@@ -273,3 +273,21 @@ func TestPut_RejectsMalformedWantWithoutTempFiles(t *testing.T) {
 		t.Errorf("temporaries left behind: %v", left)
 	}
 }
+
+func TestPut_TerminatesWithUnnormalizedRoots(t *testing.T) {
+	base := t.TempDir()
+	t.Chdir(base)
+	for _, root := range []string{base + "/store/", "./store", "store/../store", filepath.Join(base, "x", "..", "store")} {
+		t.Run(root, func(t *testing.T) {
+			s, err := blob.New(root, clock.Real{})
+			if err != nil {
+				t.Fatalf("New(%q): %v", root, err)
+			}
+			for range 2 { // the second Put finds the blob already installed
+				if _, _, err := s.Put(t.Context(), strings.NewReader("same content"), ""); err != nil {
+					t.Fatalf("Put: %v", err)
+				}
+			}
+		})
+	}
+}

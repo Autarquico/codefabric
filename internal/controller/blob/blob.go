@@ -72,6 +72,10 @@ type Store struct {
 
 // New prepares root and removes temporary files abandoned by earlier crashes.
 func New(root string, clk clock.Clock) (*Store, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("blob: resolving root: %w", err)
+	}
 	s := &Store{root: root}
 	if err := os.MkdirAll(s.tmpDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("blob: preparing %s: %w", root, err)
@@ -209,6 +213,9 @@ func (s *Store) makeDurable(dst string) error {
 		}
 		if dir == s.root {
 			return nil
+		}
+		if filepath.Dir(dir) == dir {
+			return fmt.Errorf("blob: %s is not below root %s", dst, s.root)
 		}
 	}
 }
