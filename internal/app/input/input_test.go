@@ -10,7 +10,7 @@ import (
 func TestRepo_RefusesPasswordsAndTokensInTheURL(t *testing.T) {
 	for _, repo := range []string{
 		"git@github.com:org/repo.git", "ssh://git@github.com/org/repo.git", "https://github.com/org/repo.git",
-		"file:///srv/repo", "/srv/repo", "../repo", "git@host:repo?x",
+		"file:///srv/repo", "/srv/repo", "git@host:repo?x",
 	} {
 		if err := Repo(repo); err != nil {
 			t.Errorf("%q: %v", repo, err)

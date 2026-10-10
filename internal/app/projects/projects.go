@@ -177,9 +177,15 @@ func editAliases(p *store.Project, add, remove []string) error {
 			p.RepoAliases = append(p.RepoAliases, url)
 		}
 	}
+	if len(p.RepoAliases) > maxRepoAliases {
+		return input.Invalid("a Project has at most %d repo aliases", maxRepoAliases)
+	}
 	slices.Sort(p.RepoAliases)
 	return nil
 }
+
+// maxRepoAliases bounds the URLs a Project matches; real clones need a handful.
+const maxRepoAliases = 32
 
 func validateNew(req v1.CreateProjectRequest) error {
 	return input.First(

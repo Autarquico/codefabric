@@ -149,7 +149,7 @@ func TestProjectsTasksRunsApi_ErrorsAndStatuses(t *testing.T) {
 		status, e, _ := tc.call(owner, "POST", path, body)
 		return status, e.Code
 	}
-	if s, c := post("/v1/projects", `{"name":"backend","repo":"r"}`); s != http.StatusCreated || c != "" {
+	if s, c := post("/v1/projects", `{"name":"backend","repo":"/srv/r"}`); s != http.StatusCreated || c != "" {
 		t.Fatalf("create: %d %s", s, c)
 	}
 
@@ -161,7 +161,7 @@ func TestProjectsTasksRunsApi_ErrorsAndStatuses(t *testing.T) {
 		{"an unknown field", "POST", "/v1/projects", `{"name":"x","repo":"r","bogus":1}`, 400, domain.CodeInvalidRequest},
 		{"a body that is not JSON", "POST", "/v1/tasks", `nope`, 400, domain.CodeInvalidRequest},
 		{"an invalid name", "POST", "/v1/projects", `{"name":"No Good","repo":"r"}`, 400, domain.CodeInvalidRequest},
-		{"a duplicate project", "POST", "/v1/projects", `{"name":"backend","repo":"r"}`, 400, domain.CodeInvalidRequest},
+		{"a duplicate project", "POST", "/v1/projects", `{"name":"backend","repo":"/srv/r"}`, 400, domain.CodeInvalidRequest},
 		{"an unknown project", "GET", "/v1/projects/nope", "", 404, domain.CodeNotFound},
 		{"an unknown task", "GET", "/v1/tasks/nope", "", 404, domain.CodeNotFound},
 		{"an unknown state filter", "GET", "/v1/tasks?state=bogus", "", 400, domain.CodeInvalidRequest},
@@ -198,7 +198,7 @@ func TestProjectsTasksRunsApi_AmbiguousAndIdempotencyConflictsAre409(t *testing.
 	ctx := t.Context()
 	c := tc.owner
 	for _, name := range []string{"backend", "frontend"} {
-		_, err := c.CreateProject(ctx, v1.CreateProjectRequest{Name: name, Repo: "r-" + name})
+		_, err := c.CreateProject(ctx, v1.CreateProjectRequest{Name: name, Repo: "/srv/r-" + name})
 		must(t, err)
 		_, err = c.CreateTask(ctx, v1.CreateTaskRequest{Project: name, Prompt: "x", Name: "shared", NoStart: true})
 		must(t, err)
@@ -238,7 +238,7 @@ func TestProjectsTasksRunsApi_AmbiguousAndIdempotencyConflictsAre409(t *testing.
 func TestProjectsTasksRunsApi_RevokedClientsCannotMutate(t *testing.T) {
 	tc := newController(t, time.Now())
 	laptop, _ := tc.enroll("laptop")
-	_, err := tc.owner.CreateProject(t.Context(), v1.CreateProjectRequest{Name: "backend", Repo: "r"})
+	_, err := tc.owner.CreateProject(t.Context(), v1.CreateProjectRequest{Name: "backend", Repo: "/srv/r"})
 	must(t, err)
 	must(t, tc.owner.RemoveClient(t.Context(), clientID(t, laptop)))
 

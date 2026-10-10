@@ -10,7 +10,7 @@ import (
 func TestRepoURLProblem(t *testing.T) {
 	for _, ok := range []string{
 		"git@github.com:org/repo.git", "ssh://git@github.com/org/repo.git", "https://github.com/org/repo.git",
-		"file:///srv/repo", "/srv/repo", "../repo", "host:repo?x", "ssh://host:2222/org/repo",
+		"file:///srv/repo", "/srv/repo", "host:repo?x", "ssh://host:2222/org/repo",
 	} {
 		if p := domain.RepoURLProblem(ok); p != "" {
 			t.Errorf("%q refused: %s", ok, p)
@@ -34,6 +34,17 @@ func TestRepoURLProblem(t *testing.T) {
 		}
 		if strings.Contains(got, "s3cret") {
 			t.Errorf("the reason repeats the secret: %q", got)
+		}
+	}
+}
+
+func TestRepoIsRelative(t *testing.T) {
+	for repo, want := range map[string]bool{
+		"../repo": true, "repo": true, "./srv/repo": true,
+		"/srv/repo": false, "git@host:repo": false, "host:repo": false, "https://h/r": false, "file:///srv/r": false,
+	} {
+		if got := domain.RepoIsRelative(repo); got != want {
+			t.Errorf("RepoIsRelative(%q) = %v, want %v", repo, got, want)
 		}
 	}
 }

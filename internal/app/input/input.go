@@ -51,6 +51,9 @@ func Repo(repo string) error {
 	if problem := domain.RepoURLProblem(repo); problem != "" {
 		return Invalid("repo must not carry %s in its URL: remove it and let git find the credentials", problem)
 	}
+	if domain.RepoIsRelative(repo) {
+		return Invalid("repo must be a URL or an absolute path: a relative path names a different repository on every machine")
+	}
 	return nil
 }
 

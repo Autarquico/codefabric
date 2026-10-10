@@ -5,7 +5,10 @@ import (
 	"strings"
 )
 
-var schemeURL = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*)://`)
+var (
+	schemeURL = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*)://`)
+	scpURL    = regexp.MustCompile(`^(?:[^@/:]+@)?[^/:]+:`)
+)
 
 // RepoURLProblem says why a repository URL must not be stored, or "" if it may.
 // The Controller never keeps a secret, and git finds credentials in the user's
@@ -33,4 +36,10 @@ func RepoURLProblem(repo string) string {
 		return "a user name or token"
 	}
 	return ""
+}
+
+// RepoIsRelative tells a relative local path: it names a different repository
+// on every machine, and an origin like it never infers a Project.
+func RepoIsRelative(repo string) bool {
+	return !schemeURL.MatchString(repo) && !scpURL.MatchString(repo) && !strings.HasPrefix(repo, "/")
 }

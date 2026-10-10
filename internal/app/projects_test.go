@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ func TestProjects_CreateShowSetAndAudit(t *testing.T) {
 	if def := e.project("other"); def.DefaultBranch != "main" {
 		t.Errorf("default branch = %q", def.DefaultBranch)
 	}
-	_, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "backend", Repo: "x"})
+	_, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "backend", Repo: "/srv/x"})
 	wantCode(t, err, domain.CodeInvalidRequest)
 
 	manual, branch, flow := domain.CompletionManual, "develop", "personal"
@@ -63,14 +64,14 @@ func TestProjects_CreateShowSetAndAudit(t *testing.T) {
 func TestProjects_Validation(t *testing.T) {
 	e := newEnv(t)
 	bad := map[string]v1.CreateProjectRequest{
-		"empty name":      {Name: "", Repo: "r"},
-		"upper-case name": {Name: "Backend", Repo: "r"},
+		"empty name":      {Name: "", Repo: "/srv/r"},
+		"upper-case name": {Name: "Backend", Repo: "/srv/r"},
 		"empty repo":      {Name: "a", Repo: ""},
 		"option as repo":  {Name: "a", Repo: "--upload-pack=x"},
 		"spaces in repo":  {Name: "a", Repo: "a b"},
-		"bad mode":        {Name: "a", Repo: "r", Defaults: v1.ProjectDefaults{Mode: "x"}},
-		"bad retry":       {Name: "a", Repo: "r", Defaults: v1.ProjectDefaults{Retry: &v1.Retry{OnFailed: "maybe", MaxAttempts: 1}}},
-		"zero attempts":   {Name: "a", Repo: "r", Defaults: v1.ProjectDefaults{Retry: &v1.Retry{OnFailed: "none", OnLost: "none"}}},
+		"bad mode":        {Name: "a", Repo: "/srv/r", Defaults: v1.ProjectDefaults{Mode: "x"}},
+		"bad retry":       {Name: "a", Repo: "/srv/r", Defaults: v1.ProjectDefaults{Retry: &v1.Retry{OnFailed: "maybe", MaxAttempts: 1}}},
+		"zero attempts":   {Name: "a", Repo: "/srv/r", Defaults: v1.ProjectDefaults{Retry: &v1.Retry{OnFailed: "none", OnLost: "none"}}},
 	}
 	for name, req := range bad {
 		if _, err := e.app.Projects.Create(t.Context(), e.owner, req); err == nil {
@@ -166,5 +167,19 @@ func TestProjects_RepoAliasesAreEditedAuditedAndNeverTouchTheMainRepo(t *testing
 	}
 	if n := e.count("audit_entries WHERE action = 'project.updated'"); n != 2 {
 		t.Errorf("%d project.updated entries, want 2 (rejected changes are not audited)", n)
+	}
+}
+
+func TestProjects_RepoAliasesAreBounded(t *testing.T) {
+	e := newEnv(t)
+	p := e.project("backend", func(r *v1.CreateProjectRequest) { r.Repo = "git@example.com:org/backend.git" })
+	many := make([]string, 33)
+	for i := range many {
+		many[i] = fmt.Sprintf("/srv/clone-%d", i)
+	}
+	_, err := e.app.Projects.Set(t.Context(), e.owner, p.Name, v1.UpdateProjectRequest{AddRepos: many})
+	wantCode(t, err, domain.CodeInvalidRequest)
+	if _, err := e.app.Projects.Set(t.Context(), e.owner, p.Name, v1.UpdateProjectRequest{AddRepos: many[:32]}); err != nil {
+		t.Fatalf("32 aliases: %v", err)
 	}
 }

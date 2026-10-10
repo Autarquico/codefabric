@@ -270,7 +270,7 @@ func TestMutations_RevalidateTheCallerInsideTheTransaction(t *testing.T) {
 
 	_, err := e.app.Tasks.Create(t.Context(), e.owner, v1.CreateTaskRequest{Project: "backend", Prompt: "x", NoStart: true})
 	wantCode(t, err, domain.CodeUnauthenticated)
-	_, err = e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "p", Repo: "r"})
+	_, err = e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "p", Repo: "/srv/r"})
 	wantCode(t, err, domain.CodeUnauthenticated)
 	if e.count("tasks") != 0 || e.count("projects") != 1 {
 		t.Errorf("tasks %d, projects %d", e.count("tasks"), e.count("projects"))
