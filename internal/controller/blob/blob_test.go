@@ -275,15 +275,21 @@ func TestPut_RejectsMalformedWantWithoutTempFiles(t *testing.T) {
 }
 
 func TestPut_TerminatesWithUnnormalizedRoots(t *testing.T) {
-	base := t.TempDir()
-	t.Chdir(base)
-	for _, root := range []string{base + "/store/", "./store", "store/../store", filepath.Join(base, "x", "..", "store")} {
+	for _, form := range []func(base string) string{
+		func(base string) string { return base + "/store/" },
+		func(string) string { return "./store" },
+		func(string) string { return "store/../store" },
+		func(base string) string { return base + "/x/../store" },
+	} {
+		base := t.TempDir()
+		t.Chdir(base)
+		root := form(base)
 		t.Run(root, func(t *testing.T) {
 			s, err := blob.New(root, clock.Real{})
 			if err != nil {
 				t.Fatalf("New(%q): %v", root, err)
 			}
-			for range 2 { // the second Put finds the blob already installed
+			for range 2 { // a fresh install, then the blob is already there
 				if _, _, err := s.Put(t.Context(), strings.NewReader("same content"), ""); err != nil {
 					t.Fatalf("Put: %v", err)
 				}
