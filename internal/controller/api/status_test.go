@@ -203,23 +203,23 @@ func TestApiSdkCliStatus_AResponseDeclaresItsLengthEvenToAnHTTP10Peer(t *testing
 		"error": {failing, "/v1/test/error", http.StatusInternalServerError},
 	} {
 		t.Run(name, func(t *testing.T) {
-			resp, body := getHTTP10(t, tc.ctl, tc.path)
-			if resp.StatusCode != tc.status {
-				t.Fatalf("status %d, want %d", resp.StatusCode, tc.status)
+			got := getHTTP10(t, tc.ctl, tc.path)
+			if got.status != tc.status {
+				t.Fatalf("status %d, want %d", got.status, tc.status)
 			}
-			length, err := strconv.Atoi(resp.Header.Get("Content-Length"))
+			length, err := strconv.Atoi(got.header.Get("Content-Length"))
 			if err != nil {
-				t.Fatalf("no Content-Length: %v", resp.Header)
+				t.Fatalf("no Content-Length: %v", got.header)
 			}
-			if len(body) != length {
-				t.Errorf("declared %d bytes, got %d", length, len(body))
+			if len(got.body) != length {
+				t.Errorf("declared %d bytes, got %d", length, len(got.body))
 			}
 		})
 	}
 }
 
 // getHTTP10 sends an HTTP/1.0 request over mutual TLS as the owner.
-func getHTTP10(t *testing.T, tc *testController, path string) (*http.Response, []byte) {
+func getHTTP10(t *testing.T, tc *testController, path string) reply {
 	t.Helper()
 	creds, err := client.LoadCredentials(tc.ownerDir)
 	must(t, err)
@@ -239,5 +239,5 @@ func getHTTP10(t *testing.T, tc *testController, path string) (*http.Response, [
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	must(t, err)
-	return resp, body
+	return reply{resp.StatusCode, resp.Header, body}
 }
