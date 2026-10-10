@@ -268,6 +268,7 @@ func TestRedaction_AnAtInTheQueryOrFragmentDoesNotUncoverTheSecret(t *testing.T)
 		"https://h/r#prefix@SECRET",
 		"https://user:SECRET@h/r?x=a@b",
 		"fatal: could not read from user:SECRET@host:org/repo.git",
+		"fatal: 'user:prefix@SECRET@host:org/repo.git' does not appear to be a git repository",
 	} {
 		if got := gitctx.Redact(raw); strings.Contains(got, "SECRET") {
 			t.Errorf("Redact(%q) = %q", raw, got)

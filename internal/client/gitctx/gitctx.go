@@ -168,9 +168,19 @@ func redact(s string) string {
 		}
 		return scheme + "://" + authority + suffix
 	})
-	// scp-like user:password@host:path has no scheme to anchor on.
-	return scpCredential.ReplaceAllString(s, "***@")
+	// scp-like user:password@host:path has no scheme to anchor on: split each
+	// word the way a remote is split and hide a userinfo that holds a password.
+	return textWord.ReplaceAllStringFunc(s, func(w string) string {
+		if strings.Contains(w, "://") {
+			return w
+		}
+		user, host, path, ok := domain.SplitScp(w)
+		if !ok || !strings.Contains(user, ":") {
+			return w
+		}
+		return "***@" + host + ":" + path
+	})
 }
 
-// scpCredential is the user:password@ of a scp-like remote inside a text.
-var scpCredential = regexp.MustCompile(`[^\s'"<>@/:]+:[^\s'"<>@/]*@`)
+// textWord is a run of characters that may form a remote inside a text.
+var textWord = regexp.MustCompile(`[^\s'"<>]+`)

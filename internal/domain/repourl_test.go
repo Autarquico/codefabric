@@ -55,9 +55,32 @@ func TestRepoURLProblem_ScpWithAPassword(t *testing.T) {
 			t.Errorf("%q: problem %q", repo, got)
 		}
 	}
-	for _, repo := range []string{"git@github.com:org/repo.git", "host:org/repo", "git@host:org/a@b.git"} {
+	for _, repo := range []string{
+		"git@github.com:org/repo.git", "host:org/repo", "git@host:org/a@b.git",
+		"git@host:a@b.git", "host:a@b.git", "git@[::1]:org/repo", "[::1]:org/repo",
+	} {
 		if got := domain.RepoURLProblem(repo); got != "" {
 			t.Errorf("%q refused: %s", repo, got)
+		}
+	}
+}
+
+func TestSplitScp(t *testing.T) {
+	for raw, want := range map[string][3]string{
+		"git@host:org/repo":                    {"git", "host", "org/repo"},
+		"host:a@b.git":                         {"", "host", "a@b.git"},
+		"git@host:a@b.git":                     {"git", "host", "a@b.git"},
+		"user:prefix@SECRET@host:org/repo.git": {"user:prefix@SECRET", "host", "org/repo.git"},
+		"git@[::1]:org/repo":                   {"git", "[::1]", "org/repo"},
+	} {
+		user, host, path, ok := domain.SplitScp(raw)
+		if !ok || [3]string{user, host, path} != want {
+			t.Errorf("SplitScp(%q) = %q %q %q %v, want %q", raw, user, host, path, ok, want)
+		}
+	}
+	for _, raw := range []string{"https://h/r", "/srv/repo", "repo"} {
+		if _, _, _, ok := domain.SplitScp(raw); ok {
+			t.Errorf("SplitScp(%q) took it for scp", raw)
 		}
 	}
 }

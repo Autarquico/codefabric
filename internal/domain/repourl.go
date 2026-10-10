@@ -19,10 +19,9 @@ var (
 func RepoURLProblem(repo string) string {
 	m := schemeURL.FindStringSubmatch(repo)
 	if m == nil {
-		// scp-like user:password@host:path: a ':' before the '@' of the first
-		// segment is a password (git@host:path has none).
-		first, _, _ := strings.Cut(repo, "/")
-		if i := strings.LastIndex(first, "@"); i >= 0 && strings.Contains(first[:i], ":") {
+		// scp-like [userinfo@]host:path: a ':' in the userinfo is a password
+		// (git@host:path has none; an '@' in the path is no userinfo).
+		if user, _, _, ok := SplitScp(repo); ok && strings.Contains(user, ":") {
 			return "a password"
 		}
 		return ""
@@ -48,4 +47,20 @@ func RepoURLProblem(repo string) string {
 // on every machine, and an origin like it never infers a Project.
 func RepoIsRelative(repo string) bool {
 	return !schemeURL.MatchString(repo) && !scpURL.MatchString(repo) && !strings.HasPrefix(repo, "/")
+}
+
+// scpForm is [userinfo@]host:path. The userinfo is greedy, so it ends at the
+// last '@' that is followed by a host and a ':'; an '@' in the path is not one.
+var scpForm = regexp.MustCompile(`^(?:(.*)@)?([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\]):(.*)$`)
+
+// SplitScp splits a scp-like remote into its userinfo, host and path.
+func SplitScp(s string) (userinfo, host, path string, ok bool) {
+	if schemeURL.MatchString(s) {
+		return "", "", "", false
+	}
+	m := scpForm.FindStringSubmatch(s)
+	if m == nil {
+		return "", "", "", false
+	}
+	return m[1], m[2], m[3], true
 }
