@@ -69,7 +69,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Error interno
 - **Given** un error inesperado del servidor
 - **When** se ejecuta cualquier comando
-- **Then** exit 1, sin stack trace salvo con `--debug`
+- **Then** exit 1; sin detalles salvo con `--debug` (request_id y causa); el stack nunca sale del servidor
 
 ## Notas técnicas / riesgos
 

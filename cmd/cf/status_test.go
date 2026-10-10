@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -44,6 +45,16 @@ func jsonValue(t *testing.T, stdout string) map[string]any {
 		t.Fatalf("stdout holds more than one JSON value: %q", stdout)
 	}
 	return v
+}
+
+// errorOf is the error object of a failed command's stdout.
+func errorOf(t *testing.T, stdout string) map[string]any {
+	t.Helper()
+	env, ok := jsonValue(t, stdout)["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("stdout is not an error envelope: %q", stdout)
+	}
+	return env
 }
 
 func statusOf(t *testing.T) v1.Status {
@@ -153,7 +164,7 @@ func TestScenario_ApiSdkCliStatus_ControllerCaido(t *testing.T) {
 	stop()
 
 	code, out, errOut := cf(t, "", "status", "--json")
-	env := jsonValue(t, out)["error"].(map[string]any)
+	env := errorOf(t, out)
 	if code != 6 || env["code"] != string(domain.CodeControllerUnreachable) || errOut != "" {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
@@ -202,6 +213,9 @@ func TestScenario_ApiSdkCliStatus_SinCredencial(t *testing.T) {
 
 // serveWithPanickingStatus runs the Controller of paths like the daemon does,
 // except that its database health check panics. It returns the server log.
+//
+// It replicates daemon.Start (wiring of the CA, server certificate, store,
+// authority and api.Server): keep the two in sync when Start changes.
 func serveWithPanickingStatus(t *testing.T, p config.Paths) *syncBuffer {
 	t.Helper()
 	cfg, err := config.LoadController(p)
@@ -272,14 +286,18 @@ func TestScenario_ApiSdkCliStatus_ErrorInterno(t *testing.T) {
 	assertNoServerInternals(t, debugErr)
 
 	code, out, _ = cf(t, "", "status", "--json")
-	env := jsonValue(t, out)["error"].(map[string]any)
+	env := errorOf(t, out)
 	details, _ := env["details"].(map[string]any)
-	if code != 1 || env["code"] != string(domain.CodeInternal) || details["request_id"] == "" {
+	jsonID, _ := details["request_id"].(string)
+	if code != 1 || env["code"] != string(domain.CodeInternal) || jsonID == "" {
 		t.Fatalf("--json: exit %d, stdout %q", code, out)
 	}
 	assertNoServerInternals(t, out)
 
 	log := logs.String()
+	if !strings.Contains(log, "request_id="+jsonID) {
+		t.Errorf("the --json request_id %q is not in the server log:\n%s", jsonID, log)
+	}
 	if !strings.Contains(log, "request_id="+id) || !strings.Contains(log, "boom-secret") || !strings.Contains(log, "goroutine") {
 		t.Errorf("the stack and the request %s belong in the server log:\n%s", id, log)
 	}
@@ -337,12 +355,14 @@ func TestApiSdkCliStatus_ControllerFlagKeepsTheTrustAndFailsLoudly(t *testing.T)
 		t.Fatalf("same address: exit %d: %s%s", code, out, errOut)
 	}
 	code, out, _ := cf(t, "", "status", "--controller", "localhost:"+port, "--json")
-	env := jsonValue(t, out)["error"].(map[string]any)
-	if code != 6 || env["code"] != string(domain.CodeControllerUnreachable) || !strings.Contains(env["message"].(string), "--advertise") {
+	env := errorOf(t, out)
+	if code != 6 || env["code"] != string(domain.CodeControllerUnreachable) || !strings.Contains(fmt.Sprint(env["message"]), "--advertise") {
 		t.Fatalf("uncovered host: exit %d, stdout %q", code, out)
 	}
-	if code, _, errOut := cf(t, "", "status", "--controller", "nonsense"); code != 2 || !strings.Contains(errOut, "CF_INVALID_REQUEST") {
-		t.Fatalf("bad address: exit %d, stderr %q", code, errOut)
+	for _, bad := range []string{"nonsense", ":" + port, "localhost:0", "localhost:99999", "user@" + addr, addr + "/path", addr + "?q", addr + "#f"} {
+		if code, _, errOut := cf(t, "", "status", "--controller", bad); code != 2 || !strings.Contains(errOut, "CF_INVALID_REQUEST") {
+			t.Fatalf("bad address %q: exit %d, stderr %q", bad, code, errOut)
+		}
 	}
 	// The stored address is untouched.
 	if stored, _ := os.ReadFile(filepath.Join(host.CredentialsDir(), "controller")); strings.TrimSpace(string(stored)) != addr { //nolint:gosec // test path

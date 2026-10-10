@@ -161,7 +161,7 @@ func TestCLI_ConnectReadsTheInvitationFromArgumentOrPrompt(t *testing.T) {
 	}
 
 	machine(t)
-	if code, _, errOut = cf(t, "", "connect"); code != 1 || !strings.Contains(errOut, "no invitation") {
+	if code, _, errOut = cf(t, "", "connect"); code != 2 || !strings.Contains(errOut, "CF_INVALID_REQUEST") || !strings.Contains(errOut, "no invitation") {
 		t.Fatalf("empty stdin: exit %d: %q", code, errOut)
 	}
 	if code, _, _ = cf(t, "", "connect", "https://example.com"); code != 2 {
@@ -186,11 +186,11 @@ func TestCLI_WorkerInvitationsAreIssuedButNotRedeemable(t *testing.T) {
 		t.Fatalf("redeem: exit %d, stderr %q", code, errOut)
 	}
 	use(t, host)
-	if code, _, _ = cf(t, "", "controller", "token", "create"); code == 0 {
-		t.Error("token create without --client/--worker succeeded")
+	if code, _, _ = cf(t, "", "controller", "token", "create"); code != 2 {
+		t.Errorf("token create without --client/--worker: exit %d", code)
 	}
-	if code, _, _ = cf(t, "", "controller", "token", "create", "--client", "--worker"); code == 0 {
-		t.Error("token create with both kinds succeeded")
+	if code, _, _ = cf(t, "", "controller", "token", "create", "--client", "--worker"); code != 2 {
+		t.Errorf("token create with both kinds: exit %d", code)
 	}
 	if code, _, errOut = cf(t, "", "controller", "token", "create", "--client", "--ttl", "200h"); code != 2 || !strings.Contains(errOut, "ttl") {
 		t.Errorf("ttl above the cap: exit %d, stderr %q", code, errOut)
