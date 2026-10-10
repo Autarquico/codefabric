@@ -11,7 +11,7 @@ import (
 
 func TestScenario_RepoBootstrap_VersionJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := run([]string{"version", "--json"}, &out, &errOut); code != 0 {
+	if code := Run([]string{"version", "--json"}, strings.NewReader(""), &out, &errOut); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errOut.String())
 	}
 	var got buildinfo.Info
@@ -25,7 +25,7 @@ func TestScenario_RepoBootstrap_VersionJSON(t *testing.T) {
 
 func TestVersionHumanOutput(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := run([]string{"version"}, &out, &errOut); code != 0 {
+	if code := Run([]string{"version"}, strings.NewReader(""), &out, &errOut); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errOut.String())
 	}
 	if !strings.HasPrefix(out.String(), "cf ") {
@@ -35,7 +35,7 @@ func TestVersionHumanOutput(t *testing.T) {
 
 func TestCompletionIsAvailable(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := run([]string{"completion", "zsh"}, &out, &errOut); code != 0 {
+	if code := Run([]string{"completion", "zsh"}, strings.NewReader(""), &out, &errOut); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), "compdef") {
@@ -45,7 +45,7 @@ func TestCompletionIsAvailable(t *testing.T) {
 
 func TestUnknownCommandFails(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := run([]string{"nope"}, &out, &errOut); code == 0 {
+	if code := Run([]string{"nope"}, strings.NewReader(""), &out, &errOut); code == 0 {
 		t.Fatal("expected non-zero exit")
 	}
 }
