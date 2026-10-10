@@ -24,3 +24,8 @@ mcp:
 sync:
   archive_on_ship: false
   default_since_days: 7
+policy:
+  review:
+    require_human_approval: false
+  merge:
+    auto_merge: conditional
