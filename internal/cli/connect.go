@@ -37,7 +37,8 @@ func newConnectCmd() *cobra.Command {
 				}
 			}
 			if name == "" {
-				name, _ = os.Hostname()
+				hostname, _ := os.Hostname()
+				name = machineName(hostname)
 			}
 			res, err := client.Connect(cmd.Context(), invitation, name, paths.CredentialsDir())
 			if err != nil {
@@ -78,4 +79,20 @@ func readInvitation(cmd *cobra.Command, args []string) (string, error) {
 		return "", errors.New("no invitation given")
 	}
 	return strings.TrimSpace(line), nil
+}
+
+// maxMachineName mirrors the Controller's limit on identity names.
+const maxMachineName = 64
+
+// machineName derives a default identity name from the hostname: its first
+// label (CI runners and some laptops report long FQDNs), cut to the limit.
+func machineName(hostname string) string {
+	label, _, _ := strings.Cut(hostname, ".")
+	if runes := []rune(label); len(runes) > maxMachineName {
+		label = string(runes[:maxMachineName])
+	}
+	if label == "" {
+		return "machine"
+	}
+	return label
 }
