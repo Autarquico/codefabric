@@ -262,3 +262,14 @@ func TestHasAndOpen_RejectMalformedDigest(t *testing.T) {
 		}
 	}
 }
+
+func TestPut_RejectsMalformedWantWithoutTempFiles(t *testing.T) {
+	s, root := newStore(t)
+	_, _, err := s.Put(t.Context(), strings.NewReader("payload"), "sha256:../x")
+	if !errors.Is(err, blob.ErrMalformedDigest) {
+		t.Fatalf("Put error = %v, want ErrMalformedDigest", err)
+	}
+	if left := tempFiles(t, root); len(left) != 0 {
+		t.Errorf("temporaries left behind: %v", left)
+	}
+}
