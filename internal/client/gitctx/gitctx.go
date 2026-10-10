@@ -23,13 +23,34 @@ import (
 // ErrNoOrigin means the directory has no "origin" remote to take a repository from.
 var ErrNoOrigin = errors.New("gitctx: no origin remote")
 
-// OriginURL is the URL of the "origin" remote of the repository at dir.
+// OriginURL is the URL of the "origin" remote of the repository at dir. A
+// local path or file:// origin that is relative is made absolute against the
+// directory of the repository, which is what git resolves it against, so that
+// it can be compared with other paths.
 func OriginURL(ctx context.Context, dir string) (string, error) {
 	out, err := git(ctx, dir, "config", "--get", "remote.origin.url")
 	if err != nil || out == "" {
 		return "", ErrNoOrigin
 	}
-	return out, nil
+	top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		top = dir
+	}
+	return absoluteOrigin(out, top), nil
+}
+
+func absoluteOrigin(origin, base string) string {
+	local := origin
+	switch {
+	case strings.HasPrefix(origin, "file://"):
+		local = strings.TrimPrefix(origin, "file://")
+	case strings.Contains(origin, "://"), scpLike.MatchString(origin):
+		return origin
+	}
+	if filepath.IsAbs(local) {
+		return origin
+	}
+	return filepath.Join(base, local)
 }
 
 var scpLike = regexp.MustCompile(`^(?:[^@/:]+@)?([^/:]+):(.*)$`)
@@ -41,7 +62,9 @@ var scpLike = regexp.MustCompile(`^(?:[^@/:]+@)?([^/:]+):(.*)$`)
 //
 // all become github.com/org/repo. The scheme, user, port, a trailing ".git" or
 // slash and the case of the host do not tell repositories apart; the case of
-// the path does. Local paths and file:// URLs become file:<absolute path>.
+// the path does. Local paths and file:// URLs become file:<path>, cleaned but
+// not resolved: a relative path stays relative, and OriginURL already makes
+// the origin of a working copy absolute.
 func Normalize(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	var host, repoPath string
@@ -147,7 +170,35 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-var userinfo = regexp.MustCompile(`(\w+://)[^/@\s]+@`)
+var (
+	userinfo = regexp.MustCompile(`(\w+://)[^/@\s]+@`)
+	// authority splits scheme://[userinfo@]rest; the userinfo ends at the last '@' of the authority.
+	authority = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*://)([^/?#]*)@(.*)$`)
+)
+
+// StripCredentials takes the secrets out of a repository URL before it is
+// stored or sent: Projects keep clean URLs, and git finds the credentials in
+// the user's own configuration. It reports whether it removed anything that may
+// have been a secret. A password goes from every URL, keeping the user name; an
+// http(s) URL loses its whole userinfo, since there the name may be a token.
+// The user of an ssh URL, like git@, is no secret and stays.
+func StripCredentials(raw string) (clean string, removed bool) {
+	m := authority.FindStringSubmatch(raw)
+	if m == nil {
+		return raw, false
+	}
+	scheme, info, rest := m[1], m[2], m[3]
+	name, _, hasPassword := strings.Cut(info, ":")
+	switch {
+	case strings.EqualFold(scheme, "http://") || strings.EqualFold(scheme, "https://"):
+		return scheme + rest, true
+	case hasPassword && name == "":
+		return scheme + rest, true
+	case hasPassword:
+		return scheme + name + "@" + rest, true
+	}
+	return raw, false
+}
 
 // redact hides the credentials a URL may carry before it reaches a message.
 func redact(s string) string { return userinfo.ReplaceAllString(s, "${1}***@") }

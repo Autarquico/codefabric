@@ -89,7 +89,8 @@ func newControllerWithRoutes(t *testing.T, start time.Time, routes func(*api.Ser
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	srv := api.New(cfg)
+	srv, err := api.New(cfg)
+	must(t, err)
 	if routes != nil {
 		routes(srv)
 	}

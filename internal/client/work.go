@@ -105,26 +105,26 @@ func (c *Client) UpdateTask(ctx context.Context, ref, project string, req v1.Upd
 	return out, err
 }
 
-func (c *Client) taskAction(ctx context.Context, action, ref, project, requestID string) (v1.Task, error) {
+func (c *Client) taskAction(ctx context.Context, action, ref, project string) (v1.Task, error) {
 	var out v1.Task
 	err := c.do(ctx, http.MethodPost, withQuery(refPath("tasks", ref, action), scope(project)),
-		v1.ActionRequest{RequestID: requestID}, &out)
+		v1.ActionRequest{}, &out)
 	return out, err
 }
 
 // CancelTask cancels a Task and its live Runs.
 func (c *Client) CancelTask(ctx context.Context, ref, project string) (v1.Task, error) {
-	return c.taskAction(ctx, "cancel", ref, project, "")
+	return c.taskAction(ctx, "cancel", ref, project)
 }
 
 // CompleteTask marks a Task completed by hand.
 func (c *Client) CompleteTask(ctx context.Context, ref, project string) (v1.Task, error) {
-	return c.taskAction(ctx, "complete", ref, project, "")
+	return c.taskAction(ctx, "complete", ref, project)
 }
 
 // ArchiveTask archives a Task, which frees its name.
 func (c *Client) ArchiveTask(ctx context.Context, ref, project string) (v1.Task, error) {
-	return c.taskAction(ctx, "archive", ref, project, "")
+	return c.taskAction(ctx, "archive", ref, project)
 }
 
 // DeferTask, ResumeTask, MoveTask, ForkRun and PromoteRun are in the API
@@ -132,19 +132,19 @@ func (c *Client) ArchiveTask(ctx context.Context, ref, project string) (v1.Task,
 
 // DeferTask asks to suspend a Task's Run with a checkpoint (§11.4).
 func (c *Client) DeferTask(ctx context.Context, ref, project string) error {
-	_, err := c.taskAction(ctx, "defer", ref, project, "")
+	_, err := c.taskAction(ctx, "defer", ref, project)
 	return err
 }
 
 // ResumeTask asks to continue a deferred Task.
 func (c *Client) ResumeTask(ctx context.Context, ref, project string) error {
-	_, err := c.taskAction(ctx, "resume", ref, project, "")
+	_, err := c.taskAction(ctx, "resume", ref, project)
 	return err
 }
 
 // MoveTask asks to continue a Task on another Worker.
 func (c *Client) MoveTask(ctx context.Context, ref, project string) error {
-	_, err := c.taskAction(ctx, "move", ref, project, "")
+	_, err := c.taskAction(ctx, "move", ref, project)
 	return err
 }
 

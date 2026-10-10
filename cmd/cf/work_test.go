@@ -120,9 +120,6 @@ func TestScenario_ProjectsTasksRunsApi_CrearTrabajo(t *testing.T) {
 
 	// Naming the Project works from anywhere, resolving the ref on its repo.
 	elsewhere := ok[v1.CreateTaskResponse](t, "do", "from elsewhere", "--project", "backend")
-	if elsewhere.Run.SourceCommit != dev && elsewhere.Run.SourceCommit != o.head {
-		t.Errorf("commit = %s", elsewhere.Run.SourceCommit)
-	}
 	if elsewhere.Run.SourceCommit != o.head {
 		t.Errorf("main resolved to %s, want %s", elsewhere.Run.SourceCommit, o.head)
 	}
@@ -351,5 +348,27 @@ func TestProjectsTasksRunsApi_NamesAreScopedByTheProjectOfTheDirectory(t *testin
 	b.clone(t) // the Project of the working directory narrows the name
 	if got := ok[v1.Task](t, "task", "show", "shared"); got.ID != inBeta.Task.ID {
 		t.Errorf("from beta's clone: %+v", got)
+	}
+}
+
+func TestProjectsTasksRunsApi_ACredentialInTheRepoURLIsStrippedAndWarned(t *testing.T) {
+	bringUpController(t)
+
+	code, out, errOut := cf(t, "", "project", "create", "creds", "--repo", "https://user:s3cret@example.com/org/r.git", "--json")
+	if code != 0 || !strings.Contains(errOut, "warning") || strings.Contains(errOut, "s3cret") {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	var p v1.Project
+	if err := json.Unmarshal([]byte(out), &p); err != nil || p.Repo != "https://example.com/org/r.git" {
+		t.Fatalf("project = %+v, %v", p, err)
+	}
+
+	// Without a password there is nothing to warn about.
+	code, _, errOut = cf(t, "", "project", "create", "plain", "--repo", "ssh://git@example.com/org/p.git", "--json")
+	if code != 0 || errOut != "" {
+		t.Errorf("exit %d, stderr %q", code, errOut)
+	}
+	if _, out, _ := cf(t, "", "project", "list"); strings.Contains(out, "s3cret") {
+		t.Errorf("the list shows the secret:\n%s", out)
 	}
 }

@@ -57,7 +57,7 @@ type Config struct {
 	CA         *pki.CA
 	ServerCert tls.Certificate // leaf first, then the CA; see Server.SetServerCert
 	Store      Store
-	Work       *app.Services  // the Projects, Tasks and Runs endpoints exist only when set
+	Work       *app.Services  // the use cases behind the Projects, Tasks and Runs endpoints; required
 	Clock      clock.Clock    // defaults to clock.Real
 	StartedAt  time.Time      // uptime is measured from here
 	Build      buildinfo.Info // what /v1/status reports as the version
@@ -82,8 +82,11 @@ type Server struct {
 	health    healthCache
 }
 
-// New builds the server and its route table.
-func New(c Config) *Server {
+// New builds the server and its route table. It fails when Config.Work is missing.
+func New(c Config) (*Server, error) {
+	if c.Work == nil {
+		return nil, errors.New("api: Config.Work is required")
+	}
 	log := c.Logger
 	if log == nil {
 		log = slog.Default()
@@ -116,10 +119,8 @@ func New(c Config) *Server {
 	s.tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return s.cert.Load(), nil }
 	s.SetServerCert(c.ServerCert)
 	s.registerRoutes()
-	if s.work != nil {
-		s.registerWorkRoutes()
-	}
-	return s
+	s.registerWorkRoutes()
+	return s, nil
 }
 
 // SetServerCert makes new handshakes present cert (leaf first, then the CA).

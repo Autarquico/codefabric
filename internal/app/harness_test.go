@@ -7,7 +7,9 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +117,34 @@ func (e *env) count(table string) int {
 	var n int
 	must(e.t, e.db.Reader().QueryRowContext(e.t.Context(), `SELECT COUNT(*) FROM `+table).Scan(&n)) //nolint:gosec // test constant
 	return n
+}
+
+// dump is every cell of a table, as text, to look for what must not be in it.
+func (e *env) dump(table string) string {
+	e.t.Helper()
+	rows, err := e.db.Reader().QueryContext(e.t.Context(), `SELECT * FROM `+table) //nolint:gosec // test constant
+	must(e.t, err)
+	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	must(e.t, err)
+	var out strings.Builder
+	for rows.Next() {
+		cells := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range cells {
+			ptrs[i] = &cells[i]
+		}
+		must(e.t, rows.Scan(ptrs...))
+		for _, c := range cells {
+			if b, ok := c.([]byte); ok {
+				c = string(b)
+			}
+			fmt.Fprintf(&out, "%v|", c)
+		}
+		out.WriteByte('\n')
+	}
+	must(e.t, rows.Err())
+	return out.String()
 }
 
 func must(t *testing.T, err error) {

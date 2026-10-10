@@ -9,6 +9,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/controller/api"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -255,4 +256,10 @@ func clientID(t *testing.T, c *client.Client) string {
 	info, err := c.Describe()
 	must(t, err)
 	return info.IdentityID
+}
+
+func TestNew_RequiresTheWorkUseCases(t *testing.T) {
+	if _, err := api.New(api.Config{}); err == nil {
+		t.Fatal("a server with no Projects, Tasks and Runs use cases was built")
+	}
 }

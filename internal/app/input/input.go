@@ -40,11 +40,20 @@ func Name(what, name string) error {
 	return nil
 }
 
+// urlWithPassword matches scheme://user:password@host. A user alone, like
+// ssh://git@host, is no secret and passes.
+var urlWithPassword = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://[^/?#@]*:[^/?#]*@`)
+
 // Repo checks a repository URL or path. A leading '-' is refused because git
-// would take it for an option.
+// would take it for an option, and so is a URL with a password: the Controller
+// never stores a credential, which git takes from the user's own configuration.
+// The message does not repeat the URL.
 func Repo(repo string) error {
 	if repo == "" || len(repo) > maxURLLen || strings.HasPrefix(repo, "-") || hasSpaceOrControl(repo) {
 		return Invalid("repo must be a git URL or path without spaces, at most %d characters", maxURLLen)
+	}
+	if urlWithPassword.MatchString(repo) {
+		return Invalid("repo must not carry a password or token in its URL: remove it and let git find the credentials")
 	}
 	return nil
 }
@@ -112,13 +121,19 @@ func Requirements(r v1.Requirements) error {
 	if err := Resources(r.Resources); err != nil {
 		return err
 	}
-	for what, values := range map[string][]string{
-		"capabilities": r.Capabilities, "workers.prefer": r.Workers.Prefer,
-		"workers.avoid": r.Workers.Avoid, "workers.require": r.Workers.Require,
+	// A slice, not a map: the first invalid list reported is always the same.
+	for _, list := range []struct {
+		what   string
+		values []string
+	}{
+		{"capabilities", r.Capabilities},
+		{"workers.prefer", r.Workers.Prefer},
+		{"workers.avoid", r.Workers.Avoid},
+		{"workers.require", r.Workers.Require},
 	} {
-		for _, v := range values {
+		for _, v := range list.values {
 			if v == "" || len(v) > maxRefLen || hasSpaceOrControl(v) {
-				return Invalid("%s entries must be non-empty words of at most %d characters", what, maxRefLen)
+				return Invalid("%s entries must be non-empty words of at most %d characters", list.what, maxRefLen)
 			}
 		}
 	}

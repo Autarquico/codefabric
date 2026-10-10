@@ -35,6 +35,10 @@ func newProjectCreateCmd() *cobra.Command {
 					return domain.NewError(domain.CodeInvalidRequest, "this directory has no origin remote: give the repository with --repo", nil)
 				}
 			}
+			var removed bool
+			if req.Repo, removed = gitctx.StripCredentials(req.Repo); removed {
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: removed the credentials from the repository URL; git uses your own credentials for it")
+			}
 			c, err := openClient(cmd)
 			if err != nil {
 				return err

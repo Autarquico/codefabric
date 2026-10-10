@@ -2,7 +2,9 @@ package gitctx_test
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -189,5 +191,52 @@ func TestOriginURL(t *testing.T) {
 	}
 	if _, err := gitctx.OriginURL(t.Context(), t.TempDir()); !errors.Is(err, gitctx.ErrNoOrigin) {
 		t.Errorf("not a repository: %v", err)
+	}
+}
+
+func TestOriginURL_RelativeLocalOriginsAreAbsoluteToTheRepository(t *testing.T) {
+	r := newRepo(t)
+	// git reports the repository under its real path, which a temp dir may only link to.
+	parent, err := filepath.EvalSymlinks(filepath.Dir(r.dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(parent, "sibling.git")
+	subdir := filepath.Join(r.dir, "pkg")
+	if err := os.Mkdir(subdir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, origin := range []string{"../sibling.git", "file://../sibling.git"} {
+		r.git("config", "remote.origin.url", origin)
+		for _, from := range []string{r.dir, subdir} {
+			if got, err := gitctx.OriginURL(t.Context(), from); err != nil || got != want {
+				t.Errorf("origin %q seen from %s: OriginURL = %q, %v; want %q", origin, from, got, err, want)
+			}
+		}
+	}
+	got, _ := gitctx.OriginURL(t.Context(), r.dir)
+	if match, err := gitctx.Match(got, []v1.Project{{Repo: want}}); err != nil || len(match) != 1 {
+		t.Errorf("the absolute origin should match a Project on that path: %v, %v", match, err)
+	}
+}
+
+func TestStripCredentials(t *testing.T) {
+	for _, c := range []struct {
+		in, want string
+		removed  bool
+	}{
+		{"https://user:s3cret@github.com/org/repo.git", "https://github.com/org/repo.git", true},
+		{"https://ghp_token@github.com/org/repo.git", "https://github.com/org/repo.git", true},
+		{"https://:ghp_token@github.com/org/repo.git", "https://github.com/org/repo.git", true},
+		{"ssh://git:s3cret@github.com/org/repo.git", "ssh://git@github.com/org/repo.git", true},
+		{"ssh://git@github.com/org/repo.git", "ssh://git@github.com/org/repo.git", false},
+		{"git@github.com:org/repo.git", "git@github.com:org/repo.git", false},
+		{"https://github.com/org/repo.git", "https://github.com/org/repo.git", false},
+		{"/srv/repo", "/srv/repo", false},
+	} {
+		got, removed := gitctx.StripCredentials(c.in)
+		if got != c.want || removed != c.removed {
+			t.Errorf("gitctx.StripCredentials(%q) = (%q, %v), want (%q, %v)", c.in, got, removed, c.want, c.removed)
+		}
 	}
 }

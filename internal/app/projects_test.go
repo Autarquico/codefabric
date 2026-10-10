@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"strings"
 	"testing"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -80,5 +81,27 @@ func TestProjects_Validation(t *testing.T) {
 	}
 	if n := e.count("projects"); n != 0 {
 		t.Errorf("%d projects", n)
+	}
+}
+
+func TestProjects_NeverStoreOrAuditACredential(t *testing.T) {
+	e := newEnv(t)
+	for _, repo := range []string{"https://user:s3cret@example.com/org/r.git", "https://:s3cret@example.com/org/r.git", "ssh://git:s3cret@example.com/org/r.git"} {
+		_, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "a", Repo: repo})
+		wantCode(t, err, domain.CodeInvalidRequest)
+		if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("the error repeats the secret: %v", err)
+		}
+	}
+	// A user without password is no credential.
+	e.project("ok", func(r *v1.CreateProjectRequest) { r.Repo = "ssh://git@example.com/org/ok.git" })
+
+	for _, table := range []string{"projects", "audit_entries", "events", "idempotency_keys"} {
+		if dump := e.dump(table); strings.Contains(dump, "s3cret") {
+			t.Errorf("%s holds the secret:\n%s", table, dump)
+		}
+	}
+	if n := e.count("projects"); n != 1 {
+		t.Errorf("%d projects, want only the clean one", n)
 	}
 }
