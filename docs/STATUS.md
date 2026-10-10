@@ -19,7 +19,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_(nada)_
+- #6 API, Client SDK y `cf status`
 <!-- /pm-sync:in-progress -->
 
 ---
