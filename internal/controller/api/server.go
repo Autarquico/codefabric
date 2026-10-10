@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/controller/pki"
@@ -45,7 +46,7 @@ func (t Timeouts) orDefaults() Timeouts {
 type Config struct {
 	Authority  *pki.Authority
 	CA         *pki.CA
-	ServerCert tls.Certificate // leaf first, then the CA
+	ServerCert tls.Certificate // leaf first, then the CA; see Server.SetServerCert
 	Logger     *slog.Logger    // defaults to slog.Default()
 	Timeouts   Timeouts        // tests shorten them
 }
@@ -55,6 +56,7 @@ type Server struct {
 	authority *pki.Authority
 	timeouts  Timeouts
 	log       *slog.Logger
+	cert      atomic.Pointer[tls.Certificate]
 	tlsConfig *tls.Config
 	mux       *http.ServeMux
 	routes    map[string]route
@@ -73,8 +75,7 @@ func New(c Config) *Server {
 		timeouts:  c.Timeouts.orDefaults(),
 		log:       log,
 		tlsConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS13,
-			Certificates: []tls.Certificate{c.ServerCert},
+			MinVersion: tls.VersionTLS13,
 			// A certificate is optional at the handshake because /v1/join is
 			// anonymous; the route table decides who may call what.
 			ClientAuth: tls.VerifyClientCertIfGiven,
@@ -83,9 +84,15 @@ func New(c Config) *Server {
 		mux:    http.NewServeMux(),
 		routes: map[string]route{},
 	}
+	s.tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return s.cert.Load(), nil }
+	s.SetServerCert(c.ServerCert)
 	s.registerRoutes()
 	return s
 }
+
+// SetServerCert makes new handshakes present cert (leaf first, then the CA).
+// Connections already established keep the one they negotiated.
+func (s *Server) SetServerCert(cert tls.Certificate) { s.cert.Store(&cert) }
 
 // Handler is the authorising handler; tests may serve it with their own TLS.
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serveHTTP) }

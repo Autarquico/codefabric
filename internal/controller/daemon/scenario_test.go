@@ -3,6 +3,7 @@ package daemon_test
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"errors"
 	"net"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 func freeAddr(t *testing.T) string {
@@ -428,5 +430,46 @@ func TestInit_TheDatabaseIsPrivate(t *testing.T) {
 		if got := mode(t, p.DatabaseFile()+side); got != 0o600 {
 			t.Errorf("%s mode %04o, want 0600", side, got)
 		}
+	}
+}
+
+func TestStart_RenewsTheServerCertificateWhileRunning(t *testing.T) {
+	p := newPaths(t)
+	_, addr := initController(t, p)
+	clk := clock.NewFake(time.Now())
+	ctx, cancel := context.WithCancel(t.Context())
+	c, err := daemon.Start(ctx, daemon.Options{Paths: p, Clock: clk, ServerCertCheckEvery: 10 * time.Millisecond})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		if err := c.Wait(); err != nil {
+			t.Errorf("Wait: %v", err)
+		}
+	})
+
+	presented := func() string {
+		conn, err := (&tls.Dialer{Config: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}}). //nolint:gosec // only the presented serial is read
+																DialContext(t.Context(), "tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close() }()
+		return conn.(*tls.Conn).ConnectionState().PeerCertificates[0].SerialNumber.Text(16) //nolint:forcetypeassert // tls.Dialer returns *tls.Conn
+	}
+	before := presented()
+	if again := presented(); again != before {
+		t.Fatal("the certificate changed without approaching its expiry")
+	}
+
+	clk.Advance(340 * 24 * time.Hour) // under 30 days left
+	deadline := time.Now().Add(5 * time.Second)
+	for presented() == before {
+		if time.Now().After(deadline) {
+			t.Fatal("the running Controller kept presenting the certificate that is about to expire")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
