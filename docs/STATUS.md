@@ -18,7 +18,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_(nada)_
+- #5 Identidad del Controller, TLS y tokens de cliente
 <!-- /pm-sync:in-progress -->
 
 ---
