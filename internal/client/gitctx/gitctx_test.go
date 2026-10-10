@@ -3,9 +3,8 @@ package gitctx_test
 import (
 	"errors"
 	"net"
-	"os"
 	"os/exec"
-	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,85 +13,6 @@ import (
 	"github.com/Autarquico/codefabric/internal/client/gitctx"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
-
-func TestNormalize(t *testing.T) {
-	same := []struct {
-		name string
-		urls []string
-		want string
-	}{
-		{"one repository, many spellings", []string{
-			"git@github.com:org/repo.git",
-			"git@GitHub.com:org/repo",
-			"github.com:org/repo.git",
-			"https://github.com/org/repo.git",
-			"https://github.com:443/org/repo",
-			"https://user:secret@GITHUB.COM/org/repo/",
-			"http://github.com:80/org/repo",
-			"git://github.com:9418/org/repo.git",
-			"git://github.com/org/repo.git",
-			"  https://github.com/org/repo.git\n",
-		}, "github.com/org/repo"},
-		{"an absolute ssh path", []string{
-			"git@host.example:/srv/git/repo.git", "ssh://host.example/srv/git/repo.git",
-			"ssh://git@host.example:22/srv/git/repo/",
-		}, "host.example//srv/git/repo"},
-		{"a local repository", []string{"/srv/git/repo", "file:///srv/git/repo", "/srv/git//repo/"}, "file:/srv/git/repo"},
-		{"a local bare repository", []string{"/srv/git/repo.git", "file:///srv/git/repo.git"}, "file:/srv/git/repo.git"},
-	}
-	for _, c := range same {
-		for _, raw := range c.urls {
-			if got, err := gitctx.Normalize(raw); err != nil || got != c.want {
-				t.Errorf("%s: Normalize(%q) = %q, %v; want %q", c.name, raw, got, err, c.want)
-			}
-		}
-	}
-
-	// The case of the path, the host, a port that is not the default and a local ".git" tell repositories apart.
-	distinct := []string{
-		"git@github.com:Org/Repo.git", "git@github.com:org/other.git", "git@gitlab.com:org/repo.git", "git@github.com:org/repo.git",
-		"ssh://git@github.com:2222/org/repo", "ssh://git@github.com:2223/org/repo", "http://github.com:8080/org/repo", "https://github.com:8443/org/repo",
-		"/srv/git/repo", "/srv/git/repo.git",
-		// Over ssh a relative path is relative to the home of the user, an absolute one is not.
-		"git@host.example:srv/git/repo.git", "git@host.example:/srv/git/repo.git",
-	}
-	seen := map[string]string{}
-	for _, raw := range distinct {
-		got, err := gitctx.Normalize(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if prev, dup := seen[got]; dup {
-			t.Errorf("%q and %q collide as %q", raw, prev, got)
-		}
-		seen[got] = raw
-	}
-
-	for _, bad := range []string{"", "  ", "https://", "https://github.com", "ssh://git@host/"} {
-		if got, err := gitctx.Normalize(bad); err == nil {
-			t.Errorf("Normalize(%q) = %q, want an error", bad, got)
-		}
-	}
-}
-
-func TestMatch(t *testing.T) {
-	projects := []v1.Project{
-		{Name: "backend", Repo: "git@github.com:org/backend.git"},
-		{Name: "backend-mirror", Repo: "https://github.com/org/backend"},
-		{Name: "web", Repo: "git@github.com:org/web.git"},
-		{Name: "broken", Repo: "https://"},
-	}
-	got, err := gitctx.Match("git@GitHub.com:org/backend.git", projects)
-	if err != nil || len(got) != 2 || got[0].Name != "backend" || got[1].Name != "backend-mirror" {
-		t.Errorf("Match = %+v, %v", got, err)
-	}
-	if got, _ := gitctx.Match("git@github.com:org/none.git", projects); len(got) != 0 {
-		t.Errorf("matched %+v", got)
-	}
-	if _, err := gitctx.Match("", projects); err == nil {
-		t.Error("an empty origin matched")
-	}
-}
 
 // repo is a real git repository with history, and the commits it made.
 type repo struct {
@@ -206,53 +126,6 @@ func TestOriginURL(t *testing.T) {
 	}
 }
 
-func TestOriginURL_RelativeLocalOriginsAreAbsoluteToTheRepository(t *testing.T) {
-	r := newRepo(t)
-	// git reports the repository under its real path, which a temp dir may only link to.
-	parent, err := filepath.EvalSymlinks(filepath.Dir(r.dir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(parent, "sibling.git")
-	subdir := filepath.Join(r.dir, "pkg")
-	if err := os.Mkdir(subdir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	for _, origin := range []string{"../sibling.git", "file://../sibling.git"} {
-		r.git("config", "remote.origin.url", origin)
-		for _, from := range []string{r.dir, subdir} {
-			if got, err := gitctx.OriginURL(t.Context(), from); err != nil || got != want {
-				t.Errorf("origin %q seen from %s: OriginURL = %q, %v; want %q", origin, from, got, err, want)
-			}
-		}
-	}
-	got, _ := gitctx.OriginURL(t.Context(), r.dir)
-	if match, err := gitctx.Match(got, []v1.Project{{Repo: want}}); err != nil || len(match) != 1 {
-		t.Errorf("the absolute origin should match a Project on that path: %v, %v", match, err)
-	}
-}
-
-func TestStripCredentials(t *testing.T) {
-	for _, c := range []struct {
-		in, want string
-		removed  bool
-	}{
-		{"https://user:s3cret@github.com/org/repo.git", "https://github.com/org/repo.git", true},
-		{"https://ghp_token@github.com/org/repo.git", "https://github.com/org/repo.git", true},
-		{"https://:ghp_token@github.com/org/repo.git", "https://github.com/org/repo.git", true},
-		{"ssh://git:s3cret@github.com/org/repo.git", "ssh://git@github.com/org/repo.git", true},
-		{"ssh://git@github.com/org/repo.git", "ssh://git@github.com/org/repo.git", false},
-		{"git@github.com:org/repo.git", "git@github.com:org/repo.git", false},
-		{"https://github.com/org/repo.git", "https://github.com/org/repo.git", false},
-		{"/srv/repo", "/srv/repo", false},
-	} {
-		got, removed := gitctx.StripCredentials(c.in)
-		if got != c.want || removed != c.removed {
-			t.Errorf("gitctx.StripCredentials(%q) = (%q, %v), want (%q, %v)", c.in, got, removed, c.want, c.removed)
-		}
-	}
-}
-
 // A remote that takes the connection and never answers ends at the deadline.
 func TestResolveRef_ARemoteThatNeverAnswersTimesOut(t *testing.T) {
 	lc := net.ListenConfig{}
@@ -279,42 +152,112 @@ func TestResolveRef_ARemoteThatNeverAnswersTimesOut(t *testing.T) {
 	}
 }
 
-func TestNormalize_AnInvalidURLNeverEchoesItsCredentials(t *testing.T) {
-	_, err := gitctx.Normalize("https://user:SECRET@host:bad/org/repo.git")
-	if err == nil {
-		t.Fatal("an invalid URL was accepted")
-	}
-	if strings.Contains(err.Error(), "SECRET") {
-		t.Fatalf("the error leaks the credential: %v", err)
+func projects() []v1.Project {
+	return []v1.Project{
+		{Name: "backend", Repo: "git@github.com:org/backend.git", RepoAliases: []string{"https://github.com/org/backend.git", "/srv/git/backend"}},
+		{Name: "web", Repo: "git@github.com:org/web.git"},
+		{Name: "mirror", Repo: "ssh://git@mirror.example/org/backend", RepoAliases: []string{"git@github.com:org/backend.git"}},
 	}
 }
 
-func TestNormalize_RefusesPathsItCannotKeySafely(t *testing.T) {
-	for _, raw := range []string{
-		"host:../repo", "host:repo/../other", "host:~/repo", "host:~user/repo",
-		"ssh://host/~user/repo", "ssh://host//~user/repo", "ssh://host//srv/repo",
-		"https://host/org/../repo", "git@host:./repo",
-	} {
-		if got, err := gitctx.Normalize(raw); !errors.Is(err, gitctx.ErrUnsafePath) {
-			t.Errorf("Normalize(%q) = %q, %v; want ErrUnsafePath", raw, got, err)
-		}
+func names(ps []v1.Project) []string {
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = p.Name
 	}
-	// A refused remote matches no Project rather than a wrong one.
-	projects := []v1.Project{{Name: "repo", Repo: "host:repo"}}
-	if got, err := gitctx.Match("host:../repo", projects); err == nil || len(got) != 0 {
-		t.Errorf("Match = %+v, %v", got, err)
+	return out
+}
+
+func TestMatch_IsLiteralEqualityWithTheMainRepoOrAnAlias(t *testing.T) {
+	for origin, want := range map[string][]string{
+		"git@github.com:org/web.git":         {"web"},
+		"https://github.com/org/backend.git": {"backend"}, // an alias
+		"/srv/git/backend":                   {"backend"},
+		"  git@github.com:org/web.git\n":     {"web"}, // only the white space around it goes
+		"git@github.com:org/backend.git":     {"backend", "mirror"},
+		"file:///srv/git/backend":            nil, // another spelling of an alias is not the alias
+	} {
+		got, err := gitctx.Match(origin, projects())
+		if err != nil || !slices.Equal(names(got), want) {
+			t.Errorf("Match(%q) = %v, %v; want %v", origin, names(got), err, want)
+		}
 	}
 }
 
-func TestRedaction_HidesTheWholeUserinfo(t *testing.T) {
-	for _, raw := range []string{
-		"https://user:p@SECRET@host:bad/org/repo.git", "https://SECRET@@host/x", "ssh://u:a@b@SECRET@host/x",
+func TestMatch_NoFuzzyMatchWithoutAnAlias(t *testing.T) {
+	// Other spellings of git@github.com:org/web.git: none of them is it.
+	for _, origin := range []string{
+		"https://github.com/org/web.git", "ssh://git@github.com/org/web.git", "git@GitHub.com:org/web.git",
+		"git@github.com:org/Web.git", "git@github.com:org/web", "git@github.com:org/web.git/", "ssh://git@github.com:22/org/web.git",
+		"alice@github.com:org/web.git", "github.com:org/web.git", "git@github.com:/org/web.git",
 	} {
-		if _, err := gitctx.Normalize(raw); err != nil && strings.Contains(err.Error(), "SECRET") {
-			t.Errorf("Normalize(%q) leaks: %v", raw, err)
+		if got, err := gitctx.Match(origin, projects()); err != nil || len(got) != 0 {
+			t.Errorf("Match(%q) = %v, %v; want no match", origin, names(got), err)
 		}
-		if got := gitctx.Redact(raw); strings.Contains(got, "SECRET") {
-			t.Errorf("Redact(%q) = %q", raw, got)
+	}
+	// Adding the spelling as an alias is how it matches.
+	ps := projects()
+	ps[1].RepoAliases = []string{"https://github.com/org/web"}
+	if got, err := gitctx.Match("https://github.com/org/web", ps); err != nil || !slices.Equal(names(got), []string{"web"}) {
+		t.Errorf("with the alias: %v, %v", names(got), err)
+	}
+}
+
+func TestMatch_DifferentUsersAreDifferentRepositories(t *testing.T) {
+	ps := []v1.Project{{Name: "a", Repo: "alice@host:repo"}, {Name: "b", Repo: "bob@host:repo"}}
+	got, err := gitctx.Match("alice@host:repo", ps)
+	if err != nil || !slices.Equal(names(got), []string{"a"}) {
+		t.Errorf("Match = %v, %v", names(got), err)
+	}
+	if got, _ := gitctx.Match("carol@host:repo", ps); len(got) != 0 {
+		t.Errorf("matched %v", names(got))
+	}
+}
+
+func TestMatch_ARelativeOriginIdentifiesNothing(t *testing.T) {
+	ps := []v1.Project{{Name: "p", Repo: "../repo"}, {Name: "q", Repo: "file://../repo"}}
+	for _, origin := range []string{"../repo", "repo", "./repo", "~/repo", "file://../repo", "file://repo"} {
+		if got, err := gitctx.Match(origin, ps); !errors.Is(err, gitctx.ErrRelativeOrigin) || len(got) != 0 {
+			t.Errorf("Match(%q) = %v, %v; want ErrRelativeOrigin", origin, names(got), err)
 		}
+	}
+	if _, err := gitctx.Match("", ps); err == nil {
+		t.Error("an empty origin matched")
+	}
+}
+
+func TestOriginURL_IsWhatGitHasNeverResolved(t *testing.T) {
+	r := newRepo(t)
+	for _, origin := range []string{"../sibling.git", "file://../sibling.git", "git@GitHub.com:Org/Repo.git/", "https://h/r?x=1"} {
+		r.git("config", "remote.origin.url", origin)
+		if got, err := gitctx.OriginURL(t.Context(), r.dir); err != nil || got != origin {
+			t.Errorf("OriginURL = %q, %v; want %q", got, err, origin)
+		}
+	}
+}
+
+func TestRedact_HidesTheUserinfoAndAnyQueryOrFragment(t *testing.T) {
+	for raw, want := range map[string]string{ //nolint:gosec // test data: fake secrets
+		"https://h/r?access_token=SECRET":                     "https://h/r?***",
+		"https://h/r#SECRET":                                  "https://h/r#***",
+		"ssh://git@h/org/r.git?x=SECRET#SECRET":               "ssh://***@h/org/r.git?***",
+		"https://user:p@SECRET@host/org/repo.git":             "https://***@host/org/repo.git",
+		"https://SECRET@@host/x":                              "https://***@host/x",
+		"ssh://u:a@b@SECRET@host/x":                           "ssh://***@host/x",
+		"https://u:SECRET@host:bad/org/repo.git":              "https://***@host:bad/org/repo.git",
+		"fatal: unable to access 'https://h/r?t=SECRET': 404": "fatal: unable to access 'https://h/r?***': 404",
+		"fatal: repository not found?  Did you mean?":         "fatal: repository not found?  Did you mean?",
+		"git@github.com:org/repo.git":                         "git@github.com:org/repo.git",
+	} {
+		if got := gitctx.Redact(raw); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestResolveRef_FailuresDoNotLeakAQueryToken(t *testing.T) {
+	_, err := gitctx.ResolveRef(t.Context(), newRepo(t).dir, "https://127.0.0.1:1/org/repo.git?access_token=SECRET", "main")
+	if err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("err = %v", err)
 	}
 }

@@ -45,18 +45,24 @@ type ProjectDefaults struct {
 	Retry      *Retry            `json:"retry,omitempty"`
 }
 
-// Project is §3.1.
+// Project is §3.1. Repo is the main repository and RepoAliases the other URLs
+// the same repository goes by; a working copy belongs to the Project if its
+// origin is, literally, one of them.
 type Project struct {
 	ID                 string          `json:"id"`
 	Short              string          `json:"short_id"`
 	Name               string          `json:"name"`
 	Repo               string          `json:"repo"`
+	RepoAliases        []string        `json:"repo_aliases"`
 	DefaultBranch      string          `json:"default_branch"`
 	DefaultWorkflow    string          `json:"default_workflow,omitempty"`
 	DefaultEnvironment string          `json:"default_environment,omitempty"`
 	Defaults           ProjectDefaults `json:"defaults"`
 	CreatedAt          time.Time       `json:"created_at"`
 }
+
+// RepoURLs are every URL of the Project: the main repo, then the aliases.
+func (p Project) RepoURLs() []string { return append([]string{p.Repo}, p.RepoAliases...) }
 
 // CreateProjectRequest is POST /v1/projects. DefaultBranch defaults to main.
 type CreateProjectRequest struct {
@@ -70,9 +76,12 @@ type CreateProjectRequest struct {
 }
 
 // UpdateProjectRequest is PATCH /v1/projects/{ref}: only the fields present
-// change. An empty workflow or environment clears it.
+// change. An empty workflow or environment clears it. AddRepos and RemoveRepos
+// edit the aliases; the main repo cannot be removed.
 type UpdateProjectRequest struct {
 	RequestID          string             `json:"request_id,omitempty"`
+	AddRepos           []string           `json:"add_repos,omitempty"`
+	RemoveRepos        []string           `json:"remove_repos,omitempty"`
 	DefaultBranch      *string            `json:"default_branch,omitempty"`
 	DefaultWorkflow    *string            `json:"default_workflow,omitempty"`
 	DefaultEnvironment *string            `json:"default_environment,omitempty"`

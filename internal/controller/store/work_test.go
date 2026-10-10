@@ -89,6 +89,46 @@ func TestOpen_UpgradesAPhase0Database(t *testing.T) {
 	}
 }
 
+func TestProjects_RepoAliasesAreStoredWithTheirProject(t *testing.T) {
+	ctx := t.Context()
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "controller.db"), Options{Clock: clock.NewFake(now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	err = db.WithTx(ctx, func(tx *Tx) error {
+		for i, name := range []string{"a", "b"} {
+			p := Project{ID: domain.ID("project_" + name), Short: uint64(i + 1), Name: name, Repo: "r-" + name, DefaultBranch: "main", CreatedAt: now}
+			if err := tx.InsertProject(ctx, p); err != nil {
+				return err
+			}
+			p.RepoAliases = []string{"y-" + name, "x-" + name}
+			if err := tx.UpdateProject(ctx, p); err != nil {
+				return err
+			}
+		}
+		p, err := ProjectByID(ctx, tx, "project_a")
+		if err != nil {
+			return err
+		}
+		p.RepoAliases = []string{"x-a"}
+		return tx.UpdateProject(ctx, p)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all []Project
+	if err := db.Read(ctx, func(q Querier) (err error) { all, err = Projects(ctx, q); return err }); err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || len(all[0].RepoAliases) != 1 || all[0].RepoAliases[0] != "x-a" ||
+		len(all[1].RepoAliases) != 2 || all[1].RepoAliases[0] != "x-b" || all[1].RepoAliases[1] != "y-b" {
+		t.Errorf("aliases = %v, %v", all[0].RepoAliases, all[1].RepoAliases)
+	}
+}
+
 // seedPhase0 builds a database exactly as Phase 0 left it: only its three
 // migrations, with a row in each table the next phase must not disturb.
 func seedPhase0(t *testing.T, path string) {

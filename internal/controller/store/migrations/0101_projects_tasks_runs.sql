@@ -15,6 +15,14 @@ CREATE TABLE projects (
     created_at          INTEGER NOT NULL
 ) STRICT;
 
+-- The URLs, besides projects.repo, that a working copy's origin may have to
+-- belong to the Project. They are compared literally, never normalised.
+CREATE TABLE project_repos (
+    project_id TEXT NOT NULL REFERENCES projects (id),
+    url        TEXT NOT NULL,
+    PRIMARY KEY (project_id, url)
+) STRICT, WITHOUT ROWID;
+
 -- state and waiting_reason are derived from the Task's markers and Runs
 -- (domain.DeriveTaskState) and re-derived in the transaction of every change
 -- to either (tasks.Rederive); they are stored so lists can filter on them.

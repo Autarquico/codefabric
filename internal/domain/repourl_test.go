@@ -1,0 +1,39 @@
+package domain_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/Autarquico/codefabric/internal/domain"
+)
+
+func TestRepoURLProblem(t *testing.T) {
+	for _, ok := range []string{
+		"git@github.com:org/repo.git", "ssh://git@github.com/org/repo.git", "https://github.com/org/repo.git",
+		"file:///srv/repo", "/srv/repo", "../repo", "host:repo?x", "ssh://host:2222/org/repo",
+	} {
+		if p := domain.RepoURLProblem(ok); p != "" {
+			t.Errorf("%q refused: %s", ok, p)
+		}
+	}
+	for repo, want := range map[string]string{ //nolint:gosec // test data: fake secrets
+		"https://user:s3cret@h/r":         "a password",
+		"https://:s3cret@h/r":             "a password",
+		"ssh://git:s3cret@h/r":            "a password",
+		"https://user:p@ss@h/r":           "a password",
+		"https://s3cret@h/r":              "a user name or token",
+		"HTTP://s3cret@h/r":               "a user name or token",
+		"https://h/r?access_token=s3cret": "a query or fragment",
+		"ssh://git@h/r#s3cret":            "a query or fragment",
+		"file:///srv/r?s3cret":            "a query or fragment",
+		"https://h?s3cret=1":              "a query or fragment",
+	} {
+		got := domain.RepoURLProblem(repo)
+		if got != want {
+			t.Errorf("%q: problem %q, want %q", repo, got, want)
+		}
+		if strings.Contains(got, "s3cret") {
+			t.Errorf("the reason repeats the secret: %q", got)
+		}
+	}
+}

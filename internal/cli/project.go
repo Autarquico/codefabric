@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -34,10 +35,10 @@ func newProjectCreateCmd() *cobra.Command {
 				if req.Repo, err = gitctx.OriginURL(cmd.Context(), dir); err != nil {
 					return domain.NewError(domain.CodeInvalidRequest, "this directory has no origin remote: give the repository with --repo", nil)
 				}
-			}
-			var removed bool
-			if req.Repo, removed = gitctx.StripCredentials(req.Repo); removed {
-				fmt.Fprintln(cmd.ErrOrStderr(), "warning: removed the credentials from the repository URL; git uses your own credentials for it")
+				if problem := domain.RepoURLProblem(req.Repo); problem != "" {
+					return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf(
+						"the origin of this directory carries %s in its URL, which a Project does not keep: take it out of the remote (git remote set-url origin) or give the repository with --repo", problem), nil)
+				}
 			}
 			c, err := openClient(cmd)
 			if err != nil {
@@ -111,10 +112,18 @@ func newProjectShowCmd() *cobra.Command {
 
 func printProject(w io.Writer, p v1.Project) error {
 	d := p.Defaults
-	_, err := fmt.Fprintf(w, "ID           %s (%s)\nName         %s\nRepo         %s\nBranch       %s\nWorkflow     %s\nEnvironment  %s\nMode         %s\nCompletion   %s\nResources    %s\nRetry        %s\nCreated      %s\n",
-		p.ID, p.Short, p.Name, p.Repo, p.DefaultBranch, dash(p.DefaultWorkflow), dash(p.DefaultEnvironment),
+	_, err := fmt.Fprintf(w, "ID           %s (%s)\nName         %s\nRepo         %s\n%sBranch       %s\nWorkflow     %s\nEnvironment  %s\nMode         %s\nCompletion   %s\nResources    %s\nRetry        %s\nCreated      %s\n",
+		p.ID, p.Short, p.Name, p.Repo, aliasLines(p.RepoAliases), p.DefaultBranch, dash(p.DefaultWorkflow), dash(p.DefaultEnvironment),
 		dash(string(d.Mode)), dash(string(d.Completion)), resourcesLabel(d.Resources), retryLabel(d.Retry), local(p.CreatedAt))
 	return err
+}
+
+func aliasLines(aliases []string) string {
+	var b strings.Builder
+	for _, url := range aliases {
+		fmt.Fprintf(&b, "             %s\n", url)
+	}
+	return b.String()
 }
 
 func resourcesLabel(r *v1.Resources) string {
@@ -136,6 +145,7 @@ func newProjectSetCmd() *cobra.Command {
 		branch, workflow, environment string
 		mode, completion              string
 		cpu, memoryMB                 int
+		addRepos, removeRepos         []string
 	)
 	cmd := &cobra.Command{
 		Use:   "set <project>",
@@ -143,7 +153,7 @@ func newProjectSetCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			f := cmd.Flags()
-			var req v1.UpdateProjectRequest
+			req := v1.UpdateProjectRequest{AddRepos: addRepos, RemoveRepos: removeRepos}
 			if f.Changed("default-branch") {
 				req.DefaultBranch = &branch
 			}
@@ -184,6 +194,8 @@ func newProjectSetCmd() *cobra.Command {
 	f.StringVar(&environment, "environment", "", "default Environment (empty clears it)")
 	f.StringVar(&mode, "mode", "", "default mode: headless or interactive")
 	f.StringVar(&completion, "completion", "", "default completion: first_success, promote or manual")
+	f.StringArrayVar(&addRepos, "add-repo", nil, "another URL of the repository; repeatable. A working copy belongs to the Project if its origin is exactly one of its URLs")
+	f.StringArrayVar(&removeRepos, "remove-repo", nil, "an added URL to remove; repeatable. The main repo cannot be removed")
 	f.IntVar(&cpu, "cpu", 0, "default CPUs per Run")
 	f.IntVar(&memoryMB, "memory-mb", 0, "default memory per Run, in MB")
 	return cmd

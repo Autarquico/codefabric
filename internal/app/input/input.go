@@ -40,24 +40,16 @@ func Name(what, name string) error {
 	return nil
 }
 
-// urlWithPassword matches scheme://user:password@host. A user alone, like
-// ssh://git@host, is no secret and passes.
-var urlWithPassword = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://[^/?#@]*:[^/?#]*@`)
-
-// httpWithUserinfo matches any userinfo on http(s): there the user name alone
-// is often a token (https://TOKEN@host), and git never needs it in the URL.
-var httpWithUserinfo = regexp.MustCompile(`(?i)^https?://[^/?#]*@`)
-
 // Repo checks a repository URL or path. A leading '-' is refused because git
-// would take it for an option, and so is a URL with a password: the Controller
-// never stores a credential, which git takes from the user's own configuration.
-// The message does not repeat the URL.
+// would take it for an option, and so is a URL that carries a credential (see
+// domain.RepoURLProblem): the Controller never stores one, and git takes them
+// from the user's own configuration. The message does not repeat the URL.
 func Repo(repo string) error {
 	if repo == "" || len(repo) > maxURLLen || strings.HasPrefix(repo, "-") || hasSpaceOrControl(repo) {
 		return Invalid("repo must be a git URL or path without spaces, at most %d characters", maxURLLen)
 	}
-	if urlWithPassword.MatchString(repo) || httpWithUserinfo.MatchString(repo) {
-		return Invalid("repo must not carry a password or token in its URL: remove it and let git find the credentials")
+	if problem := domain.RepoURLProblem(repo); problem != "" {
+		return Invalid("repo must not carry %s in its URL: remove it and let git find the credentials", problem)
 	}
 	return nil
 }

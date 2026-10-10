@@ -45,6 +45,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **Given** un cwd cuyo remote coincide con el Project `backend`
 - **When** se ejecuta `cf do "x"`
 - **Then** se crean la Task y un Run `queued` con `spec_digest` y commit congelados; sin coincidencia, error y nunca un default silencioso
+- **Nota**: «coincide» significa igualdad literal (byte a byte, salvo los espacios alrededor) entre el origin del cwd y el repo del Project o uno de sus alias; no hay normalización de URLs.
 
 ### Scenario: Sin arranque
 - **Given** `cf task new --no-start`

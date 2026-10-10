@@ -86,15 +86,26 @@ func TestProjects_Validation(t *testing.T) {
 
 func TestProjects_NeverStoreOrAuditACredential(t *testing.T) {
 	e := newEnv(t)
-	for _, repo := range []string{"https://user:s3cret@example.com/org/r.git", "https://:s3cret@example.com/org/r.git", "ssh://git:s3cret@example.com/org/r.git"} {
+	for _, repo := range []string{
+		"https://user:s3cret@example.com/org/r.git", "https://:s3cret@example.com/org/r.git", "ssh://git:s3cret@example.com/org/r.git",
+		"https://s3cret@example.com/org/r.git", "https://example.com/org/r.git?access_token=s3cret", "ssh://git@example.com/org/r.git#s3cret",
+	} {
 		_, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "a", Repo: repo})
 		wantCode(t, err, domain.CodeInvalidRequest)
 		if strings.Contains(err.Error(), "s3cret") {
 			t.Errorf("the error repeats the secret: %v", err)
 		}
 	}
+	// The same through the aliases of an existing Project.
+	ok := e.project("ok", func(r *v1.CreateProjectRequest) { r.Repo = "ssh://git@example.com/org/ok.git" })
+	for _, repo := range []string{"https://user:s3cret@example.com/r.git", "https://example.com/r?token=s3cret"} {
+		_, err := e.app.Projects.Set(t.Context(), e.owner, ok.Name, v1.UpdateProjectRequest{AddRepos: []string{repo}})
+		wantCode(t, err, domain.CodeInvalidRequest)
+		if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("the error repeats the secret: %v", err)
+		}
+	}
 	// A user without password is no credential.
-	e.project("ok", func(r *v1.CreateProjectRequest) { r.Repo = "ssh://git@example.com/org/ok.git" })
 
 	for _, table := range []string{"projects", "audit_entries", "events", "idempotency_keys"} {
 		if dump := e.dump(table); strings.Contains(dump, "s3cret") {
@@ -103,5 +114,57 @@ func TestProjects_NeverStoreOrAuditACredential(t *testing.T) {
 	}
 	if n := e.count("projects"); n != 1 {
 		t.Errorf("%d projects, want only the clean one", n)
+	}
+}
+
+func TestProjects_RepoAliasesAreEditedAuditedAndNeverTouchTheMainRepo(t *testing.T) {
+	e := newEnv(t)
+	p := e.project("backend", func(r *v1.CreateProjectRequest) { r.Repo = "git@example.com:org/backend.git" })
+	set := func(req v1.UpdateProjectRequest) (v1.Project, error) {
+		return e.app.Projects.Set(t.Context(), e.owner, p.Name, req)
+	}
+
+	got, err := set(v1.UpdateProjectRequest{AddRepos: []string{"https://example.com/b.git", "/srv/b", "https://example.com/b.git", p.Repo}})
+	must(t, err)
+	if want := []string{"/srv/b", "https://example.com/b.git"}; !equal(got.RepoAliases, want) || got.Repo != p.Repo {
+		t.Fatalf("project = %+v", got)
+	}
+	stored, err := e.app.Projects.Get(t.Context(), p.Name)
+	must(t, err)
+	if !equal(stored.RepoAliases, got.RepoAliases) {
+		t.Errorf("stored = %v", stored.RepoAliases)
+	}
+	if list, err := e.app.Projects.List(t.Context()); err != nil || len(list) != 1 || !equal(list[0].RepoAliases, got.RepoAliases) {
+		t.Errorf("list = %+v, %v", list, err)
+	}
+
+	for name, req := range map[string]v1.UpdateProjectRequest{
+		"the main repo":          {RemoveRepos: []string{p.Repo}},
+		"an unknown URL":         {RemoveRepos: []string{"https://example.com/none.git"}},
+		"add and remove at once": {AddRepos: []string{"/srv/c"}, RemoveRepos: []string{"/srv/c"}},
+		"an empty URL":           {RemoveRepos: []string{""}},
+	} {
+		_, err := set(req)
+		wantCode(t, err, domain.CodeInvalidRequest)
+		if after, _ := e.app.Projects.Get(t.Context(), p.Name); !equal(after.RepoAliases, got.RepoAliases) {
+			t.Errorf("%s changed the aliases: %v", name, after.RepoAliases)
+		}
+	}
+
+	got, err = set(v1.UpdateProjectRequest{RemoveRepos: []string{"/srv/b"}})
+	must(t, err)
+	if !equal(got.RepoAliases, []string{"https://example.com/b.git"}) {
+		t.Errorf("aliases = %v", got.RepoAliases)
+	}
+
+	// Every change is audited with the URLs before and after.
+	var after string
+	must(t, e.db.Reader().QueryRowContext(t.Context(),
+		`SELECT after FROM audit_entries WHERE action = 'project.updated' ORDER BY id DESC LIMIT 1`).Scan(&after))
+	if !strings.Contains(after, "https://example.com/b.git") || strings.Contains(after, "/srv/b") {
+		t.Errorf("last audit entry = %s", after)
+	}
+	if n := e.count("audit_entries WHERE action = 'project.updated'"); n != 2 {
+		t.Errorf("%d project.updated entries, want 2 (rejected changes are not audited)", n)
 	}
 }

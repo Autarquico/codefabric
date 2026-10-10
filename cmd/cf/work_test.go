@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -366,31 +367,37 @@ func TestProjectsTasksRunsApi_NamesAreScopedByTheProjectOfTheDirectory(t *testin
 	}
 }
 
-func TestProjectsTasksRunsApi_ACredentialInTheRepoURLIsStrippedAndWarned(t *testing.T) {
+func TestProjectsTasksRunsApi_ACredentialInARepoURLIsRefusedNeverStripped(t *testing.T) {
 	bringUpController(t)
 
-	code, out, errOut := cf(t, "", "project", "create", "creds", "--repo", "https://user:s3cret@example.com/org/r.git", "--json")
-	if code != 0 || !strings.Contains(errOut, "warning") || strings.Contains(errOut, "s3cret") {
-		t.Fatalf("exit %d, stderr %q", code, errOut)
+	for _, repo := range []string{
+		"https://user:s3cret@example.com/org/r.git", "https://s3cret@example.com/org/r.git",
+		"https://example.com/org/r.git?access_token=s3cret", "ssh://git@example.com/org/r.git#s3cret",
+	} {
+		env := fails(t, 2, domain.CodeInvalidRequest, "project", "create", "creds", "--repo", repo)
+		if msg := fmt.Sprint(env["message"]); strings.Contains(msg, "s3cret") {
+			t.Errorf("the error repeats the secret: %q", msg)
+		}
 	}
-	var p v1.Project
-	if err := json.Unmarshal([]byte(out), &p); err != nil || p.Repo != "https://example.com/org/r.git" {
-		t.Fatalf("project = %+v, %v", p, err)
+	// Without --repo the origin is used, and an origin with a secret is not cleaned up in silence.
+	dir := newOrigin(t).clone(t)
+	for _, origin := range []string{"https://s3cret@example.com/org/r.git", "https://example.com/org/r.git?access_token=s3cret"} {
+		git(t, dir, "remote", "set-url", "origin", origin)
+		env := fails(t, 2, domain.CodeInvalidRequest, "project", "create", "creds")
+		if msg := fmt.Sprint(env["message"]); strings.Contains(msg, "s3cret") || !strings.Contains(msg, "--repo") {
+			t.Errorf("message = %q", msg)
+		}
 	}
-
-	// Without a password there is nothing to warn about.
-	code, _, errOut = cf(t, "", "project", "create", "plain", "--repo", "ssh://git@example.com/org/p.git", "--json")
-	if code != 0 || errOut != "" {
-		t.Errorf("exit %d, stderr %q", code, errOut)
-	}
-	if _, out, _ := cf(t, "", "project", "list"); strings.Contains(out, "s3cret") {
-		t.Errorf("the list shows the secret:\n%s", out)
+	// A user without password over ssh is no secret.
+	ok[v1.Project](t, "project", "create", "plain", "--repo", "ssh://git@example.com/org/p.git")
+	if _, out, _ := cf(t, "", "project", "list"); strings.Contains(out, "s3cret") || !strings.Contains(out, "plain") || strings.Contains(out, "creds") {
+		t.Errorf("the list:\n%s", out)
 	}
 }
 
-// Two repositories are never taken for one: a bare "repo.git" next to "repo",
-// or the same host on another port, match no Project and create no Task.
-func TestProjectsTasksRunsApi_DistinctRepositoriesAreNeverConfused(t *testing.T) {
+// Only a literal URL of the Project matches: every other spelling of the same
+// repository is no match until it is added as an alias.
+func TestProjectsTasksRunsApi_OnlyAnExactURLMatches(t *testing.T) {
 	bringUpController(t)
 	base := t.TempDir()
 	plain := newOriginAt(t, filepath.Join(base, "repo"))
@@ -399,35 +406,102 @@ func TestProjectsTasksRunsApi_DistinctRepositoriesAreNeverConfused(t *testing.T)
 	plain.clone(t)
 
 	env := fails(t, 3, domain.CodeNotFound, "do", "x")
-	if msg, _ := env["message"].(string); !strings.Contains(msg, "no Project has the repository") {
+	if msg, _ := env["message"].(string); !strings.Contains(msg, "no Project has the origin") || !strings.Contains(msg, "--project") {
 		t.Errorf("message = %q", msg)
 	}
 
-	ok[v1.Project](t, "project", "create", "ported", "--repo", "ssh://git@example.com:2222/org/repo.git")
+	ok[v1.Project](t, "project", "create", "web", "--repo", "ssh://git@example.com:2222/org/repo.git")
 	dir := newOrigin(t).clone(t)
-	git(t, dir, "remote", "set-url", "origin", "ssh://git@example.com:2223/org/repo.git")
-	fails(t, 3, domain.CodeNotFound, "do", "y")
-	git(t, dir, "remote", "set-url", "origin", "ssh://git@example.com:22/org/repo.git") // the default port is no difference...
-	fails(t, 3, domain.CodeNotFound, "do", "z")                                         // ...but this Project is on 2222
+	for _, origin := range []string{
+		"ssh://git@example.com:22/org/repo.git", "ssh://git@example.com:2223/org/repo.git", "ssh://git@example.com:2222/org/repo",
+		"ssh://git@Example.com:2222/org/repo.git", "ssh://git@example.com:2222/org/repo.git/", "ssh://git@example.com:2222/org/Repo.git",
+		"git@example.com:org/repo.git", "ssh://bob@example.com:2222/org/repo.git",
+	} {
+		git(t, dir, "remote", "set-url", "origin", origin)
+		fails(t, 3, domain.CodeNotFound, "task", "new", "--no-start", origin)
+	}
+	git(t, dir, "remote", "set-url", "origin", "git@example.com:org/repo.git")
+	updated := ok[v1.Project](t, "project", "set", "web", "--add-repo", "git@example.com:org/repo.git")
+	if !slices.Equal(updated.RepoAliases, []string{"git@example.com:org/repo.git"}) {
+		t.Fatalf("aliases = %v", updated.RepoAliases)
+	}
+	if created := ok[v1.CreateTaskResponse](t, "task", "new", "--no-start", "now it matches"); created.Task.ProjectID != updated.ID {
+		t.Errorf("the alias should match: %+v", created.Task)
+	}
+	// ...and only that exact spelling: another user over the same scp form does not.
+	git(t, dir, "remote", "set-url", "origin", "alice@example.com:org/repo.git")
+	fails(t, 3, domain.CodeNotFound, "task", "new", "--no-start", "alice")
 
-	// Over ssh, an absolute path and a home-relative one are two repositories,
-	// in both directions; and a path that cannot be keyed safely is refused.
-	ok[v1.Project](t, "project", "create", "absolute", "--repo", "git@host.example:/srv/git/app.git")
-	git(t, dir, "remote", "set-url", "origin", "git@host.example:srv/git/app.git")
-	fails(t, 3, domain.CodeNotFound, "do", "rel")
-	ok[v1.Project](t, "project", "create", "relative", "--repo", "git@host.example:srv/git/web.git")
-	git(t, dir, "remote", "set-url", "origin", "ssh://git@host.example/srv/git/web.git")
-	fails(t, 3, domain.CodeNotFound, "do", "abs")
-	git(t, dir, "remote", "set-url", "origin", "git@host.example:../srv/git/web.git")
-	if env := fails(t, 2, domain.CodeInvalidRequest, "do", "dots"); !strings.Contains(fmt.Sprint(env["message"]), "--project") {
-		t.Errorf("no hint about --project: %v", env)
+	// A relative origin names nothing by itself: no inference, and a hint.
+	git(t, dir, "remote", "set-url", "origin", "../repo")
+	if env := fails(t, 2, domain.CodeInvalidRequest, "do", "rel"); !strings.Contains(fmt.Sprint(env["message"]), "use --project or set an absolute origin") {
+		t.Errorf("no hint: %v", env)
 	}
 	if code, _, errOut := cf(t, "", "do", "human"); code != 2 || !strings.Contains(errOut, "--project") {
 		t.Errorf("human output: exit %d, stderr %q", code, errOut)
 	}
+	if tasks := ok[v1.ListTasksResponse](t, "task", "list", "--all"); len(tasks.Tasks) != 1 {
+		t.Errorf("%d Tasks, want only the one that matched", len(tasks.Tasks))
+	}
+}
 
-	if tasks := ok[v1.ListTasksResponse](t, "task", "list", "--all"); len(tasks.Tasks) != 0 {
-		t.Errorf("%d Tasks were created", len(tasks.Tasks))
+func TestProjectsTasksRunsApi_RepoAliasesAreAddedRemovedAndKeepTheMainRepo(t *testing.T) {
+	bringUpController(t)
+	p := ok[v1.Project](t, "project", "create", "backend", "--repo", "git@example.com:org/backend.git")
+	if len(p.RepoAliases) != 0 {
+		t.Fatalf("aliases = %v", p.RepoAliases)
+	}
+
+	p = ok[v1.Project](t, "project", "set", "backend", "--add-repo", "https://example.com/org/backend.git", "--add-repo", "/srv/git/backend", "--add-repo", "/srv/git/backend")
+	if want := []string{"/srv/git/backend", "https://example.com/org/backend.git"}; !slices.Equal(p.RepoAliases, want) {
+		t.Errorf("aliases = %v, want %v", p.RepoAliases, want)
+	}
+	if _, out, _ := cf(t, "", "project", "show", "backend"); !strings.Contains(out, "git@example.com:org/backend.git") ||
+		!strings.Contains(out, "/srv/git/backend") || !strings.Contains(out, "https://example.com/org/backend.git") {
+		t.Errorf("show lists every URL:\n%s", out)
+	}
+
+	fails(t, 2, domain.CodeInvalidRequest, "project", "set", "backend", "--remove-repo", "git@example.com:org/backend.git")
+	fails(t, 2, domain.CodeInvalidRequest, "project", "set", "backend", "--remove-repo", "https://example.com/other.git")
+	fails(t, 2, domain.CodeInvalidRequest, "project", "set", "backend", "--add-repo", "https://t0ken@example.com/x.git")
+	p = ok[v1.Project](t, "project", "set", "backend", "--remove-repo", "/srv/git/backend")
+	if want := []string{"https://example.com/org/backend.git"}; !slices.Equal(p.RepoAliases, want) || p.Repo != "git@example.com:org/backend.git" {
+		t.Errorf("project = %+v", p)
+	}
+	if got := ok[v1.Project](t, "project", "show", "backend"); !slices.Equal(got.RepoAliases, p.RepoAliases) {
+		t.Errorf("stored aliases = %v", got.RepoAliases)
+	}
+
+	// One URL in two Projects is ambiguous, and naming the Project resolves it.
+	ok[v1.Project](t, "project", "create", "mirror", "--repo", "git@mirror.example:org/backend.git")
+	ok[v1.Project](t, "project", "set", "mirror", "--add-repo", "https://example.com/org/backend.git")
+	dir := newOrigin(t).clone(t)
+	git(t, dir, "remote", "set-url", "origin", "https://example.com/org/backend.git")
+	env := fails(t, 3, domain.CodeAmbiguousRef, "task", "new", "--no-start", "x")
+	if msg, _ := env["message"].(string); !strings.Contains(msg, "backend") || !strings.Contains(msg, "mirror") {
+		t.Errorf("message = %q", msg)
+	}
+	if created := ok[v1.CreateTaskResponse](t, "task", "new", "--no-start", "x", "--project", "mirror"); created.Task.ProjectID == "" {
+		t.Error("naming the Project resolves the ambiguity")
+	}
+}
+
+// --project works from a working copy of any other repository: the ref is
+// resolved on the Project's main repo, not on the origin of the directory.
+func TestProjectsTasksRunsApi_ProjectFlagWithoutAMatchResolvesOnTheMainRepo(t *testing.T) {
+	bringUpController(t)
+	o := newOrigin(t)
+	o.clone(t)
+	ok[v1.Project](t, "project", "create", "backend")
+
+	stranger := newOrigin(t)
+	git(t, stranger.dir, "commit", "-q", "--allow-empty", "-m", "only here")
+	stranger.clone(t)
+	strangerHead := git(t, stranger.dir, "rev-parse", "HEAD")
+
+	created := ok[v1.CreateTaskResponse](t, "do", "x", "--project", "backend")
+	if created.Run.SourceCommit != o.head || created.Run.SourceCommit == strangerHead {
+		t.Errorf("froze %s, want %s of the Project's repo (not %s of the origin of the directory)", created.Run.SourceCommit, o.head, strangerHead)
 	}
 }
 

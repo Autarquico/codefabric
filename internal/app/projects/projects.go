@@ -4,6 +4,7 @@ package projects
 
 import (
 	"context"
+	"slices"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/input"
@@ -80,7 +81,9 @@ func (s *Service) Set(ctx context.Context, by pki.Session, ref string, req v1.Up
 			return v1.Project{}, err
 		}
 		before := View(p)
-		apply(&p, req)
+		if err := apply(&p, req); err != nil {
+			return v1.Project{}, err
+		}
 		if err := tx.UpdateProject(ctx, p); err != nil {
 			return v1.Project{}, err
 		}
@@ -121,13 +124,16 @@ func (s *Service) Get(ctx context.Context, ref string) (v1.Project, error) {
 func View(p store.Project) v1.Project {
 	return v1.Project{
 		ID: string(p.ID), Short: domain.ShortID{Kind: domain.KindProject, N: p.Short}.String(),
-		Name: p.Name, Repo: p.Repo, DefaultBranch: p.DefaultBranch,
+		Name: p.Name, Repo: p.Repo, RepoAliases: append([]string{}, p.RepoAliases...), DefaultBranch: p.DefaultBranch,
 		DefaultWorkflow: p.DefaultWorkflow, DefaultEnvironment: p.DefaultEnvironment,
 		Defaults: p.Defaults, CreatedAt: p.CreatedAt,
 	}
 }
 
-func apply(p *store.Project, req v1.UpdateProjectRequest) {
+func apply(p *store.Project, req v1.UpdateProjectRequest) error {
+	if err := editAliases(p, req.AddRepos, req.RemoveRepos); err != nil {
+		return err
+	}
 	if req.DefaultBranch != nil {
 		p.DefaultBranch = *req.DefaultBranch
 	}
@@ -149,6 +155,30 @@ func apply(p *store.Project, req v1.UpdateProjectRequest) {
 	if req.Retry != nil {
 		p.Defaults.Retry = req.Retry
 	}
+	return nil
+}
+
+// editAliases removes, then adds, URLs among the aliases of p. The URLs are
+// kept as given: they are only ever compared literally. Adding a URL the
+// Project already has changes nothing.
+func editAliases(p *store.Project, add, remove []string) error {
+	for _, url := range remove {
+		i := slices.Index(p.RepoAliases, url)
+		switch {
+		case url == p.Repo:
+			return input.Invalid("the main repo of a Project cannot be removed")
+		case i < 0:
+			return input.Invalid("remove_repos has a URL that is not a repo alias of this Project")
+		}
+		p.RepoAliases = slices.Delete(p.RepoAliases, i, i+1)
+	}
+	for _, url := range add {
+		if url != p.Repo && !slices.Contains(p.RepoAliases, url) {
+			p.RepoAliases = append(p.RepoAliases, url)
+		}
+	}
+	slices.Sort(p.RepoAliases)
+	return nil
 }
 
 func validateNew(req v1.CreateProjectRequest) error {
@@ -161,6 +191,14 @@ func validateNew(req v1.CreateProjectRequest) error {
 
 func validateUpdate(req v1.UpdateProjectRequest) error {
 	var errs []error
+	for _, url := range req.AddRepos {
+		errs = append(errs, input.Repo(url))
+	}
+	for _, url := range req.RemoveRepos {
+		if url == "" || slices.Contains(req.AddRepos, url) {
+			errs = append(errs, input.Invalid("remove_repos must be non-empty and not also in add_repos"))
+		}
+	}
 	if req.DefaultBranch != nil {
 		errs = append(errs, input.Ref("default_branch", *req.DefaultBranch))
 	}

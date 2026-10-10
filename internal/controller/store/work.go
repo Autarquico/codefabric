@@ -19,6 +19,7 @@ type Project struct {
 	Short              uint64
 	Name               string
 	Repo               string
+	RepoAliases        []string // other URLs of the repository, sorted
 	DefaultBranch      string
 	DefaultWorkflow    string
 	DefaultEnvironment string
@@ -149,7 +150,8 @@ func (t *Tx) InsertProject(ctx context.Context, p Project) error {
 	return nil
 }
 
-// UpdateProject replaces what a Project lets change: branch, workflow, environment and defaults.
+// UpdateProject replaces what a Project lets change: branch, workflow,
+// environment, defaults and the repo aliases.
 func (t *Tx) UpdateProject(ctx context.Context, p Project) error {
 	defaults, err := json.Marshal(p.Defaults)
 	if err != nil {
@@ -161,17 +163,56 @@ func (t *Tx) UpdateProject(ctx context.Context, p Project) error {
 	if err != nil {
 		return fmt.Errorf("store: updating project: %w", err)
 	}
+	if _, err = t.Exec(ctx, `DELETE FROM project_repos WHERE project_id = ?`, string(p.ID)); err != nil {
+		return fmt.Errorf("store: replacing repo aliases: %w", err)
+	}
+	for _, url := range p.RepoAliases {
+		if _, err = t.Exec(ctx, `INSERT INTO project_repos (project_id, url) VALUES (?, ?)`, string(p.ID), url); err != nil {
+			return fmt.Errorf("store: replacing repo aliases: %w", err)
+		}
+	}
 	return nil
 }
 
 // ProjectByID returns ErrNotFound for an unknown ID.
 func ProjectByID(ctx context.Context, q Querier, id domain.ID) (Project, error) {
-	return scanProject(q.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE id = ?`, string(id)))
+	p, err := scanProject(q.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE id = ?`, string(id)))
+	if err != nil {
+		return p, err
+	}
+	aliases, err := repoAliases(ctx, q, `WHERE project_id = ?`, string(id))
+	p.RepoAliases = aliases[id]
+	return p, err
 }
 
 // Projects lists every Project, oldest first.
 func Projects(ctx context.Context, q Querier) ([]Project, error) {
-	return collect(ctx, q, scanProject, `SELECT `+projectColumns+` FROM projects ORDER BY short_n`)
+	projects, err := collect(ctx, q, scanProject, `SELECT `+projectColumns+` FROM projects ORDER BY short_n`)
+	if err != nil {
+		return nil, err
+	}
+	aliases, err := repoAliases(ctx, q, ``)
+	for i := range projects {
+		projects[i].RepoAliases = aliases[projects[i].ID]
+	}
+	return projects, err
+}
+
+// repoAliases reads the aliases of the Projects the WHERE clause selects, sorted.
+func repoAliases(ctx context.Context, q Querier, where string, args ...any) (map[domain.ID][]string, error) {
+	type row struct{ project, url string }
+	rows, err := collect(ctx, q, func(r rowScanner) (row, error) {
+		var v row
+		if err := r.Scan(&v.project, &v.url); err != nil {
+			return v, scanErr(err, "repo alias")
+		}
+		return v, nil
+	}, `SELECT project_id, url FROM project_repos `+where+` ORDER BY url`, args...)
+	out := map[domain.ID][]string{}
+	for _, r := range rows {
+		out[domain.ID(r.project)] = append(out[domain.ID(r.project)], r.url)
+	}
+	return out, err
 }
 
 // ProjectCandidates feeds domain.Resolve.

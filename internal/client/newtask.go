@@ -12,8 +12,9 @@ import (
 )
 
 // NewTask creates a Task from the working directory dir, the way every
-// interface does (§11.1). Without req.Project it is the Project whose repo is
-// the origin of dir; nothing matching is an error, never a default. Unless
+// interface does (§11.1). Without req.Project it is the Project that has the
+// origin of dir among its repo URLs (the main repo or an alias, compared
+// literally); nothing matching is an error, never a default. Unless
 // req.NoStart, it asks the origin for the commit of the source ref (the
 // Project's default branch if req.SourceRef is empty) and sends it with the
 // ref it resolved; the Run freezes the pair, and the Controller never resolves
@@ -59,7 +60,7 @@ func first(a, b string) string {
 	return b
 }
 
-// ProjectForDir is the Project whose repo is the origin of dir, if exactly one is.
+// ProjectForDir is the Project that has the origin of dir among its repo URLs, if exactly one does.
 func (c *Client) ProjectForDir(ctx context.Context, dir string) (v1.Project, error) {
 	return c.projectFor(ctx, dir, "")
 }
@@ -78,22 +79,27 @@ func (c *Client) projectFor(ctx context.Context, dir, ref string) (v1.Project, e
 	}
 	matches, err := gitctx.Match(origin, projects)
 	if err != nil {
+		if errors.Is(err, gitctx.ErrRelativeOrigin) {
+			return v1.Project{}, domain.NewError(domain.CodeInvalidRequest,
+				"the origin of this working directory is a relative path: use --project or set an absolute origin", nil)
+		}
 		return v1.Project{}, domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
 	}
 	switch len(matches) {
 	case 0:
-		return v1.Project{}, noMatch("no Project has the repository of this working directory", projects)
+		return v1.Project{}, noMatch("no Project has the origin of this working directory as a repo URL", projects)
 	case 1:
 		return matches[0], nil
 	}
 	names := projectNames(matches)
 	return v1.Project{}, domain.NewError(domain.CodeAmbiguousRef,
-		fmt.Sprintf("more than one Project has the repository of this working directory (%s): choose one with --project", strings.Join(names, ", ")),
+		fmt.Sprintf("more than one Project has the origin of this working directory as a repo URL (%s): choose one with --project", strings.Join(names, ", ")),
 		map[string]any{"candidates": names})
 }
 
-// remoteFor is "origin" when the working copy is of the Project's repository,
-// so that git uses the user's own configuration for it; else the repo URL.
+// remoteFor is "origin" when the origin of the working copy is, literally, a
+// URL of the Project, so that git uses the user's own configuration for it;
+// else the main repo of the Project.
 func remoteFor(ctx context.Context, dir string, p v1.Project) string {
 	if origin, err := gitctx.OriginURL(ctx, dir); err == nil {
 		if m, err := gitctx.Match(origin, []v1.Project{p}); err == nil && len(m) == 1 {

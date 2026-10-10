@@ -9,12 +9,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
 	"os/exec"
-	"path"
-	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,138 +22,55 @@ import (
 // ErrNoOrigin means the directory has no "origin" remote to take a repository from.
 var ErrNoOrigin = errors.New("gitctx: no origin remote")
 
-// OriginURL is the URL of the "origin" remote of the repository at dir. A
-// local path or file:// origin that is relative is made absolute against the
-// directory of the repository, which is what git resolves it against, so that
-// it can be compared with other paths.
+// OriginURL is the URL of the "origin" remote of the repository at dir, as git
+// has it but for the surrounding white space.
 func OriginURL(ctx context.Context, dir string) (string, error) {
 	out, err := git(ctx, dir, "config", "--get", "remote.origin.url")
 	if err != nil || out == "" {
 		return "", ErrNoOrigin
 	}
-	top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
-	if err != nil {
-		top = dir
-	}
-	return absoluteOrigin(out, top), nil
+	return strings.TrimSpace(out), nil
 }
 
-func absoluteOrigin(origin, base string) string {
-	local := origin
-	switch {
-	case strings.HasPrefix(origin, "file://"):
-		local = strings.TrimPrefix(origin, "file://")
-	case strings.Contains(origin, "://"), scpLike.MatchString(origin):
-		return origin
-	}
-	if filepath.IsAbs(local) {
-		return origin
-	}
-	return filepath.Join(base, local)
-}
+// ErrRelativeOrigin means the origin is a path relative to the working copy.
+// What it names depends on where git is run, so it identifies no repository.
+var ErrRelativeOrigin = errors.New("gitctx: the origin is a relative path: use --project or set an absolute origin")
 
-var scpLike = regexp.MustCompile(`^(?:[^@/:]+@)?([^/:]+):(.*)$`)
+// scpLike is the "[user@]host:path" form of an ssh remote.
+var scpLike = regexp.MustCompile(`^(?:[^@/:]+@)?[^/:]+:`)
 
-// Normalize reduces the many spellings of a repository URL to one key, so that
-// the remote of a working copy can be matched with the repo of a Project:
-//
-//	git@GitHub.com:org/repo.git, https://user:pw@github.com:443/org/repo/
-//
-// all become github.com/org/repo. Over ssh a path is a filesystem path:
-// host:/srv/x and ssh://host/srv/x are absolute and get the key host//srv/x,
-// distinct from the home-relative host:srv/x. Paths with ~, .. or a leading //
-// are refused (ErrUnsafePath) rather than guessed. The scheme, user, a trailing ".git" or slash,
-// the case of the host and the default port of the scheme (ssh 22, https 443,
-// http 80, git 9418) do not tell repositories apart; the case of the path and
-// any other port do. Local paths and file:// URLs become file:<path>, cleaned
-// but not resolved: a relative path stays relative, and OriginURL already
-// makes the origin of a working copy absolute. They keep their ".git": on a
-// filesystem /srv/repo and /srv/repo.git are two repositories.
-func Normalize(raw string) (string, error) {
-	s := strings.TrimSpace(raw)
-	var host, repoPath string
-	var absolute bool
-	switch {
-	case s == "":
-		return "", errors.New("gitctx: empty repository URL")
-	case strings.Contains(s, "://"):
-		u, err := url.Parse(s)
-		if err != nil {
-			// url.Error repeats the raw URL, and a malformed one defeats any
-			// redaction: name nothing of it.
-			return "", errors.New("gitctx: the repository URL is not a valid URL")
-		}
-		if u.Scheme == "file" {
-			return localKey(u.Path), nil
-		}
-		host, repoPath = strings.ToLower(u.Hostname()), u.Path
-		if port := u.Port(); port != "" && port != defaultPorts[strings.ToLower(u.Scheme)] {
-			host = net.JoinHostPort(host, port)
-		}
-		scheme := strings.ToLower(u.Scheme)
-		absolute = scheme == "ssh" || scheme == "git+ssh" || scheme == "ssh+git"
-	case scpLike.MatchString(s):
-		m := scpLike.FindStringSubmatch(s)
-		host, repoPath = strings.ToLower(m[1]), m[2]
-		absolute = strings.HasPrefix(repoPath, "/")
-	default:
-		return localKey(s), nil
-	}
-	if !safePath(repoPath) {
-		return "", ErrUnsafePath
-	}
-	repoPath = strings.TrimSuffix(strings.Trim(path.Clean("/"+repoPath), "/"), ".git")
-	if host == "" || repoPath == "" {
-		return "", fmt.Errorf("gitctx: repository URL %q has no host or path", redact(s))
-	}
-	if absolute {
-		// Over ssh a path is a filesystem path: host:/srv/x and host:srv/x
-		// (relative to the home of the user) are two repositories, so the
-		// absolute form gets its own key. Forges treat both alike, but a
-		// failed match is an error; a wrong one would pick another Project.
-		return host + "//" + repoPath, nil
-	}
-	return host + "/" + repoPath, nil
-}
-
-// ErrUnsafePath reports a remote path that git interprets in ways a key
-// cannot capture safely (home expansion, "..", a leading "//"). Such a remote
-// matches no Project: choose one with --project instead.
-var ErrUnsafePath = errors.New("gitctx: the repository path uses ~, .. or a leading // and cannot be matched safely; choose the Project with --project")
-
-// safePath accepts only remote paths whose meaning does not depend on the
-// server: no home expansion, no parent segments, no leading double slash.
-func safePath(p string) bool {
-	if strings.HasPrefix(p, "~") || strings.HasPrefix(p, "/~") || strings.HasPrefix(p, "//") {
-		return false
-	}
-	for _, seg := range strings.Split(p, "/") {
-		if seg == ".." || seg == "." {
-			return false
-		}
-	}
-	return true
-}
-
-// defaultPorts are the ports a scheme implies, which a URL may spell or omit.
-var defaultPorts = map[string]string{"ssh": "22", "https": "443", "http": "80", "git": "9418"}
-
-func localKey(p string) string { return "file:" + filepath.Clean(p) }
-
-// Match returns the Projects whose repository is the one at origin. A Project
-// whose repo cannot be read as a URL matches nothing.
+// Match returns the Projects that have origin among their URLs: the main repo
+// or an alias. The comparison is literal, byte for byte: no case folding, no
+// ".git", port or slash handling, no path cleaning. Two spellings of one
+// repository are told apart by adding the second as an alias of the Project. An
+// origin that is a relative path matches nothing (ErrRelativeOrigin): git
+// resolves it against the working copy, and guessing a path would trade
+// repositories.
 func Match(origin string, projects []v1.Project) ([]v1.Project, error) {
-	want, err := Normalize(origin)
-	if err != nil {
-		return nil, err
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return nil, errors.New("gitctx: empty repository URL")
+	}
+	if isRelativePath(origin) {
+		return nil, ErrRelativeOrigin
 	}
 	var out []v1.Project
 	for _, p := range projects {
-		if got, err := Normalize(p.Repo); err == nil && got == want {
+		if slices.Contains(p.RepoURLs(), origin) {
 			out = append(out, p)
 		}
 	}
 	return out, nil
+}
+
+func isRelativePath(s string) bool {
+	switch {
+	case strings.HasPrefix(s, "file://"):
+		return !strings.HasPrefix(s, "file:///")
+	case strings.Contains(s, "://"), scpLike.MatchString(s):
+		return false
+	}
+	return !strings.HasPrefix(s, "/")
 }
 
 var fullSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
@@ -230,35 +144,21 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-var (
-	userinfo = regexp.MustCompile(`(\w+://)[^/\s]*@`) // greedy: the userinfo ends at the last '@'
-	// authority splits scheme://[userinfo@]rest; the userinfo ends at the last '@' of the authority.
-	authority = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*://)([^/?#]*)@(.*)$`)
-)
+// urlToken is a URL with a scheme inside a longer text, such as git's stderr.
+var urlToken = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"<>]*`)
 
-// StripCredentials takes the secrets out of a repository URL before it is
-// stored or sent: Projects keep clean URLs, and git finds the credentials in
-// the user's own configuration. It reports whether it removed anything that may
-// have been a secret. A password goes from every URL, keeping the user name; an
-// http(s) URL loses its whole userinfo, since there the name may be a token.
-// The user of an ssh URL, like git@, is no secret and stays.
-func StripCredentials(raw string) (clean string, removed bool) {
-	m := authority.FindStringSubmatch(raw)
-	if m == nil {
-		return raw, false
-	}
-	scheme, info, rest := m[1], m[2], m[3]
-	name, _, hasPassword := strings.Cut(info, ":")
-	switch {
-	case strings.EqualFold(scheme, "http://") || strings.EqualFold(scheme, "https://"):
-		return scheme + rest, true
-	case hasPassword && name == "":
-		return scheme + rest, true
-	case hasPassword:
-		return scheme + name + "@" + rest, true
-	}
-	return raw, false
+// redact hides what a URL in s may carry as a secret: the whole userinfo, up to
+// the last '@', and any query or fragment (https://h/r?token=x becomes
+// https://h/r?***). It errs on the side of hiding too much.
+func redact(s string) string {
+	return urlToken.ReplaceAllStringFunc(s, func(u string) string {
+		scheme, rest, _ := strings.Cut(u, "://")
+		if i := strings.LastIndex(rest, "@"); i >= 0 {
+			rest = "***@" + rest[i+1:]
+		}
+		if i := strings.IndexAny(rest, "?#"); i >= 0 {
+			rest = rest[:i+1] + "***"
+		}
+		return scheme + "://" + rest
+	})
 }
-
-// redact hides the credentials a URL may carry before it reaches a message.
-func redact(s string) string { return userinfo.ReplaceAllString(s, "${1}***@") }
