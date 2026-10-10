@@ -48,3 +48,16 @@ func TestRepoIsRelative(t *testing.T) {
 		}
 	}
 }
+
+func TestRepoURLProblem_ScpWithAPassword(t *testing.T) {
+	for _, repo := range []string{"user:s3cret@host:org/repo.git", "u:s3cret@host:/srv/repo"} {
+		if got := domain.RepoURLProblem(repo); got != "a password" {
+			t.Errorf("%q: problem %q", repo, got)
+		}
+	}
+	for _, repo := range []string{"git@github.com:org/repo.git", "host:org/repo", "git@host:org/a@b.git"} {
+		if got := domain.RepoURLProblem(repo); got != "" {
+			t.Errorf("%q refused: %s", repo, got)
+		}
+	}
+}

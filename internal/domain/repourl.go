@@ -19,6 +19,12 @@ var (
 func RepoURLProblem(repo string) string {
 	m := schemeURL.FindStringSubmatch(repo)
 	if m == nil {
+		// scp-like user:password@host:path: a ':' before the '@' of the first
+		// segment is a password (git@host:path has none).
+		first, _, _ := strings.Cut(repo, "/")
+		if i := strings.LastIndex(first, "@"); i >= 0 && strings.Contains(first[:i], ":") {
+			return "a password"
+		}
 		return ""
 	}
 	if strings.ContainsAny(repo, "?#") {

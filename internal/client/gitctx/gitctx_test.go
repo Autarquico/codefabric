@@ -261,3 +261,19 @@ func TestResolveRef_FailuresDoNotLeakAQueryToken(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestRedaction_AnAtInTheQueryOrFragmentDoesNotUncoverTheSecret(t *testing.T) {
+	for _, raw := range []string{ //nolint:gosec // test data: fake secrets
+		"https://h/r?access_token=prefix@SECRET",
+		"https://h/r#prefix@SECRET",
+		"https://user:SECRET@h/r?x=a@b",
+		"fatal: could not read from user:SECRET@host:org/repo.git",
+	} {
+		if got := gitctx.Redact(raw); strings.Contains(got, "SECRET") {
+			t.Errorf("Redact(%q) = %q", raw, got)
+		}
+	}
+	if got := gitctx.Redact("https://h/r?access_token=prefix@SECRET"); got != "https://h/r?***" {
+		t.Errorf("Redact = %q, want the URL without its query", got)
+	}
+}

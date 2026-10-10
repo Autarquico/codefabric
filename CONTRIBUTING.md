@@ -31,6 +31,8 @@ Tests must not depend on wall-clock time: inject the clock.
 
 SQLite migrations are numbered by phase to avoid collisions between parallel milestones: Phase 0 uses `0001–0099`, Phase 1 `0100–0199`, and so on. Each milestone spec reserves its range.
 
+A migration is immutable once it is on `main`: later changes go into a new migration. Until its PR is merged, a migration may still be edited in place, since no deployed database can have applied it.
+
 ## Commits
 
 Small, focused commits with imperative messages. No generated files in commits except `go.sum`.

@@ -151,14 +151,26 @@ var urlToken = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"<>]*`)
 // the last '@', and any query or fragment (https://h/r?token=x becomes
 // https://h/r?***). It errs on the side of hiding too much.
 func redact(s string) string {
-	return urlToken.ReplaceAllStringFunc(s, func(u string) string {
+	s = urlToken.ReplaceAllStringFunc(s, func(u string) string {
 		scheme, rest, _ := strings.Cut(u, "://")
-		if i := strings.LastIndex(rest, "@"); i >= 0 {
-			rest = "***@" + rest[i+1:]
-		}
+		// The query and fragment go first: an '@' inside them must not be
+		// taken for the end of a userinfo.
+		suffix := ""
 		if i := strings.IndexAny(rest, "?#"); i >= 0 {
-			rest = rest[:i+1] + "***"
+			rest, suffix = rest[:i], rest[i:i+1]+"***"
 		}
-		return scheme + "://" + rest
+		authority, path, hasPath := strings.Cut(rest, "/")
+		if i := strings.LastIndex(authority, "@"); i >= 0 {
+			authority = "***@" + authority[i+1:]
+		}
+		if hasPath {
+			authority += "/" + path
+		}
+		return scheme + "://" + authority + suffix
 	})
+	// scp-like user:password@host:path has no scheme to anchor on.
+	return scpCredential.ReplaceAllString(s, "***@")
 }
+
+// scpCredential is the user:password@ of a scp-like remote inside a text.
+var scpCredential = regexp.MustCompile(`[^\s'"<>@/:]+:[^\s'"<>@/]*@`)
