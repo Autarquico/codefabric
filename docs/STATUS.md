@@ -9,7 +9,7 @@
 ## Done esta semana
 
 <!-- pm-sync:done-this-week -->
-_(nada)_
+- #3 Domain core: entidades, máquinas de estado y errores
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -17,7 +17,7 @@ _(nada)_
 ## En curso
 
 <!-- pm-sync:in-progress -->
-- #3 Domain core: entidades, máquinas de estado y errores
+- #4 Controller store: SQLite, transacciones, eventos e idempotencia
 <!-- /pm-sync:in-progress -->
 
 ---
