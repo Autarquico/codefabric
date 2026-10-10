@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,7 +78,7 @@ func Open(dir string, opts ...Option) (*Client, error) {
 	}
 	controller := b.Controller
 	if o.controller != "" {
-		if _, _, err := net.SplitHostPort(o.controller); err != nil {
+		if !validControllerAddress(o.controller) {
 			return nil, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("--controller %q is not a host:port address", o.controller), nil)
 		}
 		controller = o.controller
@@ -87,6 +89,21 @@ func Open(dir string, opts ...Option) (*Client, error) {
 	}
 	c.dir = dir
 	return c, nil
+}
+
+// validControllerAddress accepts a bare host and a numeric port from 1 to
+// 65535: no scheme, credentials, path, query or fragment, which would otherwise
+// bend the URL the client builds from it.
+func validControllerAddress(addr string) bool {
+	if strings.ContainsAny(addr, "/@?#") {
+		return false
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+	n, err := strconv.ParseUint(port, 10, 16)
+	return err == nil && n >= 1
 }
 
 // newClient pins ca as the only root: the system store plays no part.

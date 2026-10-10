@@ -53,7 +53,7 @@ func newController(t *testing.T, start time.Time, opts ...func(*api.Config)) *te
 	return newControllerWithRoutes(t, start, nil, opts...)
 }
 
-// newControllerWithRoutes also lets the test add routes (see addRoute) before
+// newControllerWithRoutes also lets the test add routes (see AddRoute) before
 // the server starts.
 func newControllerWithRoutes(t *testing.T, start time.Time, routes func(*api.Server), opts ...func(*api.Config)) *testController {
 	t.Helper()

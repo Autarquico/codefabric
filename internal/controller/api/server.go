@@ -70,6 +70,7 @@ type Server struct {
 	tlsConfig *tls.Config
 	mux       *http.ServeMux
 	routes    map[string]route
+	health    healthCache
 }
 
 // New builds the server and its route table.

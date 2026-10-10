@@ -1,11 +1,18 @@
 package api_test
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -118,10 +125,22 @@ func TestApiSdkCliStatus_ControllerOverrideKeepsThePinnedTrustAndTheStoredBundle
 		_, err = c.Status(t.Context())
 		wantCode(t, err, domain.CodeUnauthenticated)
 	})
-	t.Run("not an address", func(t *testing.T) {
-		_, err := openOverride(tc.ownerDir, "no-port-here")
-		wantCode(t, err, domain.CodeInvalidRequest)
-	})
+	for _, bad := range []string{
+		"no-port-here", ":7443", "host:", "host:0", "host:65536", "host:+80", "host:http",
+		"host:7443/path", "user@host:7443", "host:7443?x=1", "host:7443#frag", "https://host:7443",
+	} {
+		t.Run("not an address: "+bad, func(t *testing.T) {
+			_, err := openOverride(tc.ownerDir, bad)
+			wantCode(t, err, domain.CodeInvalidRequest)
+		})
+	}
+	for _, good := range []string{"example.com:1", "127.0.0.1:65535", "[::1]:7443"} {
+		t.Run("an address: "+good, func(t *testing.T) {
+			if _, err := openOverride(tc.ownerDir, good); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 
 	after, err := client.LoadCredentials(tc.ownerDir)
 	must(t, err)
@@ -132,4 +151,93 @@ func TestApiSdkCliStatus_ControllerOverrideKeepsThePinnedTrustAndTheStoredBundle
 
 func openOverride(dir, addr string) (*client.Client, error) {
 	return client.Open(dir, client.WithController(addr))
+}
+
+func TestApiSdkCliStatus_ConcurrentStatusCallsShareOneHealthCheckForAFewSeconds(t *testing.T) {
+	var checks atomic.Int64
+	tc := newController(t, time.Now(), withHealth(func(context.Context) error {
+		checks.Add(1)
+		time.Sleep(100 * time.Millisecond) // long enough for the others to arrive
+		return nil
+	}))
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Go(func() {
+			st, err := tc.owner.Status(t.Context())
+			if err != nil || !st.Database.OK {
+				t.Errorf("status %+v: %v", st, err)
+			}
+		})
+	}
+	wg.Wait()
+	if got := checks.Load(); got != 1 {
+		t.Fatalf("%d concurrent calls ran %d health checks, want 1", 20, got)
+	}
+
+	tc.clock.Advance(4 * time.Second)
+	_, err := tc.owner.Status(t.Context())
+	must(t, err)
+	if got := checks.Load(); got != 1 {
+		t.Errorf("a call within the cache window ran a check: %d", got)
+	}
+
+	tc.clock.Advance(2 * time.Second)
+	_, err = tc.owner.Status(t.Context())
+	must(t, err)
+	if got := checks.Load(); got != 2 {
+		t.Errorf("a call after the cache window ran %d checks in total, want 2", got)
+	}
+}
+
+func TestApiSdkCliStatus_AResponseDeclaresItsLengthEvenToAnHTTP10Peer(t *testing.T) {
+	healthy := newController(t, time.Now())
+	failing := newControllerWithRoutes(t, time.Now(), failureRoutes)
+
+	for name, tc := range map[string]struct {
+		ctl    *testController
+		path   string
+		status int
+	}{
+		"2xx":   {healthy, "/v1/status", http.StatusOK},
+		"error": {failing, "/v1/test/error", http.StatusInternalServerError},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, body := getHTTP10(t, tc.ctl, tc.path)
+			if resp.StatusCode != tc.status {
+				t.Fatalf("status %d, want %d", resp.StatusCode, tc.status)
+			}
+			length, err := strconv.Atoi(resp.Header.Get("Content-Length"))
+			if err != nil {
+				t.Fatalf("no Content-Length: %v", resp.Header)
+			}
+			if len(body) != length {
+				t.Errorf("declared %d bytes, got %d", length, len(body))
+			}
+		})
+	}
+}
+
+// getHTTP10 sends an HTTP/1.0 request over mutual TLS as the owner.
+func getHTTP10(t *testing.T, tc *testController, path string) (*http.Response, []byte) {
+	t.Helper()
+	creds, err := client.LoadCredentials(tc.ownerDir)
+	must(t, err)
+	pair, err := tls.X509KeyPair(creds.CertPEM, creds.KeyPEM)
+	must(t, err)
+	roots := x509.NewCertPool()
+	roots.AddCert(tc.ca.Cert)
+	conn, err := (&tls.Dialer{Config: &tls.Config{
+		MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{pair},
+	}}).DialContext(t.Context(), "tcp", tc.addr)
+	must(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.Write([]byte("GET " + path + " HTTP/1.0\r\n\r\n"))
+	must(t, err)
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	must(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	must(t, err)
+	return resp, body
 }

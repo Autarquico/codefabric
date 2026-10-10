@@ -25,7 +25,7 @@ type requestState struct {
 	id        string
 	principal domain.ID
 	status    int // 0 until the response starts
-	panicked  bool
+	aborted   bool
 }
 
 type stateKey struct{}
@@ -107,7 +107,7 @@ func (s *Server) withLog(next http.Handler) http.Handler {
 		defer func() {
 			st := stateOf(r.Context())
 			level := slog.LevelInfo
-			if st.panicked || st.status >= http.StatusInternalServerError {
+			if st.aborted || st.status >= http.StatusInternalServerError {
 				level = slog.LevelError
 			}
 			attrs := []slog.Attr{
@@ -120,7 +120,7 @@ func (s *Server) withLog(next http.Handler) http.Handler {
 			if st.principal != "" {
 				attrs = append(attrs, slog.String("principal", string(st.principal)))
 			}
-			if st.panicked {
+			if st.aborted {
 				attrs = append(attrs, slog.Bool("aborted", true))
 			}
 			s.log.LogAttrs(r.Context(), level, "request", attrs...)
@@ -147,7 +147,7 @@ func (s *Server) withRecover(next http.Handler) http.Handler {
 			s.log.ErrorContext(r.Context(), "panic serving request",
 				"request_id", st.id, "panic", fmt.Sprint(rec), "stack", string(debug.Stack()))
 			if st.status != 0 {
-				st.panicked = true
+				st.aborted = true
 				panic(http.ErrAbortHandler)
 			}
 			writeError(w, r, s.log, internalError(r))
