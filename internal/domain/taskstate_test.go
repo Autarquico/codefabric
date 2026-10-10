@@ -199,9 +199,10 @@ func checkDerivation(t *testing.T, v TaskView) {
 // existential over the set of Runs or reads the last Run, so a history of
 // three holds the last Run plus two distinct existential witnesses, which is
 // the most any single predicate pair can need. Longer histories are covered by
-// the random test below. Each case must select a row and agree with the oracle.
+// the random test below. Histories of 0 to 2 Runs also use every Run class
+// (publication × evaluation × promoted), so every combination of those fields
+// meets every policy. Each case must select a row and agree with the oracle.
 func TestScenario_DomainCore_TaskDerivationExhaustive(t *testing.T) {
-	classes := representativeRunClasses()
 	completions := []Completion{CompletionFirstSuccess, CompletionPromote, CompletionManual}
 	start := time.Now()
 	cases := 0
@@ -217,8 +218,8 @@ func TestScenario_DomainCore_TaskDerivationExhaustive(t *testing.T) {
 	}
 	var history [3]RunSummary
 	shortNs := [3]uint64{1, 2, 3}
-	var walk func(v TaskView, depth, maxDepth int)
-	walk = func(v TaskView, depth, maxDepth int) {
+	var walk func(v TaskView, classes []RunSummary, depth, maxDepth int)
+	walk = func(v TaskView, classes []RunSummary, depth, maxDepth int) {
 		if depth == maxDepth {
 			v.Runs = history[:depth]
 			check(v)
@@ -227,7 +228,7 @@ func TestScenario_DomainCore_TaskDerivationExhaustive(t *testing.T) {
 		for _, class := range classes {
 			class.ShortN = shortNs[depth]
 			history[depth] = class
-			walk(v, depth+1, maxDepth)
+			walk(v, classes, depth+1, maxDepth)
 		}
 	}
 
@@ -238,14 +239,17 @@ func TestScenario_DomainCore_TaskDerivationExhaustive(t *testing.T) {
 					for _, retry := range retryClasses() {
 						view := TaskView{Markers: markers, Completion: completion, DepsSatisfied: deps, Autostart: autostart, Retry: retry}
 						for size := range 4 {
-							walk(view, 0, size)
+							walk(view, representativeRunClasses(), 0, size)
+						}
+						for size := range 3 {
+							walk(view, runClasses(), 0, size)
 						}
 					}
 				}
 			}
 		}
 	}
-	t.Logf("%d Run classes, histories of 0-3 Runs: %d cases in %v", len(classes), cases, time.Since(start))
+	t.Logf("%d representative classes up to 3 Runs, %d classes up to 2 Runs: %d cases in %v", len(representativeRunClasses()), len(runClasses()), cases, time.Since(start))
 }
 
 func TestTaskDerivation_LastRunIsTheHighestShortNWhateverTheSliceOrder(t *testing.T) {
@@ -445,6 +449,7 @@ func TestTaskRows_Golden(t *testing.T) {
 		{"row 2: first_success met by a published Run without evaluators", with(ready, runs(completedRun(1, PublicationPublished, EvaluationNone))), 2, TaskCompleted, WaitingNone},
 		{"row 2: first_success met by a published Run that passed", with(ready, runs(completedRun(1, PublicationPublished, EvaluationPassed))), 2, TaskCompleted, WaitingNone},
 		{"row 2: promote met by a published, promoted Run", with(ready, both(runs(RunSummary{ShortN: 1, State: RunCompleted, Publication: PublicationPublished, Evaluation: EvaluationNone, Promoted: true}), func(v *TaskView) { v.Completion = CompletionPromote })), 2, TaskCompleted, WaitingNone},
+		{"row 2 over row 4: promote met while evaluation is still pending", with(ready, both(runs(RunSummary{ShortN: 1, State: RunCompleted, Publication: PublicationPublished, Evaluation: EvaluationPending, Promoted: true}), func(v *TaskView) { v.Completion = CompletionPromote })), 2, TaskCompleted, WaitingNone},
 		{"row 4: promote with a promoted Run still publishing", with(ready, both(runs(RunSummary{ShortN: 1, State: RunCompleted, Publication: PublicationPending, Evaluation: EvaluationNone, Promoted: true}), func(v *TaskView) { v.Completion = CompletionPromote })), 4, TaskRunning, WaitingNone},
 		{"row 10: promote with a promoted Run whose publication failed", with(ready, both(runs(RunSummary{ShortN: 1, State: RunCompleted, Publication: PublicationFailed, Evaluation: EvaluationNone, Promoted: true}), func(v *TaskView) { v.Completion = CompletionPromote })), 10, TaskWaiting, WaitingReview},
 		{"row 10: promote with a promoted Run without publication", with(ready, both(runs(RunSummary{ShortN: 1, State: RunCompleted, Publication: PublicationNone, Evaluation: EvaluationNone, Promoted: true}), func(v *TaskView) { v.Completion = CompletionPromote })), 10, TaskWaiting, WaitingReview},

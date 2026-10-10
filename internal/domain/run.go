@@ -50,7 +50,8 @@ const (
 	LineageRetries    LineageKind = "retries"
 )
 
-// EndReason says why a Run reached a terminal state; the set is open (§3.4).
+// EndReason says why a Run reached a terminal state. The domain defines the
+// closed set below; the zero value means no reason recorded.
 type EndReason string
 
 // End reasons named in the spec.
