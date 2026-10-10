@@ -124,7 +124,7 @@ func TestWorkers_RoundTripWithTheLastHeartbeat(t *testing.T) {
 	}
 
 	total := v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 512000}
-	resources := v1.WorkerResources{Total: total, Allocatable: v1.Capacity{CPU: 8, MemoryMB: 65536, DiskMB: 512000}, Free: v1.Capacity{CPU: 8}}
+	resources := v1.WorkerResources{Total: total, Allocatable: v1.Capacity{CPU: 8, MemoryMB: 65536, DiskMB: 512000}}
 	report := WorkerReport{Epoch: "E1", DaemonVersion: "v0.3.0", Hostname: "alpha.lan", OS: "linux", Arch: "amd64", Capabilities: []string{"docker"}}
 	beat := func(report WorkerReport, health v1.Health) {
 		t.Helper()
@@ -139,6 +139,7 @@ func TestWorkers_RoundTripWithTheLastHeartbeat(t *testing.T) {
 	beat(report, v1.Health{Status: v1.HealthDegraded, Message: "disk"}) // replaces the first: only the last is kept
 
 	got := f.read(w.ID)
+	resources.Free = resources.Allocatable // nothing is reserved: Free is read as what the Worker contributes
 	if got.Report.Epoch != "E2" || got.Report.Hostname != "alpha.lan" || !slices.Equal(got.Report.Capabilities, []string{"docker"}) ||
 		got.Resources != resources || got.Health != (v1.Health{Status: v1.HealthDegraded, Message: "disk"}) ||
 		got.LastHeartbeatAt == nil || !got.LastHeartbeatAt.Equal(epoch0) {

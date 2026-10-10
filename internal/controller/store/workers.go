@@ -30,6 +30,13 @@ type Worker struct {
 	Resources  v1.WorkerResources
 	Health     v1.Health
 	ActiveRuns int
+
+	// Reserved is the sum of the open reservations of the Worker (§10.5) and
+	// Reservations how many they are; Resources.Free is Allocatable less
+	// Reserved. LastCommandSeq is the Seq of the latest command queued for it.
+	Reserved       v1.Capacity
+	Reservations   int
+	LastCommandSeq uint64
 }
 
 // WorkerReport is what a daemon says about itself on every heartbeat.
@@ -60,8 +67,11 @@ const workerSelect = `SELECT w.id, w.short_n, w.name, w.identity_id, w.state, CO
     COALESCE(w.epoch, ''), COALESCE(w.daemon_version, ''), COALESCE(w.hostname, ''), COALESCE(w.os, ''),
     COALESCE(w.arch, ''), w.capabilities, w.cpu_max, w.memory_max_mb, w.disk_max_mb, w.max_concurrent_runs,
     w.availability, w.last_heartbeat_at, w.created_at, w.removed_at, h.payload,
-    (SELECT COUNT(*) FROM runs r WHERE r.worker_id = w.id AND r.state IN (` + activeRunStates + `))
-  FROM workers w LEFT JOIN worker_heartbeats h ON h.worker_id = w.id`
+    (SELECT COUNT(*) FROM runs r WHERE r.worker_id = w.id AND r.state IN (` + activeRunStates + `)),
+    COALESCE(rv.cpu, 0), COALESCE(rv.memory_mb, 0), COALESCE(rv.disk_mb, 0), COALESCE(rv.n, 0), w.last_command_seq
+  FROM workers w LEFT JOIN worker_heartbeats h ON h.worker_id = w.id
+  LEFT JOIN (SELECT worker_id, SUM(cpu) AS cpu, SUM(memory_mb) AS memory_mb, SUM(disk_mb) AS disk_mb, COUNT(*) AS n
+             FROM reservations WHERE released_at IS NULL GROUP BY worker_id) rv ON rv.worker_id = w.id`
 
 // heartbeatState is the document kept in worker_heartbeats.
 type heartbeatState struct {
@@ -82,7 +92,8 @@ func scanWorker(row rowScanner) (Worker, error) {
 	if err := row.Scan(&id, &w.Short, &w.Name, &identity, &state, &beforeOff,
 		&w.Report.Epoch, &w.Report.DaemonVersion, &w.Report.Hostname, &w.Report.OS, &w.Report.Arch,
 		&capabilities, &w.Settings.CPUMax, &w.Settings.MemoryMaxMB, &w.Settings.DiskMaxMB, &w.Settings.MaxConcurrentRuns,
-		&avail, &heartbeat, &created, &removed, &payload, &w.ActiveRuns); err != nil {
+		&avail, &heartbeat, &created, &removed, &payload, &w.ActiveRuns,
+		&w.Reserved.CPU, &w.Reserved.MemoryMB, &w.Reserved.DiskMB, &w.Reservations, &w.LastCommandSeq); err != nil {
 		return Worker{}, scanErr(err, "worker")
 	}
 	if err := json.Unmarshal([]byte(capabilities), &w.Report.Capabilities); err != nil {
@@ -94,6 +105,7 @@ func scanWorker(row rowScanner) (Worker, error) {
 			return Worker{}, fmt.Errorf("store: worker %s has a corrupt heartbeat: %w", id, err)
 		}
 		w.Resources, w.Health = hb.Resources, hb.Health
+		w.Resources.Free = unreserved(w.Resources.Allocatable, w.Reserved)
 	}
 	w.ID, w.IdentityID = domain.ID(id), domain.ID(identity)
 	w.State, w.BeforeOffline = domain.WorkerState(state), domain.WorkerState(beforeOff)
@@ -101,6 +113,17 @@ func scanWorker(row rowScanner) (Worker, error) {
 	w.LastHeartbeatAt, w.RemovedAt = timePtr(heartbeat), timePtr(removed)
 	w.CreatedAt = time.Unix(0, created).UTC()
 	return w, nil
+}
+
+// unreserved is what is left of allocatable once the reservations are taken,
+// never below zero: a Worker that now contributes less than it has reserved
+// has nothing free, not a negative amount.
+func unreserved(allocatable, reserved v1.Capacity) v1.Capacity {
+	return v1.Capacity{
+		CPU:      max(0, allocatable.CPU-reserved.CPU),
+		MemoryMB: max(0, allocatable.MemoryMB-reserved.MemoryMB),
+		DiskMB:   max(0, allocatable.DiskMB-reserved.DiskMB),
+	}
 }
 
 // InsertWorker stores a new Worker. Name must be free among live Workers.

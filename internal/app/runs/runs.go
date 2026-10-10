@@ -5,6 +5,7 @@ package runs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 
@@ -140,12 +141,10 @@ func (s *Service) CancelLiveIn(ctx context.Context, tx *store.Tx, act mutation.A
 		if err != nil {
 			return err
 		}
-		moved, err := tx.FinishRun(ctx, run.ID, run.State, next.State, "", act.Now)
-		if err != nil {
-			return err
-		}
-		if !moved {
+		if err := tx.FinishRun(ctx, run, next.State, "", act.Now); errors.Is(err, store.ErrNoRowChanged) {
 			return domain.NewError(domain.CodeInvalidTransition, "the Run changed state meanwhile", map[string]any{"run": string(run.ID)})
+		} else if err != nil {
+			return err
 		}
 		ev := act.Event(domain.EventRunCancelled, "run cancelled")
 		ev.ProjectID, ev.TaskID, ev.RunID = task.ProjectID, taskID, run.ID
