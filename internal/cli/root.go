@@ -40,7 +40,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, extra ...*cob
 	defer stop()
 
 	root := newRootCmd()
-	root.AddCommand(extra...)
+	addCommands(root, extra)
 	root.SetArgs(args)
 	root.SetIn(stdin)
 	root.SetOut(stdout)
@@ -142,8 +142,22 @@ func newRootCmd() *cobra.Command {
 	flags.String(flagController, "", "host:port of the Controller for this run, instead of the one stored at connect time")
 	flags.Bool(flagDebug, false, "show the details of an error")
 	root.AddCommand(newVersionCmd(), newStatusCmd(), newConnectCmd(), newClientCmd(), newConfigCmd(),
-		newProjectCmd(), newTaskCmd(), newDoCmd(), newRunCmd())
+		newProjectCmd(), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd())
 	return root
+}
+
+// addCommands composes commands from other packages into root. One that has
+// the name of a command root already has (`worker`) contributes its
+// subcommands to it instead of replacing it.
+func addCommands(root *cobra.Command, extra []*cobra.Command) {
+	for _, cmd := range extra {
+		i := slices.IndexFunc(root.Commands(), func(existing *cobra.Command) bool { return existing.Name() == cmd.Name() })
+		if i < 0 {
+			root.AddCommand(cmd)
+			continue
+		}
+		root.Commands()[i].AddCommand(cmd.Commands()...)
+	}
 }
 
 // reportUsageAsInvalidRequest makes a wrong flag or argument count a

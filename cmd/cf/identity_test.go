@@ -17,6 +17,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/cli"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/daemon"
+	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
 )
 
 // cf runs the real command tree, composed exactly as main does.
@@ -28,7 +29,7 @@ func cf(t *testing.T, stdin string, args ...string) (code int, stdout, stderr st
 }
 
 func cliRun(stdout, stderr io.Writer, stdin string, args []string) int {
-	return cli.Run(args, strings.NewReader(stdin), stdout, stderr, daemon.Command())
+	return cli.Run(args, strings.NewReader(stdin), stdout, stderr, daemon.Command(), workerdaemon.Command())
 }
 
 // machine points the CLI at a fresh config/data directory pair.
@@ -169,8 +170,8 @@ func TestCLI_ConnectReadsTheInvitationFromArgumentOrPrompt(t *testing.T) {
 	}
 }
 
-func TestCLI_WorkerInvitationsAreIssuedButNotRedeemable(t *testing.T) {
-	host, _ := bringUpController(t)
+func TestCLI_AnInvitationIsRedeemedOnlyByTheCommandOfItsKind(t *testing.T) {
+	host, clientInvite := bringUpController(t)
 	code, out, errOut := cf(t, "", "controller", "token", "create", "--worker", "--ttl", "10m")
 	if code != 0 || !inviteRe.MatchString(out) {
 		t.Fatalf("create: exit %d: %q %q", code, out, errOut)
@@ -180,10 +181,23 @@ func TestCLI_WorkerInvitationsAreIssuedButNotRedeemable(t *testing.T) {
 		t.Error("the invitation was printed twice")
 	}
 
+	// Each refusal leaves the token unspent: the right command redeems it afterwards.
 	machine(t)
 	code, _, errOut = cf(t, "", "connect", invite)
-	if code != 8 || !strings.Contains(errOut, "CF_NOT_IMPLEMENTED") {
-		t.Fatalf("redeem: exit %d, stderr %q", code, errOut)
+	if code != 2 || !strings.Contains(errOut, "cf worker join") {
+		t.Fatalf("a worker invitation redeemed as a client: exit %d, stderr %q", code, errOut)
+	}
+	if code, _, errOut = cf(t, "", "worker", "join", clientInvite); code != 2 || !strings.Contains(errOut, "cf connect") {
+		t.Fatalf("a client invitation redeemed as a Worker: exit %d, stderr %q", code, errOut)
+	}
+	if code, _, errOut = cf(t, "", "worker", "join", invite, "--name", "Not A Slug"); code != 2 {
+		t.Fatalf("a name that is not a slug: exit %d, stderr %q", code, errOut)
+	}
+	if code, _, errOut = cf(t, "", "worker", "join", invite, "--name", "ci-1"); code != 0 {
+		t.Fatalf("worker join: exit %d, stderr %q", code, errOut)
+	}
+	if code, _, errOut = cf(t, "", "connect", clientInvite); code != 0 {
+		t.Fatalf("the client invitation was spent by the refusal: exit %d, stderr %q", code, errOut)
 	}
 	use(t, host)
 	if code, _, _ = cf(t, "", "controller", "token", "create"); code != 2 {
