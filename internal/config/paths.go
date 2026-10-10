@@ -20,6 +20,12 @@ type Paths struct {
 // CredentialsDir holds the client's certificate, key and pinned CA.
 func (p Paths) CredentialsDir() string { return filepath.Join(p.ConfigDir, "credentials") }
 
+// WorkerCredentialsDir holds the credentials of the Worker daemon of this
+// machine, apart from the client's: one machine can be both.
+func (p Paths) WorkerCredentialsDir() string {
+	return filepath.Join(p.ConfigDir, "worker", "credentials")
+}
+
 // ControllerConfigFile is the Controller's settings file.
 func (p Paths) ControllerConfigFile() string { return filepath.Join(p.ConfigDir, "controller.json") }
 

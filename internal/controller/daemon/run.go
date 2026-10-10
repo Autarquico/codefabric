@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/app"
+	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/api"
@@ -29,6 +31,9 @@ type Options struct {
 	// ServerCertCheckEvery is how often the server certificate is checked for
 	// renewal; zero means every 12 hours.
 	ServerCertCheckEvery time.Duration
+	// WorkerOfflineTTL overrides controller.json's worker_offline_ttl; zero
+	// takes that, and failing that the default of Appendix A.
+	WorkerOfflineTTL time.Duration
 }
 
 const serverCertCheckEvery = 12 * time.Hour
@@ -53,6 +58,7 @@ func newAuthority(db *store.DB, ca *pki.CA, clk clock.Clock, host, port string) 
 	return pki.NewAuthority(pki.AuthorityConfig{
 		DB: db, CA: ca, Clock: clk, IDs: domain.NewIDGenerator(clk.Now, rand.Reader),
 		CertTTL: domain.Defaults().IdentityCertTTL, Host: host, Port: port,
+		EnrollWorker: workers.Enroll,
 	})
 }
 
@@ -94,10 +100,14 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		return nil, fmt.Errorf("listening on %s: %w", cfg.Listen, err)
 	}
 
+	build := buildinfo.Get()
+	offlineTTL := cmp.Or(o.WorkerOfflineTTL, time.Duration(cfg.WorkerOfflineTTL))
+	services := app.New(db, o.Clock, domain.NewIDGenerator(o.Clock.Now, rand.Reader),
+		app.WithWorkers(workers.Config{ControllerVersion: build.Version, OfflineTTL: offlineTTL}))
 	srv, err := api.New(api.Config{
 		Authority: newAuthority(db, ca, o.Clock, host, port), CA: ca, ServerCert: serverCert,
-		Store: db, Work: app.New(db, o.Clock, domain.NewIDGenerator(o.Clock.Now, rand.Reader)),
-		Clock: o.Clock, StartedAt: o.Clock.Now(), Build: buildinfo.Get(), Logger: o.Logger,
+		Store: db, Work: services,
+		Clock: o.Clock, StartedAt: o.Clock.Now(), Build: build, Logger: o.Logger,
 	})
 	if err != nil {
 		_ = ln.Close()
@@ -109,15 +119,16 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	go func() {
 		defer close(c.done)
 		runCtx, stop := context.WithCancel(ctx)
-		var renewing sync.WaitGroup
-		renewing.Go(func() {
+		var background sync.WaitGroup
+		background.Go(func() {
 			renewServerCert(runCtx, o.ServerCertCheckEvery, func() (tls.Certificate, error) {
 				return ca.LoadServerCert(p.PKIDir(), host, o.Clock.Now())
 			}, srv.SetServerCert, o.Logger)
 		})
+		background.Go(func() { services.Workers.RunSweeper(runCtx, o.Logger) })
 		serveErr := srv.Serve(ctx, ln)
 		stop()
-		renewing.Wait()
+		background.Wait()
 		c.err = errors.Join(serveErr, db.Close())
 	}()
 	return c, nil
