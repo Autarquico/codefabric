@@ -2,13 +2,13 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/config"
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 )
 
 func newClientCmd() *cobra.Command {
@@ -17,21 +17,13 @@ func newClientCmd() *cobra.Command {
 	return cmd
 }
 
-func openClient() (*client.Client, error) {
-	paths, err := config.ResolveFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	return client.Open(paths.CredentialsDir())
-}
-
 func newClientListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List client machines",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			c, err := openClient()
+			c, err := openClient(cmd)
 			if err != nil {
 				return err
 			}
@@ -39,16 +31,18 @@ func newClientListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tNAME\tSTATUS\tCERTIFICATE EXPIRES")
-			for _, cl := range clients {
-				status := "active"
-				if cl.RevokedAt != nil {
-					status = "revoked"
+			return emit(cmd, v1.ListClientsResponse{Clients: clients}, func(out io.Writer) error {
+				w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(w, "ID\tNAME\tSTATUS\tCERTIFICATE EXPIRES")
+				for _, cl := range clients {
+					status := "active"
+					if cl.RevokedAt != nil {
+						status = "revoked"
+					}
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", cl.ID, cl.Name, status, cl.NotAfter.Local().Format(time.DateOnly))
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", cl.ID, cl.Name, status, cl.NotAfter.Local().Format(time.DateOnly))
-			}
-			return w.Flush()
+				return w.Flush()
+			})
 		},
 	}
 }
@@ -59,15 +53,19 @@ func newClientRemoveCmd() *cobra.Command {
 		Short: "Revoke a client machine",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := openClient()
+			c, err := openClient(cmd)
 			if err != nil {
 				return err
 			}
 			if err := c.RemoveClient(cmd.Context(), args[0]); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Revoked %s.\n", args[0])
-			return nil
+			return emit(cmd, struct {
+				Revoked string `json:"revoked"`
+			}{args[0]}, func(w io.Writer) error {
+				_, err := fmt.Fprintf(w, "Revoked %s.\n", args[0])
+				return err
+			})
 		},
 	}
 }
@@ -78,7 +76,7 @@ func newClientRenewCmd() *cobra.Command {
 		Short: "Replace this machine's certificate before it expires",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			c, err := openClient()
+			c, err := openClient(cmd)
 			if err != nil {
 				return err
 			}
@@ -89,8 +87,10 @@ func newClientRenewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Certificate renewed; valid until %s.\n", info.NotAfter.Local().Format(time.DateOnly))
-			return nil
+			return emit(cmd, info, func(w io.Writer) error {
+				_, err := fmt.Fprintf(w, "Certificate renewed; valid until %s.\n", info.NotAfter.Local().Format(time.DateOnly))
+				return err
+			})
 		},
 	}
 }

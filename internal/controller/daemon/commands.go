@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -45,6 +46,15 @@ func newInitCmd() *cobra.Command {
 			res, err := Init(cmd.Context(), InitOptions{Paths: paths, Advertise: advertise, Listen: listen, OwnerName: name})
 			if err != nil {
 				return err
+			}
+			if jsonOutput(cmd) {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
+					OwnerID     domain.ID `json:"owner_id"`
+					Invite      string    `json:"invite"`
+					InviteUntil time.Time `json:"invite_until"`
+					ConfigDir   string    `json:"config_dir"`
+					DataDir     string    `json:"data_dir"`
+				}{res.OwnerID, res.Invite, res.InviteUntil, res.Paths.ConfigDir, res.Paths.DataDir})
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Controller initialized.\n  config:  %s\n  data:    %s\n  owner:   %s (credentials in %s, mode 0600)\n\n",
@@ -102,13 +112,20 @@ func newTokenCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c, err := client.Open(paths.CredentialsDir())
+			var opts []client.Option
+			if addr, _ := cmd.Flags().GetString("controller"); addr != "" {
+				opts = append(opts, client.WithController(addr))
+			}
+			c, err := client.Open(paths.CredentialsDir(), opts...)
 			if err != nil {
 				return err
 			}
 			res, err := c.CreateToken(cmd.Context(), kind, ttl)
 			if err != nil {
 				return err
+			}
+			if jsonOutput(cmd) {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Single-use %s invitation, valid until %s:\n", kind, res.ExpiresAt.Local().Format(time.RFC3339))
 			fmt.Fprintln(cmd.OutOrStdout(), res.Invite)
@@ -120,6 +137,13 @@ func newTokenCmd() *cobra.Command {
 	create.Flags().DurationVar(&ttl, "ttl", time.Hour, "how long the invitation stays valid (at most 168h)")
 	token.AddCommand(create)
 	return token
+}
+
+// jsonOutput reads the root command's persistent --json (internal/cli owns
+// it; this package cannot import the CLI).
+func jsonOutput(cmd *cobra.Command) bool {
+	on, _ := cmd.Flags().GetBool("json")
+	return on
 }
 
 func defaultAdvertise() string {
