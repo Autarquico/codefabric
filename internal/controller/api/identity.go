@@ -22,6 +22,7 @@ func (s *Server) registerRoutes() {
 	s.handle("POST /v1/join", nil, s.join)
 	s.handle(renewPattern, anyIdentity, s.renew)
 	s.handle("POST /v1/tokens", clientsOnly, s.createToken)
+	s.handle("GET /v1/status", clientsOnly, s.status)
 	s.handle("GET /v1/clients", clientsOnly, s.listClients)
 	s.handle("DELETE /v1/clients/{id}", clientsOnly, s.removeClient)
 }

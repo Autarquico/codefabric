@@ -11,7 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 // Limits that keep a slow or silent peer from holding a connection forever.
@@ -27,6 +29,9 @@ const (
 // Timeouts bound a connection; a zero field takes its production default.
 type Timeouts struct {
 	Read, Write, Idle time.Duration
+	// Health bounds the database check behind /v1/status. It is an
+	// infrastructure deadline on a context, so it runs on real time.
+	Health time.Duration
 }
 
 func (t Timeouts) orDefaults() Timeouts {
@@ -39,6 +44,9 @@ func (t Timeouts) orDefaults() Timeouts {
 	if t.Idle == 0 {
 		t.Idle = idleTimeout
 	}
+	if t.Health == 0 {
+		t.Health = healthTimeout
+	}
 	return t
 }
 
@@ -47,8 +55,12 @@ type Config struct {
 	Authority  *pki.Authority
 	CA         *pki.CA
 	ServerCert tls.Certificate // leaf first, then the CA; see Server.SetServerCert
-	Logger     *slog.Logger    // defaults to slog.Default()
-	Timeouts   Timeouts        // tests shorten them
+	Store      Store
+	Clock      clock.Clock    // defaults to clock.Real
+	StartedAt  time.Time      // uptime is measured from here
+	Build      buildinfo.Info // what /v1/status reports as the version
+	Logger     *slog.Logger   // defaults to slog.Default()
+	Timeouts   Timeouts       // tests shorten them
 }
 
 // Server is the Controller API over mutual TLS.
@@ -56,10 +68,15 @@ type Server struct {
 	authority *pki.Authority
 	timeouts  Timeouts
 	log       *slog.Logger
+	store     Store
+	clock     clock.Clock
+	startedAt time.Time
+	build     buildinfo.Info
 	cert      atomic.Pointer[tls.Certificate]
 	tlsConfig *tls.Config
 	mux       *http.ServeMux
 	routes    map[string]route
+	health    healthCache
 }
 
 // New builds the server and its route table.
@@ -68,12 +85,20 @@ func New(c Config) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
+	clk := c.Clock
+	if clk == nil {
+		clk = clock.Real{}
+	}
 	roots := x509.NewCertPool()
 	roots.AddCert(c.CA.Cert)
 	s := &Server{
 		authority: c.Authority,
 		timeouts:  c.Timeouts.orDefaults(),
 		log:       log,
+		store:     c.Store,
+		clock:     clk,
+		startedAt: c.StartedAt,
+		build:     c.Build,
 		tlsConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13,
 			// A certificate is optional at the handshake because /v1/join is
@@ -94,8 +119,9 @@ func New(c Config) *Server {
 // Connections already established keep the one they negotiated.
 func (s *Server) SetServerCert(cert tls.Certificate) { s.cert.Store(&cert) }
 
-// Handler is the authorising handler; tests may serve it with their own TLS.
-func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serveHTTP) }
+// Handler is the authorising handler behind the request ID, log and recover
+// middlewares; tests may serve it with their own TLS.
+func (s *Server) Handler() http.Handler { return s.chain(http.HandlerFunc(s.serveHTTP)) }
 
 // TLSConfig is the server-side TLS configuration.
 func (s *Server) TLSConfig() *tls.Config { return s.tlsConfig.Clone() }

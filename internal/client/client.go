@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,18 +53,57 @@ type Client struct {
 	renewMu sync.Mutex
 }
 
+// Option adjusts Open.
+type Option func(*options)
+
+type options struct{ controller string }
+
+// WithController dials addr (host:port) instead of the address stored in the
+// bundle, for this client only: the bundle is not touched. The pinned CA and
+// the client certificate stay, and the server certificate is still verified
+// against addr's host, so it must be one that certificate covers.
+func WithController(addr string) Option {
+	return func(o *options) { o.controller = addr }
+}
+
 // Open loads the credentials in dir and returns a client authenticated with them.
-func Open(dir string) (*Client, error) {
+func Open(dir string, opts ...Option) (*Client, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	b, err := loadBundle(dir)
 	if err != nil {
 		return nil, err
 	}
-	c, err := newClient(b.Controller, b.ca, []tls.Certificate{b.keyPair})
+	controller := b.Controller
+	if o.controller != "" {
+		if !validControllerAddress(o.controller) {
+			return nil, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("--controller %q is not a host:port address", o.controller), nil)
+		}
+		controller = o.controller
+	}
+	c, err := newClient(controller, b.ca, []tls.Certificate{b.keyPair})
 	if err != nil {
 		return nil, err
 	}
 	c.dir = dir
 	return c, nil
+}
+
+// validControllerAddress accepts a bare host and a numeric port from 1 to
+// 65535: no scheme, credentials, path, query or fragment, which would otherwise
+// bend the URL the client builds from it.
+func validControllerAddress(addr string) bool {
+	if strings.ContainsAny(addr, "/@?#") {
+		return false
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+	n, err := strconv.ParseUint(port, 10, 16)
+	return err == nil && n >= 1
 }
 
 // newClient pins ca as the only root: the system store plays no part.
@@ -109,6 +150,13 @@ func (c *Client) CreateToken(ctx context.Context, kind domain.Kind, ttl time.Dur
 	var out v1.CreateTokenResponse
 	err := c.do(ctx, http.MethodPost, "/v1/tokens",
 		v1.CreateTokenRequest{Kind: string(kind), TTLSeconds: int64(ttl / time.Second)}, &out)
+	return out, err
+}
+
+// Status reports the Controller's identity, version, uptime and database health.
+func (c *Client) Status(ctx context.Context) (v1.Status, error) {
+	var out v1.Status
+	err := c.do(ctx, http.MethodGet, "/v1/status", nil, &out)
 	return out, err
 }
 
@@ -227,23 +275,30 @@ func (c *Client) decodeError(status int, raw []byte) error {
 const renewHint = "ask the owner for a new invitation (`cf controller token create`) and run `cf connect --force <invitation>`"
 
 // transportError sorts connection failures: a certificate that one side
-// refuses is an authentication problem, anything else is an unreachable Controller.
+// refuses is an authentication problem, anything else (a name the server
+// certificate does not cover included) is an unreachable Controller.
 func (c *Client) transportError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	cause := map[string]any{"cause": err.Error()} // local, so --debug may show it
 	var verify *tls.CertificateVerificationError
 	if errors.As(err, &verify) {
+		var wrongHost x509.HostnameError
+		if errors.As(verify.Err, &wrongHost) {
+			return domain.NewError(domain.CodeControllerUnreachable,
+				fmt.Sprintf("the Controller's certificate does not cover %q: dial an address it was issued for (see `cf controller init --advertise`)", c.serverName), cause)
+		}
 		return domain.NewError(domain.CodeUnauthenticated,
-			"the Controller's certificate is not trusted by the CA pinned at connect time", nil)
+			"the Controller's certificate is not trusted by the CA pinned at connect time", cause)
 	}
 	var op *net.OpError
 	if errors.As(err, &op) && op.Op == "remote error" && rejectsCertificate(op.Err) {
 		return domain.NewError(domain.CodeUnauthenticated,
-			"the Controller rejected this client certificate (expired or revoked): "+renewHint, nil)
+			"the Controller rejected this client certificate (expired or revoked): "+renewHint, cause)
 	}
 	return domain.NewError(domain.CodeControllerUnreachable,
-		fmt.Sprintf("cannot reach the Controller at %s", c.controller), map[string]any{"cause": err.Error()})
+		fmt.Sprintf("cannot reach the Controller at %s", c.controller), cause)
 }
 
 // TLS alerts (RFC 8446 §6.2) by which a server refuses a client certificate.

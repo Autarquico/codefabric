@@ -165,10 +165,10 @@ func TestControllerIdentityTLS_AuthorizationByRouteAndKind(t *testing.T) {
 	clientsOnly := []probe{
 		{http.MethodGet, "/v1/clients", ""},
 		{http.MethodPost, "/v1/tokens", `{"kind":"client","ttl_seconds":60}`},
+		{http.MethodGet, "/v1/status", ""},
 		{http.MethodDelete, "/v1/clients/" + someClient, ""},
 	}
 	unlisted := []probe{
-		{http.MethodGet, "/v1/status", ""},
 		{http.MethodGet, "/v1/worker/anything", ""},
 		{http.MethodGet, "/v1/join", ""}, // listed path, unlisted method
 		{http.MethodGet, "/", ""},
@@ -197,7 +197,7 @@ func TestControllerIdentityTLS_AuthorizationByRouteAndKind(t *testing.T) {
 			t.Errorf("client %s %s: %d %s", p.method, p.path, code, body.Code)
 		}
 	}
-	for _, p := range clientsOnly[:2] {
+	for _, p := range clientsOnly[:3] {
 		if code, _, _ := tc.call(clientHTTP, p.method, p.path, p.body); code >= 300 {
 			t.Errorf("client %s %s: %d", p.method, p.path, code)
 		}

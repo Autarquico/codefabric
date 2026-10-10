@@ -56,6 +56,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, s.log, err)
 		return
 	}
+	stateOf(r.Context()).principal = c.Principal.ID
 	if !known || !contains(rt.allow, c.Principal.Kind) {
 		writeError(w, r, s.log, domain.NewError(domain.CodePolicyDenied, "this identity may not call this endpoint", nil))
 		return

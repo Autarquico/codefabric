@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -28,14 +29,35 @@ func newConfigPathsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "config:       %s\n", p.ConfigDir)
-			fmt.Fprintf(out, "data:         %s\n", p.DataDir)
-			fmt.Fprintf(out, "credentials:  %s\n", p.CredentialsDir())
-			fmt.Fprintf(out, "database:     %s\n", p.DatabaseFile())
-			return nil
+			result := struct {
+				Config      string `json:"config"`
+				Data        string `json:"data"`
+				Credentials string `json:"credentials"`
+				Database    string `json:"database"`
+			}{p.ConfigDir, p.DataDir, p.CredentialsDir(), p.DatabaseFile()}
+			return emit(cmd, result, func(out io.Writer) error {
+				fmt.Fprintf(out, "config:       %s\n", result.Config)
+				fmt.Fprintf(out, "data:         %s\n", result.Data)
+				fmt.Fprintf(out, "credentials:  %s\n", result.Credentials)
+				fmt.Fprintf(out, "database:     %s\n", result.Database)
+				return nil
+			})
 		},
 	}
+}
+
+// configShown is `cf config show`: the Controller section exists only on a
+// machine that ran `cf controller init`.
+type configShown struct {
+	Controller *config.Controller `json:"controller,omitempty"`
+	Client     clientShown        `json:"client"`
+}
+
+type clientShown struct {
+	Connected  bool       `json:"connected"`
+	Controller string     `json:"controller,omitempty"`
+	IdentityID string     `json:"identity_id,omitempty"`
+	NotAfter   *time.Time `json:"not_after,omitempty"`
 }
 
 // newConfigShowCmd prints the effective configuration. It reads no secret
@@ -51,9 +73,9 @@ func newConfigShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
+			var shown configShown
 			if ctl, err := config.LoadController(p); err == nil {
-				fmt.Fprintf(out, "controller.listen:     %s\ncontroller.advertise:  %s\n", ctl.Listen, ctl.Advertise)
+				shown.Controller = &ctl
 			} else if !errors.Is(err, config.ErrNotInitialized) {
 				return err
 			}
@@ -61,14 +83,23 @@ func newConfigShowCmd() *cobra.Command {
 			var coded *domain.Error
 			switch {
 			case errors.As(err, &coded):
-				fmt.Fprintln(out, "client: not connected")
 			case err != nil:
 				return err
 			default:
-				fmt.Fprintf(out, "client.controller:  %s\nclient.identity:    %s\nclient.expires:     %s\nclient.key:         [redacted]\n",
-					info.Controller, info.IdentityID, info.NotAfter.Local().Format(time.DateOnly))
+				shown.Client = clientShown{Connected: true, Controller: info.Controller, IdentityID: info.IdentityID, NotAfter: &info.NotAfter}
 			}
-			return nil
+			return emit(cmd, shown, func(out io.Writer) error {
+				if shown.Controller != nil {
+					fmt.Fprintf(out, "controller.listen:     %s\ncontroller.advertise:  %s\n", shown.Controller.Listen, shown.Controller.Advertise)
+				}
+				if !shown.Client.Connected {
+					fmt.Fprintln(out, "client: not connected")
+					return nil
+				}
+				fmt.Fprintf(out, "client.controller:  %s\nclient.identity:    %s\nclient.expires:     %s\nclient.key:         [redacted]\n",
+					shown.Client.Controller, shown.Client.IdentityID, shown.Client.NotAfter.Local().Format(time.DateOnly))
+				return nil
+			})
 		},
 	}
 }

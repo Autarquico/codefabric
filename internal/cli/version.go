@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -10,23 +10,18 @@ import (
 )
 
 func newVersionCmd() *cobra.Command {
-	var asJSON bool
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "version",
 		Short: "Print the cf version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			info := buildinfo.Get()
-			if asJSON {
-				enc := json.NewEncoder(cmd.OutOrStdout())
-				return enc.Encode(info)
-			}
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "cf %s (commit %s, built %s)\n", info.Version, orUnknown(info.Commit), orUnknown(info.Date))
-			return err
+			return emit(cmd, info, func(w io.Writer) error {
+				_, err := fmt.Fprintf(w, "cf %s (commit %s, built %s)\n", info.Version, orUnknown(info.Commit), orUnknown(info.Date))
+				return err
+			})
 		},
 	}
-	cmd.Flags().BoolVar(&asJSON, "json", false, "output as JSON")
-	return cmd
 }
 
 func orUnknown(s string) string {

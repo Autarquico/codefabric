@@ -2,8 +2,8 @@ package cli
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -11,6 +11,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 func newConnectCmd() *cobra.Command {
@@ -44,8 +45,10 @@ func newConnectCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Connected to %s as %s.\n", res.Controller, res.IdentityID)
-			return nil
+			return emit(cmd, res, func(w io.Writer) error {
+				_, err := fmt.Fprintf(w, "Connected to %s as %s.\n", res.Controller, res.IdentityID)
+				return err
+			})
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "name for this machine (default: hostname)")
@@ -76,7 +79,7 @@ func readInvitation(cmd *cobra.Command, args []string) (string, error) {
 	}
 	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 	if err != nil && line == "" {
-		return "", errors.New("no invitation given")
+		return "", domain.NewError(domain.CodeInvalidRequest, "no invitation given", nil)
 	}
 	return strings.TrimSpace(line), nil
 }

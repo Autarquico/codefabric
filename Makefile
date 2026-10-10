@@ -11,7 +11,7 @@ TARGETS  := linux/amd64 linux/arm64 darwin/arm64
 
 export CGO_ENABLED := 0
 
-.PHONY: build test test-race test-integration test-e2e lint fmt cover cross release-snapshot clean
+.PHONY: build test test-race test-integration test-e2e bench lint fmt cover cross release-snapshot clean
 
 build:
 	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/cf ./cmd/cf
@@ -24,6 +24,9 @@ test-race:
 
 test-integration:
 	go test -tags integration ./...
+
+bench:
+	CF_LOAD_FLOOR=1 go test -tags integration -run TestLoad -v ./internal/controller/store/
 
 test-e2e: build
 	go test -tags e2e ./internal/e2e/...

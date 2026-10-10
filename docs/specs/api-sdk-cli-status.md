@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: S
 issue: 6
-prs: []
+prs: [31]
 related_issues: [6]
 sub_issues: []
 depends_on: [controller-identity-tls]
@@ -69,12 +69,12 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Error interno
 - **Given** un error inesperado del servidor
 - **When** se ejecuta cualquier comando
-- **Then** exit 1, sin stack trace salvo con `--debug`
+- **Then** exit 1; sin detalles salvo con `--debug`, que muestra el `request_id` (y la causa solo si el fallo es local: red o TLS); la causa y el stack de un fallo del servidor nunca salen de él y se localizan en su log por el `request_id`
 
 ## Notas técnicas / riesgos
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
-- Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+- Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout de dominio. Excepciones, igual que en controller-store: timeouts de `context` e infraestructura (el chequeo de salud de `/v1/status`, configurable con `api.Timeouts.Health`) y timeouts de red.
 - `--controller` debe convivir con la dirección guardada en el bundle de credenciales: los SANs del certificado del servidor tienen que cubrirla, o el cliente fijado a la CA la rechazará.
 
 ## Referencias
