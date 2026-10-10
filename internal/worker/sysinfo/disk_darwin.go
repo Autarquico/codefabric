@@ -1,5 +1,3 @@
-//go:build linux || darwin
-
 package sysinfo
 
 import (
@@ -12,5 +10,5 @@ func diskBytes(dir string) (uint64, error) {
 	if err := syscall.Statfs(dir, &st); err != nil {
 		return 0, fmt.Errorf("sysinfo: statfs %s: %w", dir, err)
 	}
-	return st.Blocks * uint64(st.Bsize), nil //nolint:gosec // Bsize is a positive block size
+	return st.Blocks * uint64(st.Bsize), nil
 }

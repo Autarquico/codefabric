@@ -102,12 +102,13 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 
 	build := buildinfo.Get()
 	offlineTTL := cmp.Or(o.WorkerOfflineTTL, time.Duration(cfg.WorkerOfflineTTL))
+	startedAt := o.Clock.Now()
 	services := app.New(db, o.Clock, domain.NewIDGenerator(o.Clock.Now, rand.Reader),
-		app.WithWorkers(workers.Config{ControllerVersion: build.Version, OfflineTTL: offlineTTL}))
+		workers.Config{ControllerVersion: build.Version, OfflineTTL: offlineTTL, StartedAt: startedAt})
 	srv, err := api.New(api.Config{
 		Authority: newAuthority(db, ca, o.Clock, host, port), CA: ca, ServerCert: serverCert,
 		Store: db, Work: services,
-		Clock: o.Clock, StartedAt: o.Clock.Now(), Build: build, Logger: o.Logger,
+		Clock: o.Clock, StartedAt: startedAt, Build: build, Logger: o.Logger,
 	})
 	if err != nil {
 		_ = ln.Close()

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	controllerdaemon "github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/daemon"
+	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
 )
 
 const interval = 20 * time.Millisecond
@@ -220,6 +222,75 @@ func TestRun_KeepsTryingWhileTheControllerIsDownAndRecoversWhenItReturns(t *test
 	if err := daemonRun.stop(); err != nil {
 		t.Errorf("a daemon that retried and recovered ended with %v", err)
 	}
+}
+
+// runMeasuring starts a daemon whose measures are the real ones until broken is set.
+func runMeasuring(t *testing.T, paths config.Paths, broken *atomic.Bool) *running {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	r := &running{cancel: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(r.done)
+		r.err = daemon.Run(ctx, daemon.Options{
+			Paths: paths, Interval: interval, Logger: slog.New(slog.DiscardHandler),
+			Measure: func(dir string) (sysinfo.Info, error) {
+				if broken.Load() {
+					return sysinfo.Info{}, errors.New("statfs: input/output error")
+				}
+				return sysinfo.Collect(dir)
+			},
+		})
+	}()
+	t.Cleanup(func() { _ = r.stop() })
+	return r
+}
+
+func TestRun_AMachineThatCannotBeMeasuredIsDegradedWithItsLastMeasuresAndTheDaemonGoesOn(t *testing.T) {
+	c := newController(t)
+	paths := machine(t)
+	c.join("box", paths)
+	var broken atomic.Bool
+	daemonRun := runMeasuring(t, paths, &broken)
+	online := c.eventually("box", "the Worker to be online", func(w v1.Worker) bool { return w.State == domain.WorkerOnline })
+
+	broken.Store(true)
+	sick := c.eventually("box", "the Worker to be degraded", func(w v1.Worker) bool { return w.State == domain.WorkerDegraded })
+	if sick.Health.Status != v1.HealthDegraded || sick.Health.Message == "" || strings.Contains(sick.Health.Message, "statfs") {
+		t.Errorf("health = %+v, want degraded with a message that keeps the cause out", sick.Health)
+	}
+	if sick.Resources.Total != online.Resources.Total {
+		t.Errorf("total = %+v, want the last known, %+v", sick.Resources.Total, online.Resources.Total)
+	}
+	select {
+	case <-daemonRun.done:
+		t.Fatalf("the daemon ended: %v", daemonRun.err)
+	default:
+	}
+
+	broken.Store(false)
+	c.eventually("box", "the Worker to be online again", func(w v1.Worker) bool { return w.State == domain.WorkerOnline })
+}
+
+func TestRun_AMachineThatNeverCouldBeMeasuredKeepsTheDaemonRunning(t *testing.T) {
+	c := newController(t)
+	paths := machine(t)
+	c.join("box", paths)
+	var broken atomic.Bool
+	broken.Store(true)
+	daemonRun := runMeasuring(t, paths, &broken)
+
+	time.Sleep(20 * interval)
+	select {
+	case <-daemonRun.done:
+		t.Fatalf("the daemon ended: %v", daemonRun.err)
+	default:
+	}
+	if w, err := c.owner.Worker(t.Context(), "box"); err != nil || w.State != domain.WorkerJoining {
+		t.Fatalf("a Worker that reported nothing: %+v, %v", w, err)
+	}
+
+	broken.Store(false)
+	c.eventually("box", "the Worker to be online", func(w v1.Worker) bool { return w.State == domain.WorkerOnline })
 }
 
 func TestRun_EndsWhenTheWorkerIsRemoved(t *testing.T) {

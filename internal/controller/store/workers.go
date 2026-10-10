@@ -208,6 +208,20 @@ func SilentWorkers(ctx context.Context, q Querier, cutoff time.Time) ([]Worker, 
 		  ORDER BY w.short_n`, cutoff.UnixNano())
 }
 
+// LastWorkerEventAt is when the Worker's latest event of the type was written,
+// and false if it has none.
+func LastWorkerEventAt(ctx context.Context, q Querier, id domain.ID, eventType domain.EventType) (time.Time, bool, error) {
+	var ts sql.NullInt64
+	err := q.QueryRow(ctx, `SELECT MAX(ts) FROM events WHERE worker_id = ? AND type = ?`, string(id), string(eventType)).Scan(&ts)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("store: finding the last %s of a worker: %w", eventType, err)
+	}
+	if !ts.Valid {
+		return time.Time{}, false, nil
+	}
+	return time.Unix(0, ts.Int64).UTC(), true, nil
+}
+
 // DrainingWorkers lists the Workers that are waiting for their Runs to end.
 func DrainingWorkers(ctx context.Context, q Querier) ([]Worker, error) {
 	return collect(ctx, q, scanWorker, workerSelect+` WHERE w.state = ? ORDER BY w.short_n`, string(domain.WorkerDraining))

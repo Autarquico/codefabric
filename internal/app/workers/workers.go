@@ -20,9 +20,19 @@ import (
 type Config struct {
 	// ControllerVersion is what Workers' versions are compared with (§41).
 	ControllerVersion string
-	// OfflineTTL is how long a Worker may stay silent before it is offline.
+	// OfflineTTL is how long a Worker may stay silent before it is offline;
+	// anything under minOfflineTTL takes the default.
 	OfflineTTL time.Duration
+	// StartedAt is when the Controller started. Silence is measured from the
+	// later of a Worker's last sign of life and this: a Controller that was
+	// down did not witness the silence, and the Workers had no Controller to
+	// heartbeat to. The zero value counts from the last sign of life alone.
+	StartedAt time.Time
 }
+
+// minOfflineTTL is the shortest TTL that makes sense: the sweeper runs a third
+// of it, and heartbeats are seconds apart.
+const minOfflineTTL = time.Second
 
 // Service runs the Worker use cases.
 type Service struct {
@@ -30,14 +40,15 @@ type Service struct {
 	clock   clock.Clock
 	version string
 	ttl     time.Duration
+	started time.Time
 }
 
 // New builds the service. The clock is the one the store was opened with.
 func New(db *store.DB, clk clock.Clock, cfg Config) *Service {
-	if cfg.OfflineTTL <= 0 {
+	if cfg.OfflineTTL < minOfflineTTL {
 		cfg.OfflineTTL = domain.Defaults().WorkerOfflineTTL
 	}
-	return &Service{db: db, clock: clk, version: cfg.ControllerVersion, ttl: cfg.OfflineTTL}
+	return &Service{db: db, clock: clk, version: cfg.ControllerVersion, ttl: cfg.OfflineTTL, started: cfg.StartedAt}
 }
 
 // List returns the Workers, oldest first; removed ones only with includeRemoved.
@@ -162,8 +173,15 @@ func (s *Service) Undrain(ctx context.Context, by pki.Session, ref string, req v
 		case domain.WorkerOffline:
 			return offline(*w, "undrained")
 		}
-		moved, err := move(ctx, tx, w, domain.WorkerEventUndrain, domain.WorkerFacts{ActiveRuns: w.ActiveRuns}, act.Now)
+		facts := domain.WorkerFacts{ActiveRuns: w.ActiveRuns}
+		moved, err := move(ctx, tx, w, domain.WorkerEventUndrain, facts, act.Now)
 		if err != nil || !moved {
+			return err
+		}
+		// Back to online is only where the machine starts: its version and last
+		// health still decide, as they do on every heartbeat.
+		compatible := domain.WorkerVersionCompatible(s.version, w.Report.DaemonVersion)
+		if _, err := move(ctx, tx, w, doctorVerdict(compatible, w.Health), facts, act.Now); err != nil {
 			return err
 		}
 		return audit(ctx, tx, act, "worker.undrained", *w, map[string]any{"state": domain.WorkerDrained}, map[string]any{"state": w.State})

@@ -87,7 +87,7 @@ func newControllerWithRoutes(t *testing.T, start time.Time, routes func(*api.Ser
 	cfg := api.Config{
 		Authority: tc.authority, CA: tc.ca, ServerCert: serverCert,
 		Work: app.New(tc.db, tc.clock, domain.NewIDGenerator(tc.clock.Now, rand.Reader),
-			app.WithWorkers(workers.Config{ControllerVersion: controllerVersion})),
+			workers.Config{ControllerVersion: controllerVersion}),
 		Store: tc.db, Clock: tc.clock, StartedAt: tc.clock.Now(), Build: buildinfo.Info{Version: "test", Commit: "abc123"},
 		Logger: slog.New(slog.NewTextHandler(tc.logs, nil)),
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/app/runs"
+	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -47,7 +48,7 @@ func newEnv(t *testing.T) *env {
 	e := &env{
 		t: t, db: db, clock: clk,
 		authority: pki.NewAuthority(pki.AuthorityConfig{DB: db, CA: ca, Clock: clk, IDs: ids, CertTTL: domain.Defaults().IdentityCertTTL}),
-		app:       app.New(db, clk, ids),
+		app:       app.New(db, clk, ids, workers.Config{}),
 	}
 	e.owner = e.newClient("owner")
 	return e

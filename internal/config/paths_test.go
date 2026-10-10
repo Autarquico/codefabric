@@ -108,7 +108,7 @@ func TestControllerConfigWorkerOfflineTTL(t *testing.T) {
 		t.Errorf("an unset TTL was written: %s", raw)
 	}
 
-	for _, bad := range []string{`"soon"`, `"0s"`, `"-5s"`, `45`, `""`} {
+	for _, bad := range []string{`"soon"`, `"0s"`, `"-5s"`, `"999ms"`, `45`, `""`} {
 		if err := os.WriteFile(p.ControllerConfigFile(), []byte(`{"listen":"a:1","advertise":"b:2","worker_offline_ttl":`+bad+`}`), 0o600); err != nil {
 			t.Fatal(err)
 		}

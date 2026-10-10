@@ -18,6 +18,13 @@ import (
 const (
 	maxCapabilities = 64
 	maxTextLen      = 256
+
+	// Upper bounds on what a Worker may claim about itself or be given at join:
+	// far above any real machine, low enough that sums of them cannot overflow.
+	maxCPU            = 4096
+	maxMemoryMB       = int64(1) << 40
+	maxDiskMB         = int64(1) << 40
+	maxConcurrentRuns = 1024
 )
 
 // Heartbeat records a sign of life from the Worker that the caller's identity
@@ -28,8 +35,10 @@ const (
 // is inside the upgrade policy (§41) and degraded otherwise. Later heartbeats
 // keep applying the same verdict, plus the daemon's own health, to online and
 // degraded Workers. A heartbeat from an offline Worker brings it back to
-// where it was (WorkerReconnected); one with a new epoch from a Worker that
-// had not gone offline means the daemon restarted (WorkerRestarted). A
+// where it was (WorkerReconnected, unless it was only joining: that is its
+// registration); one with a new epoch from a Worker that had not gone offline
+// means the daemon restarted (WorkerRestarted, at most one per
+// WorkerHeartbeatInterval, so a daemon cannot flood the event store). A
 // draining Worker with no Runs left becomes drained.
 func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.HeartbeatRequest) (v1.HeartbeatResponse, error) {
 	if err := validateHeartbeat(req); err != nil {
@@ -69,18 +78,19 @@ func (s *Service) applyHeartbeat(ctx context.Context, tx *store.Tx, act mutation
 
 	switch {
 	case w.State == domain.WorkerOffline:
+		wasJoining := w.BeforeOffline == domain.WorkerJoining
 		moved, err := move(ctx, tx, w, domain.WorkerEventHeartbeat, facts, act.Now)
 		if err != nil {
 			return err
 		}
-		if moved {
+		if moved && !wasJoining {
 			data["restarted"], data["state"] = restarted, string(w.State)
 			if err := emit(ctx, tx, act, domain.EventWorkerReconnected, *w, "worker reconnected", data); err != nil {
 				return err
 			}
 		}
 	case restarted:
-		if err := emit(ctx, tx, act, domain.EventWorkerRestarted, *w, "worker restarted", data); err != nil {
+		if err := emitRestart(ctx, tx, act, *w, data); err != nil {
 			return err
 		}
 	}
@@ -91,15 +101,33 @@ func (s *Service) applyHeartbeat(ctx context.Context, tx *store.Tx, act mutation
 		}
 	}
 	if w.State == domain.WorkerOnline || w.State == domain.WorkerDegraded {
-		verdict := domain.WorkerEventDoctorOK
-		if !compatible || req.Health.Status != v1.HealthOK {
-			verdict = domain.WorkerEventDoctorFailed
-		}
-		if _, err := move(ctx, tx, w, verdict, facts, act.Now); err != nil {
+		if _, err := move(ctx, tx, w, doctorVerdict(compatible, req.Health), facts, act.Now); err != nil {
 			return err
 		}
 	}
 	return drainIfEmpty(ctx, tx, act, w)
+}
+
+// doctorVerdict is what a Worker's version and its daemon's own health say of it.
+func doctorVerdict(compatible bool, health v1.Health) domain.WorkerEvent {
+	if !compatible || health.Status != v1.HealthOK {
+		return domain.WorkerEventDoctorFailed
+	}
+	return domain.WorkerEventDoctorOK
+}
+
+// emitRestart writes WorkerRestarted unless the Worker's previous one is less
+// than a heartbeat interval old: a daemon that keeps changing epoch would
+// otherwise write an event per heartbeat. The epoch is recorded either way.
+func emitRestart(ctx context.Context, tx *store.Tx, act mutation.Act, w store.Worker, data map[string]any) error {
+	last, found, err := store.LastWorkerEventAt(ctx, tx, w.ID, domain.EventWorkerRestarted)
+	if err != nil {
+		return err
+	}
+	if found && act.Now.Sub(last) < domain.Defaults().WorkerHeartbeatInterval {
+		return nil
+	}
+	return emit(ctx, tx, act, domain.EventWorkerRestarted, w, "worker restarted", data)
 }
 
 // drainIfEmpty finishes the drain of a draining Worker that has no Runs left.
@@ -138,6 +166,9 @@ func validateHeartbeat(req v1.HeartbeatRequest) error {
 	}
 	if req.Total.CPU < 1 || req.Total.MemoryMB < 1 || req.Total.DiskMB < 0 {
 		checks = append(checks, input.Invalid("total needs at least 1 cpu and 1 MB of memory, and a non-negative disk"))
+	}
+	if req.Total.CPU > maxCPU || int64(req.Total.MemoryMB) > maxMemoryMB || int64(req.Total.DiskMB) > maxDiskMB {
+		checks = append(checks, input.Invalid("total is above the limits of %d cpus and %d MB of memory or disk", maxCPU, maxMemoryMB))
 	}
 	if req.Health.Status != v1.HealthOK && req.Health.Status != v1.HealthDegraded {
 		checks = append(checks, input.Invalid("health.status must be ok or degraded"))

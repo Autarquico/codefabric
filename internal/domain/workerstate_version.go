@@ -5,9 +5,6 @@ import (
 	"strconv"
 )
 
-// devVersion is what a binary built without a release reports.
-const devVersion = "dev"
-
 var semver = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$`)
 
 type version struct{ major, minor int }
@@ -26,14 +23,15 @@ func parseVersion(text string) (version, bool) {
 // Workers of its own minor version and of the one before it, within the same
 // major. Patch levels and pre-release suffixes do not matter.
 //
-// A Worker whose version is "dev", empty or not semver cannot be placed on
-// that line, so it is compatible only with a Controller that is itself "dev":
-// two development builds are assumed to match.
+// If either version is not semver ("dev", a commit hash, empty) it cannot be
+// placed on that line, so the two are compatible only if they are the same
+// string: two builds of one development version are assumed to match, and
+// nothing else is.
 func WorkerVersionCompatible(controller, worker string) bool {
 	w, workerParses := parseVersion(worker)
-	if !workerParses {
-		return controller == devVersion
-	}
 	c, controllerParses := parseVersion(controller)
-	return controllerParses && w.major == c.major && (w.minor == c.minor || w.minor == c.minor-1)
+	if !workerParses || !controllerParses {
+		return controller == worker
+	}
+	return w.major == c.major && (w.minor == c.minor || w.minor == c.minor-1)
 }

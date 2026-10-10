@@ -52,8 +52,11 @@ func normalize(s v1.WorkerSettings) (v1.WorkerSettings, error) {
 	if s.CPUMax < 0 || s.MemoryMaxMB < 0 || s.DiskMaxMB < 0 {
 		return s, input.Invalid("cpu_max, memory_max_mb and disk_max_mb cannot be negative (0 means all)")
 	}
-	if s.MaxConcurrentRuns < 0 {
-		return s, input.Invalid("max_concurrent_runs cannot be negative")
+	if s.CPUMax > maxCPU || int64(s.MemoryMaxMB) > maxMemoryMB || int64(s.DiskMaxMB) > maxDiskMB {
+		return s, input.Invalid("cpu_max is limited to %d and memory_max_mb and disk_max_mb to %d", maxCPU, maxMemoryMB)
+	}
+	if s.MaxConcurrentRuns < 0 || s.MaxConcurrentRuns > maxConcurrentRuns {
+		return s, input.Invalid("max_concurrent_runs must be between 0 and %d", maxConcurrentRuns)
 	}
 	if s.MaxConcurrentRuns == 0 {
 		s.MaxConcurrentRuns = domain.Defaults().WorkerMaxConcurrentRuns

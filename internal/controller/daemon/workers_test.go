@@ -32,7 +32,7 @@ func TestStart_SweepsSilentWorkersWithTheTTLOfTheConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.WorkerOfflineTTL = config.Duration(60 * time.Millisecond) // sweeps every 20 ms of real time
+	cfg.WorkerOfflineTTL = config.Duration(time.Second) // the shortest TTL: sweeps every third of a second of real time
 	if err := config.SaveController(p, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestStart_SweepsSilentWorkersWithTheTTLOfTheConfiguration(t *testing.T) {
 		t.Fatalf("heartbeat: %+v, %v", resp, err)
 	}
 
-	clk.Advance(time.Second)
+	clk.Advance(2 * time.Second)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		w, err := owner.Worker(t.Context(), "box")

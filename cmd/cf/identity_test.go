@@ -32,6 +32,13 @@ func cliRun(stdout, stderr io.Writer, stdin string, args []string) int {
 	return cli.Run(args, strings.NewReader(stdin), stdout, stderr, daemon.Command(), workerdaemon.Command())
 }
 
+// cfContext is cf under a context that ends commands which run until interrupted.
+func cfContext(ctx context.Context, args ...string) (code int, stderr string) {
+	var out, errOut bytes.Buffer
+	code = cli.RunContext(ctx, args, strings.NewReader(""), &out, &errOut, daemon.Command(), workerdaemon.Command())
+	return code, errOut.String()
+}
+
 // machine points the CLI at a fresh config/data directory pair.
 func machine(t *testing.T) config.Paths {
 	t.Helper()

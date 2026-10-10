@@ -26,6 +26,8 @@ type Options struct {
 	// Version is what this daemon reports; zero means the version of the binary.
 	Version string
 	Logger  *slog.Logger // defaults to slog.Default()
+	// Measure replaces sysinfo.Collect, which tests cannot make fail.
+	Measure func(dir string) (sysinfo.Info, error)
 }
 
 // Run sends a heartbeat now and then every Interval until ctx ends, and returns
@@ -36,6 +38,9 @@ type Options struct {
 // exceeds the interval, so the Worker is back as soon as the Controller is.
 // Anything else (credentials revoked or expired, a Controller that refuses the
 // heartbeat) ends Run with that error: retrying would not change it.
+//
+// A machine that cannot be measured does not stop the daemon: it keeps
+// heartbeating with the last measures it has and reports itself degraded.
 func Run(ctx context.Context, o Options) error {
 	if exists, err := client.CredentialsExist(o.Paths.WorkerCredentialsDir()); err != nil {
 		return err
@@ -53,7 +58,10 @@ func Run(ctx context.Context, o Options) error {
 	}
 	d := &daemon{
 		client: c, dataDir: o.Paths.DataDir, epoch: ulid.Make().String(),
-		interval: o.Interval, version: o.Version, log: o.Logger,
+		interval: o.Interval, version: o.Version, log: o.Logger, measure: o.Measure,
+	}
+	if d.measure == nil {
+		d.measure = sysinfo.Collect
 	}
 	if d.interval <= 0 {
 		d.interval = domain.Defaults().WorkerHeartbeatInterval
@@ -74,6 +82,10 @@ type daemon struct {
 	interval time.Duration
 	version  string
 	log      *slog.Logger
+	measure  func(dir string) (sysinfo.Info, error)
+
+	lastMeasured    sysinfo.Info
+	hasLastMeasured bool
 }
 
 func (d *daemon) loop(ctx context.Context) error {
@@ -108,15 +120,34 @@ func (d *daemon) loop(ctx context.Context) error {
 }
 
 func (d *daemon) beat(ctx context.Context) (v1.HeartbeatResponse, error) {
-	info, err := sysinfo.Collect(d.dataDir)
+	info, health, err := d.measureMachine(ctx)
 	if err != nil {
 		return v1.HeartbeatResponse{}, err
 	}
 	return d.client.Heartbeat(ctx, v1.HeartbeatRequest{
 		Epoch: d.epoch, DaemonVersion: d.version, Hostname: info.Hostname, OS: info.OS, Arch: info.Arch,
 		Total:  v1.Capacity{CPU: info.CPU, MemoryMB: info.MemoryMB, DiskMB: info.DiskMB},
-		Health: v1.Health{Status: v1.HealthOK},
+		Health: health,
 	})
+}
+
+// measureMachine is what the machine has and how healthy the daemon says it is.
+// If it cannot be measured now, the last measures stand and the health is
+// degraded; with no measures yet there is nothing to report, and the beat fails
+// as a retryable error.
+func (d *daemon) measureMachine(ctx context.Context) (sysinfo.Info, v1.Health, error) {
+	const unmeasurable = "cannot measure this machine"
+	info, err := d.measure(d.dataDir)
+	switch {
+	case err == nil:
+		d.lastMeasured, d.hasLastMeasured = info, true
+		return info, v1.Health{Status: v1.HealthOK}, nil
+	case !d.hasLastMeasured:
+		d.log.ErrorContext(ctx, unmeasurable, "err", err)
+		return sysinfo.Info{}, v1.Health{}, domain.NewError(domain.CodeInternal, unmeasurable, nil)
+	}
+	d.log.WarnContext(ctx, unmeasurable+"; reporting the last measures", "err", err)
+	return d.lastMeasured, v1.Health{Status: v1.HealthDegraded, Message: unmeasurable}, nil
 }
 
 // retryable: only failures that a later attempt can fix.

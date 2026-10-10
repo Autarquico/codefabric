@@ -134,9 +134,55 @@ func TestSweep_AJoinThatNeverHeartbeatedGoesOfflineCountingFromCreation(t *testi
 		t.Fatalf("WorkerLost = %+v", lost)
 	}
 
-	// Its daemon finally starts: it is reconnected, and then registered.
+	// Its daemon finally starts: that is its registration, not a reconnection.
 	if got := e.beat(w, request(newEpoch())); got != domain.WorkerOnline {
 		t.Errorf("first heartbeat after the silence: %s", got)
+	}
+	if got := e.events(domain.EventWorkerReconnected, domain.EventWorkerRestarted); len(got) != 0 {
+		t.Errorf("registering emitted %+v", got)
+	}
+}
+
+func TestSweep_AControllerThatJustStartedWaitsATTLBeforeLosingAnyone(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	w := e.join("box")
+	e.beat(w, request(newEpoch()))
+
+	// The Controller was down for an hour; the Worker's last heartbeat is old.
+	e.clock.Advance(time.Hour)
+	restarted := workers.New(e.db, e.clock, workers.Config{
+		ControllerVersion: controllerVersion, OfflineTTL: offlineTTL, StartedAt: e.clock.Now(),
+	})
+	sweep := func() { must(t, restarted.Sweep(t.Context())) }
+
+	sweep()
+	e.clock.Advance(offlineTTL)
+	sweep()
+	if got := e.state(w); got != domain.WorkerOnline || len(e.events(domain.EventWorkerLost)) != 0 {
+		t.Fatalf("a TTL after the Controller started: %s", got)
+	}
+	e.clock.Advance(time.Second)
+	sweep()
+	if got := e.state(w); got != domain.WorkerOffline {
+		t.Errorf("past the TTL since the Controller started: %s", got)
+	}
+	if lost := e.events(domain.EventWorkerLost); len(lost) != 1 {
+		t.Errorf("WorkerLost = %+v", lost)
+	}
+}
+
+func TestSweep_AWorkerThatHeartbeatedAfterTheStartIsMeasuredFromItsHeartbeat(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	w := e.join("box")
+	started := e.clock.Now()
+	e.clock.Advance(30 * time.Second)
+	e.beat(w, request(newEpoch()))
+	restarted := workers.New(e.db, e.clock, workers.Config{ControllerVersion: controllerVersion, OfflineTTL: offlineTTL, StartedAt: started})
+
+	e.clock.Advance(offlineTTL + time.Second)
+	must(t, restarted.Sweep(t.Context()))
+	if got := e.state(w); got != domain.WorkerOffline {
+		t.Errorf("silent for more than a TTL since its heartbeat: %s", got)
 	}
 }
 
@@ -217,6 +263,18 @@ func TestVersionPolicy_IsReappliedOnEveryHeartbeat(t *testing.T) {
 	}
 }
 
+func TestVersionPolicy_NeitherSideIsSemverMeansTheSameString(t *testing.T) {
+	e := newEnv(t, "3f2a9c1")
+	same := e.join("same")
+	other := e.join("other")
+	if got := e.beat(same, request(newEpoch(), withVersion("3f2a9c1"))); got != domain.WorkerOnline {
+		t.Errorf("the same commit: %s", got)
+	}
+	if got := e.beat(other, request(newEpoch(), withVersion("8b7e0d4"))); got != domain.WorkerDegraded {
+		t.Errorf("another commit: %s", got)
+	}
+}
+
 func TestHealth_ADaemonThatReportsItselfDegradedIsDegraded(t *testing.T) {
 	e := newEnv(t, controllerVersion)
 	w := e.join("box")
@@ -254,6 +312,30 @@ func TestHeartbeat_EpochEvents(t *testing.T) {
 	}
 	if got := e.worker("box").Epoch; got != second {
 		t.Errorf("epoch = %s, want %s", got, second)
+	}
+}
+
+func TestHeartbeat_RestartsAreGroupedByTheHeartbeatInterval(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	w := e.join("box")
+	e.beat(w, request(newEpoch()))
+
+	for range 300 {
+		e.beat(w, request(newEpoch()))
+	}
+	last := newEpoch()
+	e.beat(w, request(last))
+	if n := len(e.events(domain.EventWorkerRestarted)); n != 1 {
+		t.Fatalf("%d WorkerRestarted for 301 restarts inside one interval, want 1", n)
+	}
+	if got := e.worker("box").Epoch; got != last {
+		t.Errorf("epoch = %s, want the latest, %s", got, last)
+	}
+
+	e.clock.Advance(domain.Defaults().WorkerHeartbeatInterval)
+	e.beat(w, request(newEpoch()))
+	if n := len(e.events(domain.EventWorkerRestarted)); n != 2 {
+		t.Errorf("%d WorkerRestarted after the interval passed, want 2", n)
 	}
 }
 
@@ -296,6 +378,9 @@ func TestHeartbeat_Validation(t *testing.T) {
 		"empty capability":        func(r *v1.HeartbeatRequest) { r.Capabilities = []string{""} },
 		"capability with a space": func(r *v1.HeartbeatRequest) { r.Capabilities = []string{"docker compose"} },
 		"too many capabilities":   func(r *v1.HeartbeatRequest) { r.Capabilities = make([]string, 65) },
+		"too many cpus":           func(r *v1.HeartbeatRequest) { r.Total.CPU = 4097 },
+		"too much memory":         func(r *v1.HeartbeatRequest) { r.Total.MemoryMB = 1<<40 + 1 },
+		"too much disk":           func(r *v1.HeartbeatRequest) { r.Total.DiskMB = 1<<40 + 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := e.svc.Heartbeat(t.Context(), w, request(newEpoch(), mutate))
@@ -520,6 +605,61 @@ func TestUndrain(t *testing.T) {
 	wantCode(t, err, domain.CodeWorkerOffline)
 }
 
+func TestUndrain_ReappliesTheVerdictOfTheVersionAndTheHealth(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mutate []func(*v1.HeartbeatRequest)
+		want   domain.WorkerState
+	}{
+		"healthy and compatible": {nil, domain.WorkerOnline},
+		"an incompatible version": {
+			[]func(*v1.HeartbeatRequest){withVersion("v0.1.0")}, domain.WorkerDegraded,
+		},
+		"a degraded health": {
+			[]func(*v1.HeartbeatRequest){func(r *v1.HeartbeatRequest) { r.Health = v1.Health{Status: v1.HealthDegraded, Message: "disk full"} }},
+			domain.WorkerDegraded,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, controllerVersion)
+			w := e.join("box")
+			epoch := newEpoch()
+			e.beat(w, request(epoch, tc.mutate...))
+			_, err := e.svc.Drain(t.Context(), e.owner, "box", v1.ActionRequest{})
+			must(t, err)
+			e.beat(w, request(epoch, tc.mutate...)) // no Runs: drained
+			if got := e.state(w); got != domain.WorkerDrained {
+				t.Fatalf("before undraining: %s", got)
+			}
+
+			got, err := e.svc.Undrain(t.Context(), e.owner, "box", v1.ActionRequest{})
+			if err != nil || got.State != tc.want {
+				t.Errorf("undrained: %+v, %v; want %s", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestNew_ATTLUnderASecondTakesTheDefault(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	w := e.join("box")
+	e.beat(w, request(newEpoch()))
+	tiny := workers.New(e.db, e.clock, workers.Config{ControllerVersion: controllerVersion, OfflineTTL: time.Millisecond})
+
+	e.clock.Advance(time.Minute)
+	must(t, tiny.Sweep(t.Context()))
+	if got := e.state(w); got != domain.WorkerOffline {
+		t.Fatalf("a minute of silence: %s", got)
+	}
+	// A TTL of a millisecond would have lost the Worker after its first second.
+	fresh := e.join("fresh")
+	e.beat(fresh, request(newEpoch()))
+	e.clock.Advance(10 * time.Second)
+	must(t, tiny.Sweep(t.Context()))
+	if got := e.state(fresh); got != domain.WorkerOnline {
+		t.Errorf("10 s of silence with a 1 ms TTL: %s, want the default TTL to apply", got)
+	}
+}
+
 func TestAdministration_AnOfflineWorkerCannotBeDrained(t *testing.T) {
 	e := newEnv(t, controllerVersion)
 	w := e.join("box")
@@ -639,6 +779,10 @@ func TestEnroll_Refusals(t *testing.T) {
 		"negative cpu":           {"a", v1.WorkerSettings{CPUMax: -1}},
 		"negative concurrency":   {"b", v1.WorkerSettings{MaxConcurrentRuns: -1}},
 		"unknown availability":   {"c", v1.WorkerSettings{Availability: "sometimes"}},
+		"too many cpus":          {"d", v1.WorkerSettings{CPUMax: 4097}},
+		"too much memory":        {"e", v1.WorkerSettings{MemoryMaxMB: 1<<40 + 1}},
+		"too much disk":          {"f", v1.WorkerSettings{DiskMaxMB: 1<<40 + 1}},
+		"too much concurrency":   {"g", v1.WorkerSettings{MaxConcurrentRuns: 1025}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			token := e.token()

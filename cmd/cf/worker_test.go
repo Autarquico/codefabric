@@ -1,8 +1,8 @@
 package main
 
 import (
+	"context"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -30,9 +30,10 @@ func workerInvite(t *testing.T, host config.Paths) string {
 func startWorker(t *testing.T, host, machine config.Paths, ref string) (stopWorker func() int) {
 	t.Helper()
 	use(t, machine)
+	ctx, interrupt := context.WithCancel(t.Context())
 	done := make(chan int, 1)
 	go func() {
-		code, _, errOut := cf(t, "", "worker", "run")
+		code, errOut := cfContext(ctx, "worker", "run")
 		if code != 0 {
 			t.Errorf("worker run: exit %d: %s", code, errOut)
 		}
@@ -51,15 +52,12 @@ func startWorker(t *testing.T, host, machine config.Paths, ref string) (stopWork
 		}
 	}
 	return func() int {
-		// The command listens for SIGINT like the real one: this is Ctrl-C.
-		if err := syscall.Kill(syscall.Getpid(), syscall.SIGINT); err != nil {
-			t.Fatal(err)
-		}
+		interrupt() // what Ctrl-C does to the command's context
 		select {
 		case code := <-done:
 			return code
 		case <-time.After(10 * time.Second):
-			t.Fatal("cf worker run did not stop on SIGINT")
+			t.Fatal("cf worker run did not stop when interrupted")
 			return -1
 		}
 	}

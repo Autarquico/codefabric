@@ -38,7 +38,12 @@ func Execute(extra ...*cobra.Command) int {
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, extra ...*cobra.Command) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	return RunContext(ctx, args, stdin, stdout, stderr, extra...)
+}
 
+// RunContext is Run under a context the caller ends: commands that run until
+// interrupted stop when ctx does, whatever the process gets.
+func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, extra ...*cobra.Command) int {
 	root := newRootCmd()
 	addCommands(root, extra)
 	root.SetArgs(args)

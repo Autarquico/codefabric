@@ -32,15 +32,15 @@ func (d Duration) MarshalJSON() ([]byte, error) {
 	return json.Marshal(time.Duration(d).String())
 }
 
-// UnmarshalJSON reads a string such as "45s"; zero and negative values are refused.
+// UnmarshalJSON reads a string such as "45s"; anything under one second is refused.
 func (d *Duration) UnmarshalJSON(raw []byte) error {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
 		return fmt.Errorf("a duration such as \"45s\": %w", err)
 	}
 	parsed, err := time.ParseDuration(text)
-	if err != nil || parsed <= 0 {
-		return fmt.Errorf("%q is not a positive duration such as \"45s\"", text)
+	if err != nil || parsed < time.Second {
+		return fmt.Errorf("%q is not a duration of at least 1s such as \"45s\"", text)
 	}
 	*d = Duration(parsed)
 	return nil

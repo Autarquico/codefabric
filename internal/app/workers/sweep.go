@@ -13,9 +13,11 @@ import (
 var systemActor = domain.ActorRef{Kind: domain.ActorSystem, ID: "controller"}
 
 // Sweep applies what silence and time decide, once, in one transaction:
-//   - a live Worker whose last heartbeat is more than the offline TTL old
-//     becomes offline (WorkerLost). One that never heartbeated counts from its
-//     creation, so a join whose daemon never started also ends;
+//   - a live Worker silent for more than the offline TTL becomes offline
+//     (WorkerLost). Silence runs from its last heartbeat, or from its creation
+//     if it never heartbeated, so a join whose daemon never started also ends;
+//     and never from before the Controller started, so a restarted Controller
+//     waits a TTL for its Workers to find it before it loses any;
 //   - a draining Worker with no Runs left becomes drained.
 //
 // Offline and removed Workers are not looked at, and every transition is
@@ -25,9 +27,13 @@ func (s *Service) Sweep(ctx context.Context) error {
 		now := s.clock.Now()
 		act := mutation.Act{Actor: systemActor, Now: now}
 
-		silent, err := store.SilentWorkers(ctx, tx, now.Add(-s.ttl))
-		if err != nil {
-			return err
+		cutoff := now.Add(-s.ttl)
+		var silent []store.Worker
+		if s.started.Before(cutoff) {
+			var err error
+			if silent, err = store.SilentWorkers(ctx, tx, cutoff); err != nil {
+				return err
+			}
 		}
 		for _, w := range silent {
 			lastSeen, was := w.CreatedAt, w.State
@@ -62,9 +68,9 @@ func (s *Service) Sweep(ctx context.Context) error {
 	})
 }
 
-// RunSweeper sweeps every third of the offline TTL until ctx ends. It does not
-// sweep at start: after a Controller restart the Workers have not had a
-// chance to heartbeat yet, and silence it did not witness is not theirs.
+// RunSweeper sweeps every third of the offline TTL until ctx ends. A sweep
+// right after a Controller restart loses no one: silence is measured from the
+// Controller's start at the earliest.
 func (s *Service) RunSweeper(ctx context.Context, log *slog.Logger) {
 	ticker := time.NewTicker(s.ttl / 3)
 	defer ticker.Stop()
