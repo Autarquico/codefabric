@@ -1509,7 +1509,7 @@ Registrar:
 
 v0.x asume un único propietario humano: todas las identidades humanas son el principal `owner`. No hay RBAC; sí hay identidades distintas por máquina y por sesión MCP, para auditar y revocar.
 
-- **Controller:** `cf controller init` genera un keypair ed25519 y una CA propia. Toda la API va sobre TLS con esa CA, también dentro de la tailnet (Tailscale es red, no autenticación).
+- **Controller:** `cf controller init` genera una CA propia (ECDSA P-256) y su clave **es** la identidad del Controller: no hay un keypair aparte, porque nada lo usaría. Toda la API va sobre TLS con esa CA, también dentro de la tailnet (Tailscale es red, no autenticación). CA y certificados hoja usan P-256 por compatibilidad con git/libcurl (ADR 0002, D2).
 - **Primera credencial del owner:** `cf controller init` escribe en el host del Controller un credential bundle del owner (`0600`) y emite una invitación de cliente para la primera máquina. No hay otro camino de bootstrap: quien tiene shell en el host del Controller es el owner.
 - **Invitaciones:** `cf controller token create --worker|--client --ttl 1h` emite un token de un solo uso con formato `cf://<host>:<port>/join?token=<t>#sha256:<fingerprint-CA>`. El cliente/Worker **verifica la CA contra el fingerprint de la invitación** antes de enviar nada (TOFU anclado al token, no a la red) y la fija para siempre.
 - **Canje:** el Worker/cliente genera su clave y canjea el token por un certificado cliente (mTLS). El consumo del token es atómico (una transacción marca el token usado y crea la identidad); un segundo canje → `CF_UNAUTHENTICATED`.
@@ -2770,8 +2770,8 @@ Exit codes del CLI:
 | Code | Significado | Errores |
 |------|-------------|---------|
 | 0 | ok | — |
-| 1 | error no clasificado | `CF_REPO_CONFIG_INVALID` y otros |
-| 2 | uso incorrecto | flags/args |
+| 1 | error no clasificado | `CF_REPO_CONFIG_INVALID`, `CF_INTERNAL` y otros |
+| 2 | uso incorrecto | flags/args, `CF_INVALID_REQUEST` |
 | 3 | no encontrado / ambiguo | `CF_NOT_FOUND`, `CF_AMBIGUOUS_REF` |
 | 4 | conflicto de estado | `CF_INVALID_TRANSITION`, `CF_WORKFLOW_CONFLICT`, `CF_STALE_LEASE`, `CF_IDEMPOTENCY_MISMATCH`, `CF_CONFIRMATION_STALE`, `CF_CURSOR_EXPIRED`, `CF_DEPENDENCY_CYCLE` |
 | 5 | denegado por policy/budget | `CF_POLICY_DENIED`, `CF_BUDGET_EXCEEDED`, `CF_SECRET_UNAVAILABLE` |
@@ -3237,8 +3237,12 @@ Recortes de MVP: máquina de estados reducida en Fase 1; overlays, `merged` y sy
 - §11.7 fila 1: si una Task tiene los marcadores `archived` y `cancelled`, deriva `archived` (archivar es el acto final; GC y retention dependen de ello).
 - §11.7 fila 10: «algún Run `completed` sin satisfacer la policy». Un resultado completado pendiente de revisión precede a la retry policy de Runs posteriores fallidos: la Task queda en `waiting(review)` y decide un humano.
 - §40: `CF_DEPENDENCY_CYCLE` → exit 4; `CF_WORKER_OFFLINE`, `CF_RUN_NOT_ATTACHABLE`, `CF_VERSION_INCOMPATIBLE`, `CF_PROVIDER_USAGE_UNAVAILABLE` → exit 8.
+- §40: `CF_INVALID_REQUEST` (petición mal formada o fuera de rango, HTTP 400) → exit 2 y `CF_INTERNAL` (fallo inesperado del servidor, sin detalles) → exit 1; no están en la lista de ejemplo de §40 pero el cable los necesita.
 - §9.5: un heartbeat, un doctor en verde sobre un Worker `online` o un doctor fallido sobre un Worker `degraded` son no-ops.
 - §3.13: una ref vacía nunca resuelve (`CF_NOT_FOUND`).
+- §16.6 / §20.1: las mutaciones de identidad (`token`, `join`, `renew`, `revoke`) se auditan, pero no emiten eventos de dominio (§20.1 no los define) ni usan `request_id`: sus respuestas llevan secretos o certificados y no se guardan para reproducirlas. La idempotencia de `renew` la da el periodo de gracia: el certificado sustituido puede renovar de nuevo durante 10 minutos (solo `POST /v1/identity/renew`; revocar la anula), de modo que una respuesta perdida se recupera repitiendo `cf client renew`.
+- §16.6: el certificado de servidor se renueva en caliente: el Controller lo revisa cada 12 h y, con menos de 30 días de vigencia, emite y publica uno nuevo sin reiniciar; las conexiones abiertas conservan el anterior.
+- §16.6: las decisiones de autorización y caducidad de las mutaciones de identidad (`token`, `join`, `renew`, `revoke`) se toman dentro de la transacción, con el reloj leído después de adquirir el escritor y revalidando al caller (identidad existente, no revocada, certificado en vigencia y con el serial actual; `renew` admite además el anterior dentro de la gracia); `Authenticate` es solo un filtro por petición.
 
 ## Apéndice C — Decisiones
 

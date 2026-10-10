@@ -33,7 +33,7 @@ Fase 0 del roadmap de `docs/codefabric-spec.md` (§43). Release objetivo: **v0.1
 | `domain-core` | Domain core: entidades, máquinas de estado y errores | M | — |
 | `controller-store` | Controller store: SQLite, transacciones, eventos e idempotencia | M | `domain-core` |
 | `controller-identity-tls` | Identidad del Controller, TLS y tokens de cliente | M | `controller-store` |
-| `api-sdk-cli-status` | API, Client SDK y `cf status` | M | `controller-identity-tls` |
+| `api-sdk-cli-status` | API, Client SDK y `cf status` | S | `controller-identity-tls` |
 
 `repo-bootstrap` (P0-1) ya está entregado en el PR #1.
 

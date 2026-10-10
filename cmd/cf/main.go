@@ -5,8 +5,9 @@ import (
 	"os"
 
 	"github.com/Autarquico/codefabric/internal/cli"
+	"github.com/Autarquico/codefabric/internal/controller/daemon"
 )
 
 func main() {
-	os.Exit(cli.Execute())
+	os.Exit(cli.Execute(daemon.Command()))
 }

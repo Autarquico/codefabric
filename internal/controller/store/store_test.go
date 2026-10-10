@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -109,10 +111,35 @@ func TestScenario_ControllerStore_Pragmas(t *testing.T) {
 	}
 }
 
+// The embedded migrations define the current schema version; the tests derive
+// everything from it, so adding a migration never breaks them.
+var (
+	currentVersion = latestEmbeddedVersion()
+	nextVersion    = currentVersion + 1
+	backupSuffix   = fmt.Sprintf(".pre-%d", currentVersion)
+)
+
+func latestEmbeddedVersion() int64 {
+	entries, err := fs.ReadDir(embeddedMigrations, "migrations")
+	if err != nil {
+		panic(err)
+	}
+	var latest int64
+	for _, e := range entries {
+		prefix, _, _ := strings.Cut(e.Name(), "_")
+		v, err := strconv.ParseInt(prefix, 10, 64)
+		if err != nil {
+			panic(fmt.Sprintf("migration %q does not start with its version", e.Name()))
+		}
+		latest = max(latest, v)
+	}
+	return latest
+}
+
 func TestScenario_ControllerStore_BackupBeforeMigrating(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "controller.db")
 	first := reopen(t, path, Options{})
-	if _, err := os.Stat(path + ".pre-1"); err == nil {
+	if _, err := os.Stat(path + backupSuffix); err == nil {
 		t.Fatal("a brand-new database must not be backed up")
 	}
 	id := first.ControllerID()
@@ -121,17 +148,17 @@ func TestScenario_ControllerStore_BackupBeforeMigrating(t *testing.T) {
 	}
 
 	var backupExistedDuringMigration bool
-	second := goose.NewGoMigration(2, &goose.GoFunc{RunTx: func(_ context.Context, _ *sql.Tx) error {
-		_, err := os.Stat(path + ".pre-1")
+	second := goose.NewGoMigration(nextVersion, &goose.GoFunc{RunTx: func(_ context.Context, _ *sql.Tx) error {
+		_, err := os.Stat(path + backupSuffix)
 		backupExistedDuringMigration = err == nil
 		return nil
 	}}, nil)
 	db := reopen(t, path, Options{goMigrations: []*goose.Migration{second}})
 
 	if !backupExistedDuringMigration {
-		t.Fatal("controller.db.pre-1 did not exist when the pending migration ran")
+		t.Fatal("the pre-migration backup did not exist when the pending migration ran")
 	}
-	if err := quickCheckFile(t.Context(), path+".pre-1"); err != nil {
+	if err := quickCheckFile(t.Context(), path+backupSuffix); err != nil {
 		t.Fatalf("backup is not a valid database: %v", err)
 	}
 	if db.ControllerID() != id {
@@ -144,24 +171,24 @@ func TestBackup_InterruptedLeftoversAreReplacedByFreshBackup(t *testing.T) {
 	_ = reopen(t, path, Options{}).Close()
 
 	// Leftovers of a crashed attempt: a half-written temporary and an unusable backup.
-	if err := os.WriteFile(path+".pre-1.tmp", []byte("half written"), 0o600); err != nil {
+	if err := os.WriteFile(path+backupSuffix+".tmp", []byte("half written"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path+".pre-1", []byte("not a database at all"), 0o600); err != nil {
+	if err := os.WriteFile(path+backupSuffix, []byte("not a database at all"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	noop := goose.NewGoMigration(2, &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error { return nil }}, nil)
+	noop := goose.NewGoMigration(nextVersion, &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error { return nil }}, nil)
 	clk := clock.NewFake(epoch0)
 	reopen(t, path, Options{Clock: clk, goMigrations: []*goose.Migration{noop}})
 
-	if err := quickCheckFile(t.Context(), path+".pre-1"); err != nil {
+	if err := quickCheckFile(t.Context(), path+backupSuffix); err != nil {
 		t.Fatalf("backup was not rebuilt: %v", err)
 	}
-	if _, err := os.Stat(path + ".pre-1.tmp"); err == nil {
+	if _, err := os.Stat(path + backupSuffix + ".tmp"); err == nil {
 		t.Error("temporary backup left behind")
 	}
-	aside := fmt.Sprintf("%s.pre-1.%d", path, epoch0.Unix())
+	aside := fmt.Sprintf("%s%s.%d", path, backupSuffix, epoch0.Unix())
 	got, err := os.ReadFile(aside) //nolint:gosec // test path
 	if err != nil || string(got) != "not a database at all" {
 		t.Errorf("previous backup not set aside at %s: content=%q err=%v", aside, got, err)
@@ -172,23 +199,23 @@ func TestBackup_ExistingBackupIsNeverReused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "controller.db")
 	_ = reopen(t, path, Options{}).Close()
 
-	failing := goose.NewGoMigration(2, &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error { return errors.New("boom") }}, nil)
+	failing := goose.NewGoMigration(nextVersion, &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error { return errors.New("boom") }}, nil)
 	if _, err := Open(t.Context(), path, Options{goMigrations: []*goose.Migration{failing}}); err == nil {
 		t.Fatal("migration failure must fail Open")
 	}
-	first, err := os.Stat(path + ".pre-1")
+	first, err := os.Stat(path + backupSuffix)
 	if err != nil {
 		t.Fatalf("no backup after a failed migration: %v", err)
 	}
 
-	fixed := goose.NewGoMigration(2, &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error { return nil }}, nil)
+	fixed := goose.NewGoMigration(nextVersion, &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error { return nil }}, nil)
 	reopen(t, path, Options{goMigrations: []*goose.Migration{fixed}})
 
-	fresh, err := os.Stat(path + ".pre-1")
+	fresh, err := os.Stat(path + backupSuffix)
 	if err != nil || os.SameFile(first, fresh) {
 		t.Fatalf("backup was reused instead of rebuilt (err=%v)", err)
 	}
-	aside, err := os.Stat(fmt.Sprintf("%s.pre-1.%d", path, epoch0.Unix()))
+	aside, err := os.Stat(fmt.Sprintf("%s%s.%d", path, backupSuffix, epoch0.Unix()))
 	if err != nil || !os.SameFile(first, aside) {
 		t.Fatalf("old backup not preserved under a timestamped name (err=%v)", err)
 	}

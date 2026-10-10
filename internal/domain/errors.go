@@ -5,7 +5,7 @@ import "fmt"
 // Code is a stable, machine-readable error identifier (§40).
 type Code string
 
-// Error codes of §40.
+// Error codes of §40, plus the two the wire needs (CF_INVALID_REQUEST, CF_INTERNAL).
 const (
 	CodeWorkerOffline            Code = "CF_WORKER_OFFLINE"
 	CodeNoEligibleWorker         Code = "CF_NO_ELIGIBLE_WORKER"
@@ -35,6 +35,8 @@ const (
 	CodeCursorExpired            Code = "CF_CURSOR_EXPIRED"
 	CodeConfirmationStale        Code = "CF_CONFIRMATION_STALE"
 	CodeNotImplemented           Code = "CF_NOT_IMPLEMENTED"
+	CodeInvalidRequest           Code = "CF_INVALID_REQUEST"
+	CodeInternal                 Code = "CF_INTERNAL"
 )
 
 // Error is a failure that carries a §40 code. Parsing and invariant failures
@@ -62,6 +64,8 @@ func (e *Error) Is(target error) bool {
 
 // §40 exit-code table. Codes absent from it are "unclassified" (1).
 var exitCodes = map[Code]int{
+	CodeInternal:                 1,
+	CodeInvalidRequest:           2,
 	CodeNotFound:                 3,
 	CodeAmbiguousRef:             3,
 	CodeInvalidTransition:        4,
