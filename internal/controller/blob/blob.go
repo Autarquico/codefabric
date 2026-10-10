@@ -73,7 +73,7 @@ type Store struct {
 // New prepares root and removes temporary files abandoned by earlier crashes.
 func New(root string, clk clock.Clock) (*Store, error) {
 	s := &Store{root: root}
-	if err := mkdirAllDurable(s.tmpDir()); err != nil {
+	if err := os.MkdirAll(s.tmpDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("blob: preparing %s: %w", root, err)
 	}
 	if err := s.removeStaleTemps(clk.Now()); err != nil {
@@ -180,17 +180,36 @@ func (s *Store) Put(ctx context.Context, r io.Reader, want Digest) (_ Digest, _ 
 // replacing, which closes the race between two Puts of the same digest.
 func (s *Store) install(tmp string, d Digest, size int64) error {
 	dst := s.path(d)
-	if err := mkdirAllDurable(filepath.Dir(dst)); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return fmt.Errorf("blob: preparing directory: %w", err)
 	}
 	err := os.Link(tmp, dst)
 	switch {
 	case err == nil:
-		return syncDir(filepath.Dir(dst))
 	case errors.Is(err, fs.ErrExist):
-		return s.verifyInstalled(dst, d, size)
+		if err := s.verifyInstalled(dst, d, size); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("blob: installing %s: %w", d, err)
+	}
+	return s.makeDurable(dst)
+}
+
+// makeDurable syncs the blob and every directory entry from it up to the
+// store root. It runs on every successful Put, also when the blob already
+// existed: an earlier installer may have failed or not yet finished syncing.
+func (s *Store) makeDurable(dst string) error {
+	if err := syncFile(dst); err != nil {
+		return err
+	}
+	for dir := filepath.Dir(dst); ; dir = filepath.Dir(dir) {
+		if err := syncDir(dir); err != nil {
+			return err
+		}
+		if dir == s.root {
+			return nil
+		}
 	}
 }
 

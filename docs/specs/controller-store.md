@@ -50,9 +50,9 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **Then** `journal_mode=wal` y `synchronous=FULL`
 
 ### Scenario: Backup previo a migrar
-- **Given** una migración pendiente
+- **Given** una DB ya versionada (versión > 0) con una migración pendiente
 - **When** arranca el Controller
-- **Then** existe `controller.db.pre-<v>` antes de aplicarla
+- **Then** existe `controller.db.pre-<v>` antes de aplicarla (una DB nueva, en versión 0, no tiene nada que respaldar)
 
 ### Scenario: Atomicidad
 - **Given** una mutación con `request_id` que hace panic dentro de la transacción
@@ -77,7 +77,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ## Notas técnicas / riesgos
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
-- Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+- Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout de dominio. Excepciones explícitas: `busy_timeout` de SQLite y los timeouts de `context` del llamador.
 
 ## Referencias
 

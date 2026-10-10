@@ -428,10 +428,12 @@ func TestScenario_ControllerStore_EventDeduplication(t *testing.T) {
 	// A redelivery in a later transaction (Worker retry) is deduplicated too.
 	var again uint64
 	var dup bool
-	_ = db.WithTx(t.Context(), func(tx *Tx) (err error) {
+	if err := db.WithTx(t.Context(), func(tx *Tx) (err error) {
 		again, dup, err = tx.AppendEvent(t.Context(), workerEvent(worker, 7))
 		return err
-	})
+	}); err != nil {
+		t.Fatalf("redelivery transaction: %v", err)
+	}
 	if !dup || again != seqs[0] {
 		t.Errorf("redelivery = (%d, dup=%v), want (%d, true)", again, dup, seqs[0])
 	}
