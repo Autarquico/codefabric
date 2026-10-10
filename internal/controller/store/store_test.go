@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,11 +139,11 @@ func TestScenario_ControllerStore_BackupBeforeMigrating(t *testing.T) {
 	}
 }
 
-func TestBackup_IsIdempotentAfterInterruption(t *testing.T) {
+func TestBackup_InterruptedLeftoversAreReplacedByFreshBackup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "controller.db")
 	_ = reopen(t, path, Options{}).Close()
 
-	// Leftovers of a crashed attempt: a half-written temporary and a corrupt backup.
+	// Leftovers of a crashed attempt: a half-written temporary and an unusable backup.
 	if err := os.WriteFile(path+".pre-1.tmp", []byte("half written"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -160,21 +161,22 @@ func TestBackup_IsIdempotentAfterInterruption(t *testing.T) {
 	if _, err := os.Stat(path + ".pre-1.tmp"); err == nil {
 		t.Error("temporary backup left behind")
 	}
-	moved, _ := filepath.Glob(path + ".pre-1.corrupt-*")
-	if len(moved) != 1 {
-		t.Errorf("corrupt backup not set aside: %v", moved)
+	aside := fmt.Sprintf("%s.pre-1.%d", path, epoch0.Unix())
+	got, err := os.ReadFile(aside) //nolint:gosec // test path
+	if err != nil || string(got) != "not a database at all" {
+		t.Errorf("previous backup not set aside at %s: content=%q err=%v", aside, got, err)
 	}
 }
 
-func TestBackup_ValidExistingBackupIsReused(t *testing.T) {
+func TestBackup_ExistingBackupIsNeverReused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "controller.db")
 	_ = reopen(t, path, Options{}).Close()
 
-	noop := goose.NewGoMigration(2, &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error { return errors.New("boom") }}, nil)
-	if _, err := Open(t.Context(), path, Options{goMigrations: []*goose.Migration{noop}}); err == nil {
+	failing := goose.NewGoMigration(2, &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error { return errors.New("boom") }}, nil)
+	if _, err := Open(t.Context(), path, Options{goMigrations: []*goose.Migration{failing}}); err == nil {
 		t.Fatal("migration failure must fail Open")
 	}
-	before, err := os.Stat(path + ".pre-1")
+	first, err := os.Stat(path + ".pre-1")
 	if err != nil {
 		t.Fatalf("no backup after a failed migration: %v", err)
 	}
@@ -182,9 +184,13 @@ func TestBackup_ValidExistingBackupIsReused(t *testing.T) {
 	fixed := goose.NewGoMigration(2, &goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error { return nil }}, nil)
 	reopen(t, path, Options{goMigrations: []*goose.Migration{fixed}})
 
-	after, err := os.Stat(path + ".pre-1")
-	if err != nil || !os.SameFile(before, after) {
-		t.Fatalf("existing valid backup was rebuilt (err=%v)", err)
+	fresh, err := os.Stat(path + ".pre-1")
+	if err != nil || os.SameFile(first, fresh) {
+		t.Fatalf("backup was reused instead of rebuilt (err=%v)", err)
+	}
+	aside, err := os.Stat(fmt.Sprintf("%s.pre-1.%d", path, epoch0.Unix()))
+	if err != nil || !os.SameFile(first, aside) {
+		t.Fatalf("old backup not preserved under a timestamped name (err=%v)", err)
 	}
 }
 
@@ -575,7 +581,7 @@ func TestEvents_RoundTripFilterAndPaging(t *testing.T) {
 	}
 }
 
-func TestScenario_ControllerStore_PublishesOnlyAfterCommit(t *testing.T) {
+func TestWithTx_NotifiesOnlyAfterCommit(t *testing.T) {
 	db, _ := openTest(t, Options{})
 	n := db.Notifier()
 

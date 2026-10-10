@@ -54,21 +54,17 @@ func (db *DB) migrate(ctx context.Context, goMigrations []*goose.Migration) erro
 	return nil
 }
 
-// backupBeforeMigrating leaves a consistent copy at <db>.pre-<version>. It can
-// be interrupted and rerun at any point: the copy is built under a temporary
-// name and only renamed into place once it passes quick_check.
+// backupBeforeMigrating leaves a fresh consistent copy at <db>.pre-<version>.
+// An older backup is never reused, since the database may have changed since:
+// it is renamed to <db>.pre-<version>.<unix-ts>. The copy is built under a
+// temporary name and only renamed into place once it passes quick_check, so
+// the whole step can be interrupted and rerun at any point.
 func (db *DB) backupBeforeMigrating(ctx context.Context, version int64) error {
 	final := fmt.Sprintf("%s.pre-%d", db.path, version)
 	tmp := final + ".tmp"
 
-	if _, err := os.Stat(final); err == nil {
-		if checkErr := quickCheckFile(ctx, final); checkErr == nil {
-			return nil
-		}
-		corrupt := fmt.Sprintf("%s.corrupt-%d", final, db.clock.Now().Unix())
-		if err := os.Rename(final, corrupt); err != nil {
-			return fmt.Errorf("store: setting aside corrupt backup: %w", err)
-		}
+	if err := setAsideOldBackup(final, db.clock.Now().Unix()); err != nil {
+		return err
 	}
 
 	if err := os.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -90,6 +86,27 @@ func (db *DB) backupBeforeMigrating(ctx context.Context, version int64) error {
 		return fmt.Errorf("store: installing backup: %w", err)
 	}
 	return syncFile(filepath.Dir(final)) // a directory is synced the same way as a file
+}
+
+// setAsideOldBackup renames an existing backup to <final>.<ts>, moving ts
+// forward until the name is free so no earlier backup is overwritten.
+func setAsideOldBackup(final string, ts int64) error {
+	if _, err := os.Stat(final); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("store: inspecting previous backup: %w", err)
+	}
+	for ; ; ts++ {
+		aside := fmt.Sprintf("%s.%d", final, ts)
+		if _, err := os.Lstat(aside); errors.Is(err, fs.ErrNotExist) {
+			if err := os.Rename(final, aside); err != nil {
+				return fmt.Errorf("store: setting aside previous backup: %w", err)
+			}
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("store: inspecting previous backup: %w", err)
+		}
+	}
 }
 
 func quickCheckFile(ctx context.Context, path string) error {

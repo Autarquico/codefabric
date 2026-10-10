@@ -145,6 +145,9 @@ func TestLoad_NoBusy(t *testing.T) {
 		latencies[len(latencies)/2], p95, latencies[len(latencies)-1])
 	t.Logf("tailing reader saw %d events during the window", read.Load())
 
+	if floor := 0.9 * 1000 * loadDuration.Seconds(); float64(events.Load()) < floor {
+		t.Errorf("throughput too low: %d events committed, want at least %.0f", events.Load(), floor)
+	}
 	if err := db.Health(t.Context()); err != nil {
 		t.Errorf("health after load: %v", err)
 	}

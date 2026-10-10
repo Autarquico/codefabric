@@ -249,3 +249,16 @@ func TestNew_RemovesOnlyStaleTemporaries(t *testing.T) {
 		t.Fatalf("fresh temporary removed: %v", err)
 	}
 }
+
+func TestHasAndOpen_RejectMalformedDigest(t *testing.T) {
+	s, _ := newStore(t)
+	for _, raw := range []string{"", "x", "sha256:../../etc", "sha256:" + strings.Repeat("A", 64)} {
+		d := blob.Digest(raw)
+		if _, err := s.Has(d); !errors.Is(err, blob.ErrMalformedDigest) {
+			t.Errorf("Has(%q) error = %v, want ErrMalformedDigest", raw, err)
+		}
+		if _, err := s.Open(d); !errors.Is(err, blob.ErrMalformedDigest) {
+			t.Errorf("Open(%q) error = %v, want ErrMalformedDigest", raw, err)
+		}
+	}
+}

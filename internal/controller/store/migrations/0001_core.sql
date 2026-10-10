@@ -30,7 +30,8 @@ CREATE TABLE events (
     message        TEXT    NOT NULL,
     data           TEXT,
     UNIQUE (worker_id, worker_epoch, worker_seq),
-    CHECK ((worker_epoch IS NULL) = (worker_seq IS NULL))
+    CHECK ((worker_epoch IS NULL) = (worker_seq IS NULL)),
+    CHECK (worker_seq IS NULL OR worker_id IS NOT NULL)
 ) STRICT;
 
 CREATE INDEX events_run_id    ON events (run_id)    WHERE run_id IS NOT NULL;

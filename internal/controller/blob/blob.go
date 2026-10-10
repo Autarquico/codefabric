@@ -40,14 +40,25 @@ type Digest string
 
 // ParseDigest validates the textual form of a Digest.
 func ParseDigest(s string) (Digest, error) {
-	hexPart, ok := strings.CutPrefix(s, digestPrefix)
+	d := Digest(s)
+	if err := d.validate(); err != nil {
+		return "", err
+	}
+	return d, nil
+}
+
+// validate is the single definition of a well-formed Digest. Every Store
+// method that builds a path calls it first, so a zero or hostile Digest can
+// neither panic nor escape the root.
+func (d Digest) validate() error {
+	hexPart, ok := strings.CutPrefix(string(d), digestPrefix)
 	if !ok || len(hexPart) != hexLen {
-		return "", fmt.Errorf("%w: %q", ErrMalformedDigest, s)
+		return fmt.Errorf("%w: %q", ErrMalformedDigest, string(d))
 	}
 	if raw, err := hex.DecodeString(hexPart); err != nil || hex.EncodeToString(raw) != hexPart {
-		return "", fmt.Errorf("%w: %q", ErrMalformedDigest, s)
+		return fmt.Errorf("%w: %q", ErrMalformedDigest, string(d))
 	}
-	return Digest(s), nil
+	return nil
 }
 
 func (d Digest) String() string { return string(d) }
@@ -99,6 +110,9 @@ func (s *Store) removeStaleTemps(now time.Time) error {
 
 // Has reports whether the blob is installed.
 func (s *Store) Has(d Digest) (bool, error) {
+	if err := d.validate(); err != nil {
+		return false, err
+	}
 	_, err := os.Stat(s.path(d))
 	switch {
 	case err == nil:
@@ -112,6 +126,9 @@ func (s *Store) Has(d Digest) (bool, error) {
 
 // Open returns a reader for the blob, or a CF_NOT_FOUND error.
 func (s *Store) Open(d Digest) (io.ReadCloser, error) {
+	if err := d.validate(); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(s.path(d))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, domain.NewError(domain.CodeNotFound, "blob not found", map[string]any{"digest": string(d)})
@@ -127,6 +144,11 @@ func (s *Store) Open(d Digest) (io.ReadCloser, error) {
 // ErrDigestMismatch is returned. Putting content that is already stored is a
 // successful no-op.
 func (s *Store) Put(ctx context.Context, r io.Reader, want Digest) (_ Digest, _ int64, err error) {
+	if want != "" {
+		if err := want.validate(); err != nil {
+			return "", 0, err
+		}
+	}
 	tmp, err := os.CreateTemp(s.tmpDir(), "put-*")
 	if err != nil {
 		return "", 0, fmt.Errorf("blob: creating temporary: %w", err)

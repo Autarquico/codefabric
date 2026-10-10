@@ -39,10 +39,3 @@ func (f *Fake) Advance(d time.Duration) {
 	defer f.mu.Unlock()
 	f.now = f.now.Add(d)
 }
-
-// Set jumps the fake time to t.
-func (f *Fake) Set(t time.Time) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.now = t
-}

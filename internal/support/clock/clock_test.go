@@ -8,18 +8,13 @@ import (
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
-func TestFake_AdvanceAndSet(t *testing.T) {
+func TestFake_Advance(t *testing.T) {
 	start := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	f := clock.NewFake(start)
 
 	f.Advance(90 * time.Second)
 	if got, want := f.Now(), start.Add(90*time.Second); !got.Equal(want) {
 		t.Fatalf("after Advance: got %v, want %v", got, want)
-	}
-
-	f.Set(start)
-	if !f.Now().Equal(start) {
-		t.Fatalf("after Set: got %v, want %v", f.Now(), start)
 	}
 }
 
