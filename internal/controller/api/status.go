@@ -63,7 +63,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request, _ caller) error 
 // checkDatabase runs detached from the caller's cancellation: its result is
 // shared with other callers, so one impatient client must not poison it.
 func (s *Server) checkDatabase(r *http.Request) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), healthTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), s.timeouts.Health)
 	defer cancel()
 	err := s.store.Health(ctx)
 	if err != nil {

@@ -29,6 +29,9 @@ const (
 // Timeouts bound a connection; a zero field takes its production default.
 type Timeouts struct {
 	Read, Write, Idle time.Duration
+	// Health bounds the database check behind /v1/status. It is an
+	// infrastructure deadline on a context, so it runs on real time.
+	Health time.Duration
 }
 
 func (t Timeouts) orDefaults() Timeouts {
@@ -40,6 +43,9 @@ func (t Timeouts) orDefaults() Timeouts {
 	}
 	if t.Idle == 0 {
 		t.Idle = idleTimeout
+	}
+	if t.Health == 0 {
+		t.Health = healthTimeout
 	}
 	return t
 }

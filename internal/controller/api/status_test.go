@@ -87,11 +87,11 @@ func TestApiSdkCliStatus_TheHealthCheckHasATimeout(t *testing.T) {
 	tc := newController(t, time.Now(), withHealth(func(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
-	}))
+	}), func(c *api.Config) { c.Timeouts.Health = 50 * time.Millisecond })
 	start := time.Now()
 	st, err := tc.owner.Status(t.Context())
 	must(t, err)
-	if st.Database.OK || time.Since(start) > 10*time.Second {
+	if st.Database.OK || time.Since(start) > 5*time.Second {
 		t.Errorf("database %+v after %s", st.Database, time.Since(start))
 	}
 }

@@ -168,6 +168,12 @@ func TestScenario_ApiSdkCliStatus_ControllerCaido(t *testing.T) {
 	if code != 6 || env["code"] != string(domain.CodeControllerUnreachable) || errOut != "" {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
+
+	// A local failure has a local cause, and --debug shows it.
+	code, _, debugErr := cf(t, "", "status", "--debug")
+	if code != 6 || !strings.Contains(debugErr, "cause: ") {
+		t.Fatalf("--debug: exit %d, stderr %q", code, debugErr)
+	}
 }
 
 func TestScenario_ApiSdkCliStatus_Persistencia(t *testing.T) {
@@ -180,12 +186,18 @@ func TestScenario_ApiSdkCliStatus_Persistencia(t *testing.T) {
 	}
 	use(t, host)
 	before := statusOf(t)
-	_, clientsBefore, _ := cf(t, "", "client", "list", "--json")
+	code, clientsBefore, errOut := cf(t, "", "client", "list", "--json")
+	if code != 0 {
+		t.Fatalf("client list before the restart: exit %d: %s", code, errOut)
+	}
 	stop()
 
 	serve(t, host, daemon.Options{})
 	after := statusOf(t)
-	_, clientsAfter, _ := cf(t, "", "client", "list", "--json")
+	code, clientsAfter, errOut := cf(t, "", "client", "list", "--json")
+	if code != 0 {
+		t.Fatalf("client list after the restart: exit %d: %s", code, errOut)
+	}
 
 	if before.ControllerID == "" || after.ControllerID != before.ControllerID {
 		t.Errorf("controller id %q before, %q after the restart", before.ControllerID, after.ControllerID)

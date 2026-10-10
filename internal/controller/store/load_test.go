@@ -147,10 +147,11 @@ func TestLoad_NoBusy(t *testing.T) {
 		latencies[len(latencies)/2], p95, latencies[len(latencies)-1])
 	t.Logf("tailing reader saw %d events during the window", read.Load())
 
-	// The floor is deliberately loose: raw throughput depends on how busy the
-	// machine running the test is. The milestone target (§1.3) is checked by
-	// the p95 latency logged above, not by this floor, which only catches a
-	// collapse (writers stuck on SQLITE_BUSY, a stalled queue).
+	// The floor (75 % of the simulated rate) is deliberately loose: raw
+	// throughput depends on how busy the machine running the test is, and at
+	// 90 % it failed on loaded CI and developer machines with no regression.
+	// It only catches a collapse (writers stuck on SQLITE_BUSY, a stalled
+	// queue). The p95 above is informational; nothing asserts it.
 	if floor := 0.75 * 1000 * loadDuration.Seconds(); float64(events.Load()) < floor {
 		t.Errorf("throughput too low: %d events committed, want at least %.0f", events.Load(), floor)
 	}
