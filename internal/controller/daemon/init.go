@@ -61,7 +61,7 @@ type InitResult struct {
 func Init(ctx context.Context, o InitOptions) (_ InitResult, err error) {
 	host, port, err := net.SplitHostPort(o.Advertise)
 	if n, convErr := strconv.Atoi(port); err != nil || host == "" || convErr != nil || n < 1 || n > 65535 {
-		return InitResult{}, fmt.Errorf("--advertise must be host:port, got %q", o.Advertise)
+		return InitResult{}, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("--advertise must be host:port, got %q", o.Advertise), nil)
 	}
 	if o.Listen == "" {
 		o.Listen = net.JoinHostPort("0.0.0.0", port)

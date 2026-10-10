@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
+	"unicode"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -30,6 +32,16 @@ func oneJSONValue(t *testing.T, stdout string) map[string]any {
 		t.Fatalf("stdout holds more than one JSON value: %q", stdout)
 	}
 	return v
+}
+
+// errorOf is the error object of a failed command's stdout.
+func errorOf(t *testing.T, stdout string) map[string]any {
+	t.Helper()
+	env, ok := oneJSONValue(t, stdout)["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("stdout is not an error envelope: %q", stdout)
+	}
+	return env
 }
 
 func isolatedMachine(t *testing.T) {
@@ -72,7 +84,7 @@ func TestApiSdkCliStatus_UsageErrorsAreInvalidRequestWithExit2(t *testing.T) {
 				if name == "bad flag value" {
 					return // --json itself is the broken flag: no JSON mode to honour
 				}
-				env := oneJSONValue(t, stdout)["error"].(map[string]any)
+				env := errorOf(t, stdout)
 				if env["code"] != string(domain.CodeInvalidRequest) {
 					t.Errorf("envelope %v", env)
 				}
@@ -102,8 +114,8 @@ func TestApiSdkCliStatus_JSONCommandsWriteExactlyOneValueToStdout(t *testing.T) 
 func TestApiSdkCliStatus_ConfigShowJSONSaysWhetherThisMachineIsConnected(t *testing.T) {
 	isolatedMachine(t)
 	_, stdout, _ := run(t, "config", "show", "--json")
-	client := oneJSONValue(t, stdout)["client"].(map[string]any)
-	if client["connected"] != false {
+	client, ok := oneJSONValue(t, stdout)["client"].(map[string]any)
+	if !ok || client["connected"] != false {
 		t.Errorf("client %v", client)
 	}
 }
@@ -124,11 +136,84 @@ func TestApiSdkCliStatus_AFailureWithJSONIsTheEnvelopeOnStdout(t *testing.T) {
 }
 
 func TestApiSdkCliStatus_AnUncodedFailureWithJSONIsUnclassified(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := report(&stdout, &stderr, errors.New("disk on fire"), true, false)
+	env := errorOf(t, stdout.String())
+	if code != 1 || env["code"] != string(domain.CodeInternal) || stderr.Len() != 0 {
+		t.Errorf("exit %d, envelope %v, stderr %q", code, env, stderr.String())
+	}
+}
+
+func TestApiSdkCliStatus_ANoInvitationIsAUsageError(t *testing.T) {
 	isolatedMachine(t)
 	code, stdout, _ := run(t, "connect", "--json") // no invitation on stdin
-	env := oneJSONValue(t, stdout)["error"].(map[string]any)
-	if code != 1 || env["code"] != string(domain.CodeInternal) {
+	env := errorOf(t, stdout)
+	if code != 2 || env["code"] != string(domain.CodeInvalidRequest) {
 		t.Errorf("exit %d, envelope %v", code, env)
+	}
+}
+
+func TestApiSdkCliStatus_HelpAndCompletionMisuseIsAUsageError(t *testing.T) {
+	isolatedMachine(t)
+	for _, args := range [][]string{{"completion", "nope"}, {"completion", "bash", "extra"}, {"help", "--bogus"}} {
+		code, stdout, _ := run(t, append(args, "--json")...)
+		if env := errorOf(t, stdout); code != 2 || env["code"] != string(domain.CodeInvalidRequest) {
+			t.Errorf("cf %v: exit %d, envelope %v", args, code, env)
+		}
+	}
+	if code, stdout, _ := run(t, "help"); code != 0 || stdout == "" {
+		t.Errorf("help: exit %d, stdout %q", code, stdout)
+	}
+}
+
+func TestApiSdkCliStatus_AGroupingCommandWithJSONNeedsASubcommand(t *testing.T) {
+	isolatedMachine(t)
+	for _, args := range [][]string{{"--json"}, {"client", "--json"}, {"--json=true", "config"}, {"config", "--json=1"}} {
+		code, stdout, stderr := run(t, args...)
+		if env := errorOf(t, stdout); code != 2 || env["code"] != string(domain.CodeInvalidRequest) || stderr != "" {
+			t.Errorf("cf %v: exit %d, envelope %v, stderr %q", args, code, env, stderr)
+		}
+	}
+	for _, args := range [][]string{{}, {"client"}, {"client", "--json=false"}} {
+		code, stdout, _ := run(t, args...)
+		if code != 0 || !strings.Contains(stdout, "Usage:") {
+			t.Errorf("cf %v: exit %d, stdout %q", args, code, stdout)
+		}
+	}
+}
+
+func TestApiSdkCliStatus_JSONIsRecognisedInTheRawArgumentsWhateverItsSpelling(t *testing.T) {
+	for args, want := range map[string]bool{
+		"--json":         true,
+		"--json=true":    true,
+		"--json=1":       true,
+		"--json=T":       true,
+		"--json=false":   false,
+		"--json=maybe":   false,
+		"--jsonx":        false,
+		"x -- --json":    false,
+		"--name=--json=": false,
+	} {
+		if got := jsonRequested(newRootCmd(), strings.Fields(args)); got != want {
+			t.Errorf("%q: got %v, want %v", args, got, want)
+		}
+	}
+}
+
+func TestApiSdkCliStatus_ServerTextShownToAPersonHasNoControlCharacters(t *testing.T) {
+	err := domain.NewError(domain.CodeInvalidRequest, "bad\x1b[31m\nerror: fake",
+		map[string]any{"k\r": "v\x07\nx", "request_id": "id\x1b"})
+	for _, debug := range []bool{false, true} {
+		var stderr bytes.Buffer
+		report(io.Discard, &stderr, err, false, debug)
+		for _, r := range strings.TrimSpace(stderr.String()) {
+			if unicode.IsControl(r) && r != '\n' {
+				t.Fatalf("debug=%v: control character %q in %q", debug, r, stderr.String())
+			}
+		}
+		if lines := strings.Count(strings.TrimSpace(stderr.String()), "\n"); (!debug && lines != 0) || (debug && lines != 2) {
+			t.Errorf("debug=%v: %d extra lines in %q", debug, lines, stderr.String())
+		}
 	}
 }
 

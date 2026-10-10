@@ -10,7 +10,9 @@ import (
 	"os/signal"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -39,11 +41,15 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, extra ...*cob
 
 	root := newRootCmd()
 	root.AddCommand(extra...)
-	reportUsageAsInvalidRequest(root)
 	root.SetArgs(args)
 	root.SetIn(stdin)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
+	// Cobra would add these at Execute, after the usage-error wrapping, and the
+	// completion command binds the output stream when it is created.
+	root.InitDefaultHelpCmd()
+	root.InitDefaultCompletionCmd()
+	reportUsageAsInvalidRequest(root)
 	if err := root.ExecuteContext(ctx); err != nil {
 		debug, _ := root.PersistentFlags().GetBool(flagDebug)
 		return report(stdout, stderr, err, jsonRequested(root, args), debug)
@@ -61,7 +67,14 @@ func jsonRequested(root *cobra.Command, args []string) bool {
 	if end < 0 {
 		end = len(args)
 	}
-	return slices.Contains(args[:end], "--json") || slices.Contains(args[:end], "--json=true")
+	return slices.ContainsFunc(args[:end], func(arg string) bool {
+		if arg == "--"+flagJSON {
+			return true
+		}
+		value, ok := strings.CutPrefix(arg, "--"+flagJSON+"=")
+		on, err := strconv.ParseBool(value)
+		return ok && err == nil && on
+	})
 }
 
 // report prints err and maps it to the §40 exit code. With --json the §40
@@ -89,9 +102,9 @@ func report(stdout, stderr io.Writer, err error, asJSON, debug bool) int {
 // of the details (never a server stack: that stays on the server).
 func humanError(e *domain.Error, debug bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "error: %s: %s", e.Code, e.Message)
+	fmt.Fprintf(&b, "error: %s: %s", e.Code, printable(e.Message))
 	if id, ok := e.Details["request_id"].(string); ok && e.Code == domain.CodeInternal {
-		fmt.Fprintf(&b, " (request %s)", id)
+		fmt.Fprintf(&b, " (request %s)", printable(id))
 	}
 	if debug {
 		keys := make([]string, 0, len(e.Details))
@@ -100,10 +113,21 @@ func humanError(e *domain.Error, debug bool) string {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			fmt.Fprintf(&b, "\n  %s: %v", k, e.Details[k])
+			fmt.Fprintf(&b, "\n  %s: %s", printable(k), printable(fmt.Sprint(e.Details[k])))
 		}
 	}
 	return b.String()
+}
+
+// printable drops control characters from text that came from the server, so
+// it cannot move the cursor, recolour the terminal or fake extra lines.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func newRootCmd() *cobra.Command {
@@ -149,6 +173,9 @@ func reportUsageAsInvalidRequest(root *cobra.Command) {
 func showHelpOrRejectArgs(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		return usageError(fmt.Errorf("unknown command %q for %q", args[0], cmd.CommandPath()))
+	}
+	if on, _ := cmd.Flags().GetBool(flagJSON); on {
+		return usageError(fmt.Errorf("%q needs a subcommand", cmd.CommandPath()))
 	}
 	return cmd.Help()
 }

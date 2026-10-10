@@ -97,7 +97,7 @@ func newConfigShowCmd() *cobra.Command {
 					return nil
 				}
 				fmt.Fprintf(out, "client.controller:  %s\nclient.identity:    %s\nclient.expires:     %s\nclient.key:         [redacted]\n",
-					info.Controller, info.IdentityID, info.NotAfter.Local().Format(time.DateOnly))
+					shown.Client.Controller, shown.Client.IdentityID, shown.Client.NotAfter.Local().Format(time.DateOnly))
 				return nil
 			})
 		},

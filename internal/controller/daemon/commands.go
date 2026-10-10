@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -102,7 +101,7 @@ func newTokenCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if asClient == asWorker {
-				return errors.New("choose exactly one of --client or --worker")
+				return domain.NewError(domain.CodeInvalidRequest, "choose exactly one of --client or --worker", nil)
 			}
 			kind := domain.KindClient
 			if asWorker {
