@@ -41,8 +41,10 @@ func Name(what, name string) error {
 }
 
 // Repo checks a repository URL or path against the allowlist of
-// domain.ValidRepoURL: the Controller never stores a credential, and git takes
-// them from the user's own configuration. The message does not repeat the URL.
+// domain.ValidRepoURL, which refuses the forms that carry git credentials
+// (a password, http userinfo, a query, a fragment); git takes credentials from
+// the user's own configuration. A secret typed as a user name or a path is not
+// detected. The message does not repeat the URL.
 func Repo(repo string) error {
 	if repo == "" || len(repo) > maxURLLen {
 		return Invalid("repo must be a git URL or path of at most %d characters", maxURLLen)

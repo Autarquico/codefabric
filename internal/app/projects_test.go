@@ -90,9 +90,9 @@ func TestProjects_NeverStoreOrAuditACredential(t *testing.T) {
 	for _, repo := range []string{
 		"https://user:s3cret@example.com/org/r.git", "https://:s3cret@example.com/org/r.git", "ssh://git:s3cret@example.com/org/r.git",
 		"https://s3cret@example.com/org/r.git", "https://example.com/org/r.git?access_token=s3cret", "ssh://git@example.com/org/r.git#s3cret",
-		"user:s3cret@build_box:org/repo.git", "git@host:org/a@s3cret:c.git",
+		"user:s3cret@build_box:org/repo.git", "git@host:org/a@s3cret:c.git", "/srv/s3cret\x00",
 	} {
-		_, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "a", Repo: repo})
+		_, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "a", Repo: repo, RequestID: "create-" + repo})
 		wantCode(t, err, domain.CodeInvalidRequest)
 		if strings.Contains(err.Error(), "s3cret") {
 			t.Errorf("the error repeats the secret: %v", err)
@@ -101,13 +101,16 @@ func TestProjects_NeverStoreOrAuditACredential(t *testing.T) {
 	// The same through the aliases of an existing Project.
 	ok := e.project("ok", func(r *v1.CreateProjectRequest) { r.Repo = "ssh://git@example.com/org/ok.git" })
 	for _, repo := range []string{"https://user:s3cret@example.com/r.git", "https://example.com/r?token=s3cret", "u:s3cret@host:path"} {
-		_, err := e.app.Projects.Set(t.Context(), e.owner, ok.Name, v1.UpdateProjectRequest{AddRepos: []string{repo}})
+		_, err := e.app.Projects.Set(t.Context(), e.owner, ok.Name, v1.UpdateProjectRequest{AddRepos: []string{repo}, RequestID: "set-" + repo})
 		wantCode(t, err, domain.CodeInvalidRequest)
 		if strings.Contains(err.Error(), "s3cret") {
 			t.Errorf("the error repeats the secret: %v", err)
 		}
 	}
-	for _, table := range []string{"projects", "audit_entries", "events", "idempotency_keys"} {
+	if after, err := e.app.Projects.Get(t.Context(), ok.Name); err != nil || len(after.RepoAliases) != 0 {
+		t.Errorf("the rejected aliases changed the Project: %+v, %v", after, err)
+	}
+	for _, table := range []string{"projects", "project_repos", "audit_entries", "events", "idempotency_keys"} {
 		if dump := e.dump(table); strings.Contains(dump, "s3cret") {
 			t.Errorf("%s holds the secret:\n%s", table, dump)
 		}
@@ -180,5 +183,17 @@ func TestProjects_RepoAliasesAreBounded(t *testing.T) {
 	wantCode(t, err, domain.CodeInvalidRequest)
 	if _, err := e.app.Projects.Set(t.Context(), e.owner, p.Name, v1.UpdateProjectRequest{AddRepos: many[:32]}); err != nil {
 		t.Fatalf("32 aliases: %v", err)
+	}
+}
+
+// The allowlist refuses the forms that carry credentials, not every secret: a
+// user name or a path is free text within its charset and is stored as given.
+func TestProjects_TheAllowlistDoesNotDetectASecretTypedAsAUserOrAPath(t *testing.T) {
+	e := newEnv(t)
+	for i, repo := range []string{"ssh://tok3n@example.com/org/r.git", "tok3n@example.com:org/r.git", "https://example.com/tok3n@r.git", "/srv/tok3n"} {
+		p, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: fmt.Sprintf("p%d", i), Repo: repo})
+		if err != nil || p.Repo != repo {
+			t.Errorf("Create(%q) = %+v, %v", repo, p, err)
+		}
 	}
 }
