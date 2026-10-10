@@ -1509,7 +1509,7 @@ Registrar:
 
 v0.x asume un único propietario humano: todas las identidades humanas son el principal `owner`. No hay RBAC; sí hay identidades distintas por máquina y por sesión MCP, para auditar y revocar.
 
-- **Controller:** `cf controller init` genera un keypair ed25519 y una CA propia. Toda la API va sobre TLS con esa CA, también dentro de la tailnet (Tailscale es red, no autenticación).
+- **Controller:** `cf controller init` genera una CA propia (ECDSA P-256) y su clave **es** la identidad del Controller: no hay un keypair aparte, porque nada lo usaría. Toda la API va sobre TLS con esa CA, también dentro de la tailnet (Tailscale es red, no autenticación). CA y certificados hoja usan P-256 por compatibilidad con git/libcurl (ADR 0002, D2).
 - **Primera credencial del owner:** `cf controller init` escribe en el host del Controller un credential bundle del owner (`0600`) y emite una invitación de cliente para la primera máquina. No hay otro camino de bootstrap: quien tiene shell en el host del Controller es el owner.
 - **Invitaciones:** `cf controller token create --worker|--client --ttl 1h` emite un token de un solo uso con formato `cf://<host>:<port>/join?token=<t>#sha256:<fingerprint-CA>`. El cliente/Worker **verifica la CA contra el fingerprint de la invitación** antes de enviar nada (TOFU anclado al token, no a la red) y la fija para siempre.
 - **Canje:** el Worker/cliente genera su clave y canjea el token por un certificado cliente (mTLS). El consumo del token es atómico (una transacción marca el token usado y crea la identidad); un segundo canje → `CF_UNAUTHENTICATED`.

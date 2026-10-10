@@ -27,11 +27,17 @@ Owner previsto en el bucle Develop: backend-eng (API, SDK) y frontend-eng (CLI).
 ## Scope
 
 **Entra:**
-- `internal/api/v1`: DTOs y sobre de error `{error:{code,message,details}}`
-- `internal/controller/api`: server, middleware (request_id, slog, recover, auth), mapeo CF→HTTP, `GET /v1/status`
-- `cmd/cf`: comando `cf controller run` (wiring de Controller, ver ADR 0001)
-- `internal/client`: SDK HTTP con TLS fijado
-- `internal/cli`: flags globales `--json`, `--controller`, `--debug`; mapeo de errores a exit codes; `cf status`
+- `cf status` y `GET /v1/status` (versión, uptime, salud de la DB)
+- `internal/controller/api`: middleware de `request_id`, `slog` y `recover`
+- `cmd/cf` / `internal/cli`: flags globales `--controller` y `--debug`, y `--json` global con golden files
+- Los 5 scenarios de abajo
+
+**Ya entregado por [controller-identity-tls](controller-identity-tls.md)** (no se rehace aquí):
+- `internal/api/v1`: DTOs de identidad y sobre de error `{error:{code,message,details}}`
+- `internal/controller/api`: servidor TLS, middleware de auth con tabla de rutas y mapeo CF→HTTP
+- `cf controller run` (el wiring del Controller vive en `internal/controller/daemon`, ADR 0001)
+- `internal/client`: SDK base con TLS fijado y credenciales
+- `internal/cli`: mapeo de errores a exit codes (`*domain.Error` → `domain.ExitCode`)
 
 **No entra:**
 - Recursos distintos de status
