@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: M
 issue: 8
-prs: []
+prs: [32]
 related_issues: [8]
 sub_issues: []
 depends_on: [api-sdk-cli-status]
