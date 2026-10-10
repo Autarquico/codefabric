@@ -1,0 +1,75 @@
+---
+codename: codefabric
+title: API, Client SDK y `cf status`
+type: task
+status: active
+priority: P0
+size: M
+issue: 6
+prs: []
+related_issues: [6]
+sub_issues: []
+depends_on: [controller-identity-tls]
+supersedes: []
+related_specs: [codefabric-spec, phase-0-skeleton]
+created: 2026-10-10
+updated: 2026-10-10
+---
+
+# API, Client SDK y `cf status`
+
+## Contexto / problema
+
+Milestone de la [Fase 0 — Skeleton](phase-0-skeleton.md). Implementa §18.1–18.2, §31.1–31.2, §34, §40 de `docs/codefabric-spec.md`.
+
+Owner previsto en el bucle Develop: backend-eng (API, SDK) y frontend-eng (CLI).
+
+## Scope
+
+**Entra:**
+- `internal/api/v1`: DTOs y sobre de error `{error:{code,message,details}}`
+- `internal/controller/api`: server, middleware (request_id, slog, recover, auth), mapeo CF→HTTP, `GET /v1/status`
+- `cmd/cf`: comando `cf controller run` (wiring de Controller, ver ADR 0001)
+- `internal/client`: SDK HTTP con TLS fijado
+- `internal/cli`: flags globales `--json`, `--controller`, `--debug`; mapeo de errores a exit codes; `cf status`
+
+**No entra:**
+- Recursos distintos de status
+
+## Criterios de aceptación
+
+Cada scenario se implementa como un test `TestScenario_*`.
+
+### Scenario: Status
+- **Given** un Controller corriendo y un cliente conectado
+- **When** se ejecuta `cf status`
+- **Then** muestra versión, uptime y salud de la DB; `--json` coincide con el golden
+
+### Scenario: Controller caído
+- **Given** el Controller parado
+- **When** se ejecuta `cf status --json`
+- **Then** stdout contiene `CF_CONTROLLER_UNREACHABLE` y el exit es 6
+
+### Scenario: Persistencia (Done de Fase 0)
+- **Given** un Controller reiniciado
+- **When** se ejecuta `cf status`
+- **Then** el ID del Controller y los datos persisten
+
+### Scenario: Sin credencial
+- **Given** un cliente sin credencial
+- **When** se ejecuta `cf status`
+- **Then** exit 6 y sugerencia de `cf connect`
+
+### Scenario: Error interno
+- **Given** un error inesperado del servidor
+- **When** se ejecuta cualquier comando
+- **Then** exit 1, sin stack trace salvo con `--debug`
+
+## Notas técnicas / riesgos
+
+- Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
+- Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+
+## Referencias
+
+- `docs/codefabric-spec.md` §18.1–18.2, §31.1–31.2, §34, §40

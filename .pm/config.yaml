@@ -1,0 +1,26 @@
+codename: codefabric
+display_name: CodeFabric
+github:
+  repo: Autarquico/codefabric
+  project:
+    owner: Autarquico
+    owner_type: org
+    number: 5
+  field_ids:
+    status: PVTSSF_lADODyLb1M4BmeaQzhlHTdc
+    priority: PVTSSF_lADODyLb1M4BmeaQzhlHTeQ
+    size: PVTSSF_lADODyLb1M4BmeaQzhlHTeU
+    ticket_type: PVTSSF_lADODyLb1M4BmeaQzhlHTek
+paths:
+  specs: docs/specs/
+  specs_archive: docs/specs/archive/
+  tracking:
+    status: docs/STATUS.md
+agent:
+  language: es
+  conventions: AGENT.md
+mcp:
+  server: github
+sync:
+  archive_on_ship: false
+  default_since_days: 7
