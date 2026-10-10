@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: S
 issue: 6
-prs: []
+prs: [31]
 related_issues: [6]
 sub_issues: []
 depends_on: [controller-identity-tls]
