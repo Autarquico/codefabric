@@ -23,14 +23,14 @@ func digestOf(t *testing.T, task store.Task, project store.Project, commit strin
 // spec_digest for ever, so this fixture only changes together with specSchema.
 func TestSpecDigest_Fixture(t *testing.T) {
 	project := store.Project{DefaultBranch: "main"}
-	raw, digest := digestOf(t, store.Task{}, project, commit)
+	raw, digest := digestOf(t, store.Task{Prompt: "fix the flaky test"}, project, commit)
 
-	const wantJSON = `{"schema":1,"source":{"ref":"main","commit":"0123456789abcdef0123456789abcdef01234567","snapshot":""},` +
+	const wantJSON = `{"schema":2,"prompt":"fix the flaky test","source":{"ref":"main","commit":"0123456789abcdef0123456789abcdef01234567","snapshot":""},` +
 		`"mode":"headless","workflow":"","environment":"",` +
 		`"requirements":{"harness":"","model":"","capabilities":[],"resources":{"cpu":2,"memory_mb":4096},` +
 		`"workers":{"prefer":[],"avoid":[],"require":[]}},` +
 		`"completion":"first_success","retry":{"on_failed":"none","on_lost":"ask","max_attempts":1}}`
-	const wantDigest = "sha256:2d270e751b8566b0f653fe13c9edaa63100a6b2036b4a19351a8afe70aaa1ba2"
+	const wantDigest = "sha256:630b344c4d436369aae73053dc8cb3f66d0e098a5996280c2bdb7543a6ad949c"
 	if raw != wantJSON {
 		t.Errorf("spec JSON changed:\n got %s\nwant %s", raw, wantJSON)
 	}
@@ -98,6 +98,7 @@ func TestSpecDigest_EveryFrozenFieldCounts(t *testing.T) {
 	other := "fedcba9876543210fedcba9876543210fedcba98"
 
 	variants := map[string]func() (store.Task, store.Project, string){
+		"the prompt":   func() (store.Task, store.Project, string) { return store.Task{Prompt: "p"}, project, commit },
 		"the commit":   func() (store.Task, store.Project, string) { return store.Task{}, project, other },
 		"the ref":      func() (store.Task, store.Project, string) { return store.Task{SourceRef: "dev"}, project, commit },
 		"the snapshot": func() (store.Task, store.Project, string) { return store.Task{SourceSnapshot: "s"}, project, commit },

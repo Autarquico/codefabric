@@ -14,6 +14,7 @@ import (
 // Inherited is a Task's configuration with every field it omits resolved
 // Task → Project → global defaults (§3.3). Resources is always set.
 type Inherited struct {
+	Prompt       string
 	SourceRef    string
 	Mode         domain.Mode
 	Workflow     string
@@ -29,6 +30,7 @@ type Inherited struct {
 func Inherit(t store.Task, p store.Project) Inherited {
 	global := domain.Defaults()
 	in := Inherited{
+		Prompt:       t.Prompt,
 		SourceRef:    first(t.SourceRef, p.DefaultBranch),
 		Mode:         first(t.Mode, p.Defaults.Mode, global.TaskMode),
 		Workflow:     first(t.Workflow, p.DefaultWorkflow),
@@ -66,14 +68,16 @@ func firstPtr[T any](values ...*T) *T {
 
 // specSchema versions the layout of runSpec. A change to the layout must raise
 // it, so that digests of different layouts never compare equal by accident.
-const specSchema = 1
+const specSchema = 2
 
 // runSpec is what a Run freezes when it is created (§3.3). Its JSON, with the
 // fields in this order, is hashed into spec_digest: it holds only logical
-// configuration, never IDs, timestamps or operational state, and it owns its
-// types so that a change to the API's does not move the digests.
+// configuration and inputs, never IDs, timestamps or operational state, and it
+// owns its types so that a change to the API's does not move the digests. The
+// prompt is an input: Runs that differ in it are not reproductions (§12.3).
 type runSpec struct {
 	Schema       int               `json:"schema"`
+	Prompt       string            `json:"prompt"`
 	Source       specSource        `json:"source"`
 	Mode         domain.Mode       `json:"mode"`
 	Workflow     string            `json:"workflow"`
@@ -118,6 +122,7 @@ func newSpec(in Inherited, snapshot, commit string) runSpec {
 	r := in.Requirements
 	return runSpec{
 		Schema:      specSchema,
+		Prompt:      in.Prompt,
 		Source:      specSource{Ref: in.SourceRef, Commit: commit, Snapshot: snapshot},
 		Mode:        in.Mode,
 		Workflow:    in.Workflow,
