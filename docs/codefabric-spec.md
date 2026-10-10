@@ -1131,7 +1131,7 @@ no terminal ──Worker no reconciliable tras run_lost_timeout──▶ lost
 
 | # | Condición | Estado | `waiting_reason` |
 |---|-----------|--------|------------------|
-| 1 | marcador `cancelled` / `archived` | `cancelled` / `archived` | — |
+| 1 | marcador `archived` / `cancelled` (si hay ambos, gana `archived`) | `archived` / `cancelled` | — |
 | 2 | se cumple la completion policy o hay marcador `completed_manually_at` | `completed` | — |
 | 3 | alguna dependencia no está `completed` | `blocked` | — |
 | 4 | algún Run en `preparing\|running\|checkpointing`, o `completed` con `evaluation: pending` o `publication: pending` | `running` | — |
@@ -1140,7 +1140,7 @@ no terminal ──Worker no reconciliable tras run_lost_timeout──▶ lost
 | 7 | sin Runs y `autostart: true` | `queued` (el scheduler crea el Run al cumplirse las dependencias) | — |
 | 8 | sin Runs y `autostart: false` | `waiting` | `start` |
 | 9 | último Run `suspended` | `waiting` | `deferred` |
-| 10 | Runs `completed` sin satisfacer la policy (evaluators `failed\|error`, `publication: failed`, o `completion: promote` sin promover) | `waiting` | `review` |
+| 10 | algún Run `completed` sin satisfacer la policy (evaluators `failed\|error`, `publication: failed`, o `completion: promote` sin promover) | `waiting` | `review` |
 | 11 | último Run `failed\|lost` con retry `ask` | `waiting` | `decision` |
 | 12 | último Run `failed\|lost` con retry `reschedule` y quedan intentos | `queued` (se crea el Run de retry) | — |
 | 13 | último Run `cancelled` (sin cancelar la Task) | `waiting` | `decision` |
@@ -2773,11 +2773,11 @@ Exit codes del CLI:
 | 1 | error no clasificado | `CF_REPO_CONFIG_INVALID` y otros |
 | 2 | uso incorrecto | flags/args |
 | 3 | no encontrado / ambiguo | `CF_NOT_FOUND`, `CF_AMBIGUOUS_REF` |
-| 4 | conflicto de estado | `CF_INVALID_TRANSITION`, `CF_WORKFLOW_CONFLICT`, `CF_STALE_LEASE`, `CF_IDEMPOTENCY_MISMATCH`, `CF_CONFIRMATION_STALE`, `CF_CURSOR_EXPIRED` |
+| 4 | conflicto de estado | `CF_INVALID_TRANSITION`, `CF_WORKFLOW_CONFLICT`, `CF_STALE_LEASE`, `CF_IDEMPOTENCY_MISMATCH`, `CF_CONFIRMATION_STALE`, `CF_CURSOR_EXPIRED`, `CF_DEPENDENCY_CYCLE` |
 | 5 | denegado por policy/budget | `CF_POLICY_DENIED`, `CF_BUDGET_EXCEEDED`, `CF_SECRET_UNAVAILABLE` |
 | 6 | Controller inaccesible / auth | `CF_CONTROLLER_UNREACHABLE`, `CF_UNAUTHENTICATED` |
 | 7 | requiere confirmación | `CF_CONFIRMATION_REQUIRED` |
-| 8 | capacidad no disponible | `CF_NO_ELIGIBLE_WORKER`, `CF_HARNESS_UNAVAILABLE`, `CF_CHECKPOINT_UNSUPPORTED`, `CF_RUN_NOT_RESPONDABLE`, `CF_WORKER_CAPACITY`, `CF_WORKER_BUSY`, `CF_NOT_IMPLEMENTED` |
+| 8 | capacidad no disponible | `CF_NO_ELIGIBLE_WORKER`, `CF_HARNESS_UNAVAILABLE`, `CF_CHECKPOINT_UNSUPPORTED`, `CF_RUN_NOT_RESPONDABLE`, `CF_WORKER_CAPACITY`, `CF_WORKER_BUSY`, `CF_NOT_IMPLEMENTED`, `CF_WORKER_OFFLINE`, `CF_RUN_NOT_ATTACHABLE`, `CF_VERSION_INCOMPATIBLE`, `CF_PROVIDER_USAGE_UNAVAILABLE` |
 | 9 | reintentable | `CF_IN_PROGRESS` |
 
 Con `--json`, los errores se emiten como `{"error": {"code": "...", "message": "...", "details": {...}}}` en stdout.
@@ -3231,6 +3231,14 @@ Recortes de MVP: máquina de estados reducida en Fase 1; overlays, `merged` y sy
 - §10.5: liberación inmediata con `runtime: none`; con harness arrancado, la reserva y el lock se retienen hasta parada + sellado + evaluación.
 - §43 Fase 2: `input_required` detiene el harness por §10.7 antes de sellar y respeta la retry policy configurada.
 - §10.7/§10.5 (ronda 4): cancel durante `preparing` serializado con el arranque en el Worker; la reserva sólo se libera tras `RunStopped(never_started)` o parada real.
+
+## Apéndice B5 — Decisiones tomadas durante la implementación
+
+- §11.7 fila 1: si una Task tiene los marcadores `archived` y `cancelled`, deriva `archived` (archivar es el acto final; GC y retention dependen de ello).
+- §11.7 fila 10: «algún Run `completed` sin satisfacer la policy». Un resultado completado pendiente de revisión precede a la retry policy de Runs posteriores fallidos: la Task queda en `waiting(review)` y decide un humano.
+- §40: `CF_DEPENDENCY_CYCLE` → exit 4; `CF_WORKER_OFFLINE`, `CF_RUN_NOT_ATTACHABLE`, `CF_VERSION_INCOMPATIBLE`, `CF_PROVIDER_USAGE_UNAVAILABLE` → exit 8.
+- §9.5: un heartbeat, un doctor en verde sobre un Worker `online` o un doctor fallido sobre un Worker `degraded` son no-ops.
+- §3.13: una ref vacía nunca resuelve (`CF_NOT_FOUND`).
 
 ## Apéndice C — Decisiones
 
