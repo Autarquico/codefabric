@@ -38,7 +38,7 @@ func TestOpen_UpgradesAPhase0Database(t *testing.T) {
 			t.Errorf("%s has %d rows after the upgrade, want %d", table, got, want)
 		}
 	}
-	for _, table := range []string{"projects", "tasks", "runs"} {
+	for _, table := range []string{"projects", "tasks", "runs", "workers", "worker_heartbeats"} {
 		if got := count(t, db, table); got != 0 {
 			t.Errorf("%s has %d rows, want 0", table, got)
 		}

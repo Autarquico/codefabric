@@ -5,7 +5,7 @@ import "testing"
 var allWorkerEvents = []WorkerEvent{
 	WorkerEventDoctorOK, WorkerEventDoctorFailed, WorkerEventDrain,
 	WorkerEventRunsEmpty, WorkerEventUndrain, WorkerEventHeartbeatTimeout, WorkerEventHeartbeat,
-	WorkerEventRemove,
+	WorkerEventRemove, WorkerEventRegistered,
 }
 
 var liveWorkerStates = []WorkerState{
@@ -43,7 +43,7 @@ func TestWorkerTransitions_NothingOutsideTheDiagramIsValid(t *testing.T) {
 	open := map[WorkerEvent]bool{WorkerEventHeartbeatTimeout: true, WorkerEventHeartbeat: true, WorkerEventRemove: true}
 	for _, state := range liveWorkerStates {
 		for _, ev := range allWorkerEvents {
-			if _, listed := workerArrows[state][ev]; listed || open[ev] {
+			if _, listed := workerArrows[state][ev]; listed || open[ev] || (state == WorkerJoining && ev == WorkerEventRegistered) {
 				continue
 			}
 			t.Run(string(state)+"/"+string(ev), func(t *testing.T) {
@@ -66,6 +66,26 @@ func TestWorkerTransitions_OfflineIsReachedFromAnyLiveStateAndRemembersWhere(t *
 				t.Fatalf("heartbeat = %+v, %v; want back in %s", back, err, state)
 			}
 		})
+	}
+}
+
+func TestWorkerTransitions_RegisteringDecidesOnlineOrDegradedByVersion(t *testing.T) {
+	for compatible, want := range map[bool]WorkerState{true: WorkerOnline, false: WorkerDegraded} {
+		got, err := NextWorkerState(WorkerStatus{State: WorkerJoining}, WorkerEventRegistered, WorkerFacts{Compatible: compatible})
+		if err != nil || got != (WorkerStatus{State: want}) {
+			t.Errorf("compatible=%t: registered = %+v, %v; want %s", compatible, got, err, want)
+		}
+	}
+}
+
+func TestWorkerTransitions_RegisteringHappensOnlyFromJoining(t *testing.T) {
+	for _, state := range append(liveWorkerStates[1:], WorkerOffline, WorkerRemoved) {
+		cur := WorkerStatus{State: state}
+		if state == WorkerOffline {
+			cur.BeforeOffline = WorkerOnline
+		}
+		_, err := NextWorkerState(cur, WorkerEventRegistered, WorkerFacts{Compatible: true})
+		requireCode(t, err, CodeInvalidTransition)
 	}
 }
 

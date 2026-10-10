@@ -1871,7 +1871,8 @@ Modo `:` puede aceptar sintaxis CLI sin el prefijo `cf`, reutilizando parser/com
 WorkerJoined
 WorkerHeartbeat          # no se persiste en el event store; sólo worker_heartbeats
 WorkerLost
-WorkerReconnected
+WorkerReconnected        # el heartbeat vuelve tras `offline` (mismo epoch o uno nuevo)
+WorkerRestarted          # epoch nuevo sin haber pasado por `offline`: el daemon se reinició a tiempo
 WorkerDraining
 WorkerDrained
 WorkerRemoved
