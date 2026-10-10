@@ -25,8 +25,8 @@ var statusByCode = map[domain.Code]int{
 func writeError(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) {
 	var de *domain.Error
 	if !errors.As(err, &de) {
-		log.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "err", err)
-		de = domain.NewError(domain.CodeInternal, "internal error", nil)
+		log.ErrorContext(r.Context(), "request failed", "request_id", stateOf(r.Context()).id, "method", r.Method, "path", r.URL.Path, "err", err)
+		de = internalError(r)
 	}
 	status, ok := statusByCode[de.Code]
 	if !ok {

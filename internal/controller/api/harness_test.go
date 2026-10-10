@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/controller/api"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
@@ -38,6 +40,7 @@ type testController struct {
 	authority *pki.Authority
 	clock     *clock.Fake
 	addr      string
+	logs      *logBuffer
 	owner     *client.Client
 	ownerDir  string
 }
@@ -47,7 +50,14 @@ type testController struct {
 // client certificates that are genuinely expired.
 func newController(t *testing.T, start time.Time, opts ...func(*api.Config)) *testController {
 	t.Helper()
-	tc := &testController{t: t, clock: clock.NewFake(start)}
+	return newControllerWithRoutes(t, start, nil, opts...)
+}
+
+// newControllerWithRoutes also lets the test add routes (see addRoute) before
+// the server starts.
+func newControllerWithRoutes(t *testing.T, start time.Time, routes func(*api.Server), opts ...func(*api.Config)) *testController {
+	t.Helper()
+	tc := &testController{t: t, clock: clock.NewFake(start), logs: &logBuffer{}}
 	dir := t.TempDir()
 
 	var err error
@@ -69,11 +79,18 @@ func newController(t *testing.T, start time.Time, opts ...func(*api.Config)) *te
 		DB: tc.db, CA: tc.ca, Clock: tc.clock, IDs: domain.NewIDGenerator(tc.clock.Now, rand.Reader),
 		CertTTL: domain.Defaults().IdentityCertTTL, Host: host, Port: port,
 	})
-	cfg := api.Config{Authority: tc.authority, CA: tc.ca, ServerCert: serverCert}
+	cfg := api.Config{
+		Authority: tc.authority, CA: tc.ca, ServerCert: serverCert,
+		Store: tc.db, Clock: tc.clock, StartedAt: tc.clock.Now(), Build: buildinfo.Info{Version: "test", Commit: "abc123"},
+		Logger: slog.New(slog.NewTextHandler(tc.logs, nil)),
+	}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 	srv := api.New(cfg)
+	if routes != nil {
+		routes(srv)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(ctx, ln) }()

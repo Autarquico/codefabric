@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/api"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
@@ -92,7 +93,10 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		return nil, fmt.Errorf("listening on %s: %w", cfg.Listen, err)
 	}
 
-	srv := api.New(api.Config{Authority: newAuthority(db, ca, o.Clock, host, port), CA: ca, ServerCert: serverCert, Logger: o.Logger})
+	srv := api.New(api.Config{
+		Authority: newAuthority(db, ca, o.Clock, host, port), CA: ca, ServerCert: serverCert,
+		Store: db, Clock: o.Clock, StartedAt: o.Clock.Now(), Build: buildinfo.Get(), Logger: o.Logger,
+	})
 
 	c := &Controller{addr: ln.Addr(), done: make(chan struct{})}
 	go func() {

@@ -19,8 +19,8 @@ const dialTimeout = 10 * time.Second
 
 // Connected is the result of a successful Connect.
 type Connected struct {
-	IdentityID string
-	Controller string
+	IdentityID string `json:"identity_id"`
+	Controller string `json:"controller"`
 }
 
 // pinError marks a Controller whose identity does not match the invitation.

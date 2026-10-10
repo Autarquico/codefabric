@@ -262,9 +262,9 @@ func tlsMaterial(c Credentials) (material, error) {
 
 // Info describes the stored credentials without exposing any secret.
 type Info struct {
-	Controller string
-	IdentityID string
-	NotAfter   time.Time
+	Controller string    `json:"controller"`
+	IdentityID string    `json:"identity_id"`
+	NotAfter   time.Time `json:"not_after"`
 }
 
 // Describe reads the bundle in dir and summarises it.
