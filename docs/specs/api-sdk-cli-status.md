@@ -2,7 +2,7 @@
 codename: codefabric
 title: API, Client SDK y `cf status`
 type: task
-status: active
+status: shipped
 priority: P0
 size: S
 issue: 6
