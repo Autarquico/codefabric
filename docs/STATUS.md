@@ -17,7 +17,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_(nada)_
+- #4 Controller store: SQLite, transacciones, eventos e idempotencia
 <!-- /pm-sync:in-progress -->
 
 ---
