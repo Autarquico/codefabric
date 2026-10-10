@@ -23,59 +23,20 @@ type IdemKey struct {
 	RequestID string
 }
 
-// Idempotent runs a synchronous mutation at most once per key (§27.4).
-//
-// Lookup, fn, and the saving of the key and its response share one
-// transaction, so a crash or an error leaves no key behind and a retry
-// executes cleanly. A repeated key with the same payload returns the saved
-// response without calling fn; with a different payload it fails with
-// CF_IDEMPOTENCY_MISMATCH. An empty RequestID disables idempotency.
-func (db *DB) Idempotent(ctx context.Context, key IdemKey, payload []byte,
-	fn func(*Tx) ([]byte, error),
-) ([]byte, error) {
-	var response []byte
+// SavedResponse looks up the response saved for key (§27.4). found is false
+// for a key not seen before and for an empty RequestID, which disables
+// idempotency. The same key with another payload fails with
+// CF_IDEMPOTENCY_MISMATCH. Looking up, running the mutation and SaveResponse
+// must share one transaction, so a crash or an error leaves no key behind and
+// a retry executes cleanly.
+func (t *Tx) SavedResponse(ctx context.Context, key IdemKey, payload []byte) (response []byte, found bool, err error) {
 	if key.RequestID == "" {
-		err := db.WithTx(ctx, func(tx *Tx) (err error) {
-			response, err = fn(tx)
-			return err
-		})
-		return response, err
+		return nil, false, nil
 	}
 	if key.Principal == "" || key.Operation == "" {
-		return nil, fmt.Errorf("%w: principal and operation are required with a request_id", ErrInvalidIdempotencyKey)
+		return nil, false, fmt.Errorf("%w: principal and operation are required with a request_id", ErrInvalidIdempotencyKey)
 	}
-
-	digest := sha256.Sum256(payload)
-	payloadHash := hex.EncodeToString(digest[:])
-
-	err := db.WithTx(ctx, func(tx *Tx) error {
-		saved, found, err := tx.savedResponse(ctx, key, payloadHash)
-		if err != nil || found {
-			response = saved
-			return err
-		}
-		if response, err = fn(tx); err != nil {
-			return err
-		}
-		if response == nil {
-			response = []byte{} // the column is NOT NULL
-		}
-		_, err = tx.Exec(ctx,
-			`INSERT INTO idempotency_keys (principal, operation, request_id, payload_hash, response, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			key.Principal, key.Operation, key.RequestID, payloadHash, response, tx.db.clock.Now().UnixNano())
-		if err != nil {
-			return fmt.Errorf("store: saving idempotency key: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return response, nil
-}
-
-func (t *Tx) savedResponse(ctx context.Context, key IdemKey, payloadHash string) (response []byte, found bool, err error) {
+	payloadHash := hashOf(payload)
 	var savedHash string
 	err = t.QueryRow(ctx,
 		`SELECT payload_hash, response FROM idempotency_keys
@@ -92,6 +53,30 @@ func (t *Tx) savedResponse(ctx context.Context, key IdemKey, payloadHash string)
 			map[string]any{"operation": key.Operation, "request_id": key.RequestID})
 	}
 	return response, true, nil
+}
+
+// SaveResponse records response as the answer of key, for SavedResponse to
+// return when the request repeats. It does nothing for an empty RequestID.
+func (t *Tx) SaveResponse(ctx context.Context, key IdemKey, payload, response []byte) error {
+	if key.RequestID == "" {
+		return nil
+	}
+	if response == nil {
+		response = []byte{} // the column is NOT NULL
+	}
+	_, err := t.Exec(ctx,
+		`INSERT INTO idempotency_keys (principal, operation, request_id, payload_hash, response, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		key.Principal, key.Operation, key.RequestID, hashOf(payload), response, t.db.clock.Now().UnixNano())
+	if err != nil {
+		return fmt.Errorf("store: saving idempotency key: %w", err)
+	}
+	return nil
+}
+
+func hashOf(payload []byte) string {
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:])
 }
 
 // PurgeIdempotency deletes keys created before olderThan (idempotency.ttl,

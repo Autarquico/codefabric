@@ -19,6 +19,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/api"
@@ -253,14 +254,18 @@ func serveWithPanickingStatus(t *testing.T, p config.Paths) *syncBuffer {
 	}
 	logs := &syncBuffer{}
 	clk := clock.Real{}
-	srv := api.New(api.Config{
+	srv, err := api.New(api.Config{
 		Authority: pki.NewAuthority(pki.AuthorityConfig{
 			DB: db, CA: ca, Clock: clk, IDs: domain.NewIDGenerator(clk.Now, rand.Reader),
 			CertTTL: domain.Defaults().IdentityCertTTL, Host: host, Port: port,
 		}),
 		CA: ca, ServerCert: serverCert, Store: panickingHealth{db}, Clock: clk, StartedAt: clk.Now(),
+		Work:   app.New(db, clk, domain.NewIDGenerator(clk.Now, rand.Reader)),
 		Logger: slog.New(slog.NewTextHandler(logs, nil)),
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(ctx, ln) }()

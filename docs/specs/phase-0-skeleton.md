@@ -2,7 +2,7 @@
 codename: codefabric
 title: Fase 0 — Skeleton
 type: epic
-status: active
+status: shipped
 priority: P0
 size: XL
 issue: 2

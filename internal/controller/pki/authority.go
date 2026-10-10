@@ -203,7 +203,7 @@ func (a *Authority) Renew(ctx context.Context, s Session, csrPEM string) (Joined
 	var out Joined
 	err = a.db.WithTx(ctx, func(tx *store.Tx) error {
 		now := a.clock.Now()
-		ident, err := a.requireCaller(ctx, tx, s, now, true)
+		ident, err := requireCaller(ctx, tx, s, now, true)
 		if err != nil {
 			return err
 		}
@@ -305,12 +305,19 @@ func (j Joined) Session() (Session, error) {
 	return Session{Principal: domain.Principal{ID: j.ID, Kind: kind}, Certificate: cert}, nil
 }
 
+// RequireCaller is the authorisation decision of every mutating operation,
+// inside the caller's own transaction (see requireCaller). Operations outside
+// this package use it so that their decision is the same as the Authority's.
+func RequireCaller(ctx context.Context, tx *store.Tx, s Session, now time.Time) (store.Identity, error) {
+	return requireCaller(ctx, tx, s, now, false)
+}
+
 // requireCaller is the authorisation decision of every mutating operation:
 // inside the transaction, with the instant read after the writer was acquired,
 // the identity must exist, be usable, and the session's certificate must be in
 // validity and be the identity's current one (or, only when allowSuperseded,
 // its previous one within the grace). Authenticate is just a per-request filter.
-func (a *Authority) requireCaller(ctx context.Context, tx *store.Tx, s Session, now time.Time, allowSuperseded bool) (store.Identity, error) {
+func requireCaller(ctx context.Context, tx *store.Tx, s Session, now time.Time, allowSuperseded bool) (store.Identity, error) {
 	ident, err := tx.IdentityByID(ctx, s.Principal.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.Identity{}, errNotAuthenticated()
@@ -333,7 +340,7 @@ func (a *Authority) requireCaller(ctx context.Context, tx *store.Tx, s Session, 
 
 // requireClient is requireCaller for operations only clients may perform.
 func (a *Authority) requireClient(ctx context.Context, tx *store.Tx, s Session, now time.Time) (store.Identity, error) {
-	ident, err := a.requireCaller(ctx, tx, s, now, false)
+	ident, err := requireCaller(ctx, tx, s, now, false)
 	if err != nil {
 		return ident, err
 	}

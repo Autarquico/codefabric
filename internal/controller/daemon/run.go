@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/api"
@@ -93,10 +94,16 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		return nil, fmt.Errorf("listening on %s: %w", cfg.Listen, err)
 	}
 
-	srv := api.New(api.Config{
+	srv, err := api.New(api.Config{
 		Authority: newAuthority(db, ca, o.Clock, host, port), CA: ca, ServerCert: serverCert,
-		Store: db, Clock: o.Clock, StartedAt: o.Clock.Now(), Build: buildinfo.Get(), Logger: o.Logger,
+		Store: db, Work: app.New(db, o.Clock, domain.NewIDGenerator(o.Clock.Now, rand.Reader)),
+		Clock: o.Clock, StartedAt: o.Clock.Now(), Build: buildinfo.Get(), Logger: o.Logger,
 	})
+	if err != nil {
+		_ = ln.Close()
+		_ = db.Close()
+		return nil, err
+	}
 
 	c := &Controller{addr: ln.Addr(), done: make(chan struct{})}
 	go func() {

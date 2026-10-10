@@ -1,0 +1,636 @@
+package app_test
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/tasks"
+	"github.com/Autarquico/codefabric/internal/controller/store"
+	"github.com/Autarquico/codefabric/internal/domain"
+)
+
+func TestCreateTask_StartsARunAndMaterialisesTheState(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+
+	out := e.mustTask("backend", "fix flaky auth tests")
+
+	if out.Run == nil || out.Run.State != domain.RunQueued || out.Run.Attempt != 1 || out.Run.Short != "run-1" {
+		t.Fatalf("run = %+v", out.Run)
+	}
+	if out.Task.State != domain.TaskQueued || out.Task.WaitingReason != "" || out.Task.Name != "fix-flaky-auth-tests" || out.Task.Short != "task-1" {
+		t.Fatalf("task = %+v", out.Task)
+	}
+	if !strings.HasPrefix(out.Run.SpecDigest, "sha256:") || out.Run.SourceCommit != commitA {
+		t.Errorf("run digest %q commit %q", out.Run.SpecDigest, out.Run.SourceCommit)
+	}
+	// Row 7 of §11.7 gives queued before the Run exists, row 6 after it: the
+	// state never moved, so there is no TaskStateChanged.
+	var types []domain.EventType
+	for _, ev := range e.events() {
+		types = append(types, ev.Type)
+	}
+	if got, want := types, []domain.EventType{domain.EventTaskCreated, domain.EventRunQueued}; !equal(got, want) {
+		t.Errorf("events = %v, want %v", got, want)
+	}
+}
+
+func TestCreateTask_NoStartWaitsForStart(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+
+	out := e.mustTask("backend", "later", noStart)
+
+	if out.Run != nil || out.Task.State != domain.TaskWaiting || out.Task.WaitingReason != domain.WaitingStart || out.Task.Autostart {
+		t.Fatalf("task = %+v run = %+v", out.Task, out.Run)
+	}
+	if n := e.count("runs"); n != 0 {
+		t.Errorf("%d runs", n)
+	}
+}
+
+func TestCreateTask_ValidatesWhatItFreezes(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	cases := map[string]func(*v1.CreateTaskRequest){
+		"no commit when starting":          func(r *v1.CreateTaskRequest) { r.SourceCommit = "" },
+		"no resolved ref when starting":    func(r *v1.CreateTaskRequest) { r.ResolvedRef = "" },
+		"a resolved ref that is an option": func(r *v1.CreateTaskRequest) { r.ResolvedRef = "--upload-pack=x" },
+		"a resolved ref with no start":     func(r *v1.CreateTaskRequest) { r.NoStart, r.SourceCommit = true, "" },
+		"a commit that is a ref":           func(r *v1.CreateTaskRequest) { r.SourceCommit = "main" },
+		"a commit with no start":           func(r *v1.CreateTaskRequest) { r.NoStart = true },
+		"an empty prompt":                  func(r *v1.CreateTaskRequest) { r.Prompt = "  " },
+		"a name that is a short ID":        func(r *v1.CreateTaskRequest) { r.Name = "run-4" },
+		"a name that is not a slug":        func(r *v1.CreateTaskRequest) { r.Name = "Fix Auth" },
+		"an unknown completion":            func(r *v1.CreateTaskRequest) { r.Completion = "sometimes" },
+		"an option as the source":          func(r *v1.CreateTaskRequest) { r.SourceRef = "--upload-pack=x" },
+		"resources of zero":                func(r *v1.CreateTaskRequest) { r.Requirements.Resources = &v1.Resources{} },
+		"an unknown project":               func(r *v1.CreateTaskRequest) { r.Project = "nope" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := e.createTask("backend", "x", mutate)
+			if name == "an unknown project" {
+				wantCode(t, err, domain.CodeNotFound)
+			} else {
+				wantCode(t, err, domain.CodeInvalidRequest)
+			}
+		})
+	}
+	if n := e.count("tasks"); n != 0 {
+		t.Errorf("%d tasks were left behind", n)
+	}
+}
+
+func TestUniqueNames_PerProjectAndReleasedByArchiving(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	e.project("frontend")
+	named := func(name string) func(*v1.CreateTaskRequest) {
+		return func(r *v1.CreateTaskRequest) { r.Name = name }
+	}
+
+	first := e.mustTask("backend", "x", named("x"), noStart)
+	_, err := e.createTask("backend", "again", named("x"))
+	wantCode(t, err, domain.CodeInvalidRequest)
+	e.mustTask("frontend", "other project", named("x")) // names are per Project
+
+	// Archived Tasks free their name.
+	if _, err := e.app.Tasks.Archive(t.Context(), e.owner, first.Task.ID, "", v1.ActionRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	again := e.mustTask("backend", "again", named("x"))
+	if again.Task.Name != "x" || again.Task.ID == first.Task.ID {
+		t.Fatalf("task = %+v", again.Task)
+	}
+	// "x" now names the live Task; the archived one is still reachable by ID.
+	got, err := e.app.Tasks.Get(t.Context(), "x", "backend")
+	must(t, err)
+	if got.ID != again.Task.ID {
+		t.Errorf("x resolves to %s, want %s", got.ID, again.Task.ID)
+	}
+	archived, err := e.app.Tasks.Get(t.Context(), first.Task.ID, "")
+	must(t, err)
+	if archived.State != domain.TaskArchived {
+		t.Errorf("state = %s", archived.State)
+	}
+}
+
+func TestCreateTask_DerivedNamesAreMadeUnique(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	var names []string
+	for range 3 {
+		names = append(names, e.mustTask("backend", "Fix the auth race!", noStart).Task.Name)
+	}
+	if want := []string{"fix-the-auth-race", "fix-the-auth-race-2", "fix-the-auth-race-3"}; !equal(names, want) {
+		t.Errorf("names = %v, want %v", names, want)
+	}
+	if got := e.mustTask("backend", "task-7", noStart).Task.Name; got != "task-task-7" {
+		t.Errorf("a prompt that reads as a short ID became %q", got)
+	}
+	if got := e.mustTask("backend", "???", noStart).Task.Name; got != "task" {
+		t.Errorf("a prompt with no words became %q", got)
+	}
+}
+
+// A suffix made up by the server must never read as an ID: "task-2" is the
+// short ID of the second Task, which IDs resolve before names.
+func TestCreateTask_ASuffixNeverReadsAsAnID(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	var created []v1.CreateTaskResponse
+	for _, prompt := range []string{"other", "task", "task"} {
+		created = append(created, e.mustTask("backend", prompt))
+	}
+	names := []string{created[0].Task.Name, created[1].Task.Name, created[2].Task.Name}
+	if want := []string{"other", "task", "task-n2"}; !equal(names, want) {
+		t.Fatalf("names = %v, want %v", names, want)
+	}
+
+	cancelled, err := e.app.Tasks.Cancel(t.Context(), e.owner, "task-n2", "backend", v1.ActionRequest{})
+	must(t, err)
+	if cancelled.ID != created[2].Task.ID {
+		t.Errorf("cancelled %s (%s), want %s", cancelled.ID, cancelled.Name, created[2].Task.ID)
+	}
+	if got, err := e.app.Tasks.Get(t.Context(), created[1].Task.ID, ""); err != nil || got.State != domain.TaskQueued {
+		t.Errorf("the other Task was touched: %+v, %v", got, err)
+	}
+	// Every name it makes for the same prompt stays valid for longer.
+	for range 12 {
+		name := e.mustTask("backend", "run", noStart).Task.Name
+		if _, err := domain.ParseShortID(name); err == nil {
+			t.Fatalf("name %q reads as a short ID", name)
+		}
+	}
+}
+
+func TestSet_RenameChecksUniqueness(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	a := e.mustTask("backend", "a", noStart).Task
+	b := e.mustTask("backend", "b", noStart).Task
+	name := a.Name
+
+	_, err := e.app.Tasks.Set(t.Context(), e.owner, b.ID, "", v1.UpdateTaskRequest{Name: &name})
+	wantCode(t, err, domain.CodeInvalidRequest)
+	fresh := "renamed"
+	got, err := e.app.Tasks.Set(t.Context(), e.owner, b.ID, "", v1.UpdateTaskRequest{Name: &fresh})
+	must(t, err)
+	if got.Name != "renamed" {
+		t.Errorf("name = %q", got.Name)
+	}
+	_, err = e.app.Tasks.Set(t.Context(), e.owner, b.ID, "", v1.UpdateTaskRequest{})
+	wantCode(t, err, domain.CodeInvalidRequest)
+}
+
+func TestCreateTask_IsIdempotentByRequestID(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	withID := func(id string) func(*v1.CreateTaskRequest) {
+		return func(r *v1.CreateTaskRequest) { r.RequestID = id }
+	}
+
+	first := e.mustTask("backend", "do it", withID("req-1"))
+	second := e.mustTask("backend", "do it", withID("req-1"))
+
+	a, _ := json.Marshal(first)
+	b, _ := json.Marshal(second)
+	if string(a) != string(b) {
+		t.Errorf("the replay differs:\n%s\n%s", a, b)
+	}
+	if e.count("tasks") != 1 || e.count("runs") != 1 {
+		t.Errorf("tasks %d, runs %d", e.count("tasks"), e.count("runs"))
+	}
+	if n := len(e.events(domain.EventTaskCreated)); n != 1 {
+		t.Errorf("%d TaskCreated events", n)
+	}
+	_, err := e.createTask("backend", "something else", withID("req-1"))
+	wantCode(t, err, domain.CodeIdempotencyMismatch)
+	_, err = e.createTask("backend", "x", withID("has spaces"))
+	wantCode(t, err, domain.CodeInvalidRequest)
+}
+
+// The pair that the client resolved is no input of the user: repeating a
+// request_id must give the original answer whatever the remote says now.
+func TestCreateTask_ReplayDoesNotDependOnTheResolvedPair(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	withID := func(id string) func(*v1.CreateTaskRequest) {
+		return func(r *v1.CreateTaskRequest) { r.RequestID = id }
+	}
+	first := e.mustTask("backend", "do it", withID("req-1"))
+
+	const advanced = "fedcba9876543210fedcba9876543210fedcba98"
+	moved := e.mustTask("backend", "do it", withID("req-1"), func(r *v1.CreateTaskRequest) {
+		r.ResolvedRef, r.SourceCommit = "release", advanced
+	})
+	gone := e.mustTask("backend", "do it", withID("req-1"), func(r *v1.CreateTaskRequest) { r.ResolvedRef, r.SourceCommit = "", "" })
+
+	a, _ := json.Marshal(first)
+	for name, got := range map[string]v1.CreateTaskResponse{"the remote moved on": moved, "the remote is unreachable": gone} {
+		if b, _ := json.Marshal(got); string(a) != string(b) {
+			t.Errorf("%s: the replay differs:\n%s\n%s", name, a, b)
+		}
+	}
+	if first.Run.SourceCommit != commitA || e.count("tasks") != 1 || e.count("runs") != 1 {
+		t.Errorf("commit %s, tasks %d, runs %d", first.Run.SourceCommit, e.count("tasks"), e.count("runs"))
+	}
+
+	// Without the pair, a key never seen cannot be created.
+	_, err := e.createTask("backend", "do it", withID("req-2"), func(r *v1.CreateTaskRequest) { r.ResolvedRef, r.SourceCommit = "", "" })
+	wantCode(t, err, domain.CodeInvalidRequest)
+	if e.count("tasks") != 1 || e.count("idempotency_keys") != 1 {
+		t.Errorf("tasks %d, keys %d", e.count("tasks"), e.count("idempotency_keys"))
+	}
+
+	// An input of the user that differs is a mismatch, with or without the pair.
+	for name, mutate := range map[string]func(*v1.CreateTaskRequest){
+		"another name":    func(r *v1.CreateTaskRequest) { r.Name = "other" },
+		"another ref":     func(r *v1.CreateTaskRequest) { r.SourceRef = "dev" },
+		"no start":        noStart,
+		"another prompt":  func(r *v1.CreateTaskRequest) { r.Prompt = "something else" },
+		"another project": func(r *v1.CreateTaskRequest) { r.Project = "elsewhere" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := e.createTask("backend", "do it", withID("req-1"), mutate)
+			wantCode(t, err, domain.CodeIdempotencyMismatch)
+		})
+	}
+}
+
+func TestMutations_RevalidateTheCallerInsideTheTransaction(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	other := e.newClient("other")
+	// The session authenticated, then the identity was revoked before the commit.
+	must(t, e.authority.RevokeClient(t.Context(), other, e.owner.Principal.ID))
+
+	_, err := e.app.Tasks.Create(t.Context(), e.owner, v1.CreateTaskRequest{Project: "backend", Prompt: "x", NoStart: true})
+	wantCode(t, err, domain.CodeUnauthenticated)
+	_, err = e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "p", Repo: "/srv/r"})
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if e.count("tasks") != 0 || e.count("projects") != 1 {
+		t.Errorf("tasks %d, projects %d", e.count("tasks"), e.count("projects"))
+	}
+}
+
+func TestMutations_ARepeatedRequestIDRevalidatesTheCaller(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	other := e.newClient("other")
+	create := func() (v1.CreateTaskResponse, error) {
+		return e.createTask("backend", "x", func(r *v1.CreateTaskRequest) { r.RequestID = "once" })
+	}
+	first, err := create()
+	must(t, err)
+	must(t, e.authority.RevokeClient(t.Context(), other, e.owner.Principal.ID))
+
+	got, err := create()
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if got.Task.ID != "" {
+		t.Errorf("a revoked client was given the saved response: %+v", got)
+	}
+	if first.Task.ID == "" || e.count("tasks") != 1 {
+		t.Errorf("tasks = %d", e.count("tasks"))
+	}
+}
+
+func TestWorkflowAndEnvironmentReferencesAreNotImplementedYet(t *testing.T) {
+	e := newEnv(t)
+	e.project("flow", func(r *v1.CreateProjectRequest) { r.DefaultWorkflow = "personal@latest" })
+	e.project("env")
+
+	_, err := e.createTask("flow", "x")
+	wantCode(t, err, domain.CodeNotImplemented)
+	if n := e.count("tasks"); n != 0 {
+		t.Errorf("a failed start left %d tasks", n)
+	}
+	// Without starting, the Task exists; starting it later hits the same wall.
+	task := e.mustTask("flow", "x", noStart).Task
+	_, err = e.startRun(task.ID, commitA)
+	wantCode(t, err, domain.CodeNotImplemented)
+
+	_, err = e.createTask("env", "x", func(r *v1.CreateTaskRequest) { r.Environment = "backend" })
+	wantCode(t, err, domain.CodeNotImplemented)
+	if got := e.mustTask("env", "ok").Run; got == nil {
+		t.Error("a Project with no Workflow or Environment starts normally")
+	}
+}
+
+func TestFreezing_ChangedDefaultsDoNotMoveAQueuedRunsDigest(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	first := e.mustTask("backend", "x")
+
+	project := "backend"
+	cpu := &v1.Resources{CPU: 8, MemoryMB: 16384}
+	manual, interactive := domain.CompletionManual, domain.ModeInteractive
+	_, err := e.app.Projects.Set(t.Context(), e.owner, project, v1.UpdateProjectRequest{Resources: cpu, Completion: &manual, Mode: &interactive})
+	must(t, err)
+
+	type frozen struct {
+		Mode         string
+		Completion   string
+		Requirements struct {
+			Resources struct {
+				CPU      int
+				MemoryMB int `json:"memory_mb"`
+			}
+		}
+	}
+	specOf := func(run v1.Run) (s frozen) {
+		must(t, json.Unmarshal(run.Spec, &s))
+		return s
+	}
+	run, err := e.app.Runs.Get(t.Context(), first.Run.ID)
+	must(t, err)
+	if run.SpecDigest != first.Run.SpecDigest {
+		t.Errorf("the digest of a queued Run moved: %s -> %s", first.Run.SpecDigest, run.SpecDigest)
+	}
+	if spec := specOf(run); spec.Mode != "headless" || spec.Completion != "first_success" || spec.Requirements.Resources.CPU != 2 {
+		t.Errorf("frozen spec = %s", run.Spec)
+	}
+
+	// Same Task, same prompt: only the defaults differ between the two Runs.
+	started, err := e.startRun(first.Task.ID, commitA)
+	must(t, err)
+	second, err := e.app.Runs.Get(t.Context(), started.ID)
+	must(t, err)
+	if second.SpecDigest == first.Run.SpecDigest || second.Attempt != 2 {
+		t.Errorf("a new Run must freeze the new defaults: %+v", second)
+	}
+	spec := specOf(second)
+	if spec.Mode != "interactive" || spec.Requirements.Resources.CPU != 8 || spec.Requirements.Resources.MemoryMB != 16384 {
+		t.Errorf("the second spec lacks the new defaults: %s", second.Spec)
+	}
+	// The Task froze its completion with the first Run, so the new default does not reach it.
+	if spec.Completion != "first_success" {
+		t.Errorf("completion = %q, want the one frozen with the first Run", spec.Completion)
+	}
+}
+
+// The Run freezes the ref the client resolved with its commit, even when the
+// default of the Project moves in between; the Task's own override stays empty
+// and the Task keeps inheriting for the Runs to come.
+func TestCreateTask_TheRunFreezesTheClientsRefWithItsCommit(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	dev := "dev"
+	_, err := e.app.Projects.Set(t.Context(), e.owner, "backend", v1.UpdateProjectRequest{DefaultBranch: &dev})
+	must(t, err)
+
+	out := e.mustTask("backend", "x", func(r *v1.CreateTaskRequest) { r.ResolvedRef = "main" }) // the client resolved main before the change
+
+	run, err := e.app.Runs.Get(t.Context(), out.Run.ID)
+	must(t, err)
+	if !strings.Contains(string(run.Spec), `"source":{"ref":"main","commit":"`+commitA+`"`) {
+		t.Errorf("frozen spec = %s", run.Spec)
+	}
+	if out.Task.Source.Ref != "dev" {
+		t.Errorf("the Task should inherit the default for future Runs: %+v", out.Task.Source)
+	}
+	var overridden int
+	must(t, e.db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM tasks WHERE source_ref IS NOT NULL AND source_ref <> ''`).Scan(&overridden))
+	if overridden != 0 {
+		t.Error("an inherited ref became the Task's override")
+	}
+	override := e.mustTask("backend", "y", func(r *v1.CreateTaskRequest) { r.SourceRef, r.ResolvedRef = "release", "release" })
+	if override.Task.Source.Ref != "release" {
+		t.Errorf("source = %+v", override.Task.Source)
+	}
+}
+
+func TestCompletionIsFrozenWithTheFirstRun(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	task := e.mustTask("backend", "x", noStart).Task
+	if task.Completion != domain.CompletionFirstSuccess {
+		t.Fatalf("inherited completion = %s", task.Completion)
+	}
+
+	manual, promote := domain.CompletionManual, domain.CompletionPromote
+	_, err := e.app.Projects.Set(t.Context(), e.owner, "backend", v1.UpdateProjectRequest{Completion: &manual})
+	must(t, err)
+	_, err = e.startRun(task.ID, commitA)
+	must(t, err)
+	got, err := e.app.Tasks.Get(t.Context(), task.ID, "")
+	must(t, err)
+	if got.Completion != domain.CompletionManual {
+		t.Errorf("the first Run did not freeze the changed default: %s", got.Completion)
+	}
+
+	// Later changes of the Project no longer reach the Task...
+	_, err = e.app.Projects.Set(t.Context(), e.owner, "backend", v1.UpdateProjectRequest{Completion: &promote})
+	must(t, err)
+	got, _ = e.app.Tasks.Get(t.Context(), task.ID, "")
+	if got.Completion != domain.CompletionManual {
+		t.Errorf("a Project default changed a frozen completion: %s", got.Completion)
+	}
+	// ...only an explicit change does.
+	got, err = e.app.Tasks.Set(t.Context(), e.owner, task.ID, "", v1.UpdateTaskRequest{Completion: &promote})
+	must(t, err)
+	if got.Completion != domain.CompletionPromote {
+		t.Errorf("explicit change: %s", got.Completion)
+	}
+}
+
+func TestRetryIsFrozenWithTheFirstRun(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	retry := func(attempts int) v1.Retry {
+		return v1.Retry{OnFailed: domain.RetryReschedule, OnLost: domain.RetryAsk, MaxAttempts: attempts}
+	}
+	setProject := func(attempts int) {
+		r := retry(attempts)
+		_, err := e.app.Projects.Set(t.Context(), e.owner, "backend", v1.UpdateProjectRequest{Retry: &r})
+		must(t, err)
+	}
+	attempts := func(task string) int {
+		got, err := e.app.Tasks.Get(t.Context(), task, "")
+		must(t, err)
+		return got.Retry.MaxAttempts
+	}
+	own := retry(2)
+	task := e.mustTask("backend", "x", noStart, func(r *v1.CreateTaskRequest) { r.Retry = &own }).Task
+	setProject(3)
+	if got := attempts(task.ID); got != 2 {
+		t.Fatalf("before the first Run the Task's own policy rules: %d", got)
+	}
+	other := e.mustTask("backend", "y", noStart).Task
+	if got := attempts(other.ID); got != 3 {
+		t.Fatalf("a Task without its own policy follows the Project: %d", got)
+	}
+
+	_, err := e.startRun(other.ID, commitA)
+	must(t, err)
+	setProject(5)
+	if got := attempts(other.ID); got != 3 {
+		t.Errorf("a Project default changed a frozen retry policy: %d", got)
+	}
+	explicit := retry(7)
+	got, err := e.app.Tasks.Set(t.Context(), e.owner, other.ID, "", v1.UpdateTaskRequest{Retry: &explicit})
+	must(t, err)
+	if got.Retry.MaxAttempts != 7 {
+		t.Errorf("explicit change: %+v", got.Retry)
+	}
+	bad := v1.Retry{OnFailed: "explode", MaxAttempts: 1}
+	_, err = e.app.Tasks.Set(t.Context(), e.owner, other.ID, "", v1.UpdateTaskRequest{Retry: &bad})
+	wantCode(t, err, domain.CodeInvalidRequest)
+}
+
+func TestCancel_UpdatesTheStateAndTheEventsInOneTransaction(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	created := e.mustTask("backend", "x")
+	mark := len(e.events())
+
+	got, err := e.app.Tasks.Cancel(t.Context(), e.owner, created.Task.ID, "", v1.ActionRequest{})
+	must(t, err)
+
+	if got.State != domain.TaskCancelled || got.CancelledAt == nil {
+		t.Fatalf("task = %+v", got)
+	}
+	run, err := e.app.Runs.Get(t.Context(), created.Run.ID)
+	must(t, err)
+	if run.State != domain.RunCancelled || run.FinishedAt == nil {
+		t.Errorf("run = %+v", run)
+	}
+	var types []domain.EventType
+	for _, ev := range e.events()[mark:] {
+		types = append(types, ev.Type)
+	}
+	if want := []domain.EventType{domain.EventRunCancelled, domain.EventTaskStateChanged}; !equal(types, want) {
+		t.Errorf("events = %v, want %v", types, want)
+	}
+	changed := e.events(domain.EventTaskStateChanged)
+	if data := changed[len(changed)-1].Data; data["from"] != "queued" || data["to"] != "cancelled" {
+		t.Errorf("data = %v", data)
+	}
+
+	again, err := e.app.Tasks.Cancel(t.Context(), e.owner, created.Task.ID, "", v1.ActionRequest{})
+	must(t, err)
+	if again.State != domain.TaskCancelled || len(e.events()) != mark+2 {
+		t.Errorf("cancelling twice must change nothing: %+v, %d events", again, len(e.events()))
+	}
+}
+
+func TestMarkers_CompleteAndArchive(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	live := e.mustTask("backend", "live")
+
+	if _, err := e.app.Tasks.Archive(t.Context(), e.owner, live.Task.ID, "", v1.ActionRequest{}); err == nil {
+		t.Fatal("archived a Task with a live Run")
+	} else {
+		wantCode(t, err, domain.CodeInvalidTransition)
+	}
+
+	done, err := e.app.Tasks.Complete(t.Context(), e.owner, live.Task.ID, "", v1.ActionRequest{})
+	must(t, err)
+	if done.State != domain.TaskCompleted || done.CompletedManuallyAt == nil {
+		t.Fatalf("task = %+v", done)
+	}
+	if run, _ := e.app.Runs.Get(t.Context(), live.Run.ID); run.State != domain.RunCancelled {
+		t.Errorf("a completed Task keeps a %s Run", run.State)
+	}
+	archived, err := e.app.Tasks.Archive(t.Context(), e.owner, live.Task.ID, "", v1.ActionRequest{})
+	must(t, err)
+	if archived.State != domain.TaskArchived {
+		t.Errorf("state = %s", archived.State)
+	}
+	_, err = e.app.Tasks.Cancel(t.Context(), e.owner, live.Task.ID, "", v1.ActionRequest{})
+	wantCode(t, err, domain.CodeInvalidTransition)
+	_, err = e.startRun(live.Task.ID, commitA)
+	wantCode(t, err, domain.CodeInvalidTransition)
+}
+
+func TestCreateRun_RefusesTasksThatEnded(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	// Each case leaves a Task that must not get a Run: by a marker alone, with
+	// the derived state left stale, or by a derived state that is terminal.
+	set := func(assignment string) func(string) {
+		return func(id string) {
+			must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+				_, err := tx.Exec(t.Context(), `UPDATE tasks SET `+assignment+` WHERE id = ?`, id) //nolint:gosec // test constants
+				return err
+			}))
+		}
+	}
+	for name, end := range map[string]func(id string){
+		"completed by hand (marker only)": set("completed_manually_at = 1"),
+		"cancelled (marker only)":         set("cancelled_at = 1"),
+		"archived (marker only)":          set("archived_at = 1"),
+		"failed":                          set("state = 'failed'"),
+		"completed":                       set("state = 'completed'"),
+		"cancelled state":                 set("state = 'cancelled'"),
+		"archived state":                  set("state = 'archived'"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			task := e.mustTask("backend", name, noStart).Task
+			end(task.ID)
+			_, err := e.startRun(task.ID, commitA)
+			wantCode(t, err, domain.CodeInvalidTransition)
+			if n := e.count("runs"); n != 0 {
+				t.Errorf("%d Runs were created", n)
+			}
+		})
+	}
+}
+
+func TestList_FiltersAndHidesArchived(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	e.project("frontend")
+	a := e.mustTask("backend", "a", noStart).Task
+	e.mustTask("backend", "b")
+	e.mustTask("frontend", "c", noStart)
+	_, err := e.app.Tasks.Archive(t.Context(), e.owner, a.ID, "", v1.ActionRequest{})
+	must(t, err)
+
+	names := func(f ...func(*taskList)) []string {
+		var l taskList
+		for _, m := range f {
+			m(&l)
+		}
+		got, err := e.app.Tasks.List(t.Context(), l.filter)
+		must(t, err)
+		var out []string
+		for _, task := range got {
+			out = append(out, task.Name)
+		}
+		return out
+	}
+	if got := names(); !equal(got, []string{"b", "c"}) {
+		t.Errorf("default = %v", got)
+	}
+	if got := names(func(l *taskList) { l.filter.All = true }); !equal(got, []string{"a", "b", "c"}) {
+		t.Errorf("all = %v", got)
+	}
+	if got := names(func(l *taskList) { l.filter.Project = "frontend" }); !equal(got, []string{"c"}) {
+		t.Errorf("project = %v", got)
+	}
+	if got := names(func(l *taskList) { l.filter.States = []domain.TaskState{domain.TaskArchived} }); !equal(got, []string{"a"}) {
+		t.Errorf("state archived = %v", got)
+	}
+	if got := names(func(l *taskList) { l.filter.States = []domain.TaskState{domain.TaskWaiting} }); !equal(got, []string{"c"}) {
+		t.Errorf("state waiting = %v", got)
+	}
+}
+
+func equal[T comparable](a, b []T) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+type taskList struct{ filter tasks.ListFilter }

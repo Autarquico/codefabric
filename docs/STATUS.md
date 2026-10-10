@@ -9,9 +9,11 @@
 ## Done esta semana
 
 <!-- pm-sync:done-this-week -->
+- #2 Fase 0 — Skeleton
 - #3 Domain core: entidades, máquinas de estado y errores
 - #4 Controller store: SQLite, transacciones, eventos e idempotencia
 - #5 Identidad del Controller, TLS y tokens de cliente
+- #6 API, Client SDK y `cf status`
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -19,7 +21,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-- #6 API, Client SDK y `cf status`
+- #8 Projects, Tasks y Runs: API y CLI
 <!-- /pm-sync:in-progress -->
 
 ---
