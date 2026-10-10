@@ -103,8 +103,10 @@ func TestFake_StoppedTimersDoNotFire(t *testing.T) {
 func TestFake_BlockUntilWaitsForTheTimers(t *testing.T) {
 	f := clock.NewFake(time.Unix(0, 0))
 	released := make(chan struct{})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 	go func() {
-		if err := f.BlockUntil(t.Context(), 2); err != nil {
+		if err := f.BlockUntil(ctx, 2); err != nil {
 			t.Error(err)
 		}
 		close(released)
@@ -132,7 +134,27 @@ func TestFake_BlockUntilEndsWithItsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := f.BlockUntil(ctx, 1); !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v", err)
+		t.Fatalf("already cancelled: err = %v", err)
+	}
+
+	ctx, cancel = context.WithTimeout(t.Context(), 10*time.Millisecond) // ends while it waits
+	defer cancel()
+	if err := f.BlockUntil(ctx, 1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cancelled while waiting: err = %v", err)
+	}
+}
+
+func TestFake_AnExtremeAdvanceDoesNotOverflowTheTickerPhase(t *testing.T) {
+	f := clock.NewFake(time.Unix(0, 0))
+	ticker := f.NewTicker(2 * time.Nanosecond)
+	f.Advance(time.Nanosecond)
+	f.Advance(time.Duration(1<<63 - 1))
+	if !fired(ticker.C()) {
+		t.Fatal("did not tick")
+	}
+	f.Advance(0)
+	if fired(ticker.C()) {
+		t.Fatal("ticked again without time passing")
 	}
 }
 

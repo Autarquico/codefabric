@@ -127,7 +127,7 @@ func (f *Fake) Advance(d time.Duration) {
 			delete(f.waiters, w)
 			continue
 		}
-		w.at = w.at.Add((f.now.Sub(w.at)/w.every + 1) * w.every)
+		w.at = f.now.Add(w.every - f.now.Sub(w.at)%w.every)
 	}
 }
 
