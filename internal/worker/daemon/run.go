@@ -13,6 +13,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
 )
 
@@ -26,6 +27,7 @@ type Options struct {
 	// Version is what this daemon reports; zero means the version of the binary.
 	Version string
 	Logger  *slog.Logger // defaults to slog.Default()
+	Clock   clock.Clock  // defaults to clock.Real
 	// Measure replaces sysinfo.Collect, which tests cannot make fail.
 	Measure func(dir string) (sysinfo.Info, error)
 }
@@ -58,10 +60,13 @@ func Run(ctx context.Context, o Options) error {
 	}
 	d := &daemon{
 		client: c, dataDir: o.Paths.DataDir, epoch: ulid.Make().String(),
-		interval: o.Interval, version: o.Version, log: o.Logger, measure: o.Measure,
+		interval: o.Interval, version: o.Version, log: o.Logger, measure: o.Measure, clock: o.Clock,
 	}
 	if d.measure == nil {
 		d.measure = sysinfo.Collect
+	}
+	if d.clock == nil {
+		d.clock = clock.Real{}
 	}
 	if d.interval <= 0 {
 		d.interval = domain.Defaults().WorkerHeartbeatInterval
@@ -83,6 +88,7 @@ type daemon struct {
 	version  string
 	log      *slog.Logger
 	measure  func(dir string) (sysinfo.Info, error)
+	clock    clock.Clock
 
 	lastMeasured    sysinfo.Info
 	hasLastMeasured bool
@@ -113,7 +119,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		default:
 			return err
 		}
-		if !sleep(ctx, wait) {
+		if !d.sleep(ctx, wait) {
 			return nil
 		}
 	}
@@ -171,14 +177,14 @@ func (d *daemon) backoff(failures int) time.Duration {
 	return delay
 }
 
-// sleep waits for d and reports false if ctx ended first.
-func sleep(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
+// sleep waits for wait and reports false if ctx ended first.
+func (d *daemon) sleep(ctx context.Context, wait time.Duration) bool {
+	timer := d.clock.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return false
-	case <-timer.C:
+	case <-timer.C():
 		return true
 	}
 }

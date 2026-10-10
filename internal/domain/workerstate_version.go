@@ -5,7 +5,11 @@ import (
 	"strconv"
 )
 
-var semver = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$`)
+// semver is semver.org 2.0.0 with an optional leading v: no leading zeros in
+// the numbers, and a pre-release and build metadata that are well formed.
+var semver = regexp.MustCompile(`^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(?:0|[1-9]\d*)` +
+	`(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?` +
+	`(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$`)
 
 type version struct{ major, minor int }
 

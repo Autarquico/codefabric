@@ -76,6 +76,7 @@ func (s *Service) applyHeartbeat(ctx context.Context, tx *store.Tx, act mutation
 	restarted := w.Report.Epoch != "" && w.Report.Epoch != req.Epoch
 	data := map[string]any{"epoch": req.Epoch, "previous_epoch": w.Report.Epoch}
 
+	var reconnected bool
 	switch {
 	case w.State == domain.WorkerOffline:
 		wasJoining := w.BeforeOffline == domain.WorkerJoining
@@ -83,12 +84,7 @@ func (s *Service) applyHeartbeat(ctx context.Context, tx *store.Tx, act mutation
 		if err != nil {
 			return err
 		}
-		if moved && !wasJoining {
-			data["restarted"], data["state"] = restarted, string(w.State)
-			if err := emit(ctx, tx, act, domain.EventWorkerReconnected, *w, "worker reconnected", data); err != nil {
-				return err
-			}
-		}
+		reconnected = moved && !wasJoining
 	case restarted:
 		if err := emitRestart(ctx, tx, act, *w, data); err != nil {
 			return err
@@ -102,6 +98,13 @@ func (s *Service) applyHeartbeat(ctx context.Context, tx *store.Tx, act mutation
 	}
 	if w.State == domain.WorkerOnline || w.State == domain.WorkerDegraded {
 		if _, err := move(ctx, tx, w, doctorVerdict(compatible, req.Health), facts, act.Now); err != nil {
+			return err
+		}
+	}
+	// Reconnected says the state the Worker ends in, once the verdict is in.
+	if reconnected {
+		data["restarted"], data["state"] = restarted, string(w.State)
+		if err := emit(ctx, tx, act, domain.EventWorkerReconnected, *w, "worker reconnected", data); err != nil {
 			return err
 		}
 	}

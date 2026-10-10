@@ -122,7 +122,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		runCtx, stop := context.WithCancel(ctx)
 		var background sync.WaitGroup
 		background.Go(func() {
-			renewServerCert(runCtx, o.ServerCertCheckEvery, func() (tls.Certificate, error) {
+			renewServerCert(runCtx, o.Clock, o.ServerCertCheckEvery, func() (tls.Certificate, error) {
 				return ca.LoadServerCert(p.PKIDir(), host, o.Clock.Now())
 			}, srv.SetServerCert, o.Logger)
 		})
@@ -139,14 +139,14 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 // publishes it. load reissues the certificate once it has under 30 days left
 // (pki.CA.LoadServerCert), so a long-running Controller never serves an
 // expired one. A failure is logged and retried at the next tick.
-func renewServerCert(ctx context.Context, every time.Duration, load func() (tls.Certificate, error), publish func(tls.Certificate), log *slog.Logger) {
-	ticker := time.NewTicker(every)
+func renewServerCert(ctx context.Context, clk clock.Clock, every time.Duration, load func() (tls.Certificate, error), publish func(tls.Certificate), log *slog.Logger) {
+	ticker := clk.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			cert, err := load()
 			if err != nil {
 				log.ErrorContext(ctx, "renewing the server certificate failed", "err", err)

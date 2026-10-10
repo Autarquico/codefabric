@@ -40,3 +40,85 @@ func TestReal_ReturnsUTC(t *testing.T) {
 		t.Fatalf("location = %v, want UTC", loc)
 	}
 }
+
+func fired[T any](c <-chan T) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
+	}
+}
+
+func TestFake_TimerFiresOnceWhenAdvancedPastIt(t *testing.T) {
+	f := clock.NewFake(time.Unix(0, 0))
+	timer := f.NewTimer(time.Minute)
+
+	f.Advance(time.Minute - time.Nanosecond)
+	if fired(timer.C()) {
+		t.Fatal("fired early")
+	}
+	f.Advance(time.Nanosecond)
+	if !fired(timer.C()) {
+		t.Fatal("did not fire at its time")
+	}
+	f.Advance(time.Hour)
+	if fired(timer.C()) {
+		t.Fatal("fired twice")
+	}
+}
+
+func TestFake_TickerFiresOncePerAdvanceHoweverManyPeriodsPass(t *testing.T) {
+	f := clock.NewFake(time.Unix(0, 0))
+	ticker := f.NewTicker(time.Second)
+
+	f.Advance(10 * time.Second)
+	if !fired(ticker.C()) || fired(ticker.C()) {
+		t.Fatal("want exactly one tick for ten periods")
+	}
+	f.Advance(time.Second - time.Nanosecond)
+	if fired(ticker.C()) {
+		t.Fatal("ticked before the next period")
+	}
+	f.Advance(time.Nanosecond)
+	if !fired(ticker.C()) {
+		t.Fatal("did not tick on the next period")
+	}
+}
+
+func TestFake_StoppedTimersDoNotFire(t *testing.T) {
+	f := clock.NewFake(time.Unix(0, 0))
+	timer, ticker := f.NewTimer(time.Second), f.NewTicker(time.Second)
+	timer.Stop()
+	ticker.Stop()
+
+	f.Advance(time.Hour)
+	if fired(timer.C()) || fired(ticker.C()) {
+		t.Fatal("a stopped timer fired")
+	}
+}
+
+func TestFake_BlockUntilWaitsForTheTimers(t *testing.T) {
+	f := clock.NewFake(time.Unix(0, 0))
+	released := make(chan struct{})
+	go func() {
+		f.BlockUntil(2)
+		close(released)
+	}()
+
+	f.NewTimer(time.Second)
+	if fired(released) {
+		t.Fatal("released with one timer of two")
+	}
+	f.NewTicker(time.Second)
+	<-released
+}
+
+func TestReal_TimersFire(*testing.T) {
+	var r clock.Real
+	timer, ticker := r.NewTimer(time.Millisecond), r.NewTicker(time.Millisecond)
+	defer timer.Stop()
+	defer ticker.Stop()
+	<-timer.C()
+	<-ticker.C()
+}

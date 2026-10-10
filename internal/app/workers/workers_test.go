@@ -3,6 +3,7 @@ package workers_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -74,6 +75,24 @@ func TestOffline_ARestartedDaemonThatComesBackIsReconnectedNotRestarted(t *testi
 	}
 	if n := len(e.events(domain.EventWorkerRestarted)); n != 0 {
 		t.Errorf("%d WorkerRestarted: coming back from offline is a reconnection", n)
+	}
+}
+
+func TestOffline_ReconnectedSaysTheStateTheVerdictLeavesTheWorkerIn(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	w := e.join("box")
+	epoch := newEpoch()
+	e.beat(w, request(epoch))
+	e.clock.Advance(offlineTTL + time.Second)
+	e.sweep()
+
+	if got := e.beat(w, request(epoch, withVersion("v0.1.0"))); got != domain.WorkerDegraded {
+		t.Fatalf("back as %s, want degraded", got)
+	}
+
+	back := e.events(domain.EventWorkerReconnected)
+	if len(back) != 1 || back[0].Data["state"] != string(domain.WorkerDegraded) {
+		t.Fatalf("WorkerReconnected = %+v, want one that says degraded", back)
 	}
 }
 
@@ -845,4 +864,45 @@ func TestJoin_RecordsTheJoinedWorker(t *testing.T) {
 	if !slices.Equal(got.Capabilities, []string{}) {
 		t.Errorf("capabilities = %#v, want an empty list, not null", got.Capabilities)
 	}
+}
+
+// startSweeper runs RunSweeper until the test ends and returns what ends it.
+func (e *env) startSweeper() (stop func()) {
+	e.t.Helper()
+	ctx, cancel := context.WithCancel(e.t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.svc.RunSweeper(ctx, slog.New(slog.DiscardHandler))
+	}()
+	e.clock.BlockUntil(1)
+	return func() { cancel(); <-done }
+}
+
+func TestRunSweeper_SweepsEveryThirdOfTheTTL(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	w := e.join("box")
+	e.beat(w, request(newEpoch()))
+	e.clock.Advance(offlineTTL + time.Second) // silent past the TTL, and nobody has swept
+	stop := e.startSweeper()
+	defer stop()
+
+	e.clock.Advance(offlineTTL/3 - time.Nanosecond)
+	if got := e.state(w); got != domain.WorkerOnline {
+		t.Fatalf("before the first third of the TTL: %s", got)
+	}
+	e.clock.Advance(time.Nanosecond)
+	deadline := time.Now().Add(5 * time.Second) // waits for the sweep, not for the time to pass
+	for e.state(w) != domain.WorkerOffline {
+		if time.Now().After(deadline) {
+			t.Fatalf("a third of the TTL later the Worker is still %s", e.state(w))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestRunSweeper_EndsWithItsContext(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	stop := e.startSweeper()
+	stop() // returns only if RunSweeper does
 }

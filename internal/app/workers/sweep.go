@@ -3,7 +3,6 @@ package workers
 import (
 	"context"
 	"log/slog"
-	"time"
 
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/controller/store"
@@ -72,13 +71,13 @@ func (s *Service) Sweep(ctx context.Context) error {
 // right after a Controller restart loses no one: silence is measured from the
 // Controller's start at the earliest.
 func (s *Service) RunSweeper(ctx context.Context, log *slog.Logger) {
-	ticker := time.NewTicker(s.ttl / 3)
+	ticker := s.clock.NewTicker(s.ttl / 3)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			if err := s.Sweep(ctx); err != nil && ctx.Err() == nil {
 				log.ErrorContext(ctx, "sweeping Workers failed", "err", err)
 			}

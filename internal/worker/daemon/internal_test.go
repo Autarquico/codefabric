@@ -1,11 +1,13 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 func TestBackoffGrowsFromATenthOfTheIntervalToTheInterval(t *testing.T) {
@@ -57,5 +59,33 @@ func TestWorkerName(t *testing.T) {
 		if got := workerName(hostname); got != want {
 			t.Errorf("workerName(%q) = %q, want %q", hostname, got, want)
 		}
+	}
+}
+
+func TestSleepWaitsForTheClockAndReportsIt(t *testing.T) {
+	clk := clock.NewFake(time.Unix(0, 0))
+	d := &daemon{clock: clk}
+	slept := make(chan bool)
+	go func() { slept <- d.sleep(t.Context(), 30*time.Second) }()
+	clk.BlockUntil(1)
+
+	clk.Advance(30*time.Second - time.Nanosecond)
+	select {
+	case <-slept:
+		t.Fatal("slept less than it was asked to")
+	default:
+	}
+	clk.Advance(time.Nanosecond)
+	if !<-slept {
+		t.Error("sleep reported an end by context after the time had passed")
+	}
+}
+
+func TestSleepEndsWithTheContextWithoutTheTimePassing(t *testing.T) {
+	d := &daemon{clock: clock.NewFake(time.Unix(0, 0))}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if d.sleep(ctx, time.Hour) {
+		t.Error("sleep reported that the time had passed")
 	}
 }
