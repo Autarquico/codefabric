@@ -14,6 +14,7 @@
 - #4 Controller store: SQLite, transacciones, eventos e idempotencia
 - #5 Identidad del Controller, TLS y tokens de cliente
 - #6 API, Client SDK y `cf status`
+- #8 Projects, Tasks y Runs: API y CLI
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -21,7 +22,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-- #8 Projects, Tasks y Runs: API y CLI
+_(nada)_
 <!-- /pm-sync:in-progress -->
 
 ---
