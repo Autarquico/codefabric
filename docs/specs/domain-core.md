@@ -2,7 +2,7 @@
 codename: codefabric
 title: "Domain core: entidades, máquinas de estado y errores"
 type: task
-status: active
+status: shipped
 priority: P0
 size: M
 issue: 3
