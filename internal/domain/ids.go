@@ -28,12 +28,14 @@ const (
 	KindEvent        Kind = "event"
 	KindConfirmation Kind = "confirmation"
 	KindOperation    Kind = "operation"
+	KindClient       Kind = "client"
 )
 
 var knownKinds = map[Kind]bool{
 	KindProject: true, KindPlan: true, KindTask: true, KindRun: true,
 	KindWorker: true, KindWorkflow: true, KindLease: true, KindCheckpoint: true,
 	KindArtifact: true, KindEvent: true, KindConfirmation: true, KindOperation: true,
+	KindClient: true,
 }
 
 // ErrMalformedID is returned for text that is not a canonical ID or short ID.
