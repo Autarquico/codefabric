@@ -79,9 +79,9 @@ func (c *Client) projectFor(ctx context.Context, dir, ref string) (v1.Project, e
 	}
 	matches, err := gitctx.Match(origin, projects)
 	if err != nil {
-		if errors.Is(err, gitctx.ErrRelativeOrigin) {
+		if errors.Is(err, gitctx.ErrUnsupportedOrigin) {
 			return v1.Project{}, domain.NewError(domain.CodeInvalidRequest,
-				"the origin of this working directory is a relative path: use --project or set an absolute origin", nil)
+				"the origin of this working directory is not a supported repository form: use --project, or set an origin that is "+domain.RepoFormHint, nil)
 		}
 		return v1.Project{}, domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
 	}

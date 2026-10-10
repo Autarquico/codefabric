@@ -90,6 +90,7 @@ func TestProjects_NeverStoreOrAuditACredential(t *testing.T) {
 	for _, repo := range []string{
 		"https://user:s3cret@example.com/org/r.git", "https://:s3cret@example.com/org/r.git", "ssh://git:s3cret@example.com/org/r.git",
 		"https://s3cret@example.com/org/r.git", "https://example.com/org/r.git?access_token=s3cret", "ssh://git@example.com/org/r.git#s3cret",
+		"user:s3cret@build_box:org/repo.git", "git@host:org/a@s3cret:c.git",
 	} {
 		_, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "a", Repo: repo})
 		wantCode(t, err, domain.CodeInvalidRequest)
@@ -99,15 +100,13 @@ func TestProjects_NeverStoreOrAuditACredential(t *testing.T) {
 	}
 	// The same through the aliases of an existing Project.
 	ok := e.project("ok", func(r *v1.CreateProjectRequest) { r.Repo = "ssh://git@example.com/org/ok.git" })
-	for _, repo := range []string{"https://user:s3cret@example.com/r.git", "https://example.com/r?token=s3cret"} {
+	for _, repo := range []string{"https://user:s3cret@example.com/r.git", "https://example.com/r?token=s3cret", "u:s3cret@host:path"} {
 		_, err := e.app.Projects.Set(t.Context(), e.owner, ok.Name, v1.UpdateProjectRequest{AddRepos: []string{repo}})
 		wantCode(t, err, domain.CodeInvalidRequest)
 		if strings.Contains(err.Error(), "s3cret") {
 			t.Errorf("the error repeats the secret: %v", err)
 		}
 	}
-	// A user without password is no credential.
-
 	for _, table := range []string{"projects", "audit_entries", "events", "idempotency_keys"} {
 		if dump := e.dump(table); strings.Contains(dump, "s3cret") {
 			t.Errorf("%s holds the secret:\n%s", table, dump)

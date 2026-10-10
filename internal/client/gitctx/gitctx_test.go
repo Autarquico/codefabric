@@ -214,11 +214,11 @@ func TestMatch_DifferentUsersAreDifferentRepositories(t *testing.T) {
 	}
 }
 
-func TestMatch_ARelativeOriginIdentifiesNothing(t *testing.T) {
+func TestMatch_AnUnsupportedOriginIdentifiesNothing(t *testing.T) {
 	ps := []v1.Project{{Name: "p", Repo: "../repo"}, {Name: "q", Repo: "file://../repo"}}
-	for _, origin := range []string{"../repo", "repo", "./repo", "~/repo", "file://../repo", "file://repo"} {
-		if got, err := gitctx.Match(origin, ps); !errors.Is(err, gitctx.ErrRelativeOrigin) || len(got) != 0 {
-			t.Errorf("Match(%q) = %v, %v; want ErrRelativeOrigin", origin, names(got), err)
+	for _, origin := range []string{"../repo", "repo", "./repo", "~/repo", "file://../repo", "file://repo", "https://u:p@h/r", "user:pw@host:path"} {
+		if got, err := gitctx.Match(origin, ps); !errors.Is(err, gitctx.ErrUnsupportedOrigin) || len(got) != 0 {
+			t.Errorf("Match(%q) = %v, %v; want ErrUnsupportedOrigin", origin, names(got), err)
 		}
 	}
 	if _, err := gitctx.Match("", ps); err == nil {
@@ -236,18 +236,17 @@ func TestOriginURL_IsWhatGitHasNeverResolved(t *testing.T) {
 	}
 }
 
-func TestRedact_HidesTheUserinfoAndAnyQueryOrFragment(t *testing.T) {
+func TestRedact_ReplacesWholeWordsWithAnAtOrAQueryURL(t *testing.T) {
 	for raw, want := range map[string]string{ //nolint:gosec // test data: fake secrets
-		"https://h/r?access_token=SECRET":                     "https://h/r?***",
-		"https://h/r#SECRET":                                  "https://h/r#***",
-		"ssh://git@h/org/r.git?x=SECRET#SECRET":               "ssh://***@h/org/r.git?***",
-		"https://user:p@SECRET@host/org/repo.git":             "https://***@host/org/repo.git",
-		"https://SECRET@@host/x":                              "https://***@host/x",
-		"ssh://u:a@b@SECRET@host/x":                           "ssh://***@host/x",
-		"https://u:SECRET@host:bad/org/repo.git":              "https://***@host:bad/org/repo.git",
-		"fatal: unable to access 'https://h/r?t=SECRET': 404": "fatal: unable to access 'https://h/r?***': 404",
+		"user:SECRET@host:repo,https://h/other":               "<redacted>",
+		"user:pre'SECRET@host:repo":                           "<redacted>",
+		"https://h/r?access_token=prefix@SECRET":              "<redacted>",
+		"https://h/r#SECRET":                                  "<redacted>",
+		"git@github.com:org/repo.git":                         "<redacted>",
+		"fatal: unable to access 'https://h/r?t=SECRET': 404": "fatal: unable to access <redacted> 404",
 		"fatal: repository not found?  Did you mean?":         "fatal: repository not found?  Did you mean?",
-		"git@github.com:org/repo.git":                         "git@github.com:org/repo.git",
+		"ref main\tnot found on https://h/r":                  "ref main\tnot found on https://h/r",
+		"a  word\nwithout at":                                 "a  word\nwithout at",
 	} {
 		if got := gitctx.Redact(raw); got != want {
 			t.Errorf("Redact(%q) = %q, want %q", raw, got, want)
@@ -259,22 +258,5 @@ func TestResolveRef_FailuresDoNotLeakAQueryToken(t *testing.T) {
 	_, err := gitctx.ResolveRef(t.Context(), newRepo(t).dir, "https://127.0.0.1:1/org/repo.git?access_token=SECRET", "main")
 	if err == nil || strings.Contains(err.Error(), "SECRET") {
 		t.Errorf("err = %v", err)
-	}
-}
-
-func TestRedaction_AnAtInTheQueryOrFragmentDoesNotUncoverTheSecret(t *testing.T) {
-	for _, raw := range []string{ //nolint:gosec // test data: fake secrets
-		"https://h/r?access_token=prefix@SECRET",
-		"https://h/r#prefix@SECRET",
-		"https://user:SECRET@h/r?x=a@b",
-		"fatal: could not read from user:SECRET@host:org/repo.git",
-		"fatal: 'user:prefix@SECRET@host:org/repo.git' does not appear to be a git repository",
-	} {
-		if got := gitctx.Redact(raw); strings.Contains(got, "SECRET") {
-			t.Errorf("Redact(%q) = %q", raw, got)
-		}
-	}
-	if got := gitctx.Redact("https://h/r?access_token=prefix@SECRET"); got != "https://h/r?***" {
-		t.Errorf("Redact = %q, want the URL without its query", got)
 	}
 }

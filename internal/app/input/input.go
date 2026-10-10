@@ -40,19 +40,15 @@ func Name(what, name string) error {
 	return nil
 }
 
-// Repo checks a repository URL or path. A leading '-' is refused because git
-// would take it for an option, and so is a URL that carries a credential (see
-// domain.RepoURLProblem): the Controller never stores one, and git takes them
-// from the user's own configuration. The message does not repeat the URL.
+// Repo checks a repository URL or path against the allowlist of
+// domain.ValidRepoURL: the Controller never stores a credential, and git takes
+// them from the user's own configuration. The message does not repeat the URL.
 func Repo(repo string) error {
-	if repo == "" || len(repo) > maxURLLen || strings.HasPrefix(repo, "-") || hasSpaceOrControl(repo) {
-		return Invalid("repo must be a git URL or path without spaces, at most %d characters", maxURLLen)
+	if repo == "" || len(repo) > maxURLLen {
+		return Invalid("repo must be a git URL or path of at most %d characters", maxURLLen)
 	}
-	if problem := domain.RepoURLProblem(repo); problem != "" {
-		return Invalid("repo must not carry %s in its URL: remove it and let git find the credentials", problem)
-	}
-	if domain.RepoIsRelative(repo) {
-		return Invalid("repo must be a URL or an absolute path: a relative path names a different repository on every machine")
+	if !domain.ValidRepoURL(repo) {
+		return Invalid("repo must be %s", domain.RepoFormHint)
 	}
 	return nil
 }

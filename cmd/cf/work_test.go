@@ -373,6 +373,7 @@ func TestProjectsTasksRunsApi_ACredentialInARepoURLIsRefusedNeverStripped(t *tes
 	for _, repo := range []string{
 		"https://user:s3cret@example.com/org/r.git", "https://s3cret@example.com/org/r.git",
 		"https://example.com/org/r.git?access_token=s3cret", "ssh://git@example.com/org/r.git#s3cret",
+		"user:s3cret@build_box:org/repo.git",
 	} {
 		env := fails(t, 2, domain.CodeInvalidRequest, "project", "create", "creds", "--repo", repo)
 		if msg := fmt.Sprint(env["message"]); strings.Contains(msg, "s3cret") {
@@ -381,14 +382,17 @@ func TestProjectsTasksRunsApi_ACredentialInARepoURLIsRefusedNeverStripped(t *tes
 	}
 	// Without --repo the origin is used, and an origin with a secret is not cleaned up in silence.
 	dir := newOrigin(t).clone(t)
-	for _, origin := range []string{"https://s3cret@example.com/org/r.git", "https://example.com/org/r.git?access_token=s3cret"} {
+	for _, origin := range []string{"https://s3cret@example.com/org/r.git", "https://example.com/org/r.git?access_token=s3cret", "user:s3cret@build_box:org/repo.git", "../s3cret"} {
 		git(t, dir, "remote", "set-url", "origin", origin)
 		env := fails(t, 2, domain.CodeInvalidRequest, "project", "create", "creds")
 		if msg := fmt.Sprint(env["message"]); strings.Contains(msg, "s3cret") || !strings.Contains(msg, "--repo") {
 			t.Errorf("message = %q", msg)
 		}
+		if code, out, errOut := cf(t, "", "project", "create", "creds"); code != 2 || strings.Contains(out+errOut, "s3cret") || !strings.Contains(errOut, "--repo") {
+			t.Errorf("human output: exit %d, stdout %q, stderr %q", code, out, errOut)
+		}
 	}
-	// A user without password over ssh is no secret.
+	// A user without password over ssh is allowed.
 	ok[v1.Project](t, "project", "create", "plain", "--repo", "ssh://git@example.com/org/p.git")
 	if _, out, _ := cf(t, "", "project", "list"); strings.Contains(out, "s3cret") || !strings.Contains(out, "plain") || strings.Contains(out, "creds") {
 		t.Errorf("the list:\n%s", out)
@@ -432,9 +436,9 @@ func TestProjectsTasksRunsApi_OnlyAnExactURLMatches(t *testing.T) {
 	git(t, dir, "remote", "set-url", "origin", "alice@example.com:org/repo.git")
 	fails(t, 3, domain.CodeNotFound, "task", "new", "--no-start", "alice")
 
-	// A relative origin names nothing by itself: no inference, and a hint.
+	// An origin of an unsupported form, a relative path among them, names nothing: no inference, and a hint.
 	git(t, dir, "remote", "set-url", "origin", "../repo")
-	if env := fails(t, 2, domain.CodeInvalidRequest, "do", "rel"); !strings.Contains(fmt.Sprint(env["message"]), "use --project or set an absolute origin") {
+	if env := fails(t, 2, domain.CodeInvalidRequest, "do", "rel"); !strings.Contains(fmt.Sprint(env["message"]), "use --project, or set an origin that is") {
 		t.Errorf("no hint: %v", env)
 	}
 	if code, _, errOut := cf(t, "", "do", "human"); code != 2 || !strings.Contains(errOut, "--project") {

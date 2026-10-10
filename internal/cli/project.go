@@ -35,9 +35,9 @@ func newProjectCreateCmd() *cobra.Command {
 				if req.Repo, err = gitctx.OriginURL(cmd.Context(), dir); err != nil {
 					return domain.NewError(domain.CodeInvalidRequest, "this directory has no origin remote: give the repository with --repo", nil)
 				}
-				if problem := domain.RepoURLProblem(req.Repo); problem != "" {
-					return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf(
-						"the origin of this directory carries %s in its URL, which a Project does not keep: take it out of the remote (git remote set-url origin) or give the repository with --repo", problem), nil)
+				if !domain.ValidRepoURL(req.Repo) {
+					return domain.NewError(domain.CodeInvalidRequest,
+						"the origin of this directory must be "+domain.RepoFormHint+": change it (git remote set-url origin) or give the repository with --repo", nil)
 				}
 			}
 			c, err := openClient(cmd)

@@ -5,62 +5,38 @@ import (
 	"strings"
 )
 
-var (
-	schemeURL = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*)://`)
-	scpURL    = regexp.MustCompile(`^(?:[^@/:]+@)?[^/:]+:`)
+// RepoFormHint says which repository forms are accepted. It never repeats a URL.
+const RepoFormHint = "an https/ssh/git URL, a scp-like user@host:path or an absolute path, with no credentials, query or fragment"
+
+// The accepted repository forms are a strict allowlist (spec B5): anything
+// else is refused, so the Controller never has to recognise a credential. Each
+// grammar is anchored. A path has no ':' and an http(s) URL has no userinfo.
+const (
+	host  = `(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])`
+	port  = `(?::[0-9]{1,5})?`
+	user  = `(?:[A-Za-z0-9._-]+@)?`
+	rpath = `[A-Za-z0-9._~/+@-]+`
 )
 
-// RepoURLProblem says why a repository URL must not be stored, or "" if it may.
-// The Controller never keeps a secret, and git finds credentials in the user's
-// own configuration, so a URL with a scheme must carry no password (in any
-// scheme), no user at all over http(s), where the name is often a token, and no
-// query or fragment, where tokens also travel. A user without password over ssh,
-// like git@, is no secret. The reason never repeats the URL.
-func RepoURLProblem(repo string) string {
-	m := schemeURL.FindStringSubmatch(repo)
-	if m == nil {
-		// scp-like [userinfo@]host:path: a ':' in the userinfo is a password
-		// (git@host:path has none; an '@' in the path is no userinfo).
-		if user, _, _, ok := SplitScp(repo); ok && strings.Contains(user, ":") {
-			return "a password"
-		}
-		return ""
-	}
-	if strings.ContainsAny(repo, "?#") {
-		return "a query or fragment"
-	}
-	authority, _, _ := strings.Cut(repo[len(m[0]):], "/")
-	i := strings.LastIndex(authority, "@")
-	if i < 0 {
-		return ""
-	}
+var (
+	httpForm  = regexp.MustCompile(`^https?://` + host + port + `/` + rpath + `$`)
+	sshForm   = regexp.MustCompile(`^ssh://` + user + host + port + `/` + rpath + `$`)
+	gitForm   = regexp.MustCompile(`^git://` + host + port + `/` + rpath + `$`)
+	scpForm   = regexp.MustCompile(`^` + user + `(` + host + `):(` + rpath + `)$`)
+	localForm = regexp.MustCompile(`^/[^\s\p{Cc}\p{Z}]*$`)
+	fileForm  = regexp.MustCompile(`^file:///[^?#\s\p{Cc}\p{Z}]*$`)
+)
+
+// ValidRepoURL tells whether repo has one of the accepted forms. A scp-like
+// path does not start with '-' (git would read an option) or '//' (that is a
+// URL with a scheme the allowlist does not know), and its host has two
+// characters at least, so that a drive letter such as C:/x is not a host.
+func ValidRepoURL(repo string) bool {
 	switch {
-	case strings.Contains(authority[:i], ":"):
-		return "a password"
-	case strings.EqualFold(m[1], "http") || strings.EqualFold(m[1], "https"):
-		return "a user name or token"
+	case httpForm.MatchString(repo), sshForm.MatchString(repo), gitForm.MatchString(repo),
+		localForm.MatchString(repo), fileForm.MatchString(repo):
+		return true
 	}
-	return ""
-}
-
-// RepoIsRelative tells a relative local path: it names a different repository
-// on every machine, and an origin like it never infers a Project.
-func RepoIsRelative(repo string) bool {
-	return !schemeURL.MatchString(repo) && !scpURL.MatchString(repo) && !strings.HasPrefix(repo, "/")
-}
-
-// scpForm is [userinfo@]host:path. The userinfo is greedy, so it ends at the
-// last '@' that is followed by a host and a ':'; an '@' in the path is not one.
-var scpForm = regexp.MustCompile(`^(?:(.*)@)?([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\]):(.*)$`)
-
-// SplitScp splits a scp-like remote into its userinfo, host and path.
-func SplitScp(s string) (userinfo, host, path string, ok bool) {
-	if schemeURL.MatchString(s) {
-		return "", "", "", false
-	}
-	m := scpForm.FindStringSubmatch(s)
-	if m == nil {
-		return "", "", "", false
-	}
-	return m[1], m[2], m[3], true
+	m := scpForm.FindStringSubmatch(repo)
+	return m != nil && len(m[1]) >= 2 && !strings.HasPrefix(m[2], "-") && !strings.HasPrefix(m[2], "//")
 }

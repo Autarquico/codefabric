@@ -32,27 +32,23 @@ func OriginURL(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// ErrRelativeOrigin means the origin is a path relative to the working copy.
-// What it names depends on where git is run, so it identifies no repository.
-var ErrRelativeOrigin = errors.New("gitctx: the origin is a relative path: use --project or set an absolute origin")
-
-// scpLike is the "[user@]host:path" form of an ssh remote.
-var scpLike = regexp.MustCompile(`^(?:[^@/:]+@)?[^/:]+:`)
+// ErrUnsupportedOrigin means the origin is not one of the forms a Project can
+// keep (domain.ValidRepoURL), a relative path among them: it identifies no
+// repository, and it is never shown.
+var ErrUnsupportedOrigin = errors.New("gitctx: the origin is not a supported repository form: use --project")
 
 // Match returns the Projects that have origin among their URLs: the main repo
 // or an alias. The comparison is literal, byte for byte: no case folding, no
 // ".git", port or slash handling, no path cleaning. Two spellings of one
 // repository are told apart by adding the second as an alias of the Project. An
-// origin that is a relative path matches nothing (ErrRelativeOrigin): git
-// resolves it against the working copy, and guessing a path would trade
-// repositories.
+// origin that is not a supported form matches nothing (ErrUnsupportedOrigin).
 func Match(origin string, projects []v1.Project) ([]v1.Project, error) {
 	origin = strings.TrimSpace(origin)
 	if origin == "" {
 		return nil, errors.New("gitctx: empty repository URL")
 	}
-	if isRelativePath(origin) {
-		return nil, ErrRelativeOrigin
+	if !domain.ValidRepoURL(origin) {
+		return nil, ErrUnsupportedOrigin
 	}
 	var out []v1.Project
 	for _, p := range projects {
@@ -61,16 +57,6 @@ func Match(origin string, projects []v1.Project) ([]v1.Project, error) {
 		}
 	}
 	return out, nil
-}
-
-func isRelativePath(s string) bool {
-	switch {
-	case strings.HasPrefix(s, "file://"):
-		return !strings.HasPrefix(s, "file:///")
-	case strings.Contains(s, "://"), scpLike.MatchString(s):
-		return false
-	}
-	return !strings.HasPrefix(s, "/")
 }
 
 var fullSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
@@ -144,43 +130,17 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// urlToken is a URL with a scheme inside a longer text, such as git's stderr.
-var urlToken = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"<>]*`)
-
-// redact hides what a URL in s may carry as a secret: the whole userinfo, up to
-// the last '@', and any query or fragment (https://h/r?token=x becomes
-// https://h/r?***). It errs on the side of hiding too much.
+// redact is a blunt defence in depth: git only sees URLs that passed
+// domain.ValidRepoURL, or an origin that equals one. Every white-space
+// separated word that has an '@', or a "://" with a '?' or '#', is replaced
+// whole; the rest of s is untouched.
 func redact(s string) string {
-	s = urlToken.ReplaceAllStringFunc(s, func(u string) string {
-		scheme, rest, _ := strings.Cut(u, "://")
-		// The query and fragment go first: an '@' inside them must not be
-		// taken for the end of a userinfo.
-		suffix := ""
-		if i := strings.IndexAny(rest, "?#"); i >= 0 {
-			rest, suffix = rest[:i], rest[i:i+1]+"***"
+	return word.ReplaceAllStringFunc(s, func(w string) string {
+		if strings.Contains(w, "@") || (strings.Contains(w, "://") && strings.ContainsAny(w, "?#")) {
+			return "<redacted>"
 		}
-		authority, path, hasPath := strings.Cut(rest, "/")
-		if i := strings.LastIndex(authority, "@"); i >= 0 {
-			authority = "***@" + authority[i+1:]
-		}
-		if hasPath {
-			authority += "/" + path
-		}
-		return scheme + "://" + authority + suffix
-	})
-	// scp-like user:password@host:path has no scheme to anchor on: split each
-	// word the way a remote is split and hide a userinfo that holds a password.
-	return textWord.ReplaceAllStringFunc(s, func(w string) string {
-		if strings.Contains(w, "://") {
-			return w
-		}
-		user, host, path, ok := domain.SplitScp(w)
-		if !ok || !strings.Contains(user, ":") {
-			return w
-		}
-		return "***@" + host + ":" + path
+		return w
 	})
 }
 
-// textWord is a run of characters that may form a remote inside a text.
-var textWord = regexp.MustCompile(`[^\s'"<>]+`)
+var word = regexp.MustCompile(`\S+`)

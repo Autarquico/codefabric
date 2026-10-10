@@ -7,27 +7,26 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 )
 
-func TestRepo_RefusesPasswordsAndTokensInTheURL(t *testing.T) {
+func TestRepo_AcceptsOnlyTheAllowlistAndNeverRepeatsTheURL(t *testing.T) {
 	for _, repo := range []string{
 		"git@github.com:org/repo.git", "ssh://git@github.com/org/repo.git", "https://github.com/org/repo.git",
-		"file:///srv/repo", "/srv/repo", "git@host:repo?x",
+		"file:///srv/repo", "/srv/repo",
 	} {
 		if err := Repo(repo); err != nil {
 			t.Errorf("%q: %v", repo, err)
 		}
 	}
-	for _, repo := range []string{
-		"https://user:s3cret@github.com/org/repo.git", "https://:ghp_token@github.com/org/repo.git",
-		"ssh://git:s3cret@github.com/org/repo.git", "https://user:p@ss@github.com/org/repo.git",
-		"https://ghp_token@github.com/org/repo.git", "HTTP://ghp_token@github.com/org/repo.git",
-		"https://github.com/org/repo.git?access_token=ghp_token", "ssh://git@github.com/org/repo.git#ghp_token",
-		"file:///srv/repo?ghp_token", "https://github.com?ghp_token",
+	for _, repo := range []string{ //nolint:gosec // test data: fake secrets
+		"https://user:s3cret@github.com/org/repo.git", "user:s3cret@build_box:org/repo.git", "https://s3cret@github.com/org/repo.git",
+		"https://github.com/org/repo.git?access_token=s3cret", "ssh://git@github.com/org/repo.git#s3cret",
+		"git@host:repo?s3cret", "../s3cret", "s3cret", "-s3cret", "C:/s3cret", "host:-s3cret",
+		"git@host:org/a@s3cret:c.git", strings.Repeat("a", maxURLLen+1),
 	} {
 		err := Repo(repo)
 		if err == nil {
 			t.Errorf("%q was accepted", repo)
-		} else if strings.Contains(err.Error(), "s3cret") || strings.Contains(err.Error(), "ghp_token") {
-			t.Errorf("the error repeats the secret: %v", err)
+		} else if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("the error repeats the URL: %v", err)
 		}
 	}
 }
