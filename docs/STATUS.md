@@ -21,7 +21,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_(nada)_
+- #8 Projects, Tasks y Runs: API y CLI
 <!-- /pm-sync:in-progress -->
 
 ---
