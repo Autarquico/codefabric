@@ -2,7 +2,7 @@
 codename: codefabric
 title: Identidad del Controller, TLS y tokens de cliente
 type: task
-status: active
+status: shipped
 priority: P0
 size: M
 issue: 5

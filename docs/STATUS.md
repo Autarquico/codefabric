@@ -11,6 +11,7 @@
 <!-- pm-sync:done-this-week -->
 - #3 Domain core: entidades, máquinas de estado y errores
 - #4 Controller store: SQLite, transacciones, eventos e idempotencia
+- #5 Identidad del Controller, TLS y tokens de cliente
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -18,7 +19,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-- #5 Identidad del Controller, TLS y tokens de cliente
+_(nada)_
 <!-- /pm-sync:in-progress -->
 
 ---
