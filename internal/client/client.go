@@ -221,13 +221,20 @@ const (
 // client certificate. Over TCP, crypto/tls reports a received alert as a
 // net.OpError whose Err is its unexported alert type (a uint8 holding the
 // RFC number); tls.AlertError is only used by QUIC. The number is read by
-// reflection because that is the one stable, typed part of the value.
+// reflection because that is the one stable, typed part of the value. The
+// unit test uses a stub; the real path is guarded by the Renovación scenario
+// ("expired certificate asks for a new invitation"), which does a real handshake.
 func rejectsCertificate(err error) bool {
-	v := reflect.ValueOf(err)
-	if v.Kind() != reflect.Uint8 {
+	var code uint64
+	var alertErr tls.AlertError
+	if errors.As(err, &alertErr) {
+		code = uint64(alertErr)
+	} else if v := reflect.ValueOf(err); v.Kind() == reflect.Uint8 {
+		code = v.Uint()
+	} else {
 		return false
 	}
-	switch v.Uint() {
+	switch code {
 	case alertBadCertificate, alertCertificateRevoked, alertCertificateExpired, alertUnknownCA, alertCertificateRequired:
 		return true
 	}

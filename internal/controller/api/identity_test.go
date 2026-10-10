@@ -25,6 +25,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/controller/api"
+	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -134,6 +135,22 @@ func TestControllerIdentityTLS_LastActiveClientCannotBeRevoked(t *testing.T) {
 	must(t, tc.owner.RemoveClient(t.Context(), owner.IdentityID))
 	_, err = tc.owner.Clients(t.Context())
 	wantCode(t, err, domain.CodeUnauthenticated)
+}
+
+func TestControllerIdentityTLS_ExpiredClientsDoNotCountAsUsable(t *testing.T) {
+	tc := newController(t, time.Now())
+	owner, err := client.Describe(tc.ownerDir)
+	must(t, err)
+	laptop, _ := tc.enroll("laptop")
+	laptopID, err := laptop.Describe()
+	must(t, err)
+	must(t, tc.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(t.Context(), `UPDATE identities SET not_after = ? WHERE id = ?`,
+			time.Now().Add(-time.Hour).UnixNano(), string(laptopID.IdentityID))
+		return err
+	}))
+	// The only other client has expired and cannot renew, so the owner is the last usable one.
+	wantCode(t, tc.owner.RemoveClient(t.Context(), owner.IdentityID), domain.CodePolicyDenied)
 }
 
 func TestControllerIdentityTLS_AuthorizationByRouteAndKind(t *testing.T) {

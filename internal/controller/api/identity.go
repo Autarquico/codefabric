@@ -70,8 +70,7 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request, c caller) e
 	if err := decodeBody(w, r, &req); err != nil {
 		return err
 	}
-	// The Authority owns the TTL policy; this only keeps the conversion from overflowing.
-	ttl := time.Duration(max(-maxTTLSeconds, min(req.TTLSeconds, maxTTLSeconds))) * time.Second
+	ttl := secondsToDuration(req.TTLSeconds)
 	invite, expires, err := s.authority.CreateToken(r.Context(), c.Principal, domain.Kind(req.Kind), ttl)
 	if err != nil {
 		return err
@@ -108,4 +107,10 @@ func (s *Server) removeClient(w http.ResponseWriter, r *http.Request, c caller) 
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// secondsToDuration converts without overflowing; the Authority owns the TTL
+// policy and rejects out-of-range values itself.
+func secondsToDuration(seconds int64) time.Duration {
+	return time.Duration(max(-maxTTLSeconds, min(seconds, maxTTLSeconds))) * time.Second
 }

@@ -107,8 +107,8 @@ func LoadCredentials(dir string) (Credentials, error) {
 	return b.Credentials, err
 }
 
-// CredentialsExist reports whether dir already holds credentials, finishing an
-// interrupted publish first.
+// CredentialsExist reports whether dir already holds credentials. It is not a
+// pure query: it first completes (renames on disk) a publish interrupted by a crash.
 func CredentialsExist(dir string) (bool, error) {
 	if err := recoverInterrupted(dir); err != nil {
 		return false, err

@@ -238,14 +238,14 @@ func (a *Authority) RevokeClient(ctx context.Context, by domain.Principal, id do
 		if ident.Revoked() {
 			return nil
 		}
-		active, err := tx.CountActiveIdentities(ctx, domain.KindClient)
+		usable, err := tx.CountUsableIdentities(ctx, domain.KindClient, now)
 		if err != nil {
 			return err
 		}
-		if active <= 1 {
-			return domain.NewError(domain.CodePolicyDenied, "the last active client cannot be revoked", nil)
+		if usable <= 1 {
+			return domain.NewError(domain.CodePolicyDenied, "the last usable client cannot be revoked", nil)
 		}
-		if _, err := tx.Revoke(ctx, id, domain.KindClient, now); err != nil {
+		if err := tx.Revoke(ctx, id, domain.KindClient, now); err != nil {
 			return err
 		}
 		return tx.AppendAudit(ctx, store.AuditEntry{

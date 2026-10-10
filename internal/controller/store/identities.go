@@ -107,22 +107,24 @@ func (t *Tx) ReplaceCertificate(ctx context.Context, id domain.ID, oldSerial, ne
 	return rowsChanged(res)
 }
 
-// Revoke marks a non-revoked identity of the given kind as revoked. It reports
-// whether a row changed.
-func (t *Tx) Revoke(ctx context.Context, id domain.ID, kind domain.Kind, at time.Time) (bool, error) {
-	res, err := t.Exec(ctx,
+// Revoke marks a non-revoked identity of the given kind as revoked.
+func (t *Tx) Revoke(ctx context.Context, id domain.ID, kind domain.Kind, at time.Time) error {
+	_, err := t.Exec(ctx,
 		`UPDATE identities SET revoked_at = ? WHERE id = ? AND kind = ? AND revoked_at IS NULL`,
 		at.UnixNano(), string(id), string(kind))
 	if err != nil {
-		return false, fmt.Errorf("store: revoking identity: %w", err)
+		return fmt.Errorf("store: revoking identity: %w", err)
 	}
-	return rowsChanged(res)
+	return nil
 }
 
-// CountActiveIdentities counts the non-revoked identities of one kind.
-func (t *Tx) CountActiveIdentities(ctx context.Context, kind domain.Kind) (int, error) {
+// CountUsableIdentities counts the identities of one kind that can still
+// authenticate at now: not revoked and not expired.
+func (t *Tx) CountUsableIdentities(ctx context.Context, kind domain.Kind, now time.Time) (int, error) {
 	var n int
-	err := t.QueryRow(ctx, `SELECT COUNT(*) FROM identities WHERE kind = ? AND revoked_at IS NULL`, string(kind)).Scan(&n)
+	err := t.QueryRow(ctx,
+		`SELECT COUNT(*) FROM identities WHERE kind = ? AND revoked_at IS NULL AND not_after > ?`,
+		string(kind), now.UnixNano()).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("store: counting identities: %w", err)
 	}
