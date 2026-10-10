@@ -35,6 +35,7 @@ type env struct {
 	app       *app.Services
 	owner     pki.Session
 	epochs    map[domain.ID]string
+	sessions  map[string]pki.Session
 }
 
 func newEnv(t *testing.T) *env {

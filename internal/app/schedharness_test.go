@@ -10,6 +10,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
+	"github.com/Autarquico/codefabric/internal/app/scheduler"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -19,21 +20,34 @@ import (
 // online with 16 CPUs and 64 GB to contribute. mutate adjusts the heartbeat.
 func (e *env) joinWorker(name string, mutate ...func(*v1.HeartbeatRequest)) pki.Session {
 	e.t.Helper()
+	return e.joinWorkerWith(name, v1.WorkerSettings{}, mutate...)
+}
+
+// joinWorkerWith is joinWorker for a Worker that contributes what settings say.
+func (e *env) joinWorkerWith(name string, settings v1.WorkerSettings, mutate ...func(*v1.HeartbeatRequest)) pki.Session {
+	e.t.Helper()
 	invite, _, err := e.authority.CreateToken(e.t.Context(), e.owner, domain.KindWorker, time.Hour)
 	must(e.t, err)
-	joined, err := e.authority.Join(e.t.Context(), invite.Token, e.csr(), name, &v1.WorkerSettings{})
+	joined, err := e.authority.Join(e.t.Context(), invite.Token, e.csr(), name, &settings)
 	must(e.t, err)
 	w, err := joined.Session()
 	must(e.t, err)
+	if e.sessions == nil {
+		e.sessions = map[string]pki.Session{}
+	}
+	e.sessions[name] = w
 	e.beat(w, mutate...)
 	return w
 }
+
+// sessionOf is the session of a Worker joined by joinWorker.
+func (e *env) sessionOf(name string) pki.Session { return e.sessions[name] }
 
 // beat sends a heartbeat for the Worker, with the last epoch it used.
 func (e *env) beat(w pki.Session, mutate ...func(*v1.HeartbeatRequest)) {
 	e.t.Helper()
 	req := v1.HeartbeatRequest{
-		Epoch: e.epochOf(w), DaemonVersion: "dev", Hostname: "box.lan", OS: "linux", Arch: "amd64",
+		Epoch: e.epochOf(w), DaemonVersion: "", Hostname: "box.lan", OS: "linux", Arch: "amd64",
 		Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 500000}, Health: v1.Health{Status: v1.HealthOK},
 	}
 	for _, m := range mutate {
@@ -160,4 +174,27 @@ func jsonOf(t *testing.T, v any) string {
 	raw, err := json.Marshal(v)
 	must(t, err)
 	return string(raw)
+}
+
+// pass runs one pass of the scheduler.
+func (e *env) pass() scheduler.Result {
+	e.t.Helper()
+	res, err := e.app.Scheduler.Pass(e.t.Context())
+	must(e.t, err)
+	return res
+}
+
+// workerOfRun is the name of the Worker a Run is assigned to, "" if none.
+func (e *env) workerOfRun(run string) string {
+	e.t.Helper()
+	id := e.storedRun(run).WorkerID
+	if id == "" {
+		return ""
+	}
+	var w store.Worker
+	must(e.t, e.db.Read(e.t.Context(), func(q store.Querier) (err error) {
+		w, err = store.WorkerByID(e.t.Context(), q, id)
+		return err
+	}))
+	return w.Name
 }
