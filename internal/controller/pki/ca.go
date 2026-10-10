@@ -113,9 +113,9 @@ func LoadCA(dir string) (*CA, error) {
 	return &CA{Cert: cert, Key: key}, nil
 }
 
-// Exists reports whether any CA file is present in dir.
+// Exists reports whether any PKI file (CA or server certificate) is present in dir.
 func Exists(dir string) bool {
-	for _, f := range []string{caCertFile, caKeyFile} {
+	for _, f := range []string{caCertFile, caKeyFile, serverCertFile, serverKeyFile} {
 		if _, err := os.Stat(filepath.Join(dir, f)); !errors.Is(err, fs.ErrNotExist) {
 			return true
 		}

@@ -39,6 +39,13 @@ func (c *Controller) Wait() error {
 	return c.err
 }
 
+func newAuthority(db *store.DB, ca *pki.CA, clk clock.Clock, host, port string) *pki.Authority {
+	return pki.NewAuthority(pki.AuthorityConfig{
+		DB: db, CA: ca, Clock: clk, IDs: domain.NewIDGenerator(clk.Now, rand.Reader),
+		CertTTL: domain.Defaults().IdentityCertTTL, Host: host, Port: port,
+	})
+}
+
 // Start opens the database, loads the PKI and serves the API until ctx ends.
 func Start(ctx context.Context, o Options) (*Controller, error) {
 	if o.Clock == nil {
@@ -71,11 +78,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		return nil, fmt.Errorf("listening on %s: %w", cfg.Listen, err)
 	}
 
-	authority := pki.NewAuthority(pki.AuthorityConfig{
-		DB: db, CA: ca, Clock: o.Clock, IDs: domain.NewIDGenerator(o.Clock.Now, rand.Reader),
-		CertTTL: domain.Defaults().IdentityCertTTL, Host: host, Port: port,
-	})
-	srv := api.New(api.Config{Authority: authority, CA: ca, ServerCert: serverCert, Logger: o.Logger})
+	srv := api.New(api.Config{Authority: newAuthority(db, ca, o.Clock, host, port), CA: ca, ServerCert: serverCert, Logger: o.Logger})
 
 	c := &Controller{addr: ln.Addr(), done: make(chan struct{})}
 	go func() {

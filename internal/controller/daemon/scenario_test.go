@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -273,5 +274,159 @@ func TestScenario_ControllerIdentityTLS_CanjeAtomico(t *testing.T) {
 	clients, err := owner.Clients(t.Context())
 	if err != nil || len(clients) != 2 { // the owner and the single winner
 		t.Fatalf("clients = %d, %v", len(clients), err)
+	}
+}
+
+func TestInit_ConcurrentRunsLeaveTheWinnerIntact(t *testing.T) {
+	for range 5 {
+		p := newPaths(t)
+		addr := freeAddr(t)
+		const racers = 2
+		errs := make([]error, racers)
+		var wg sync.WaitGroup
+		for i := range racers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, errs[i] = daemon.Init(t.Context(), daemon.InitOptions{Paths: p, Advertise: addr, Listen: addr, OwnerName: "racer"})
+			}()
+		}
+		wg.Wait()
+
+		var winners int
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				winners++
+			case errors.Is(err, daemon.ErrInitInProgress), errors.Is(err, daemon.ErrAlreadyInitialized):
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}
+		if winners != 1 {
+			t.Fatalf("%d inits succeeded, want exactly 1 (%v)", winners, errs)
+		}
+
+		// Whatever the loser did, the winner's Controller still works.
+		start(t, p)
+		owner, err := client.Open(p.CredentialsDir())
+		if err != nil {
+			t.Fatalf("owner credentials: %v", err)
+		}
+		if _, err := owner.Clients(t.Context()); err != nil {
+			t.Fatalf("owner cannot use the Controller: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(p.DataDir, ".init.lock")); err == nil {
+			t.Error("the lock was left behind")
+		}
+	}
+}
+
+func TestInit_AnExistingLockBelongsToSomeoneElse(t *testing.T) {
+	p := newPaths(t)
+	if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(p.DataDir, ".init.lock")
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := daemon.Init(t.Context(), daemon.InitOptions{Paths: p, Advertise: "127.0.0.1:7443"})
+	if !errors.Is(err, daemon.ErrInitInProgress) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Lstat(lock); err != nil {
+		t.Errorf("init removed a lock it did not create: %v", err)
+	}
+	if _, err := os.Lstat(p.ConfigDir); err == nil {
+		t.Error("init created the config directory without holding the lock")
+	}
+}
+
+func TestInit_RefusalAndFailureOnlyRemoveWhatInitCreated(t *testing.T) {
+	// Pre-existing server key: init refuses and leaves it, and the directories around it.
+	p := newPaths(t)
+	if err := os.MkdirAll(p.PKIDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	serverKey := filepath.Join(p.PKIDir(), "server.key")
+	if err := os.WriteFile(serverKey, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := daemon.Init(t.Context(), daemon.InitOptions{Paths: p, Advertise: "127.0.0.1:7443"})
+	if !errors.Is(err, daemon.ErrAlreadyInitialized) {
+		t.Fatalf("err = %v", err)
+	}
+	if got, err := os.ReadFile(serverKey); err != nil || string(got) != "mine" { //nolint:gosec // test path
+		t.Fatalf("the server key was touched: %q, %v", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(p.DataDir, ".init.lock")); err == nil {
+		t.Error("the lock was left behind")
+	}
+
+	// A failure midway keeps a data directory that existed before.
+	p = newPaths(t)
+	if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(p.DataDir, "keep.txt")
+	if err := os.WriteFile(keep, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(p.ConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p.ConfigDir, 0o500); err != nil { //nolint:gosec // a read-only directory is the failure under test
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p.ConfigDir, 0o700) }) //nolint:gosec // restoring the test directory
+	if _, err := daemon.Init(t.Context(), daemon.InitOptions{Paths: p, Advertise: "127.0.0.1:7443"}); err == nil {
+		t.Skip("running as a user that ignores directory modes")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("init removed a file it did not create: %v", err)
+	}
+	if entries, _ := os.ReadDir(p.DataDir); len(entries) != 1 {
+		t.Errorf("data directory holds %d entries after the failure, want only keep.txt", len(entries))
+	}
+}
+
+func TestInit_RefusesDirectoriesOpenToOthers(t *testing.T) {
+	for _, which := range []string{"data", "config"} {
+		p := newPaths(t)
+		open := p.DataDir
+		if which == "config" {
+			open = p.ConfigDir
+		}
+		if err := os.MkdirAll(open, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(open, 0o755); err != nil { //nolint:gosec // the unsafe mode is the point of the test
+			t.Fatal(err)
+		}
+		_, err := daemon.Init(t.Context(), daemon.InitOptions{Paths: p, Advertise: "127.0.0.1:7443"})
+		if !errors.Is(err, daemon.ErrUnsafeDirectory) || !strings.Contains(err.Error(), "chmod 700") {
+			t.Errorf("%s dir 0755: err = %v", which, err)
+		}
+		if entries, _ := os.ReadDir(open); len(entries) != 0 {
+			t.Errorf("%s dir 0755: init wrote %d entries into it", which, len(entries))
+		}
+	}
+}
+
+func TestInit_TheDatabaseIsPrivate(t *testing.T) {
+	p := newPaths(t)
+	initController(t, p)
+	if got := mode(t, p.DatabaseFile()); got != 0o600 {
+		t.Errorf("database mode %04o, want 0600", got)
+	}
+	start(t, p) // a running Controller has the -wal and -shm files open
+	for _, side := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(p.DatabaseFile() + side); err != nil {
+			continue
+		}
+		if got := mode(t, p.DatabaseFile()+side); got != 0o600 {
+			t.Errorf("%s mode %04o, want 0600", side, got)
+		}
 	}
 }
