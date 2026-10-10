@@ -123,3 +123,61 @@ func TestCleanName(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadCARefusesAnUnsafeKeyOrDirectory(t *testing.T) {
+	saved := func(t *testing.T) string {
+		t.Helper()
+		dir := filepath.Join(t.TempDir(), "pki")
+		ca, _ := NewCA(time.Now())
+		if err := ca.Save(dir); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	t.Run("a private CA loads", func(t *testing.T) {
+		if _, err := LoadCA(saved(t)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("a key open to others", func(t *testing.T) {
+		dir := saved(t)
+		if err := os.Chmod(filepath.Join(dir, "ca.key"), 0o640); err != nil { //nolint:gosec // the point is to loosen it
+			t.Fatal(err)
+		}
+		if _, err := LoadCA(dir); err == nil {
+			t.Fatal("loaded a group-readable key")
+		}
+	})
+	t.Run("a directory open to others", func(t *testing.T) {
+		dir := saved(t)
+		if err := os.Chmod(dir, 0o750); err != nil { //nolint:gosec // the point is to loosen it
+			t.Fatal(err)
+		}
+		if _, err := LoadCA(dir); err == nil {
+			t.Fatal("loaded from a group-accessible directory")
+		}
+	})
+	t.Run("a symlinked key", func(t *testing.T) {
+		dir := saved(t)
+		moved := filepath.Join(t.TempDir(), "elsewhere.key")
+		if err := os.Rename(filepath.Join(dir, "ca.key"), moved); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(moved, filepath.Join(dir, "ca.key")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadCA(dir); err == nil {
+			t.Fatal("loaded a symlinked key")
+		}
+	})
+	t.Run("a symlinked directory", func(t *testing.T) {
+		dir := saved(t)
+		link := filepath.Join(t.TempDir(), "pki")
+		if err := os.Symlink(dir, link); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadCA(link); err == nil {
+			t.Fatal("loaded through a symlinked directory")
+		}
+	})
+}

@@ -93,8 +93,16 @@ func (ca *CA) Save(dir string) error {
 	return atomicfile.Write(filepath.Join(dir, caCertFile), ca.CertPEM(), secretFilePerms)
 }
 
-// LoadCA reads the CA saved by Save.
+// LoadCA reads the CA saved by Save. It refuses a pki directory or a CA key
+// that is a symlink or readable by others: whoever can read the key can mint
+// identities.
 func LoadCA(dir string) (*CA, error) {
+	if err := requirePrivate(dir, secretDirPerms, true); err != nil {
+		return nil, err
+	}
+	if err := requirePrivate(filepath.Join(dir, caKeyFile), secretFilePerms, false); err != nil {
+		return nil, err
+	}
 	cert, err := readCert(filepath.Join(dir, caCertFile))
 	if err != nil {
 		return nil, err
@@ -111,6 +119,25 @@ func LoadCA(dir string) (*CA, error) {
 		return nil, errors.New("pki: CA certificate is not a CA")
 	}
 	return &CA{Cert: cert, Key: key}, nil
+}
+
+// requirePrivate fails unless path is a real (not symlinked) directory or
+// regular file whose permission bits are within limit.
+func requirePrivate(path string, limit os.FileMode, dir bool) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("pki: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("pki: %s is a symlink", path)
+	}
+	if info.IsDir() != dir {
+		return fmt.Errorf("pki: %s is not the expected kind of file", path)
+	}
+	if extra := info.Mode().Perm() &^ limit; extra != 0 {
+		return fmt.Errorf("pki: %s has mode %04o; it must be at most %04o", path, info.Mode().Perm(), limit)
+	}
+	return nil
 }
 
 // Exists reports whether any PKI file (CA or server certificate) is present in dir.
