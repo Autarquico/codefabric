@@ -97,7 +97,7 @@ func newRepo(t *testing.T) *repo {
 
 func (r *repo) git(args ...string) string {
 	r.t.Helper()
-	cmd := exec.CommandContext(r.t.Context(), "git", append([]string{"-C", r.dir,
+	cmd := exec.CommandContext(r.t.Context(), "git", append([]string{"-C", r.dir, //nolint:gosec // test helper: fixed git options, arguments from the test
 		"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

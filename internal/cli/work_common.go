@@ -24,10 +24,6 @@ func addProjectFlag(cmd *cobra.Command, usage string) {
 	cmd.Flags().String(flagProject, "", usage)
 }
 
-func addRequestIDFlag(cmd *cobra.Command) {
-	cmd.Flags().String(flagRequestID, "", "idempotency key: repeating the command with it creates nothing twice")
-}
-
 // refScope is the Project that narrows a name more than one Project has
 // (§3.13): --project, else the Project of the working directory if it has one.
 func refScope(cmd *cobra.Command, c *client.Client) string {

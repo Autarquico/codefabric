@@ -30,11 +30,24 @@ func TestProjectsTasksRunsApi_WorkRoutesAreForClientsOnly(t *testing.T) {
 	owner := tc.httpClientFor(tc.ownerDir)
 
 	routes := []struct{ method, path string }{
-		{"POST", "/v1/projects"}, {"GET", "/v1/projects"}, {"GET", "/v1/projects/x"}, {"PATCH", "/v1/projects/x"},
-		{"POST", "/v1/tasks"}, {"GET", "/v1/tasks"}, {"GET", "/v1/tasks/x"}, {"PATCH", "/v1/tasks/x"},
-		{"POST", "/v1/tasks/x/cancel"}, {"POST", "/v1/tasks/x/complete"}, {"POST", "/v1/tasks/x/archive"},
-		{"POST", "/v1/tasks/x/defer"}, {"POST", "/v1/tasks/x/resume"}, {"POST", "/v1/tasks/x/move"},
-		{"GET", "/v1/runs"}, {"GET", "/v1/runs/x"}, {"POST", "/v1/runs/x/fork"}, {"POST", "/v1/runs/x/promote"},
+		{"POST", "/v1/projects"},
+		{"GET", "/v1/projects"},
+		{"GET", "/v1/projects/x"},
+		{"PATCH", "/v1/projects/x"},
+		{"POST", "/v1/tasks"},
+		{"GET", "/v1/tasks"},
+		{"GET", "/v1/tasks/x"},
+		{"PATCH", "/v1/tasks/x"},
+		{"POST", "/v1/tasks/x/cancel"},
+		{"POST", "/v1/tasks/x/complete"},
+		{"POST", "/v1/tasks/x/archive"},
+		{"POST", "/v1/tasks/x/defer"},
+		{"POST", "/v1/tasks/x/resume"},
+		{"POST", "/v1/tasks/x/move"},
+		{"GET", "/v1/runs"},
+		{"GET", "/v1/runs/x"},
+		{"POST", "/v1/runs/x/fork"},
+		{"POST", "/v1/runs/x/promote"},
 		{"GET", "/v1/resolve?kind=task&ref=x"},
 	}
 	for _, r := range routes {
@@ -107,7 +120,7 @@ func TestProjectsTasksRunsApi_RoundTripThroughTheSDK(t *testing.T) {
 	}
 }
 
-func TestScenario_ProjectsTasksRunsApi_OperacionesFuturas_API(t *testing.T) {
+func TestProjectsTasksRunsApi_FutureOperationsAnswerNotImplemented(t *testing.T) {
 	tc := newController(t, time.Now())
 	ctx := t.Context()
 

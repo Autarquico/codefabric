@@ -80,7 +80,7 @@ func TestCreateTask_ValidatesWhatItFreezes(t *testing.T) {
 	}
 }
 
-func TestScenario_ProjectsTasksRunsApi_UnicidadDeNombre_App(t *testing.T) {
+func TestUniqueNames_PerProjectAndReleasedByArchiving(t *testing.T) {
 	e := newEnv(t)
 	e.project("backend")
 	e.project("frontend")
@@ -216,7 +216,7 @@ func TestWorkflowAndEnvironmentReferencesAreNotImplementedYet(t *testing.T) {
 	}
 }
 
-func TestScenario_ProjectsTasksRunsApi_Congelacion_App(t *testing.T) {
+func TestFreezing_ChangedDefaultsDoNotMoveAQueuedRunsDigest(t *testing.T) {
 	e := newEnv(t)
 	e.project("backend")
 	first := e.mustTask("backend", "x")

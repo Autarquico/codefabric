@@ -1,7 +1,11 @@
 package app_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -9,7 +13,6 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app"
-	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -48,8 +51,11 @@ func newEnv(t *testing.T) *env {
 
 func (e *env) newClient(name string) pki.Session {
 	e.t.Helper()
-	_, csr, err := client.GenerateKeyAndCSR()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	must(e.t, err)
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	must(e.t, err)
+	csr := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}))
 	joined, err := e.authority.BootstrapOwner(e.t.Context(), csr, name)
 	must(e.t, err)
 	s, err := joined.Session()
