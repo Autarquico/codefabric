@@ -39,7 +39,8 @@ func newInitCmd() *cobra.Command {
 				advertise = defaultAdvertise()
 			}
 			if name == "" {
-				name = hostnameOr("owner")
+				hostname, _ := os.Hostname()
+				name = config.MachineName(hostname, "owner")
 			}
 			res, err := Init(cmd.Context(), InitOptions{Paths: paths, Advertise: advertise, Listen: listen, OwnerName: name})
 			if err != nil {
@@ -55,7 +56,7 @@ func newInitCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&advertise, "advertise", "", "host:port clients dial; its host goes into the server certificate (default <hostname>:"+defaultPort+")")
 	cmd.Flags().StringVar(&listen, "listen", "", "address to bind (default 0.0.0.0:<advertised port>)")
-	cmd.Flags().StringVar(&name, "name", "", "name for the owner's machine (default: hostname)")
+	cmd.Flags().StringVar(&name, "name", "", "name for the owner's machine (default: first label of the hostname)")
 	return cmd
 }
 

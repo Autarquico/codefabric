@@ -25,6 +25,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/controller/api"
+	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -522,7 +523,7 @@ func TestControllerIdentityTLS_RenewNeedsACertificateThatIsValidAtCommit(t *test
 
 		owner, err := client.Describe(tc.ownerDir)
 		must(t, err)
-		_, err = tc.authority.Renew(t.Context(), domain.Principal{ID: domain.ID(owner.IdentityID), Kind: domain.KindClient}, presented, newCSR(t))
+		_, err = tc.authority.Renew(t.Context(), sessionOf(owner.IdentityID, presented), newCSR(t))
 		wantCode(t, err, domain.CodeUnauthenticated)
 	})
 
@@ -535,7 +536,7 @@ func TestControllerIdentityTLS_RenewNeedsACertificateThatIsValidAtCommit(t *test
 				tc.clock.Now().Add(-time.Second).UnixNano(), owner.IdentityID)
 			return err
 		}))
-		_, err = tc.authority.Renew(t.Context(), domain.Principal{ID: domain.ID(owner.IdentityID), Kind: domain.KindClient}, certOf(t, tc.ownerDir), newCSR(t))
+		_, err = tc.authority.Renew(t.Context(), sessionOf(owner.IdentityID, certOf(t, tc.ownerDir)), newCSR(t))
 		wantCode(t, err, domain.CodeUnauthenticated)
 	})
 }
@@ -699,5 +700,120 @@ func TestControllerIdentityTLS_ExpiredClientCanBeRevokedEvenIfOnlyOneIsUsable(t 
 	must(t, tc.owner.RemoveClient(t.Context(), laptopID.IdentityID))
 	if _, err := tc.owner.Clients(t.Context()); err != nil {
 		t.Fatalf("the owner lost access: %v", err)
+	}
+}
+
+func sessionOf(id string, cert *x509.Certificate) pki.Session {
+	return pki.Session{Principal: domain.Principal{ID: domain.ID(id), Kind: domain.KindClient}, Certificate: cert}
+}
+
+func (tc *testController) sessionFor(dir string) pki.Session {
+	tc.t.Helper()
+	s, err := tc.authority.Authenticate(tc.t.Context(), certOf(tc.t, dir))
+	must(tc.t, err)
+	return s
+}
+
+// holdWriter occupies the database writer until the returned release is
+// called, and waits long enough for a concurrent operation to queue behind it.
+func (tc *testController) holdWriter() (release func()) {
+	tc.t.Helper()
+	held, free, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = tc.db.WithTx(tc.t.Context(), func(*store.Tx) error {
+			close(held)
+			<-free
+			return nil
+		})
+	}()
+	<-held
+	return func() { close(free); <-done }
+}
+
+// queueBehindWriter runs op while the writer is held, moves the Authority's
+// clock by advance once op has had time to queue, then releases the writer.
+func (tc *testController) queueBehindWriter(advance time.Duration, op func() error) error {
+	tc.t.Helper()
+	release := tc.holdWriter()
+	result := make(chan error, 1)
+	go func() { result <- op() }()
+	time.Sleep(200 * time.Millisecond)
+	tc.clock.Advance(advance)
+	release()
+	return <-result
+}
+
+func (tc *testController) countRows(query string) (n int) {
+	tc.t.Helper()
+	must(tc.t, tc.db.WithTx(tc.t.Context(), func(tx *store.Tx) error {
+		return tx.QueryRow(tc.t.Context(), query).Scan(&n)
+	}))
+	return n
+}
+
+func TestControllerIdentityTLS_RenewReadsTheClockAfterTakingTheWriter(t *testing.T) {
+	tc := newController(t, time.Now())
+	session := tc.sessionFor(tc.ownerDir)
+	before, err := tc.authority.Clients(t.Context())
+	must(t, err)
+
+	err = tc.queueBehindWriter(domain.Defaults().IdentityCertTTL+time.Hour, func() error {
+		_, err := tc.authority.Renew(t.Context(), session, newCSR(t))
+		return err
+	})
+	wantCode(t, err, domain.CodeUnauthenticated)
+
+	after, err := tc.authority.Clients(t.Context())
+	must(t, err)
+	if len(after) != 1 || after[0].CertSerial != before[0].CertSerial {
+		t.Errorf("a certificate was issued: %+v -> %+v", before, after)
+	}
+}
+
+func TestControllerIdentityTLS_JoinReadsTheClockAfterTakingTheWriter(t *testing.T) {
+	tc := newController(t, time.Now())
+	invite, _, err := tc.authority.CreateToken(t.Context(), tc.sessionFor(tc.ownerDir), domain.KindClient, time.Minute)
+	must(t, err)
+
+	err = tc.queueBehindWriter(2*time.Minute, func() error {
+		_, err := tc.authority.Join(t.Context(), invite.Token, newCSR(t), "late")
+		return err
+	})
+	wantCode(t, err, domain.CodeUnauthenticated)
+
+	if n := tc.countRows(`SELECT count(*) FROM join_tokens WHERE used_at IS NOT NULL`); n != 0 {
+		t.Errorf("%d tokens consumed", n)
+	}
+	if n := tc.countRows(`SELECT count(*) FROM identities`); n != 1 {
+		t.Errorf("%d identities, want only the owner", n)
+	}
+}
+
+func TestControllerIdentityTLS_ARevokedIssuerCannotCreateInvitations(t *testing.T) {
+	tc := newController(t, time.Now())
+	_, dir := tc.enroll("laptop")
+	laptop := tc.sessionFor(dir) // authenticated before the revocation
+	tokens := tc.countRows(`SELECT count(*) FROM join_tokens`)
+	must(t, tc.owner.RemoveClient(t.Context(), string(laptop.Principal.ID)))
+
+	_, _, err := tc.authority.CreateToken(t.Context(), laptop, domain.KindClient, time.Hour)
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if n := tc.countRows(`SELECT count(*) FROM join_tokens`); n != tokens {
+		t.Errorf("%d tokens, want %d", n, tokens)
+	}
+}
+
+func TestControllerIdentityTLS_ARevokedClientCannotRevokeOthers(t *testing.T) {
+	tc := newController(t, time.Now())
+	_, dir := tc.enroll("laptop")
+	laptop := tc.sessionFor(dir)
+	owner, err := client.Describe(tc.ownerDir)
+	must(t, err)
+	must(t, tc.owner.RemoveClient(t.Context(), string(laptop.Principal.ID)))
+
+	wantCode(t, tc.authority.RevokeClient(t.Context(), laptop, domain.ID(owner.IdentityID)), domain.CodeUnauthenticated)
+	if n := tc.countRows(`SELECT count(*) FROM identities WHERE revoked_at IS NULL`); n != 1 {
+		t.Errorf("%d usable identities, want the owner only", n)
 	}
 }

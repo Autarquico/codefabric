@@ -59,7 +59,7 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request, c caller) error {
 	if err := decodeBody(w, r, &req); err != nil {
 		return err
 	}
-	joined, err := s.authority.Renew(r.Context(), c.Principal, c.Presented, req.CSR)
+	joined, err := s.authority.Renew(r.Context(), c.Session, req.CSR)
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request, c caller) e
 		return err
 	}
 	ttl := secondsToDuration(req.TTLSeconds)
-	invite, expires, err := s.authority.CreateToken(r.Context(), c.Principal, domain.Kind(req.Kind), ttl)
+	invite, expires, err := s.authority.CreateToken(r.Context(), c.Session, domain.Kind(req.Kind), ttl)
 	if err != nil {
 		return err
 	}
@@ -104,7 +104,7 @@ func (s *Server) removeClient(w http.ResponseWriter, r *http.Request, c caller) 
 	if kind, _, err := domain.ParseID(id); err != nil || kind != domain.KindClient {
 		return domain.NewError(domain.CodeNotFound, "client not found", nil)
 	}
-	if err := s.authority.RevokeClient(r.Context(), c.Principal, domain.ID(id)); err != nil {
+	if err := s.authority.RevokeClient(r.Context(), c.Session, domain.ID(id)); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

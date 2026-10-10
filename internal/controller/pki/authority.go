@@ -56,9 +56,10 @@ func NewAuthority(c AuthorityConfig) *Authority {
 	}
 }
 
-// CreateToken issues a single-use join token. The only copy of the token is in
-// the returned invitation.
-func (a *Authority) CreateToken(ctx context.Context, by domain.Principal, kind domain.Kind, ttl time.Duration) (v1.Invite, time.Time, error) {
+// CreateToken issues a single-use join token on behalf of an authenticated
+// client, who is checked again inside the transaction. The only copy of the
+// token is in the returned invitation.
+func (a *Authority) CreateToken(ctx context.Context, by Session, kind domain.Kind, ttl time.Duration) (v1.Invite, time.Time, error) {
 	if kind != domain.KindClient && kind != domain.KindWorker {
 		return v1.Invite{}, time.Time{}, invalidRequest("kind must be client or worker")
 	}
@@ -70,14 +71,18 @@ func (a *Authority) CreateToken(ctx context.Context, by domain.Principal, kind d
 		return v1.Invite{}, time.Time{}, err
 	}
 	hash := hashToken(token)
-	now := a.clock.Now()
-	expires := now.Add(ttl)
+	var expires time.Time
 	err = a.db.WithTx(ctx, func(tx *store.Tx) error {
-		if err := tx.InsertJoinToken(ctx, hash, kind, string(by.ID), now, expires); err != nil {
+		now := a.clock.Now()
+		if _, err := a.requireClient(ctx, tx, by, now); err != nil {
+			return err
+		}
+		expires = now.Add(ttl)
+		if err := tx.InsertJoinToken(ctx, hash, kind, string(by.Principal.ID), now, expires); err != nil {
 			return err
 		}
 		return tx.AppendAudit(ctx, store.AuditEntry{
-			ActorKind: by.ActorKind(), ActorID: string(by.ID), Action: "token.created",
+			ActorKind: by.Principal.ActorKind(), ActorID: string(by.Principal.ID), Action: "token.created",
 			ResourceKind: "join_token", ResourceID: hash[:12], Result: "ok",
 			After: map[string]any{"kind": kind, "expires_at": expires},
 		})
@@ -112,9 +117,9 @@ func (a *Authority) Join(ctx context.Context, token, csrPEM, name string) (Joine
 		return Joined{}, errBadToken()
 	}
 	hash := hashToken(token)
-	now := a.clock.Now()
 	var out Joined
 	err = a.db.WithTx(ctx, func(tx *store.Tx) error {
+		now := a.clock.Now()
 		kind, ok, err := tx.ConsumeJoinToken(ctx, hash, now)
 		if err != nil {
 			return err
@@ -185,27 +190,22 @@ func (a *Authority) createIdentity(ctx context.Context, tx *store.Tx, kind domai
 
 // Renew replaces the certificate of the authenticated identity. presented is
 // the certificate of the request; it must be the identity's current one, or
-// its previous one within the grace period. Everything is checked again inside
-// the transaction against a.clock, so a certificate that expired, or an
+// its previous one within the grace period. The caller is checked again inside
+// the transaction (see requireCaller), so a certificate that expired, or an
 // identity revoked, between authentication and commit does not renew.
-func (a *Authority) Renew(ctx context.Context, p domain.Principal, presented *x509.Certificate, csrPEM string) (Joined, error) {
+func (a *Authority) Renew(ctx context.Context, s Session, csrPEM string) (Joined, error) {
 	csr, err := ParseCSR(csrPEM)
 	if err != nil {
 		return Joined{}, err
 	}
-	presentedSerial := presented.SerialNumber.Text(16)
-	now := a.clock.Now()
+	p := s.Principal
+	presentedSerial := s.Certificate.SerialNumber.Text(16)
 	var out Joined
 	err = a.db.WithTx(ctx, func(tx *store.Tx) error {
-		ident, err := tx.IdentityByID(ctx, p.ID)
-		if errors.Is(err, store.ErrNotFound) {
-			return errNotAuthenticated()
-		}
+		now := a.clock.Now()
+		ident, err := a.requireCaller(ctx, tx, s, now, true)
 		if err != nil {
 			return err
-		}
-		if !validAt(presented, now) || !ident.UsableAt(now) {
-			return errNotAuthenticated()
 		}
 		der, serial, notAfter, err := a.ca.signClient(csr, ident.ID, now, a.certTTL)
 		if err != nil {
@@ -243,9 +243,12 @@ func validAt(cert *x509.Certificate, now time.Time) bool {
 // The last usable client cannot be revoked: nobody would be left to administer
 // the Controller. Revoking oneself is fine while others remain, and a client
 // that is already expired is not usable, so it can always be revoked.
-func (a *Authority) RevokeClient(ctx context.Context, by domain.Principal, id domain.ID) error {
-	now := a.clock.Now()
+func (a *Authority) RevokeClient(ctx context.Context, by Session, id domain.ID) error {
 	return a.db.WithTx(ctx, func(tx *store.Tx) error {
+		now := a.clock.Now()
+		if _, err := a.requireClient(ctx, tx, by, now); err != nil {
+			return err
+		}
 		ident, err := tx.IdentityByID(ctx, id)
 		if errors.Is(err, store.ErrNotFound) || (err == nil && ident.Kind != domain.KindClient) {
 			return domain.NewError(domain.CodeNotFound, "client not found", map[string]any{"id": string(id)})
@@ -269,7 +272,7 @@ func (a *Authority) RevokeClient(ctx context.Context, by domain.Principal, id do
 			return err
 		}
 		return tx.AppendAudit(ctx, store.AuditEntry{
-			ActorKind: by.ActorKind(), ActorID: string(by.ID), Action: "identity.revoked",
+			ActorKind: by.Principal.ActorKind(), ActorID: string(by.Principal.ID), Action: "identity.revoked",
 			ResourceKind: "identity", ResourceID: string(id), Result: "ok",
 		})
 	})
@@ -283,8 +286,61 @@ func (a *Authority) Clients(ctx context.Context) ([]store.Identity, error) {
 // Session is an authenticated request. Superseded is true when the certificate
 // is the one a renewal replaced, still within its grace: it may only renew.
 type Session struct {
-	Principal  domain.Principal
-	Superseded bool
+	Principal   domain.Principal
+	Certificate *x509.Certificate // the certificate presented on the request
+	Superseded  bool
+}
+
+// Session builds the session of an identity that has just been issued a
+// certificate, for callers that act as it without a TLS request (init).
+func (j Joined) Session() (Session, error) {
+	cert, err := parseCertPEM(j.Certificate)
+	if err != nil {
+		return Session{}, err
+	}
+	kind, _, err := domain.ParseID(string(j.ID))
+	if err != nil {
+		return Session{}, err
+	}
+	return Session{Principal: domain.Principal{ID: j.ID, Kind: kind}, Certificate: cert}, nil
+}
+
+// requireCaller is the authorisation decision of every mutating operation:
+// inside the transaction, with the instant read after the writer was acquired,
+// the identity must exist, be usable, and the session's certificate must be in
+// validity and be the identity's current one (or, only when allowSuperseded,
+// its previous one within the grace). Authenticate is just a per-request filter.
+func (a *Authority) requireCaller(ctx context.Context, tx *store.Tx, s Session, now time.Time, allowSuperseded bool) (store.Identity, error) {
+	ident, err := tx.IdentityByID(ctx, s.Principal.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Identity{}, errNotAuthenticated()
+	}
+	if err != nil {
+		return store.Identity{}, err
+	}
+	if s.Certificate == nil || !validAt(s.Certificate, now) || !ident.UsableAt(now) ||
+		ident.Kind != s.Principal.Kind || string(ident.ID) != s.Certificate.Subject.CommonName {
+		return store.Identity{}, errNotAuthenticated()
+	}
+	switch serial := s.Certificate.SerialNumber.Text(16); {
+	case ident.CertSerial == serial:
+	case allowSuperseded && ident.PreviousSerial == serial && now.Before(ident.PreviousValidUntil):
+	default:
+		return store.Identity{}, errNotAuthenticated()
+	}
+	return ident, nil
+}
+
+// requireClient is requireCaller for operations only clients may perform.
+func (a *Authority) requireClient(ctx context.Context, tx *store.Tx, s Session, now time.Time) (store.Identity, error) {
+	ident, err := a.requireCaller(ctx, tx, s, now, false)
+	if err != nil {
+		return ident, err
+	}
+	if ident.Kind != domain.KindClient {
+		return ident, domain.NewError(domain.CodePolicyDenied, "this identity may not do this", nil)
+	}
+	return ident, nil
 }
 
 // Authenticate maps a certificate that already passed TLS verification to a
@@ -309,7 +365,7 @@ func (a *Authority) Authenticate(ctx context.Context, cert *x509.Certificate) (S
 	if !ident.UsableAt(now) || string(ident.ID) != cert.Subject.CommonName {
 		return Session{}, errNotAuthenticated()
 	}
-	session := Session{Principal: domain.Principal{ID: ident.ID, Kind: ident.Kind}}
+	session := Session{Principal: domain.Principal{ID: ident.ID, Kind: ident.Kind}, Certificate: cert}
 	if ident.CertSerial != serial {
 		if !now.Before(ident.PreviousValidUntil) {
 			return Session{}, errNotAuthenticated()

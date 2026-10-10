@@ -3242,6 +3242,7 @@ Recortes de MVP: máquina de estados reducida en Fase 1; overlays, `merged` y sy
 - §3.13: una ref vacía nunca resuelve (`CF_NOT_FOUND`).
 - §16.6 / §20.1: las mutaciones de identidad (`token`, `join`, `renew`, `revoke`) se auditan, pero no emiten eventos de dominio (§20.1 no los define) ni usan `request_id`: sus respuestas llevan secretos o certificados y no se guardan para reproducirlas. La idempotencia de `renew` la da el periodo de gracia: el certificado sustituido puede renovar de nuevo durante 10 minutos (solo `POST /v1/identity/renew`; revocar la anula), de modo que una respuesta perdida se recupera repitiendo `cf client renew`.
 - §16.6: el certificado de servidor se renueva en caliente: el Controller lo revisa cada 12 h y, con menos de 30 días de vigencia, emite y publica uno nuevo sin reiniciar; las conexiones abiertas conservan el anterior.
+- §16.6: las decisiones de autorización y caducidad de las mutaciones de identidad (`token`, `join`, `renew`, `revoke`) se toman dentro de la transacción, con el reloj leído después de adquirir el escritor y revalidando al caller (identidad existente, no revocada, certificado en vigencia y con el serial actual; `renew` admite además el anterior dentro de la gracia); `Authenticate` es solo un filtro por petición.
 
 ## Apéndice C — Decisiones
 

@@ -152,8 +152,11 @@ func Init(ctx context.Context, o InitOptions) (_ InitResult, err error) {
 		return InitResult{}, err
 	}
 
-	ownerPrincipal := domain.Principal{ID: owner.ID, Kind: domain.KindClient}
-	invite, until, err := authority.CreateToken(ctx, ownerPrincipal, domain.KindClient, firstInviteTTL)
+	ownerSession, err := owner.Session()
+	if err != nil {
+		return InitResult{}, err
+	}
+	invite, until, err := authority.CreateToken(ctx, ownerSession, domain.KindClient, firstInviteTTL)
 	if err != nil {
 		return InitResult{}, err
 	}

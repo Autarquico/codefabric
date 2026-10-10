@@ -71,6 +71,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+- Excepciones al reloj inyectable: el reloj real en la verificación TLS del cliente, los timeouts de red HTTP/TLS y el intervalo real del ticker del certificado de servidor (el instante de evaluación de este sí usa el reloj inyectado).
 
 ## Referencias
 

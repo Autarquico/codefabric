@@ -2,9 +2,9 @@ package api
 
 import (
 	"context"
-	"crypto/x509"
 	"net/http"
 
+	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -17,13 +17,9 @@ type route struct {
 type handlerFunc func(w http.ResponseWriter, r *http.Request, c caller) error
 
 // caller is the authenticated side of a request.
-type caller struct {
-	Principal domain.Principal
-	Presented *x509.Certificate // certificate presented on this request
-	// Superseded marks a certificate that a renewal replaced: within its grace
-	// it may call the renewal endpoint and nothing else.
-	Superseded bool
-}
+// Its Session's Superseded marks a certificate that a renewal replaced: within
+// its grace it may call the renewal endpoint and nothing else.
+type caller struct{ pki.Session }
 
 type callerKey struct{}
 
@@ -80,7 +76,7 @@ func (s *Server) authenticate(r *http.Request) (caller, error) {
 	if err != nil {
 		return caller{}, err
 	}
-	return caller{Principal: session.Principal, Presented: leaf, Superseded: session.Superseded}, nil
+	return caller{session}, nil
 }
 
 func contains(kinds []domain.Kind, k domain.Kind) bool {

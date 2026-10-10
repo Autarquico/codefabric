@@ -131,7 +131,7 @@ func requirePrivate(path string, limit os.FileMode, dir bool) error {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("pki: %s is a symlink", path)
 	}
-	if info.IsDir() != dir {
+	if info.IsDir() != dir || (!dir && !info.Mode().IsRegular()) {
 		return fmt.Errorf("pki: %s is not the expected kind of file", path)
 	}
 	if extra := info.Mode().Perm() &^ limit; extra != 0 {

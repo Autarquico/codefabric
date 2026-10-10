@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -180,4 +181,14 @@ func TestLoadCARefusesAnUnsafeKeyOrDirectory(t *testing.T) {
 			t.Fatal("loaded through a symlinked directory")
 		}
 	})
+}
+
+func TestRequirePrivateRefusesAFileThatIsNotRegular(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "ca.key")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := requirePrivate(fifo, secretFilePerms, false); err == nil {
+		t.Fatal("a FIFO passed as a private file")
+	}
 }

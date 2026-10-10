@@ -1,4 +1,4 @@
-package cli
+package config
 
 import (
 	"strings"
@@ -14,8 +14,8 @@ func TestMachineName_FitsTheControllerLimit(t *testing.T) {
 		"":                     "machine",
 		".local":               "machine",
 	} {
-		if got := machineName(hostname); got != want {
-			t.Errorf("machineName(%q) = %q, want %q", hostname, got, want)
+		if got := MachineName(hostname, "machine"); got != want {
+			t.Errorf("MachineName(%q) = %q, want %q", hostname, got, want)
 		}
 	}
 }
