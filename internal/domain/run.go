@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // RunState describes the execution of the harness (§11.3).
 type RunState string
@@ -18,6 +21,14 @@ const (
 	RunCancelled     RunState = "cancelled"
 	RunLost          RunState = "lost"
 )
+
+var runStates = []RunState{
+	RunQueued, RunPreparing, RunRunning, RunWaitingInput, RunCheckpointing,
+	RunSuspended, RunCompleted, RunFailed, RunCancelled, RunLost,
+}
+
+// IsValid reports whether s is one of the Run states.
+func (s RunState) IsValid() bool { return slices.Contains(runStates, s) }
 
 // IsTerminal reports whether the Run can never execute again (invariant 18).
 func (s RunState) IsTerminal() bool {
@@ -57,6 +68,14 @@ const (
 	EndInputRequired  EndReason = "input_required"
 )
 
+var endReasons = []EndReason{
+	EndExitCode, EndDeferred, EndMoved, EndDrained, EndBudget, EndLeaseLost,
+	EndAssignmentLost, EndWorktreeLost, EndCheckpoint, EndEnvironment, EndInputRequired,
+}
+
+// IsValid reports whether r is one of the end reasons named in the spec.
+func (r EndReason) IsValid() bool { return slices.Contains(endReasons, r) }
+
 // Runtime tracks the process session, independently of the Run state (§10.7).
 type Runtime string
 
@@ -66,6 +85,11 @@ const (
 	RuntimeActive  Runtime = "active"
 	RuntimeStopped Runtime = "stopped"
 )
+
+// IsValid reports whether r is one of the Runtime states.
+func (r Runtime) IsValid() bool {
+	return r == RuntimeNone || r == RuntimeActive || r == RuntimeStopped
+}
 
 // Publication tracks making the result available outside the Worker (§22.6).
 // PublicationNone only exists for Runs whose harness never started.
@@ -79,6 +103,15 @@ const (
 	PublicationFailed    Publication = "failed"
 )
 
+// IsValid reports whether p is one of the Publication states.
+func (p Publication) IsValid() bool {
+	switch p {
+	case PublicationNone, PublicationPending, PublicationPublished, PublicationFailed:
+		return true
+	}
+	return false
+}
+
 // Evaluation aggregates the required evaluators (§13).
 // EvaluationNone means there are no required evaluators.
 type Evaluation string
@@ -91,6 +124,15 @@ const (
 	EvaluationFailed  Evaluation = "failed"
 	EvaluationError   Evaluation = "error"
 )
+
+// IsValid reports whether e is one of the Evaluation states.
+func (e Evaluation) IsValid() bool {
+	switch e {
+	case EvaluationNone, EvaluationPending, EvaluationPassed, EvaluationFailed, EvaluationError:
+		return true
+	}
+	return false
+}
 
 // LeaseRef is the lease a Run was accepted under.
 type LeaseRef struct {

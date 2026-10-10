@@ -17,6 +17,22 @@ func ValidateRun(r Run) error {
 		violations = append(violations, fmt.Errorf("%w: "+format, append([]any{ErrRunInvariant}, args...)...))
 	}
 
+	if !r.State.IsValid() {
+		violate("unknown run state %q", r.State)
+	}
+	if !r.Publication.IsValid() {
+		violate("unknown publication %q", r.Publication)
+	}
+	if !r.Evaluation.IsValid() {
+		violate("unknown evaluation %q", r.Evaluation)
+	}
+	if !r.Runtime.IsValid() {
+		violate("unknown runtime %q", r.Runtime)
+	}
+	if r.EndReason != "" && !r.EndReason.IsValid() {
+		violate("unknown end reason %q", r.EndReason)
+	}
+
 	if r.State == RunCompleted && r.Publication == PublicationNone {
 		violate("completed run has publication none (§22.6)")
 	}

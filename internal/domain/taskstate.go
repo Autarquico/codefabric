@@ -124,7 +124,9 @@ func (f taskFacts) completionSatisfied() bool {
 				(r.Evaluation == EvaluationPassed || r.Evaluation == EvaluationNone)
 		})
 	case CompletionPromote:
-		return f.anyRun(func(r RunSummary) bool { return r.Promoted })
+		return f.anyRun(func(r RunSummary) bool {
+			return r.State == RunCompleted && r.Publication == PublicationPublished && r.Promoted
+		})
 	}
 	return false
 }

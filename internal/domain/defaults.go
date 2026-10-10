@@ -31,10 +31,12 @@ type DefaultValues struct {
 	IdempotencyTTL         time.Duration
 	ProjectRepoConfig      RepoConfig
 
-	BudgetWarnAt         float64
-	BudgetOnExceed       BudgetExceedAction
-	BudgetOnUnobservable BudgetUnobservableAction
-	PromoteStrategy      string
+	BudgetWarnAt               float64
+	BudgetOnExceed             BudgetExceedAction
+	BudgetOnExceedMaxDuration  BudgetExceedAction
+	BudgetOnUnobservable       BudgetUnobservableAction
+	PromoteStrategy            string
+	PromoteRequireConfirmation bool
 
 	ConfirmationTTL      time.Duration
 	IdentityCertTTL      time.Duration
@@ -76,10 +78,12 @@ func Defaults() DefaultValues {
 		IdempotencyTTL:         day,
 		ProjectRepoConfig:      RepoConfigAllow,
 
-		BudgetWarnAt:         0.8,
-		BudgetOnExceed:       BudgetBlockNew, // BudgetCheckpointStop for max_duration (§15)
-		BudgetOnUnobservable: BudgetUnobservableWarn,
-		PromoteStrategy:      "branch",
+		BudgetWarnAt:               0.8,
+		BudgetOnExceed:             BudgetBlockNew,
+		BudgetOnExceedMaxDuration:  BudgetCheckpointStop,
+		BudgetOnUnobservable:       BudgetUnobservableWarn,
+		PromoteStrategy:            "branch",
+		PromoteRequireConfirmation: true,
 
 		ConfirmationTTL:      day,
 		IdentityCertTTL:      90 * day,

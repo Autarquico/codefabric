@@ -77,7 +77,16 @@ func (s WorkerStatus) isConsistent() bool {
 	case WorkerJoining, WorkerOnline, WorkerDegraded, WorkerDraining, WorkerDrained:
 		return s.BeforeOffline == ""
 	case WorkerOffline:
-		return s.BeforeOffline != WorkerOffline && s.BeforeOffline != WorkerRemoved && s.BeforeOffline != ""
+		return s.BeforeOffline.canGoOffline()
+	}
+	return false
+}
+
+// canGoOffline: only the live states can go silent, and only they can return.
+func (s WorkerState) canGoOffline() bool {
+	switch s {
+	case WorkerJoining, WorkerOnline, WorkerDegraded, WorkerDraining, WorkerDrained:
+		return true
 	}
 	return false
 }

@@ -43,31 +43,121 @@ func runClasses() []RunSummary {
 	return classes
 }
 
-// taskClasses are the equivalence classes of a Task's own facts, without Runs.
-func taskClasses() []TaskView {
-	markers := []Markers{{}, {Cancelled: true}, {Archived: true}, {CompletedManually: true}}
-	completions := []Completion{CompletionFirstSuccess, CompletionPromote, CompletionManual}
-	actions := []RetryAction{RetryNone, RetryReschedule, RetryAsk}
-	var classes []TaskView
-	for _, m := range markers {
-		for _, completion := range completions {
-			for _, deps := range []bool{false, true} {
-				for _, autostart := range []bool{false, true} {
-					for _, onFailed := range actions {
-						for _, onLost := range actions {
-							for _, attempts := range []int{0, 1} {
-								classes = append(classes, TaskView{
-									Markers: m, Completion: completion, DepsSatisfied: deps, Autostart: autostart,
-									Retry: RetryView{OnFailed: onFailed, OnLost: onLost, AttemptsLeft: attempts},
-								})
-							}
-						}
-					}
-				}
-			}
+// representativeRunClasses is one Run per way the §11.7 predicates can tell
+// Runs apart: the 9 states other than completed, and completed split by what
+// publication, evaluation and promotion say about it.
+func representativeRunClasses() []RunSummary {
+	var classes []RunSummary
+	for _, state := range allRunStates {
+		if state != RunCompleted {
+			classes = append(classes, RunSummary{State: state, Publication: PublicationNone, Evaluation: EvaluationNone})
 		}
 	}
-	return classes
+	done := func(pub Publication, eval Evaluation, promoted bool) RunSummary {
+		return RunSummary{State: RunCompleted, Publication: pub, Evaluation: eval, Promoted: promoted}
+	}
+	return append(classes,
+		done(PublicationPublished, EvaluationPassed, true),
+		done(PublicationPublished, EvaluationPassed, false),
+		done(PublicationPublished, EvaluationNone, false),
+		done(PublicationPending, EvaluationNone, false),
+		done(PublicationFailed, EvaluationNone, false),
+		done(PublicationPublished, EvaluationPending, false),
+		done(PublicationPublished, EvaluationFailed, false),
+		done(PublicationPublished, EvaluationError, false),
+	)
+}
+
+func allMarkers() []Markers {
+	var all []Markers
+	for bits := range 8 {
+		all = append(all, Markers{Cancelled: bits&1 != 0, Archived: bits&2 != 0, CompletedManually: bits&4 != 0})
+	}
+	return all
+}
+
+// retryClasses cover every outcome of rows 11, 12 and 14 for failed and lost
+// Runs: ask, reschedule with and without attempts, and none.
+func retryClasses() []RetryView {
+	return []RetryView{
+		{OnFailed: RetryNone, OnLost: RetryNone, AttemptsLeft: 0},
+		{OnFailed: RetryAsk, OnLost: RetryReschedule, AttemptsLeft: 1},
+		{OnFailed: RetryReschedule, OnLost: RetryAsk, AttemptsLeft: 1},
+		{OnFailed: RetryReschedule, OnLost: RetryReschedule, AttemptsLeft: 0},
+	}
+}
+
+// expectedTaskState is a reference oracle written straight from the §11.7
+// table (and §22.6 for what counts as a success), not from the production code.
+func expectedTaskState(v TaskView) (TaskState, WaitingReason) {
+	var last RunSummary
+	for _, r := range v.Runs {
+		if r.ShortN > last.ShortN {
+			last = r
+		}
+	}
+	some := func(pred func(RunSummary) bool) bool {
+		for _, r := range v.Runs {
+			if pred(r) {
+				return true
+			}
+		}
+		return false
+	}
+	published := func(r RunSummary) bool { return r.State == RunCompleted && r.Publication == PublicationPublished }
+
+	policyMet := v.Markers.CompletedManually
+	switch v.Completion {
+	case CompletionFirstSuccess:
+		policyMet = policyMet || some(func(r RunSummary) bool {
+			return published(r) && (r.Evaluation == EvaluationPassed || r.Evaluation == EvaluationNone)
+		})
+	case CompletionPromote:
+		policyMet = policyMet || some(func(r RunSummary) bool { return published(r) && r.Promoted })
+	}
+	inProgress := some(func(r RunSummary) bool {
+		return r.State == RunPreparing || r.State == RunRunning || r.State == RunCheckpointing ||
+			(r.State == RunCompleted && (r.Evaluation == EvaluationPending || r.Publication == PublicationPending))
+	})
+	lastFailedOrLost := len(v.Runs) > 0 && (last.State == RunFailed || last.State == RunLost)
+	retry := v.Retry.OnFailed
+	if len(v.Runs) > 0 && last.State == RunLost {
+		retry = v.Retry.OnLost
+	}
+
+	switch {
+	case v.Markers.Archived:
+		return TaskArchived, WaitingNone
+	case v.Markers.Cancelled:
+		return TaskCancelled, WaitingNone
+	case policyMet:
+		return TaskCompleted, WaitingNone
+	case !v.DepsSatisfied:
+		return TaskBlocked, WaitingNone
+	case inProgress:
+		return TaskRunning, WaitingNone
+	case some(func(r RunSummary) bool { return r.State == RunWaitingInput }):
+		return TaskWaiting, WaitingInput
+	case some(func(r RunSummary) bool { return r.State == RunQueued }):
+		return TaskQueued, WaitingNone
+	case len(v.Runs) == 0 && v.Autostart:
+		return TaskQueued, WaitingNone
+	case len(v.Runs) == 0:
+		return TaskWaiting, WaitingStart
+	case last.State == RunSuspended:
+		return TaskWaiting, WaitingDeferred
+	case some(func(r RunSummary) bool { return r.State == RunCompleted }):
+		return TaskWaiting, WaitingReview
+	case lastFailedOrLost && retry == RetryAsk:
+		return TaskWaiting, WaitingDecision
+	case lastFailedOrLost && retry == RetryReschedule && v.Retry.AttemptsLeft > 0:
+		return TaskQueued, WaitingNone
+	case last.State == RunCancelled:
+		return TaskWaiting, WaitingDecision
+	case lastFailedOrLost:
+		return TaskFailed, WaitingNone
+	}
+	panic("expectedTaskState: the §11.7 table is exhaustive, nothing matched")
 }
 
 func derivedRow(v TaskView) (state TaskState, reason WaitingReason, row int, err error) {
@@ -102,31 +192,60 @@ func checkDerivation(t *testing.T, v TaskView) {
 	}
 }
 
+// TestScenario_DomainCore_TaskDerivationExhaustive crosses every marker
+// combination, completion policy, dependency/autostart/retry class with every
+// history of 0 to 3 Runs drawn from the representative Run classes, in every
+// order. Three Runs are enough because each §11.7 predicate is either
+// existential over the set of Runs or reads the last Run, so a history of
+// three holds the last Run plus two distinct existential witnesses, which is
+// the most any single predicate pair can need. Longer histories are covered by
+// the random test below. Each case must select a row and agree with the oracle.
 func TestScenario_DomainCore_TaskDerivationExhaustive(t *testing.T) {
-	runs, tasks := runClasses(), taskClasses()
+	classes := representativeRunClasses()
+	completions := []Completion{CompletionFirstSuccess, CompletionPromote, CompletionManual}
 	start := time.Now()
 	cases := 0
-	var history [2]RunSummary
-	for _, task := range tasks {
-		task.Runs = nil
-		checkDerivation(t, task)
+
+	check := func(v TaskView) {
+		checkDerivation(t, v)
+		wantState, wantReason := expectedTaskState(v)
+		gotState, gotReason, err := DeriveTaskState(v)
+		if err != nil || gotState != wantState || gotReason != wantReason {
+			t.Fatalf("DeriveTaskState = %s/%q, %v; oracle says %s/%q for %+v", gotState, gotReason, err, wantState, wantReason, v)
+		}
 		cases++
-		for _, a := range runs {
-			a.ShortN = 1
-			history[0] = a
-			task.Runs = history[:1]
-			checkDerivation(t, task)
-			cases++
-			for _, b := range runs {
-				b.ShortN = 2
-				history[1] = b
-				task.Runs = history[:2]
-				checkDerivation(t, task)
-				cases++
+	}
+	var history [3]RunSummary
+	shortNs := [3]uint64{1, 2, 3}
+	var walk func(v TaskView, depth, maxDepth int)
+	walk = func(v TaskView, depth, maxDepth int) {
+		if depth == maxDepth {
+			v.Runs = history[:depth]
+			check(v)
+			return
+		}
+		for _, class := range classes {
+			class.ShortN = shortNs[depth]
+			history[depth] = class
+			walk(v, depth+1, maxDepth)
+		}
+	}
+
+	for _, markers := range allMarkers() {
+		for _, completion := range completions {
+			for _, deps := range []bool{false, true} {
+				for _, autostart := range []bool{false, true} {
+					for _, retry := range retryClasses() {
+						view := TaskView{Markers: markers, Completion: completion, DepsSatisfied: deps, Autostart: autostart, Retry: retry}
+						for size := range 4 {
+							walk(view, 0, size)
+						}
+					}
+				}
 			}
 		}
 	}
-	t.Logf("%d Run classes x %d Task classes, %d cases in %v", len(runs), len(tasks), cases, time.Since(start))
+	t.Logf("%d Run classes, histories of 0-3 Runs: %d cases in %v", len(classes), cases, time.Since(start))
 }
 
 func TestTaskDerivation_LastRunIsTheHighestShortNWhateverTheSliceOrder(t *testing.T) {
@@ -325,7 +444,10 @@ func TestTaskRows_Golden(t *testing.T) {
 		{"row 1: archived marker", with(ready, func(v *TaskView) { v.Markers.Archived = true }), 1, TaskArchived, WaitingNone},
 		{"row 2: first_success met by a published Run without evaluators", with(ready, runs(completedRun(1, PublicationPublished, EvaluationNone))), 2, TaskCompleted, WaitingNone},
 		{"row 2: first_success met by a published Run that passed", with(ready, runs(completedRun(1, PublicationPublished, EvaluationPassed))), 2, TaskCompleted, WaitingNone},
-		{"row 2: promote met by a promoted Run", with(ready, both(runs(RunSummary{ShortN: 1, State: RunCompleted, Promoted: true}), func(v *TaskView) { v.Completion = CompletionPromote })), 2, TaskCompleted, WaitingNone},
+		{"row 2: promote met by a published, promoted Run", with(ready, both(runs(RunSummary{ShortN: 1, State: RunCompleted, Publication: PublicationPublished, Evaluation: EvaluationNone, Promoted: true}), func(v *TaskView) { v.Completion = CompletionPromote })), 2, TaskCompleted, WaitingNone},
+		{"row 4: promote with a promoted Run still publishing", with(ready, both(runs(RunSummary{ShortN: 1, State: RunCompleted, Publication: PublicationPending, Evaluation: EvaluationNone, Promoted: true}), func(v *TaskView) { v.Completion = CompletionPromote })), 4, TaskRunning, WaitingNone},
+		{"row 10: promote with a promoted Run whose publication failed", with(ready, both(runs(RunSummary{ShortN: 1, State: RunCompleted, Publication: PublicationFailed, Evaluation: EvaluationNone, Promoted: true}), func(v *TaskView) { v.Completion = CompletionPromote })), 10, TaskWaiting, WaitingReview},
+		{"row 10: promote with a promoted Run without publication", with(ready, both(runs(RunSummary{ShortN: 1, State: RunCompleted, Publication: PublicationNone, Evaluation: EvaluationNone, Promoted: true}), func(v *TaskView) { v.Completion = CompletionPromote })), 10, TaskWaiting, WaitingReview},
 		{"row 2: completed_manually marker", with(ready, func(v *TaskView) { v.Completion = CompletionManual; v.Markers.CompletedManually = true }), 2, TaskCompleted, WaitingNone},
 		{"row 3: a dependency is not completed", with(ready, func(v *TaskView) { v.DepsSatisfied = false }), 3, TaskBlocked, WaitingNone},
 		{"row 4: a Run is preparing", with(ready, runs(run(1, RunPreparing))), 4, TaskRunning, WaitingNone},

@@ -140,6 +140,7 @@ func TestWorkerTransitions_InconsistentBeforeOfflineIsInvalid(t *testing.T) {
 		{State: WorkerOffline, BeforeOffline: WorkerOffline},
 		{State: WorkerOffline, BeforeOffline: WorkerRemoved},
 		{State: WorkerOnline, BeforeOffline: WorkerDrained},
+		{State: WorkerOffline, BeforeOffline: "bogus"},
 	}
 	for _, status := range inconsistent {
 		for _, ev := range allWorkerEvents {

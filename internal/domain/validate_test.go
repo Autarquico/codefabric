@@ -32,7 +32,17 @@ func TestScenario_DomainCore_PublicationInvariant(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := ValidateRun(c.run)
+			run := c.run
+			if run.Runtime == "" {
+				run.Runtime = RuntimeNone
+			}
+			if run.Evaluation == "" {
+				run.Evaluation = EvaluationNone
+			}
+			if run.Publication == "" {
+				run.Publication = PublicationNone
+			}
+			err := ValidateRun(run)
 			switch {
 			case c.valid && err != nil:
 				t.Fatalf("ValidateRun = %v, want nil", err)
@@ -43,8 +53,44 @@ func TestScenario_DomainCore_PublicationInvariant(t *testing.T) {
 	}
 }
 
+func TestValidateRun_RejectsInvalidEnums(t *testing.T) {
+	valid := Run{State: RunRunning, Runtime: RuntimeActive, Publication: PublicationNone, Evaluation: EvaluationNone}
+	if err := ValidateRun(valid); err != nil {
+		t.Fatalf("baseline Run: %v", err)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*Run)
+	}{
+		{"zero Run", func(r *Run) { *r = Run{} }},
+		{"empty state", func(r *Run) { r.State = "" }},
+		{"unknown state", func(r *Run) { r.State = "paused" }},
+		{"empty publication", func(r *Run) { r.Publication = "" }},
+		{"unknown publication", func(r *Run) { r.Publication = "uploaded" }},
+		{"empty evaluation", func(r *Run) { r.Evaluation = "" }},
+		{"unknown evaluation", func(r *Run) { r.Evaluation = "maybe" }},
+		{"empty runtime", func(r *Run) { r.Runtime = "" }},
+		{"unknown runtime", func(r *Run) { r.Runtime = "zombie" }},
+		{"unknown end reason", func(r *Run) { r.EndReason = "boredom" }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			run := valid
+			c.mutate(&run)
+			if err := ValidateRun(run); !errors.Is(err, ErrRunInvariant) {
+				t.Fatalf("ValidateRun = %v, want ErrRunInvariant", err)
+			}
+		})
+	}
+	withReason := valid
+	withReason.EndReason = EndExitCode
+	if err := ValidateRun(withReason); err != nil {
+		t.Errorf("a known end reason must be accepted: %v", err)
+	}
+}
+
 func TestValidateRun_ReportsEveryViolation(t *testing.T) {
-	run := Run{State: RunCompleted, Publication: PublicationNone}
+	run := Run{State: RunCompleted, Runtime: RuntimeNone, Publication: PublicationNone, Evaluation: EvaluationNone}
 	err := ValidateRun(run)
 	var joined interface{ Unwrap() []error }
 	if !errors.As(err, &joined) || len(joined.Unwrap()) != 2 {
