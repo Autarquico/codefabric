@@ -2,7 +2,7 @@
 codename: codefabric
 title: Registro de Workers y heartbeats
 type: task
-status: active
+status: shipped
 priority: P0
 size: M
 issue: 9
