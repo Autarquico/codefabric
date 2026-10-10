@@ -14,7 +14,7 @@ func TestWrite_ReplacesContentWithTheRequestedModeAndLeavesNoTemporaryFile(t *te
 			t.Fatal(err)
 		}
 	}
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(path) //nolint:gosec // path is inside t.TempDir()
 	if err != nil || string(got) != "second" {
 		t.Fatalf("content = %q, %v", got, err)
 	}

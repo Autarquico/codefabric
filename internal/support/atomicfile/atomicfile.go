@@ -1,3 +1,4 @@
+// Package atomicfile writes files so that a crash never leaves them half written.
 package atomicfile
 
 import (
