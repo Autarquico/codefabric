@@ -87,12 +87,12 @@ func TestProjects_Validation(t *testing.T) {
 
 func TestProjects_NeverStoreOrAuditACredential(t *testing.T) {
 	e := newEnv(t)
-	for _, repo := range []string{
+	for i, repo := range []string{
 		"https://user:s3cret@example.com/org/r.git", "https://:s3cret@example.com/org/r.git", "ssh://git:s3cret@example.com/org/r.git",
 		"https://s3cret@example.com/org/r.git", "https://example.com/org/r.git?access_token=s3cret", "ssh://git@example.com/org/r.git#s3cret",
 		"user:s3cret@build_box:org/repo.git", "git@host:org/a@s3cret:c.git", "/srv/s3cret\x00",
 	} {
-		_, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "a", Repo: repo, RequestID: "create-" + repo})
+		_, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "a", Repo: repo, RequestID: fmt.Sprintf("create-%d", i)})
 		wantCode(t, err, domain.CodeInvalidRequest)
 		if strings.Contains(err.Error(), "s3cret") {
 			t.Errorf("the error repeats the secret: %v", err)
@@ -100,8 +100,8 @@ func TestProjects_NeverStoreOrAuditACredential(t *testing.T) {
 	}
 	// The same through the aliases of an existing Project.
 	ok := e.project("ok", func(r *v1.CreateProjectRequest) { r.Repo = "ssh://git@example.com/org/ok.git" })
-	for _, repo := range []string{"https://user:s3cret@example.com/r.git", "https://example.com/r?token=s3cret", "u:s3cret@host:path"} {
-		_, err := e.app.Projects.Set(t.Context(), e.owner, ok.Name, v1.UpdateProjectRequest{AddRepos: []string{repo}, RequestID: "set-" + repo})
+	for i, repo := range []string{"https://user:s3cret@example.com/r.git", "https://example.com/r?token=s3cret", "u:s3cret@host:path"} {
+		_, err := e.app.Projects.Set(t.Context(), e.owner, ok.Name, v1.UpdateProjectRequest{AddRepos: []string{repo}, RequestID: fmt.Sprintf("set-%d", i)})
 		wantCode(t, err, domain.CodeInvalidRequest)
 		if strings.Contains(err.Error(), "s3cret") {
 			t.Errorf("the error repeats the secret: %v", err)

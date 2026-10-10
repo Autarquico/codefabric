@@ -1,7 +1,7 @@
 // Package gitctx reads the git context of the client's working directory: the
 // repository it belongs to, and the commit a ref points to on the remote. It
-// runs on the client because the Controller never holds credentials to the
-// origin (ADR 0002 D1); git is run with the user's own.
+// runs on the client so that git authenticates with the user's own
+// credentials and the Controller never needs them (ADR 0002 D1, spec B5).
 package gitctx
 
 import (

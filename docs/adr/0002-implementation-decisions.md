@@ -7,7 +7,7 @@ Decisions the spec left open or that refine it, agreed when planning the full im
 
 | # | Topic | Decision |
 |---|-------|----------|
-| D1 | Resolving `source.ref` to a commit | The **client** resolves it with `git ls-remote` using its own credentials (`cf mcp serve` also runs on the client host). The Controller never holds origin credentials. |
+| D1 | Resolving `source.ref` to a commit | The **client** resolves it with `git ls-remote` using its own credentials (`cf mcp serve` also runs on the client host). The Controller never asks for origin credentials and refuses the URL forms that carry them; a secret typed as a URL user name or path is not detected (spec B5). |
 | D2 | PKI algorithms | The Controller's identity **is its CA**, so there is no separate ed25519 keypair (nothing would use it). The CA, the server certificate and the client certificates are all **ECDSA P-256**, for compatibility with git/libcurl TLS stacks; the Controller rejects any other key type in a CSR. Validated by `TestGitTrustsControllerCert` (build tag `integration`), which runs `git ls-remote` against a server using the issued certificates on macOS and Ubuntu. Client keys are generated on the client and never leave it; the Controller builds every certificate from its own template (CN = identity ID, client-auth only, no SANs or extensions copied from the CSR). |
 | D3 | Who runs `promote` | A **Worker holding the origin secret**, through a durable command. Compatible with "approving executes" (§16.3). |
 | D4 | Provider admin keys | Stored in a `SecretStore` local to the Controller host, separate from Run secrets (§16.7 governs Run secrets). |
