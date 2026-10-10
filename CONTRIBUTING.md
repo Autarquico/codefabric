@@ -22,7 +22,7 @@ Enforced by depguard (`make lint`):
 | Kind | How to run | What is real |
 |------|------------|--------------|
 | Unit | `make test` | pure logic |
-| Integration | `make test-integration` (tag `integration`) | SQLite, git, tmux, TLS |
+| Integration | `make test-integration` (tag `integration`) | SQLite, git, TLS (tmux when the runtime lands) |
 | End-to-end | `make test-e2e` (tag `e2e`) | compiled `cf` binary, multiple processes |
 
 Tests must not depend on wall-clock time: inject the clock.
