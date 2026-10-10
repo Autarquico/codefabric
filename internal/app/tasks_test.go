@@ -7,6 +7,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/tasks"
+	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -194,6 +195,27 @@ func TestMutations_RevalidateTheCallerInsideTheTransaction(t *testing.T) {
 	}
 }
 
+func TestMutations_ARepeatedRequestIDRevalidatesTheCaller(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	other := e.newClient("other")
+	create := func() (v1.CreateTaskResponse, error) {
+		return e.createTask("backend", "x", func(r *v1.CreateTaskRequest) { r.RequestID = "once" })
+	}
+	first, err := create()
+	must(t, err)
+	must(t, e.authority.RevokeClient(t.Context(), other, e.owner.Principal.ID))
+
+	got, err := create()
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if got.Task.ID != "" {
+		t.Errorf("a revoked client was given the saved response: %+v", got)
+	}
+	if first.Task.ID == "" || e.count("tasks") != 1 {
+		t.Errorf("tasks = %d", e.count("tasks"))
+	}
+}
+
 func TestWorkflowAndEnvironmentReferencesAreNotImplementedYet(t *testing.T) {
 	e := newEnv(t)
 	e.project("flow", func(r *v1.CreateProjectRequest) { r.DefaultWorkflow = "personal@latest" })
@@ -206,7 +228,7 @@ func TestWorkflowAndEnvironmentReferencesAreNotImplementedYet(t *testing.T) {
 	}
 	// Without starting, the Task exists; starting it later hits the same wall.
 	task := e.mustTask("flow", "x", noStart).Task
-	_, err = e.app.Tasks.StartRun(t.Context(), e.owner, task.ID, "", commitA, "")
+	_, err = e.startRun(task.ID, commitA)
 	wantCode(t, err, domain.CodeNotImplemented)
 
 	_, err = e.createTask("env", "x", func(r *v1.CreateTaskRequest) { r.Environment = "backend" })
@@ -241,7 +263,7 @@ func TestFreezing_ChangedDefaultsDoNotMoveAQueuedRunsDigest(t *testing.T) {
 		t.Errorf("frozen spec = %s", run.Spec)
 	}
 
-	second, err := e.app.Tasks.StartRun(t.Context(), e.owner, first.Task.ID, "", commitA, "")
+	second, err := e.startRun(first.Task.ID, commitA)
 	must(t, err)
 	if second.SpecDigest == first.Run.SpecDigest || second.Attempt != 2 {
 		t.Errorf("a new Run must freeze the new defaults: %+v", second)
@@ -259,7 +281,7 @@ func TestCompletionIsFrozenWithTheFirstRun(t *testing.T) {
 	manual, promote := domain.CompletionManual, domain.CompletionPromote
 	_, err := e.app.Projects.Set(t.Context(), e.owner, "backend", v1.UpdateProjectRequest{Completion: &manual})
 	must(t, err)
-	_, err = e.app.Tasks.StartRun(t.Context(), e.owner, task.ID, "", commitA, "")
+	_, err = e.startRun(task.ID, commitA)
 	must(t, err)
 	got, err := e.app.Tasks.Get(t.Context(), task.ID, "")
 	must(t, err)
@@ -344,8 +366,42 @@ func TestMarkers_CompleteAndArchive(t *testing.T) {
 	}
 	_, err = e.app.Tasks.Cancel(t.Context(), e.owner, live.Task.ID, "", v1.ActionRequest{})
 	wantCode(t, err, domain.CodeInvalidTransition)
-	_, err = e.app.Tasks.StartRun(t.Context(), e.owner, live.Task.ID, "", commitA, "")
+	_, err = e.startRun(live.Task.ID, commitA)
 	wantCode(t, err, domain.CodeInvalidTransition)
+}
+
+func TestCreateRun_RefusesTasksThatEnded(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	// Each case leaves a Task that must not get a Run: by a marker alone, with
+	// the derived state left stale, or by a derived state that is terminal.
+	set := func(assignment string) func(string) {
+		return func(id string) {
+			must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+				_, err := tx.Exec(t.Context(), `UPDATE tasks SET `+assignment+` WHERE id = ?`, id) //nolint:gosec // test constants
+				return err
+			}))
+		}
+	}
+	for name, end := range map[string]func(id string){
+		"completed by hand (marker only)": set("completed_manually_at = 1"),
+		"cancelled (marker only)":         set("cancelled_at = 1"),
+		"archived (marker only)":          set("archived_at = 1"),
+		"failed":                          set("state = 'failed'"),
+		"completed":                       set("state = 'completed'"),
+		"cancelled state":                 set("state = 'cancelled'"),
+		"archived state":                  set("state = 'archived'"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			task := e.mustTask("backend", name, noStart).Task
+			end(task.ID)
+			_, err := e.startRun(task.ID, commitA)
+			wantCode(t, err, domain.CodeInvalidTransition)
+			if n := e.count("runs"); n != 0 {
+				t.Errorf("%d Runs were created", n)
+			}
+		})
+	}
 }
 
 func TestList_FiltersAndHidesArchived(t *testing.T) {

@@ -240,7 +240,7 @@ func TestScenario_ControllerStore_Atomicity(t *testing.T) {
 				t.Error("the panic was swallowed")
 			}
 		}()
-		_, _ = db.Idempotent(t.Context(), key, payload, func(tx *Tx) ([]byte, error) {
+		_, _ = idempotent(t, db, key, payload, func(tx *Tx) ([]byte, error) {
 			if err := mutation(tx); err != nil {
 				return nil, err
 			}
@@ -261,7 +261,7 @@ func TestScenario_ControllerStore_Atomicity(t *testing.T) {
 		t.Errorf("notifier announced %d for a rolled-back event", got)
 	}
 
-	resp, err := db.Idempotent(t.Context(), key, payload, func(tx *Tx) ([]byte, error) {
+	resp, err := idempotent(t, db, key, payload, func(tx *Tx) ([]byte, error) {
 		return []byte("done"), mutation(tx)
 	})
 	if err != nil || string(resp) != "done" {
@@ -277,7 +277,7 @@ func TestScenario_ControllerStore_Idempotency(t *testing.T) {
 	key := IdemKey{Principal: "owner", Operation: "task.create", RequestID: "req-1"}
 	var calls int
 	run := func(payload string) ([]byte, error) {
-		return db.Idempotent(t.Context(), key, []byte(payload), func(tx *Tx) ([]byte, error) {
+		return idempotent(t, db, key, []byte(payload), func(tx *Tx) ([]byte, error) {
 			calls++
 			_, _, err := tx.AppendEvent(t.Context(), controllerEvent(domain.EventTaskCreated))
 			return []byte("response-" + payload), err
@@ -314,7 +314,7 @@ func TestIdempotent_KeysAreScopedByPrincipalAndOperation(t *testing.T) {
 	for _, key := range []IdemKey{
 		{"owner", "task.create", "r"}, {"other", "task.create", "r"}, {"owner", "task.cancel", "r"},
 	} {
-		_, err := db.Idempotent(t.Context(), key, []byte("p"), func(*Tx) ([]byte, error) {
+		_, err := idempotent(t, db, key, []byte("p"), func(*Tx) ([]byte, error) {
 			calls++
 			return nil, nil
 		})
@@ -331,7 +331,7 @@ func TestIdempotent_EmptyKeyAlwaysExecutes(t *testing.T) {
 	db, _ := openTest(t, Options{})
 	var calls int
 	for range 2 {
-		if _, err := db.Idempotent(t.Context(), IdemKey{}, nil, func(*Tx) ([]byte, error) {
+		if _, err := idempotent(t, db, IdemKey{}, nil, func(*Tx) ([]byte, error) {
 			calls++
 			return nil, nil
 		}); err != nil {
@@ -345,7 +345,7 @@ func TestIdempotent_EmptyKeyAlwaysExecutes(t *testing.T) {
 
 func TestIdempotent_RequestIDNeedsScope(t *testing.T) {
 	db, _ := openTest(t, Options{})
-	_, err := db.Idempotent(t.Context(), IdemKey{RequestID: "r"}, nil, func(*Tx) ([]byte, error) { return nil, nil })
+	_, err := idempotent(t, db, IdemKey{RequestID: "r"}, nil, func(*Tx) ([]byte, error) { return nil, nil })
 	if !errors.Is(err, ErrInvalidIdempotencyKey) {
 		t.Fatalf("err = %v, want ErrInvalidIdempotencyKey", err)
 	}
@@ -356,7 +356,7 @@ func TestIdempotent_ErrorRollsBackAndLeavesNoKey(t *testing.T) {
 	key := IdemKey{"owner", "op", "r"}
 	boom := errors.New("boom")
 
-	_, err := db.Idempotent(t.Context(), key, []byte("p"), func(tx *Tx) ([]byte, error) {
+	_, err := idempotent(t, db, key, []byte("p"), func(tx *Tx) ([]byte, error) {
 		_, _, _ = tx.AppendEvent(t.Context(), controllerEvent(domain.EventTaskCreated))
 		return nil, boom
 	})
@@ -367,7 +367,7 @@ func TestIdempotent_ErrorRollsBackAndLeavesNoKey(t *testing.T) {
 		t.Fatal("a failed callback left state behind")
 	}
 	// The same key with a different payload is fine: nothing was recorded.
-	if _, err := db.Idempotent(t.Context(), key, []byte("other"), func(*Tx) ([]byte, error) { return nil, nil }); err != nil {
+	if _, err := idempotent(t, db, key, []byte("other"), func(*Tx) ([]byte, error) { return nil, nil }); err != nil {
 		t.Fatalf("retry after failure: %v", err)
 	}
 }
@@ -382,7 +382,7 @@ func TestIdempotent_ConcurrentSameKeyExecutesOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range callers {
 		wg.Go(func() {
-			resp, err := db.Idempotent(t.Context(), key, []byte("p"), func(tx *Tx) ([]byte, error) {
+			resp, err := idempotent(t, db, key, []byte("p"), func(tx *Tx) ([]byte, error) {
 				calls.Add(1)
 				_, _, err := tx.AppendEvent(t.Context(), controllerEvent(domain.EventTaskCreated))
 				return []byte("resp"), err
@@ -413,7 +413,7 @@ func TestPurgeIdempotency_RemovesOnlyExpiredKeys(t *testing.T) {
 	db, _ := openTest(t, Options{Clock: clk})
 	put := func(id string) {
 		t.Helper()
-		if _, err := db.Idempotent(t.Context(), IdemKey{"owner", "op", id}, nil, func(*Tx) ([]byte, error) { return nil, nil }); err != nil {
+		if _, err := idempotent(t, db, IdemKey{"owner", "op", id}, nil, func(*Tx) ([]byte, error) { return nil, nil }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -801,4 +801,26 @@ func TestOpen_PathWithSpecialCharacters(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "controller.db")); err != nil {
 		t.Fatalf("database not created at the requested path: %v", err)
 	}
+}
+
+// idempotent is the sequence mutation.Do runs around a use case, without the
+// caller check: look the key up, run fn, save the response.
+func idempotent(t *testing.T, db *DB, key IdemKey, payload []byte, fn func(*Tx) ([]byte, error)) ([]byte, error) {
+	t.Helper()
+	var response []byte
+	err := db.WithTx(t.Context(), func(tx *Tx) error {
+		saved, found, err := tx.SavedResponse(t.Context(), key, payload)
+		if err != nil || found {
+			response = saved
+			return err
+		}
+		if response, err = fn(tx); err != nil {
+			return err
+		}
+		return tx.SaveResponse(t.Context(), key, payload, response)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
 }

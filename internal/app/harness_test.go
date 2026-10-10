@@ -13,6 +13,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app"
+	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -88,6 +89,15 @@ func (e *env) mustTask(project, prompt string, mutate ...func(*v1.CreateTaskRequ
 	out, err := e.createTask(project, prompt, mutate...)
 	must(e.t, err)
 	return out
+}
+
+// startRun queues another Run of a Task, the step the scheduler will take.
+func (e *env) startRun(task, commit string) (v1.Run, error) {
+	e.t.Helper()
+	return mutation.Do(e.t.Context(), e.db, e.clock, e.owner, "test.start-run", "", task,
+		func(tx *store.Tx, act mutation.Act) (v1.Run, error) {
+			return e.app.Runs.CreateIn(e.t.Context(), tx, act, domain.ID(task), commit)
+		})
 }
 
 func noStart(r *v1.CreateTaskRequest) { r.NoStart, r.SourceCommit = true, "" }

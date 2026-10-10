@@ -22,7 +22,7 @@ type Tx struct {
 // the new events on the Notifier, so no consumer wakes for data that may
 // still vanish.
 //
-// It cannot be nested: calling WithTx or Idempotent inside fn deadlocks until
+// It cannot be nested: calling WithTx inside fn deadlocks until
 // ctx ends, because the writer holds a single connection.
 func (db *DB) WithTx(ctx context.Context, fn func(*Tx) error) error {
 	sqlTx, err := db.writer.BeginTx(ctx, nil)

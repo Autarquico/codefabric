@@ -33,11 +33,13 @@ func (a Act) Event(eventType domain.EventType, message string) domain.Event {
 	}
 }
 
-// Do runs fn as a single use case: in one transaction it applies the
-// request_id idempotency contract, revalidates the caller and runs fn. fn
-// receives the transaction and never opens its own; the clock is read inside
-// it, after the writer was acquired. The result is saved as the response of
-// the request_id and returned from it when the request repeats.
+// Do runs fn as a single use case: in one transaction it revalidates the
+// caller, applies the request_id idempotency contract and runs fn. The caller
+// is revalidated first, so a repeated request_id does not give a saved
+// response to an identity revoked since. fn receives the transaction and never
+// opens its own; the clock is read inside it, after the writer was acquired.
+// The result is saved as the response of the request_id and returned from it
+// when the request repeats.
 func Do[T any](ctx context.Context, db *store.DB, clk clock.Clock, by pki.Session,
 	operation, requestID string, request any, fn func(*store.Tx, Act) (T, error),
 ) (T, error) {
@@ -51,26 +53,36 @@ func Do[T any](ctx context.Context, db *store.DB, clk clock.Clock, by pki.Sessio
 		return zero, fmt.Errorf("mutation: encoding the request: %w", err)
 	}
 	key := store.IdemKey{Principal: string(by.Principal.ID), Operation: operation, RequestID: requestID}
-	saved, err := db.Idempotent(ctx, key, payload, func(tx *store.Tx) ([]byte, error) {
+	var out T
+	err = db.WithTx(ctx, func(tx *store.Tx) error {
 		now := clk.Now()
 		if _, err := pki.RequireCaller(ctx, tx, by, now); err != nil {
-			return nil, err
+			return err
 		}
-		out, err := fn(tx, Act{
+		saved, found, err := tx.SavedResponse(ctx, key, payload)
+		if err != nil {
+			return err
+		}
+		if found {
+			if err := json.Unmarshal(saved, &out); err != nil {
+				return fmt.Errorf("mutation: decoding the response: %w", err)
+			}
+			return nil
+		}
+		if out, err = fn(tx, Act{
 			Actor:     domain.ActorRef{Kind: by.Principal.ActorKind(), ID: string(by.Principal.ID)},
 			RequestID: requestID, Now: now,
-		})
-		if err != nil {
-			return nil, err
+		}); err != nil {
+			return err
 		}
-		return json.Marshal(out)
+		response, err := json.Marshal(out)
+		if err != nil {
+			return fmt.Errorf("mutation: encoding the response: %w", err)
+		}
+		return tx.SaveResponse(ctx, key, payload, response)
 	})
 	if err != nil {
 		return zero, err
-	}
-	var out T
-	if err := json.Unmarshal(saved, &out); err != nil {
-		return zero, fmt.Errorf("mutation: decoding the response: %w", err)
 	}
 	return out, nil
 }

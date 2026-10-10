@@ -96,21 +96,6 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateTaskR
 		})
 }
 
-// StartRun queues a Run of a Task that has none yet or needs another, frozen
-// at commit. It is what the autostart of the scheduler and a future
-// `cf task start` build on; Create uses the same step for the first Run.
-func (s *Service) StartRun(ctx context.Context, by pki.Session, ref, project, commit, requestID string) (v1.Run, error) {
-	return mutation.Do(ctx, s.db, s.clock, by, "task.start", requestID,
-		map[string]string{"ref": ref, "project": project, "commit": commit},
-		func(tx *store.Tx, act mutation.Act) (v1.Run, error) {
-			id, err := resolveIn(ctx, tx, ref, project)
-			if err != nil {
-				return v1.Run{}, err
-			}
-			return s.runs.CreateIn(ctx, tx, act, id, commit)
-		})
-}
-
 // Cancel marks the Task cancelled and cancels its live Runs, in one transaction.
 // Cancelling a cancelled Task changes nothing; a Task that ended cannot be cancelled.
 func (s *Service) Cancel(ctx context.Context, by pki.Session, ref, project string, req v1.ActionRequest) (v1.Task, error) {

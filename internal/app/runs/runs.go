@@ -39,6 +39,8 @@ var commitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 // the Task's configuration resolved against its Project and the defaults, and
 // the commit that the client resolved from the source ref (ADR 0002 D1).
 //
+// A Task that ended, by a marker or by its derived state, gets no more Runs.
+//
 // The first Run also freezes the Task's completion (§3.3). A Project or Task
 // that names a Workflow or an Environment cannot get a Run yet: resolving them
 // to a version is Phase 2, and freezing the bare reference would pin nothing.
@@ -50,7 +52,7 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if err != nil {
 		return v1.Run{}, err
 	}
-	if task.ArchivedAt != nil || task.CancelledAt != nil {
+	if ended(task) {
 		return v1.Run{}, domain.NewError(domain.CodeInvalidTransition,
 			fmt.Sprintf("task %s is %s: it cannot start Runs", task.Name, task.State), map[string]any{"state": string(task.State)})
 	}
@@ -102,6 +104,12 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		return v1.Run{}, err
 	}
 	return view(run, false), nil
+}
+
+// ended says whether the Task can no longer get Runs: it carries a marker
+// that finishes it, or its derived state is terminal.
+func ended(t store.Task) bool {
+	return t.CompletedManuallyAt != nil || t.CancelledAt != nil || t.ArchivedAt != nil || t.State.IsTerminal()
 }
 
 // CancelLiveIn cancels the Runs of the Task that have not ended. Only queued
