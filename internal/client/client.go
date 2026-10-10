@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -26,8 +28,9 @@ import (
 )
 
 const (
-	requestTimeout = 30 * time.Second
-	maxResponse    = 1 << 20
+	requestTimeout  = 30 * time.Second
+	idleConnTimeout = 90 * time.Second
+	maxResponse     = 1 << 20
 
 	pemTypeCert    = "CERTIFICATE"
 	pemTypeCertReq = "CERTIFICATE REQUEST"
@@ -37,9 +40,15 @@ const (
 // Client calls the Controller API.
 type Client struct {
 	base       string
-	http       *http.Client
 	controller string
 	dir        string // credentials directory; empty for a pre-enrolment client
+
+	roots      *x509.CertPool
+	serverName string
+	// http is replaced by Renew, which installs a transport that presents the
+	// new certificate; renewMu keeps two renewals from racing over the bundle.
+	http    atomic.Pointer[http.Client]
+	renewMu sync.Mutex
 }
 
 // Open loads the credentials in dir and returns a client authenticated with them.
@@ -64,23 +73,32 @@ func newClient(controller string, ca *x509.Certificate, certs []tls.Certificate)
 	}
 	roots := x509.NewCertPool()
 	roots.AddCert(ca)
-	return &Client{
-		base:       "https://" + controller,
-		controller: controller,
-		http: &http.Client{
-			Timeout: requestTimeout,
-			// A redirect could carry a token or certificate elsewhere.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					MinVersion:   tls.VersionTLS13,
-					RootCAs:      roots,
-					ServerName:   host,
-					Certificates: certs,
-				},
+	c := &Client{base: "https://" + controller, controller: controller, roots: roots, serverName: host}
+	c.useCertificates(certs)
+	return c, nil
+}
+
+// useCertificates points the client at a fresh transport presenting certs and
+// closes the idle connections of the previous one, which carried the old
+// certificate. Requests already in flight finish on the old transport.
+func (c *Client) useCertificates(certs []tls.Certificate) {
+	next := &http.Client{
+		Timeout: requestTimeout,
+		// A redirect could carry a token or certificate elsewhere.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: &http.Transport{
+			IdleConnTimeout: idleConnTimeout,
+			TLSClientConfig: &tls.Config{
+				MinVersion:   tls.VersionTLS13,
+				RootCAs:      c.roots,
+				ServerName:   c.serverName,
+				Certificates: certs,
 			},
 		},
-	}, nil
+	}
+	if prev := c.http.Swap(next); prev != nil {
+		prev.CloseIdleConnections()
+	}
 }
 
 // Controller is the host:port this client talks to.
@@ -113,11 +131,16 @@ func (c *Client) RemoveClient(ctx context.Context, id string) error {
 func (c *Client) Describe() (Info, error) { return Describe(c.dir) }
 
 // Renew swaps this machine's certificate for a fresh one. The key is
-// regenerated and never leaves the machine; the bundle is replaced atomically.
+// regenerated and never leaves the machine; the bundle is replaced atomically
+// and this client starts presenting the new certificate, so it keeps working.
+// If the response is lost or the bundle cannot be written, the replaced
+// certificate can renew again for a few minutes: run Renew again.
 func (c *Client) Renew(ctx context.Context) error {
 	if c.dir == "" {
 		return errors.New("client: renew needs credentials opened with Open")
 	}
+	c.renewMu.Lock()
+	defer c.renewMu.Unlock()
 	b, err := loadBundle(c.dir)
 	if err != nil {
 		return err
@@ -138,7 +161,15 @@ func (c *Client) Renew(ctx context.Context) error {
 		return err
 	}
 	b.CertPEM, b.KeyPEM = []byte(out.Certificate), keyPEM
-	return SaveCredentials(c.dir, b.Credentials)
+	if err := SaveCredentials(c.dir, b.Credentials); err != nil {
+		return err
+	}
+	pair, err := tls.X509KeyPair(b.CertPEM, b.KeyPEM)
+	if err != nil {
+		return fmt.Errorf("client: renewed credentials are unusable: %w", err)
+	}
+	c.useCertificates([]tls.Certificate{pair})
+	return nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
@@ -157,7 +188,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.http.Do(req)
+	resp, err := c.http.Load().Do(req)
 	if err != nil {
 		return c.transportError(ctx, err)
 	}
@@ -167,7 +198,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return c.transportError(ctx, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return decodeError(resp.StatusCode, raw)
+		return c.decodeError(resp.StatusCode, raw)
 	}
 	if out == nil || len(raw) == 0 {
 		return nil
@@ -178,15 +209,22 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	return nil
 }
 
-func decodeError(status int, raw []byte) error {
+// decodeError turns an error envelope into a domain error. An authentication
+// failure of a client that has credentials gets the recovery hint: those
+// credentials are expired, revoked or replaced.
+func (c *Client) decodeError(status int, raw []byte) error {
 	var env v1.ErrorEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil || env.Error.Code == "" {
 		return domain.NewError(domain.CodeInternal, fmt.Sprintf("unexpected response from the Controller (HTTP %d)", status), nil)
 	}
-	return domain.NewError(env.Error.Code, env.Error.Message, env.Error.Details)
+	msg := env.Error.Message
+	if env.Error.Code == domain.CodeUnauthenticated && c.dir != "" {
+		msg += ": " + renewHint
+	}
+	return domain.NewError(env.Error.Code, msg, env.Error.Details)
 }
 
-const renewHint = "ask the owner for a new invitation (`cf controller token create`) and run `cf connect`"
+const renewHint = "ask the owner for a new invitation (`cf controller token create`) and run `cf connect --force <invitation>`"
 
 // transportError sorts connection failures: a certificate that one side
 // refuses is an authentication problem, anything else is an unreachable Controller.

@@ -98,7 +98,7 @@ func TestScenario_ControllerIdentityTLS_Revocacion(t *testing.T) {
 	use(t, laptop)
 	for _, args := range [][]string{{"client", "list"}, {"client", "renew"}, {"controller", "token", "create", "--client"}} {
 		code, _, errOut = cf(t, "", args...)
-		if code != 6 || !strings.Contains(errOut, "CF_UNAUTHENTICATED") {
+		if code != 6 || !strings.Contains(errOut, "CF_UNAUTHENTICATED") || !strings.Contains(errOut, "cf connect --force") {
 			t.Errorf("cf %v after revocation: exit %d, stderr %q", args, code, errOut)
 		}
 	}
