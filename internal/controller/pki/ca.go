@@ -16,7 +16,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/config"
+	"github.com/Autarquico/codefabric/internal/support/atomicfile"
 )
 
 const (
@@ -87,10 +87,10 @@ func (ca *CA) Save(dir string) error {
 	if err != nil {
 		return err
 	}
-	if err := config.WriteFileAtomic(filepath.Join(dir, caKeyFile), keyPEM, secretFilePerms); err != nil {
+	if err := atomicfile.Write(filepath.Join(dir, caKeyFile), keyPEM, secretFilePerms); err != nil {
 		return err
 	}
-	return config.WriteFileAtomic(filepath.Join(dir, caCertFile), ca.CertPEM(), secretFilePerms)
+	return atomicfile.Write(filepath.Join(dir, caCertFile), ca.CertPEM(), secretFilePerms)
 }
 
 // LoadCA reads the CA saved by Save.

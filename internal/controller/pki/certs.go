@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/atomicfile"
 )
 
 const (
@@ -157,9 +157,9 @@ func saveServerCert(dir string, cert tls.Certificate) error {
 	if err != nil {
 		return err
 	}
-	if err := config.WriteFileAtomic(filepath.Join(dir, serverKeyFile), keyPEM, secretFilePerms); err != nil {
+	if err := atomicfile.Write(filepath.Join(dir, serverKeyFile), keyPEM, secretFilePerms); err != nil {
 		return err
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: pemTypeCert, Bytes: cert.Certificate[0]})
-	return config.WriteFileAtomic(filepath.Join(dir, serverCertFile), certPEM, secretFilePerms)
+	return atomicfile.Write(filepath.Join(dir, serverCertFile), certPEM, secretFilePerms)
 }

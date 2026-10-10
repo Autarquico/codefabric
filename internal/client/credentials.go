@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/atomicfile"
 )
 
 const (
@@ -69,12 +69,12 @@ func SaveCredentials(dir string, c Credentials) error {
 	for name, content := range map[string][]byte{
 		certFile: c.CertPEM, keyFile: c.KeyPEM, caFile: c.CAPEM, controllerFile: []byte(c.Controller + "\n"),
 	} {
-		if err := config.WriteFileAtomic(filepath.Join(staging, name), content, filePerms); err != nil {
+		if err := atomicfile.Write(filepath.Join(staging, name), content, filePerms); err != nil {
 			_ = os.RemoveAll(staging)
 			return err
 		}
 	}
-	if err := config.SyncDir(staging); err != nil {
+	if err := atomicfile.SyncDir(staging); err != nil {
 		return err
 	}
 
@@ -92,7 +92,7 @@ func SaveCredentials(dir string, c Credentials) error {
 		}
 		return fmt.Errorf("client: publishing credentials: %w", err)
 	}
-	if err := config.SyncDir(parent); err != nil {
+	if err := atomicfile.SyncDir(parent); err != nil {
 		return err
 	}
 	return os.RemoveAll(old)

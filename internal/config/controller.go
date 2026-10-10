@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+
+	"github.com/Autarquico/codefabric/internal/support/atomicfile"
 )
 
 // Controller is the Controller's settings file. JSON keeps the module free of
@@ -40,5 +42,5 @@ func SaveController(p Paths, c Controller) error {
 	if err != nil {
 		return fmt.Errorf("config: encoding controller config: %w", err)
 	}
-	return WriteFileAtomic(p.ControllerConfigFile(), append(raw, '\n'), 0o600)
+	return atomicfile.Write(p.ControllerConfigFile(), append(raw, '\n'), 0o600)
 }
