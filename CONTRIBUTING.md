@@ -2,7 +2,7 @@
 
 ## Workflow
 
-1. Every non-trivial change starts from a spec in `docs/specs/<slug>.md` with Given/When/Then scenarios, linked to an issue.
+1. Every non-trivial change starts from a spec in `docs/specs/<slug>.md` (managed with `/pm`, see `AGENT.md`): context, scope, Given/When/Then scenarios and references to `docs/codefabric-spec.md`. The spec is linked to an issue on the [project board](https://github.com/orgs/Autarquico/projects/5).
 2. Branch from `main`, open a PR that closes the issue.
 3. Each scenario of the spec has at least one test named `TestScenario_<Slug>_<Description>`.
 4. CI must be green: lint, unit (Linux and macOS, with `-race`), integration, cross-build, govulncheck.
