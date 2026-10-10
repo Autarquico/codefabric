@@ -25,8 +25,6 @@ func TestNormalize(t *testing.T) {
 			"git@github.com:org/repo.git",
 			"git@GitHub.com:org/repo",
 			"github.com:org/repo.git",
-			"ssh://git@github.com/org/repo.git",
-			"ssh://git@github.com:22/org/repo/",
 			"https://github.com/org/repo.git",
 			"https://github.com:443/org/repo",
 			"https://user:secret@GITHUB.COM/org/repo/",
@@ -35,7 +33,10 @@ func TestNormalize(t *testing.T) {
 			"git://github.com/org/repo.git",
 			"  https://github.com/org/repo.git\n",
 		}, "github.com/org/repo"},
-		{"an absolute scp path", []string{"git@host.example:/srv/git/repo.git", "ssh://host.example//srv/git/repo.git"}, "host.example/srv/git/repo"},
+		{"an absolute ssh path", []string{
+			"git@host.example:/srv/git/repo.git", "ssh://host.example/srv/git/repo.git",
+			"ssh://git@host.example:22//srv/git/repo/",
+		}, "host.example//srv/git/repo"},
 		{"a local repository", []string{"/srv/git/repo", "file:///srv/git/repo", "/srv/git//repo/"}, "file:/srv/git/repo"},
 		{"a local bare repository", []string{"/srv/git/repo.git", "file:///srv/git/repo.git"}, "file:/srv/git/repo.git"},
 	}
@@ -52,6 +53,8 @@ func TestNormalize(t *testing.T) {
 		"git@github.com:Org/Repo.git", "git@github.com:org/other.git", "git@gitlab.com:org/repo.git", "git@github.com:org/repo.git",
 		"ssh://git@github.com:2222/org/repo", "ssh://git@github.com:2223/org/repo", "http://github.com:8080/org/repo", "https://github.com:8443/org/repo",
 		"/srv/git/repo", "/srv/git/repo.git",
+		// Over ssh a relative path is relative to the home of the user, an absolute one is not.
+		"git@host.example:srv/git/repo.git", "git@host.example:/srv/git/repo.git",
 	}
 	seen := map[string]string{}
 	for _, raw := range distinct {
@@ -79,7 +82,7 @@ func TestMatch(t *testing.T) {
 		{Name: "web", Repo: "git@github.com:org/web.git"},
 		{Name: "broken", Repo: "https://"},
 	}
-	got, err := gitctx.Match("ssh://git@GitHub.com/org/backend.git", projects)
+	got, err := gitctx.Match("git@GitHub.com:org/backend.git", projects)
 	if err != nil || len(got) != 2 || got[0].Name != "backend" || got[1].Name != "backend-mirror" {
 		t.Errorf("Match = %+v, %v", got, err)
 	}
@@ -273,5 +276,15 @@ func TestResolveRef_ARemoteThatNeverAnswersTimesOut(t *testing.T) {
 	}
 	if took := time.Since(start); took > 10*time.Second {
 		t.Errorf("took %s", took)
+	}
+}
+
+func TestNormalize_AnInvalidURLNeverEchoesItsCredentials(t *testing.T) {
+	_, err := gitctx.Normalize("https://user:SECRET@host:bad/org/repo.git")
+	if err == nil {
+		t.Fatal("an invalid URL was accepted")
+	}
+	if strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("the error leaks the credential: %v", err)
 	}
 }

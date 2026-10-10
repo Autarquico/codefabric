@@ -72,13 +72,15 @@ var scpLike = regexp.MustCompile(`^(?:[^@/:]+@)?([^/:]+):(.*)$`)
 func Normalize(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	var host, repoPath string
+	var absolute bool
 	switch {
 	case s == "":
 		return "", errors.New("gitctx: empty repository URL")
 	case strings.Contains(s, "://"):
 		u, err := url.Parse(s)
 		if err != nil {
-			return "", fmt.Errorf("gitctx: repository URL %q: %w", redact(s), err)
+			// url.Error repeats the raw URL, credentials included: never wrap it.
+			return "", fmt.Errorf("gitctx: repository URL %q is not a valid URL", redact(s))
 		}
 		if u.Scheme == "file" {
 			return localKey(u.Path), nil
@@ -87,15 +89,25 @@ func Normalize(raw string) (string, error) {
 		if port := u.Port(); port != "" && port != defaultPorts[strings.ToLower(u.Scheme)] {
 			host = net.JoinHostPort(host, port)
 		}
+		scheme := strings.ToLower(u.Scheme)
+		absolute = scheme == "ssh" || scheme == "git+ssh" || scheme == "ssh+git"
 	case scpLike.MatchString(s):
 		m := scpLike.FindStringSubmatch(s)
 		host, repoPath = strings.ToLower(m[1]), m[2]
+		absolute = strings.HasPrefix(repoPath, "/")
 	default:
 		return localKey(s), nil
 	}
 	repoPath = strings.TrimSuffix(strings.Trim(path.Clean("/"+repoPath), "/"), ".git")
 	if host == "" || repoPath == "" {
 		return "", fmt.Errorf("gitctx: repository URL %q has no host or path", redact(s))
+	}
+	if absolute {
+		// Over ssh a path is a filesystem path: host:/srv/x and host:srv/x
+		// (relative to the home of the user) are two repositories, so the
+		// absolute form gets its own key. Forges treat both alike, but a
+		// failed match is an error; a wrong one would pick another Project.
+		return host + "//" + repoPath, nil
 	}
 	return host + "/" + repoPath, nil
 }

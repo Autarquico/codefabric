@@ -3258,6 +3258,8 @@ Recortes de MVP: máquina de estados reducida en Fase 1; overlays, `merged` y sy
 - §3.13 / §27.4: `CF_AMBIGUOUS_REF` y `CF_IDEMPOTENCY_MISMATCH` viajan como HTTP 409.
 - §18.2: `cf task defer|resume|move` y `cf run fork|promote` existen desde la Fase 1 y devuelven `CF_NOT_IMPLEMENTED` (exit 8) hasta su milestone.
 
+- Normalización de repos: sobre ssh una ruta es de sistema de ficheros. `host:/srv/x` y `ssh://host/srv/x` (absolutas) tienen clave propia, distinta de `host:srv/x` (relativa al home) y de https. Las forjas tratan ambas igual, pero un no-match es un error y un match equivocado elegiría otro Project. Los errores de parseo nunca repiten la URL original (podría llevar credenciales).
+
 ## Apéndice C — Decisiones
 
 | # | Decisión | Estado |
