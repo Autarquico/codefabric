@@ -35,7 +35,7 @@ func TestNormalize(t *testing.T) {
 		}, "github.com/org/repo"},
 		{"an absolute ssh path", []string{
 			"git@host.example:/srv/git/repo.git", "ssh://host.example/srv/git/repo.git",
-			"ssh://git@host.example:22//srv/git/repo/",
+			"ssh://git@host.example:22/srv/git/repo/",
 		}, "host.example//srv/git/repo"},
 		{"a local repository", []string{"/srv/git/repo", "file:///srv/git/repo", "/srv/git//repo/"}, "file:/srv/git/repo"},
 		{"a local bare repository", []string{"/srv/git/repo.git", "file:///srv/git/repo.git"}, "file:/srv/git/repo.git"},
@@ -286,5 +286,35 @@ func TestNormalize_AnInvalidURLNeverEchoesItsCredentials(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "SECRET") {
 		t.Fatalf("the error leaks the credential: %v", err)
+	}
+}
+
+func TestNormalize_RefusesPathsItCannotKeySafely(t *testing.T) {
+	for _, raw := range []string{
+		"host:../repo", "host:repo/../other", "host:~/repo", "host:~user/repo",
+		"ssh://host/~user/repo", "ssh://host//~user/repo", "ssh://host//srv/repo",
+		"https://host/org/../repo", "git@host:./repo",
+	} {
+		if got, err := gitctx.Normalize(raw); !errors.Is(err, gitctx.ErrUnsafePath) {
+			t.Errorf("Normalize(%q) = %q, %v; want ErrUnsafePath", raw, got, err)
+		}
+	}
+	// A refused remote matches no Project rather than a wrong one.
+	projects := []v1.Project{{Name: "repo", Repo: "host:repo"}}
+	if got, err := gitctx.Match("host:../repo", projects); err == nil || len(got) != 0 {
+		t.Errorf("Match = %+v, %v", got, err)
+	}
+}
+
+func TestRedaction_HidesTheWholeUserinfo(t *testing.T) {
+	for _, raw := range []string{
+		"https://user:p@SECRET@host:bad/org/repo.git", "https://SECRET@@host/x", "ssh://u:a@b@SECRET@host/x",
+	} {
+		if _, err := gitctx.Normalize(raw); err != nil && strings.Contains(err.Error(), "SECRET") {
+			t.Errorf("Normalize(%q) leaks: %v", raw, err)
+		}
+		if got := gitctx.Redact(raw); strings.Contains(got, "SECRET") {
+			t.Errorf("Redact(%q) = %q", raw, got)
+		}
 	}
 }

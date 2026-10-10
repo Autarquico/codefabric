@@ -60,9 +60,12 @@ var scpLike = regexp.MustCompile(`^(?:[^@/:]+@)?([^/:]+):(.*)$`)
 // Normalize reduces the many spellings of a repository URL to one key, so that
 // the remote of a working copy can be matched with the repo of a Project:
 //
-//	git@GitHub.com:org/repo.git, ssh://git@github.com:22/org/repo, https://user:pw@github.com/org/repo/
+//	git@GitHub.com:org/repo.git, https://user:pw@github.com:443/org/repo/
 //
-// all become github.com/org/repo. The scheme, user, a trailing ".git" or slash,
+// all become github.com/org/repo. Over ssh a path is a filesystem path:
+// host:/srv/x and ssh://host/srv/x are absolute and get the key host//srv/x,
+// distinct from the home-relative host:srv/x. Paths with ~, .. or a leading //
+// are refused (ErrUnsafePath) rather than guessed. The scheme, user, a trailing ".git" or slash,
 // the case of the host and the default port of the scheme (ssh 22, https 443,
 // http 80, git 9418) do not tell repositories apart; the case of the path and
 // any other port do. Local paths and file:// URLs become file:<path>, cleaned
@@ -79,8 +82,9 @@ func Normalize(raw string) (string, error) {
 	case strings.Contains(s, "://"):
 		u, err := url.Parse(s)
 		if err != nil {
-			// url.Error repeats the raw URL, credentials included: never wrap it.
-			return "", fmt.Errorf("gitctx: repository URL %q is not a valid URL", redact(s))
+			// url.Error repeats the raw URL, and a malformed one defeats any
+			// redaction: name nothing of it.
+			return "", errors.New("gitctx: the repository URL is not a valid URL")
 		}
 		if u.Scheme == "file" {
 			return localKey(u.Path), nil
@@ -98,6 +102,9 @@ func Normalize(raw string) (string, error) {
 	default:
 		return localKey(s), nil
 	}
+	if !safePath(repoPath) {
+		return "", ErrUnsafePath
+	}
 	repoPath = strings.TrimSuffix(strings.Trim(path.Clean("/"+repoPath), "/"), ".git")
 	if host == "" || repoPath == "" {
 		return "", fmt.Errorf("gitctx: repository URL %q has no host or path", redact(s))
@@ -110,6 +117,25 @@ func Normalize(raw string) (string, error) {
 		return host + "//" + repoPath, nil
 	}
 	return host + "/" + repoPath, nil
+}
+
+// ErrUnsafePath reports a remote path that git interprets in ways a key
+// cannot capture safely (home expansion, "..", a leading "//"). Such a remote
+// matches no Project: choose one with --project instead.
+var ErrUnsafePath = errors.New("gitctx: the repository path uses ~, .. or a leading // and cannot be matched safely; choose the Project with --project")
+
+// safePath accepts only remote paths whose meaning does not depend on the
+// server: no home expansion, no parent segments, no leading double slash.
+func safePath(p string) bool {
+	if strings.HasPrefix(p, "~") || strings.HasPrefix(p, "/~") || strings.HasPrefix(p, "//") {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." || seg == "." {
+			return false
+		}
+	}
+	return true
 }
 
 // defaultPorts are the ports a scheme implies, which a URL may spell or omit.
@@ -205,7 +231,7 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 var (
-	userinfo = regexp.MustCompile(`(\w+://)[^/@\s]+@`)
+	userinfo = regexp.MustCompile(`(\w+://)[^/\s]*@`) // greedy: the userinfo ends at the last '@'
 	// authority splits scheme://[userinfo@]rest; the userinfo ends at the last '@' of the authority.
 	authority = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*://)([^/?#]*)@(.*)$`)
 )

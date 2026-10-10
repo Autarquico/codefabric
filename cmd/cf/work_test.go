@@ -410,6 +410,22 @@ func TestProjectsTasksRunsApi_DistinctRepositoriesAreNeverConfused(t *testing.T)
 	git(t, dir, "remote", "set-url", "origin", "ssh://git@example.com:22/org/repo.git") // the default port is no difference...
 	fails(t, 3, domain.CodeNotFound, "do", "z")                                         // ...but this Project is on 2222
 
+	// Over ssh, an absolute path and a home-relative one are two repositories,
+	// in both directions; and a path that cannot be keyed safely is refused.
+	ok[v1.Project](t, "project", "create", "absolute", "--repo", "git@host.example:/srv/git/app.git")
+	git(t, dir, "remote", "set-url", "origin", "git@host.example:srv/git/app.git")
+	fails(t, 3, domain.CodeNotFound, "do", "rel")
+	ok[v1.Project](t, "project", "create", "relative", "--repo", "git@host.example:srv/git/web.git")
+	git(t, dir, "remote", "set-url", "origin", "ssh://git@host.example/srv/git/web.git")
+	fails(t, 3, domain.CodeNotFound, "do", "abs")
+	git(t, dir, "remote", "set-url", "origin", "git@host.example:../srv/git/web.git")
+	if env := fails(t, 2, domain.CodeInvalidRequest, "do", "dots"); !strings.Contains(fmt.Sprint(env["message"]), "--project") {
+		t.Errorf("no hint about --project: %v", env)
+	}
+	if code, _, errOut := cf(t, "", "do", "human"); code != 2 || !strings.Contains(errOut, "--project") {
+		t.Errorf("human output: exit %d, stderr %q", code, errOut)
+	}
+
 	if tasks := ok[v1.ListTasksResponse](t, "task", "list", "--all"); len(tasks.Tasks) != 0 {
 		t.Errorf("%d Tasks were created", len(tasks.Tasks))
 	}
