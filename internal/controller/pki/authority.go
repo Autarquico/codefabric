@@ -191,7 +191,13 @@ func (a *Authority) Renew(ctx context.Context, p domain.Principal, presentedSeri
 	var out Joined
 	err = a.db.WithTx(ctx, func(tx *store.Tx) error {
 		ident, err := tx.IdentityByID(ctx, p.ID)
-		if err != nil || ident.Revoked() || ident.CertSerial != presentedSerial {
+		if errors.Is(err, store.ErrNotFound) {
+			return errNotAuthenticated()
+		}
+		if err != nil {
+			return err
+		}
+		if ident.Revoked() || ident.CertSerial != presentedSerial {
 			return errNotAuthenticated()
 		}
 		der, serial, notAfter, err := a.ca.signClient(csr, ident.ID, now, a.certTTL)
@@ -217,19 +223,30 @@ func (a *Authority) Renew(ctx context.Context, p domain.Principal, presentedSeri
 }
 
 // RevokeClient revokes a client identity. Revoking twice succeeds silently.
+// The last active client cannot be revoked: nobody would be left to administer
+// the Controller. Revoking oneself is fine while others remain.
 func (a *Authority) RevokeClient(ctx context.Context, by domain.Principal, id domain.ID) error {
 	now := a.clock.Now()
 	return a.db.WithTx(ctx, func(tx *store.Tx) error {
-		changed, err := tx.Revoke(ctx, id, domain.KindClient, now)
+		ident, err := tx.IdentityByID(ctx, id)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && ident.Kind != domain.KindClient) {
+			return domain.NewError(domain.CodeNotFound, "client not found", map[string]any{"id": string(id)})
+		}
 		if err != nil {
 			return err
 		}
-		if !changed {
-			ident, err := tx.IdentityByID(ctx, id)
-			if errors.Is(err, store.ErrNotFound) || (err == nil && ident.Kind != domain.KindClient) {
-				return domain.NewError(domain.CodeNotFound, "client not found", map[string]any{"id": string(id)})
-			}
-			return err // nil when it was already revoked
+		if ident.Revoked() {
+			return nil
+		}
+		active, err := tx.CountActiveIdentities(ctx, domain.KindClient)
+		if err != nil {
+			return err
+		}
+		if active <= 1 {
+			return domain.NewError(domain.CodePolicyDenied, "the last active client cannot be revoked", nil)
+		}
+		if _, err := tx.Revoke(ctx, id, domain.KindClient, now); err != nil {
+			return err
 		}
 		return tx.AppendAudit(ctx, store.AuditEntry{
 			ActorKind: by.ActorKind(), ActorID: string(by.ID), Action: "identity.revoked",
@@ -244,9 +261,15 @@ func (a *Authority) Clients(ctx context.Context) ([]store.Identity, error) {
 }
 
 // Authenticate maps a certificate that already passed TLS verification to a
-// live identity. Unknown serials (superseded by a renewal) and revoked
-// identities are rejected, so revocation applies to every request.
+// live identity. Unknown serials (superseded by a renewal), revoked identities
+// and certificates outside their validity window are rejected, so revocation
+// and expiry apply to every request, including those on a connection that was
+// opened while the certificate was still valid.
 func (a *Authority) Authenticate(ctx context.Context, cert *x509.Certificate) (domain.Principal, error) {
+	now := a.clock.Now()
+	if now.After(cert.NotAfter) || now.Before(cert.NotBefore) {
+		return domain.Principal{}, errNotAuthenticated()
+	}
 	serial := cert.SerialNumber.Text(16)
 	ident, err := a.db.IdentityBySerial(ctx, serial)
 	if errors.Is(err, store.ErrNotFound) {
@@ -255,7 +278,7 @@ func (a *Authority) Authenticate(ctx context.Context, cert *x509.Certificate) (d
 	if err != nil {
 		return domain.Principal{}, err
 	}
-	if ident.Revoked() || string(ident.ID) != cert.Subject.CommonName {
+	if ident.Revoked() || now.After(ident.NotAfter) || string(ident.ID) != cert.Subject.CommonName {
 		return domain.Principal{}, errNotAuthenticated()
 	}
 	return domain.Principal{ID: ident.ID, Kind: ident.Kind}, nil
@@ -274,8 +297,13 @@ func cleanName(name string) (string, error) {
 	if name == "" {
 		return "unnamed", nil
 	}
-	if len([]rune(name)) > maxNameLen || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+	if len([]rune(name)) > maxNameLen || strings.IndexFunc(name, isHidden) >= 0 {
 		return "", invalidRequest(fmt.Sprintf("name must be at most %d printable characters", maxNameLen))
 	}
 	return name, nil
 }
+
+// isHidden is true for characters that print as nothing or reorder text
+// (control characters and Unicode format characters such as U+202E), which
+// would let a name impersonate another in listings.
+func isHidden(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }

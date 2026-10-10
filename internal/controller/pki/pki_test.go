@@ -117,7 +117,7 @@ func TestCleanName(t *testing.T) {
 	if got, _ := cleanName(""); got != "unnamed" {
 		t.Errorf("%q", got)
 	}
-	for _, bad := range []string{"a\nb", "x\x00", string(make([]rune, 65))} {
+	for _, bad := range []string{"a\nb", "x\x00", "bob\u202egpj.exe", "zero\u200bwidth", string(make([]rune, 65))} {
 		if _, err := cleanName(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}

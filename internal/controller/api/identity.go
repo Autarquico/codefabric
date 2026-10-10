@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"time"
 
@@ -10,7 +11,10 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-const maxBodyBytes = 64 << 10
+const (
+	maxBodyBytes  = 64 << 10
+	maxTTLSeconds = int64(math.MaxInt64 / int64(time.Second))
+)
 
 func (s *Server) registerRoutes() {
 	s.handle("POST /v1/join", nil, s.join)
@@ -66,10 +70,8 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request, c caller) e
 	if err := decodeBody(w, r, &req); err != nil {
 		return err
 	}
-	if req.TTLSeconds < 1 || req.TTLSeconds > int64(pki.MaxTokenTTL/time.Second) {
-		return domain.NewError(domain.CodeInvalidRequest, "ttl_seconds is out of range", nil)
-	}
-	ttl := time.Duration(req.TTLSeconds) * time.Second
+	// The Authority owns the TTL policy; this only keeps the conversion from overflowing.
+	ttl := time.Duration(max(-maxTTLSeconds, min(req.TTLSeconds, maxTTLSeconds))) * time.Second
 	invite, expires, err := s.authority.CreateToken(r.Context(), c.Principal, domain.Kind(req.Kind), ttl)
 	if err != nil {
 		return err

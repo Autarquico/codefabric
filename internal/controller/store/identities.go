@@ -119,6 +119,16 @@ func (t *Tx) Revoke(ctx context.Context, id domain.ID, kind domain.Kind, at time
 	return rowsChanged(res)
 }
 
+// CountActiveIdentities counts the non-revoked identities of one kind.
+func (t *Tx) CountActiveIdentities(ctx context.Context, kind domain.Kind) (int, error) {
+	var n int
+	err := t.QueryRow(ctx, `SELECT COUNT(*) FROM identities WHERE kind = ? AND revoked_at IS NULL`, string(kind)).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("store: counting identities: %w", err)
+	}
+	return n, nil
+}
+
 // InsertJoinToken stores the hash of a freshly issued token.
 func (t *Tx) InsertJoinToken(ctx context.Context, hash string, kind domain.Kind, createdBy string, created, expires time.Time) error {
 	_, err := t.Exec(ctx,

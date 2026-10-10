@@ -163,11 +163,11 @@ func readCert(path string) (*x509.Certificate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pki: reading certificate: %w", err)
 	}
-	return ParseCertPEM(raw)
+	return parseCertPEM(raw)
 }
 
-// ParseCertPEM decodes a single PEM certificate.
-func ParseCertPEM(raw []byte) (*x509.Certificate, error) {
+// parseCertPEM decodes a single PEM certificate.
+func parseCertPEM(raw []byte) (*x509.Certificate, error) {
 	block, _ := pem.Decode(raw)
 	if block == nil || block.Type != pemTypeCert {
 		return nil, errors.New("pki: not a PEM certificate")

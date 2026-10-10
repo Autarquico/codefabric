@@ -100,6 +100,38 @@ func TestControllerIdentityTLS_RevocationCutsPersistentConnection(t *testing.T) 
 	}
 }
 
+func TestControllerIdentityTLS_ExpiredCertificateIsRejectedOnAReusedConnection(t *testing.T) {
+	tc := newController(t, time.Now())
+	b, _ := tc.enroll("laptop")
+	if _, err := b.Clients(t.Context()); err != nil {
+		t.Fatalf("before expiry: %v", err)
+	}
+
+	// TLS verifies with the real clock, so the handshake of the open
+	// connection stays valid; only the Authority's clock moves past NotAfter.
+	tc.clock.Advance(domain.Defaults().IdentityCertTTL + time.Hour)
+
+	_, err := b.Clients(t.Context())
+	wantCode(t, err, domain.CodeUnauthenticated)
+	wantCode(t, b.Renew(t.Context()), domain.CodeUnauthenticated)
+}
+
+func TestControllerIdentityTLS_LastActiveClientCannotBeRevoked(t *testing.T) {
+	tc := newController(t, time.Now())
+	owner, err := client.Describe(tc.ownerDir)
+	must(t, err)
+	wantCode(t, tc.owner.RemoveClient(t.Context(), owner.IdentityID), domain.CodePolicyDenied)
+	if _, err := tc.owner.Clients(t.Context()); err != nil {
+		t.Fatalf("the owner lost access: %v", err)
+	}
+
+	// With a second client, revoking oneself is allowed.
+	tc.enroll("laptop")
+	must(t, tc.owner.RemoveClient(t.Context(), owner.IdentityID))
+	_, err = tc.owner.Clients(t.Context())
+	wantCode(t, err, domain.CodeUnauthenticated)
+}
+
 func TestControllerIdentityTLS_AuthorizationByRouteAndKind(t *testing.T) {
 	tc := newController(t, time.Now())
 	clientHTTP := tc.httpClientFor(tc.ownerDir)
@@ -208,6 +240,12 @@ func TestControllerIdentityTLS_TokenTTLIsBounded(t *testing.T) {
 	}
 	if _, err := tc.owner.CreateToken(t.Context(), domain.KindClient, 7*24*time.Hour); err != nil {
 		t.Errorf("the maximum TTL must be accepted: %v", err)
+	}
+	// A value that overflows time.Duration is refused, not wrapped around.
+	code, body, _ := tc.call(tc.httpClientFor(tc.ownerDir), http.MethodPost, "/v1/tokens",
+		`{"kind":"client","ttl_seconds":9223372036854775807}`)
+	if code != http.StatusBadRequest || body.Code != domain.CodeInvalidRequest {
+		t.Errorf("overflowing ttl: %d %+v", code, body)
 	}
 	_, err := tc.owner.CreateToken(t.Context(), domain.Kind("owner"), time.Hour)
 	wantCode(t, err, domain.CodeInvalidRequest)
