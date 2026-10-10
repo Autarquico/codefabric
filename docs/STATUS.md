@@ -22,7 +22,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_(nada)_
+- #9 Registro de Workers y heartbeats
 <!-- /pm-sync:in-progress -->
 
 ---
