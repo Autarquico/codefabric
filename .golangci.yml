@@ -1,0 +1,79 @@
+version: "2"
+
+run:
+  build-tags: [integration, e2e]
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - depguard
+    - errcheck
+    - errorlint
+    - gosec
+    - govet
+    - ineffassign
+    - noctx
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - unused
+  settings:
+    depguard:
+      rules:
+        # domain: pure entities and rules (spec §32).
+        domain:
+          list-mode: strict
+          files: ["**/internal/domain/**"]
+          allow:
+            - $gostd
+            - github.com/Autarquico/codefabric/internal/domain
+            - github.com/oklog/ulid
+        # app: use cases depend on ports, never on implementations or UIs.
+        app:
+          list-mode: lax
+          files: ["**/internal/app/**"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/adapters/
+              desc: app must depend on ports, not adapter implementations
+            - pkg: github.com/Autarquico/codefabric/internal/controller/api
+              desc: app must not know about the HTTP layer
+            - pkg: github.com/Autarquico/codefabric/internal/cli
+              desc: app must not depend on UIs
+            - pkg: github.com/Autarquico/codefabric/internal/tui
+              desc: app must not depend on UIs
+            - pkg: github.com/Autarquico/codefabric/internal/mcp
+              desc: app must not depend on UIs
+        # CLI, TUI and MCP are clients of the same SDK (invariant 7).
+        interfaces:
+          list-mode: lax
+          files:
+            - "**/internal/cli/**"
+            - "**/internal/tui/**"
+            - "**/internal/mcp/**"
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/app
+              desc: interfaces must go through internal/client (invariant 7)
+            - pkg: github.com/Autarquico/codefabric/internal/controller
+              desc: interfaces must go through internal/client (invariant 7)
+            - pkg: github.com/Autarquico/codefabric/internal/worker
+              desc: interfaces must go through internal/client (invariant 7)
+            - pkg: github.com/Autarquico/codefabric/internal/adapters
+              desc: interfaces must go through internal/client (invariant 7)
+        store:
+          list-mode: lax
+          files: ["**/internal/controller/store/**"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/controller/api
+              desc: storage must not depend on the HTTP layer
+  exclusions:
+    presets: [std-error-handling]
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: [github.com/Autarquico/codefabric]
