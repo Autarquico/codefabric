@@ -235,13 +235,39 @@ func TestCredentials_PartialFailuresAreRecovered(t *testing.T) {
 		}
 	})
 
-	t.Run("crash between the two renames restores the previous bundle", func(t *testing.T) {
+	t.Run("crash between the two renames completes the new bundle", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "credentials")
 		if err := client.SaveCredentials(dir, good); err != nil {
 			t.Fatal(err)
 		}
-		// credentials -> credentials.old happened, credentials.new -> credentials did not.
+		// The real crash: the new bundle is complete in <dir>.new and the old
+		// directory was moved aside, but <dir>.new was not renamed to <dir>.
+		if err := client.SaveCredentials(dir+".new", next); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.Rename(dir, dir+".old"); err != nil {
+			t.Fatal(err)
+		}
+		got, err := client.LoadCredentials(dir)
+		if err != nil || got.Controller != "new:1" {
+			t.Fatalf("load: %+v, %v", got, err)
+		}
+		for _, leftover := range []string{dir + ".new", dir + ".old"} {
+			if _, err := os.Lstat(leftover); err == nil {
+				t.Errorf("%s left behind", leftover)
+			}
+		}
+	})
+
+	t.Run("crash after moving the old bundle aside with no usable new one restores the old", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "credentials")
+		if err := client.SaveCredentials(dir, good); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(dir, dir+".old"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(dir+".new", 0o700); err != nil { // half written
 			t.Fatal(err)
 		}
 		got, err := client.LoadCredentials(dir)

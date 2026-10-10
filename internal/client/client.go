@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -27,6 +28,10 @@ import (
 const (
 	requestTimeout = 30 * time.Second
 	maxResponse    = 1 << 20
+
+	pemTypeCert    = "CERTIFICATE"
+	pemTypeCertReq = "CERTIFICATE REQUEST"
+	pemTypeECKey   = "EC PRIVATE KEY"
 )
 
 // Client calls the Controller API.
@@ -39,15 +44,11 @@ type Client struct {
 
 // Open loads the credentials in dir and returns a client authenticated with them.
 func Open(dir string) (*Client, error) {
-	creds, err := LoadCredentials(dir)
+	b, err := loadBundle(dir)
 	if err != nil {
 		return nil, err
 	}
-	m, err := tlsMaterial(creds)
-	if err != nil {
-		return nil, err
-	}
-	c, err := newClient(creds.Controller, m.ca, []tls.Certificate{m.keyPair})
+	c, err := newClient(b.Controller, b.ca, []tls.Certificate{b.keyPair})
 	if err != nil {
 		return nil, err
 	}
@@ -113,11 +114,7 @@ func (c *Client) Renew(ctx context.Context) error {
 	if c.dir == "" {
 		return errors.New("client: renew needs credentials opened with Open")
 	}
-	creds, err := LoadCredentials(c.dir)
-	if err != nil {
-		return err
-	}
-	m, err := tlsMaterial(creds)
+	b, err := loadBundle(c.dir)
 	if err != nil {
 		return err
 	}
@@ -133,11 +130,11 @@ func (c *Client) Renew(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := verifyIssued([]byte(out.Certificate), key, m.ca); err != nil {
+	if err := verifyIssued([]byte(out.Certificate), key, b.ca); err != nil {
 		return err
 	}
-	creds.CertPEM, creds.KeyPEM = []byte(out.Certificate), keyPEM
-	return SaveCredentials(c.dir, creds)
+	b.CertPEM, b.KeyPEM = []byte(out.Certificate), keyPEM
+	return SaveCredentials(c.dir, b.Credentials)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
@@ -199,12 +196,38 @@ func (c *Client) transportError(ctx context.Context, err error) error {
 			"the Controller's certificate is not trusted by the CA pinned at connect time", nil)
 	}
 	var op *net.OpError
-	if errors.As(err, &op) && op.Op == "remote error" {
+	if errors.As(err, &op) && op.Op == "remote error" && rejectsCertificate(op.Err) {
 		return domain.NewError(domain.CodeUnauthenticated,
 			"the Controller rejected this client certificate (expired or revoked): "+renewHint, nil)
 	}
 	return domain.NewError(domain.CodeControllerUnreachable,
 		fmt.Sprintf("cannot reach the Controller at %s", c.controller), map[string]any{"cause": err.Error()})
+}
+
+// TLS alerts (RFC 8446 §6.2) by which a server refuses a client certificate.
+const (
+	alertBadCertificate      = 42
+	alertCertificateRevoked  = 44
+	alertCertificateExpired  = 45
+	alertUnknownCA           = 48
+	alertCertificateRequired = 116
+)
+
+// rejectsCertificate tells whether err is the alert a server sends to refuse a
+// client certificate. Over TCP, crypto/tls reports a received alert as a
+// net.OpError whose Err is its unexported alert type (a uint8 holding the
+// RFC number); tls.AlertError is only used by QUIC. The number is read by
+// reflection because that is the one stable, typed part of the value.
+func rejectsCertificate(err error) bool {
+	v := reflect.ValueOf(err)
+	if v.Kind() != reflect.Uint8 {
+		return false
+	}
+	switch v.Uint() {
+	case alertBadCertificate, alertCertificateRevoked, alertCertificateExpired, alertUnknownCA, alertCertificateRequired:
+		return true
+	}
+	return false
 }
 
 // GenerateKeyAndCSR makes a fresh P-256 key and the certificate request that
@@ -220,7 +243,7 @@ func GenerateKeyAndCSR() (*ecdsa.PrivateKey, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("client: creating CSR: %w", err)
 	}
-	return key, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})), nil
+	return key, string(pem.EncodeToMemory(&pem.Block{Type: pemTypeCertReq, Bytes: der})), nil
 }
 
 // EncodeKey is the PEM form stored in the credentials bundle.
@@ -229,12 +252,12 @@ func EncodeKey(key *ecdsa.PrivateKey) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("client: encoding key: %w", err)
 	}
-	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), nil
+	return pem.EncodeToMemory(&pem.Block{Type: pemTypeECKey, Bytes: der}), nil
 }
 
 func parseCertPEM(raw []byte) (*x509.Certificate, error) {
 	block, _ := pem.Decode(raw)
-	if block == nil || block.Type != "CERTIFICATE" {
+	if block == nil || block.Type != pemTypeCert {
 		return nil, errors.New("client: not a PEM certificate")
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
@@ -260,8 +283,4 @@ func verifyIssued(certPEM []byte, key *ecdsa.PrivateKey, ca *x509.Certificate) e
 		return fmt.Errorf("client: issued certificate does not verify against the pinned CA: %w", err)
 	}
 	return nil
-}
-
-func pemEncode(typ string, der []byte) []byte {
-	return pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: der})
 }

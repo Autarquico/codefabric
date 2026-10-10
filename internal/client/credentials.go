@@ -42,7 +42,9 @@ type Credentials struct {
 // SaveCredentials publishes the bundle atomically. The files are written into
 // <dir>.new (0700, files 0600), then the old directory is moved aside, the new
 // one renamed into place and the old one deleted. A crash at any point leaves
-// a complete bundle that LoadCredentials finds.
+// a complete bundle that LoadCredentials finds: the previous one if it happened
+// before the new bundle was complete, the new one if it happened after (a
+// crash between the two renames is rolled forward).
 func SaveCredentials(dir string, c Credentials) error {
 	if _, err := tlsMaterial(c); err != nil {
 		return err
@@ -101,46 +103,94 @@ func SaveCredentials(dir string, c Credentials) error {
 // LoadCredentials reads and validates the bundle. A missing bundle is
 // CF_UNAUTHENTICATED with the way out; an unsafe one is ErrUnsafeCredentials.
 func LoadCredentials(dir string) (Credentials, error) {
+	b, err := loadBundle(dir)
+	return b.Credentials, err
+}
+
+// CredentialsExist reports whether dir already holds credentials, finishing an
+// interrupted publish first.
+func CredentialsExist(dir string) (bool, error) {
 	if err := recoverInterrupted(dir); err != nil {
-		return Credentials{}, err
+		return false, err
+	}
+	_, err := os.Lstat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// bundle is a credentials bundle together with the TLS material validated
+// from it, so callers parse nothing twice.
+type bundle struct {
+	Credentials
+	material
+}
+
+func loadBundle(dir string) (bundle, error) {
+	if err := recoverInterrupted(dir); err != nil {
+		return bundle{}, err
 	}
 	exists, err := checkDir(dir)
 	if err != nil {
-		return Credentials{}, err
+		return bundle{}, err
 	}
 	if !exists {
-		return Credentials{}, domain.NewError(domain.CodeUnauthenticated,
+		return bundle{}, domain.NewError(domain.CodeUnauthenticated,
 			"no credentials found; run `cf connect <invitation>`", nil)
 	}
+	return readBundle(dir)
+}
+
+// readBundle reads dir, which checkDir has already vetted.
+func readBundle(dir string) (bundle, error) {
 	var c Credentials
 	for name, dst := range map[string]*[]byte{certFile: &c.CertPEM, keyFile: &c.KeyPEM, caFile: &c.CAPEM} {
-		if *dst, err = readPrivate(filepath.Join(dir, name)); err != nil {
-			return Credentials{}, err
+		raw, err := readPrivate(filepath.Join(dir, name))
+		if err != nil {
+			return bundle{}, err
 		}
+		*dst = raw
 	}
 	addr, err := readPrivate(filepath.Join(dir, controllerFile))
 	if err != nil {
-		return Credentials{}, err
+		return bundle{}, err
 	}
 	c.Controller = strings.TrimSpace(string(addr))
-	if _, err := tlsMaterial(c); err != nil {
-		return Credentials{}, err
+	m, err := tlsMaterial(c)
+	if err != nil {
+		return bundle{}, err
 	}
-	return c, nil
+	return bundle{Credentials: c, material: m}, nil
 }
 
 // recoverInterrupted finishes a publish that crashed between moving the old
-// directory aside and renaming the new one into place.
+// directory aside and renaming the new one into place. A complete <dir>.new is
+// rolled forward; the previous bundle comes back only if there is none.
 func recoverInterrupted(dir string) error {
 	if _, err := os.Lstat(dir); err == nil {
 		return nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("client: inspecting %s: %w", dir, err)
 	}
+	if stagedBundleIsComplete(dir + ".new") {
+		if err := os.Rename(dir+".new", dir); err != nil {
+			return fmt.Errorf("client: completing the interrupted publish: %w", err)
+		}
+		return os.RemoveAll(dir + ".old") // superseded: do not leave its key lying around
+	}
 	if err := os.Rename(dir+".old", dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("client: restoring previous credentials: %w", err)
 	}
 	return nil
+}
+
+func stagedBundleIsComplete(dir string) bool {
+	if exists, err := checkDir(dir); err != nil || !exists {
+		return false
+	}
+	_, err := readBundle(dir)
+	return err == nil
 }
 
 // checkDir reports whether dir exists, and fails if it is a symlink, not a
@@ -182,6 +232,7 @@ func readPrivate(path string) ([]byte, error) {
 
 type material struct {
 	keyPair tls.Certificate
+	leaf    *x509.Certificate
 	ca      *x509.Certificate
 }
 
@@ -199,17 +250,14 @@ func tlsMaterial(c Credentials) (material, error) {
 	if err != nil {
 		return material{}, err
 	}
-	leaf, err := x509.ParseCertificate(pair.Certificate[0])
-	if err != nil {
-		return material{}, fmt.Errorf("client: parsing certificate: %w", err)
-	}
+	leaf := pair.Leaf // set by tls.X509KeyPair
 	if err := leaf.CheckSignatureFrom(ca); err != nil {
 		return material{}, errors.New("client: certificate was not issued by the pinned CA")
 	}
 	if c.Controller == "" {
 		return material{}, errors.New("client: missing Controller address")
 	}
-	return material{keyPair: pair, ca: ca}, nil
+	return material{keyPair: pair, leaf: leaf, ca: ca}, nil
 }
 
 // Info describes the stored credentials without exposing any secret.
@@ -221,17 +269,9 @@ type Info struct {
 
 // Describe reads the bundle in dir and summarises it.
 func Describe(dir string) (Info, error) {
-	creds, err := LoadCredentials(dir)
+	b, err := loadBundle(dir)
 	if err != nil {
 		return Info{}, err
 	}
-	m, err := tlsMaterial(creds)
-	if err != nil {
-		return Info{}, err
-	}
-	leaf, err := x509.ParseCertificate(m.keyPair.Certificate[0])
-	if err != nil {
-		return Info{}, fmt.Errorf("client: parsing certificate: %w", err)
-	}
-	return Info{Controller: creds.Controller, IdentityID: leaf.Subject.CommonName, NotAfter: leaf.NotAfter}, nil
+	return Info{Controller: b.Controller, IdentityID: b.leaf.Subject.CommonName, NotAfter: b.leaf.NotAfter}, nil
 }

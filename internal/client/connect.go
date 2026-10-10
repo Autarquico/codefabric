@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -69,7 +70,7 @@ func Connect(ctx context.Context, invitation, name, credentialsDir string) (Conn
 		Controller: inv.Address(),
 		CertPEM:    []byte(out.Certificate),
 		KeyPEM:     keyPEM,
-		CAPEM:      pemCert(ca),
+		CAPEM:      pem.EncodeToMemory(&pem.Block{Type: pemTypeCert, Bytes: ca.Raw}),
 	})
 	if err != nil {
 		return Connected{}, fmt.Errorf("the invitation was redeemed but the credentials could not be saved (%w): %s", err, renewHint)
@@ -147,8 +148,4 @@ func verifyAgainstPin(chain []*x509.Certificate, inv v1.Invite, now time.Time) (
 		return nil, &pinError{"its certificate is not valid for " + inv.Host + ": " + err.Error()}
 	}
 	return ca, nil
-}
-
-func pemCert(c *x509.Certificate) []byte {
-	return pemEncode("CERTIFICATE", c.Raw)
 }
