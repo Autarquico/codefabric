@@ -13,10 +13,33 @@ import (
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 )
 
+// Limits that keep a slow or silent peer from holding a connection forever.
 const (
 	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 30 * time.Second
+	writeTimeout      = 30 * time.Second
+	idleTimeout       = 120 * time.Second
+	maxHeaderBytes    = 16 << 10
 	shutdownTimeout   = 5 * time.Second
 )
+
+// Timeouts bound a connection; a zero field takes its production default.
+type Timeouts struct {
+	Read, Write, Idle time.Duration
+}
+
+func (t Timeouts) orDefaults() Timeouts {
+	if t.Read == 0 {
+		t.Read = readTimeout
+	}
+	if t.Write == 0 {
+		t.Write = writeTimeout
+	}
+	if t.Idle == 0 {
+		t.Idle = idleTimeout
+	}
+	return t
+}
 
 // Config wires a Server.
 type Config struct {
@@ -24,11 +47,13 @@ type Config struct {
 	CA         *pki.CA
 	ServerCert tls.Certificate // leaf first, then the CA
 	Logger     *slog.Logger    // defaults to slog.Default()
+	Timeouts   Timeouts        // tests shorten them
 }
 
 // Server is the Controller API over mutual TLS.
 type Server struct {
 	authority *pki.Authority
+	timeouts  Timeouts
 	log       *slog.Logger
 	tlsConfig *tls.Config
 	mux       *http.ServeMux
@@ -45,6 +70,7 @@ func New(c Config) *Server {
 	roots.AddCert(c.CA.Cert)
 	s := &Server{
 		authority: c.Authority,
+		timeouts:  c.Timeouts.orDefaults(),
 		log:       log,
 		tlsConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
@@ -73,6 +99,10 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		Handler:           s.Handler(),
 		TLSConfig:         s.TLSConfig(),
 		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       s.timeouts.Read,
+		WriteTimeout:      s.timeouts.Write,
+		IdleTimeout:       s.timeouts.Idle,
+		MaxHeaderBytes:    maxHeaderBytes,
 		ErrorLog:          slog.NewLogLogger(s.log.Handler(), slog.LevelDebug),
 	}
 	done := make(chan struct{})

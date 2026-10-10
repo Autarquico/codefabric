@@ -11,6 +11,9 @@ import (
 	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -21,6 +24,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/controller/api"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -416,6 +420,31 @@ func TestControllerIdentityTLS_RevokeEdgeCases(t *testing.T) {
 	wantCode(t, err, domain.CodeNotFound)
 	wantCode(t, tc.owner.RemoveClient(t.Context(), "not-an-id"), domain.CodeNotFound)
 	wantCode(t, tc.owner.RemoveClient(t.Context(), "worker_01JA0000000000000000000000"), domain.CodeNotFound)
+}
+
+func TestControllerIdentityTLS_ServerClosesAConnectionThatStallsMidBody(t *testing.T) {
+	tc := newController(t, time.Now(), func(c *api.Config) {
+		c.Timeouts = api.Timeouts{Read: 300 * time.Millisecond, Write: 300 * time.Millisecond, Idle: time.Second}
+	})
+	roots := x509.NewCertPool()
+	roots.AddCert(tc.ca.Cert)
+	d := tls.Dialer{Config: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: "127.0.0.1"}}
+	conn, err := d.DialContext(t.Context(), "tcp", tc.addr)
+	must(t, err)
+	defer func() { _ = conn.Close() }()
+
+	// The body is announced as 100 bytes and 5 arrive; the client then goes silent.
+	_, err = conn.Write([]byte("POST /v1/join HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"tok"))
+	must(t, err)
+
+	const patience = 5 * time.Second
+	must(t, conn.SetReadDeadline(time.Now().Add(patience)))
+	start := time.Now()
+	_, err = io.Copy(io.Discard, conn)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatalf("the server still held the connection open after %s", time.Since(start))
+	}
 }
 
 func TestControllerIdentityTLS_ServerNeedsTLS13(t *testing.T) {

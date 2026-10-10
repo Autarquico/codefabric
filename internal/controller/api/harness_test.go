@@ -45,7 +45,7 @@ type testController struct {
 // newController starts a Controller whose Authority clock begins at start.
 // TLS verification always uses the real time, so a start in the past yields
 // client certificates that are genuinely expired.
-func newController(t *testing.T, start time.Time) *testController {
+func newController(t *testing.T, start time.Time, opts ...func(*api.Config)) *testController {
 	t.Helper()
 	tc := &testController{t: t, clock: clock.NewFake(start)}
 	dir := t.TempDir()
@@ -69,7 +69,11 @@ func newController(t *testing.T, start time.Time) *testController {
 		DB: tc.db, CA: tc.ca, Clock: tc.clock, IDs: domain.NewIDGenerator(tc.clock.Now, rand.Reader),
 		CertTTL: domain.Defaults().IdentityCertTTL, Host: host, Port: port,
 	})
-	srv := api.New(api.Config{Authority: tc.authority, CA: tc.ca, ServerCert: serverCert})
+	cfg := api.Config{Authority: tc.authority, CA: tc.ca, ServerCert: serverCert}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	srv := api.New(cfg)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(ctx, ln) }()
