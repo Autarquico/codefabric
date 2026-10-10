@@ -85,7 +85,7 @@ func TestProjects_Validation(t *testing.T) {
 	}
 }
 
-func TestProjects_NeverStoreOrAuditACredential(t *testing.T) {
+func TestProjects_RejectUnsupportedRepoFormsWithoutStoringOrAuditingThem(t *testing.T) {
 	e := newEnv(t)
 	for i, repo := range []string{
 		"https://user:s3cret@example.com/org/r.git", "https://:s3cret@example.com/org/r.git", "ssh://git:s3cret@example.com/org/r.git",

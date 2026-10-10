@@ -10,8 +10,8 @@ const RepoFormHint = "an https/ssh/git URL, a scp-like user@host:path or an abso
 
 // The accepted repository forms are a strict allowlist (spec B5): anything
 // else is refused, so the Controller never has to recognise a credential. Each
-// grammar is anchored. The path of a URL or a scp-like address has no ':', and
-// an http(s) URL has no userinfo.
+// grammar is anchored. The path of an http(s), ssh or git URL or of a scp-like
+// address has no ':', and an http(s) URL has no userinfo.
 const (
 	host  = `(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])`
 	port  = `(?::[0-9]{1,5})?`
