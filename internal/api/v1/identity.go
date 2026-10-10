@@ -20,10 +20,15 @@ type ErrorBody struct {
 
 // JoinRequest redeems a token. The token travels in the body, never the URL.
 // CSR is a PEM CERTIFICATE REQUEST: the private key never leaves the client.
+//
+// Worker is present exactly when the token is a worker's: it carries what the
+// machine contributes (§9.2), so a worker invitation cannot be redeemed as a
+// client and the other way round.
 type JoinRequest struct {
-	Token string `json:"token"`
-	CSR   string `json:"csr"`
-	Name  string `json:"name"`
+	Token  string          `json:"token"`
+	CSR    string          `json:"csr"`
+	Name   string          `json:"name"`
+	Worker *WorkerSettings `json:"worker,omitempty"`
 }
 
 // CertificateResponse carries a freshly signed client certificate (PEM).

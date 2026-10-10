@@ -273,22 +273,38 @@ func TestControllerIdentityTLS_TokenTTLIsBounded(t *testing.T) {
 	wantCode(t, err, domain.CodeInvalidRequest)
 }
 
-func TestControllerIdentityTLS_WorkerTokenIsNotRedeemableYet(t *testing.T) {
+func TestControllerIdentityTLS_AnInvitationIsRedeemedOnlyAsItsKind(t *testing.T) {
 	tc := newController(t, time.Now())
 	res, err := tc.owner.CreateToken(t.Context(), domain.KindWorker, time.Hour)
 	must(t, err)
 
-	for range 2 { // the second attempt shows the first did not spend the token
+	// Redeemed as a client it is refused, and the refusal does not spend it.
+	for range 2 {
 		_, err = client.Connect(t.Context(), res.Invite, "w", t.TempDir()+"/credentials")
-		wantCode(t, err, domain.CodeNotImplemented)
-	}
-	if got := domain.ExitCode(domain.CodeNotImplemented); got != 8 {
-		t.Errorf("exit code %d", got)
+		wantCode(t, err, domain.CodeInvalidRequest)
 	}
 	list, err := tc.owner.Clients(t.Context())
 	must(t, err)
 	if len(list) != 1 {
-		t.Errorf("a worker join created identities: %+v", list)
+		t.Errorf("a refused join created identities: %+v", list)
+	}
+	dir := t.TempDir() + "/credentials"
+	if _, err = client.Connect(t.Context(), res.Invite, "w", dir, client.AsWorker(v1.WorkerSettings{})); err != nil {
+		t.Fatalf("as a Worker: %v", err)
+	}
+
+	// And the other way round.
+	clientInvite, err := tc.owner.CreateToken(t.Context(), domain.KindClient, time.Hour)
+	must(t, err)
+	_, err = client.Connect(t.Context(), clientInvite.Invite, "m", t.TempDir()+"/credentials", client.AsWorker(v1.WorkerSettings{}))
+	wantCode(t, err, domain.CodeInvalidRequest)
+	if _, err = client.Connect(t.Context(), clientInvite.Invite, "m", t.TempDir()+"/credentials"); err != nil {
+		t.Errorf("a client invitation, after the refusal: %v", err)
+	}
+	list, err = tc.owner.Clients(t.Context())
+	must(t, err)
+	if len(list) != 2 { // the owner and the new client; the Worker is not a client
+		t.Errorf("clients = %+v", list)
 	}
 }
 
@@ -777,7 +793,7 @@ func TestControllerIdentityTLS_JoinReadsTheClockAfterTakingTheWriter(t *testing.
 	must(t, err)
 
 	err = tc.queueBehindWriter(2*time.Minute, func() error {
-		_, err := tc.authority.Join(t.Context(), invite.Token, newCSR(t), "late")
+		_, err := tc.authority.Join(t.Context(), invite.Token, newCSR(t), "late", nil)
 		return err
 	})
 	wantCode(t, err, domain.CodeUnauthenticated)

@@ -28,11 +28,20 @@ type pinError struct{ reason string }
 
 func (e *pinError) Error() string { return e.reason }
 
+// ConnectOption adjusts what Connect asks for.
+type ConnectOption func(*v1.JoinRequest)
+
+// AsWorker enrols the machine as a Worker contributing settings, which a
+// worker invitation requires and a client invitation refuses.
+func AsWorker(settings v1.WorkerSettings) ConnectOption {
+	return func(r *v1.JoinRequest) { r.Worker = &settings }
+}
+
 // Connect enrols this machine with the Controller named by an invitation and
 // saves the credentials into credentialsDir. It sends nothing secret until
 // the Controller has proved, against the fingerprint in the invitation, that
 // it holds the pinned CA and that its certificate is valid for the invited host.
-func Connect(ctx context.Context, invitation, name, credentialsDir string) (Connected, error) {
+func Connect(ctx context.Context, invitation, name, credentialsDir string, opts ...ConnectOption) (Connected, error) {
 	inv, err := v1.ParseInvite(invitation)
 	if err != nil {
 		return Connected{}, domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
@@ -55,8 +64,12 @@ func Connect(ctx context.Context, invitation, name, credentialsDir string) (Conn
 	if err != nil {
 		return Connected{}, err
 	}
+	join := v1.JoinRequest{Token: inv.Token, CSR: csr, Name: name}
+	for _, opt := range opts {
+		opt(&join)
+	}
 	var out v1.CertificateResponse
-	if err := c.do(ctx, http.MethodPost, "/v1/join", v1.JoinRequest{Token: inv.Token, CSR: csr, Name: name}, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/v1/join", join, &out); err != nil {
 		return Connected{}, err
 	}
 	if err := verifyIssued([]byte(out.Certificate), key, ca); err != nil {
@@ -73,7 +86,11 @@ func Connect(ctx context.Context, invitation, name, credentialsDir string) (Conn
 		CAPEM:      pem.EncodeToMemory(&pem.Block{Type: pemTypeCert, Bytes: ca.Raw}),
 	})
 	if err != nil {
-		return Connected{}, fmt.Errorf("the invitation was redeemed but the credentials could not be saved (%w): %s", err, renewHint)
+		hint := renewHint
+		if join.Worker != nil {
+			hint = WorkerRecoveryHint
+		}
+		return Connected{}, fmt.Errorf("the invitation was redeemed but the credentials could not be saved (%w): %s", err, hint)
 	}
 	return Connected{IdentityID: out.IdentityID, Controller: inv.Address()}, nil
 }

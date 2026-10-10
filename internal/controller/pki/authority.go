@@ -35,7 +35,13 @@ type Authority struct {
 	certTTL time.Duration
 	host    string // advertised host
 	port    string
+	enroll  EnrollWorker
 }
+
+// EnrollWorker registers the Worker behind a freshly issued worker identity.
+// It runs inside the transaction that redeems the token, so a failure leaves
+// the token unspent and no identity behind. The Worker's ID is the identity's.
+type EnrollWorker func(ctx context.Context, tx *store.Tx, id domain.ID, name string, settings v1.WorkerSettings, now time.Time) error
 
 // AuthorityConfig wires an Authority.
 type AuthorityConfig struct {
@@ -46,13 +52,15 @@ type AuthorityConfig struct {
 	CertTTL time.Duration // client certificate lifetime
 	// Host and Port are what invitations point at.
 	Host, Port string
+	// EnrollWorker is optional: without it, worker invitations cannot be redeemed.
+	EnrollWorker EnrollWorker
 }
 
 // NewAuthority builds an Authority.
 func NewAuthority(c AuthorityConfig) *Authority {
 	return &Authority{
 		db: c.DB, ca: c.CA, clock: c.Clock, ids: c.IDs, certTTL: c.CertTTL,
-		host: c.Host, port: c.Port,
+		host: c.Host, port: c.Port, enroll: c.EnrollWorker,
 	}
 }
 
@@ -100,11 +108,13 @@ type Joined struct {
 	NotAfter    time.Time
 }
 
-// Join redeems a token for a client certificate. Order matters: the CSR is
-// validated before the database is touched, and everything else (consuming
-// the token, creating the identity, signing, auditing) is one transaction, so
-// a failure anywhere leaves the token unspent.
-func (a *Authority) Join(ctx context.Context, token, csrPEM, name string) (Joined, error) {
+// Join redeems a token for a certificate. A worker token comes with the
+// settings the machine contributes and a client token without them: the
+// request must match the token's kind. Order matters: the CSR is validated
+// before the database is touched, and everything else (consuming the token,
+// creating the identity and, for a Worker, its row, signing, auditing) is one
+// transaction, so a failure anywhere leaves the token unspent.
+func (a *Authority) Join(ctx context.Context, token, csrPEM, name string, worker *v1.WorkerSettings) (Joined, error) {
 	csr, err := ParseCSR(csrPEM)
 	if err != nil {
 		return Joined{}, err
@@ -127,19 +137,36 @@ func (a *Authority) Join(ctx context.Context, token, csrPEM, name string) (Joine
 		if !ok {
 			return errBadToken()
 		}
-		if kind != domain.KindClient {
-			// Returning the error rolls the consumption back: the token stays valid.
-			return domain.NewError(domain.CodeNotImplemented, "worker enrolment is not available yet", nil)
+		// Returning an error rolls the consumption back: the token stays valid.
+		if err := a.checkEnrolment(kind, worker); err != nil {
+			return err
 		}
 		out, err = a.createIdentity(ctx, tx, kind, name, csr, now, store.AuditEntry{
-			ActorKind: domain.ActorHuman,
+			ActorKind: domain.Principal{Kind: kind}.ActorKind(),
 		})
 		if err != nil {
 			return err
 		}
+		if kind == domain.KindWorker {
+			if err := a.enroll(ctx, tx, out.ID, name, *worker, now); err != nil {
+				return err
+			}
+		}
 		return tx.LinkJoinToken(ctx, hash, out.ID)
 	})
 	return out, err
+}
+
+func (a *Authority) checkEnrolment(kind domain.Kind, worker *v1.WorkerSettings) error {
+	switch {
+	case kind == domain.KindWorker && a.enroll == nil:
+		return domain.NewError(domain.CodeNotImplemented, "worker enrolment is not available", nil)
+	case kind == domain.KindWorker && worker == nil:
+		return invalidRequest("this is a worker invitation: redeem it with `cf worker join`")
+	case kind == domain.KindClient && worker != nil:
+		return invalidRequest("this is a client invitation: redeem it with `cf connect`")
+	}
+	return nil
 }
 
 // BootstrapOwner creates the first client identity without a token: whoever

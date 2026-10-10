@@ -20,6 +20,8 @@ var statusByCode = map[domain.Code]int{
 	domain.CodeInvalidTransition:   http.StatusConflict,
 	domain.CodeAmbiguousRef:        http.StatusConflict,
 	domain.CodeIdempotencyMismatch: http.StatusConflict,
+	domain.CodeWorkerBusy:          http.StatusConflict,
+	domain.CodeWorkerOffline:       http.StatusConflict,
 	domain.CodeNotImplemented:      http.StatusNotImplemented,
 }
 
