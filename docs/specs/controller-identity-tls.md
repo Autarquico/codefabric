@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: M
 issue: 5
-prs: []
+prs: [30]
 related_issues: [5]
 sub_issues: []
 depends_on: [controller-store]
