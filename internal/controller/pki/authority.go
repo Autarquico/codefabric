@@ -21,6 +21,10 @@ const MaxTokenTTL = 7 * 24 * time.Hour
 
 const maxNameLen = 64
 
+// renewGrace is how long a replaced certificate may still renew, so that a
+// client whose renewal response was lost can retry with what it still holds.
+const renewGrace = 10 * time.Minute
+
 // Authority issues, renews and revokes identities. Every change commits with
 // its audit entry in one transaction, and secrets never reach the audit trail.
 type Authority struct {
@@ -179,14 +183,17 @@ func (a *Authority) createIdentity(ctx context.Context, tx *store.Tx, kind domai
 	return Joined{ID: id, Certificate: pem.EncodeToMemory(&pem.Block{Type: pemTypeCert, Bytes: der}), NotAfter: notAfter}, nil
 }
 
-// Renew replaces the certificate of the authenticated identity. The new serial
-// supersedes presentedSerial inside the transaction, so the old certificate
-// stops working, and a revocation that committed first wins.
-func (a *Authority) Renew(ctx context.Context, p domain.Principal, presentedSerial, csrPEM string) (Joined, error) {
+// Renew replaces the certificate of the authenticated identity. presented is
+// the certificate of the request; it must be the identity's current one, or
+// its previous one within the grace period. Everything is checked again inside
+// the transaction against a.clock, so a certificate that expired, or an
+// identity revoked, between authentication and commit does not renew.
+func (a *Authority) Renew(ctx context.Context, p domain.Principal, presented *x509.Certificate, csrPEM string) (Joined, error) {
 	csr, err := ParseCSR(csrPEM)
 	if err != nil {
 		return Joined{}, err
 	}
+	presentedSerial := presented.SerialNumber.Text(16)
 	now := a.clock.Now()
 	var out Joined
 	err = a.db.WithTx(ctx, func(tx *store.Tx) error {
@@ -197,14 +204,20 @@ func (a *Authority) Renew(ctx context.Context, p domain.Principal, presentedSeri
 		if err != nil {
 			return err
 		}
-		if ident.Revoked() || ident.CertSerial != presentedSerial {
+		if !validAt(presented, now) || !ident.UsableAt(now) {
 			return errNotAuthenticated()
 		}
 		der, serial, notAfter, err := a.ca.signClient(csr, ident.ID, now, a.certTTL)
 		if err != nil {
 			return err
 		}
-		swapped, err := tx.ReplaceCertificate(ctx, ident.ID, presentedSerial, serial, notAfter)
+		var swapped bool
+		switch {
+		case ident.CertSerial == presentedSerial:
+			swapped, err = tx.ReplaceCertificate(ctx, ident.ID, presentedSerial, serial, notAfter, now.Add(renewGrace))
+		case ident.PreviousSerial == presentedSerial:
+			swapped, err = tx.ReplaceFromPrevious(ctx, ident.ID, presentedSerial, serial, notAfter, now)
+		}
 		if err != nil {
 			return err
 		}
@@ -222,9 +235,14 @@ func (a *Authority) Renew(ctx context.Context, p domain.Principal, presentedSeri
 	return out, err
 }
 
+func validAt(cert *x509.Certificate, now time.Time) bool {
+	return !now.Before(cert.NotBefore) && now.Before(cert.NotAfter)
+}
+
 // RevokeClient revokes a client identity. Revoking twice succeeds silently.
-// The last active client cannot be revoked: nobody would be left to administer
-// the Controller. Revoking oneself is fine while others remain.
+// The last usable client cannot be revoked: nobody would be left to administer
+// the Controller. Revoking oneself is fine while others remain, and a client
+// that is already expired is not usable, so it can always be revoked.
 func (a *Authority) RevokeClient(ctx context.Context, by domain.Principal, id domain.ID) error {
 	now := a.clock.Now()
 	return a.db.WithTx(ctx, func(tx *store.Tx) error {
@@ -238,12 +256,14 @@ func (a *Authority) RevokeClient(ctx context.Context, by domain.Principal, id do
 		if ident.Revoked() {
 			return nil
 		}
-		usable, err := tx.CountUsableIdentities(ctx, domain.KindClient, now)
-		if err != nil {
-			return err
-		}
-		if usable <= 1 {
-			return domain.NewError(domain.CodePolicyDenied, "the last usable client cannot be revoked", nil)
+		if ident.UsableAt(now) {
+			usable, err := tx.CountUsableIdentities(ctx, domain.KindClient, now)
+			if err != nil {
+				return err
+			}
+			if usable <= 1 {
+				return domain.NewError(domain.CodePolicyDenied, "the last usable client cannot be revoked", nil)
+			}
 		}
 		if err := tx.Revoke(ctx, id, domain.KindClient, now); err != nil {
 			return err
@@ -260,28 +280,43 @@ func (a *Authority) Clients(ctx context.Context) ([]store.Identity, error) {
 	return a.db.Identities(ctx, domain.KindClient)
 }
 
+// Session is an authenticated request. Superseded is true when the certificate
+// is the one a renewal replaced, still within its grace: it may only renew.
+type Session struct {
+	Principal  domain.Principal
+	Superseded bool
+}
+
 // Authenticate maps a certificate that already passed TLS verification to a
-// live identity. Unknown serials (superseded by a renewal), revoked identities
-// and certificates outside their validity window are rejected, so revocation
-// and expiry apply to every request, including those on a connection that was
-// opened while the certificate was still valid.
-func (a *Authority) Authenticate(ctx context.Context, cert *x509.Certificate) (domain.Principal, error) {
+// live identity. Unknown serials, revoked identities and certificates outside
+// their validity window are rejected, so revocation and expiry apply to every
+// request, including those on a connection that was opened while the
+// certificate was still valid. A replaced certificate within its renewal grace
+// is accepted but marked Superseded.
+func (a *Authority) Authenticate(ctx context.Context, cert *x509.Certificate) (Session, error) {
 	now := a.clock.Now()
-	if now.After(cert.NotAfter) || now.Before(cert.NotBefore) {
-		return domain.Principal{}, errNotAuthenticated()
+	if !validAt(cert, now) {
+		return Session{}, errNotAuthenticated()
 	}
 	serial := cert.SerialNumber.Text(16)
 	ident, err := a.db.IdentityBySerial(ctx, serial)
 	if errors.Is(err, store.ErrNotFound) {
-		return domain.Principal{}, errNotAuthenticated()
+		return Session{}, errNotAuthenticated()
 	}
 	if err != nil {
-		return domain.Principal{}, err
+		return Session{}, err
 	}
-	if ident.Revoked() || now.After(ident.NotAfter) || string(ident.ID) != cert.Subject.CommonName {
-		return domain.Principal{}, errNotAuthenticated()
+	if !ident.UsableAt(now) || string(ident.ID) != cert.Subject.CommonName {
+		return Session{}, errNotAuthenticated()
 	}
-	return domain.Principal{ID: ident.ID, Kind: ident.Kind}, nil
+	session := Session{Principal: domain.Principal{ID: ident.ID, Kind: ident.Kind}}
+	if ident.CertSerial != serial {
+		if !now.Before(ident.PreviousValidUntil) {
+			return Session{}, errNotAuthenticated()
+		}
+		session.Superseded = true
+	}
+	return session, nil
 }
 
 func errNotAuthenticated() *domain.Error {

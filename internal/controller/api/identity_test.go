@@ -476,3 +476,228 @@ func TestControllerIdentityTLS_ServerNeedsTLS13(t *testing.T) {
 		t.Fatal("a TLS 1.2 handshake succeeded")
 	}
 }
+
+// certOf is the certificate stored in a credentials directory.
+func certOf(t *testing.T, dir string) *x509.Certificate {
+	t.Helper()
+	creds, err := client.LoadCredentials(dir)
+	must(t, err)
+	block, _ := pem.Decode(creds.CertPEM)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	must(t, err)
+	return cert
+}
+
+func newCSR(t *testing.T) string {
+	t.Helper()
+	_, csr, err := client.GenerateKeyAndCSR()
+	must(t, err)
+	return csr
+}
+
+// loseRenewalResponse renews through the API and throws the response away, as
+// if the connection dropped, the process died or the local write failed.
+func loseRenewalResponse(t *testing.T, tc *testController, dir string) {
+	t.Helper()
+	body, err := json.Marshal(v1.RenewRequest{CSR: newCSR(t)})
+	must(t, err)
+	if code, _, raw := tc.call(tc.httpClientFor(dir), http.MethodPost, "/v1/identity/renew", string(body)); code != http.StatusOK {
+		t.Fatalf("renew: %d %s", code, raw)
+	}
+}
+
+func wantRecoveryHint(t *testing.T, err error) {
+	t.Helper()
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if !strings.Contains(err.Error(), "cf connect --force") {
+		t.Errorf("no recovery hint in %q", err)
+	}
+}
+
+func TestControllerIdentityTLS_RenewNeedsACertificateThatIsValidAtCommit(t *testing.T) {
+	t.Run("the presented certificate expires after authentication", func(t *testing.T) {
+		tc := newController(t, time.Now())
+		presented := certOf(t, tc.ownerDir)
+		tc.clock.Advance(domain.Defaults().IdentityCertTTL + time.Hour)
+
+		owner, err := client.Describe(tc.ownerDir)
+		must(t, err)
+		_, err = tc.authority.Renew(t.Context(), domain.Principal{ID: domain.ID(owner.IdentityID), Kind: domain.KindClient}, presented, newCSR(t))
+		wantCode(t, err, domain.CodeUnauthenticated)
+	})
+
+	t.Run("the identity's certificate expired after authentication", func(t *testing.T) {
+		tc := newController(t, time.Now())
+		owner, err := client.Describe(tc.ownerDir)
+		must(t, err)
+		must(t, tc.db.WithTx(t.Context(), func(tx *store.Tx) error {
+			_, err := tx.Exec(t.Context(), `UPDATE identities SET not_after = ? WHERE id = ?`,
+				tc.clock.Now().Add(-time.Second).UnixNano(), owner.IdentityID)
+			return err
+		}))
+		_, err = tc.authority.Renew(t.Context(), domain.Principal{ID: domain.ID(owner.IdentityID), Kind: domain.KindClient}, certOf(t, tc.ownerDir), newCSR(t))
+		wantCode(t, err, domain.CodeUnauthenticated)
+	})
+}
+
+func TestScenario_ControllerIdentityTLS_RenovacionPorConexionReutilizada(t *testing.T) {
+	tc := newController(t, time.Now())
+	b, _ := tc.enroll("laptop")
+	if _, err := b.Clients(t.Context()); err != nil {
+		t.Fatalf("before expiry: %v", err)
+	}
+	tc.clock.Advance(domain.Defaults().IdentityCertTTL + time.Hour)
+
+	_, err := b.Clients(t.Context())
+	wantRecoveryHint(t, err)
+	wantRecoveryHint(t, b.Renew(t.Context()))
+}
+
+func TestControllerIdentityTLS_RevokedClientGetsTheRecoveryHint(t *testing.T) {
+	tc := newController(t, time.Now())
+	b, dir := tc.enroll("laptop")
+	info, err := client.Describe(dir)
+	must(t, err)
+	must(t, tc.owner.RemoveClient(t.Context(), info.IdentityID))
+
+	_, err = b.Clients(t.Context())
+	wantRecoveryHint(t, err)
+}
+
+func TestControllerIdentityTLS_ClientKeepsWorkingAfterRenew(t *testing.T) {
+	tc := newController(t, time.Now())
+	b, _ := tc.enroll("laptop")
+
+	must(t, b.Renew(t.Context()))
+	if _, err := b.Clients(t.Context()); err != nil {
+		t.Fatalf("after the first renewal: %v", err)
+	}
+	must(t, b.Renew(t.Context()))
+	if _, err := b.Clients(t.Context()); err != nil {
+		t.Fatalf("after the second renewal: %v", err)
+	}
+}
+
+func TestControllerIdentityTLS_ConcurrentRenewsLeaveTheClientUsable(t *testing.T) {
+	tc := newController(t, time.Now())
+	b, dir := tc.enroll("laptop")
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() { must(t, b.Renew(t.Context())) })
+	}
+	wg.Wait()
+
+	if _, err := b.Clients(t.Context()); err != nil {
+		t.Fatalf("shared client: %v", err)
+	}
+	reopened, err := client.Open(dir)
+	must(t, err)
+	if _, err := reopened.Clients(t.Context()); err != nil {
+		t.Fatalf("stored credentials: %v", err)
+	}
+}
+
+func TestControllerIdentityTLS_InterruptedRenewalCanBeRetried(t *testing.T) {
+	t.Run("the old credentials renew again within the grace", func(t *testing.T) {
+		tc := newController(t, time.Now())
+		_, dir := tc.enroll("laptop")
+		loseRenewalResponse(t, tc, dir) // the stored credentials are still the old ones
+
+		retry, err := client.Open(dir)
+		must(t, err)
+		must(t, retry.Renew(t.Context()))
+		again, err := client.Open(dir)
+		must(t, err)
+		if _, err := again.Clients(t.Context()); err != nil {
+			t.Fatalf("after the retry: %v", err)
+		}
+	})
+
+	t.Run("the grace only covers renewing", func(t *testing.T) {
+		tc := newController(t, time.Now())
+		_, dir := tc.enroll("laptop")
+		loseRenewalResponse(t, tc, dir)
+
+		old := tc.httpClientFor(dir)
+		for _, p := range []struct{ method, path, body string }{
+			{http.MethodGet, "/v1/clients", ""},
+			{http.MethodPost, "/v1/tokens", `{"kind":"client","ttl_seconds":60}`},
+		} {
+			if code, body, _ := tc.call(old, p.method, p.path, p.body); code != http.StatusUnauthorized || body.Code != domain.CodeUnauthenticated {
+				t.Errorf("%s %s with the superseded certificate: %d %+v", p.method, p.path, code, body)
+			}
+		}
+		stale, err := client.Open(dir)
+		must(t, err)
+		_, err = stale.Clients(t.Context())
+		wantRecoveryHint(t, err)
+	})
+
+	t.Run("outside the grace the old credentials are refused", func(t *testing.T) {
+		tc := newController(t, time.Now())
+		_, dir := tc.enroll("laptop")
+		loseRenewalResponse(t, tc, dir)
+		tc.clock.Advance(10*time.Minute + time.Second)
+
+		late, err := client.Open(dir)
+		must(t, err)
+		wantRecoveryHint(t, late.Renew(t.Context()))
+	})
+
+	t.Run("a retry does not extend the grace", func(t *testing.T) {
+		tc := newController(t, time.Now())
+		_, dir := tc.enroll("laptop")
+		original := t.TempDir() + "/credentials"
+		creds, err := client.LoadCredentials(dir)
+		must(t, err)
+		must(t, client.SaveCredentials(original, creds))
+
+		loseRenewalResponse(t, tc, dir)
+		// Less than the one minute of back-dating: the client checks new certificates against the real clock.
+		tc.clock.Advance(50 * time.Second)
+		retry, err := client.Open(dir)
+		must(t, err)
+		must(t, retry.Renew(t.Context()))                // renews from the original certificate, inside its grace
+		tc.clock.Advance(9*time.Minute + 40*time.Second) // past 10 minutes after the first renewal
+
+		stale, err := client.Open(original)
+		must(t, err)
+		wantRecoveryHint(t, stale.Renew(t.Context()))
+		current, err := client.Open(dir)
+		must(t, err)
+		if _, err := current.Clients(t.Context()); err != nil {
+			t.Fatalf("the credentials from the retry: %v", err)
+		}
+	})
+
+	t.Run("revoking ends the grace", func(t *testing.T) {
+		tc := newController(t, time.Now())
+		_, dir := tc.enroll("laptop")
+		info, err := client.Describe(dir)
+		must(t, err)
+		loseRenewalResponse(t, tc, dir)
+		must(t, tc.owner.RemoveClient(t.Context(), info.IdentityID))
+
+		old, err := client.Open(dir)
+		must(t, err)
+		wantRecoveryHint(t, old.Renew(t.Context()))
+	})
+}
+
+func TestControllerIdentityTLS_ExpiredClientCanBeRevokedEvenIfOnlyOneIsUsable(t *testing.T) {
+	tc := newController(t, time.Now())
+	laptop, _ := tc.enroll("laptop")
+	laptopID, err := laptop.Describe()
+	must(t, err)
+	must(t, tc.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(t.Context(), `UPDATE identities SET not_after = ? WHERE id = ?`,
+			time.Now().Add(-time.Hour).UnixNano(), laptopID.IdentityID)
+		return err
+	}))
+
+	must(t, tc.owner.RemoveClient(t.Context(), laptopID.IdentityID))
+	if _, err := tc.owner.Clients(t.Context()); err != nil {
+		t.Fatalf("the owner lost access: %v", err)
+	}
+}

@@ -16,9 +16,11 @@ const (
 	maxTTLSeconds = int64(math.MaxInt64 / int64(time.Second))
 )
 
+const renewPattern = "POST /v1/identity/renew"
+
 func (s *Server) registerRoutes() {
 	s.handle("POST /v1/join", nil, s.join)
-	s.handle("POST /v1/identity/renew", anyIdentity, s.renew)
+	s.handle(renewPattern, anyIdentity, s.renew)
 	s.handle("POST /v1/tokens", clientsOnly, s.createToken)
 	s.handle("GET /v1/clients", clientsOnly, s.listClients)
 	s.handle("DELETE /v1/clients/{id}", clientsOnly, s.removeClient)
@@ -57,7 +59,7 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request, c caller) error {
 	if err := decodeBody(w, r, &req); err != nil {
 		return err
 	}
-	joined, err := s.authority.Renew(r.Context(), c.Principal, c.Serial, req.CSR)
+	joined, err := s.authority.Renew(r.Context(), c.Principal, c.Presented, req.CSR)
 	if err != nil {
 		return err
 	}

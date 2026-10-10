@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/x509"
 	"net/http"
 
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -18,7 +19,10 @@ type handlerFunc func(w http.ResponseWriter, r *http.Request, c caller) error
 // caller is the authenticated side of a request.
 type caller struct {
 	Principal domain.Principal
-	Serial    string // serial of the certificate presented on this request
+	Presented *x509.Certificate // certificate presented on this request
+	// Superseded marks a certificate that a renewal replaced: within its grace
+	// it may call the renewal endpoint and nothing else.
+	Superseded bool
 }
 
 type callerKey struct{}
@@ -60,6 +64,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, s.log, domain.NewError(domain.CodePolicyDenied, "this identity may not call this endpoint", nil))
 		return
 	}
+	if c.Superseded && pattern != renewPattern {
+		writeError(w, r, s.log, domain.NewError(domain.CodeUnauthenticated, "certificate is not valid for this Controller", nil))
+		return
+	}
 	s.mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, c)))
 }
 
@@ -68,11 +76,11 @@ func (s *Server) authenticate(r *http.Request) (caller, error) {
 		return caller{}, domain.NewError(domain.CodeUnauthenticated, "a client certificate is required", nil)
 	}
 	leaf := r.TLS.PeerCertificates[0]
-	p, err := s.authority.Authenticate(r.Context(), leaf)
+	session, err := s.authority.Authenticate(r.Context(), leaf)
 	if err != nil {
 		return caller{}, err
 	}
-	return caller{Principal: p, Serial: leaf.SerialNumber.Text(16)}, nil
+	return caller{Principal: session.Principal, Presented: leaf, Superseded: session.Superseded}, nil
 }
 
 func contains(kinds []domain.Kind, k domain.Kind) bool {
