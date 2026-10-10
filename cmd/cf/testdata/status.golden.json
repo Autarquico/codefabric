@@ -1,0 +1,10 @@
+{
+  "commit": "<commit>",
+  "controller_id": "<controller_id>",
+  "database": {
+    "ok": true
+  },
+  "started_at": "<started_at>",
+  "uptime_seconds": "<uptime_seconds>",
+  "version": "<version>"
+}

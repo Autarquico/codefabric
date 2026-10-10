@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,8 +23,12 @@ import (
 func cf(t *testing.T, stdin string, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code = cli.Run(args, strings.NewReader(stdin), &out, &errOut, daemon.Command())
+	code = cliRun(&out, &errOut, stdin, args)
 	return code, out.String(), errOut.String()
+}
+
+func cliRun(stdout, stderr io.Writer, stdin string, args []string) int {
+	return cli.Run(args, strings.NewReader(stdin), stdout, stderr, daemon.Command())
 }
 
 // machine points the CLI at a fresh config/data directory pair.
@@ -44,34 +51,56 @@ var (
 	identityRe = regexp.MustCompile(`as (client_\w+)`)
 )
 
-// bringUpController inits a Controller on a free localhost port and serves it.
-func bringUpController(t *testing.T) (host config.Paths, firstInvite string) {
+// initController inits a Controller on a free localhost port, without serving it.
+func initController(t *testing.T) (host config.Paths, addr, firstInvite string) {
 	t.Helper()
 	host = machine(t)
 	ln, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := ln.Addr().String()
+	addr = ln.Addr().String()
 	_ = ln.Close()
 
 	code, out, errOut := cf(t, "", "controller", "init", "--advertise", addr, "--listen", addr, "--name", "host")
 	if code != 0 {
 		t.Fatalf("init: exit %d: %s", code, errOut)
 	}
+	return host, addr, inviteRe.FindString(out)
+}
+
+// serve runs the Controller of paths until the returned stop is called (or the test ends).
+func serve(t *testing.T, paths config.Paths, opts daemon.Options) (stop func()) {
+	t.Helper()
+	opts.Paths = paths
+	if opts.Logger == nil {
+		opts.Logger = slog.New(slog.DiscardHandler)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
-	c, err := daemon.Start(ctx, daemon.Options{Paths: host})
+	c, err := daemon.Start(ctx, opts)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		cancel()
-		if err := c.Wait(); err != nil {
-			t.Errorf("Wait: %v", err)
-		}
-	})
-	return host, inviteRe.FindString(out)
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			cancel()
+			if err := c.Wait(); err != nil {
+				t.Errorf("Wait: %v", err)
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return stop
+}
+
+// bringUpController inits a Controller on a free localhost port and serves it.
+func bringUpController(t *testing.T) (host config.Paths, firstInvite string) {
+	t.Helper()
+	host, _, firstInvite = initController(t)
+	serve(t, host, daemon.Options{})
+	return host, firstInvite
 }
 
 func TestScenario_ControllerIdentityTLS_Revocacion(t *testing.T) {

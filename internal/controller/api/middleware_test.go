@@ -39,9 +39,15 @@ func failureRoutes(s *api.Server) {
 	})
 }
 
+type reply struct {
+	status int
+	header http.Header
+	body   []byte
+}
+
 // fetch performs a request and returns the response with its body read, or the
 // transport error that stopped it.
-func fetch(t *testing.T, hc *http.Client, url, method, body string, mod func(*http.Request)) (*http.Response, []byte, error) {
+func fetch(t *testing.T, hc *http.Client, url, method, body string, mod func(*http.Request)) (reply, error) {
 	t.Helper()
 	r, err := http.NewRequestWithContext(t.Context(), method, url, strings.NewReader(body))
 	must(t, err)
@@ -50,11 +56,11 @@ func fetch(t *testing.T, hc *http.Client, url, method, body string, mod func(*ht
 	}
 	resp, err := hc.Do(r)
 	if err != nil {
-		return nil, nil, err
+		return reply{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
-	return resp, raw, err
+	return reply{resp.StatusCode, resp.Header, raw}, err
 }
 
 func withID(id string) func(*http.Request) {
@@ -80,10 +86,10 @@ func TestApiSdkCliStatus_RequestIDIsKeptOnlyWhenItIsPlain(t *testing.T) {
 	id64 := strings.Repeat("a", 64)
 
 	for _, id := range []string{"abc-123_X.y", id64, "0"} {
-		resp, _, err := fetch(t, hc, url, http.MethodGet, "", withID(id))
+		got, err := fetch(t, hc, url, http.MethodGet, "", withID(id))
 		must(t, err)
-		if got := resp.Header.Get("X-Request-ID"); got != id {
-			t.Errorf("valid ID %q came back as %q", id, got)
+		if gotID := got.header.Get("X-Request-ID"); gotID != id {
+			t.Errorf("valid ID %q came back as %q", id, gotID)
 		}
 		logLine(t, tc, id)
 	}
@@ -102,13 +108,13 @@ func TestApiSdkCliStatus_RequestIDIsKeptOnlyWhenItIsPlain(t *testing.T) {
 	}
 	for name, mod := range invalid {
 		t.Run(name, func(t *testing.T) {
-			resp, _, err := fetch(t, hc, url, http.MethodGet, "", mod)
+			got, err := fetch(t, hc, url, http.MethodGet, "", mod)
 			must(t, err)
-			got := resp.Header.Get("X-Request-ID")
-			if len(got) != 26 || strings.Trim(got, "0123456789ABCDEFGHJKMNPQRSTVWXYZ") != "" {
-				t.Fatalf("expected a generated ULID, got %q", got)
+			id := got.header.Get("X-Request-ID")
+			if len(id) != 26 || strings.Trim(id, "0123456789ABCDEFGHJKMNPQRSTVWXYZ") != "" {
+				t.Fatalf("expected a generated ULID, got %q", id)
 			}
-			logLine(t, tc, got) // the same ID in the response and in the log
+			logLine(t, tc, id) // the same ID in the response and in the log
 		})
 	}
 }
@@ -116,7 +122,7 @@ func TestApiSdkCliStatus_RequestIDIsKeptOnlyWhenItIsPlain(t *testing.T) {
 func TestApiSdkCliStatus_TheAccessLogHasNoBodyQueryOrHeaders(t *testing.T) {
 	tc := newControllerWithRoutes(t, time.Now(), failureRoutes)
 	hc := tc.httpClientFor(tc.ownerDir)
-	_, _, err := fetch(t, hc, "https://"+tc.addr+"/v1/test/echo?token=QUERYSECRET", http.MethodPost, `{"password":"BODYSECRET"}`,
+	_, err := fetch(t, hc, "https://"+tc.addr+"/v1/test/echo?token=QUERYSECRET", http.MethodPost, `{"password":"BODYSECRET"}`,
 		func(r *http.Request) {
 			withID("log-check")(r)
 			r.Header.Set("Authorization", "Bearer HEADERSECRET")
@@ -142,11 +148,11 @@ func TestApiSdkCliStatus_TheLogNamesThePrincipalOfAuthenticatedDeniedAndAnonymou
 	must(t, err)
 	url := "https://" + tc.addr + "/v1/status"
 
-	_, _, err = fetch(t, tc.httpClientFor(tc.ownerDir), url, http.MethodGet, "", withID("authenticated"))
+	_, err = fetch(t, tc.httpClientFor(tc.ownerDir), url, http.MethodGet, "", withID("authenticated"))
 	must(t, err)
-	_, _, err = fetch(t, tc.enrollWorker(), url, http.MethodGet, "", withID("denied"))
+	_, err = fetch(t, tc.enrollWorker(), url, http.MethodGet, "", withID("denied"))
 	must(t, err)
-	_, _, err = fetch(t, tc.httpClient(), url, http.MethodGet, "", withID("anonymous"))
+	_, err = fetch(t, tc.httpClient(), url, http.MethodGet, "", withID("anonymous"))
 	must(t, err)
 
 	if line := logLine(t, tc, "authenticated"); !strings.Contains(line, "status=200") || !strings.Contains(line, "principal="+owner.IdentityID) {
@@ -166,13 +172,13 @@ func TestApiSdkCliStatus_AnUnexpectedFailureIsAGeneric500WithTheRequestID(t *tes
 
 	for _, path := range []string{"/v1/test/panic", "/v1/test/error"} {
 		t.Run(path, func(t *testing.T) {
-			resp, raw, err := fetch(t, hc, "https://"+tc.addr+path, http.MethodGet, "", withID("fail"+strings.ReplaceAll(path, "/", "-")))
+			got, err := fetch(t, hc, "https://"+tc.addr+path, http.MethodGet, "", withID("fail"+strings.ReplaceAll(path, "/", "-")))
 			must(t, err)
-			id := resp.Header.Get("X-Request-ID")
-			if resp.StatusCode != http.StatusInternalServerError {
-				t.Fatalf("status %d", resp.StatusCode)
+			id := got.header.Get("X-Request-ID")
+			if got.status != http.StatusInternalServerError {
+				t.Fatalf("status %d", got.status)
 			}
-			body := string(raw)
+			body := string(got.body)
 			for _, want := range []string{`"code":"CF_INTERNAL"`, `"message":"internal error"`, `"request_id":"` + id + `"`} {
 				if !strings.Contains(body, want) {
 					t.Errorf("body lacks %s: %s", want, body)
@@ -201,9 +207,9 @@ func TestApiSdkCliStatus_APanicAfterTheResponseStartedAbortsTheConnection(t *tes
 	for _, path := range []string{"/v1/test/panic-after-header", "/v1/test/panic-after-body"} {
 		t.Run(path, func(t *testing.T) {
 			id := "abort" + strings.ReplaceAll(path, "/", "-")
-			resp, raw, err := fetch(t, hc, "https://"+tc.addr+path, http.MethodGet, "", withID(id))
+			got, err := fetch(t, hc, "https://"+tc.addr+path, http.MethodGet, "", withID(id))
 			if err == nil {
-				t.Fatalf("the caller saw a complete response: %d %q", resp.StatusCode, raw)
+				t.Fatalf("the caller saw a complete response: %d %q", got.status, got.body)
 			}
 			if line := logLine(t, tc, id); !strings.Contains(line, "aborted=true") || !strings.Contains(line, "level=ERROR") {
 				t.Errorf("an aborted response should be logged as such: %s", line)
