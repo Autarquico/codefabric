@@ -4,7 +4,7 @@ title: API, Client SDK y `cf status`
 type: task
 status: active
 priority: P0
-size: M
+size: S
 issue: 6
 prs: []
 related_issues: [6]
@@ -75,6 +75,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+- `--controller` debe convivir con la dirección guardada en el bundle de credenciales: los SANs del certificado del servidor tienen que cubrirla, o el cliente fijado a la CA la rechazará.
 
 ## Referencias
 
