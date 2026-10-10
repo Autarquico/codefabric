@@ -1,6 +1,8 @@
 package clock_test
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -102,7 +104,9 @@ func TestFake_BlockUntilWaitsForTheTimers(t *testing.T) {
 	f := clock.NewFake(time.Unix(0, 0))
 	released := make(chan struct{})
 	go func() {
-		f.BlockUntil(2)
+		if err := f.BlockUntil(t.Context(), 2); err != nil {
+			t.Error(err)
+		}
 		close(released)
 	}()
 
@@ -121,4 +125,71 @@ func TestReal_TimersFire(*testing.T) {
 	defer ticker.Stop()
 	<-timer.C()
 	<-ticker.C()
+}
+
+func TestFake_BlockUntilEndsWithItsContext(t *testing.T) {
+	f := clock.NewFake(time.Unix(0, 0))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := f.BlockUntil(ctx, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFake_ATickerNeedsAPositiveInterval(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Second} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("NewTicker(%s) did not panic", d)
+				}
+			}()
+			clock.NewFake(time.Unix(0, 0)).NewTicker(d)
+		}()
+	}
+}
+
+func TestFake_ALongAdvanceKeepsTheTickerPhase(t *testing.T) {
+	f := clock.NewFake(time.Unix(0, 0))
+	ticker := f.NewTicker(time.Nanosecond * 3)
+	f.Advance(1000 * time.Hour) // 1.2e15 periods: must not loop over them
+	if !fired(ticker.C()) {
+		t.Fatal("did not tick")
+	}
+	ticker2 := f.NewTicker(time.Second)
+	f.Advance(10*time.Second + 500*time.Millisecond)
+	if !fired(ticker2.C()) {
+		t.Fatal("did not tick")
+	}
+	f.Advance(499 * time.Millisecond)
+	if fired(ticker2.C()) {
+		t.Fatal("ticked off its phase")
+	}
+	f.Advance(time.Millisecond)
+	if !fired(ticker2.C()) {
+		t.Fatal("did not tick on its phase")
+	}
+}
+
+func TestFake_StopDropsATickAlreadySent(t *testing.T) {
+	f := clock.NewFake(time.Unix(0, 0))
+	timer, ticker := f.NewTimer(time.Second), f.NewTicker(time.Second)
+	f.Advance(time.Second)
+	timer.Stop()
+	ticker.Stop()
+	if fired(timer.C()) || fired(ticker.C()) {
+		t.Fatal("a stopped timer delivered a tick")
+	}
+}
+
+func TestFake_StopRacesWithAdvance(*testing.T) {
+	f := clock.NewFake(time.Unix(0, 0))
+	var wg sync.WaitGroup
+	for range 50 {
+		ticker := f.NewTicker(time.Millisecond)
+		wg.Add(2)
+		go func() { defer wg.Done(); f.Advance(time.Millisecond) }()
+		go func() { defer wg.Done(); ticker.Stop() }()
+	}
+	wg.Wait()
 }

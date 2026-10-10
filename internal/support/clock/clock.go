@@ -2,6 +2,7 @@
 package clock
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -11,11 +12,13 @@ type Clock interface {
 	Now() time.Time
 	// NewTimer fires once, d from now.
 	NewTimer(d time.Duration) Timer
-	// NewTicker fires every d, dropping the ticks that nobody received.
+	// NewTicker fires every d, dropping the ticks that nobody received. It
+	// panics if d is not positive, as time.NewTicker does.
 	NewTicker(d time.Duration) Timer
 }
 
-// Timer is what NewTimer and NewTicker start. Stop it when done with it.
+// Timer is what NewTimer and NewTicker start. Stop it when done with it; once
+// stopped, its channel delivers nothing, not even a tick already sent.
 type Timer interface {
 	C() <-chan time.Time
 	Stop()
@@ -81,8 +84,13 @@ func (f *Fake) Now() time.Time {
 func (f *Fake) NewTimer(d time.Duration) Timer { return f.start(d, 0) }
 
 // NewTicker starts a ticker that fires each time the fake time passes a
-// multiple of d from now.
-func (f *Fake) NewTicker(d time.Duration) Timer { return f.start(d, d) }
+// multiple of d from now. It panics if d is not positive.
+func (f *Fake) NewTicker(d time.Duration) Timer {
+	if d <= 0 {
+		panic("clock: non-positive interval for NewTicker")
+	}
+	return f.start(d, d)
+}
 
 func (f *Fake) start(d, every time.Duration) Timer {
 	f.mu.Lock()
@@ -94,6 +102,10 @@ func (f *Fake) start(d, every time.Duration) Timer {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		delete(f.waiters, w)
+		select {
+		case <-w.c:
+		default:
+		}
 	}}
 }
 
@@ -115,18 +127,27 @@ func (f *Fake) Advance(d time.Duration) {
 			delete(f.waiters, w)
 			continue
 		}
-		for !w.at.After(f.now) {
-			w.at = w.at.Add(w.every)
-		}
+		w.at = w.at.Add((f.now.Sub(w.at)/w.every + 1) * w.every)
 	}
 }
 
 // BlockUntil returns once n timers or tickers are running, so a test advances
-// the time only after the code under test is waiting on it.
-func (f *Fake) BlockUntil(n int) {
+// the time only after the code under test is waiting on it, or with the error
+// of ctx if it ends first.
+func (f *Fake) BlockUntil(ctx context.Context, n int) error {
+	stop := context.AfterFunc(ctx, func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.armed.Broadcast()
+	})
+	defer stop()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for len(f.waiters) < n {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		f.armed.Wait()
 	}
+	return nil
 }

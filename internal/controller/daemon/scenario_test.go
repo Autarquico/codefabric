@@ -464,7 +464,12 @@ func TestStart_RenewsTheServerCertificateWhileRunning(t *testing.T) {
 		t.Fatal("the certificate changed without approaching its expiry")
 	}
 
-	clk.BlockUntil(2)                 // the renewal and the sweeper are waiting on the clock
+	// The renewal and the sweeper are waiting on the clock.
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelWait()
+	if err := clk.BlockUntil(waitCtx, 2); err != nil {
+		t.Fatal(err)
+	}
 	clk.Advance(340 * 24 * time.Hour) // under 30 days left
 	deadline := time.Now().Add(5 * time.Second)
 	for presented() == before {

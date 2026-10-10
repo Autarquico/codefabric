@@ -875,7 +875,11 @@ func (e *env) startSweeper() (stop func()) {
 		defer close(done)
 		e.svc.RunSweeper(ctx, slog.New(slog.DiscardHandler))
 	}()
-	e.clock.BlockUntil(1)
+	waitCtx, cancelWait := context.WithTimeout(e.t.Context(), 5*time.Second)
+	defer cancelWait()
+	if err := e.clock.BlockUntil(waitCtx, 1); err != nil {
+		e.t.Fatal(err)
+	}
 	return func() { cancel(); <-done }
 }
 

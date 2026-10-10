@@ -67,7 +67,11 @@ func TestSleepWaitsForTheClockAndReportsIt(t *testing.T) {
 	d := &daemon{clock: clk}
 	slept := make(chan bool)
 	go func() { slept <- d.sleep(t.Context(), 30*time.Second) }()
-	clk.BlockUntil(1)
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelWait()
+	if err := clk.BlockUntil(waitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	clk.Advance(30*time.Second - time.Nanosecond)
 	select {

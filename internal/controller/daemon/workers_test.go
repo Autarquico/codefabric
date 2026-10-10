@@ -70,7 +70,12 @@ func TestStart_SweepsSilentWorkersWithTheTTLOfTheConfiguration(t *testing.T) {
 		t.Fatalf("heartbeat: %+v, %v", resp, err)
 	}
 
-	clk.BlockUntil(2) // the sweeper and the certificate renewal are waiting on the clock
+	// The sweeper and the certificate renewal are waiting on the clock.
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelWait()
+	if err := clk.BlockUntil(waitCtx, 2); err != nil {
+		t.Fatal(err)
+	}
 	clk.Advance(2 * time.Second)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
