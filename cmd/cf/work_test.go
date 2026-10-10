@@ -265,6 +265,10 @@ func TestProjectsTasksRunsApi_CLILifecycle(t *testing.T) {
 	if got := ok[v1.Task](t, "task", "set", first.Task.Name, "--completion", "manual"); got.Completion != domain.CompletionManual {
 		t.Errorf("task = %+v", got)
 	}
+	if got := ok[v1.Task](t, "task", "set", first.Task.Name, "--retry-max-attempts", "4", "--retry-on-failed", "reschedule"); got.Retry.MaxAttempts != 4 ||
+		got.Retry.OnFailed != domain.RetryReschedule || got.Retry.OnLost != domain.RetryAsk {
+		t.Errorf("retry = %+v", got.Retry)
+	}
 	if got := ok[v1.Task](t, "task", "set", first.Task.Name, "--name", "renamed"); got.Name != "renamed" {
 		t.Errorf("task = %+v", got)
 	}

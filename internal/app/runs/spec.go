@@ -23,8 +23,9 @@ type Inherited struct {
 	Retry        v1.Retry
 }
 
-// Inherit resolves what a Task leaves unset. The Completion is the one in
-// force: frozen with the first Run, else the Task's own, else the Project's.
+// Inherit resolves what a Task leaves unset. The Completion and the Retry
+// policy are the ones in force: frozen with the first Run, else the Task's own,
+// else the Project's.
 func Inherit(t store.Task, p store.Project) Inherited {
 	global := domain.Defaults()
 	in := Inherited{
@@ -38,7 +39,7 @@ func Inherit(t store.Task, p store.Project) Inherited {
 	}
 	in.Requirements.Resources = firstPtr(t.Requirements.Resources, p.Defaults.Resources,
 		&v1.Resources{CPU: global.RunResources.CPU, MemoryMB: global.RunResources.MemoryMB})
-	if r := firstPtr(t.Retry, p.Defaults.Retry); r != nil {
+	if r := firstPtr(t.Retry, t.RetryOverride, p.Defaults.Retry); r != nil {
 		in.Retry = *r
 	}
 	return in

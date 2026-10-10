@@ -65,7 +65,7 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateTaskR
 				ID: s.ids.New(domain.KindTask), Short: short, ProjectID: projectID, Name: name, Prompt: req.Prompt,
 				Autostart: !req.NoStart, SourceRef: req.SourceRef, Mode: req.Mode, Workflow: req.Workflow,
 				Environment: req.Environment, Requirements: req.Requirements, CompletionOverride: req.Completion,
-				Retry: req.Retry, CreatedBy: creator(by), CreatedAt: act.Now,
+				RetryOverride: req.Retry, CreatedBy: creator(by), CreatedAt: act.Now,
 			}
 			if task.State, task.WaitingReason, err = derive(task, project, nil); err != nil {
 				return v1.CreateTaskResponse{}, err
@@ -161,15 +161,15 @@ func (s *Service) Archive(ctx context.Context, by pki.Session, ref, project stri
 	})
 }
 
-// Set renames the Task or changes its completion policy. The completion is
-// explicit: it replaces the one frozen with the first Run (§3.3).
+// Set renames the Task or changes its completion or retry policy. A policy
+// given is explicit: it replaces the one frozen with the first Run (§3.3).
 func (s *Service) Set(ctx context.Context, by pki.Session, ref, project string, req v1.UpdateTaskRequest) (v1.Task, error) {
 	if err := validateUpdate(req); err != nil {
 		return v1.Task{}, err
 	}
 	return s.change(ctx, by, "task.set", ref, project, req.RequestID, req,
 		func(tx *store.Tx, act mutation.Act, t *store.Task) error {
-			before := map[string]any{"name": t.Name, "completion": string(t.Completion), "completion_override": string(t.CompletionOverride)}
+			before := map[string]any{"name": t.Name, "completion": string(t.Completion), "completion_override": string(t.CompletionOverride), "retry": t.Retry, "retry_override": t.RetryOverride}
 			if req.Name != nil {
 				if t.ArchivedAt == nil {
 					if taken, err := store.TaskNameTaken(ctx, tx, t.ProjectID, *req.Name, t.ID); err != nil || taken {
@@ -187,10 +187,16 @@ func (s *Service) Set(ctx context.Context, by pki.Session, ref, project string, 
 					t.Completion = *req.Completion
 				}
 			}
+			if req.Retry != nil {
+				t.RetryOverride = req.Retry
+				if t.Retry != nil {
+					t.Retry = req.Retry
+				}
+			}
 			if err := tx.UpdateTask(ctx, *t); err != nil {
 				return err
 			}
-			after := map[string]any{"name": t.Name, "completion": string(t.Completion), "completion_override": string(t.CompletionOverride)}
+			after := map[string]any{"name": t.Name, "completion": string(t.Completion), "completion_override": string(t.CompletionOverride), "retry": t.Retry, "retry_override": t.RetryOverride}
 			return audit(ctx, tx, act, "task.updated", *t, before, after)
 		})
 }
@@ -413,8 +419,8 @@ func validateStart(req v1.CreateTaskRequest) error {
 }
 
 func validateUpdate(req v1.UpdateTaskRequest) error {
-	if req.Name == nil && req.Completion == nil {
-		return input.Invalid("nothing to change: send a name or a completion")
+	if req.Name == nil && req.Completion == nil && req.Retry == nil {
+		return input.Invalid("nothing to change: send a name, a completion or a retry policy")
 	}
 	var name error
 	if req.Name != nil {
@@ -427,5 +433,5 @@ func validateUpdate(req v1.UpdateTaskRequest) error {
 			completion = input.Invalid("completion must be first_success, promote or manual")
 		}
 	}
-	return input.First(name, completion)
+	return input.First(name, completion, input.Retry(req.Retry))
 }

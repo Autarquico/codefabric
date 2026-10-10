@@ -44,7 +44,8 @@ type Task struct {
 	Requirements        v1.Requirements
 	CompletionOverride  domain.Completion
 	Completion          domain.Completion // frozen with the first Run; "" before
-	Retry               *v1.Retry
+	RetryOverride       *v1.Retry
+	Retry               *v1.Retry // frozen with the first Run; nil before
 	CreatedBy           domain.Creator
 	CancelledAt         *time.Time
 	ArchivedAt          *time.Time
@@ -183,29 +184,35 @@ func ProjectCandidates(ctx context.Context, q Querier) ([]domain.Candidate, erro
 const taskColumns = `id, short_n, project_id, name, prompt, autostart, priority,
     COALESCE(source_ref, ''), COALESCE(source_snapshot, ''), COALESCE(mode, ''),
     COALESCE(workflow, ''), COALESCE(environment, ''), requirements,
-    COALESCE(completion_override, ''), COALESCE(completion, ''), retry, created_by,
+    COALESCE(completion_override, ''), COALESCE(completion, ''), retry_override, retry, created_by,
     cancelled_at, archived_at, completed_manually_at, state, COALESCE(waiting_reason, ''), created_at`
 
 func scanTask(row rowScanner) (Task, error) {
 	var (
 		t                              Task
 		id, project, requirements      string
-		retry                          sql.NullString
+		retryOverride, retry           sql.NullString
 		cancelled, archived, completed sql.NullInt64
 		created                        int64
 	)
 	if err := row.Scan(&id, &t.Short, &project, &t.Name, &t.Prompt, &t.Autostart, &t.Priority,
 		&t.SourceRef, &t.SourceSnapshot, &t.Mode, &t.Workflow, &t.Environment, &requirements,
-		&t.CompletionOverride, &t.Completion, &retry, &t.CreatedBy,
+		&t.CompletionOverride, &t.Completion, &retryOverride, &retry, &t.CreatedBy,
 		&cancelled, &archived, &completed, &t.State, &t.WaitingReason, &created); err != nil {
 		return Task{}, scanErr(err, "task")
 	}
 	if err := json.Unmarshal([]byte(requirements), &t.Requirements); err != nil {
 		return Task{}, fmt.Errorf("store: task %s has corrupt requirements: %w", id, err)
 	}
-	if retry.Valid {
-		t.Retry = new(v1.Retry)
-		if err := json.Unmarshal([]byte(retry.String), t.Retry); err != nil {
+	for _, column := range []struct {
+		raw sql.NullString
+		dst **v1.Retry
+	}{{retryOverride, &t.RetryOverride}, {retry, &t.Retry}} {
+		if !column.raw.Valid {
+			continue
+		}
+		*column.dst = new(v1.Retry)
+		if err := json.Unmarshal([]byte(column.raw.String), *column.dst); err != nil {
 			return Task{}, fmt.Errorf("store: task %s has a corrupt retry policy: %w", id, err)
 		}
 	}
@@ -221,19 +228,19 @@ func (t *Tx) InsertTask(ctx context.Context, k Task) error {
 	if err != nil {
 		return err
 	}
-	retry, err := jsonOrNil(k.Retry)
+	retryOverride, retry, err := retryColumns(k)
 	if err != nil {
 		return err
 	}
 	_, err = t.Exec(ctx,
 		`INSERT INTO tasks (id, short_n, project_id, name, prompt, autostart, priority, source_ref, source_snapshot,
-		     mode, workflow, environment, requirements, completion_override, completion, retry, created_by,
+		     mode, workflow, environment, requirements, completion_override, completion, retry_override, retry, created_by,
 		     cancelled_at, archived_at, completed_manually_at, state, waiting_reason, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(k.ID), k.Short, string(k.ProjectID), k.Name, k.Prompt, k.Autostart, k.Priority,
 		nullable(k.SourceRef), nullable(k.SourceSnapshot), nullable(string(k.Mode)),
 		nullable(k.Workflow), nullable(k.Environment), string(requirements),
-		nullable(string(k.CompletionOverride)), nullable(string(k.Completion)), retry, string(k.CreatedBy),
+		nullable(string(k.CompletionOverride)), nullable(string(k.Completion)), retryOverride, retry, string(k.CreatedBy),
 		nanosOrNil(k.CancelledAt), nanosOrNil(k.ArchivedAt), nanosOrNil(k.CompletedManuallyAt),
 		string(k.State), nullable(string(k.WaitingReason)), k.CreatedAt.UnixNano())
 	if err != nil {
@@ -242,18 +249,40 @@ func (t *Tx) InsertTask(ctx context.Context, k Task) error {
 	return nil
 }
 
-// UpdateTask writes the columns of a Task that change after creation: its
-// name, completion, markers and derived state.
+func retryColumns(k Task) (override, frozen any, err error) {
+	if override, err = jsonOrNil(k.RetryOverride); err != nil {
+		return nil, nil, err
+	}
+	frozen, err = jsonOrNil(k.Retry)
+	return override, frozen, err
+}
+
+// UpdateTask writes what a Task lets change after creation: its name,
+// completion and retry policies, with their frozen values, and its markers.
+// Its derived state is written by SetTaskState alone.
 func (t *Tx) UpdateTask(ctx context.Context, k Task) error {
-	_, err := t.Exec(ctx,
-		`UPDATE tasks SET name = ?, completion_override = ?, completion = ?, cancelled_at = ?, archived_at = ?,
-		     completed_manually_at = ?, state = ?, waiting_reason = ?
+	retryOverride, retry, err := retryColumns(k)
+	if err != nil {
+		return err
+	}
+	_, err = t.Exec(ctx,
+		`UPDATE tasks SET name = ?, completion_override = ?, completion = ?, retry_override = ?, retry = ?,
+		     cancelled_at = ?, archived_at = ?, completed_manually_at = ?
 		 WHERE id = ?`,
-		k.Name, nullable(string(k.CompletionOverride)), nullable(string(k.Completion)),
-		nanosOrNil(k.CancelledAt), nanosOrNil(k.ArchivedAt), nanosOrNil(k.CompletedManuallyAt),
-		string(k.State), nullable(string(k.WaitingReason)), string(k.ID))
+		k.Name, nullable(string(k.CompletionOverride)), nullable(string(k.Completion)), retryOverride, retry,
+		nanosOrNil(k.CancelledAt), nanosOrNil(k.ArchivedAt), nanosOrNil(k.CompletedManuallyAt), string(k.ID))
 	if err != nil {
 		return fmt.Errorf("store: updating task: %w", err)
+	}
+	return nil
+}
+
+// SetTaskState stores the state derived for a Task and why it waits.
+func (t *Tx) SetTaskState(ctx context.Context, id domain.ID, state domain.TaskState, reason domain.WaitingReason) error {
+	_, err := t.Exec(ctx, `UPDATE tasks SET state = ?, waiting_reason = ? WHERE id = ?`,
+		string(state), nullable(string(reason)), string(id))
+	if err != nil {
+		return fmt.Errorf("store: setting task state: %w", err)
 	}
 	return nil
 }

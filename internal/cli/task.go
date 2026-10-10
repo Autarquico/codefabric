@@ -160,10 +160,13 @@ func printTask(w io.Writer, t v1.Task) error {
 }
 
 func newTaskSetCmd() *cobra.Command {
-	var name, completion string
+	var (
+		name, completion, onFailed, onLost string
+		maxAttempts                        int
+	)
 	cmd := &cobra.Command{
 		Use:   "set <task>",
-		Short: "Rename a Task or change its completion policy",
+		Short: "Rename a Task or change its completion or retry policy",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var req v1.UpdateTaskRequest
@@ -178,7 +181,26 @@ func newTaskSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			t, err := c.UpdateTask(cmd.Context(), args[0], refScope(cmd, c), req)
+			scope := refScope(cmd, c)
+			if f := cmd.Flags(); f.Changed("retry-on-failed") || f.Changed("retry-on-lost") || f.Changed("retry-max-attempts") {
+				// The policy travels whole: the flags given change the one in force.
+				current, err := c.Task(cmd.Context(), args[0], scope)
+				if err != nil {
+					return err
+				}
+				retry := current.Retry
+				if f.Changed("retry-on-failed") {
+					retry.OnFailed = domain.RetryAction(onFailed)
+				}
+				if f.Changed("retry-on-lost") {
+					retry.OnLost = domain.RetryAction(onLost)
+				}
+				if f.Changed("retry-max-attempts") {
+					retry.MaxAttempts = maxAttempts
+				}
+				req.Retry = &retry
+			}
+			t, err := c.UpdateTask(cmd.Context(), args[0], scope, req)
 			if err != nil {
 				return err
 			}
@@ -187,6 +209,9 @@ func newTaskSetCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&name, "name", "", "new name")
 	cmd.Flags().StringVar(&completion, "completion", "", "completion policy: first_success, promote or manual")
+	cmd.Flags().StringVar(&onFailed, "retry-on-failed", "", "what to do when a Run fails: none, reschedule or ask")
+	cmd.Flags().StringVar(&onLost, "retry-on-lost", "", "what to do when a Run is lost: none, reschedule or ask")
+	cmd.Flags().IntVar(&maxAttempts, "retry-max-attempts", 0, "Runs a Task may use in all, the first included")
 	addProjectFlag(cmd, "Project that narrows a name more than one Project has (default: the one of this directory)")
 	return cmd
 }

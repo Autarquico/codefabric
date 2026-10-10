@@ -41,7 +41,7 @@ var commitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 //
 // A Task that ended, by a marker or by its derived state, gets no more Runs.
 //
-// The first Run also freezes the Task's completion (§3.3). A Project or Task
+// The first Run also freezes the Task's completion and retry policy (§3.3). A Project or Task
 // that names a Workflow or an Environment cannot get a Run yet: resolving them
 // to a version is Phase 2, and freezing the bare reference would pin nothing.
 func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID, commit string) (v1.Run, error) {
@@ -86,7 +86,7 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		Runtime: domain.RuntimeNone, CreatedAt: act.Now,
 	}
 	if task.Completion == "" {
-		task.Completion = in.Completion
+		task.Completion, task.Retry = in.Completion, &in.Retry
 		if err := tx.UpdateTask(ctx, task); err != nil {
 			return v1.Run{}, err
 		}

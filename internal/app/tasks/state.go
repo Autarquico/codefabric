@@ -39,7 +39,7 @@ func Rederive(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain
 	}
 	from, fromReason := task.State, task.WaitingReason
 	task.State, task.WaitingReason = state, reason
-	if err := tx.UpdateTask(ctx, task); err != nil {
+	if err := tx.SetTaskState(ctx, taskID, state, reason); err != nil {
 		return err
 	}
 	ev := act.Event(domain.EventTaskStateChanged, fmt.Sprintf("task %s -> %s", from, state))

@@ -18,8 +18,9 @@ CREATE TABLE projects (
 -- state and waiting_reason are derived from the Task's markers and Runs
 -- (domain.DeriveTaskState) and re-derived in the transaction of every change
 -- to either (tasks.Rederive); they are stored so lists can filter on them.
--- completion is frozen when the first Run is created; until then the Task
--- follows completion_override, then the Project (§3.3).
+-- completion and retry are frozen when the first Run is created; until then
+-- the Task follows completion_override and retry_override, then the Project
+-- (§3.3).
 CREATE TABLE tasks (
     id                    TEXT    PRIMARY KEY,
     short_n               INTEGER NOT NULL UNIQUE,
@@ -36,6 +37,7 @@ CREATE TABLE tasks (
     requirements          TEXT    NOT NULL,
     completion_override   TEXT,
     completion            TEXT,
+    retry_override        TEXT,
     retry                 TEXT,
     created_by            TEXT    NOT NULL,
     cancelled_at          INTEGER,

@@ -304,6 +304,50 @@ func TestCompletionIsFrozenWithTheFirstRun(t *testing.T) {
 	}
 }
 
+func TestRetryIsFrozenWithTheFirstRun(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	retry := func(attempts int) v1.Retry {
+		return v1.Retry{OnFailed: domain.RetryReschedule, OnLost: domain.RetryAsk, MaxAttempts: attempts}
+	}
+	setProject := func(attempts int) {
+		r := retry(attempts)
+		_, err := e.app.Projects.Set(t.Context(), e.owner, "backend", v1.UpdateProjectRequest{Retry: &r})
+		must(t, err)
+	}
+	attempts := func(task string) int {
+		got, err := e.app.Tasks.Get(t.Context(), task, "")
+		must(t, err)
+		return got.Retry.MaxAttempts
+	}
+	own := retry(2)
+	task := e.mustTask("backend", "x", noStart, func(r *v1.CreateTaskRequest) { r.Retry = &own }).Task
+	setProject(3)
+	if got := attempts(task.ID); got != 2 {
+		t.Fatalf("before the first Run the Task's own policy rules: %d", got)
+	}
+	other := e.mustTask("backend", "y", noStart).Task
+	if got := attempts(other.ID); got != 3 {
+		t.Fatalf("a Task without its own policy follows the Project: %d", got)
+	}
+
+	_, err := e.startRun(other.ID, commitA)
+	must(t, err)
+	setProject(5)
+	if got := attempts(other.ID); got != 3 {
+		t.Errorf("a Project default changed a frozen retry policy: %d", got)
+	}
+	explicit := retry(7)
+	got, err := e.app.Tasks.Set(t.Context(), e.owner, other.ID, "", v1.UpdateTaskRequest{Retry: &explicit})
+	must(t, err)
+	if got.Retry.MaxAttempts != 7 {
+		t.Errorf("explicit change: %+v", got.Retry)
+	}
+	bad := v1.Retry{OnFailed: "explode", MaxAttempts: 1}
+	_, err = e.app.Tasks.Set(t.Context(), e.owner, other.ID, "", v1.UpdateTaskRequest{Retry: &bad})
+	wantCode(t, err, domain.CodeInvalidRequest)
+}
+
 func TestCancel_UpdatesTheStateAndTheEventsInOneTransaction(t *testing.T) {
 	e := newEnv(t)
 	e.project("backend")

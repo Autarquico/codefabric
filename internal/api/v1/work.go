@@ -146,11 +146,13 @@ type CreateTaskResponse struct {
 }
 
 // UpdateTaskRequest is PATCH /v1/tasks/{ref}: only the fields present change.
-// Changing the completion is explicit and also changes the frozen one (§3.3).
+// Changing the completion or the retry policy is explicit and also changes the
+// frozen one (§3.3).
 type UpdateTaskRequest struct {
 	RequestID  string             `json:"request_id,omitempty"`
 	Name       *string            `json:"name,omitempty"`
 	Completion *domain.Completion `json:"completion,omitempty"`
+	Retry      *Retry             `json:"retry,omitempty"`
 }
 
 // ActionRequest is the body of the POST actions of a Task (cancel, complete, archive, ...).
