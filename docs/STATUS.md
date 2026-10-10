@@ -9,7 +9,7 @@
 ## Done esta semana
 
 <!-- pm-sync:done-this-week -->
-_Pendiente de primera ejecución de `/pm sync`._
+_(nada)_
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -17,7 +17,7 @@ _Pendiente de primera ejecución de `/pm sync`._
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_Pendiente de primera ejecución de `/pm sync`._
+- #3 Domain core: entidades, máquinas de estado y errores
 <!-- /pm-sync:in-progress -->
 
 ---
@@ -25,7 +25,7 @@ _Pendiente de primera ejecución de `/pm sync`._
 ## Bloqueado / sin actividad
 
 <!-- pm-sync:blocked -->
-_Pendiente._
+_(nada)_
 <!-- /pm-sync:blocked -->
 
 ---
