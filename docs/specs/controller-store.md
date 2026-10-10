@@ -2,7 +2,7 @@
 codename: codefabric
 title: "Controller store: SQLite, transacciones, eventos e idempotencia"
 type: task
-status: active
+status: shipped
 priority: P0
 size: M
 issue: 4
