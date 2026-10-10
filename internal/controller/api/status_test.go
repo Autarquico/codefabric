@@ -84,13 +84,19 @@ func TestApiSdkCliStatus_AnUnhealthyDatabaseIsReportedWithoutLeakingTheCause(t *
 }
 
 func TestApiSdkCliStatus_TheHealthCheckHasATimeout(t *testing.T) {
+	var budget time.Duration
 	tc := newController(t, time.Now(), withHealth(func(ctx context.Context) error {
+		deadline, _ := ctx.Deadline()
+		budget = time.Until(deadline)
 		<-ctx.Done()
 		return ctx.Err()
 	}), func(c *api.Config) { c.Timeouts.Health = 50 * time.Millisecond })
 	start := time.Now()
 	st, err := tc.owner.Status(t.Context())
 	must(t, err)
+	if budget <= 0 || budget > 50*time.Millisecond {
+		t.Errorf("the health check got a %s deadline, want the configured 50ms", budget)
+	}
 	if st.Database.OK || time.Since(start) > 5*time.Second {
 		t.Errorf("database %+v after %s", st.Database, time.Since(start))
 	}
@@ -118,12 +124,14 @@ func TestApiSdkCliStatus_ControllerOverrideKeepsThePinnedTrustAndTheStoredBundle
 		if !strings.Contains(err.Error(), "--advertise") {
 			t.Errorf("no hint about --advertise: %v", err)
 		}
+		wantLocalCause(t, err)
 	})
 	t.Run("a Controller of another CA", func(t *testing.T) {
 		c, err := openOverride(tc.ownerDir, other.addr)
 		must(t, err)
 		_, err = c.Status(t.Context())
 		wantCode(t, err, domain.CodeUnauthenticated)
+		wantLocalCause(t, err)
 	})
 	for _, bad := range []string{
 		"no-port-here", ":7443", "host:", "host:0", "host:65536", "host:+80", "host:http",
@@ -240,4 +248,13 @@ func getHTTP10(t *testing.T, tc *testController, path string) reply {
 	body, err := io.ReadAll(resp.Body)
 	must(t, err)
 	return reply{resp.StatusCode, resp.Header, body}
+}
+
+// wantLocalCause checks a client-side TLS failure keeps its cause for --debug.
+func wantLocalCause(t *testing.T, err error) {
+	t.Helper()
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Details["cause"] == nil {
+		t.Errorf("the local cause is missing for --debug: %#v", err)
+	}
 }

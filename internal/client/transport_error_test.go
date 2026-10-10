@@ -36,6 +36,10 @@ func TestTransportError_OnlyCertificateAlertsAreAuthenticationFailures(t *testin
 			if !isCode(err, tc.want) {
 				t.Fatalf("alert %d: got %v, want %s", uint8(tc.alert), err, tc.want)
 			}
+			var de *domain.Error
+			if !errors.As(err, &de) || de.Details["cause"] == nil {
+				t.Fatalf("alert %d: the local cause is missing for --debug: %#v", uint8(tc.alert), err)
+			}
 		})
 	}
 }

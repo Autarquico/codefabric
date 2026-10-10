@@ -281,23 +281,24 @@ func (c *Client) transportError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	cause := map[string]any{"cause": err.Error()} // local, so --debug may show it
 	var verify *tls.CertificateVerificationError
 	if errors.As(err, &verify) {
 		var wrongHost x509.HostnameError
 		if errors.As(verify.Err, &wrongHost) {
 			return domain.NewError(domain.CodeControllerUnreachable,
-				fmt.Sprintf("the Controller's certificate does not cover %q: dial an address it was issued for (see `cf controller init --advertise`)", c.serverName), nil)
+				fmt.Sprintf("the Controller's certificate does not cover %q: dial an address it was issued for (see `cf controller init --advertise`)", c.serverName), cause)
 		}
 		return domain.NewError(domain.CodeUnauthenticated,
-			"the Controller's certificate is not trusted by the CA pinned at connect time", nil)
+			"the Controller's certificate is not trusted by the CA pinned at connect time", cause)
 	}
 	var op *net.OpError
 	if errors.As(err, &op) && op.Op == "remote error" && rejectsCertificate(op.Err) {
 		return domain.NewError(domain.CodeUnauthenticated,
-			"the Controller rejected this client certificate (expired or revoked): "+renewHint, nil)
+			"the Controller rejected this client certificate (expired or revoked): "+renewHint, cause)
 	}
 	return domain.NewError(domain.CodeControllerUnreachable,
-		fmt.Sprintf("cannot reach the Controller at %s", c.controller), map[string]any{"cause": err.Error()})
+		fmt.Sprintf("cannot reach the Controller at %s", c.controller), cause)
 }
 
 // TLS alerts (RFC 8446 §6.2) by which a server refuses a client certificate.
