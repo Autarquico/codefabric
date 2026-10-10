@@ -108,7 +108,7 @@ func TestLeases_ARunHasOneLiveLeaseAndEachEpochIsIssuedOnce(t *testing.T) {
 	}
 }
 
-func TestRunLease_AssignClearAndPrepareAreCompareAndSets(t *testing.T) {
+func TestRunLease_AssignClearAndAdvanceAreCompareAndSets(t *testing.T) {
 	f := newLeaseFixture(t)
 	ctx := t.Context()
 	run := f.queuedRun(1)
@@ -124,12 +124,12 @@ func TestRunLease_AssignClearAndPrepareAreCompareAndSets(t *testing.T) {
 	if !errors.Is(err, ErrNoRowChanged) {
 		t.Errorf("assigning a Run that has a lease: %v", err)
 	}
-	// Neither the epoch of another lease nor another state matches a clear or a prepare.
+	// The epoch of another lease matches neither a clear, an advance nor a finish.
 	stale := got
 	stale.LeaseEpoch = 7
 	for name, step := range map[string]func(*Tx) error{
 		"clear":   func(tx *Tx) error { return tx.ClearRunLease(ctx, stale) },
-		"prepare": func(tx *Tx) error { return tx.PrepareRun(ctx, stale) },
+		"advance": func(tx *Tx) error { return tx.AdvanceRun(ctx, stale, domain.RunPreparing) },
 		"finish":  func(tx *Tx) error { return tx.FinishRun(ctx, stale, domain.RunCancelled, "", epoch0) },
 	} {
 		if err := f.db.WithTx(ctx, step); !errors.Is(err, ErrNoRowChanged) {

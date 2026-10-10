@@ -59,3 +59,23 @@ func (n *Notifier) Wait(ctx context.Context, after uint64) (uint64, error) {
 		}
 	}
 }
+
+// closedChan is what Changed returns when there is nothing to wait for.
+var closedChan = func() chan struct{} {
+	c := make(chan struct{})
+	close(c)
+	return c
+}()
+
+// Changed returns a channel that is closed once the high-water mark has grown
+// past after. It is Wait for a select: the caller combines it with a timer or
+// a context and need not leave a goroutine behind. After it fires the caller
+// reads Latest again, since the mark may have grown by less than it needs.
+func (n *Notifier) Changed(after uint64) <-chan struct{} {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.latest > after {
+		return closedChan
+	}
+	return n.changed
+}

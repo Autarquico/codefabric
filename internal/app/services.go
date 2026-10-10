@@ -4,6 +4,7 @@ import (
 	"context"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/projects"
 	"github.com/Autarquico/codefabric/internal/app/refs"
 	"github.com/Autarquico/codefabric/internal/app/runs"
@@ -21,6 +22,7 @@ type Services struct {
 	Tasks    *tasks.Service
 	Runs     *runs.Service
 	Workers  *workers.Service
+	Leases   *leases.Service
 
 	db *store.DB
 }
@@ -34,6 +36,7 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, workersCfg work
 		Tasks:    tasks.New(db, clk, ids, runService),
 		Runs:     runService,
 		Workers:  workers.New(db, clk, workersCfg),
+		Leases:   leases.New(db, clk, ids, tasks.Rederive),
 		db:       db,
 	}
 }

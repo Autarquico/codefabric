@@ -67,3 +67,33 @@ func TestNotifier_WaitDoesNotMissConcurrentNotify(t *testing.T) {
 		t.Fatalf("Latest = %d, want %d", got, target)
 	}
 }
+
+func TestNotifier_ChangedIsClosedOnceTheMarkPassesAfter(t *testing.T) {
+	n := eventbus.NewNotifier()
+	n.Notify(5)
+
+	select {
+	case <-n.Changed(4):
+	default:
+		t.Fatal("Changed(4) is open with the mark at 5")
+	}
+	changed := n.Changed(5)
+	select {
+	case <-changed:
+		t.Fatal("Changed(5) is closed with the mark at 5")
+	default:
+	}
+
+	n.Notify(5) // not a rise
+	select {
+	case <-changed:
+		t.Fatal("a Notify that does not raise the mark woke the waiter")
+	default:
+	}
+	n.Notify(6)
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Changed(5) stayed open after the mark rose to 6")
+	}
+}

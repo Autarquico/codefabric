@@ -198,6 +198,7 @@ type Run struct {
 	Runtime      domain.Runtime     `json:"runtime"`
 	Promoted     bool               `json:"promoted"`
 	WorkerID     string             `json:"worker_id,omitempty"`
+	Lease        *RunLease          `json:"lease,omitempty"`
 	CreatedAt    time.Time          `json:"created_at"`
 	StartedAt    *time.Time         `json:"started_at,omitempty"`
 	FinishedAt   *time.Time         `json:"finished_at,omitempty"`

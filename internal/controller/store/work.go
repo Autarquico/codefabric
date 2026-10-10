@@ -461,12 +461,14 @@ func (t *Tx) ClearRunLease(ctx context.Context, run Run) error {
 	return changedOne(res, err, "clearing run lease")
 }
 
-// PrepareRun moves a queued Run to preparing once its lease is accepted.
-func (t *Tx) PrepareRun(ctx context.Context, run Run) error {
+// AdvanceRun moves a Run that holds a lease from one state to the next one of
+// the machine (§11.7), but only while it is in the state and under the lease
+// that run says.
+func (t *Tx) AdvanceRun(ctx context.Context, run Run, to domain.RunState) error {
 	res, err := t.Exec(ctx,
 		`UPDATE runs SET state = ? WHERE id = ? AND state = ? AND lease_id = ? AND lease_epoch = ?`,
-		string(domain.RunPreparing), string(run.ID), string(domain.RunQueued), string(run.LeaseID), run.LeaseEpoch)
-	return changedOne(res, err, "preparing run")
+		string(to), string(run.ID), string(run.State), string(run.LeaseID), run.LeaseEpoch)
+	return changedOne(res, err, "advancing run")
 }
 
 // QueuedRuns lists the Runs that wait for a Worker (queued, without a lease)
