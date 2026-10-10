@@ -184,7 +184,7 @@ func TestConnect_UnreachableController(t *testing.T) {
 func TestConnect_RefusesAMalformedInvitationAndAnUnsafeDestination(t *testing.T) {
 	_, err := client.Connect(t.Context(), "https://example.com", "m", filepath.Join(t.TempDir(), "credentials"))
 	var de *domain.Error
-	if !asDomain(err, &de) || de.Code != v1.CodeInvalidRequest {
+	if !asDomain(err, &de) || de.Code != domain.CodeInvalidRequest {
 		t.Fatalf("err = %v", err)
 	}
 

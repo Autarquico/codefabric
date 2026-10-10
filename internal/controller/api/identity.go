@@ -24,7 +24,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		return domain.NewError(v1.CodeInvalidRequest, "request body is not valid JSON for this endpoint", nil)
+		return domain.NewError(domain.CodeInvalidRequest, "request body is not valid JSON for this endpoint", nil)
 	}
 	return nil
 }
@@ -67,7 +67,7 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request, c caller) e
 		return err
 	}
 	if req.TTLSeconds < 1 || req.TTLSeconds > int64(pki.MaxTokenTTL/time.Second) {
-		return domain.NewError(v1.CodeInvalidRequest, "ttl_seconds is out of range", nil)
+		return domain.NewError(domain.CodeInvalidRequest, "ttl_seconds is out of range", nil)
 	}
 	ttl := time.Duration(req.TTLSeconds) * time.Second
 	invite, expires, err := s.authority.CreateToken(r.Context(), c.Principal, domain.Kind(req.Kind), ttl)

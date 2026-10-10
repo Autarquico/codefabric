@@ -204,13 +204,13 @@ func TestControllerIdentityTLS_TokenTTLIsBounded(t *testing.T) {
 	tc := newController(t, time.Now())
 	for _, ttl := range []time.Duration{0, -time.Hour, 7*24*time.Hour + time.Second, 1000 * 24 * time.Hour} {
 		_, err := tc.owner.CreateToken(t.Context(), domain.KindClient, ttl)
-		wantCode(t, err, v1.CodeInvalidRequest)
+		wantCode(t, err, domain.CodeInvalidRequest)
 	}
 	if _, err := tc.owner.CreateToken(t.Context(), domain.KindClient, 7*24*time.Hour); err != nil {
 		t.Errorf("the maximum TTL must be accepted: %v", err)
 	}
 	_, err := tc.owner.CreateToken(t.Context(), domain.Kind("owner"), time.Hour)
-	wantCode(t, err, v1.CodeInvalidRequest)
+	wantCode(t, err, domain.CodeInvalidRequest)
 }
 
 func TestControllerIdentityTLS_WorkerTokenIsNotRedeemableYet(t *testing.T) {
@@ -260,7 +260,7 @@ func TestControllerIdentityTLS_IssuancePolicy(t *testing.T) {
 			"not a CSR":        "hello",
 			"wrong PEM header": strings.ReplaceAll(csrPEM(t, p256, &x509.CertificateRequest{}), "CERTIFICATE REQUEST", "CERTIFICATE"),
 		} {
-			if code, body, _ := join(t, inv.Token, csr); code != http.StatusBadRequest || body.Code != v1.CodeInvalidRequest {
+			if code, body, _ := join(t, inv.Token, csr); code != http.StatusBadRequest || body.Code != domain.CodeInvalidRequest {
 				t.Errorf("%s: %d %+v", name, code, body)
 			}
 		}

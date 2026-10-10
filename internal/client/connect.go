@@ -34,7 +34,7 @@ func (e *pinError) Error() string { return e.reason }
 func Connect(ctx context.Context, invitation, name, credentialsDir string) (Connected, error) {
 	inv, err := v1.ParseInvite(invitation)
 	if err != nil {
-		return Connected{}, domain.NewError(v1.CodeInvalidRequest, err.Error(), nil)
+		return Connected{}, domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
 	}
 	// Fail on an unsafe destination now: the token is spent by the join.
 	if _, err := checkDir(credentialsDir); err != nil {

@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -50,7 +49,7 @@ func ParseCSR(csrPEM string) (*x509.CertificateRequest, error) {
 }
 
 func invalidRequest(msg string) *domain.Error {
-	return domain.NewError(v1.CodeInvalidRequest, msg, nil)
+	return domain.NewError(domain.CodeInvalidRequest, msg, nil)
 }
 
 // signClient issues a client certificate. The template is entirely the

@@ -2770,8 +2770,8 @@ Exit codes del CLI:
 | Code | Significado | Errores |
 |------|-------------|---------|
 | 0 | ok | — |
-| 1 | error no clasificado | `CF_REPO_CONFIG_INVALID` y otros |
-| 2 | uso incorrecto | flags/args |
+| 1 | error no clasificado | `CF_REPO_CONFIG_INVALID`, `CF_INTERNAL` y otros |
+| 2 | uso incorrecto | flags/args, `CF_INVALID_REQUEST` |
 | 3 | no encontrado / ambiguo | `CF_NOT_FOUND`, `CF_AMBIGUOUS_REF` |
 | 4 | conflicto de estado | `CF_INVALID_TRANSITION`, `CF_WORKFLOW_CONFLICT`, `CF_STALE_LEASE`, `CF_IDEMPOTENCY_MISMATCH`, `CF_CONFIRMATION_STALE`, `CF_CURSOR_EXPIRED`, `CF_DEPENDENCY_CYCLE` |
 | 5 | denegado por policy/budget | `CF_POLICY_DENIED`, `CF_BUDGET_EXCEEDED`, `CF_SECRET_UNAVAILABLE` |
@@ -3237,6 +3237,7 @@ Recortes de MVP: máquina de estados reducida en Fase 1; overlays, `merged` y sy
 - §11.7 fila 1: si una Task tiene los marcadores `archived` y `cancelled`, deriva `archived` (archivar es el acto final; GC y retention dependen de ello).
 - §11.7 fila 10: «algún Run `completed` sin satisfacer la policy». Un resultado completado pendiente de revisión precede a la retry policy de Runs posteriores fallidos: la Task queda en `waiting(review)` y decide un humano.
 - §40: `CF_DEPENDENCY_CYCLE` → exit 4; `CF_WORKER_OFFLINE`, `CF_RUN_NOT_ATTACHABLE`, `CF_VERSION_INCOMPATIBLE`, `CF_PROVIDER_USAGE_UNAVAILABLE` → exit 8.
+- §40: `CF_INVALID_REQUEST` (petición mal formada o fuera de rango, HTTP 400) → exit 2 y `CF_INTERNAL` (fallo inesperado del servidor, sin detalles) → exit 1; no están en la lista de ejemplo de §40 pero el cable los necesita.
 - §9.5: un heartbeat, un doctor en verde sobre un Worker `online` o un doctor fallido sobre un Worker `degraded` son no-ops.
 - §3.13: una ref vacía nunca resuelve (`CF_NOT_FOUND`).
 

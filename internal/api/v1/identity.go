@@ -6,12 +6,6 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-// Error codes that §40 does not define but the wire needs.
-const (
-	CodeInvalidRequest domain.Code = "CF_INVALID_REQUEST"
-	CodeInternal       domain.Code = "CF_INTERNAL"
-)
-
 // ErrorEnvelope is the body of every non-2xx response.
 type ErrorEnvelope struct {
 	Error ErrorBody `json:"error"`

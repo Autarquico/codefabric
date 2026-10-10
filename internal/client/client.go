@@ -172,7 +172,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return domain.NewError(v1.CodeInternal, "the Controller sent an unreadable response", nil)
+		return domain.NewError(domain.CodeInternal, "the Controller sent an unreadable response", nil)
 	}
 	return nil
 }
@@ -180,7 +180,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 func decodeError(status int, raw []byte) error {
 	var env v1.ErrorEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil || env.Error.Code == "" {
-		return domain.NewError(v1.CodeInternal, fmt.Sprintf("unexpected response from the Controller (HTTP %d)", status), nil)
+		return domain.NewError(domain.CodeInternal, fmt.Sprintf("unexpected response from the Controller (HTTP %d)", status), nil)
 	}
 	return domain.NewError(env.Error.Code, env.Error.Message, env.Error.Details)
 }

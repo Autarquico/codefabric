@@ -18,6 +18,8 @@ func TestScenario_DomainCore_ExitCodes(t *testing.T) {
 		want int
 	}{
 		{"CF_REPO_CONFIG_INVALID", 1},
+		{"CF_INTERNAL", 1},
+		{"CF_INVALID_REQUEST", 2},
 		{"CF_NOT_FOUND", 3},
 		{"CF_AMBIGUOUS_REF", 3},
 		{"CF_INVALID_TRANSITION", 4},
@@ -73,10 +75,11 @@ func TestScenario_DomainCore_ExitCodes_ConstantsMatchSpecNames(t *testing.T) {
 		CodeRepoConfigInvalid: "CF_REPO_CONFIG_INVALID", CodeIdempotencyMismatch: "CF_IDEMPOTENCY_MISMATCH",
 		CodeInProgress: "CF_IN_PROGRESS", CodeCursorExpired: "CF_CURSOR_EXPIRED",
 		CodeConfirmationStale: "CF_CONFIRMATION_STALE", CodeNotImplemented: "CF_NOT_IMPLEMENTED",
+		CodeInvalidRequest: "CF_INVALID_REQUEST", CodeInternal: "CF_INTERNAL",
 	}
-	const specCodeCount = 28
+	const specCodeCount = 30
 	if len(constants) != specCodeCount {
-		t.Fatalf("%d codes checked, §40 lists %d", len(constants), specCodeCount)
+		t.Fatalf("%d codes checked, §40 and Appendix B5 list %d", len(constants), specCodeCount)
 	}
 	for code, name := range constants {
 		if string(code) != name {

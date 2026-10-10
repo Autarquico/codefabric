@@ -135,7 +135,7 @@ func TestCLI_ConnectReadsTheInvitationFromArgumentOrPrompt(t *testing.T) {
 	if code, _, errOut = cf(t, "", "connect"); code != 1 || !strings.Contains(errOut, "no invitation") {
 		t.Fatalf("empty stdin: exit %d: %q", code, errOut)
 	}
-	if code, _, _ = cf(t, "", "connect", "https://example.com"); code != 1 {
+	if code, _, _ = cf(t, "", "connect", "https://example.com"); code != 2 {
 		t.Fatalf("malformed invitation: exit %d", code)
 	}
 }
@@ -163,7 +163,7 @@ func TestCLI_WorkerInvitationsAreIssuedButNotRedeemable(t *testing.T) {
 	if code, _, _ = cf(t, "", "controller", "token", "create", "--client", "--worker"); code == 0 {
 		t.Error("token create with both kinds succeeded")
 	}
-	if code, _, errOut = cf(t, "", "controller", "token", "create", "--client", "--ttl", "200h"); code != 1 || !strings.Contains(errOut, "ttl") {
+	if code, _, errOut = cf(t, "", "controller", "token", "create", "--client", "--ttl", "200h"); code != 2 || !strings.Contains(errOut, "ttl") {
 		t.Errorf("ttl above the cap: exit %d, stderr %q", code, errOut)
 	}
 }

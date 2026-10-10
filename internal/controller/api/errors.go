@@ -11,7 +11,7 @@ import (
 )
 
 var statusByCode = map[domain.Code]int{
-	v1.CodeInvalidRequest:        http.StatusBadRequest,
+	domain.CodeInvalidRequest:    http.StatusBadRequest,
 	domain.CodeUnauthenticated:   http.StatusUnauthorized,
 	domain.CodePolicyDenied:      http.StatusForbidden,
 	domain.CodeNotFound:          http.StatusNotFound,
@@ -26,7 +26,7 @@ func writeError(w http.ResponseWriter, r *http.Request, log *slog.Logger, err er
 	var de *domain.Error
 	if !errors.As(err, &de) {
 		log.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "err", err)
-		de = domain.NewError(v1.CodeInternal, "internal error", nil)
+		de = domain.NewError(domain.CodeInternal, "internal error", nil)
 	}
 	status, ok := statusByCode[de.Code]
 	if !ok {
