@@ -11,7 +11,11 @@ func TestResolve_AppliesTheReferenceOrderWithProjectScope(t *testing.T) {
 	e := newEnv(t)
 	e.project("backend")
 	e.project("frontend")
-	named := func(r *v1.CreateTaskRequest) { r.Name = "shared"; r.NoStart = true; r.SourceCommit = "" }
+	named := func(r *v1.CreateTaskRequest) {
+		r.Name = "shared"
+		r.NoStart = true
+		r.SourceCommit, r.ResolvedRef = "", ""
+	}
 	a := e.mustTask("backend", "a", named).Task
 	b := e.mustTask("frontend", "b", named).Task
 

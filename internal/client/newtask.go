@@ -14,25 +14,39 @@ import (
 // interface does (§11.1). Without req.Project it is the Project whose repo is
 // the origin of dir; nothing matching is an error, never a default. Unless
 // req.NoStart, it asks the origin for the commit of the source ref (the
-// Project's default branch if req.SourceRef is empty) and the Run freezes it:
-// the Controller never resolves refs (ADR 0002 D1).
+// Project's default branch if req.SourceRef is empty) and sends it with the
+// ref it resolved; the Run freezes the pair, and the Controller never resolves
+// refs (ADR 0002 D1).
+//
+// If the origin cannot be asked and the call carries a request_id, the request
+// goes without the pair: the Controller answers it from the saved response if
+// the request was already made, and refuses it otherwise. Repeating a call
+// must not depend on the remote being reachable.
 func (c *Client) NewTask(ctx context.Context, dir string, req v1.CreateTaskRequest) (v1.CreateTaskResponse, error) {
 	project, err := c.projectFor(ctx, dir, req.Project)
 	if err != nil {
 		return v1.CreateTaskResponse{}, err
 	}
 	req.Project = project.ID
-	req.SourceCommit = ""
+	req.ResolvedRef, req.SourceCommit = "", ""
 	if !req.NoStart {
-		ref := req.SourceRef
-		if ref == "" {
-			ref = project.DefaultBranch
-		}
-		if req.SourceCommit, err = gitctx.ResolveRef(ctx, dir, remoteFor(ctx, dir, project), ref); err != nil {
+		ref := first(req.SourceRef, project.DefaultBranch)
+		commit, err := gitctx.ResolveRef(ctx, dir, remoteFor(ctx, dir, project), ref)
+		switch {
+		case err == nil:
+			req.ResolvedRef, req.SourceCommit = ref, commit
+		case req.RequestID == "":
 			return v1.CreateTaskResponse{}, err
 		}
 	}
 	return c.CreateTask(ctx, req)
+}
+
+func first(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 // ProjectForDir is the Project whose repo is the origin of dir, if exactly one is.

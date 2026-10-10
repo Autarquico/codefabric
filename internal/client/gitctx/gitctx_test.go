@@ -2,11 +2,13 @@ package gitctx_test
 
 import (
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client/gitctx"
@@ -24,15 +26,18 @@ func TestNormalize(t *testing.T) {
 			"git@GitHub.com:org/repo",
 			"github.com:org/repo.git",
 			"ssh://git@github.com/org/repo.git",
-			"ssh://git@github.com:2222/org/repo/",
+			"ssh://git@github.com:22/org/repo/",
 			"https://github.com/org/repo.git",
+			"https://github.com:443/org/repo",
 			"https://user:secret@GITHUB.COM/org/repo/",
-			"http://github.com:8080/org/repo",
+			"http://github.com:80/org/repo",
+			"git://github.com:9418/org/repo.git",
 			"git://github.com/org/repo.git",
 			"  https://github.com/org/repo.git\n",
 		}, "github.com/org/repo"},
 		{"an absolute scp path", []string{"git@host.example:/srv/git/repo.git", "ssh://host.example//srv/git/repo.git"}, "host.example/srv/git/repo"},
-		{"a local repository", []string{"/srv/git/repo.git", "/srv/git/repo", "file:///srv/git/repo.git", "/srv/git//repo/"}, "file:/srv/git/repo"},
+		{"a local repository", []string{"/srv/git/repo", "file:///srv/git/repo", "/srv/git//repo/"}, "file:/srv/git/repo"},
+		{"a local bare repository", []string{"/srv/git/repo.git", "file:///srv/git/repo.git"}, "file:/srv/git/repo.git"},
 	}
 	for _, c := range same {
 		for _, raw := range c.urls {
@@ -42,8 +47,12 @@ func TestNormalize(t *testing.T) {
 		}
 	}
 
-	// The case of the path tells repositories apart; the host and the path do too.
-	distinct := []string{"git@github.com:Org/Repo.git", "git@github.com:org/other.git", "git@gitlab.com:org/repo.git"}
+	// The case of the path, the host, a port that is not the default and a local ".git" tell repositories apart.
+	distinct := []string{
+		"git@github.com:Org/Repo.git", "git@github.com:org/other.git", "git@gitlab.com:org/repo.git", "git@github.com:org/repo.git",
+		"ssh://git@github.com:2222/org/repo", "ssh://git@github.com:2223/org/repo", "http://github.com:8080/org/repo", "https://github.com:8443/org/repo",
+		"/srv/git/repo", "/srv/git/repo.git",
+	}
 	seen := map[string]string{}
 	for _, raw := range distinct {
 		got, err := gitctx.Normalize(raw)
@@ -238,5 +247,31 @@ func TestStripCredentials(t *testing.T) {
 		if got != c.want || removed != c.removed {
 			t.Errorf("gitctx.StripCredentials(%q) = (%q, %v), want (%q, %v)", c.in, got, removed, c.want, c.removed)
 		}
+	}
+}
+
+// A remote that takes the connection and never answers ends at the deadline.
+func TestResolveRef_ARemoteThatNeverAnswersTimesOut(t *testing.T) {
+	lc := net.ListenConfig{}
+	l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	go func() {
+		for {
+			if _, err := l.Accept(); err != nil { // the connection is held open, unanswered
+				return
+			}
+		}
+	}()
+
+	start := time.Now()
+	_, err = gitctx.ResolveRefWithin(t.Context(), newRepo(t).dir, "git://"+l.Addr().String()+"/repo", "main", 300*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "no answer within") {
+		t.Fatalf("err = %v", err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("took %s", took)
 	}
 }

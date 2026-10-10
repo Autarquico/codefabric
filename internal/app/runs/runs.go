@@ -35,18 +35,26 @@ func New(db *store.DB, ids *domain.IDGenerator, rederive Rederive) *Service {
 
 var commitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
+// Source is what a Run starts from: the commit the client resolved and the ref
+// it resolved it from, which travel together (ADR 0002 D1).
+type Source struct{ Ref, Commit string }
+
 // CreateIn queues a Run of the Task in tx, freezing what the Run will execute:
 // the Task's configuration resolved against its Project and the defaults, and
-// the commit that the client resolved from the source ref (ADR 0002 D1).
+// the source the client resolved.
 //
 // A Task that ended, by a marker or by its derived state, gets no more Runs.
 //
 // The first Run also freezes the Task's completion and retry policy (§3.3). A Project or Task
 // that names a Workflow or an Environment cannot get a Run yet: resolving them
 // to a version is Phase 2, and freezing the bare reference would pin nothing.
-func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID, commit string) (v1.Run, error) {
+func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID, source Source) (v1.Run, error) {
+	commit := source.Commit
 	if !commitSHA.MatchString(commit) {
 		return v1.Run{}, input.Invalid("source_commit must be a full lower-case hex commit ID")
+	}
+	if err := input.Ref("resolved_ref", source.Ref); err != nil {
+		return v1.Run{}, err
 	}
 	task, err := store.TaskByID(ctx, tx, taskID)
 	if err != nil {
@@ -67,7 +75,7 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 			map[string]any{"workflow": in.Workflow, "environment": in.Environment})
 	}
 
-	raw, digest, err := newSpec(in, task.SourceSnapshot, commit).encode()
+	raw, digest, err := newSpec(in, task.SourceSnapshot, source).encode()
 	if err != nil {
 		return v1.Run{}, fmt.Errorf("runs: encoding the spec: %w", err)
 	}

@@ -43,8 +43,15 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateTaskR
 	if err := validateNew(req); err != nil {
 		return v1.CreateTaskResponse{}, err
 	}
-	return mutation.Do(ctx, s.db, s.clock, by, "task.create", req.RequestID, req,
+	// Only what the user asked for identifies the call: the pair the client
+	// resolved from the remote is no input, so a replay does not depend on it.
+	explicit := req
+	explicit.ResolvedRef, explicit.SourceCommit = "", ""
+	return mutation.Do(ctx, s.db, s.clock, by, "task.create", req.RequestID, explicit,
 		func(tx *store.Tx, act mutation.Act) (v1.CreateTaskResponse, error) {
+			if err := requireSource(req); err != nil {
+				return v1.CreateTaskResponse{}, err
+			}
 			projectID, err := refs.Project(ctx, tx, req.Project)
 			if err != nil {
 				return v1.CreateTaskResponse{}, err
@@ -85,7 +92,7 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateTaskR
 
 			var out v1.CreateTaskResponse
 			if task.Autostart {
-				run, err := s.runs.CreateIn(ctx, tx, act, task.ID, req.SourceCommit)
+				run, err := s.runs.CreateIn(ctx, tx, act, task.ID, runs.Source{Ref: req.ResolvedRef, Commit: req.SourceCommit})
 				if err != nil {
 					return out, err
 				}
@@ -345,15 +352,30 @@ func freeName(ctx context.Context, q store.Querier, project domain.ID, req v1.Cr
 	}
 	base := nameFromPrompt(req.Prompt)
 	for n := 1; ; n++ {
-		name := base
-		if n > 1 {
-			name = fmt.Sprintf("%s-%d", base, n)
+		name, ok := candidate(base, n)
+		if !ok {
+			continue
 		}
 		taken, err := store.TaskNameTaken(ctx, q, project, name, "")
 		if err != nil || !taken {
 			return name, err
 		}
 	}
+}
+
+// candidate is the nth try at a name: base, base-2, base-3... A suffix must
+// never make the name read as an ID, and "task-2" reads as a short ID: that
+// one becomes "task-n2". ok is false if neither spelling is a valid name.
+func candidate(base string, n int) (name string, ok bool) {
+	if n == 1 {
+		return base, true
+	}
+	for _, format := range []string{"%s-%d", "%s-n%d"} {
+		if name = fmt.Sprintf(format, base, n); input.Name("name", name) == nil {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // nameFromPrompt makes a slug from the first words of the prompt.
@@ -388,12 +410,15 @@ func validateNew(req v1.CreateTaskRequest) error {
 	if req.Name != "" {
 		name = input.Name("name", req.Name)
 	}
-	var ref error
+	var ref, resolved error
 	if req.SourceRef != "" {
 		ref = input.Ref("source_ref", req.SourceRef)
 	}
+	if req.ResolvedRef != "" {
+		resolved = input.Ref("resolved_ref", req.ResolvedRef)
+	}
 	return input.First(
-		name, ref, validatePrompt(req.Prompt), input.Mode(req.Mode), input.Completion(req.Completion),
+		name, ref, resolved, validatePrompt(req.Prompt), input.Mode(req.Mode), input.Completion(req.Completion),
 		input.Label("workflow", req.Workflow), input.Label("environment", req.Environment),
 		input.Requirements(req.Requirements), input.Retry(req.Retry), validateStart(req),
 	)
@@ -406,14 +431,22 @@ func validatePrompt(prompt string) error {
 	return nil
 }
 
-// validateStart: a Task that starts needs the commit the client resolved (D1);
-// one that does not start has nothing to freeze, so sending one is a mistake.
+// validateStart: a Task that does not start has nothing to freeze, so sending
+// the pair of the client is a mistake. That a Task that starts has one is
+// checked later (requireSource), inside the transaction.
 func validateStart(req v1.CreateTaskRequest) error {
-	switch {
-	case req.NoStart && req.SourceCommit != "":
-		return input.Invalid("source_commit is for Tasks that start: the Run freezes it")
-	case !req.NoStart && req.SourceCommit == "":
-		return input.Invalid("source_commit is required to start the Task; the client resolves it from the source ref")
+	if req.NoStart && (req.SourceCommit != "" || req.ResolvedRef != "") {
+		return input.Invalid("source_commit and resolved_ref are for Tasks that start: the Run freezes them")
+	}
+	return nil
+}
+
+// requireSource: a Task that starts needs the commit the client resolved and
+// the ref it resolved it from (D1). It is checked after the saved response of a
+// repeated request_id was looked up, which needs neither.
+func requireSource(req v1.CreateTaskRequest) error {
+	if !req.NoStart && (req.SourceCommit == "" || req.ResolvedRef == "") {
+		return input.Invalid("source commit required: the client resolves source_commit and resolved_ref from the source ref")
 	}
 	return nil
 }

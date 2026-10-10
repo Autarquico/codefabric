@@ -55,16 +55,19 @@ func TestCreateTask_ValidatesWhatItFreezes(t *testing.T) {
 	e := newEnv(t)
 	e.project("backend")
 	cases := map[string]func(*v1.CreateTaskRequest){
-		"no commit when starting":   func(r *v1.CreateTaskRequest) { r.SourceCommit = "" },
-		"a commit that is a ref":    func(r *v1.CreateTaskRequest) { r.SourceCommit = "main" },
-		"a commit with no start":    func(r *v1.CreateTaskRequest) { r.NoStart = true },
-		"an empty prompt":           func(r *v1.CreateTaskRequest) { r.Prompt = "  " },
-		"a name that is a short ID": func(r *v1.CreateTaskRequest) { r.Name = "run-4" },
-		"a name that is not a slug": func(r *v1.CreateTaskRequest) { r.Name = "Fix Auth" },
-		"an unknown completion":     func(r *v1.CreateTaskRequest) { r.Completion = "sometimes" },
-		"an option as the source":   func(r *v1.CreateTaskRequest) { r.SourceRef = "--upload-pack=x" },
-		"resources of zero":         func(r *v1.CreateTaskRequest) { r.Requirements.Resources = &v1.Resources{} },
-		"an unknown project":        func(r *v1.CreateTaskRequest) { r.Project = "nope" },
+		"no commit when starting":          func(r *v1.CreateTaskRequest) { r.SourceCommit = "" },
+		"no resolved ref when starting":    func(r *v1.CreateTaskRequest) { r.ResolvedRef = "" },
+		"a resolved ref that is an option": func(r *v1.CreateTaskRequest) { r.ResolvedRef = "--upload-pack=x" },
+		"a resolved ref with no start":     func(r *v1.CreateTaskRequest) { r.NoStart, r.SourceCommit = true, "" },
+		"a commit that is a ref":           func(r *v1.CreateTaskRequest) { r.SourceCommit = "main" },
+		"a commit with no start":           func(r *v1.CreateTaskRequest) { r.NoStart = true },
+		"an empty prompt":                  func(r *v1.CreateTaskRequest) { r.Prompt = "  " },
+		"a name that is a short ID":        func(r *v1.CreateTaskRequest) { r.Name = "run-4" },
+		"a name that is not a slug":        func(r *v1.CreateTaskRequest) { r.Name = "Fix Auth" },
+		"an unknown completion":            func(r *v1.CreateTaskRequest) { r.Completion = "sometimes" },
+		"an option as the source":          func(r *v1.CreateTaskRequest) { r.SourceRef = "--upload-pack=x" },
+		"resources of zero":                func(r *v1.CreateTaskRequest) { r.Requirements.Resources = &v1.Resources{} },
+		"an unknown project":               func(r *v1.CreateTaskRequest) { r.Project = "nope" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -133,6 +136,37 @@ func TestCreateTask_DerivedNamesAreMadeUnique(t *testing.T) {
 	}
 }
 
+// A suffix made up by the server must never read as an ID: "task-2" is the
+// short ID of the second Task, which IDs resolve before names.
+func TestCreateTask_ASuffixNeverReadsAsAnID(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	var created []v1.CreateTaskResponse
+	for _, prompt := range []string{"other", "task", "task"} {
+		created = append(created, e.mustTask("backend", prompt))
+	}
+	names := []string{created[0].Task.Name, created[1].Task.Name, created[2].Task.Name}
+	if want := []string{"other", "task", "task-n2"}; !equal(names, want) {
+		t.Fatalf("names = %v, want %v", names, want)
+	}
+
+	cancelled, err := e.app.Tasks.Cancel(t.Context(), e.owner, "task-n2", "backend", v1.ActionRequest{})
+	must(t, err)
+	if cancelled.ID != created[2].Task.ID {
+		t.Errorf("cancelled %s (%s), want %s", cancelled.ID, cancelled.Name, created[2].Task.ID)
+	}
+	if got, err := e.app.Tasks.Get(t.Context(), created[1].Task.ID, ""); err != nil || got.State != domain.TaskQueued {
+		t.Errorf("the other Task was touched: %+v, %v", got, err)
+	}
+	// Every name it makes for the same prompt stays valid for longer.
+	for range 12 {
+		name := e.mustTask("backend", "run", noStart).Task.Name
+		if _, err := domain.ParseShortID(name); err == nil {
+			t.Fatalf("name %q reads as a short ID", name)
+		}
+	}
+}
+
 func TestSet_RenameChecksUniqueness(t *testing.T) {
 	e := newEnv(t)
 	e.project("backend")
@@ -177,6 +211,54 @@ func TestCreateTask_IsIdempotentByRequestID(t *testing.T) {
 	wantCode(t, err, domain.CodeIdempotencyMismatch)
 	_, err = e.createTask("backend", "x", withID("has spaces"))
 	wantCode(t, err, domain.CodeInvalidRequest)
+}
+
+// The pair that the client resolved is no input of the user: repeating a
+// request_id must give the original answer whatever the remote says now.
+func TestCreateTask_ReplayDoesNotDependOnTheResolvedPair(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	withID := func(id string) func(*v1.CreateTaskRequest) {
+		return func(r *v1.CreateTaskRequest) { r.RequestID = id }
+	}
+	first := e.mustTask("backend", "do it", withID("req-1"))
+
+	const advanced = "fedcba9876543210fedcba9876543210fedcba98"
+	moved := e.mustTask("backend", "do it", withID("req-1"), func(r *v1.CreateTaskRequest) {
+		r.ResolvedRef, r.SourceCommit = "release", advanced
+	})
+	gone := e.mustTask("backend", "do it", withID("req-1"), func(r *v1.CreateTaskRequest) { r.ResolvedRef, r.SourceCommit = "", "" })
+
+	a, _ := json.Marshal(first)
+	for name, got := range map[string]v1.CreateTaskResponse{"the remote moved on": moved, "the remote is unreachable": gone} {
+		if b, _ := json.Marshal(got); string(a) != string(b) {
+			t.Errorf("%s: the replay differs:\n%s\n%s", name, a, b)
+		}
+	}
+	if first.Run.SourceCommit != commitA || e.count("tasks") != 1 || e.count("runs") != 1 {
+		t.Errorf("commit %s, tasks %d, runs %d", first.Run.SourceCommit, e.count("tasks"), e.count("runs"))
+	}
+
+	// Without the pair, a key never seen cannot be created.
+	_, err := e.createTask("backend", "do it", withID("req-2"), func(r *v1.CreateTaskRequest) { r.ResolvedRef, r.SourceCommit = "", "" })
+	wantCode(t, err, domain.CodeInvalidRequest)
+	if e.count("tasks") != 1 || e.count("idempotency_keys") != 1 {
+		t.Errorf("tasks %d, keys %d", e.count("tasks"), e.count("idempotency_keys"))
+	}
+
+	// An input of the user that differs is a mismatch, with or without the pair.
+	for name, mutate := range map[string]func(*v1.CreateTaskRequest){
+		"another name":    func(r *v1.CreateTaskRequest) { r.Name = "other" },
+		"another ref":     func(r *v1.CreateTaskRequest) { r.SourceRef = "dev" },
+		"no start":        noStart,
+		"another prompt":  func(r *v1.CreateTaskRequest) { r.Prompt = "something else" },
+		"another project": func(r *v1.CreateTaskRequest) { r.Project = "elsewhere" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := e.createTask("backend", "do it", withID("req-1"), mutate)
+			wantCode(t, err, domain.CodeIdempotencyMismatch)
+		})
+	}
 }
 
 func TestMutations_RevalidateTheCallerInsideTheTransaction(t *testing.T) {
@@ -249,24 +331,75 @@ func TestFreezing_ChangedDefaultsDoNotMoveAQueuedRunsDigest(t *testing.T) {
 	_, err := e.app.Projects.Set(t.Context(), e.owner, project, v1.UpdateProjectRequest{Resources: cpu, Completion: &manual, Mode: &interactive})
 	must(t, err)
 
+	type frozen struct {
+		Mode         string
+		Completion   string
+		Requirements struct {
+			Resources struct {
+				CPU      int
+				MemoryMB int `json:"memory_mb"`
+			}
+		}
+	}
+	specOf := func(run v1.Run) (s frozen) {
+		must(t, json.Unmarshal(run.Spec, &s))
+		return s
+	}
 	run, err := e.app.Runs.Get(t.Context(), first.Run.ID)
 	must(t, err)
 	if run.SpecDigest != first.Run.SpecDigest {
 		t.Errorf("the digest of a queued Run moved: %s -> %s", first.Run.SpecDigest, run.SpecDigest)
 	}
-	var spec struct {
-		Mode         string
-		Requirements struct{ Resources struct{ CPU int } }
-	}
-	must(t, json.Unmarshal(run.Spec, &spec))
-	if spec.Mode != "headless" || spec.Requirements.Resources.CPU != 2 {
+	if spec := specOf(run); spec.Mode != "headless" || spec.Completion != "first_success" || spec.Requirements.Resources.CPU != 2 {
 		t.Errorf("frozen spec = %s", run.Spec)
 	}
 
-	second, err := e.startRun(first.Task.ID, commitA)
+	// Same Task, same prompt: only the defaults differ between the two Runs.
+	started, err := e.startRun(first.Task.ID, commitA)
+	must(t, err)
+	second, err := e.app.Runs.Get(t.Context(), started.ID)
 	must(t, err)
 	if second.SpecDigest == first.Run.SpecDigest || second.Attempt != 2 {
 		t.Errorf("a new Run must freeze the new defaults: %+v", second)
+	}
+	spec := specOf(second)
+	if spec.Mode != "interactive" || spec.Requirements.Resources.CPU != 8 || spec.Requirements.Resources.MemoryMB != 16384 {
+		t.Errorf("the second spec lacks the new defaults: %s", second.Spec)
+	}
+	// The Task froze its completion with the first Run, so the new default does not reach it.
+	if spec.Completion != "first_success" {
+		t.Errorf("completion = %q, want the one frozen with the first Run", spec.Completion)
+	}
+}
+
+// The Run freezes the ref the client resolved with its commit, even when the
+// default of the Project moves in between; the Task's own override stays empty
+// and the Task keeps inheriting for the Runs to come.
+func TestCreateTask_TheRunFreezesTheClientsRefWithItsCommit(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	dev := "dev"
+	_, err := e.app.Projects.Set(t.Context(), e.owner, "backend", v1.UpdateProjectRequest{DefaultBranch: &dev})
+	must(t, err)
+
+	out := e.mustTask("backend", "x", func(r *v1.CreateTaskRequest) { r.ResolvedRef = "main" }) // the client resolved main before the change
+
+	run, err := e.app.Runs.Get(t.Context(), out.Run.ID)
+	must(t, err)
+	if !strings.Contains(string(run.Spec), `"source":{"ref":"main","commit":"`+commitA+`"`) {
+		t.Errorf("frozen spec = %s", run.Spec)
+	}
+	if out.Task.Source.Ref != "dev" {
+		t.Errorf("the Task should inherit the default for future Runs: %+v", out.Task.Source)
+	}
+	var overridden int
+	must(t, e.db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM tasks WHERE source_ref IS NOT NULL AND source_ref <> ''`).Scan(&overridden))
+	if overridden != 0 {
+		t.Error("an inherited ref became the Task's override")
+	}
+	override := e.mustTask("backend", "y", func(r *v1.CreateTaskRequest) { r.SourceRef, r.ResolvedRef = "release", "release" })
+	if override.Task.Source.Ref != "release" {
+		t.Errorf("source = %+v", override.Task.Source)
 	}
 }
 

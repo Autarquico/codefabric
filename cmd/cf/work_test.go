@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,11 +29,17 @@ type origin struct {
 	dir, url, head string
 }
 
-func newOrigin(t *testing.T) origin {
+func newOrigin(t *testing.T) origin { return newOriginAt(t, t.TempDir()) }
+
+// newOriginAt is an origin in a directory of the test's choosing.
+func newOriginAt(t *testing.T, dir string) origin {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	o := origin{dir: t.TempDir()}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	o := origin{dir: dir}
 	git(t, o.dir, "init", "-q", "-b", "main")
 	git(t, o.dir, "commit", "-q", "--allow-empty", "-m", "first")
 	git(t, o.dir, "commit", "-q", "--allow-empty", "-m", "second")
@@ -181,10 +189,16 @@ func TestScenario_ProjectsTasksRunsApi_Congelacion(t *testing.T) {
 	if !strings.Contains(string(after.Spec), `"cpu":2`) || !strings.Contains(string(after.Spec), `"mode":"headless"`) {
 		t.Errorf("the frozen spec follows the new defaults: %s", after.Spec)
 	}
-	// A Task made now freezes the new defaults, so its digest differs.
-	next := ok[v1.CreateTaskResponse](t, "do", "y")
+	// A Task made now, from the same prompt, freezes the new defaults.
+	next := ok[v1.CreateTaskResponse](t, "do", "x")
 	if next.Run.SpecDigest == created.Run.SpecDigest {
 		t.Error("the new defaults did not reach the new Run")
+	}
+	spec := ok[v1.Run](t, "run", "show", next.Run.Short).Spec
+	for _, want := range []string{`"prompt":"x"`, `"cpu":8`, `"memory_mb":16384`, `"mode":"interactive"`, `"completion":"manual"`} {
+		if !strings.Contains(string(spec), want) {
+			t.Errorf("the second spec lacks %s: %s", want, spec)
+		}
 	}
 }
 
@@ -370,5 +384,64 @@ func TestProjectsTasksRunsApi_ACredentialInTheRepoURLIsStrippedAndWarned(t *test
 	}
 	if _, out, _ := cf(t, "", "project", "list"); strings.Contains(out, "s3cret") {
 		t.Errorf("the list shows the secret:\n%s", out)
+	}
+}
+
+// Two repositories are never taken for one: a bare "repo.git" next to "repo",
+// or the same host on another port, match no Project and create no Task.
+func TestProjectsTasksRunsApi_DistinctRepositoriesAreNeverConfused(t *testing.T) {
+	bringUpController(t)
+	base := t.TempDir()
+	plain := newOriginAt(t, filepath.Join(base, "repo"))
+	bare := newOriginAt(t, filepath.Join(base, "repo.git"))
+	ok[v1.Project](t, "project", "create", "bare", "--repo", bare.dir)
+	plain.clone(t)
+
+	env := fails(t, 3, domain.CodeNotFound, "do", "x")
+	if msg, _ := env["message"].(string); !strings.Contains(msg, "no Project has the repository") {
+		t.Errorf("message = %q", msg)
+	}
+
+	ok[v1.Project](t, "project", "create", "ported", "--repo", "ssh://git@example.com:2222/org/repo.git")
+	dir := newOrigin(t).clone(t)
+	git(t, dir, "remote", "set-url", "origin", "ssh://git@example.com:2223/org/repo.git")
+	fails(t, 3, domain.CodeNotFound, "do", "y")
+	git(t, dir, "remote", "set-url", "origin", "ssh://git@example.com:22/org/repo.git") // the default port is no difference...
+	fails(t, 3, domain.CodeNotFound, "do", "z")                                         // ...but this Project is on 2222
+
+	if tasks := ok[v1.ListTasksResponse](t, "task", "list", "--all"); len(tasks.Tasks) != 0 {
+		t.Errorf("%d Tasks were created", len(tasks.Tasks))
+	}
+}
+
+// Repeating a request_id gives the original answer: the branch moving on, or
+// the origin going away, change nothing; an input of the user that differs does.
+func TestProjectsTasksRunsApi_ReplayDoesNotDependOnTheRemote(t *testing.T) {
+	bringUpController(t)
+	o := newOrigin(t)
+	o.clone(t)
+	ok[v1.Project](t, "project", "create", "backend")
+	first := ok[v1.CreateTaskResponse](t, "do", "x", "--request-id", "r1")
+
+	git(t, o.dir, "commit", "-q", "--allow-empty", "-m", "the branch moves on")
+	moved := ok[v1.CreateTaskResponse](t, "do", "x", "--request-id", "r1")
+	if moved.Run.ID != first.Run.ID || moved.Run.SourceCommit != o.head {
+		t.Errorf("after the branch moved: run %s at %s, want %s at %s", moved.Run.ID, moved.Run.SourceCommit, first.Run.ID, o.head)
+	}
+
+	gone := o.dir + ".gone"
+	if err := os.Rename(o.dir, gone); err != nil {
+		t.Fatal(err)
+	}
+	unreachable := ok[v1.CreateTaskResponse](t, "do", "x", "--request-id", "r1")
+	if unreachable.Run.ID != first.Run.ID || unreachable.Task.ID != first.Task.ID {
+		t.Errorf("with the origin gone: %+v", unreachable)
+	}
+	// Nothing was saved for a key that was never used, so it needs the remote.
+	fails(t, 2, domain.CodeInvalidRequest, "do", "x", "--request-id", "r2")
+	fails(t, 4, domain.CodeIdempotencyMismatch, "do", "x", "--request-id", "r1", "--name", "another")
+	fails(t, 4, domain.CodeIdempotencyMismatch, "do", "another prompt", "--request-id", "r1")
+	if tasks := ok[v1.ListTasksResponse](t, "task", "list", "--all"); len(tasks.Tasks) != 1 {
+		t.Errorf("%d Tasks, want the one of the first call", len(tasks.Tasks))
 	}
 }

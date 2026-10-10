@@ -16,6 +16,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
+	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -79,7 +80,7 @@ func (e *env) project(name string, mutate ...func(*v1.CreateProjectRequest)) v1.
 
 func (e *env) createTask(project, prompt string, mutate ...func(*v1.CreateTaskRequest)) (v1.CreateTaskResponse, error) {
 	e.t.Helper()
-	req := v1.CreateTaskRequest{Project: project, Prompt: prompt, SourceCommit: commitA}
+	req := v1.CreateTaskRequest{Project: project, Prompt: prompt, ResolvedRef: "main", SourceCommit: commitA}
 	for _, m := range mutate {
 		m(&req)
 	}
@@ -98,11 +99,11 @@ func (e *env) startRun(task, commit string) (v1.Run, error) {
 	e.t.Helper()
 	return mutation.Do(e.t.Context(), e.db, e.clock, e.owner, "test.start-run", "", task,
 		func(tx *store.Tx, act mutation.Act) (v1.Run, error) {
-			return e.app.Runs.CreateIn(e.t.Context(), tx, act, domain.ID(task), commit)
+			return e.app.Runs.CreateIn(e.t.Context(), tx, act, domain.ID(task), runs.Source{Ref: "main", Commit: commit})
 		})
 }
 
-func noStart(r *v1.CreateTaskRequest) { r.NoStart, r.SourceCommit = true, "" }
+func noStart(r *v1.CreateTaskRequest) { r.NoStart, r.ResolvedRef, r.SourceCommit = true, "", "" }
 
 // events returns the committed events of a type, oldest first.
 func (e *env) events(types ...domain.EventType) []domain.Event {

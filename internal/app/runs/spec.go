@@ -118,12 +118,12 @@ type specRetry struct {
 	MaxAttempts int                `json:"max_attempts"`
 }
 
-func newSpec(in Inherited, snapshot, commit string) runSpec {
+func newSpec(in Inherited, snapshot string, source Source) runSpec {
 	r := in.Requirements
 	return runSpec{
 		Schema:      specSchema,
 		Prompt:      in.Prompt,
-		Source:      specSource{Ref: in.SourceRef, Commit: commit, Snapshot: snapshot},
+		Source:      specSource{Ref: source.Ref, Commit: source.Commit, Snapshot: snapshot},
 		Mode:        in.Mode,
 		Workflow:    in.Workflow,
 		Environment: in.Environment,

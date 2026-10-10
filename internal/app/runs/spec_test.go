@@ -12,7 +12,7 @@ const commit = "0123456789abcdef0123456789abcdef01234567"
 
 func digestOf(t *testing.T, task store.Task, project store.Project, commit string) (string, string) {
 	t.Helper()
-	raw, digest, err := newSpec(Inherit(task, project), task.SourceSnapshot, commit).encode()
+	raw, digest, err := newSpec(Inherit(task, project), task.SourceSnapshot, Source{Ref: Inherit(task, project).SourceRef, Commit: commit}).encode()
 	if err != nil {
 		t.Fatal(err)
 	}

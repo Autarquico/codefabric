@@ -80,7 +80,7 @@ func TestProjectsTasksRunsApi_RoundTripThroughTheSDK(t *testing.T) {
 		t.Fatalf("an empty list must decode to an empty slice: %#v, %v", empty, err)
 	}
 
-	created, err := c.CreateTask(ctx, v1.CreateTaskRequest{Project: "backend", Prompt: "fix auth", SourceCommit: commitA})
+	created, err := c.CreateTask(ctx, v1.CreateTaskRequest{Project: "backend", Prompt: "fix auth", ResolvedRef: "main", SourceCommit: commitA})
 	must(t, err)
 	if created.Run == nil || created.Task.State != domain.TaskQueued {
 		t.Fatalf("created = %+v", created)

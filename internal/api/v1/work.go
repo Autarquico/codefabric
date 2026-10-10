@@ -122,7 +122,12 @@ type Task struct {
 
 // CreateTaskRequest is POST /v1/tasks. Project is a reference (§3.13). Unless
 // NoStart is set the Task gets its first Run, frozen at SourceCommit: the
-// client resolves the commit of SourceRef itself (ADR 0002 D1).
+// client resolves the commit itself (ADR 0002 D1) and sends it with the ref it
+// resolved, ResolvedRef, so that the Run freezes a coherent pair even if the
+// Project's default branch changes meanwhile. SourceRef is something else: the
+// Task's own, persistent override of the ref, empty when it inherits it.
+// ResolvedRef and SourceCommit are not inputs of the user, so they are outside
+// the idempotency payload: repeating a request_id needs neither.
 type CreateTaskRequest struct {
 	RequestID    string            `json:"request_id,omitempty"`
 	Project      string            `json:"project"`
@@ -130,6 +135,7 @@ type CreateTaskRequest struct {
 	Prompt       string            `json:"prompt"`
 	NoStart      bool              `json:"no_start,omitempty"`
 	SourceRef    string            `json:"source_ref,omitempty"`
+	ResolvedRef  string            `json:"resolved_ref,omitempty"`
 	SourceCommit string            `json:"source_commit,omitempty"`
 	Mode         domain.Mode       `json:"mode,omitempty"`
 	Workflow     string            `json:"workflow,omitempty"`

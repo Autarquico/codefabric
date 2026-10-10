@@ -9,12 +9,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -60,11 +62,13 @@ var scpLike = regexp.MustCompile(`^(?:[^@/:]+@)?([^/:]+):(.*)$`)
 //
 //	git@GitHub.com:org/repo.git, ssh://git@github.com:22/org/repo, https://user:pw@github.com/org/repo/
 //
-// all become github.com/org/repo. The scheme, user, port, a trailing ".git" or
-// slash and the case of the host do not tell repositories apart; the case of
-// the path does. Local paths and file:// URLs become file:<path>, cleaned but
-// not resolved: a relative path stays relative, and OriginURL already makes
-// the origin of a working copy absolute.
+// all become github.com/org/repo. The scheme, user, a trailing ".git" or slash,
+// the case of the host and the default port of the scheme (ssh 22, https 443,
+// http 80, git 9418) do not tell repositories apart; the case of the path and
+// any other port do. Local paths and file:// URLs become file:<path>, cleaned
+// but not resolved: a relative path stays relative, and OriginURL already
+// makes the origin of a working copy absolute. They keep their ".git": on a
+// filesystem /srv/repo and /srv/repo.git are two repositories.
 func Normalize(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	var host, repoPath string
@@ -80,6 +84,9 @@ func Normalize(raw string) (string, error) {
 			return localKey(u.Path), nil
 		}
 		host, repoPath = strings.ToLower(u.Hostname()), u.Path
+		if port := u.Port(); port != "" && port != defaultPorts[strings.ToLower(u.Scheme)] {
+			host = net.JoinHostPort(host, port)
+		}
 	case scpLike.MatchString(s):
 		m := scpLike.FindStringSubmatch(s)
 		host, repoPath = strings.ToLower(m[1]), m[2]
@@ -93,9 +100,10 @@ func Normalize(raw string) (string, error) {
 	return host + "/" + repoPath, nil
 }
 
-func localKey(p string) string {
-	return "file:" + strings.TrimSuffix(filepath.Clean(p), ".git")
-}
+// defaultPorts are the ports a scheme implies, which a URL may spell or omit.
+var defaultPorts = map[string]string{"ssh": "22", "https": "443", "http": "80", "git": "9418"}
+
+func localKey(p string) string { return "file:" + filepath.Clean(p) }
 
 // Match returns the Projects whose repository is the one at origin. A Project
 // whose repo cannot be read as a URL matches nothing.
@@ -120,6 +128,15 @@ var fullSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 // commit ID is returned as it is. A branch wins over a tag of the same name,
 // and an annotated tag gives the commit it points to.
 func ResolveRef(ctx context.Context, dir, remote, ref string) (string, error) {
+	return resolveRef(ctx, dir, remote, ref, lsRemoteTimeout)
+}
+
+// lsRemoteTimeout bounds one git ls-remote: a remote that accepts the
+// connection and never answers must not hang the command. It is an
+// infrastructure deadline on a context, so it runs on real time.
+const lsRemoteTimeout = 30 * time.Second
+
+func resolveRef(ctx context.Context, dir, remote, ref string, timeout time.Duration) (string, error) {
 	if fullSHA.MatchString(ref) {
 		return ref, nil
 	}
@@ -127,8 +144,13 @@ func ResolveRef(ctx context.Context, dir, remote, ref string) (string, error) {
 		return "", domain.NewError(domain.CodeInvalidRequest, "the ref and the remote must not start with '-'", nil)
 	}
 	// The second pattern asks for the peeled line of an annotated tag, which the first does not match.
-	out, err := git(ctx, dir, "ls-remote", "--", remote, ref, ref+"^{}")
+	lsCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	out, err := git(lsCtx, dir, "ls-remote", "--", remote, ref, ref+"^{}")
 	if err != nil {
+		if ctx.Err() == nil && errors.Is(lsCtx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("resolving %q on %s: no answer within %s", ref, redact(remote), timeout)
+		}
 		return "", fmt.Errorf("resolving %q on %s: %w", ref, redact(remote), err)
 	}
 	found := map[string]string{}
