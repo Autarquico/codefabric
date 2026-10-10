@@ -12,6 +12,7 @@ const (
 	WorkerEventUndrain          WorkerEvent = "undrain"
 	WorkerEventHeartbeatTimeout WorkerEvent = "heartbeat_timeout"
 	WorkerEventHeartbeat        WorkerEvent = "heartbeat"
+	WorkerEventRegistered       WorkerEvent = "registered"
 	WorkerEventRemove           WorkerEvent = "remove"
 )
 
@@ -23,12 +24,16 @@ type WorkerStatus struct {
 }
 
 // WorkerFacts are the observations guards need; the machine never queries.
+// Compatible says the Worker's version is inside the upgrade policy (§41); only
+// WorkerEventRegistered reads it.
 type WorkerFacts struct {
 	ActiveRuns int
+	Compatible bool
 }
 
 // workerTransitions is §9.5 minus the transitions open to every state
-// (HeartbeatTimeout, Remove) and the guarded ones handled in NextWorkerState.
+// (HeartbeatTimeout, Remove) and the ones that depend on facts or on where the
+// Worker was (Registered, Heartbeat, RunsEmpty), handled in NextWorkerState.
 var workerTransitions = map[WorkerState]map[WorkerEvent]WorkerState{
 	WorkerJoining:  {WorkerEventDoctorOK: WorkerOnline},
 	WorkerOnline:   {WorkerEventDoctorFailed: WorkerDegraded, WorkerEventDrain: WorkerDraining},
@@ -59,6 +64,10 @@ func NextWorkerState(cur WorkerStatus, ev WorkerEvent, facts WorkerFacts) (Worke
 	case ev == WorkerEventHeartbeat, ev == WorkerEventDoctorOK && cur.State == WorkerOnline,
 		ev == WorkerEventDoctorFailed && cur.State == WorkerDegraded:
 		return cur, nil
+	case ev == WorkerEventRegistered && cur.State == WorkerJoining && facts.Compatible:
+		return WorkerStatus{State: WorkerOnline}, nil
+	case ev == WorkerEventRegistered && cur.State == WorkerJoining:
+		return WorkerStatus{State: WorkerDegraded}, nil
 	case ev == WorkerEventRunsEmpty && facts.ActiveRuns > 0:
 		return WorkerStatus{}, invalid
 	}

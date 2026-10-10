@@ -11,6 +11,7 @@ const (
 	EventWorkerHeartbeat   EventType = "WorkerHeartbeat" // never persisted in the event store
 	EventWorkerLost        EventType = "WorkerLost"
 	EventWorkerReconnected EventType = "WorkerReconnected"
+	EventWorkerRestarted   EventType = "WorkerRestarted"
 	EventWorkerDraining    EventType = "WorkerDraining"
 	EventWorkerDrained     EventType = "WorkerDrained"
 	EventWorkerRemoved     EventType = "WorkerRemoved"

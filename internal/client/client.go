@@ -44,6 +44,7 @@ type Client struct {
 	base       string
 	controller string
 	dir        string // credentials directory; empty for a pre-enrolment client
+	recovery   string // what to do when the credentials are rejected
 
 	roots      *x509.CertPool
 	serverName string
@@ -56,7 +57,13 @@ type Client struct {
 // Option adjusts Open.
 type Option func(*options)
 
-type options struct{ controller string }
+type options struct{ controller, recovery string }
+
+// WithRecoveryHint replaces the advice given when the Controller rejects the
+// credentials, for credentials that are not a client's.
+func WithRecoveryHint(hint string) Option {
+	return func(o *options) { o.recovery = hint }
+}
 
 // WithController dials addr (host:port) instead of the address stored in the
 // bundle, for this client only: the bundle is not touched. The pinned CA and
@@ -88,6 +95,9 @@ func Open(dir string, opts ...Option) (*Client, error) {
 		return nil, err
 	}
 	c.dir = dir
+	if o.recovery != "" {
+		c.recovery = o.recovery
+	}
 	return c, nil
 }
 
@@ -114,7 +124,7 @@ func newClient(controller string, ca *x509.Certificate, certs []tls.Certificate)
 	}
 	roots := x509.NewCertPool()
 	roots.AddCert(ca)
-	c := &Client{base: "https://" + controller, controller: controller, roots: roots, serverName: host}
+	c := &Client{base: "https://" + controller, controller: controller, roots: roots, serverName: host, recovery: renewHint}
 	c.useCertificates(certs)
 	return c, nil
 }
@@ -267,12 +277,15 @@ func (c *Client) decodeError(status int, raw []byte) error {
 	}
 	msg := env.Error.Message
 	if env.Error.Code == domain.CodeUnauthenticated && c.dir != "" {
-		msg += ": " + renewHint
+		msg += ": " + c.recovery
 	}
 	return domain.NewError(env.Error.Code, msg, env.Error.Details)
 }
 
 const renewHint = "ask the owner for a new invitation (`cf controller token create`) and run `cf connect --force <invitation>`"
+
+// WorkerRecoveryHint is the advice for a Worker whose credentials were rejected.
+const WorkerRecoveryHint = "ask the owner for a new invitation (`cf controller token create --worker`) and run `cf worker join --force <invitation>`"
 
 // transportError sorts connection failures: a certificate that one side
 // refuses is an authentication problem, anything else (a name the server
@@ -295,7 +308,7 @@ func (c *Client) transportError(ctx context.Context, err error) error {
 	var op *net.OpError
 	if errors.As(err, &op) && op.Op == "remote error" && rejectsCertificate(op.Err) {
 		return domain.NewError(domain.CodeUnauthenticated,
-			"the Controller rejected this client certificate (expired or revoked): "+renewHint, cause)
+			"the Controller rejected this client certificate (expired or revoked): "+c.recovery, cause)
 	}
 	return domain.NewError(domain.CodeControllerUnreachable,
 		fmt.Sprintf("cannot reach the Controller at %s", c.controller), cause)

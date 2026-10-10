@@ -25,6 +25,7 @@ type callerKey struct{}
 
 var (
 	clientsOnly = []domain.Kind{domain.KindClient}
+	workersOnly = []domain.Kind{domain.KindWorker}
 	anyIdentity = []domain.Kind{domain.KindClient, domain.KindWorker}
 )
 

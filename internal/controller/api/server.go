@@ -57,7 +57,7 @@ type Config struct {
 	CA         *pki.CA
 	ServerCert tls.Certificate // leaf first, then the CA; see Server.SetServerCert
 	Store      Store
-	Work       *app.Services  // the use cases behind the Projects, Tasks and Runs endpoints; required
+	Work       *app.Services  // required: the Projects, Tasks and Runs use cases; its Workers area enables the Worker endpoints
 	Clock      clock.Clock    // defaults to clock.Real
 	StartedAt  time.Time      // uptime is measured from here
 	Build      buildinfo.Info // what /v1/status reports as the version
@@ -120,6 +120,9 @@ func New(c Config) (*Server, error) {
 	s.SetServerCert(c.ServerCert)
 	s.registerRoutes()
 	s.registerWorkRoutes()
+	if s.work.Workers != nil {
+		s.registerWorkerRoutes()
+	}
 	return s, nil
 }
 

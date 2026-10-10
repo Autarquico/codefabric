@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/support/atomicfile"
 )
@@ -18,6 +19,31 @@ type Controller struct {
 	// Advertise is the host:port clients are told to dial; its host becomes the
 	// server certificate's SAN.
 	Advertise string `json:"advertise"`
+	// WorkerOfflineTTL is how long a Worker may stay silent before it is
+	// offline, e.g. "45s". Unset, it is the default of Appendix A.
+	WorkerOfflineTTL Duration `json:"worker_offline_ttl,omitempty"`
+}
+
+// Duration is a time.Duration written in JSON as text such as "45s".
+type Duration time.Duration
+
+// MarshalJSON writes the duration as a string.
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Duration(d).String())
+}
+
+// UnmarshalJSON reads a string such as "45s"; anything under one second is refused.
+func (d *Duration) UnmarshalJSON(raw []byte) error {
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return fmt.Errorf("a duration such as \"45s\": %w", err)
+	}
+	parsed, err := time.ParseDuration(text)
+	if err != nil || parsed < time.Second {
+		return fmt.Errorf("%q is not a duration of at least 1s such as \"45s\"", text)
+	}
+	*d = Duration(parsed)
+	return nil
 }
 
 // LoadController reads controller.json; ErrNotInitialized if it is missing.

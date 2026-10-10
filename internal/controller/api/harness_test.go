@@ -23,6 +23,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app"
+	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/controller/api"
@@ -31,6 +32,9 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
+
+// controllerVersion is the version the test Controllers report.
+const controllerVersion = "v0.3.0"
 
 // testController is a real Controller API over real TLS on localhost, with an
 // injectable clock for the Authority (tokens and issued certificates).
@@ -78,11 +82,12 @@ func newControllerWithRoutes(t *testing.T, start time.Time, routes func(*api.Ser
 
 	tc.authority = pki.NewAuthority(pki.AuthorityConfig{
 		DB: tc.db, CA: tc.ca, Clock: tc.clock, IDs: domain.NewIDGenerator(tc.clock.Now, rand.Reader),
-		CertTTL: domain.Defaults().IdentityCertTTL, Host: host, Port: port,
+		CertTTL: domain.Defaults().IdentityCertTTL, Host: host, Port: port, EnrollWorker: workers.Enroll,
 	})
 	cfg := api.Config{
 		Authority: tc.authority, CA: tc.ca, ServerCert: serverCert,
-		Work:  app.New(tc.db, tc.clock, domain.NewIDGenerator(tc.clock.Now, rand.Reader)),
+		Work: app.New(tc.db, tc.clock, domain.NewIDGenerator(tc.clock.Now, rand.Reader),
+			workers.Config{ControllerVersion: controllerVersion}),
 		Store: tc.db, Clock: tc.clock, StartedAt: tc.clock.Now(), Build: buildinfo.Info{Version: "test", Commit: "abc123"},
 		Logger: slog.New(slog.NewTextHandler(tc.logs, nil)),
 	}
@@ -139,8 +144,8 @@ func (tc *testController) enroll(name string) (*client.Client, string) {
 	return c, dir
 }
 
-// enrollWorker inserts a worker identity directly: worker enrolment is not
-// available through the API yet, but authorization must already treat the kind.
+// enrollWorker inserts a worker identity directly, with no Worker behind it:
+// enough to test that authorization treats the kind. enrollRealWorker joins one.
 func (tc *testController) enrollWorker() *http.Client {
 	tc.t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -160,6 +165,24 @@ func (tc *testController) enrollWorker() *http.Client {
 		})
 	}))
 	return tc.httpClient(tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key})
+}
+
+// enrollRealWorker joins a Worker the normal way: a worker invitation, pinned
+// TLS and join. Its client SDK and the credentials directory are returned.
+func (tc *testController) enrollRealWorker(name string, settings ...v1.WorkerSettings) (*client.Client, string) {
+	tc.t.Helper()
+	res, err := tc.owner.CreateToken(tc.t.Context(), domain.KindWorker, time.Hour)
+	must(tc.t, err)
+	dir := filepath.Join(tc.t.TempDir(), "credentials")
+	join := v1.WorkerSettings{}
+	if len(settings) > 0 {
+		join = settings[0]
+	}
+	_, err = client.Connect(tc.t.Context(), res.Invite, name, dir, client.AsWorker(join))
+	must(tc.t, err)
+	c, err := client.Open(dir)
+	must(tc.t, err)
+	return c, dir
 }
 
 // httpClient is a raw HTTPS client pinned to this Controller's CA. With no

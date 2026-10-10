@@ -2,8 +2,11 @@ package config
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func resolve(t *testing.T, env map[string]string) (Paths, error) {
@@ -70,5 +73,47 @@ func TestControllerConfigRoundTripAndMissing(t *testing.T) {
 	}
 	if got, err := LoadController(p); err != nil || got != want {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestWorkerCredentialsAreApartFromTheClients(t *testing.T) {
+	p := Paths{ConfigDir: "/cfg", DataDir: "/data"}
+	if got, want := p.WorkerCredentialsDir(), "/cfg/worker/credentials"; got != want {
+		t.Errorf("WorkerCredentialsDir = %q, want %q", got, want)
+	}
+	if p.WorkerCredentialsDir() == p.CredentialsDir() {
+		t.Error("a Worker and a client on one machine would share a bundle")
+	}
+}
+
+func TestControllerConfigWorkerOfflineTTL(t *testing.T) {
+	p := Paths{ConfigDir: t.TempDir(), DataDir: t.TempDir()}
+	want := Controller{Listen: "0.0.0.0:7443", Advertise: "ctl:7443", WorkerOfflineTTL: Duration(90 * time.Second)}
+	if err := SaveController(p, want); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(p.ControllerConfigFile())
+	if err != nil || !strings.Contains(string(raw), `"worker_offline_ttl": "1m30s"`) {
+		t.Fatalf("file = %s (%v)", raw, err)
+	}
+	if got, err := LoadController(p); err != nil || got != want {
+		t.Fatalf("%+v %v", got, err)
+	}
+
+	// Unset, it stays out of the file.
+	if err := SaveController(p, Controller{Listen: "a:1", Advertise: "b:2"}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(p.ControllerConfigFile()); strings.Contains(string(raw), "ttl") {
+		t.Errorf("an unset TTL was written: %s", raw)
+	}
+
+	for _, bad := range []string{`"soon"`, `"0s"`, `"-5s"`, `"999ms"`, `45`, `""`} {
+		if err := os.WriteFile(p.ControllerConfigFile(), []byte(`{"listen":"a:1","advertise":"b:2","worker_offline_ttl":`+bad+`}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadController(p); err == nil {
+			t.Errorf("worker_offline_ttl %s was accepted", bad)
+		}
 	}
 }

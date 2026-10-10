@@ -47,7 +47,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request, _ caller) error {
 	if err := decodeBody(w, r, &req); err != nil {
 		return err
 	}
-	joined, err := s.authority.Join(r.Context(), req.Token, req.CSR, req.Name)
+	joined, err := s.authority.Join(r.Context(), req.Token, req.CSR, req.Name, req.Worker)
 	if err != nil {
 		return err
 	}
