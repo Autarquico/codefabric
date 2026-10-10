@@ -42,3 +42,7 @@ CREATE TABLE worker_heartbeats (
 
 -- ActiveRuns, evaluated on every heartbeat and sweep, counts the Runs of a Worker.
 CREATE INDEX runs_worker_id ON runs (worker_id) WHERE worker_id IS NOT NULL;
+
+-- LastWorkerEventAt groups WorkerRestarted per Worker; without this index SQLite
+-- scans every event of that type across all Workers inside the write transaction.
+CREATE INDEX events_worker_type_ts ON events (worker_id, type, ts) WHERE worker_id IS NOT NULL;
