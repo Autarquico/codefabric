@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -438,7 +439,9 @@ func TestProjectsTasksRunsApi_ReplayDoesNotDependOnTheRemote(t *testing.T) {
 		t.Errorf("with the origin gone: %+v", unreachable)
 	}
 	// Nothing was saved for a key that was never used, so it needs the remote.
-	fails(t, 2, domain.CodeInvalidRequest, "do", "x", "--request-id", "r2")
+	if e := fails(t, 2, domain.CodeInvalidRequest, "do", "x", "--request-id", "r2"); !strings.Contains(fmt.Sprint(e["message"]), "git ls-remote") {
+		t.Errorf("the git cause is hidden: %v", e)
+	}
 	fails(t, 4, domain.CodeIdempotencyMismatch, "do", "x", "--request-id", "r1", "--name", "another")
 	fails(t, 4, domain.CodeIdempotencyMismatch, "do", "another prompt", "--request-id", "r1")
 	if tasks := ok[v1.ListTasksResponse](t, "task", "list", "--all"); len(tasks.Tasks) != 1 {

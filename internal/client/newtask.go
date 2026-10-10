@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -29,6 +30,7 @@ func (c *Client) NewTask(ctx context.Context, dir string, req v1.CreateTaskReque
 	}
 	req.Project = project.ID
 	req.ResolvedRef, req.SourceCommit = "", ""
+	var gitErr error
 	if !req.NoStart {
 		ref := first(req.SourceRef, project.DefaultBranch)
 		commit, err := gitctx.ResolveRef(ctx, dir, remoteFor(ctx, dir, project), ref)
@@ -37,9 +39,17 @@ func (c *Client) NewTask(ctx context.Context, dir string, req v1.CreateTaskReque
 			req.ResolvedRef, req.SourceCommit = ref, commit
 		case req.RequestID == "":
 			return v1.CreateTaskResponse{}, err
+		default:
+			gitErr = err
 		}
 	}
-	return c.CreateTask(ctx, req)
+	res, err := c.CreateTask(ctx, req)
+	var de *domain.Error
+	if gitErr != nil && errors.As(err, &de) && de.Code == domain.CodeInvalidRequest {
+		// Not a replay the Controller knew: the real cause is git, not the missing pair.
+		return res, domain.NewError(domain.CodeInvalidRequest, gitErr.Error(), nil)
+	}
+	return res, err
 }
 
 func first(a, b string) string {
