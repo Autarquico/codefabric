@@ -19,6 +19,7 @@ func TestRepo_RefusesPasswordsAndTokensInTheURL(t *testing.T) {
 	for _, repo := range []string{
 		"https://user:s3cret@github.com/org/repo.git", "https://:ghp_token@github.com/org/repo.git",
 		"ssh://git:s3cret@github.com/org/repo.git", "https://user:p@ss@github.com/org/repo.git",
+		"https://ghp_token@github.com/org/repo.git", "HTTP://ghp_token@github.com/org/repo.git",
 	} {
 		err := Repo(repo)
 		if err == nil {
