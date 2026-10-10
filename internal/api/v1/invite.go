@@ -69,9 +69,3 @@ func ParseInvite(s string) (Invite, error) {
 	}
 	return Invite{Host: u.Hostname(), Port: port, Token: token, Fingerprint: strings.ToLower(fp)}, nil
 }
-
-// Redact hides the token of an invitation for display in config and logs.
-func (i Invite) Redact() string {
-	i.Token = "REDACTED"
-	return i.String()
-}

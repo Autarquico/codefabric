@@ -78,18 +78,14 @@ func newClientRenewCmd() *cobra.Command {
 		Short: "Replace this machine's certificate before it expires",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			paths, err := config.ResolveFromEnv()
-			if err != nil {
-				return err
-			}
-			c, err := client.Open(paths.CredentialsDir())
+			c, err := openClient()
 			if err != nil {
 				return err
 			}
 			if err := c.Renew(cmd.Context()); err != nil {
 				return err
 			}
-			info, err := client.Describe(paths.CredentialsDir())
+			info, err := c.Describe()
 			if err != nil {
 				return err
 			}

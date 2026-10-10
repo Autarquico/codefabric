@@ -15,6 +15,7 @@ import (
 
 func newConnectCmd() *cobra.Command {
 	var name string
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "connect [invitation | -]",
 		Short: "Enrol this machine with a Controller using an invitation",
@@ -30,6 +31,11 @@ func newConnectCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !force {
+				if err := refuseToReplaceCredentials(paths.CredentialsDir()); err != nil {
+					return err
+				}
+			}
 			if name == "" {
 				name, _ = os.Hostname()
 			}
@@ -42,7 +48,22 @@ func newConnectCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "name for this machine (default: hostname)")
+	cmd.Flags().BoolVar(&force, "force", false, "replace the credentials already stored on this machine")
 	return cmd
+}
+
+// refuseToReplaceCredentials runs before the invitation is redeemed: the
+// token is spent by the join, so a refusal afterwards would waste it.
+func refuseToReplaceCredentials(dir string) error {
+	exists, err := client.CredentialsExist(dir)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("this machine already has credentials in %s; `cf connect --force` replaces them "+
+			"(the old identity stays registered at its Controller until a client revokes it)", dir)
+	}
+	return nil
 }
 
 func readInvitation(cmd *cobra.Command, args []string) (string, error) {

@@ -37,10 +37,3 @@ func TestParseInviteRejects(t *testing.T) {
 		}
 	}
 }
-
-func TestRedactHidesToken(t *testing.T) {
-	inv := Invite{Host: "h", Port: "1", Token: "secret", Fingerprint: strings.Repeat("00", 32)}
-	if strings.Contains(inv.Redact(), "secret") {
-		t.Fatal(inv.Redact())
-	}
-}

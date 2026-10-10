@@ -108,6 +108,10 @@ func (c *Client) RemoveClient(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/clients/"+url.PathEscape(id), nil, nil)
 }
 
+// Describe summarises the credentials this client was opened with, as they are
+// stored now (after a Renew, the renewed ones).
+func (c *Client) Describe() (Info, error) { return Describe(c.dir) }
+
 // Renew swaps this machine's certificate for a fresh one. The key is
 // regenerated and never leaves the machine; the bundle is replaced atomically.
 func (c *Client) Renew(ctx context.Context) error {

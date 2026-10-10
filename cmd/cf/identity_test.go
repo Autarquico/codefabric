@@ -264,3 +264,39 @@ func TestCLI_ControllerRunServesUntilCancelled(t *testing.T) {
 		t.Fatalf("run returned %v", err)
 	}
 }
+
+func TestCLI_ConnectRefusesToReplaceCredentialsWithoutForce(t *testing.T) {
+	host, first := bringUpController(t)
+	laptop := machine(t)
+	code, out, errOut := cf(t, "", "connect", first, "--name", "laptop")
+	if code != 0 {
+		t.Fatalf("first connect: exit %d: %s", code, errOut)
+	}
+	firstID := identityRe.FindStringSubmatch(out)[1]
+
+	use(t, host)
+	code, out, _ = cf(t, "", "controller", "token", "create", "--client")
+	if code != 0 {
+		t.Fatalf("token create: exit %d", code)
+	}
+	second := strings.TrimSpace(out)
+
+	use(t, laptop)
+	before, _ := os.ReadFile(filepath.Join(laptop.CredentialsDir(), "cert.pem"))
+	code, _, errOut = cf(t, "", "connect", second)
+	if code == 0 || !strings.Contains(errOut, "--force") {
+		t.Fatalf("connect over existing credentials: exit %d, stderr %q", code, errOut)
+	}
+	if after, _ := os.ReadFile(filepath.Join(laptop.CredentialsDir(), "cert.pem")); !bytes.Equal(before, after) {
+		t.Fatal("the credentials changed without --force")
+	}
+
+	// The refusal came before the join: the invitation is still good.
+	code, out, errOut = cf(t, "", "connect", second, "--force", "--name", "laptop-2")
+	if code != 0 {
+		t.Fatalf("connect --force: exit %d: %s", code, errOut)
+	}
+	if id := identityRe.FindStringSubmatch(out)[1]; id == firstID {
+		t.Error("--force did not enrol a new identity")
+	}
+}
