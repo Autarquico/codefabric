@@ -13,12 +13,14 @@ import (
 )
 
 var statusByCode = map[domain.Code]int{
-	domain.CodeInvalidRequest:    http.StatusBadRequest,
-	domain.CodeUnauthenticated:   http.StatusUnauthorized,
-	domain.CodePolicyDenied:      http.StatusForbidden,
-	domain.CodeNotFound:          http.StatusNotFound,
-	domain.CodeInvalidTransition: http.StatusConflict,
-	domain.CodeNotImplemented:    http.StatusNotImplemented,
+	domain.CodeInvalidRequest:      http.StatusBadRequest,
+	domain.CodeUnauthenticated:     http.StatusUnauthorized,
+	domain.CodePolicyDenied:        http.StatusForbidden,
+	domain.CodeNotFound:            http.StatusNotFound,
+	domain.CodeInvalidTransition:   http.StatusConflict,
+	domain.CodeAmbiguousRef:        http.StatusConflict,
+	domain.CodeIdempotencyMismatch: http.StatusConflict,
+	domain.CodeNotImplemented:      http.StatusNotImplemented,
 }
 
 // writeError renders err as the {error:{code,message,details}} envelope. Only

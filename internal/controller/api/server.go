@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -56,6 +57,7 @@ type Config struct {
 	CA         *pki.CA
 	ServerCert tls.Certificate // leaf first, then the CA; see Server.SetServerCert
 	Store      Store
+	Work       *app.Services  // the Projects, Tasks and Runs endpoints exist only when set
 	Clock      clock.Clock    // defaults to clock.Real
 	StartedAt  time.Time      // uptime is measured from here
 	Build      buildinfo.Info // what /v1/status reports as the version
@@ -69,6 +71,7 @@ type Server struct {
 	timeouts  Timeouts
 	log       *slog.Logger
 	store     Store
+	work      *app.Services
 	clock     clock.Clock
 	startedAt time.Time
 	build     buildinfo.Info
@@ -96,6 +99,7 @@ func New(c Config) *Server {
 		timeouts:  c.Timeouts.orDefaults(),
 		log:       log,
 		store:     c.Store,
+		work:      c.Work,
 		clock:     clk,
 		startedAt: c.StartedAt,
 		build:     c.Build,
@@ -112,6 +116,9 @@ func New(c Config) *Server {
 	s.tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return s.cert.Load(), nil }
 	s.SetServerCert(c.ServerCert)
 	s.registerRoutes()
+	if s.work != nil {
+		s.registerWorkRoutes()
+	}
 	return s
 }
 
