@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"syscall"
@@ -78,28 +79,31 @@ func (e *Executor) settleExit(ctx context.Context, r state.Run, m markers) (done
 		}
 	}
 	e.endSession(ctx, r.Key)
-	fresh, ok := e.refresh(ctx, r, m)
-	if !ok {
-		return false
-	}
+	fresh := e.refresh(r, m)
 	if fresh.exit == nil {
 		fresh.exit = m.exit
 	}
-	return e.finalize(ctx, r, facts{at: fresh.exit.ExitedAt, exit: fresh.exit, started: fresh.started})
+	f := facts{at: fresh.exit.ExitedAt, exit: fresh.exit, started: fresh.started}
+	if d := fresh.diagnosis(); d != "" && fresh.exit.Error == "" {
+		f.message = d
+	}
+	return e.finalize(ctx, r, f)
 }
 
 // refresh reads the markers of a Run again, once its wrapper is known to be
 // over: what the first reading saw was taken while the wrapper could still write,
 // and a started or an exit written in between would be missed. The wrapper record
-// that was verified stays. ok is false if they cannot be read.
-func (e *Executor) refresh(ctx context.Context, r state.Run, m markers) (markers, bool) {
-	fresh, err := e.markers(r.Key)
-	if err != nil {
-		e.log.ErrorContext(ctx, "reading the markers of a Run again", "run", r.RunID, "err", err)
-		return markers{}, false
+// that was verified stays. A marker that cannot be read does not hold the Run
+// back, since the wrapper is over and will never write it again: an exit that
+// cannot be read is no exit (the Run is lost, with the error in its message), and
+// a started that cannot be read is a harness that was launched.
+func (e *Executor) refresh(r state.Run, m markers) markers {
+	fresh := e.markers(r.Key)
+	fresh.wrapper, fresh.wrapperErr = m.wrapper, nil
+	if fresh.startedErr != nil {
+		fresh.started = &execwrap.Started{StartedAt: e.clock.Now()}
 	}
-	fresh.wrapper = m.wrapper
-	return fresh, true
+	return fresh
 }
 
 // settleLost is the wrapper being gone with no exit. Only if it is gone in the
@@ -107,11 +111,7 @@ func (e *Executor) refresh(ctx context.Context, r state.Run, m markers) (markers
 // after a reboot, or with the pid in other hands, nothing is signalled and the
 // group counts as empty.
 func (e *Executor) settleLost(ctx context.Context, r state.Run, m markers, v procident.Verdict) (done bool) {
-	fresh, ok := e.refresh(ctx, r, m)
-	if !ok {
-		return false
-	}
-	if m = fresh; m.exit != nil {
+	if m = e.refresh(r, m); m.exit != nil {
 		return e.settleExit(ctx, r, m) // it wrote its exit and then died: that is not a loss
 	}
 	w := m.wrapper
@@ -121,13 +121,14 @@ func (e *Executor) settleLost(ctx context.Context, r state.Run, m markers, v pro
 		return false
 	}
 	e.endSession(ctx, r.Key)
-	if m, ok = e.refresh(ctx, r, m); !ok {
-		return false
-	}
-	if m.exit != nil {
+	if m = e.refresh(r, m); m.exit != nil {
 		return e.settleExit(ctx, r, m)
 	}
-	return e.finalize(ctx, r, facts{at: e.clock.Now(), started: m.started, lost: true, message: "the wrapper died without leaving an exit"})
+	message := "the wrapper died without leaving an exit"
+	if d := m.diagnosis(); d != "" {
+		message += ": " + d
+	}
+	return e.finalize(ctx, r, facts{at: e.clock.Now(), started: m.started, lost: true, message: message})
 }
 
 // settleNeverRan ends a Run whose harness never ran. The caller holds the lock.
@@ -262,7 +263,7 @@ func fillExit(en *v1.RunReportEntry, f facts) {
 	case f.lost:
 		en.Cause, en.Message = v1.ExitCauseWrapperLost, f.message
 	case f.exit != nil:
-		en.ExitCode, en.Signal, en.Cause, en.Message = f.exit.ExitCode, f.exit.Signal, f.exit.Cause, f.exit.Error
+		en.ExitCode, en.Signal, en.Cause, en.Message = f.exit.ExitCode, f.exit.Signal, f.exit.Cause, cmp.Or(f.exit.Error, f.message)
 	default:
 		en.Cause, en.Message = v1.ExitCauseExit, f.message
 	}

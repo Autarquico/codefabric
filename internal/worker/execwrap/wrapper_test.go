@@ -4,6 +4,7 @@ package execwrap_test
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,7 @@ func TestMain(m *testing.M) {
 	if dir := os.Getenv(asWrapper); dir != "" {
 		_ = os.Unsetenv(asWrapper)
 		if err := execwrap.Run(execwrap.Options{RunDir: dir, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -222,18 +224,25 @@ func TestWrapperKillsWhatIsLeftOfTheGroupAfterAnExit(t *testing.T) {
 		t.Errorf("exit.json = %+v: the sleep was a remnant", exit)
 	}
 	waitDead(t, child)
-	if empty, err := procident.GroupEmpty(s.cmd.Process.Pid); err != nil || !empty {
-		t.Errorf("group empty = %v, %v", empty, err)
-	}
+	waitGroupEmpty(t, s.cmd.Process.Pid)
 }
 
 func TestTheGroupIsKilledEvenWhenTheExitCannotBeWritten(t *testing.T) {
-	// A directory where exit.json goes makes its write fail.
-	s := launch(t, execwrap.Launch{Argv: shell("mkdir " + execwrap.ExitFile + "; (trap '' TERM; sleep 300) & echo $! > child.pid; exit 0"), Grace: 300 * time.Millisecond}, true)
+	// A directory where exit.json goes makes its write fail. The remnant has its trap
+	// in place before the harness ends, which waits for it.
+	script := "mkdir " + execwrap.ExitFile + "; (trap '' TERM; touch barrier; sleep 300) & echo $! > child.pid\n" +
+		"while [ ! -e barrier ]; do sleep 0.02; done; exit 0"
+	s := launch(t, execwrap.Launch{Argv: shell(script), Grace: 300 * time.Millisecond}, true)
 	child := s.pidFile("child.pid")
+	select {
+	case <-s.exited:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the wrapper did not end")
+	}
 	waitDead(t, child)
-	if empty, err := procident.GroupEmpty(s.cmd.Process.Pid); err != nil || !empty {
-		t.Errorf("group empty = %v, %v", empty, err)
+	waitGroupEmpty(t, s.cmd.Process.Pid)
+	if !strings.Contains(s.pane.String(), execwrap.ExitFile) {
+		t.Errorf("the wrapper did not say why it failed: %q", s.pane.String())
 	}
 }
 
@@ -266,9 +275,7 @@ while :; do sleep 1; done`
 	}
 	waitDead(t, child)
 	waitDead(t, child2)
-	if empty, err := procident.GroupEmpty(w.PGID); err != nil || !empty {
-		t.Errorf("group empty = %v, %v", empty, err)
-	}
+	waitGroupEmpty(t, w.PGID)
 }
 
 func TestWrapperStopsAHarnessThatEndsOnSIGTERMWithoutWaitingForTheGrace(t *testing.T) {
@@ -443,9 +450,7 @@ func TestWhatDoesNotEndWithTheGraceIsKilledWithTheGroupAfterTheExitIsWritten(t *
 		t.Errorf("exit.json = %+v", exit)
 	}
 	waitDead(t, rebel)
-	if empty, err := procident.GroupEmpty(s.cmd.Process.Pid); err != nil || !empty {
-		t.Errorf("group empty = %v, %v", empty, err)
-	}
+	waitGroupEmpty(t, s.cmd.Process.Pid)
 }
 
 func TestAHarnessThatIgnoresTheStopIsKilledWithTheGroupAndSaysSo(t *testing.T) {
@@ -460,9 +465,7 @@ func TestAHarnessThatIgnoresTheStopIsKilledWithTheGroupAndSaysSo(t *testing.T) {
 	if exit.Cause != execwrap.CauseStop || exit.Signal != "SIGKILL" || !exit.GroupKilled {
 		t.Errorf("exit.json = %+v", exit)
 	}
-	if empty, err := procident.GroupEmpty(w.PGID); err != nil || !empty {
-		t.Errorf("group empty = %v, %v", empty, err)
-	}
+	waitGroupEmpty(t, w.PGID)
 }
 
 // A pid that was listed can end, be reaped and be reused outside the group. The
@@ -481,5 +484,22 @@ func TestTheWrapperNeverSignalsAPidOnItsOwn(t *testing.T) {
 		if !strings.HasPrefix(strings.TrimSpace(c[1]), "-") {
 			t.Errorf("syscall.Kill(%s, ...) signals a pid on its own", c[1])
 		}
+	}
+}
+
+// waitGroupEmpty waits, within a bound, for the group to have no process: a kill
+// to the group is delivered at once but its members take a moment to go.
+func waitGroupEmpty(t *testing.T, pgid int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		empty, err := procident.GroupEmpty(pgid)
+		if err == nil && empty {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the group never emptied (%v)", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

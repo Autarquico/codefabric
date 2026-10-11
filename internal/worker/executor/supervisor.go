@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 
@@ -189,11 +191,7 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 		e.log.WarnContext(ctx, "asking the Runtime about a session failed", "run", r.RunID, "err", err)
 		return false
 	}
-	m, err := e.markers(r.Key)
-	if err != nil {
-		e.log.ErrorContext(ctx, "reading the markers of a Run", "run", r.RunID, "err", err)
-		return false
-	}
+	m := e.markers(r.Key)
 	if h := e.o.Hooks.AfterMarkers; h != nil {
 		h(r)
 	}
@@ -202,6 +200,9 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 		e.signalStop(ctx, r, m)
 	}
 	switch {
+	case m.wrapperErr != nil:
+		// The wrapper cannot be identified: nothing is signalled, whatever the other markers say.
+		return e.unresolved(ctx, r, "wrapper.json is unreadable")
 	case m.exit != nil:
 		return e.settleExit(ctx, r, m)
 	case m.wrapper != nil:
@@ -283,27 +284,52 @@ func (e *Executor) sessionAlive(ctx context.Context, k state.Key) (bool, error) 
 	return st.Alive, err
 }
 
+// markers is what a Run's wrapper has left on disk. A marker that exists and
+// cannot be read is not nil and not an error of the whole: its error is kept, and
+// what it means depends on what is known of the wrapper (settle.go).
 type markers struct {
 	wrapper *execwrap.Wrapper
 	started *execwrap.Started
 	exit    *execwrap.Exit
+
+	wrapperErr, startedErr, exitErr error
 }
 
-func (e *Executor) markers(k state.Key) (m markers, err error) {
+func (e *Executor) markers(k state.Key) markers {
+	var m markers
 	dir := e.runDir(k)
-	if m.exit, err = readMarker[execwrap.Exit](dir, execwrap.ExitFile); err != nil {
-		return markers{}, err
-	}
-	if m.wrapper, err = readMarker[execwrap.Wrapper](dir, execwrap.WrapperFile); err != nil {
-		return markers{}, err
-	}
-	if m.started, err = readMarker[execwrap.Started](dir, execwrap.StartedFile); err != nil {
-		return markers{}, err
-	}
-	return m, nil
+	m.exit, m.exitErr = readMarker[execwrap.Exit](dir, execwrap.ExitFile)
+	m.wrapper, m.wrapperErr = readMarker[execwrap.Wrapper](dir, execwrap.WrapperFile)
+	m.started, m.startedErr = readMarker[execwrap.Started](dir, execwrap.StartedFile)
+	return m
 }
 
-// readMarker returns nil for a marker that does not exist.
+// diagnosis says, briefly, which markers could not be read and why. It goes in the
+// message of a report, which is cleaned before it is written.
+func (m markers) diagnosis() string {
+	var parts []string
+	for _, f := range []struct {
+		name string
+		err  error
+	}{{execwrap.ExitFile, m.exitErr}, {execwrap.StartedFile, m.startedErr}} {
+		if f.err != nil {
+			parts = append(parts, f.name+" is unreadable ("+brief(f.err)+")")
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// brief is the cause of a read error without the paths of this machine.
+func brief(err error) string {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err.Error()
+	}
+	return "corrupt"
+}
+
+// readMarker returns nil for a marker that does not exist, and the error for one
+// that cannot be read.
 func readMarker[T any](dir, name string) (*T, error) {
 	var v T
 	ok, err := execwrap.Read(dir, name, &v)

@@ -1106,27 +1106,100 @@ func TestAnExitAndAStartWrittenWhileTheMarkersWereBeingReadAreNotMissed(t *testi
 	}
 }
 
-func TestAMarkerThatCannotBeReadAgainStopsTheSettlement(t *testing.T) {
-	var f *fixture
-	armed := true
-	f = newFixture(t, func(o *Options) {
-		o.Hooks.AfterMarkers = func(r state.Run) {
-			if armed {
-				armed = false
-				if err := os.WriteFile(filepath.Join(f.runDir(r.Key), execwrap.StartedFile), []byte("{"), 0o600); err != nil {
-					t.Error(err)
-				}
-			}
-		}
-	})
+func TestAMarkerThatCannotBeReadHoldsBackARunWhoseWrapperIsAlive(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	w := newWrapperProcess(t, "sleep 60")
+	f.writeWrapper(k, w.w)
+	if err := os.WriteFile(filepath.Join(f.runDir(k), execwrap.StartedFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if f.e.step(t.Context(), k) || f.run(k).Phase != state.PhaseRunning || !w.alive() {
+		t.Fatalf("a live wrapper with a marker that cannot be read: phase %s", f.run(k).Phase)
+	}
+	// Once the wrapper is over, nothing will rewrite the marker: the Run is settled,
+	// and the harness counts as launched.
+	_ = syscall.Kill(-w.w.PGID, syscall.SIGKILL)
+	<-w.ended
+	waitFor(t, "the Run to be settled", func() bool { return f.e.step(t.Context(), k) })
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) ||
+		!strings.Contains(reports[1].Message, "started.json is unreadable") {
+		t.Errorf("reports = %+v", reports)
+	}
+}
+
+func TestAnExitThatCannotBeReadIsNoExitAndTheLostRunSaysWhy(t *testing.T) {
+	f := newFixture(t)
 	k := f.started("echo hi")
 	w := newWrapperProcess(t, "exit 0")
 	<-w.ended
 	f.writeWrapper(k, w.w)
-	if f.e.step(t.Context(), k) {
-		t.Fatal("settled on markers it could not read")
+	f.writeStarted(k, w.w, t0)
+	if err := os.MkdirAll(filepath.Join(f.runDir(k), execwrap.ExitFile), 0o700); err != nil { // a directory where the file goes
+		t.Fatal(err)
 	}
-	if r := f.run(k); r.Phase != state.PhaseRunning || len(f.reports(k)) != 1 {
-		t.Errorf("phase %s, %d reports", r.Phase, len(f.reports(k)))
+	if !f.e.step(t.Context(), k) {
+		t.Fatalf("not settled: %s", f.run(k).Phase)
+	}
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) ||
+		reports[1].Cause != v1.ExitCauseWrapperLost || !strings.Contains(reports[1].Message, "exit.json is unreadable") {
+		t.Errorf("reports = %+v", reports)
+	}
+	if r := f.run(k); r.Phase != state.PhaseStopped {
+		t.Errorf("phase = %s", r.Phase)
+	}
+}
+
+func TestAStartedAndAnExitThatCannotBeReadAreAHarnessThatRanAndWasLost(t *testing.T) {
+	f := newFixture(t)
+	k := f.accepted("echo hi")
+	w := newWrapperProcess(t, "exit 0")
+	<-w.ended
+	f.writeWrapper(k, w.w)
+	if err := os.WriteFile(filepath.Join(f.runDir(k), execwrap.StartedFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(f.runDir(k), execwrap.ExitFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+		return state.Advance(t.Context(), tx, k, state.PhaseAccepted, state.PhaseStarting, t0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !f.e.step(t.Context(), k) {
+		t.Fatalf("not settled: %s", f.run(k).Phase)
+	}
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) {
+		t.Errorf("reports = %+v: a launched harness is exited, not prepare_failed", reports)
+	}
+}
+
+func TestAWrapperRecordThatCannotBeReadSignalsNothingAndNeverSettlesTheRun(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	w := newWrapperProcess(t, "trap 'exit 0' TERM; while :; do sleep 0.05; done")
+	if err := os.WriteFile(filepath.Join(f.runDir(k), execwrap.WrapperFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: t0, Cause: execwrap.CauseExit})
+	for range 3 {
+		if f.e.step(t.Context(), k) {
+			t.Fatal("settled without being able to identify the wrapper")
+		}
+	}
+	if r := f.run(k); r.Phase != state.PhaseRunning || !w.alive() {
+		t.Errorf("phase %s", r.Phase)
+	}
+	// With a stop ordered, it parks, and still signals nothing.
+	_ = os.Remove(filepath.Join(f.runDir(k), execwrap.ExitFile))
+	if err := f.e.Stop(t.Context(), k.RunID, 1, "x", SourceController); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.run(k); r.Phase != state.PhaseStopUnverified || !w.alive() {
+		t.Errorf("phase %s, alive %v", r.Phase, w.alive())
 	}
 }

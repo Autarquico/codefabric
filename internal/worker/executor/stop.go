@@ -82,11 +82,7 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 	e.mu.Lock()
 	e.memo(k).signaled = true
 	e.mu.Unlock()
-	m, err := e.markers(k)
-	if err != nil {
-		return err
-	}
-	e.signalStop(ctx, r, m)
+	e.signalStop(ctx, r, e.markers(k))
 	if e.spawn != nil {
 		e.spawn(k)
 	}
@@ -98,6 +94,10 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 // session is removed: nothing had started in it that the wrapper could stop.
 func (e *Executor) signalStop(ctx context.Context, r state.Run, m markers) {
 	if m.exit != nil {
+		return
+	}
+	if m.wrapperErr != nil {
+		e.markUnverified(ctx, r, "wrapper.json is unreadable") // no identity: nothing is signalled
 		return
 	}
 	if m.wrapper == nil {
