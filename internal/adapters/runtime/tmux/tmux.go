@@ -84,6 +84,13 @@ func (r *Runtime) Start(ctx context.Context, spec cfruntime.Spec) (cfruntime.Han
 	if len(spec.Command) == 0 {
 		return cfruntime.Handle{}, errors.New("tmux: a session needs a command")
 	}
+	// tmux expands '#' in a start directory and in a pipe-pane command as a format:
+	// a path with one would not mean what it says.
+	for _, path := range []string{spec.Dir, spec.Capture, spec.Ready} {
+		if strings.Contains(path, "#") {
+			return cfruntime.Handle{}, fmt.Errorf("tmux: the path %q has a '#', which tmux would read as a format: move the data directory", path)
+		}
+	}
 	h := r.HandleFor(spec.Name)
 	exists, err := r.hasSession(ctx, spec.Name)
 	if err != nil {
@@ -146,18 +153,6 @@ func (r *Runtime) Status(ctx context.Context, h cfruntime.Handle) (cfruntime.Sta
 	}
 	alive, err := r.hasSession(ctx, session)
 	return cfruntime.Status{Alive: alive}, err
-}
-
-// Attach connects the terminal of the caller to the session.
-func (r *Runtime) Attach(ctx context.Context, h cfruntime.Handle) error {
-	session, err := r.session(h)
-	if err != nil {
-		return err
-	}
-	cmd := exec.CommandContext(ctx, r.binary, append(r.base(), "attach-session", "-t", "="+session)...) //nolint:gosec // the binary is tmux
-	cmd.Env = environment()
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd.Run()
 }
 
 // KillServer ends the tmux server of this Runtime and every session in it. It

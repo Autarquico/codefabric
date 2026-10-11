@@ -137,8 +137,6 @@ func (r *fakeRuntime) Status(_ context.Context, h cfruntime.Handle) (cfruntime.S
 	return cfruntime.Status{Alive: r.sessions[h.Ref[len("sock/"):]]}, nil
 }
 
-func (r *fakeRuntime) Attach(context.Context, cfruntime.Handle) error { return nil }
-
 func (r *fakeRuntime) startCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -310,7 +308,7 @@ func kinds(entries []v1.RunReportEntry) []v1.RunReportKind {
 	return out
 }
 
-func (f *fixture) runDir(k state.Key) string { return f.paths.WorkerRunDir(k.RunID) }
+func (f *fixture) runDir(k state.Key) string { return f.paths.WorkerRunDir(k.RunID, k.LeaseEpoch) }
 
 // helper is a real process standing in for a wrapper: it has a group of its
 // own, and its identity can be written to wrapper.json.

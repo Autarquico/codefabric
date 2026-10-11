@@ -64,8 +64,23 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("state: resolving %q: %w", path, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
+	dir := filepath.Dir(abs)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("state: creating directory: %w", err)
+	}
+	// The directory holds the markers of the Runs and the file their reports:
+	// only the user of the daemon reads them, whoever made the directory first.
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a directory: the owner needs the x bit
+		return nil, fmt.Errorf("state: securing %s: %w", dir, err)
+	}
+	// SQLite gives its -wal and -shm files the mode of the database: it exists, closed, before it is opened.
+	f, err := os.OpenFile(abs, os.O_CREATE|os.O_RDONLY, 0o600) //nolint:gosec // the state file
+	if err != nil {
+		return nil, fmt.Errorf("state: creating %s: %w", abs, err)
+	}
+	_ = f.Close()
+	if err := os.Chmod(abs, 0o600); err != nil {
+		return nil, fmt.Errorf("state: securing %s: %w", abs, err)
 	}
 	dsn := "file:" + (&url.URL{Path: abs}).EscapedPath() + "?" + url.Values{
 		"_pragma": {

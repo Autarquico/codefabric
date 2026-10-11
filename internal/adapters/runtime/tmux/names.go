@@ -8,19 +8,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 )
 
 // Name is how handles say that tmux made them.
 const Name = "tmux"
-
-// SessionName is the session of a Run under a lease epoch: the same Run and
-// epoch always name the same session, which is what makes Start idempotent. It
-// has no '.' or ':' (tmux reads them as separators in a target).
-func SessionName(runID string, leaseEpoch uint64) string {
-	return cfruntime.NameFor(runID, leaseEpoch)
-}
 
 // SocketName names the tmux server of a Worker by its data directory, so that
 // each Worker, and each test, has a server of its own. It is a name for -L, not

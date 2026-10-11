@@ -3,6 +3,7 @@ package state_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -238,12 +239,9 @@ func TestJournalSeqNeverRepeatsAndFencedRunsAreLeftOut(t *testing.T) {
 	if err != nil || len(pending) != 1 || pending[0].Key != b || pending[0].Epoch != "E2" || pending[0].Seq != 5 {
 		t.Errorf("pending = %+v (%v)", pending, err)
 	}
-	if n, _ := state.JournalLen(t.Context(), db.Reader()); n != 2 {
-		t.Errorf("the fenced row was dropped: %d rows", n)
-	}
-	tx(t, db, func(x *state.Tx) error { return state.RecordAttempt(t.Context(), x, []uint64{5}) })
-	if p, _ := state.PendingJournal(t.Context(), db.Reader(), 10); p[0].Attempts != 1 {
-		t.Errorf("attempts = %d", p[0].Attempts)
+	var n int
+	if err := db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM journal`).Scan(&n); err != nil || n != 2 {
+		t.Errorf("the fenced row was dropped: %d rows (%v)", n, err)
 	}
 }
 
@@ -260,5 +258,27 @@ func TestAFailedTransactionLeavesNothing(t *testing.T) {
 	}
 	if live, _ := state.LiveRuns(t.Context(), db.Reader()); len(live) != 0 {
 		t.Errorf("%d rows stayed", len(live))
+	}
+}
+
+func TestTheStateIsPrivateToTheUserOfTheDaemon(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "worker")
+	if err := os.Mkdir(dir, 0o755); err != nil { //nolint:gosec // the point of the test // made by someone else, open to all
+		t.Fatal(err)
+	}
+	db, err := state.Open(t.Context(), filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	tx(t, db, func(x *state.Tx) error {
+		_, err := state.InsertAssigned(t.Context(), x, assignment("run_a", 1, 1))
+		return err
+	})
+	for path, want := range map[string]os.FileMode{dir: 0o700, filepath.Join(dir, "state.db"): 0o600, filepath.Join(dir, "state.db-wal"): 0o600} {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != want {
+			t.Errorf("%s: %v %v, want %v", path, info, err, want)
+		}
 	}
 }

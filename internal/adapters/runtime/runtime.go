@@ -55,8 +55,6 @@ type Runtime interface {
 	// Ending the processes in an orderly way is the caller's: this is the last resort.
 	Stop(ctx context.Context, h Handle) error
 	Status(ctx context.Context, h Handle) (Status, error)
-	// Attach connects the terminal of the caller to the session until it detaches.
-	Attach(ctx context.Context, h Handle) error
 	// HandleFor is the handle Start returns for a Name, without starting anything.
 	HandleFor(name string) Handle
 }

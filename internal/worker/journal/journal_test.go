@@ -121,7 +121,8 @@ func (f *fixture) write(j *journal.Journal, run string, kinds ...v1.RunReportKin
 
 func (f *fixture) pending() int {
 	f.t.Helper()
-	n, err := state.JournalLen(f.t.Context(), f.db.Reader())
+	var n int
+	err := f.db.Reader().QueryRowContext(f.t.Context(), `SELECT COUNT(*) FROM journal`).Scan(&n)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -161,7 +162,7 @@ func TestScenario_WorkerExecutorTmux_ReenvioDelJournal(t *testing.T) {
 
 	up := &controller{}
 	s := f.sender(up, second)
-	for {
+	for range 10 { // the 103 rows go in a few requests: more flushes than that is a loop
 		n, err := s.Flush(t.Context())
 		if err != nil {
 			t.Fatal(err)
@@ -314,42 +315,31 @@ func TestARejectionFencesTheRunKeepsItsReportsAndDoesNotStopOtherRuns(t *testing
 	}
 }
 
-func TestAWholeRequestRefusedForGoodFencesTheRun(t *testing.T) {
-	for _, code := range []domain.Code{domain.CodeNotFound, domain.CodeStaleLease, domain.CodeInvalidRequest} {
+func TestAnErrorOfTheWholeRequestFencesNothingAndLosesNothing(t *testing.T) {
+	for _, code := range []domain.Code{domain.CodeNotFound, domain.CodeStaleLease, domain.CodeInvalidRequest, domain.CodeUnauthenticated, domain.CodePolicyDenied, domain.CodeInternal, domain.CodeControllerUnreachable} {
 		f := newFixture(t)
 		j := journal.New("01J0000000000000000000000E1", f.clock)
 		f.write(j, "run_a", lifecycle...)
-		c := &controller{answer: func(string, v1.RunReportRequest) (v1.RunReportResponse, error) {
-			return v1.RunReportResponse{}, domain.NewError(code, "no", nil)
+		f.write(j, "run_b", lifecycle...)
+		c := &controller{answer: func(run string, _ v1.RunReportRequest) (v1.RunReportResponse, error) {
+			if run == "run_a" {
+				return v1.RunReportResponse{}, domain.NewError(code, "no", nil)
+			}
+			return v1.RunReportResponse{}, nil
 		}}
-		if _, err := f.sender(c, j).Flush(t.Context()); err != nil {
-			t.Fatalf("%s: %v", code, err)
+		if _, err := f.sender(c, j).Flush(t.Context()); err == nil {
+			t.Fatalf("%s: the failure was not reported to the caller, which backs off", code)
 		}
-		run, _ := state.RunBy(t.Context(), f.db.Reader(), state.Key{RunID: "run_a", LeaseEpoch: 1})
-		if run.FencedCode != string(code) || f.pending() != 3 {
-			t.Errorf("%s: fenced %q, %d rows", code, run.FencedCode, f.pending())
+		for _, id := range []string{"run_a", "run_b"} {
+			run, _ := state.RunBy(t.Context(), f.db.Reader(), state.Key{RunID: id, LeaseEpoch: 1})
+			if run.FencedCode != "" {
+				t.Errorf("%s: %s was fenced by an error of the request", code, id)
+			}
 		}
-	}
-}
-
-func TestAnUnreachableControllerLosesNothingAndCountsAttempts(t *testing.T) {
-	f := newFixture(t)
-	j := journal.New("01J0000000000000000000000E1", f.clock)
-	f.write(j, "run_a", lifecycle...)
-	down := &controller{answer: func(string, v1.RunReportRequest) (v1.RunReportResponse, error) {
-		return v1.RunReportResponse{}, domain.NewError(domain.CodeInternal, "boom", nil)
-	}}
-	for range 2 {
-		if _, err := f.sender(down, j).Flush(t.Context()); err == nil {
-			t.Fatal("no error")
+		// The failing Run keeps its three rows; the other Run went through.
+		if f.pending() != 3 {
+			t.Errorf("%s: %d rows left, want the 3 of run_a", code, f.pending())
 		}
-	}
-	pending, _ := state.PendingJournal(t.Context(), f.db.Reader(), 10)
-	if len(pending) != 3 || pending[0].Attempts != 2 {
-		t.Errorf("pending = %+v", pending)
-	}
-	if run, _ := state.RunBy(t.Context(), f.db.Reader(), state.Key{RunID: "run_a", LeaseEpoch: 1}); run.FencedCode != "" {
-		t.Error("a transient failure fenced the Run")
 	}
 }
 

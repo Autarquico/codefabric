@@ -1,7 +1,6 @@
 package execwrap
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -101,7 +101,12 @@ func (w *wrapper) run() error {
 		// processes that are not ours.
 		return w.fail("the wrapper does not lead its process group")
 	}
-	start, _ := procident.StartOf(w.self) // empty if the platform cannot say; the daemon then cannot verify
+	start, err := procident.StartOf(w.self)
+	if err != nil {
+		// The daemon signals this group only if it can tell this process from another
+		// that gets the pid: a wrapper it could not identify must not run anything.
+		return w.fail("the wrapper cannot identify itself: %v", err)
+	}
 	if err := Write(w.o.RunDir, WrapperFile, Wrapper{PID: w.self, PGID: w.pgid, Start: start, StartedAt: w.clock.Now()}); err != nil {
 		return err
 	}
@@ -109,7 +114,6 @@ func (w *wrapper) run() error {
 	case err != nil:
 		return w.fail("%v", err)
 	case stopped:
-		w.stopping = true
 		return Write(w.o.RunDir, ExitFile, Exit{ExitedAt: w.clock.Now(), Cause: CauseStop, Error: "stopped before the harness started"})
 	}
 
@@ -119,9 +123,9 @@ func (w *wrapper) run() error {
 	}
 	defer func() { _ = log.Close() }()
 
-	cmd := exec.CommandContext(context.Background(), w.launch.Argv[0], w.launch.Argv[1:]...) //nolint:gosec // the argv is what the Run asked for
+	cmd := exec.Command(w.launch.Argv[0], w.launch.Argv[1:]...) //nolint:gosec,noctx // the argv is what the Run asked for; nothing ends the harness but the wrapper
 	cmd.Dir = w.launch.Dir
-	cmd.Env = append(os.Environ(), w.launch.Env...)
+	cmd.Env = append(withoutTmux(os.Environ()), w.launch.Env...)
 	copied, parentEnds, err := w.wire(cmd, log)
 	if err != nil {
 		return w.fail("wiring the output: %v", err)
@@ -208,8 +212,10 @@ func (w *wrapper) waitForGate() (stopped bool, err error) {
 			return false, nil
 		}
 		select {
-		case <-w.signals:
-			return true, nil
+		case sig := <-w.signals:
+			if w.stops(sig) {
+				return true, nil
+			}
 		case <-timeout.C():
 			return false, fmt.Errorf("the terminal was not ready after %s", GateTimeout)
 		case <-ticker.C():
@@ -223,13 +229,36 @@ func (w *wrapper) supervise(waited <-chan struct{}) {
 		select {
 		case <-waited:
 			return
-		case <-w.signals:
-			w.beginStop()
+		case sig := <-w.signals:
+			if w.stops(sig) {
+				w.beginStop()
+			}
 		case <-w.deadline:
 			w.deadline, w.expired = nil, true
 			w.killOthers()
 		}
 	}
+}
+
+// stops says whether a signal asks the wrapper to stop. In interactive mode the
+// harness has the terminal of the pane: a Ctrl-C of the user reaches it through
+// the foreground group, and it is the harness's to handle, not a reason to end
+// the Run. SIGTERM and SIGHUP (the session closing) always stop.
+func (w *wrapper) stops(sig os.Signal) bool {
+	return sig != syscall.SIGINT || w.launch.Mode != ModeInteractive
+}
+
+// withoutTmux is env without the variables that make a process think it is in a
+// tmux client: the harness is not a user of the server of the Worker.
+func withoutTmux(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // beginStop asks the group to end and starts the grace.

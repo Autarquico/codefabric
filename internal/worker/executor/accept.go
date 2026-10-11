@@ -81,7 +81,16 @@ func (e *Executor) decide(ctx context.Context, k state.Key) (retry bool) {
 		return true
 	}
 	if v := e.evaluate(r, lim, load); v.reject != "" {
-		return e.answer(ctx, r, e.reject(ctx, r, v), state.PhaseRejected)
+		err := e.reject(ctx, r, v)
+		var coded *domain.Error
+		if errors.As(err, &coded) && coded.Code == domain.CodeInvalidTransition {
+			// The lease is accepted already: an earlier accept got to the Controller and
+			// the daemon died before it wrote it down, and what it sees now is different.
+			// Accepting again is idempotent and says whether it is still ours; the Run
+			// then fails on its own if it cannot run.
+			return e.answer(ctx, r, e.accept(ctx, r), state.PhaseAccepted)
+		}
+		return e.answer(ctx, r, err, state.PhaseRejected)
 	}
 	return e.answer(ctx, r, e.accept(ctx, r), state.PhaseAccepted)
 }
@@ -124,8 +133,12 @@ func (e *Executor) answer(ctx context.Context, r state.Run, err error, done stat
 		e.log.ErrorContext(ctx, "recording the answer to an assignment", "run", r.RunID, "err", txErr)
 		return true
 	}
-	if to == state.PhaseAccepted && e.spawn != nil {
-		e.spawn(r.Key)
+	if to.Live() {
+		if e.spawn != nil {
+			e.spawn(r.Key)
+		}
+	} else {
+		e.forget(r.Key)
 	}
 	return false
 }

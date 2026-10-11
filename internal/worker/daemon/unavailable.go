@@ -20,7 +20,7 @@ func (unavailable) Stop(context.Context, cfruntime.Handle) error { return nil }
 func (unavailable) Status(context.Context, cfruntime.Handle) (cfruntime.Status, error) {
 	return cfruntime.Status{}, nil
 }
-func (unavailable) Attach(context.Context, cfruntime.Handle) error { return errNoRuntime }
+
 func (unavailable) HandleFor(name string) cfruntime.Handle {
 	return cfruntime.Handle{Runtime: "none", Ref: name}
 }

@@ -59,7 +59,7 @@ func sh(script string) []string { return []string{"/bin/sh", "-c", script} }
 func TestStartIsIdempotentByName(t *testing.T) {
 	r := newRuntime(t)
 	dir := t.TempDir()
-	spec := cfruntime.Spec{Name: tmux.SessionName("run_a", 1), Dir: dir, Command: sh("echo run >> runs.txt; sleep 60")}
+	spec := cfruntime.Spec{Name: cfruntime.NameFor("run_a", 1), Dir: dir, Command: sh("echo run >> runs.txt; sleep 60")}
 
 	first, err := r.Start(t.Context(), spec)
 	if err != nil {
@@ -89,7 +89,7 @@ func TestStartIsIdempotentByName(t *testing.T) {
 	}
 
 	// Another epoch is another session.
-	other := cfruntime.Spec{Name: tmux.SessionName("run_a", 2), Dir: dir, Command: sh("sleep 60")}
+	other := cfruntime.Spec{Name: cfruntime.NameFor("run_a", 2), Dir: dir, Command: sh("sleep 60")}
 	if _, err := r.Start(t.Context(), other); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestStartIsIdempotentByName(t *testing.T) {
 
 func TestStopAndStatus(t *testing.T) {
 	r := newRuntime(t)
-	spec := cfruntime.Spec{Name: tmux.SessionName("run_b", 1), Dir: t.TempDir(), Command: sh("sleep 60")}
+	spec := cfruntime.Spec{Name: cfruntime.NameFor("run_b", 1), Dir: t.TempDir(), Command: sh("sleep 60")}
 	h, err := r.Start(t.Context(), spec)
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestStopAndStatus(t *testing.T) {
 
 func TestASessionEndsWhenItsCommandDoes(t *testing.T) {
 	r := newRuntime(t)
-	h, err := r.Start(t.Context(), cfruntime.Spec{Name: tmux.SessionName("run_c", 1), Dir: t.TempDir(), Command: sh("exit 0")})
+	h, err := r.Start(t.Context(), cfruntime.Spec{Name: cfruntime.NameFor("run_c", 1), Dir: t.TempDir(), Command: sh("exit 0")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestCaptureAndGate(t *testing.T) {
 	// The command waits for the gate, as the wrapper does, and then prints.
 	script := `while [ ! -e ` + gate + ` ]; do sleep 0.05; done; echo first-line; echo second-line`
 	h, err := r.Start(t.Context(), cfruntime.Spec{
-		Name: tmux.SessionName("run_d", 1), Dir: dir, Command: sh(script), Capture: capture, Ready: gate,
+		Name: cfruntime.NameFor("run_d", 1), Dir: dir, Command: sh(script), Capture: capture, Ready: gate,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestCaptureAndGate(t *testing.T) {
 	})
 	// Adopting the session wires nothing twice: no duplicate output.
 	if _, err := r.Start(t.Context(), cfruntime.Spec{
-		Name: tmux.SessionName("run_d", 1), Dir: dir, Command: sh(script), Capture: capture, Ready: gate,
+		Name: cfruntime.NameFor("run_d", 1), Dir: dir, Command: sh(script), Capture: capture, Ready: gate,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestCommandIsRunWithoutAShellAndWithItsArgumentsIntact(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "args.txt")
 	_, err := r.Start(t.Context(), cfruntime.Spec{
-		Name: tmux.SessionName("run_e", 1), Dir: dir,
+		Name: cfruntime.NameFor("run_e", 1), Dir: dir,
 		Command: []string{"/bin/sh", "-c", `printf '%s|' "$@" > ` + out, "sh", "a b", "$HOME", "it's;rm"},
 	})
 	if err != nil {
@@ -201,7 +201,7 @@ func TestTheUsersTmuxConfigurationAndTheTmuxVariableDoNotMatter(t *testing.T) {
 	t.Setenv("TMUX_PANE", "%9")
 
 	r := newRuntime(t)
-	h, err := r.Start(t.Context(), cfruntime.Spec{Name: tmux.SessionName("run_f", 1), Dir: t.TempDir(), Command: sh("sleep 1; exit 0")})
+	h, err := r.Start(t.Context(), cfruntime.Spec{Name: cfruntime.NameFor("run_f", 1), Dir: t.TempDir(), Command: sh("sleep 1; exit 0")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,5 +226,24 @@ func TestStartRefusesWhatIsNotASession(t *testing.T) {
 		if _, err := r.Start(t.Context(), spec); err == nil {
 			t.Errorf("Start(%+v) succeeded", spec)
 		}
+	}
+}
+
+func TestStartRefusesAPathWithAHash(t *testing.T) {
+	r := newRuntime(t)
+	base := filepath.Join(t.TempDir(), "has#hash")
+	if err := os.Mkdir(base, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range []cfruntime.Spec{
+		{Name: "cf-a", Dir: base, Command: sh("true")},
+		{Name: "cf-b", Dir: t.TempDir(), Command: sh("true"), Capture: filepath.Join(base, "out.log")},
+	} {
+		if _, err := r.Start(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "'#'") {
+			t.Errorf("Start(%+v): %v", spec, err)
+		}
+	}
+	if sessions, _ := r.Sessions(t.Context()); len(sessions) != 0 {
+		t.Errorf("sessions = %v", sessions)
 	}
 }

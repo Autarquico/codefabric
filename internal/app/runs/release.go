@@ -9,22 +9,19 @@ import (
 // confirms that the Run's processes are gone (§10.5).
 const releaseRunStopped = "run_stopped"
 
+// releaseStartedWithoutSealing is the TEMPORARY EXCEPTION of
+// worker-executor-tmux (#11): sealing does not exist yet, so a Run whose harness
+// started is released at RunStopped without it. git-relay-publication (#12) sets
+// it to false and makes releasable ask for the sealing.
+const releaseStartedWithoutSealing = true
+
 // releasable is the one answer to whether the reservation of a Run's lease may
 // be released after the Worker confirmed RunStopped (§10.5): the Run must be
-// terminal and its runtime stopped.
-//
-// A Run whose harness never started needs nothing more. For one that did,
-// §10.5 also wants the local sealing finished (result_commit persisted or
-// publication: failed), and sealing does not exist yet. TEMPORARY EXCEPTION of
-// worker-executor-tmux: until git-relay-publication (#12) adds it, a stopped
-// terminal Run releases its reservation without it. #12 must tighten this
-// branch and invert TestReleasable_StartedRunIsReleasedOnStopUntilSealingExists.
+// terminal and its runtime stopped. A Run whose harness never started needs
+// nothing more; for one that did, §10.5 also wants the local sealing finished.
 func releasable(run store.Run, neverStarted bool) bool {
 	if !run.State.IsTerminal() || run.Runtime != domain.RuntimeStopped {
 		return false
 	}
-	if neverStarted {
-		return true
-	}
-	return true
+	return neverStarted || releaseStartedWithoutSealing
 }

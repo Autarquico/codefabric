@@ -17,7 +17,31 @@ type facts struct {
 	exit    *execwrap.Exit    // nil if the wrapper left none
 	started *execwrap.Started // nil if the harness never spawned
 	lost    bool              // the wrapper died and left no exit
+	ordered bool              // a stop was ordered
 	message string
+}
+
+// verdictOf says what the process with the wrapper's pid is now. The wrapper
+// leads its own group (pgid == pid), which is what lets a verdict about the pid
+// say something about the group; a record where that is not so says nothing.
+func verdictOf(w *execwrap.Wrapper) procident.Verdict {
+	v := procident.Verify(w.PID, w.Start)
+	if (v == procident.Gone || v == procident.Different) && w.PGID != w.PID {
+		return procident.Unknown
+	}
+	return v
+}
+
+// unresolved is a wrapper whose identity cannot be established. Nothing is
+// signalled. A Run that is being stopped is parked in stop_unverified, to be
+// verified again; one nobody asked to stop is left as it is and looked at again
+// on the next tick: not knowing is no reason to stop a Run.
+func (e *Executor) unresolved(ctx context.Context, r state.Run, why string) (done bool) {
+	if r.Phase == state.PhaseStopping || r.Phase == state.PhaseStopUnverified {
+		return e.markUnverified(ctx, r, why)
+	}
+	e.log.WarnContext(ctx, "the wrapper of a Run cannot be identified; looking again", "run", r.RunID, "why", why)
+	return false
 }
 
 // settleExit is the Run having an exit.json. The wrapper wrote it after it
@@ -25,7 +49,7 @@ type facts struct {
 // stop for granted, checks that the wrapper is gone and the group is empty.
 func (e *Executor) settleExit(ctx context.Context, r state.Run, m markers) (done bool) {
 	if w := m.wrapper; w != nil {
-		switch procident.Verify(w.PID, w.Start) {
+		switch verdictOf(w) {
 		case procident.Same:
 			if e.clock.Now().Sub(m.exit.ExitedAt) < wrapperExitWait {
 				return false // it is ending
@@ -34,31 +58,37 @@ func (e *Executor) settleExit(ctx context.Context, r state.Run, m markers) (done
 			_ = syscall.Kill(-w.PGID, syscall.SIGKILL)
 			return false
 		case procident.Gone:
-		default:
-			return e.markUnverified(ctx, r, "the wrapper of the Run is not the process it was")
-		}
-		if !e.groupEmpty(ctx, w) {
 			// The wrapper is gone, so a group with this ID is what it left behind.
-			e.log.WarnContext(ctx, "processes of a Run survive its wrapper: killing them", "run", r.RunID)
-			_ = syscall.Kill(-w.PGID, syscall.SIGKILL)
-			return false
+			if !e.groupEmpty(ctx, w) {
+				e.log.WarnContext(ctx, "processes of a Run survive its wrapper: killing them", "run", r.RunID)
+				_ = syscall.Kill(-w.PGID, syscall.SIGKILL)
+				return false
+			}
+		case procident.Rebooted, procident.Different:
+			// Another boot, or another process with the pid: the group of the wrapper
+			// is empty (a pid is not reused while a group with its ID has members),
+			// and whatever has this ID now is not ours.
+		default:
+			return e.unresolved(ctx, r, "the identity of the wrapper cannot be verified")
 		}
 	}
 	e.endSession(ctx, r.Key)
 	return e.finalize(ctx, r, facts{at: m.exit.ExitedAt, exit: m.exit, started: m.started})
 }
 
-// settleLost is the wrapper having died with no exit. The group it led is ended
-// by pid-verified signals, and the Run fails with the cause that was seen.
-func (e *Executor) settleLost(ctx context.Context, r state.Run, m markers) (done bool) {
+// settleLost is the wrapper being gone with no exit. Only if it is gone in the
+// same boot can something of its group be left, and then it is ours to end;
+// after a reboot, or with the pid in other hands, nothing is signalled and the
+// group counts as empty.
+func (e *Executor) settleLost(ctx context.Context, r state.Run, m markers, v procident.Verdict) (done bool) {
 	if exit, err := readMarker[execwrap.Exit](e.runDir(r.Key), execwrap.ExitFile); err == nil && exit != nil {
 		m.exit = exit // it wrote its exit and then died: that is not a loss
 		return e.settleExit(ctx, r, m)
 	}
 	w := m.wrapper
-	e.log.WarnContext(ctx, "the wrapper of a Run died without an exit", "run", r.RunID)
-	_ = syscall.Kill(-w.PGID, syscall.SIGKILL) // the wrapper is gone, so the group is what it left
-	if !e.groupEmpty(ctx, w) {
+	e.log.WarnContext(ctx, "the wrapper of a Run is gone without an exit", "run", r.RunID, "verdict", v.String())
+	if v == procident.Gone && !e.groupEmpty(ctx, w) {
+		_ = syscall.Kill(-w.PGID, syscall.SIGKILL)
 		return false
 	}
 	e.endSession(ctx, r.Key)
@@ -101,7 +131,7 @@ func (e *Executor) escalateStop(ctx context.Context, r state.Run, m markers) (do
 		return false
 	}
 	e.log.WarnContext(ctx, "a stop did not finish within stop.grace: killing the group", "run", r.RunID)
-	if procident.Verify(m.wrapper.PID, m.wrapper.Start) == procident.Same {
+	if verdictOf(m.wrapper) == procident.Same {
 		_ = syscall.Kill(-m.wrapper.PGID, syscall.SIGKILL)
 	}
 	_ = e.o.Runtime.Stop(ctx, e.o.Runtime.HandleFor(e.sessionName(r.Key)))
@@ -113,7 +143,7 @@ func (e *Executor) escalateStop(ctx context.Context, r state.Run, m markers) (do
 // verification is tried again every minute and at every start of the daemon.
 func (e *Executor) markUnverified(ctx context.Context, r state.Run, why string) (done bool) {
 	e.mu.Lock()
-	e.retryAt[r.Key] = e.clock.Now().Add(unverifiedRetry)
+	e.memo(r.Key).retryAt = e.clock.Now().Add(unverifiedRetry)
 	e.mu.Unlock()
 	if r.Phase == state.PhaseStopUnverified {
 		return false
@@ -130,17 +160,22 @@ func (e *Executor) markUnverified(ctx context.Context, r state.Run, why string) 
 
 // finalize records how a Run ended and what the Controller has to be told, in
 // one transaction: its reports, the final phase and the stop order that is done.
-// A harness that started ends with exited and stopped; one that never ran, with
-// prepare_failed and stopped(never_started), unless a stop was ordered, in which
-// case the Controller already knows that the Run is over and only the stop is
-// left to confirm.
+//
+// `started` means that the session was created, so it is reported before the
+// harness is known to have spawned. A harness that spawned (started.json) ends
+// with exited and stopped. One that never spawned ends with prepare_failed and
+// stopped, whether the failure was seen before or after `started`, and its
+// publication stays none; but if a stop was ordered the Controller already knows
+// that the Run is over, and only the stop is left to confirm. stopped says
+// never_started only if `started` was never reported.
 func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done bool) {
 	_, orderErr := state.StopOrderOf(ctx, e.o.DB.Reader(), r.Key)
-	ordered := orderErr == nil
-	ran := r.StartedAt != nil || f.started != nil
+	f.ordered = orderErr == nil
+	spawned := f.started != nil
+	reportedStart := r.StartedAt != nil || spawned
 	now := e.clock.Now()
 	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
-		if f.started != nil && r.StartedAt == nil {
+		if spawned && r.StartedAt == nil {
 			if err := state.SetStarted(ctx, tx, r.Key, mustJSON(*e.runtimeHandle(r.Key)), f.started.StartedAt); err != nil {
 				return err
 			}
@@ -150,11 +185,12 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 				return err
 			}
 		}
-		if ran {
+		switch {
+		case spawned:
 			if err := e.report(ctx, tx, r.Key, v1.ReportExited, f.at, func(en *v1.RunReportEntry) { fillExit(en, f) }); err != nil {
 				return err
 			}
-		} else if !ordered {
+		case !f.ordered:
 			message := f.message
 			if f.exit != nil && f.exit.Error != "" {
 				message = f.exit.Error
@@ -163,11 +199,10 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 				return err
 			}
 		}
-		if err := e.report(ctx, tx, r.Key, v1.ReportStopped, f.at, func(en *v1.RunReportEntry) { en.NeverStarted = !ran }); err != nil {
+		if err := e.report(ctx, tx, r.Key, v1.ReportStopped, f.at, func(en *v1.RunReportEntry) { en.NeverStarted = !reportedStart }); err != nil {
 			return err
 		}
-		from := []state.Phase{state.PhaseAccepted, state.PhaseStarting, state.PhaseRunning, state.PhaseStopping, state.PhaseStopUnverified}
-		if err := state.Close(ctx, tx, r.Key, from, state.PhaseStopped, !ran, now); err != nil {
+		if err := state.Close(ctx, tx, r.Key, state.OccupyingPhases, state.PhaseStopped, !reportedStart, now); err != nil {
 			return err
 		}
 		return state.CompleteStopOrder(ctx, tx, r.Key, now)
@@ -181,10 +216,14 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 	return true
 }
 
+// fillExit describes how the harness ended. A wrapper that was lost while a stop
+// was ordered is a stop that ended the Run, not a loss.
 func fillExit(en *v1.RunReportEntry, f facts) {
 	switch {
+	case f.lost && f.ordered:
+		en.Cause, en.Message = v1.ExitCauseStop, f.message
 	case f.lost:
-		en.Cause = v1.ExitCauseWrapperLost
+		en.Cause, en.Message = v1.ExitCauseWrapperLost, f.message
 	case f.exit != nil:
 		en.ExitCode, en.Signal, en.Cause, en.Message = f.exit.ExitCode, f.exit.Signal, f.exit.Cause, f.exit.Error
 	default:
@@ -196,8 +235,5 @@ func fillExit(en *v1.RunReportEntry, f facts) {
 func (e *Executor) forget(k state.Key) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	delete(e.failures, k)
-	delete(e.lastErr, k)
-	delete(e.signaled, k)
-	delete(e.retryAt, k)
+	delete(e.memos, k)
 }

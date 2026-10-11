@@ -17,7 +17,6 @@ type JournalRow struct {
 	Kind      string
 	Payload   []byte
 	CreatedAt time.Time
-	Attempts  int
 }
 
 // AppendJournal adds a row in the transaction of the change it reports, and
@@ -37,7 +36,7 @@ func AppendJournal(ctx context.Context, tx *Tx, r JournalRow) (uint64, error) {
 // those of fenced assignments, which are kept for the reconciliation.
 func PendingJournal(ctx context.Context, q Querier, limit int) ([]JournalRow, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT j.seq, j.epoch, j.run_id, j.lease_epoch, j.kind, j.payload, j.created_at, j.attempts
+		`SELECT j.seq, j.epoch, j.run_id, j.lease_epoch, j.kind, j.payload, j.created_at 
 		 FROM journal j LEFT JOIN local_runs r ON r.run_id = j.run_id AND r.lease_epoch = j.lease_epoch
 		 WHERE r.fenced_code IS NULL ORDER BY j.seq LIMIT ?`, limit)
 	if err != nil {
@@ -51,7 +50,7 @@ func PendingJournal(ctx context.Context, q Querier, limit int) ([]JournalRow, er
 			payload string
 			created int64
 		)
-		if err := rows.Scan(&r.Seq, &r.Epoch, &r.Key.RunID, &r.Key.LeaseEpoch, &r.Kind, &payload, &created, &r.Attempts); err != nil {
+		if err := rows.Scan(&r.Seq, &r.Epoch, &r.Key.RunID, &r.Key.LeaseEpoch, &r.Kind, &payload, &created); err != nil {
 			return nil, fmt.Errorf("state: scanning the journal: %w", err)
 		}
 		r.Payload, r.CreatedAt = []byte(payload), time.Unix(0, created).UTC()
@@ -60,23 +59,9 @@ func PendingJournal(ctx context.Context, q Querier, limit int) ([]JournalRow, er
 	return out, rows.Err()
 }
 
-// JournalLen is the number of rows the Controller has not confirmed, fenced ones included.
-func JournalLen(ctx context.Context, q Querier) (int, error) {
-	var n int
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM journal`).Scan(&n); err != nil {
-		return 0, fmt.Errorf("state: counting the journal: %w", err)
-	}
-	return n, nil
-}
-
 // DeleteJournal removes the rows the Controller has confirmed.
 func DeleteJournal(ctx context.Context, tx *Tx, seqs []uint64) error {
 	return forSeqs(ctx, tx, `DELETE FROM journal WHERE seq IN (`, seqs)
-}
-
-// RecordAttempt counts one more try on each of the rows.
-func RecordAttempt(ctx context.Context, tx *Tx, seqs []uint64) error {
-	return forSeqs(ctx, tx, `UPDATE journal SET attempts = attempts + 1 WHERE seq IN (`, seqs)
 }
 
 func forSeqs(ctx context.Context, tx *Tx, prefix string, seqs []uint64) error {

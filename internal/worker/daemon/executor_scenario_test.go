@@ -35,7 +35,7 @@ func (r *recordingRuntime) Stop(context.Context, cfruntime.Handle) error { retur
 func (r *recordingRuntime) Status(context.Context, cfruntime.Handle) (cfruntime.Status, error) {
 	return cfruntime.Status{}, nil
 }
-func (r *recordingRuntime) Attach(context.Context, cfruntime.Handle) error { return nil }
+
 func (r *recordingRuntime) HandleFor(name string) cfruntime.Handle {
 	return cfruntime.Handle{Runtime: "fake", Ref: "x/" + name}
 }

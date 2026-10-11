@@ -8,6 +8,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/oklog/ulid/v2"
@@ -37,7 +38,7 @@ type internalError struct{ error }
 // says the same thing, and a rejection if it does not. A failure that is not a
 // rejection of an entry rolls the whole request back.
 func (s *Service) Report(ctx context.Context, by pki.Session, runID string, req v1.RunReportRequest) (v1.RunReportResponse, error) {
-	if err := validateReport(req); err != nil {
+	if err := validateReport(req, s.clock.Now()); err != nil {
 		return v1.RunReportResponse{}, err
 	}
 	if kind, _, err := domain.ParseID(runID); err != nil || kind != domain.KindRun {
@@ -86,8 +87,18 @@ func (s *Service) Report(ctx context.Context, by pki.Session, runID string, req 
 			return v1.RunReportResponse{}, err
 		}
 		out.Run = view(current, false)
+		if !ownsLive(current, w.ID, req.Entries) {
+			// A lease that is no longer the Run's tells nothing of who has it now.
+			out.Run = v1.Run{ID: out.Run.ID, State: current.State, Runtime: current.Runtime, Publication: current.Publication}
+		}
 		return out, nil
 	})
+}
+
+// ownsLive says whether the Run is held by this Worker under one of the lease
+// epochs it reported with.
+func ownsLive(run store.Run, worker domain.ID, entries []v1.RunReportEntry) bool {
+	return run.WorkerID == worker && slices.ContainsFunc(entries, func(e v1.RunReportEntry) bool { return e.LeaseEpoch == run.LeaseEpoch })
 }
 
 // reportEntry decides one entry. Everything that can reject it comes before
@@ -129,7 +140,7 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		return outcome(""), err
 	}
 
-	ev := act.Event(domain.EventRunStarted, "")
+	ev := act.Event("", "") // each kind below gives it its type
 	ev.Timestamp = e.At
 	ev.ProjectID, ev.TaskID, ev.RunID, ev.WorkerID = task.ProjectID, task.ID, run.ID, w.ID
 	ev.WorkerEpoch, ev.WorkerSeq = e.WorkerEpoch, &e.WorkerSeq
@@ -164,19 +175,27 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		if err != nil {
 			return outcome(""), err
 		}
-		ev.Type, ev.Message = domain.EventRunFailed, "run failed"
 		if next.State == domain.RunCompleted {
 			ev.Type, ev.Message = domain.EventRunCompleted, "run completed"
+		} else {
+			ev.Type, ev.Message = domain.EventRunFailed, "run failed"
 		}
 		ev.Data["exit_code"], ev.Data["signal"], ev.Data["cause"] = e.ExitCode, e.Signal, e.Cause
 		apply = func() error { return tx.ExitRun(ctx, run, next.State, reason, e.ExitCode, e.At) }
 	case v1.ReportPrepareFailed:
-		next, err := domain.NextRunState(domain.RunStatus{State: run.State}, domain.RunEventPrepareFailed)
+		// `started` means that the session was created. The harness can still fail to
+		// spawn, and then the Run was `running` for the Controller: it fails all the same,
+		// as a Run that never ran (publication none).
+		event, phase := domain.RunEventPrepareFailed, domain.RunPreparing
+		if run.State == domain.RunRunning {
+			event, phase = domain.RunEventExitNonZero, domain.RunRunning
+		}
+		next, err := domain.NextRunState(domain.RunStatus{State: run.State}, event)
 		if err != nil {
 			return outcome(""), err
 		}
-		ev.Type, ev.Message = domain.EventRunFailed, "run failed while preparing"
-		ev.Data["phase"] = string(domain.RunPreparing)
+		ev.Type, ev.Message = domain.EventRunFailed, "run failed before the harness ran"
+		ev.Data["phase"] = string(phase)
 		apply = func() error { return tx.FinishRun(ctx, run, next.State, domain.EndEnvironment, e.At) }
 	case v1.ReportStopped:
 		if run.Runtime == domain.RuntimeStopped {
@@ -184,6 +203,9 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		}
 		if e.NeverStarted && run.Runtime == domain.RuntimeActive {
 			return outcome(""), domain.NewError(domain.CodeInvalidTransition, "the harness of this Run did start", nil)
+		}
+		if !e.NeverStarted && !run.State.IsTerminal() {
+			return outcome(""), domain.NewError(domain.CodeInvalidTransition, "the Run is not over: only a Run that never started can be stopped before it ends", nil)
 		}
 		ev.Type, ev.Message = domain.EventRunStopped, "run stopped"
 		ev.Data["never_started"] = e.NeverStarted
@@ -228,6 +250,15 @@ func (s *Service) releaseIfAllowed(ctx context.Context, tx *store.Tx, act mutati
 
 const dataReportDigest = "report_digest"
 
+// Bounds of what a Worker may say: numbers that fit the database, and times that
+// are not the other side of the world.
+const (
+	maxSeq   = 1 << 62
+	maxAhead = 24 * time.Hour
+)
+
+var earliestAt = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // reportDigest identifies what an entry says, apart from the (epoch, seq) that
 // name it, so that a replay can be told from a seq that was reused.
 func reportDigest(run domain.ID, e v1.RunReportEntry) string {
@@ -240,7 +271,7 @@ func reportDigest(run domain.ID, e v1.RunReportEntry) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func validateReport(req v1.RunReportRequest) error {
+func validateReport(req v1.RunReportRequest, now time.Time) error {
 	if n := len(req.Entries); n == 0 || n > v1.MaxReportEntries {
 		return input.Invalid("a report has between 1 and %d entries", v1.MaxReportEntries)
 	}
@@ -252,25 +283,25 @@ func validateReport(req v1.RunReportRequest) error {
 		if _, err := ulid.ParseStrict(e.WorkerEpoch); err != nil {
 			return input.Invalid("worker_epoch must be a ULID")
 		}
-		if e.WorkerSeq == 0 || e.WorkerSeq <= last || e.WorkerSeq > 1<<62 {
+		if e.WorkerSeq == 0 || e.WorkerSeq <= last || e.WorkerSeq > maxSeq {
 			return input.Invalid("worker_seq must be positive and grow along the entries")
 		}
 		last = e.WorkerSeq
-		if err := validateEntry(e); err != nil {
+		if err := validateEntry(e, now); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateEntry(e v1.RunReportEntry) error {
+func validateEntry(e v1.RunReportEntry, now time.Time) error {
 	switch {
-	case e.LeaseEpoch == 0:
-		return input.Invalid("lease_epoch is required")
+	case e.LeaseEpoch == 0 || e.LeaseEpoch > maxSeq:
+		return input.Invalid("lease_epoch must be between 1 and %d", maxSeq)
 	case !e.Kind.IsValid():
 		return input.Invalid("kind must be started, exited, prepare_failed or stopped")
-	case e.At.IsZero():
-		return input.Invalid("at is required")
+	case e.At.Before(earliestAt) || e.At.After(now.Add(maxAhead)):
+		return input.Invalid("at must be after the year 2000 and at most %s ahead of the Controller", maxAhead)
 	case len(e.Message) > v1.MaxReportMessageLen || hasHidden(e.Message):
 		return input.Invalid("message must print and be at most %d characters", v1.MaxReportMessageLen)
 	case e.Kind != v1.ReportStarted && e.Handle != nil:

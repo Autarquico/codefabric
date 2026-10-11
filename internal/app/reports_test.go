@@ -305,7 +305,7 @@ func TestReport_ASeqReusedForADifferentReportIsRejected(t *testing.T) {
 	// The same seq of a different epoch is another report.
 	again := first
 	again.WorkerEpoch = "01J00000000000000000000001"
-	again.Kind, again.Handle = v1.ReportStopped, nil
+	again.Kind, again.Handle, again.Cause = v1.ReportExited, nil, v1.ExitCauseExit
 	if got := results(r.mustSend(again)); got != "applied" {
 		t.Errorf("a new epoch with the same seq: %s", got)
 	}
@@ -457,5 +457,77 @@ func TestHeartbeat_AnswersWhatTheWorkerMayTakeOn(t *testing.T) {
 	must(t, err)
 	if resp.MaxConcurrentRuns != 3 || resp.Allocatable.CPU != 4 || resp.Allocatable.MemoryMB != 65536 {
 		t.Errorf("response = %+v", resp)
+	}
+}
+
+func TestReport_AStopThatSaysTheHarnessRanNeedsARunThatIsOver(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	r.mustSend(r.entry(v1.ReportStarted))
+	if got := results(r.mustSend(r.entry(v1.ReportStopped))); got != "rejected:CF_INVALID_TRANSITION" {
+		t.Errorf("stopped on a running Run = %s", got)
+	}
+	if got := e.storedRun(r.run.ID); got.Runtime != domain.RuntimeActive {
+		t.Errorf("runtime = %s", got.Runtime)
+	}
+}
+
+func TestReport_AHarnessThatCouldNotSpawnFailsTheRunWithPublicationNone(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	// `started` is the session being created; the harness then fails to spawn.
+	out := r.mustSend(r.entry(v1.ReportStarted), r.entry(v1.ReportPrepareFailed), r.entry(v1.ReportStopped))
+	if got := results(out); got != "applied,applied,applied" {
+		t.Fatalf("outcomes = %s", got)
+	}
+	got := e.storedRun(r.run.ID)
+	if got.State != domain.RunFailed || got.EndReason != domain.EndEnvironment || got.Publication != domain.PublicationNone || got.Runtime != domain.RuntimeStopped {
+		t.Errorf("Run = %+v", got)
+	}
+	if res := e.reservation(r.lease.ID); res.ReleasedAt == nil {
+		t.Error("the reservation was kept")
+	}
+}
+
+func TestReport_NumbersAndTimesOutOfRangeAreInvalidRequestsNot500s(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	for name, mutate := range map[string]func(*v1.RunReportEntry){
+		"huge lease epoch": func(en *v1.RunReportEntry) { en.LeaseEpoch = 1<<63 + 5 },
+		"huge seq":         func(en *v1.RunReportEntry) { en.WorkerSeq = 1<<63 + 5 },
+		"year 1":           func(en *v1.RunReportEntry) { en.At = time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC) },
+		"far future":       func(en *v1.RunReportEntry) { en.At = e.clock.Now().Add(25 * time.Hour) },
+	} {
+		en := r.entry(v1.ReportStarted)
+		mutate(&en)
+		_, err := r.send(en)
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+			continue
+		}
+		wantCode(t, err, domain.CodeInvalidRequest)
+	}
+	// A day ahead is within the tolerance.
+	en := r.entry(v1.ReportStarted, func(en *v1.RunReportEntry) { en.At = e.clock.Now().Add(23 * time.Hour) })
+	if got := results(r.mustSend(en)); got != "applied" {
+		t.Errorf("a time within a day = %s", got)
+	}
+}
+
+func TestReport_ARunThatIsNoLongerTheWorkersTellsItLittle(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	r := e.acceptedRun(w, "x")
+	// The Run moves on to another lease epoch, as a lost Run would.
+	must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(t.Context(), `UPDATE runs SET lease_epoch = 2 WHERE id = ?`, r.run.ID)
+		return err
+	}))
+	out := r.mustSend(r.entry(v1.ReportStarted))
+	if got := results(out); got != "rejected:CF_STALE_LEASE" {
+		t.Fatalf("outcomes = %s", got)
+	}
+	if out.Run.WorkerID != "" || out.Run.Lease != nil || out.Run.TaskID != "" || out.Run.State == "" {
+		t.Errorf("Run = %+v: only state, runtime and publication", out.Run)
 	}
 }

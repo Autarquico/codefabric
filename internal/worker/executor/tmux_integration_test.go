@@ -114,7 +114,7 @@ func (f *realFixture) pidFile(k state.Key, name string) int {
 	f.t.Helper()
 	var pid int
 	waitFor(f.t, name, func() bool {
-		raw, err := os.ReadFile(filepath.Join(f.paths.WorkerWorktreeDir(k.RunID), name)) //nolint:gosec // a file of the test
+		raw, err := os.ReadFile(filepath.Join(f.paths.WorkerWorktreeDir(k.RunID, k.LeaseEpoch), name)) //nolint:gosec // a file of the test
 		if err != nil {
 			return false
 		}
@@ -169,7 +169,7 @@ func TestRealRunOfAnInteractiveScriptCapturesTheTerminal(t *testing.T) {
 
 func TestScenario_WorkerExecutorTmux_AdopcionDeSesion(t *testing.T) {
 	f := newRealFixture(t, 2*time.Second)
-	k := f.assign(specJSON("echo $$ > harness.pid; sleep 300", "command", "headless"))
+	k := f.assign(specJSON("echo $$ > harness.pid; exec sleep 300", "command", "headless"))
 	ctx := t.Context()
 	f.e.decideOnce(ctx)
 
@@ -191,6 +191,11 @@ func TestScenario_WorkerExecutorTmux_AdopcionDeSesion(t *testing.T) {
 	wrapperBefore := f.wrapperOf(k)
 	waitFor(t, "started.json", func() bool { _, err := os.Stat(filepath.Join(dir, execwrap.StartedFile)); return err == nil })
 	harnessBefore := f.pidFile(k, "harness.pid")
+	// The shell became the harness (exec): the group is the wrapper and the harness, and stays so.
+	waitFor(t, "the group to settle", func() bool {
+		members, _ := procident.GroupMembers(wrapperBefore.PGID)
+		return len(members) == 2
+	})
 	membersBefore, _ := procident.GroupMembers(wrapperBefore.PGID)
 
 	// The daemon comes back.
@@ -241,7 +246,7 @@ while :; do sleep 1; done`
 	f.waitPhase(k, state.PhaseRunning)
 	child, child2, harness := f.pidFile(k, "child.pid"), f.pidFile(k, "child2.pid"), f.pidFile(k, "harness.pid")
 	waitFor(t, "the harness to be ready", func() bool {
-		_, err := os.Stat(filepath.Join(f.paths.WorkerWorktreeDir(k.RunID), "ready"))
+		_, err := os.Stat(filepath.Join(f.paths.WorkerWorktreeDir(k.RunID, k.LeaseEpoch), "ready"))
 		return err == nil
 	})
 	w := f.wrapperOf(k)

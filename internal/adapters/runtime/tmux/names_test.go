@@ -1,22 +1,8 @@
 package tmux
 
 import (
-	"strings"
 	"testing"
 )
-
-func TestSessionNameIsDerivedFromTheRunAndTheEpochAndHasNoSeparators(t *testing.T) {
-	name := SessionName("run_01J0ABCDEFGHJKMNPQRSTVWXYZ", 3)
-	if name != "cf-run_01J0ABCDEFGHJKMNPQRSTVWXYZ-e3" {
-		t.Errorf("name = %s", name)
-	}
-	if strings.ContainsAny(name, ".:") {
-		t.Errorf("%s has a character tmux reads as a separator", name)
-	}
-	if SessionName("run_a", 1) == SessionName("run_a", 2) {
-		t.Error("two epochs of a Run share a session")
-	}
-}
 
 func TestSocketNameIsStablePerDirectoryAndShort(t *testing.T) {
 	a, b := SocketName("/data/a"), SocketName("/data/b")

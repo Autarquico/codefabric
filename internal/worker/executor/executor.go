@@ -15,9 +15,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 
@@ -98,14 +101,31 @@ type Executor struct {
 
 	wake chan struct{} // the decider has something new
 
-	mu       sync.Mutex
-	locks    map[state.Key]*sync.Mutex
-	spawned  map[state.Key]bool
-	spawn    func(state.Key) // starts the supervisor of a Run; set by Run
-	failures map[state.Key]int
-	lastErr  map[state.Key]string
-	signaled map[state.Key]bool
-	retryAt  map[state.Key]time.Time
+	mu    sync.Mutex
+	memos map[state.Key]*runMemo
+	spawn func(state.Key) // starts the supervisor of a Run; set by Run
+}
+
+// runMemo is what the executor remembers of a Run apart from state.db, and
+// drops whole when the Run is over. Its fields are guarded by Executor.mu, but
+// lock, which serialises the changes to the Run.
+type runMemo struct {
+	lock     sync.Mutex
+	spawned  bool
+	failures int       // times the Runtime failed to start the session
+	lastErr  string    // why
+	signaled bool      // the stop was signalled in this life of the daemon
+	retryAt  time.Time // when an unverified stop is verified again
+}
+
+// memo returns the memo of a Run, making it if it is new. Callers hold e.mu.
+func (e *Executor) memo(k state.Key) *runMemo {
+	m := e.memos[k]
+	if m == nil {
+		m = new(runMemo)
+		e.memos[k] = m
+	}
+	return m
 }
 
 // New builds the executor. It does not start anything: Run does.
@@ -115,8 +135,7 @@ func New(o Options) (*Executor, error) {
 	}
 	e := &Executor{
 		o: o, harnesses: map[string]harness.Launcher{}, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, grace: o.StopGrace,
-		wake: make(chan struct{}, 1), locks: map[state.Key]*sync.Mutex{}, spawned: map[state.Key]bool{},
-		failures: map[state.Key]int{}, lastErr: map[state.Key]string{}, signaled: map[state.Key]bool{}, retryAt: map[state.Key]time.Time{},
+		wake: make(chan struct{}, 1), memos: map[state.Key]*runMemo{},
 	}
 	if e.clock == nil {
 		e.clock = clock.Real{}
@@ -190,14 +209,10 @@ func (e *Executor) kickDecider() {
 // and the answer to its assignment.
 func (e *Executor) lock(k state.Key) func() {
 	e.mu.Lock()
-	m := e.locks[k]
-	if m == nil {
-		m = new(sync.Mutex)
-		e.locks[k] = m
-	}
+	m := e.memo(k)
 	e.mu.Unlock()
-	m.Lock()
-	return m.Unlock
+	m.lock.Lock()
+	return m.lock.Unlock
 }
 
 // Run recovers what the previous daemon left, and then takes assignments until
@@ -209,10 +224,10 @@ func (e *Executor) Run(ctx context.Context) error {
 	e.spawn = func(k state.Key) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		if e.spawned[k] || ctx.Err() != nil {
+		if e.memo(k).spawned || ctx.Err() != nil {
 			return
 		}
-		e.spawned[k] = true
+		e.memo(k).spawned = true
 		wg.Go(func() { e.supervise(ctx, k) })
 	}
 	e.mu.Unlock()
@@ -232,7 +247,9 @@ func (e *Executor) supervise(ctx context.Context, k state.Key) {
 	defer ticker.Stop()
 	defer func() {
 		e.mu.Lock()
-		delete(e.spawned, k)
+		if m := e.memos[k]; m != nil {
+			m.spawned = false
+		}
 		e.mu.Unlock()
 	}()
 	for {
@@ -247,7 +264,7 @@ func (e *Executor) supervise(ctx context.Context, k state.Key) {
 	}
 }
 
-func (e *Executor) runDir(k state.Key) string { return e.o.Paths.WorkerRunDir(k.RunID) }
+func (e *Executor) runDir(k state.Key) string { return e.o.Paths.WorkerRunDir(k.RunID, k.LeaseEpoch) }
 
 func (e *Executor) sessionName(k state.Key) string { return cfruntime.NameFor(k.RunID, k.LeaseEpoch) }
 
@@ -257,9 +274,7 @@ func (e *Executor) report(ctx context.Context, tx *state.Tx, k state.Key, kind v
 	if fill != nil {
 		fill(&entry)
 	}
-	if len(entry.Message) > v1.MaxReportMessageLen {
-		entry.Message = entry.Message[:v1.MaxReportMessageLen]
-	}
+	entry.Message = reportable(entry.Message)
 	_, err := e.o.Journal.AppendTx(ctx, tx, k, entry)
 	return err
 }
@@ -267,4 +282,26 @@ func (e *Executor) report(ctx context.Context, tx *state.Tx, k state.Key, kind v
 func (e *Executor) runtimeHandle(k state.Key) *v1.RuntimeHandle {
 	h := e.o.Runtime.HandleFor(e.sessionName(k))
 	return &v1.RuntimeHandle{Runtime: h.Runtime, Ref: h.Ref}
+}
+
+// reportable makes a text fit the check the Controller makes of a message: a
+// refusal of the entry would fence the Run. It drops what does not print
+// (controls and format characters), what is not UTF-8, and cuts at a character
+// boundary to at most v1.MaxReportMessageLen bytes.
+func reportable(msg string) string {
+	msg = strings.ToValidUTF8(msg, "")
+	msg = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, msg)
+	if len(msg) <= v1.MaxReportMessageLen {
+		return msg
+	}
+	cut := v1.MaxReportMessageLen
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut]
 }

@@ -23,12 +23,16 @@ const (
 	// Different: a process has the pid but started at another time. The pid
 	// was reused, so the process recorded is gone.
 	Different
-	// Unknown: the platform or the system would not say.
+	// Unknown: the platform or the system would not say, or there is no usable token.
 	Unknown
+	// Rebooted: the token is of another boot of the machine. No process survives
+	// a reboot, so the process is gone and, whoever has the pid now, nothing in
+	// the machine is its group: nothing may be signalled on its account.
+	Rebooted
 )
 
 func (v Verdict) String() string {
-	return [...]string{"gone", "same", "different", "unknown"}[v]
+	return [...]string{"gone", "same", "different", "unknown", "rebooted"}[v]
 }
 
 // ErrUnverifiable is returned where the platform has no way to read when a
@@ -54,35 +58,31 @@ func StartOf(pid int) (string, error) {
 }
 
 // Verify compares the process that has the pid now with the token recorded
-// when it was known. A token from another boot of the machine is of a process
-// that cannot be alive, whoever has the pid now.
+// when it was known. Only a token that is whole says anything: an empty or
+// malformed one is Unknown, never Gone, so that nothing is killed on its account.
+// Gone means that, in the boot the token is of, no process has the pid.
 func Verify(pid int, token string) Verdict {
 	boot, start, ok := strings.Cut(token, "|")
-	if !ok {
-		return unverified(pid)
+	if !ok || boot == "" || start == "" {
+		return Unknown
 	}
-	if now, err := bootOf(); err == nil && now != boot {
-		return Gone
+	now, err := bootOf()
+	if err != nil {
+		return Unknown
+	}
+	if now != boot {
+		return Rebooted
 	}
 	current, err := startOf(pid)
 	switch {
 	case errors.Is(err, ErrGone):
 		return Gone
 	case err != nil:
-		return unverified(pid)
+		return Unknown
 	case current == start:
 		return Same
 	}
 	return Different
-}
-
-// unverified is what is left to say with no usable token: whether the pid is
-// in use at all.
-func unverified(pid int) Verdict {
-	if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
-		return Gone
-	}
-	return Unknown
 }
 
 // GroupMembers lists the live processes of a process group, leaving out those

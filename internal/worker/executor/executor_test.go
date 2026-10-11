@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -291,7 +292,7 @@ func TestBeginWritesTheIntentionBeforeTheEffectAndTheHandleWithTheReport(t *test
 		t.Fatalf("launch.json: %v %v", ok, err)
 	}
 	script, _ := os.ReadFile(filepath.Join(dir, "command.sh")) //nolint:gosec // a file of the test
-	if !slices.Equal(launch.Argv, []string{"/bin/sh", filepath.Join(dir, "command.sh")}) || launch.Dir != f.paths.WorkerWorktreeDir(k.RunID) ||
+	if !slices.Equal(launch.Argv, []string{"/bin/sh", filepath.Join(dir, "command.sh")}) || launch.Dir != f.paths.WorkerWorktreeDir(k.RunID, k.LeaseEpoch) ||
 		launch.Mode != "headless" || launch.Grace != 2*time.Second || launch.Gate != "" || strings.TrimSpace(string(script)) != "echo hi" {
 		t.Errorf("launch = %+v, script %q", launch, script)
 	}
@@ -416,8 +417,9 @@ func TestAStopBetweenTheRuntimeStartAndTheLocalCommitWaitsForIt(t *testing.T) {
 	if r = f.run(k); r.Phase != state.PhaseStopped {
 		t.Fatalf("phase = %s", r.Phase)
 	}
-	if got := kinds(f.reports(k)); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) {
-		t.Errorf("reports = %v", got)
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportStopped}) || reports[1].NeverStarted {
+		t.Errorf("reports = %+v: started was reported, so stopped says the session did start", reports)
 	}
 }
 
@@ -644,28 +646,72 @@ func TestAnExitWithoutAStartedFileIsAFailureToPrepare(t *testing.T) {
 	}
 }
 
-func TestAWrapperThatIsNotWhatWasRecordedIsNeverSignalled(t *testing.T) {
+// altered is a wrapper record whose start is not the process's: the pid was reused.
+func altered(w execwrap.Wrapper) execwrap.Wrapper {
+	boot, _, _ := strings.Cut(w.Start, "|")
+	w.Start = boot + "|a-different-start"
+	return w
+}
+
+func TestAPidTakenByAnotherProcessIsNeverSignalledAndTheRunIsSettledAsLost(t *testing.T) {
 	f := newFixture(t)
 	k := f.started("echo hi")
 	w := newWrapperProcess(t, "sleep 60")
-	other := w.w
-	boot, _, _ := strings.Cut(other.Start, "|")
-	other.Start = boot + "|a-different-start" // the pid was reused
-	f.writeWrapper(k, other)
+	f.writeWrapper(k, altered(w.w))
+	f.writeStarted(k, w.w, t0)
 
-	if f.e.step(t.Context(), k) {
-		t.Fatal("settled although it cannot be verified")
-	}
-	if r := f.run(k); r.Phase != state.PhaseStopUnverified {
-		t.Fatalf("phase = %s", r.Phase)
+	// Nobody ordered a stop; the wrapper, in the same boot, is not the process that has its pid now:
+	// the group it led is empty. Nothing is signalled, and the Run is settled.
+	if !f.e.step(t.Context(), k) {
+		t.Fatalf("not settled: %s", f.run(k).Phase)
 	}
 	if !w.alive() {
-		t.Error("a process that is not the wrapper was signalled")
+		t.Error("the process that has the pid now was signalled")
+	}
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) || reports[1].Cause != v1.ExitCauseWrapperLost {
+		t.Errorf("reports = %+v", reports)
+	}
+}
+
+func TestARunNobodyAskedToStopIsNeverStoppedForWantingAnIdentity(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	w := newWrapperProcess(t, "sleep 60")
+	unknown := w.w
+	unknown.Start = "" // no usable token
+	f.writeWrapper(k, unknown)
+	for range 3 {
+		if f.e.step(t.Context(), k) {
+			t.Fatal("settled although the wrapper cannot be identified")
+		}
+		f.clock.Advance(unverifiedRetry)
+	}
+	if r := f.run(k); r.Phase != state.PhaseRunning || !w.alive() {
+		t.Errorf("phase %s, alive %v: an unknown identity must change nothing", r.Phase, w.alive())
+	}
+	if got := kinds(f.reports(k)); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted}) {
+		t.Errorf("reports = %v", got)
+	}
+}
+
+func TestAStopThatCannotVerifyTheWrapperIsParkedAndNeverConfirmed(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	w := newWrapperProcess(t, "trap 'exit 0' TERM; while :; do sleep 0.05; done")
+	unknown := w.w
+	unknown.Start = ""
+	f.writeWrapper(k, unknown)
+	if err := f.e.Stop(t.Context(), k.RunID, 1, "cancel", SourceController); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.run(k); r.Phase != state.PhaseStopUnverified || !w.alive() {
+		t.Fatalf("phase %s, alive %v", r.Phase, w.alive())
 	}
 	if got := kinds(f.reports(k)); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted}) {
 		t.Errorf("reports = %v: RunStopped must not be confirmed without verification", got)
 	}
-	// It is verified again after a minute, not before.
+	// Verified again after a minute, not before; then the stop goes on.
 	f.writeWrapper(k, w.w)
 	f.e.step(t.Context(), k)
 	if f.run(k).Phase != state.PhaseStopUnverified {
@@ -675,6 +721,52 @@ func TestAWrapperThatIsNotWhatWasRecordedIsNeverSignalled(t *testing.T) {
 	f.e.step(t.Context(), k)
 	if r := f.run(k); r.Phase != state.PhaseStopping {
 		t.Errorf("phase = %s after the identity became verifiable", r.Phase)
+	}
+	select {
+	case <-w.ended:
+	case <-time.After(10 * time.Second):
+		t.Error("the stop did not go on")
+	}
+}
+
+func TestAfterARebootNothingIsSignalledWhateverLivesInThatGroupNow(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	// The record is of another boot, and the group it names is alive: it is this
+	// test's own, standing for whatever got that pid after the reboot.
+	f.writeWrapper(k, execwrap.Wrapper{PID: os.Getpid(), PGID: syscall.Getpgrp(), Start: "another-boot|1", StartedAt: t0})
+	f.writeStarted(k, execwrap.Wrapper{PID: os.Getpid(), PGID: syscall.Getpgrp()}, t0)
+	if !f.e.step(t.Context(), k) {
+		t.Fatalf("not settled: %s", f.run(k).Phase) // a signal to the group would have ended this test
+	}
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) || reports[1].Cause != v1.ExitCauseWrapperLost {
+		t.Errorf("reports = %+v", reports)
+	}
+
+	// The same with an exit file that nobody read.
+	g := newFixture(t)
+	k = g.started("echo hi")
+	g.writeWrapper(k, execwrap.Wrapper{PID: os.Getpid(), PGID: syscall.Getpgrp(), Start: "another-boot|1", StartedAt: t0})
+	g.writeStarted(k, execwrap.Wrapper{PID: os.Getpid(), PGID: syscall.Getpgrp()}, t0)
+	g.writeExit(k, execwrap.Exit{ExitCode: intp(3), ExitedAt: t0, Cause: execwrap.CauseExit})
+	if !g.e.step(t.Context(), k) {
+		t.Fatalf("not settled: %s", g.run(k).Phase)
+	}
+	if exited := g.reports(k)[1]; exited.ExitCode == nil || *exited.ExitCode != 3 {
+		t.Errorf("exited = %+v", exited)
+	}
+}
+
+func TestAReusedPidOfARecordThatDoesNotLeadItsGroupSaysNothing(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	w := newWrapperProcess(t, "sleep 60")
+	odd := altered(w.w)
+	odd.PGID = odd.PID + 1 // it could not have led the group: the record is not to be trusted
+	f.writeWrapper(k, odd)
+	if f.e.step(t.Context(), k) || f.run(k).Phase != state.PhaseRunning || !w.alive() {
+		t.Errorf("phase %s", f.run(k).Phase)
 	}
 }
 
@@ -698,8 +790,9 @@ func TestStopAsksTheWrapperAndNobodyElse(t *testing.T) {
 	}
 	// Its exit file would be written by a real wrapper; without it the Run is lost, and settled all the same.
 	waitFor(t, "the Run to be settled", func() bool { return f.e.step(t.Context(), k) })
-	if got := kinds(f.reports(k)); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) {
-		t.Errorf("reports = %v", got)
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) || reports[1].Cause != v1.ExitCauseStop {
+		t.Errorf("reports = %+v: a wrapper lost while a stop is ordered is a stop that ended the Run", reports)
 	}
 }
 
@@ -838,5 +931,91 @@ func TestTheDaemonKillsWhatSurvivesAWrapperThatSaidItWasDone(t *testing.T) {
 	}
 	if groupSize(w.w.PGID) != 0 {
 		t.Error("a process of the group is left")
+	}
+}
+
+func TestAHarnessThatCouldNotSpawnIsAFailureToPrepareWhetherOrNotStartedWasReported(t *testing.T) {
+	// The normal path: `started` (the session) is already in the journal.
+	f := newFixture(t)
+	k := f.started("echo hi")
+	f.writeExit(k, execwrap.Exit{ExitedAt: t0, Cause: execwrap.CauseExit, Error: "starting the harness: no such file"})
+	if !f.e.step(t.Context(), k) {
+		t.Fatalf("not settled: %s", f.run(k).Phase)
+	}
+	normal := f.reports(k)
+	if got := kinds(normal); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportPrepareFailed, v1.ReportStopped}) ||
+		normal[1].Message != "starting the harness: no such file" || normal[2].NeverStarted {
+		t.Errorf("normal path: %+v", normal)
+	}
+	// Recovery: the daemon died before it wrote `started`. The outcome is the same
+	// for the Run, which then never reported a start.
+	g := newFixture(t)
+	k = g.accepted("echo hi")
+	g.writeExit(k, execwrap.Exit{ExitedAt: t0, Cause: execwrap.CauseExit, Error: "starting the harness: no such file"})
+	if err := g.db.WithTx(t.Context(), func(tx *state.Tx) error {
+		return state.Advance(t.Context(), tx, k, state.PhaseAccepted, state.PhaseStarting, t0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g.rt.setAlive("cf-"+k.RunID+"-e1", true)
+	if !g.e.step(t.Context(), k) {
+		t.Fatalf("not settled: %s", g.run(k).Phase)
+	}
+	recovered := g.reports(k)
+	if got := kinds(recovered); !slices.Equal(got, []v1.RunReportKind{v1.ReportPrepareFailed, v1.ReportStopped}) || recovered[0].Message != normal[1].Message {
+		t.Errorf("recovery: %+v", recovered)
+	}
+}
+
+func TestReportMessagesAreMadeToFitWhatTheControllerChecks(t *testing.T) {
+	multibyte := strings.Repeat("ñ€😀", 100) // 600 bytes
+	got := reportable(multibyte)
+	if len(got) > v1.MaxReportMessageLen || !utf8.ValidString(got) || !strings.HasPrefix(multibyte, got) || len(got) < v1.MaxReportMessageLen-3 {
+		t.Errorf("multibyte: %d bytes, valid %v", len(got), utf8.ValidString(got))
+	}
+	if got := reportable("line one\nline\ttwo\x00\u200b end\xff"); got != "line onelinetwo end" {
+		t.Errorf("controls and format characters: %q", got)
+	}
+	// Through a real report: the message of a failed preparation.
+	f := newFixture(t, func(o *Options) {
+		o.Preparer = func(context.Context, state.Run, string) error { return errors.New("clone failed:\n" + multibyte) }
+	})
+	k := f.accepted("echo hi")
+	f.e.step(t.Context(), k)
+	reports := f.reports(k)
+	if len(reports) != 2 || len(reports[0].Message) > v1.MaxReportMessageLen || strings.ContainsAny(reports[0].Message, "\n") {
+		t.Errorf("reports = %+v", reports)
+	}
+}
+
+func TestACrashBetweenTheControllersAcceptAndTheLocalRecordSurvivesAChangedMind(t *testing.T) {
+	f := newFixture(t)
+	k := f.assign(specJSON("echo hi", "command", "headless"))
+	// The Controller accepted (the daemon died before it wrote that down); the new
+	// daemon now has no room, so it tries to reject, and the lease is accepted already.
+	f.restart("01J0000000000000000000000E2")
+	f.e.SetLimits(Limits{MaxConcurrentRuns: 0, CPU: 16, MemoryMB: 65536})
+	f.ctrl.reject = func(string, v1.RejectLeaseRequest) error {
+		return domain.NewError(domain.CodeInvalidTransition, "accepted already", nil)
+	}
+	if f.e.decideOnce(t.Context()) {
+		t.Fatal("retry")
+	}
+	if got := f.run(k).Phase; got != state.PhaseAccepted || len(f.ctrl.accepted) != 1 {
+		t.Fatalf("phase %s, %d accepts: the acceptance of the Controller must be taken as it is", got, len(f.ctrl.accepted))
+	}
+}
+
+func TestWhatTheExecutorRemembersOfARunGoesWithTheRun(t *testing.T) {
+	f := newFixture(t)
+	k := f.accepted("echo hi")
+	if err := f.e.Stop(t.Context(), k.RunID, 1, "x", SourceWorker); err != nil {
+		t.Fatal(err)
+	}
+	f.e.step(t.Context(), k)
+	f.e.mu.Lock()
+	defer f.e.mu.Unlock()
+	if _, ok := f.e.memos[k]; ok {
+		t.Error("the memo of a Run that is over is still there")
 	}
 }

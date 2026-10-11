@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -28,11 +29,12 @@ const (
 // v1.MaxReportEntries and v1.MaxReportBytes per request, and are deleted only
 // once the Controller has them (applied or duplicate).
 //
-// A rejection the Controller will not take back (stale lease, unknown Run, a
-// transition the Run no longer allows) fences the Run: the sender stops
-// sending its reports and keeps them, so that the reconciliation of the
-// Controller decides what they are worth. A failure to reach the Controller is
-// retried with a backoff and loses nothing.
+// A rejection of an entry (stale lease, unknown lease epoch, a transition the Run
+// no longer allows) fences the Run: the sender stops sending its reports and
+// keeps them, so that the reconciliation of the Controller decides what they are
+// worth. An error of the whole request (no connection, authentication, a server
+// that fails) says nothing of the entries and fences nothing: it is retried with
+// a backoff and loses nothing.
 type Sender struct {
 	DB       *state.DB
 	Reporter Reporter
@@ -112,6 +114,7 @@ func (s *Sender) Flush(ctx context.Context) (int, error) {
 		g.rows = append(g.rows, r)
 	}
 	settled := 0
+	var first error
 	for _, g := range groups {
 		for len(g.rows) > 0 {
 			batch, rest := split(g.rows)
@@ -119,14 +122,17 @@ func (s *Sender) Flush(ctx context.Context) (int, error) {
 			n, fenced, err := s.send(ctx, g.key, batch)
 			settled += n
 			if err != nil {
-				return settled, err
+				// An error of the request says nothing of the entries: the rest of this
+				// Run waits, the other Runs go on, and the sender backs off.
+				first = cmp.Or(first, err)
+				break
 			}
 			if fenced {
 				break
 			}
 		}
 	}
-	return settled, nil
+	return settled, first
 }
 
 // split takes the longest prefix that fits one request.
@@ -145,24 +151,15 @@ func split(rows []state.JournalRow) (batch, rest []state.JournalRow) {
 // Run was fenced.
 func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow) (settled int, fenced bool, err error) {
 	req := v1.RunReportRequest{Entries: make([]v1.RunReportEntry, 0, len(batch))}
-	seqs := make([]uint64, len(batch))
-	for i, r := range batch {
+	for _, r := range batch {
 		e, err := entryOf(r)
 		if err != nil {
 			return 0, false, err
 		}
 		req.Entries = append(req.Entries, e)
-		seqs[i] = r.Seq
 	}
 	resp, err := s.Reporter.ReportRun(ctx, k.RunID, req)
 	if err != nil {
-		var coded *domain.Error
-		if errors.As(err, &coded) && definitive(coded.Code) {
-			return 0, true, s.fence(ctx, k, coded.Code, nil, coded.Message)
-		}
-		if ctx.Err() == nil {
-			_ = s.DB.WithTx(ctx, func(tx *state.Tx) error { return state.RecordAttempt(ctx, tx, seqs) })
-		}
 		return 0, false, err
 	}
 	if len(resp.Outcomes) != len(batch) {
@@ -191,15 +188,6 @@ func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow
 		return len(done), true, s.fence(ctx, k, refusal.Code, done, refusal.Message)
 	}
 	return len(done), false, s.DB.WithTx(ctx, func(tx *state.Tx) error { return state.DeleteJournal(ctx, tx, done) })
-}
-
-// definitive says whether a refusal of a whole request is final.
-func definitive(code domain.Code) bool {
-	switch code {
-	case domain.CodeNotFound, domain.CodeStaleLease, domain.CodeInvalidTransition, domain.CodeInvalidRequest:
-		return true
-	}
-	return false
 }
 
 // fence deletes what the Controller confirmed and marks the Run: from here its

@@ -26,11 +26,13 @@ func TestVerifyTellsTheSameProcessFromAReusedPid(t *testing.T) {
 	if v := procident.Verify(os.Getpid(), boot+"|another-start"); v != procident.Different {
 		t.Errorf("another start: %v", v)
 	}
-	if v := procident.Verify(os.Getpid(), "another-boot|"+start); v != procident.Gone {
-		t.Errorf("a token of another boot: %v (no process survives a reboot)", v)
+	if v := procident.Verify(os.Getpid(), "another-boot|"+start); v != procident.Rebooted {
+		t.Errorf("a token of another boot: %v", v)
 	}
-	if v := procident.Verify(os.Getpid(), ""); v != procident.Unknown {
-		t.Errorf("no token for a live process: %v", v)
+	for _, bad := range []string{"", "no-separator", "|x", "x|"} {
+		if v := procident.Verify(os.Getpid(), bad); v != procident.Unknown {
+			t.Errorf("token %q: %v, want unknown", bad, v)
+		}
 	}
 }
 
@@ -51,8 +53,8 @@ func TestVerifySeesAProcessGo(t *testing.T) {
 	if v := procident.Verify(cmd.Process.Pid, start); v != procident.Gone {
 		t.Errorf("after it was reaped: %v", v)
 	}
-	if v := procident.Verify(cmd.Process.Pid, ""); v != procident.Gone {
-		t.Errorf("no token, process gone: %v", v)
+	if v := procident.Verify(cmd.Process.Pid, ""); v != procident.Unknown {
+		t.Errorf("no token, process gone: %v: without a token nothing is known", v)
 	}
 	if _, err := procident.StartOf(cmd.Process.Pid); err == nil {
 		t.Error("StartOf of a process that is gone succeeded")

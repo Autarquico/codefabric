@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -33,23 +34,28 @@ const (
 	PhaseDiscarded      Phase = "discarded"
 )
 
-// Live reports whether the assignment still needs the daemon's attention.
-func (p Phase) Live() bool {
-	switch p {
-	case PhaseStopped, PhaseAborted, PhaseRejected, PhaseDiscarded:
-		return false
-	}
-	return true
-}
+// LivePhases are those in which the assignment still needs the daemon's
+// attention; OccupyingPhases those in which it counts against the capacity of
+// the Worker (§10.5: from accepted until its process is gone). They are also the
+// phases a Run can end from.
+var (
+	LivePhases      = []Phase{PhaseAssigned, PhaseAccepted, PhaseStarting, PhaseRunning, PhaseStopping, PhaseStopUnverified}
+	OccupyingPhases = []Phase{PhaseAccepted, PhaseStarting, PhaseRunning, PhaseStopping, PhaseStopUnverified}
+)
 
-// Occupies reports whether a Run in this phase counts against the capacity of
-// the Worker (§10.5): from accepted until its process is gone.
-func (p Phase) Occupies() bool {
-	switch p {
-	case PhaseAccepted, PhaseStarting, PhaseRunning, PhaseStopping, PhaseStopUnverified:
-		return true
+// Live reports whether the assignment still needs the daemon's attention.
+func (p Phase) Live() bool { return slices.Contains(LivePhases, p) }
+
+// Occupies reports whether a Run in this phase counts against the capacity of the Worker.
+func (p Phase) Occupies() bool { return slices.Contains(OccupyingPhases, p) }
+
+// in is "(?, ?, ...)" for the phases and their arguments.
+func in(phases []Phase) (string, []any) {
+	args := make([]any, len(phases))
+	for i, p := range phases {
+		args[i] = string(p)
 	}
-	return false
+	return "(" + strings.TrimSuffix(strings.Repeat("?,", len(phases)), ",") + ")", args
 }
 
 // Key identifies an assignment: a Run under one lease epoch.
@@ -157,8 +163,8 @@ func RunBy(ctx context.Context, q Querier, k Key) (Run, error) {
 
 // LiveRuns lists the assignments that need attention, in the order they came.
 func LiveRuns(ctx context.Context, q Querier) ([]Run, error) {
-	return collectRuns(ctx, q, `SELECT `+runColumns+` FROM local_runs
-		WHERE phase NOT IN ('rejected', 'discarded', 'stopped', 'aborted') ORDER BY command_seq, run_id`)
+	marks, args := in(LivePhases)
+	return collectRuns(ctx, q, `SELECT `+runColumns+` FROM local_runs WHERE phase IN `+marks+` ORDER BY command_seq, run_id`, args...) //nolint:gosec // only placeholders are concatenated
 }
 
 // AssignedRuns lists the assignments waiting for a decision, in order.
@@ -172,9 +178,10 @@ type Load struct{ Runs, CPU, MemoryMB int }
 // Occupied sums the assignments in the phases that count against capacity.
 func Occupied(ctx context.Context, q Querier) (Load, error) {
 	var l Load
+	marks, args := in(OccupyingPhases)
 	err := q.QueryRowContext(ctx,
-		`SELECT COUNT(*), COALESCE(SUM(cpu), 0), COALESCE(SUM(memory_mb), 0) FROM local_runs
-		 WHERE phase IN ('accepted', 'starting', 'running', 'stopping', 'stop_unverified')`).Scan(&l.Runs, &l.CPU, &l.MemoryMB)
+		`SELECT COUNT(*), COALESCE(SUM(cpu), 0), COALESCE(SUM(memory_mb), 0) FROM local_runs WHERE phase IN `+marks, args...). //nolint:gosec // only placeholders are concatenated
+		Scan(&l.Runs, &l.CPU, &l.MemoryMB)
 	if err != nil {
 		return Load{}, fmt.Errorf("state: summing the load: %w", err)
 	}
@@ -191,13 +198,10 @@ func Advance(ctx context.Context, tx *Tx, k Key, from, to Phase, at time.Time) e
 
 // Close moves an assignment to a final phase, from any of the phases in from.
 func Close(ctx context.Context, tx *Tx, k Key, from []Phase, to Phase, neverStarted bool, at time.Time) error {
-	marks := strings.TrimSuffix(strings.Repeat("?,", len(from)), ",")
-	args := []any{string(to), neverStarted, at.UnixNano(), k.RunID, k.LeaseEpoch}
-	for _, p := range from {
-		args = append(args, string(p))
-	}
+	marks, phases := in(from)
+	args := append([]any{string(to), neverStarted, at.UnixNano(), k.RunID, k.LeaseEpoch}, phases...)
 	res, err := tx.exec(ctx, `UPDATE local_runs SET phase = ?, never_started = ?, updated_at = ?
-		WHERE run_id = ? AND lease_epoch = ? AND phase IN (`+marks+`)`, args...) //nolint:gosec // only placeholders are concatenated
+		WHERE run_id = ? AND lease_epoch = ? AND phase IN `+marks, args...) //nolint:gosec // only placeholders are concatenated
 	return changedOne(res, err, "closing an assignment")
 }
 

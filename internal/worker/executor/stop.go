@@ -62,6 +62,7 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 		})
 		if err == nil {
 			e.o.Journal.Notify()
+			e.forget(k)
 		}
 		return err
 	}
@@ -79,7 +80,7 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 	}
 	r.Phase = state.PhaseStopping
 	e.mu.Lock()
-	e.signaled[k] = true
+	e.memo(k).signaled = true
 	e.mu.Unlock()
 	m, err := e.markers(k)
 	if err != nil {
@@ -103,13 +104,13 @@ func (e *Executor) signalStop(ctx context.Context, r state.Run, m markers) {
 		_ = e.o.Runtime.Stop(ctx, e.o.Runtime.HandleFor(e.sessionName(r.Key)))
 		return
 	}
-	switch procident.Verify(m.wrapper.PID, m.wrapper.Start) {
+	switch verdictOf(m.wrapper) {
 	case procident.Same:
 		if err := syscall.Kill(m.wrapper.PID, syscall.SIGTERM); err != nil {
 			e.log.WarnContext(ctx, "signalling the wrapper failed", "run", r.RunID, "err", err)
 		}
-	case procident.Gone:
-		// Nothing to ask: the supervisor finds the wrapper gone and ends the group.
+	case procident.Gone, procident.Rebooted, procident.Different:
+		// Nothing to ask: the supervisor finds the wrapper gone and settles the Run.
 	default:
 		e.markUnverified(ctx, r, "the wrapper of the Run is not the process it was")
 	}

@@ -114,6 +114,14 @@ func TestScenario_WorkerExecutorTmux_DaemonMuerto(t *testing.T) {
 	box := machine(t)
 	ok[map[string]any](t, "worker", "join", invite, "--name", "alpha")
 	t.Cleanup(func() {
+		// The processes of the Run go first, whatever the test left: their groups, then the server.
+		matches, _ := filepath.Glob(filepath.Join(box.WorkerDataDir(), "runs", "*", execwrap.WrapperFile))
+		for _, m := range matches {
+			var w execwrap.Wrapper
+			if ok, _ := execwrap.Read(filepath.Dir(m), execwrap.WrapperFile, &w); ok {
+				_ = syscall.Kill(-w.PGID, syscall.SIGKILL)
+			}
+		}
 		rt, err := tmux.New(tmux.Options{Socket: tmux.SocketName(box.WorkerDataDir())})
 		if err == nil {
 			_ = rt.KillServer(context.WithoutCancel(t.Context()))
@@ -143,7 +151,7 @@ echo finished
 exit 7`
 	created := ok[v1.CreateTaskResponse](t, "do", script, "--harness", "command")
 	runID := created.Run.ID
-	worktree, runDir := box.WorkerWorktreeDir(runID), box.WorkerRunDir(runID)
+	worktree, runDir := box.WorkerWorktreeDir(runID, 1), box.WorkerRunDir(runID, 1)
 
 	// The barrier: the script is running, and the Controller knows.
 	eventually(t, "the harness to be ready", func() bool { return fileExists(filepath.Join(worktree, "ready")) })
@@ -205,7 +213,8 @@ exit 7`
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	if n, err := state.JournalLen(t.Context(), db.Reader()); err != nil || n != 0 {
+	var n int
+	if err := db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM journal`).Scan(&n); err != nil || n != 0 {
 		t.Errorf("the journal has %d rows (%v): the Controller confirmed everything", n, err)
 	}
 }

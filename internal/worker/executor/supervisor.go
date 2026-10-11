@@ -67,7 +67,7 @@ func (e *Executor) step(ctx context.Context, k state.Key) (done bool) {
 func (e *Executor) noteFailure(k state.Key, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.lastErr[k] = err.Error()
+	e.memo(k).lastErr = err.Error()
 }
 
 func mkdir(dir string) error {
@@ -80,8 +80,7 @@ func mkdir(dir string) error {
 func (e *Executor) retryDue(k state.Key) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	at, ok := e.retryAt[k]
-	return !ok || !e.clock.Now().Before(at)
+	return !e.clock.Now().Before(e.memo(k).retryAt)
 }
 
 // prepare gives the Run what it runs with: its directory, its worktree, the
@@ -92,7 +91,7 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if !ok {
 		return fmt.Errorf("this Worker has no harness %q", spec.Requirements.Harness)
 	}
-	dir, worktree := e.runDir(r.Key), e.o.Paths.WorkerWorktreeDir(r.RunID)
+	dir, worktree := e.runDir(r.Key), e.o.Paths.WorkerWorktreeDir(r.RunID, r.LeaseEpoch)
 	if err := mkdir(dir); err != nil {
 		return err
 	}
@@ -211,17 +210,18 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 func (e *Executor) firstLook(k state.Key) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.signaled[k] {
+	m := e.memo(k)
+	if m.signaled {
 		return false
 	}
-	e.signaled[k] = true
+	m.signaled = true
 	return true
 }
 
 func (e *Executor) lastError(k state.Key, fallback string) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if msg := e.lastErr[k]; msg != "" {
+	if msg := e.memo(k).lastErr; msg != "" {
 		return msg
 	}
 	return fallback
@@ -236,8 +236,9 @@ func (e *Executor) restart(ctx context.Context, r state.Run) (done bool) {
 		return false
 	}
 	e.mu.Lock()
-	e.failures[r.Key]++
-	n := e.failures[r.Key]
+	m := e.memo(r.Key)
+	m.failures++
+	n := m.failures
 	e.mu.Unlock()
 	if n >= startAttempts {
 		return e.settleNeverRan(ctx, r.Key, fmt.Sprintf("the Runtime could not start the session: %v", err))
@@ -282,16 +283,18 @@ func readMarker[T any](dir, name string) (*T, error) {
 
 // pollWrapper watches a Run whose wrapper exists and has not written an exit.
 func (e *Executor) pollWrapper(ctx context.Context, r state.Run, m markers) (done bool) {
-	switch procident.Verify(m.wrapper.PID, m.wrapper.Start) {
+	switch v := verdictOf(m.wrapper); v {
 	case procident.Same:
-		if r.Phase == state.PhaseStarting {
-			return e.adopt(ctx, r, m)
-		}
 		switch r.Phase {
+		case state.PhaseStarting:
+			return e.adopt(ctx, r, m)
 		case state.PhaseStopping:
 			return e.escalateStop(ctx, r, m)
 		case state.PhaseStopUnverified:
-			// It can be verified now: the stop goes on from where it was.
+			// It can be verified now: the stop goes on from where it was, if one was ordered.
+			if _, err := state.StopOrderOf(ctx, e.o.DB.Reader(), r.Key); err != nil {
+				return false
+			}
 			if err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 				return state.Advance(ctx, tx, r.Key, state.PhaseStopUnverified, state.PhaseStopping, e.clock.Now())
 			}); err == nil {
@@ -300,11 +303,10 @@ func (e *Executor) pollWrapper(ctx context.Context, r state.Run, m markers) (don
 			}
 		}
 		return false
-	case procident.Gone:
-		// The wrapper died without an exit: what was its group is ours to end.
-		return e.settleLost(ctx, r, m)
+	case procident.Gone, procident.Rebooted, procident.Different:
+		return e.settleLost(ctx, r, m, v)
 	default:
-		return e.markUnverified(ctx, r, "the wrapper of the Run is not the process it was")
+		return e.unresolved(ctx, r, "the identity of the wrapper cannot be verified")
 	}
 }
 

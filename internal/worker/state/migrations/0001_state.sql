@@ -69,8 +69,7 @@ CREATE TABLE journal (
     lease_epoch INTEGER NOT NULL,
     kind        TEXT    NOT NULL,
     payload     TEXT    NOT NULL,
-    created_at  INTEGER NOT NULL,
-    attempts    INTEGER NOT NULL DEFAULT 0
+    created_at  INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX journal_run ON journal (run_id, lease_epoch, seq);

@@ -121,10 +121,10 @@ func TestControllerConfigWorkerOfflineTTL(t *testing.T) {
 func TestWorkerPathsLiveUnderTheirOwnDirectory(t *testing.T) {
 	p := Paths{ConfigDir: "/c", DataDir: "/d"}
 	for got, want := range map[string]string{
-		p.WorkerDataDir():            "/d/worker",
-		p.WorkerStateFile():          "/d/worker/state.db",
-		p.WorkerRunDir("run_X"):      "/d/worker/runs/run_X",
-		p.WorkerWorktreeDir("run_X"): "/d/worker/worktrees/run_X",
+		p.WorkerDataDir():               "/d/worker",
+		p.WorkerStateFile():             "/d/worker/state.db",
+		p.WorkerRunDir("run_X", 2):      "/d/worker/runs/run_X-e2",
+		p.WorkerWorktreeDir("run_X", 2): "/d/worker/worktrees/run_X-e2",
 	} {
 		if got != want {
 			t.Errorf("got %s, want %s", got, want)

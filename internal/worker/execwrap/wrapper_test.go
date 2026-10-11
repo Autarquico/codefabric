@@ -74,7 +74,7 @@ func launch(t *testing.T, l execwrap.Launch, newSession bool) *spawned {
 	}
 	s := &spawned{t: t, dir: dir, pane: &syncBuffer{}, exited: make(chan struct{})}
 	s.cmd = exec.CommandContext(t.Context(), os.Args[0]) //nolint:gosec // the test binary itself
-	s.cmd.Env = append(os.Environ(), asWrapper+"="+dir)
+	s.cmd.Env = append(os.Environ(), asWrapper+"="+dir, "TMUX=/tmp/tmux-0/default,1,0", "TMUX_PANE=%1")
 	s.cmd.Stdout, s.cmd.Stderr = s.pane, s.pane
 	if newSession {
 		s.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -376,4 +376,49 @@ func waitDead(t *testing.T, pid int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Errorf("process %d is still alive", pid)
+}
+
+func TestInInteractiveModeCtrlCIsTheHarnessesNotAReasonToStop(t *testing.T) {
+	s := launch(t, execwrap.Launch{Argv: shell("touch ready; while :; do sleep 0.05; done"), Mode: execwrap.ModeInteractive, Grace: 500 * time.Millisecond}, true)
+	s.waitFor("ready")
+	var w execwrap.Wrapper
+	if ok, err := execwrap.Read(s.dir, execwrap.WrapperFile, &w); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if err := syscall.Kill(w.PID, syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(400 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(s.dir, execwrap.ExitFile)); err == nil {
+		t.Fatal("SIGINT stopped an interactive Run")
+	}
+	// SIGTERM, and the session closing (SIGHUP), still do.
+	if err := syscall.Kill(w.PID, syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	if exit := s.waitExit(); exit.Cause != execwrap.CauseStop {
+		t.Errorf("exit.json = %+v", exit)
+	}
+}
+
+func TestInHeadlessModeSIGINTStops(t *testing.T) {
+	s := launch(t, execwrap.Launch{Argv: shell("touch ready; while :; do sleep 0.05; done"), Grace: 500 * time.Millisecond}, true)
+	s.waitFor("ready")
+	var w execwrap.Wrapper
+	if ok, err := execwrap.Read(s.dir, execwrap.WrapperFile, &w); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	_ = syscall.Kill(w.PID, syscall.SIGINT)
+	if exit := s.waitExit(); exit.Cause != execwrap.CauseStop {
+		t.Errorf("exit.json = %+v", exit)
+	}
+}
+
+func TestTheHarnessDoesNotInheritTheTmuxVariables(t *testing.T) {
+	s := launch(t, execwrap.Launch{Argv: shell(`echo "[$TMUX][$TMUX_PANE]" > tmuxvars`), Grace: time.Second}, true)
+	s.waitExit()
+	raw, err := os.ReadFile(filepath.Join(s.dir, "tmuxvars")) //nolint:gosec // a file of the test
+	if err != nil || strings.TrimSpace(string(raw)) != "[][]" {
+		t.Errorf("tmuxvars = %q (%v)", raw, err)
+	}
 }
