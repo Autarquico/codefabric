@@ -571,7 +571,6 @@ func TestLoop(t *testing.T) {
 		passes, _ := e.startLoop(2 * time.Second)
 		e.blockUntilPolling()
 		eventually(t, "the first pass", func() bool { return passes.n.Load() >= 1 })
-		settled := passes.n.Load()
 
 		e.joinWorker("alpha") // brings no event the loop wakes on
 		eventually(t, "the loop to settle", func() bool {
@@ -579,7 +578,7 @@ func TestLoop(t *testing.T) {
 			time.Sleep(30 * time.Millisecond)
 			return passes.n.Load() == a
 		})
-		settled = passes.n.Load()
+		settled := passes.n.Load()
 		e.clock.Advance(2 * time.Second)
 		eventually(t, "the tick to pass", func() bool { return passes.n.Load() > settled })
 		eventually(t, "the Run to be assigned", func() bool { return e.storedRun(run.ID).LeaseID != "" })

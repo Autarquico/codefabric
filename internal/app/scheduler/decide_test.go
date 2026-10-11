@@ -56,7 +56,7 @@ func verdict(t *testing.T, d scheduler.Decision, name string) scheduler.Verdict 
 func TestScenario_SchedulerLeasesReservations_Determinismo(t *testing.T) {
 	// Two Workers tie on every part of the score.
 	workers := []scheduler.Worker{worker("alpha"), worker("beta")}
-	rng := rand.New(rand.NewPCG(1, 2))
+	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // a seeded shuffle, not a secret
 
 	for i := range 1000 {
 		rng.Shuffle(len(workers), func(a, b int) { workers[a], workers[b] = workers[b], workers[a] })
@@ -194,19 +194,25 @@ func TestFilters_EachOneRejectsWithItsReason(t *testing.T) {
 		{scheduler.FilterState, domain.CodeNoEligibleWorker, request(), worker("w", func(w *scheduler.Worker) { w.State = domain.WorkerDrained })},
 		{scheduler.FilterState, domain.CodeNoEligibleWorker, request(), worker("w", func(w *scheduler.Worker) { w.State = domain.WorkerJoining })},
 		{scheduler.FilterAvailability, domain.CodeNoEligibleWorker, request(), worker("w", func(w *scheduler.Worker) { w.Availability = domain.AvailabilityManual })},
-		{scheduler.FilterAvailability, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Require = []string{"w"} }),
-			worker("w", func(w *scheduler.Worker) { w.Availability = domain.AvailabilityIdle })},
+		{
+			scheduler.FilterAvailability, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Require = []string{"w"} }),
+			worker("w", func(w *scheduler.Worker) { w.Availability = domain.AvailabilityIdle }),
+		},
 		{scheduler.FilterRequire, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Require = []string{"other"} }), worker("w")},
 		{scheduler.FilterAvoid, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Avoid = []string{"w"} }), worker("w")},
-		{scheduler.FilterCapabilities, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Capabilities = []string{"docker", "gpu"} }),
-			worker("w", func(w *scheduler.Worker) { w.Capabilities = []string{"docker"} })},
+		{
+			scheduler.FilterCapabilities, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Capabilities = []string{"docker", "gpu"} }),
+			worker("w", func(w *scheduler.Worker) { w.Capabilities = []string{"docker"} }),
+		},
 		{scheduler.FilterHarness, domain.CodeHarnessUnavailable, request(func(r *scheduler.Request) { r.Harness = "claude" }), worker("w")},
 		{scheduler.FilterResources, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Resources.CPU = 9 }), worker("w")},
 		{scheduler.FilterConcurrency, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.Reservations = 4 })},
 		{scheduler.FilterCapacity, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.Reserved = v1.Capacity{CPU: 7}; w.Reservations = 1 })},
 		{scheduler.FilterCapacity, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.Reserved = v1.Capacity{MemoryMB: 14000}; w.Reservations = 1 })},
-		{scheduler.FilterCapacity, domain.CodeWorkerCapacity, request(func(r *scheduler.Request) { r.Resources.DiskMB = 50 }),
-			worker("w", func(w *scheduler.Worker) { w.Reserved = v1.Capacity{DiskMB: 99980}; w.Reservations = 1 })},
+		{
+			scheduler.FilterCapacity, domain.CodeWorkerCapacity, request(func(r *scheduler.Request) { r.Resources.DiskMB = 50 }),
+			worker("w", func(w *scheduler.Worker) { w.Reserved = v1.Capacity{DiskMB: 99980}; w.Reservations = 1 }),
+		},
 		{scheduler.FilterRecentReject, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.RejectedAt = &recent })},
 	}
 	for _, tc := range tests {

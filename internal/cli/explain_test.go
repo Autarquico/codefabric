@@ -41,8 +41,10 @@ func TestPrintExplanation_OtherDecisions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	must(v1.RunExplanation{Short: "run-1", State: domain.RunQueued, Decision: v1.DecisionAssigned, Chosen: "alpha",
-		Lease: &v1.Lease{ID: "lease_x", Epoch: 2, State: domain.LeasePending}})
+	must(v1.RunExplanation{
+		Short: "run-1", State: domain.RunQueued, Decision: v1.DecisionAssigned, Chosen: "alpha",
+		Lease: &v1.Lease{ID: "lease_x", Epoch: 2, State: domain.LeasePending},
+	})
 	must(v1.RunExplanation{Short: "run-2", State: domain.RunCancelled, Decision: v1.DecisionNotQueued})
 	must(v1.RunExplanation{Short: "run-3", State: domain.RunQueued, Decision: v1.DecisionNoWorker})
 	for _, want := range []string{"Assigned to alpha under lease lease_x, epoch 2 (pending).", "not waiting for a Worker", "There are no Workers."} {

@@ -72,8 +72,10 @@ func checkState(_ Request, w Worker, _ time.Time) *Failure {
 	if w.State == domain.WorkerOffline {
 		code = domain.CodeWorkerOffline
 	}
-	return &Failure{Code: code, Message: fmt.Sprintf("worker is %s: only an online Worker takes Runs", w.State),
-		Details: map[string]any{"state": string(w.State)}}
+	return &Failure{
+		Code: code, Message: fmt.Sprintf("worker is %s: only an online Worker takes Runs", w.State),
+		Details: map[string]any{"state": string(w.State)},
+	}
 }
 
 // checkAvailability: a manual Worker takes only the Runs that name it, and
@@ -85,11 +87,15 @@ func checkAvailability(req Request, w Worker, _ time.Time) *Failure {
 		if slices.Contains(req.Require, w.Name) {
 			return nil
 		}
-		return &Failure{Code: domain.CodeNoEligibleWorker, Message: "availability is manual: the Worker takes only Runs that require it by name",
-			Details: map[string]any{"availability": string(w.Availability)}}
+		return &Failure{
+			Code: domain.CodeNoEligibleWorker, Message: "availability is manual: the Worker takes only Runs that require it by name",
+			Details: map[string]any{"availability": string(w.Availability)},
+		}
 	case domain.AvailabilityIdle:
-		return &Failure{Code: domain.CodeNoEligibleWorker, Message: "availability is idle: Worker idleness is not detected yet",
-			Details: map[string]any{"availability": string(w.Availability)}}
+		return &Failure{
+			Code: domain.CodeNoEligibleWorker, Message: "availability is idle: Worker idleness is not detected yet",
+			Details: map[string]any{"availability": string(w.Availability)},
+		}
 	}
 	return nil
 }
@@ -98,8 +104,10 @@ func checkRequire(req Request, w Worker, _ time.Time) *Failure {
 	if len(req.Require) == 0 || slices.Contains(req.Require, w.Name) {
 		return nil
 	}
-	return &Failure{Code: domain.CodeNoEligibleWorker, Message: "the Run requires one of " + strings.Join(req.Require, ", "),
-		Details: map[string]any{"require": req.Require}}
+	return &Failure{
+		Code: domain.CodeNoEligibleWorker, Message: "the Run requires one of " + strings.Join(req.Require, ", "),
+		Details: map[string]any{"require": req.Require},
+	}
 }
 
 func checkAvoid(req Request, w Worker, _ time.Time) *Failure {
@@ -119,8 +127,10 @@ func checkCapabilities(req Request, w Worker, _ time.Time) *Failure {
 	if len(missing) == 0 {
 		return nil
 	}
-	return &Failure{Code: domain.CodeNoEligibleWorker, Message: "missing capabilities: " + strings.Join(missing, ", "),
-		Details: map[string]any{"missing": missing}}
+	return &Failure{
+		Code: domain.CodeNoEligibleWorker, Message: "missing capabilities: " + strings.Join(missing, ", "),
+		Details: map[string]any{"missing": missing},
+	}
 }
 
 // checkHarness looks for the capability harness:<id> until Workers report
@@ -129,8 +139,10 @@ func checkHarness(req Request, w Worker, _ time.Time) *Failure {
 	if req.Harness == "" || slices.Contains(w.Capabilities, HarnessCapability(req.Harness)) {
 		return nil
 	}
-	return &Failure{Code: domain.CodeHarnessUnavailable, Message: fmt.Sprintf("harness %q is not available on the Worker", req.Harness),
-		Details: map[string]any{"harness": req.Harness}}
+	return &Failure{
+		Code: domain.CodeHarnessUnavailable, Message: fmt.Sprintf("harness %q is not available on the Worker", req.Harness),
+		Details: map[string]any{"harness": req.Harness},
+	}
 }
 
 // HarnessCapability is the capability that says a Worker has the harness.
@@ -139,8 +151,10 @@ func HarnessCapability(harness string) string { return "harness:" + harness }
 // checkResources fails a Worker that could never take the Run, however empty.
 func checkResources(req Request, w Worker, _ time.Time) *Failure {
 	if over := exceeded(req.Resources, w.Allocatable); len(over) > 0 {
-		return &Failure{Code: domain.CodeNoEligibleWorker, Message: "the Run asks for more than the Worker contributes: " + strings.Join(over, ", "),
-			Details: map[string]any{"exceeds": over}}
+		return &Failure{
+			Code: domain.CodeNoEligibleWorker, Message: "the Run asks for more than the Worker contributes: " + strings.Join(over, ", "),
+			Details: map[string]any{"exceeds": over},
+		}
 	}
 	return nil
 }
@@ -151,16 +165,20 @@ func checkConcurrency(_ Request, w Worker, _ time.Time) *Failure {
 	if w.Reservations < w.MaxConcurrentRuns {
 		return nil
 	}
-	return &Failure{Code: domain.CodeWorkerCapacity,
+	return &Failure{
+		Code:    domain.CodeWorkerCapacity,
 		Message: fmt.Sprintf("worker holds %d of its %d concurrent Runs", w.Reservations, w.MaxConcurrentRuns),
-		Details: map[string]any{"reservations": w.Reservations, "max_concurrent_runs": w.MaxConcurrentRuns}}
+		Details: map[string]any{"reservations": w.Reservations, "max_concurrent_runs": w.MaxConcurrentRuns},
+	}
 }
 
 func checkCapacity(req Request, w Worker, _ time.Time) *Failure {
 	taken := sum(w.Reserved, req.Resources)
 	if over := exceeded(taken, w.Allocatable); len(over) > 0 {
-		return &Failure{Code: domain.CodeWorkerCapacity, Message: "not enough free resources: " + strings.Join(over, ", "),
-			Details: map[string]any{"exceeds": over}}
+		return &Failure{
+			Code: domain.CodeWorkerCapacity, Message: "not enough free resources: " + strings.Join(over, ", "),
+			Details: map[string]any{"exceeds": over},
+		}
 	}
 	return nil
 }
@@ -169,9 +187,11 @@ func checkRecentReject(_ Request, w Worker, now time.Time) *Failure {
 	if w.RejectedAt == nil || now.Sub(*w.RejectedAt) >= domain.LeaseRejectBackoff {
 		return nil
 	}
-	return &Failure{Code: domain.CodeWorkerCapacity,
+	return &Failure{
+		Code:    domain.CodeWorkerCapacity,
 		Message: fmt.Sprintf("worker rejected this Run %s ago; it is left alone for %s", now.Sub(*w.RejectedAt).Round(time.Second), domain.LeaseRejectBackoff),
-		Details: map[string]any{"rejected_at": w.RejectedAt.UTC().Format(time.RFC3339Nano)}}
+		Details: map[string]any{"rejected_at": w.RejectedAt.UTC().Format(time.RFC3339Nano)},
+	}
 }
 
 // exceeded names the resources where want is above have.

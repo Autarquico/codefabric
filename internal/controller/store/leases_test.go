@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -43,7 +44,8 @@ func (f *leaseFixture) tx(fn func(*Tx) error) {
 func (f *leaseFixture) queuedRun(n int) Run {
 	f.t.Helper()
 	run := Run{
-		ID: domain.ID("run_" + string(rune('a'+n))), Short: uint64(n), TaskID: "task_1", Attempt: n, Lineage: domain.LineageInitial,
+		ID: domain.ID(fmt.Sprintf("run_%c", 'a'+n)), Short: uint64(n), //nolint:gosec // a small test counter
+		TaskID: "task_1", Attempt: n, Lineage: domain.LineageInitial,
 		Spec: []byte(`{}`), SpecDigest: "d", SourceCommit: "c", State: domain.RunQueued, Publication: domain.PublicationNone,
 		Evaluation: domain.EvaluationNone, Runtime: domain.RuntimeNone, CreatedAt: epoch0.Add(time.Duration(n) * time.Second),
 	}
@@ -69,7 +71,7 @@ func (f *leaseFixture) assign(run Run, w Worker, amount v1.Capacity) Lease {
 	ctx := f.t.Context()
 	epoch := run.LeaseEpoch + 1
 	l := Lease{
-		ID: domain.ID("lease_" + string(run.ID) + string(rune('0'+epoch))), RunID: run.ID, WorkerID: w.ID, Epoch: epoch,
+		ID: domain.ID(fmt.Sprintf("lease_%s%d", run.ID, epoch)), RunID: run.ID, WorkerID: w.ID, Epoch: epoch,
 		State: domain.LeasePending, CreatedAt: epoch0, AcceptBy: epoch0.Add(domain.Defaults().LeaseAcceptBy),
 	}
 	f.tx(func(tx *Tx) error {
@@ -178,8 +180,10 @@ func TestQueuedRuns_ServeHigherPriorityFirstThenOldest(t *testing.T) {
 	f.assign(leased, f.alpha, v1.Capacity{})
 	f.tx(func(tx *Tx) error {
 		// Priority belongs to the Task: give the urgent Run a Task of its own.
-		if err := tx.InsertTask(ctx, Task{ID: "task_2", Short: 2, ProjectID: "project_1", Name: "u", Prompt: "p", Priority: 5,
-			State: domain.TaskQueued, CreatedBy: domain.CreatorHuman, CreatedAt: epoch0}); err != nil {
+		if err := tx.InsertTask(ctx, Task{
+			ID: "task_2", Short: 2, ProjectID: "project_1", Name: "u", Prompt: "p", Priority: 5,
+			State: domain.TaskQueued, CreatedBy: domain.CreatorHuman, CreatedAt: epoch0,
+		}); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE runs SET task_id = 'task_2', attempt = 1 WHERE id = ?`, string(urgent.ID))
@@ -264,8 +268,10 @@ func TestCommands_SeqIsPerWorkerMonotonicAndRollbackGivesItBack(t *testing.T) {
 	}{{"alpha", f.alpha, "run_b"}, {"alpha", f.alpha, "run_c"}, {"beta", f.beta, "run_e"}} {
 		f.tx(func(tx *Tx) error {
 			l := "lease_" + string(c.run) + "1"
-			cmd, err := tx.EnqueueCommand(ctx, WorkerCommand{WorkerID: c.w.ID, Type: domain.CommandAssign, RunID: c.run, LeaseID: domain.ID(l), Epoch: 1,
-				Payload: []byte(`{}`), CreatedAt: epoch0})
+			cmd, err := tx.EnqueueCommand(ctx, WorkerCommand{
+				WorkerID: c.w.ID, Type: domain.CommandAssign, RunID: c.run, LeaseID: domain.ID(l), Epoch: 1,
+				Payload: []byte(`{}`), CreatedAt: epoch0,
+			})
 			seqs[c.name] = append(seqs[c.name], cmd.Seq)
 			return err
 		})
@@ -276,8 +282,10 @@ func TestCommands_SeqIsPerWorkerMonotonicAndRollbackGivesItBack(t *testing.T) {
 
 	boom := errors.New("boom")
 	err := f.db.WithTx(ctx, func(tx *Tx) error {
-		c, err := tx.EnqueueCommand(ctx, WorkerCommand{WorkerID: f.alpha.ID, Type: domain.CommandAssign, RunID: "run_d", LeaseID: "lease_run_d1", Epoch: 1,
-			Payload: []byte(`{}`), CreatedAt: epoch0})
+		c, err := tx.EnqueueCommand(ctx, WorkerCommand{
+			WorkerID: f.alpha.ID, Type: domain.CommandAssign, RunID: "run_d", LeaseID: "lease_run_d1", Epoch: 1,
+			Payload: []byte(`{}`), CreatedAt: epoch0,
+		})
 		if err != nil || c.Seq != 3 {
 			t.Errorf("seq %d (%v)", c.Seq, err)
 		}
@@ -299,8 +307,10 @@ func TestCommands_AreDeliveredUntilAcknowledgedOrCancelled(t *testing.T) {
 		l := f.assign(f.queuedRun(i), f.alpha, v1.Capacity{})
 		leases = append(leases, l)
 		f.tx(func(tx *Tx) error {
-			_, err := tx.EnqueueCommand(ctx, WorkerCommand{WorkerID: f.alpha.ID, Type: domain.CommandAssign, RunID: l.RunID, LeaseID: l.ID,
-				Epoch: l.Epoch, Payload: []byte(`{"n":1}`), CreatedAt: epoch0})
+			_, err := tx.EnqueueCommand(ctx, WorkerCommand{
+				WorkerID: f.alpha.ID, Type: domain.CommandAssign, RunID: l.RunID, LeaseID: l.ID,
+				Epoch: l.Epoch, Payload: []byte(`{"n":1}`), CreatedAt: epoch0,
+			})
 			return err
 		})
 	}
