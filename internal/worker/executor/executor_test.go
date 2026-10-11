@@ -582,7 +582,7 @@ func TestAWrapperThatDiedWithoutAnExitFailsTheRunAndEndsItsGroup(t *testing.T) {
 	f := newFixture(t)
 	k := f.started("echo hi")
 	// A wrapper whose group has a straggler, and which is then killed: the group outlives its leader.
-	w := newWrapperProcess(t, "sleep 300 & echo $! > straggler.pid; wait")
+	w := newWrapperProcess(t, "sleep 300 & wait")
 	waitFor(t, "the straggler", func() bool { return groupSize(w.w.PGID) == 2 })
 	f.writeWrapper(k, w.w)
 	f.writeStarted(k, w.w, t0)
