@@ -34,6 +34,9 @@ type Options struct {
 	// WorkerOfflineTTL overrides controller.json's worker_offline_ttl; zero
 	// takes that, and failing that the default of Appendix A.
 	WorkerOfflineTTL time.Duration
+	// SchedulerTick is how often the scheduler looks at the queue when no
+	// event has woken it; zero means scheduler.DefaultTick.
+	SchedulerTick time.Duration
 }
 
 const serverCertCheckEvery = 12 * time.Hour
@@ -127,6 +130,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 			}, srv.SetServerCert, o.Logger)
 		})
 		background.Go(func() { services.Workers.RunSweeper(runCtx, o.Logger) })
+		background.Go(func() { services.Scheduler.Run(runCtx, o.SchedulerTick, o.Logger) })
 		serveErr := srv.Serve(ctx, ln)
 		stop()
 		background.Wait()

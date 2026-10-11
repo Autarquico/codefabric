@@ -11,6 +11,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/input"
+	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/app/refs"
 	"github.com/Autarquico/codefabric/internal/controller/store"
@@ -121,9 +122,11 @@ func ended(t store.Task) bool {
 	return t.CompletedManuallyAt != nil || t.CancelledAt != nil || t.ArchivedAt != nil || t.State.IsTerminal()
 }
 
-// CancelLiveIn cancels the Runs of the Task that have not ended. Only queued
-// Runs exist so far, which need no process stopped; stopping one that runs is
-// the Worker's job (§10.7) and arrives with the Worker milestones.
+// CancelLiveIn cancels the Runs of the Task that have not ended. A Run that
+// waits for its Worker's answer to a lease loses the lease and its reservation
+// in the same transaction (§10.5). One whose lease was accepted keeps both:
+// its process may be starting, and the Worker has to stop it (§10.7) before the
+// reservation is released, which arrives with the Worker milestones.
 func (s *Service) CancelLiveIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID) error {
 	task, err := store.TaskByID(ctx, tx, taskID)
 	if err != nil {
@@ -139,6 +142,9 @@ func (s *Service) CancelLiveIn(ctx context.Context, tx *store.Tx, act mutation.A
 		}
 		next, err := domain.NextRunState(domain.RunStatus{State: run.State}, domain.RunEventCancel)
 		if err != nil {
+			return err
+		}
+		if err := leases.InvalidateIn(ctx, tx, act, &run); err != nil {
 			return err
 		}
 		if err := tx.FinishRun(ctx, run, next.State, "", act.Now); errors.Is(err, store.ErrNoRowChanged) {
@@ -210,6 +216,9 @@ func view(r store.Run, withSpec bool) v1.Run {
 		SpecDigest: r.SpecDigest, SourceCommit: r.SourceCommit, Publication: r.Publication,
 		Evaluation: r.Evaluation, Runtime: r.Runtime, Promoted: r.Promoted, WorkerID: string(r.WorkerID),
 		CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+	}
+	if r.LeaseID != "" {
+		out.Lease = &v1.RunLease{ID: string(r.LeaseID), Epoch: r.LeaseEpoch, State: r.LeaseState}
 	}
 	if withSpec {
 		out.Spec = json.RawMessage(r.Spec)

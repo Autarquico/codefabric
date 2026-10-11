@@ -177,11 +177,13 @@ func (t *Tx) SetWorkerStatus(ctx context.Context, id domain.ID, from, to domain.
 
 // RecordHeartbeat keeps what a heartbeat reported: the daemon's description of
 // itself on the Worker, and the resources and health as its latest heartbeat.
+// Free is not kept: it depends on reservations, so it is computed on read.
 func (t *Tx) RecordHeartbeat(ctx context.Context, id domain.ID, report WorkerReport, resources v1.WorkerResources, health v1.Health, at time.Time) error {
 	capabilities, err := json.Marshal(nonNilStrings(report.Capabilities))
 	if err != nil {
 		return err
 	}
+	resources.Free = v1.Capacity{}
 	payload, err := json.Marshal(heartbeatState{Resources: resources, Health: health})
 	if err != nil {
 		return err
