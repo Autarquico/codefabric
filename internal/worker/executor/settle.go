@@ -38,6 +38,9 @@ func (e *Executor) settleExit(ctx context.Context, r state.Run, m markers) (done
 			return e.markUnverified(ctx, r, "the wrapper of the Run is not the process it was")
 		}
 		if !e.groupEmpty(ctx, w) {
+			// The wrapper is gone, so a group with this ID is what it left behind.
+			e.log.WarnContext(ctx, "processes of a Run survive its wrapper: killing them", "run", r.RunID)
+			_ = syscall.Kill(-w.PGID, syscall.SIGKILL)
 			return false
 		}
 	}

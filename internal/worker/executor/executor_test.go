@@ -820,3 +820,23 @@ func TestASessionWithNoWrapperAfterTooLongIsEnded(t *testing.T) {
 		t.Errorf("not settled: %s", f.run(k).Phase)
 	}
 }
+
+func TestTheDaemonKillsWhatSurvivesAWrapperThatSaidItWasDone(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	w := newWrapperProcess(t, "sleep 300 & wait")
+	waitFor(t, "the straggler", func() bool { return groupSize(w.w.PGID) == 2 })
+	f.writeWrapper(k, w.w)
+	f.writeStarted(k, w.w, t0)
+	// The wrapper left: its leader is dead and a member of the group is not.
+	_ = syscall.Kill(w.w.PID, syscall.SIGKILL)
+	<-w.ended
+	f.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: t0.Add(time.Second), Cause: execwrap.CauseExit})
+	waitFor(t, "the Run to be settled", func() bool { return f.e.step(t.Context(), k) })
+	if got := kinds(f.reports(k)); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) {
+		t.Errorf("reports = %v", got)
+	}
+	if groupSize(w.w.PGID) != 0 {
+		t.Error("a process of the group is left")
+	}
+}
