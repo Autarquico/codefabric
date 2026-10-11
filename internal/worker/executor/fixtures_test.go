@@ -342,6 +342,25 @@ func newWrapperProcess(t *testing.T, script string) *helper {
 	return h
 }
 
+// newTrappingWrapperProcess is newWrapperProcess for a script that starts with
+// a trap: it returns once the trap is in place, so a signal sent at once is
+// not taken before the shell installed it.
+func newTrappingWrapperProcess(t *testing.T, trap, body string) *helper {
+	t.Helper()
+	ready := filepath.Join(t.TempDir(), "ready")
+	h := newWrapperProcess(t, trap+"; : > "+ready+"; "+body)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			return h
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the trap was not installed")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func (h *helper) alive() bool {
 	select {
 	case <-h.ended:

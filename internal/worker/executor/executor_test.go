@@ -698,7 +698,7 @@ func TestARunNobodyAskedToStopIsNeverStoppedForWantingAnIdentity(t *testing.T) {
 func TestAStopThatCannotVerifyTheWrapperIsParkedAndNeverConfirmed(t *testing.T) {
 	f := newFixture(t)
 	k := f.started("echo hi")
-	w := newWrapperProcess(t, "trap 'exit 0' TERM; while :; do sleep 0.05; done")
+	w := newTrappingWrapperProcess(t, "trap 'exit 0' TERM", "while :; do sleep 0.05; done")
 	unknown := w.w
 	unknown.Start = ""
 	f.writeWrapper(k, unknown)
@@ -773,7 +773,7 @@ func TestAReusedPidOfARecordThatDoesNotLeadItsGroupSaysNothing(t *testing.T) {
 func TestStopAsksTheWrapperAndNobodyElse(t *testing.T) {
 	f := newFixture(t)
 	k := f.started("echo hi")
-	w := newWrapperProcess(t, "trap 'exit 0' TERM; while :; do sleep 0.05; done")
+	w := newTrappingWrapperProcess(t, "trap 'exit 0' TERM", "while :; do sleep 0.05; done")
 	f.writeWrapper(k, w.w)
 	f.writeStarted(k, w.w, t0)
 
@@ -799,7 +799,7 @@ func TestStopAsksTheWrapperAndNobodyElse(t *testing.T) {
 func TestAStopThatTheWrapperDoesNotFinishIsEscalatedAfterTheGraceAndTheMargin(t *testing.T) {
 	f := newFixture(t) // stop.grace is 2 s
 	k := f.started("echo hi")
-	w := newWrapperProcess(t, "trap '' TERM; while :; do sleep 0.05; done")
+	w := newTrappingWrapperProcess(t, "trap '' TERM", "while :; do sleep 0.05; done")
 	f.writeWrapper(k, w.w)
 	f.writeStarted(k, w.w, t0)
 	if err := f.e.Stop(t.Context(), k.RunID, 1, "cancel", SourceController); err != nil {
@@ -826,7 +826,7 @@ func TestAStopThatTheWrapperDoesNotFinishIsEscalatedAfterTheGraceAndTheMargin(t 
 func TestAStopInProgressIsSignalledAgainByTheNextDaemon(t *testing.T) {
 	f := newFixture(t)
 	k := f.started("echo hi")
-	w := newWrapperProcess(t, "trap 'exit 0' TERM; while :; do sleep 0.05; done")
+	w := newTrappingWrapperProcess(t, "trap 'exit 0' TERM", "while :; do sleep 0.05; done")
 	f.writeWrapper(k, w.w)
 	f.writeStarted(k, w.w, t0)
 	// The previous daemon wrote the stop and died before it signalled.
