@@ -61,6 +61,11 @@ type HeartbeatRequest struct {
 // HeartbeatResponse tells the daemon the state the Controller holds it in.
 type HeartbeatResponse struct {
 	State domain.WorkerState `json:"state"`
+	// MaxConcurrentRuns and Allocatable are what the Worker may take on: it
+	// cannot read its own record, and its local capacity check needs them
+	// (§10.5).
+	MaxConcurrentRuns int      `json:"max_concurrent_runs"`
+	Allocatable       Capacity `json:"allocatable"`
 }
 
 // Worker is §3.5 as the API shows it. Compatible is the verdict of the upgrade

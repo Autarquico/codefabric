@@ -189,6 +189,7 @@ type Run struct {
 	Attempt      int                `json:"attempt"`
 	State        domain.RunState    `json:"state"`
 	EndReason    domain.EndReason   `json:"end_reason,omitempty"`
+	ExitCode     *int               `json:"exit_code,omitempty"`
 	QueuedReason string             `json:"queued_reason,omitempty"`
 	Lineage      domain.LineageKind `json:"lineage"`
 	SpecDigest   string             `json:"spec_digest"`
