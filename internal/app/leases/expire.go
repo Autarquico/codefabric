@@ -2,6 +2,7 @@ package leases
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/Autarquico/codefabric/internal/app/mutation"
@@ -58,7 +59,8 @@ func closeIn(ctx context.Context, tx *store.Tx, act mutation.Act, l store.Lease,
 }
 
 // SweepExpired expires the leases nobody answered by their accept_by (§10.4.4)
-// and returns how many it expired. Each one is its own transaction, which
+// and returns how many it expired. A lease that fails to expire does not stop
+// the others: the error that comes back joins the ones of each lease. Each one is its own transaction, which
 // reads the lease and the clock again: a lease accepted or already expired
 // meanwhile is left alone, and one whose accept_by has not come (the boundary
 // is exclusive: it is alive until the instant itself) is too. The Run is
@@ -72,7 +74,10 @@ func (s *Service) SweepExpired(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	var expired int
+	var (
+		expired int
+		failed  []error
+	)
 	for _, l := range due {
 		var done bool
 		err := s.db.WithTx(ctx, func(tx *store.Tx) error {
@@ -97,14 +102,14 @@ func (s *Service) SweepExpired(ctx context.Context) (int, error) {
 			done = err == nil
 			return err
 		})
-		if err != nil {
-			return expired, fmt.Errorf("leases: expiring %s: %w", l.ID, err)
-		}
-		if done {
+		switch {
+		case err != nil:
+			failed = append(failed, fmt.Errorf("leases: expiring %s of run %s: %w", l.ID, l.RunID, err))
+		case done:
 			expired++
 		}
 	}
-	return expired, nil
+	return expired, errors.Join(failed...)
 }
 
 // InvalidateIn ends the lease of a Run that is about to be cancelled while it

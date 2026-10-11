@@ -660,3 +660,50 @@ func (e *env) bloat(seq uint64, pad string) {
 		return err
 	}))
 }
+
+// The answer is the watermark of what the Worker has acknowledged, not an echo of the request.
+func TestAck_AnswersTheHighestAcknowledgedSeq(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	for i := range 5 {
+		e.offer(e.queuedRun(strings.Repeat("p", i+1)).ID, w)
+	}
+	for _, c := range []struct{ upTo, want uint64 }{{5, 5}, {3, 5}, {5, 5}, {0, 5}} {
+		got, err := e.app.Leases.Ack(t.Context(), w, v1.AckCommandsRequest{UpToSeq: c.upTo})
+		must(t, err)
+		if got.AckedThrough != c.want {
+			t.Errorf("ack %d answered %d, want %d", c.upTo, got.AckedThrough, c.want)
+		}
+	}
+}
+
+// Revoking the Worker while its poll waits ends the poll with CF_UNAUTHENTICATED and no orders.
+func TestLongPoll_IsAuthorisedAgainAtEveryLook(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	result := e.poll(w, 0, leases.MaxWait)
+	e.blockUntilPolling()
+
+	must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		return tx.Revoke(t.Context(), w.Principal.ID, domain.KindWorker, e.clock.Now())
+	}))
+	e.clock.Advance(leases.MaxWait) // the deadline: its last look is authorised too
+	got := e.receive(result)
+	wantCode(t, got.err, domain.CodeUnauthenticated)
+	if len(got.Commands) != 0 {
+		t.Errorf("orders were delivered to a revoked Worker: %+v", got.Commands)
+	}
+
+	// And a poll that finds an order ready does not deliver it either.
+	e2 := newEnv(t)
+	w2 := e2.joinWorker("alpha")
+	e2.offer(e2.queuedRun("x").ID, w2)
+	must(t, e2.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		return tx.Revoke(t.Context(), w2.Principal.ID, domain.KindWorker, e2.clock.Now())
+	}))
+	page, err := e2.app.Leases.Assignments(t.Context(), w2, leases.AssignmentsQuery{})
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if len(page.Commands) != 0 {
+		t.Errorf("page = %+v", page)
+	}
+}

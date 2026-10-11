@@ -51,7 +51,7 @@ func printExplanation(out io.Writer, e v1.RunExplanation) error {
 	}
 	w := newTable(out, "WORKER\tSTATE\tVERDICT\tDETAIL")
 	for _, v := range e.Workers {
-		verdict, detail := "rejected", ""
+		verdict, detail := "ineligible", ""
 		switch {
 		case v.Chosen:
 			verdict = "chosen"

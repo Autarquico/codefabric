@@ -34,7 +34,7 @@ type AssignmentsQuery struct {
 }
 
 // Assignments answers with the orders of the Worker that the caller's
-// identity stands for, after AfterSeq, that it has not acknowledged, in order.
+// identity stands for (the caller is authorised again at every look), after AfterSeq, that it has not acknowledged, in order.
 // If there are none it waits up to Wait, one deadline for the whole request,
 // for a commit that brings one. An order is delivered again until the Worker
 // acknowledges it, so a Worker that crashed before persisting it, or whose
@@ -53,15 +53,6 @@ func (s *Service) Assignments(ctx context.Context, by pki.Session, q Assignments
 	limit = min(limit, MaxLimit)
 	wait := min(q.Wait, MaxWait)
 
-	var worker store.Worker
-	err := s.db.Read(ctx, func(r store.Querier) (err error) {
-		worker, err = workerOf(ctx, r, by)
-		return err
-	})
-	if err != nil {
-		return v1.AssignmentsResponse{}, err
-	}
-
 	var deadline <-chan time.Time
 	if wait > 0 {
 		timer := s.clock.NewTimer(wait)
@@ -70,7 +61,7 @@ func (s *Service) Assignments(ctx context.Context, by pki.Session, q Assignments
 	}
 	for {
 		seen := s.db.Notifier().Latest()
-		page, err := s.page(ctx, worker.ID, q.AfterSeq, limit)
+		page, err := s.page(ctx, by, q.AfterSeq, limit)
 		if err != nil || len(page.Commands) > 0 || deadline == nil {
 			return page, err
 		}
@@ -78,16 +69,26 @@ func (s *Service) Assignments(ctx context.Context, by pki.Session, q Assignments
 		case <-ctx.Done():
 			return v1.AssignmentsResponse{}, ctx.Err()
 		case <-deadline:
-			return page, nil
+			return s.page(ctx, by, q.AfterSeq, limit) // a last look, which also authorises the caller again
 		case <-s.db.Notifier().Changed(seen):
 		}
 	}
 }
 
-func (s *Service) page(ctx context.Context, worker domain.ID, after uint64, limit int) (v1.AssignmentsResponse, error) {
+// page is one look at the queue. The caller is authorised again every time:
+// a long-poll can outlive the certificate or the identity that opened it, and
+// no order is delivered to one that is revoked or expired meanwhile.
+func (s *Service) page(ctx context.Context, by pki.Session, after uint64, limit int) (v1.AssignmentsResponse, error) {
 	page := v1.AssignmentsResponse{Commands: []v1.WorkerCommand{}, LastSeq: after}
 	err := s.db.Read(ctx, func(r store.Querier) error {
-		stored, err := store.UndeliveredCommands(ctx, r, worker, after, limit)
+		if _, err := pki.RequireCaller(ctx, r, by, s.clock.Now()); err != nil {
+			return err
+		}
+		worker, err := workerOf(ctx, r, by)
+		if err != nil {
+			return err
+		}
+		stored, err := store.UndeliveredCommands(ctx, r, worker.ID, after, limit)
 		if err != nil {
 			return err
 		}
@@ -122,7 +123,8 @@ func commandView(c store.WorkerCommand) (v1.WorkerCommand, error) {
 
 // Ack is the Worker saying that it has persisted, or no longer needs, every
 // order up to UpToSeq: from then on the Controller does not deliver them. It
-// is cumulative and idempotent, and cannot go past the last order queued for
+// is cumulative and idempotent: it answers the highest Seq acknowledged so far,
+// which a late, lower ACK does not lower. It cannot go past the last order queued for
 // the Worker, which would also cover orders it has never seen.
 func (s *Service) Ack(ctx context.Context, by pki.Session, req v1.AckCommandsRequest) (v1.AckCommandsResponse, error) {
 	return mutation.Do(ctx, s.db, s.clock, by, "worker.commands.ack", "", req,
@@ -136,9 +138,10 @@ func (s *Service) Ack(ctx context.Context, by pki.Session, req v1.AckCommandsReq
 					fmt.Sprintf("up_to_seq %d is past the last order queued for this Worker (%d)", req.UpToSeq, w.LastCommandSeq),
 					map[string]any{"last_seq": w.LastCommandSeq})
 			}
-			if err := tx.AckCommandsThrough(ctx, w.ID, req.UpToSeq, act.Now); err != nil {
+			through, err := tx.AckCommandsThrough(ctx, w.ID, req.UpToSeq, act.Now)
+			if err != nil {
 				return v1.AckCommandsResponse{}, err
 			}
-			return v1.AckCommandsResponse{AckedThrough: req.UpToSeq}, nil
+			return v1.AckCommandsResponse{AckedThrough: through}, nil
 		})
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/scheduler"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -26,8 +27,8 @@ func worker(name string, mutate ...func(*scheduler.Worker)) scheduler.Worker {
 	return w
 }
 
-func request(mutate ...func(*scheduler.Request)) scheduler.Request {
-	r := scheduler.Request{Resources: v1.Capacity{CPU: 2, MemoryMB: 4096}}
+func request(mutate ...func(*runs.Placement)) runs.Placement {
+	r := runs.Placement{Resources: v1.Capacity{CPU: 2, MemoryMB: 4096}}
 	for _, m := range mutate {
 		m(&r)
 	}
@@ -100,20 +101,20 @@ func TestDecide_DoesNotDependOnTheOrderOfTheWorkersAndDoesNotChangeThem(t *testi
 func TestScore_EachComponentDecides(t *testing.T) {
 	tests := []struct {
 		name string
-		req  scheduler.Request
+		req  runs.Placement
 		a, b scheduler.Worker // a sorts before b: it would win a tie
 		want string
 	}{
 		{
 			name: "preference outranks everything",
-			req:  request(func(r *scheduler.Request) { r.Prefer = []string{"zulu"} }),
+			req:  request(func(r *runs.Placement) { r.Prefer = []string{"zulu"} }),
 			a:    worker("alpha", func(w *scheduler.Worker) { w.KnowsProject = true }),
 			b:    worker("zulu", func(w *scheduler.Worker) { w.Reserved = v1.Capacity{CPU: 4}; w.Reservations = 3 }),
 			want: "zulu",
 		},
 		{
 			name: "earlier in the prefer list wins",
-			req:  request(func(r *scheduler.Request) { r.Prefer = []string{"zulu", "alpha"} }),
+			req:  request(func(r *runs.Placement) { r.Prefer = []string{"zulu", "alpha"} }),
 			a:    worker("alpha"),
 			b:    worker("zulu"),
 			want: "zulu",
@@ -157,7 +158,7 @@ func TestScore_IsTheSumOfItsParts(t *testing.T) {
 		w.Reservations = 1
 		w.KnowsProject = true
 	})
-	d := scheduler.Decide(request(func(r *scheduler.Request) { r.Prefer = []string{"beta", "alpha"} }), []scheduler.Worker{w}, now)
+	d := scheduler.Decide(request(func(r *runs.Placement) { r.Prefer = []string{"beta", "alpha"} }), []scheduler.Worker{w}, now)
 	s := *d.Chosen.Score
 	// 8 CPUs with 2+2 taken leave 4/8; 16 GB with 4+4 taken leave 8/16.
 	want := scheduler.Score{Prefer: 1_000_000, Free: 500 + 500, Load: -250, Affinity: 100}
@@ -185,7 +186,7 @@ func TestFilters_EachOneRejectsWithItsReason(t *testing.T) {
 	tests := []struct {
 		filter string
 		code   domain.Code
-		req    scheduler.Request
+		req    runs.Placement
 		w      scheduler.Worker
 	}{
 		{scheduler.FilterState, domain.CodeNoEligibleWorker, request(), worker("w", func(w *scheduler.Worker) { w.State = domain.WorkerDraining })},
@@ -195,25 +196,25 @@ func TestFilters_EachOneRejectsWithItsReason(t *testing.T) {
 		{scheduler.FilterState, domain.CodeNoEligibleWorker, request(), worker("w", func(w *scheduler.Worker) { w.State = domain.WorkerJoining })},
 		{scheduler.FilterAvailability, domain.CodeNoEligibleWorker, request(), worker("w", func(w *scheduler.Worker) { w.Availability = domain.AvailabilityManual })},
 		{
-			scheduler.FilterAvailability, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Require = []string{"w"} }),
+			scheduler.FilterAvailability, domain.CodeNoEligibleWorker, request(func(r *runs.Placement) { r.Require = []string{"w"} }),
 			worker("w", func(w *scheduler.Worker) { w.Availability = domain.AvailabilityIdle }),
 		},
-		{scheduler.FilterRequire, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Require = []string{"other"} }), worker("w")},
-		{scheduler.FilterAvoid, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Avoid = []string{"w"} }), worker("w")},
+		{scheduler.FilterRequire, domain.CodeNoEligibleWorker, request(func(r *runs.Placement) { r.Require = []string{"other"} }), worker("w")},
+		{scheduler.FilterAvoid, domain.CodeNoEligibleWorker, request(func(r *runs.Placement) { r.Avoid = []string{"w"} }), worker("w")},
 		{
-			scheduler.FilterCapabilities, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Capabilities = []string{"docker", "gpu"} }),
+			scheduler.FilterCapabilities, domain.CodeNoEligibleWorker, request(func(r *runs.Placement) { r.Capabilities = []string{"docker", "gpu"} }),
 			worker("w", func(w *scheduler.Worker) { w.Capabilities = []string{"docker"} }),
 		},
-		{scheduler.FilterHarness, domain.CodeHarnessUnavailable, request(func(r *scheduler.Request) { r.Harness = "claude" }), worker("w")},
-		{scheduler.FilterResources, domain.CodeNoEligibleWorker, request(func(r *scheduler.Request) { r.Resources.CPU = 9 }), worker("w")},
+		{scheduler.FilterHarness, domain.CodeHarnessUnavailable, request(func(r *runs.Placement) { r.Harness = "claude" }), worker("w")},
+		{scheduler.FilterResources, domain.CodeNoEligibleWorker, request(func(r *runs.Placement) { r.Resources.CPU = 9 }), worker("w")},
 		{scheduler.FilterConcurrency, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.Reservations = 4 })},
 		{scheduler.FilterCapacity, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.Reserved = v1.Capacity{CPU: 7}; w.Reservations = 1 })},
 		{scheduler.FilterCapacity, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.Reserved = v1.Capacity{MemoryMB: 14000}; w.Reservations = 1 })},
 		{
-			scheduler.FilterCapacity, domain.CodeWorkerCapacity, request(func(r *scheduler.Request) { r.Resources.DiskMB = 50 }),
+			scheduler.FilterCapacity, domain.CodeWorkerCapacity, request(func(r *runs.Placement) { r.Resources.DiskMB = 50 }),
 			worker("w", func(w *scheduler.Worker) { w.Reserved = v1.Capacity{DiskMB: 99980}; w.Reservations = 1 }),
 		},
-		{scheduler.FilterRecentReject, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.RejectedAt = &recent })},
+		{scheduler.FilterRecentMiss, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.MissedAt = &recent })},
 	}
 	for _, tc := range tests {
 		t.Run(tc.filter+"/"+string(tc.code)+"/"+string(tc.w.State), func(t *testing.T) {
@@ -236,9 +237,9 @@ func TestFilters_EveryFailureIsListedInTheFixedOrder(t *testing.T) {
 		w.Availability = domain.AvailabilityManual
 		w.Reservations = 4
 		w.Reserved = v1.Capacity{CPU: 8}
-		w.RejectedAt = &recent
+		w.MissedAt = &recent
 	})
-	req := request(func(r *scheduler.Request) {
+	req := request(func(r *runs.Placement) {
 		r.Require = []string{"other"}
 		r.Avoid = []string{"w"}
 		r.Capabilities = []string{"gpu"}
@@ -250,7 +251,7 @@ func TestFilters_EveryFailureIsListedInTheFixedOrder(t *testing.T) {
 	for _, f := range scheduler.Decide(req, []scheduler.Worker{w}, now).Verdicts[0].Failed {
 		got = append(got, f.Filter)
 	}
-	want := []string{"state", "availability", "require", "avoid", "capabilities", "harness", "resources", "concurrency", "capacity", "recent_reject"}
+	want := []string{"state", "availability", "require", "avoid", "capabilities", "harness", "resources", "concurrency", "capacity", "recent_miss"}
 	if !slices.Equal(got, want) {
 		t.Errorf("failures = %v, want %v", got, want)
 	}
@@ -271,26 +272,26 @@ func TestFilters_Boundaries(t *testing.T) {
 	})
 	t.Run("a rejection is forgotten once the backoff has passed", func(t *testing.T) {
 		at := now.Add(-domain.LeaseRejectBackoff)
-		w := worker("w", func(w *scheduler.Worker) { w.RejectedAt = &at })
+		w := worker("w", func(w *scheduler.Worker) { w.MissedAt = &at })
 		if d := scheduler.Decide(request(), []scheduler.Worker{w}, now); d.Chosen == nil {
 			t.Errorf("rejected: %+v", d.Verdicts[0].Failed)
 		}
 		inside := now.Add(-domain.LeaseRejectBackoff + time.Nanosecond)
-		w.RejectedAt = &inside
+		w.MissedAt = &inside
 		if d := scheduler.Decide(request(), []scheduler.Worker{w}, now); d.Chosen != nil {
 			t.Error("a rejection a nanosecond inside the backoff did not count")
 		}
 	})
 	t.Run("a manual Worker takes the Runs that require it", func(t *testing.T) {
 		w := worker("w", func(w *scheduler.Worker) { w.Availability = domain.AvailabilityManual })
-		d := scheduler.Decide(request(func(r *scheduler.Request) { r.Require = []string{"w", "x"} }), []scheduler.Worker{w}, now)
+		d := scheduler.Decide(request(func(r *runs.Placement) { r.Require = []string{"w", "x"} }), []scheduler.Worker{w}, now)
 		if d.Chosen == nil {
 			t.Errorf("rejected: %+v", d.Verdicts[0].Failed)
 		}
 	})
 	t.Run("a harness is the capability harness:<id>", func(t *testing.T) {
 		w := worker("w", func(w *scheduler.Worker) { w.Capabilities = []string{scheduler.HarnessCapability("claude")} })
-		d := scheduler.Decide(request(func(r *scheduler.Request) { r.Harness = "claude" }), []scheduler.Worker{w}, now)
+		d := scheduler.Decide(request(func(r *runs.Placement) { r.Harness = "claude" }), []scheduler.Worker{w}, now)
 		if d.Chosen == nil {
 			t.Errorf("rejected: %+v", d.Verdicts[0].Failed)
 		}

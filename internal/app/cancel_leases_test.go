@@ -35,7 +35,7 @@ func TestCancelAndComplete_WithAPendingLease(t *testing.T) {
 			if got := e.storedLease(l.ID); got.State != domain.LeaseExpired || got.CloseCode != domain.LeaseCloseRunEnded {
 				t.Errorf("lease = %+v", got)
 			}
-			if rs := ReservationOf(t, e, l.ID); rs.ReleasedAt == nil || rs.ReleaseReason != "run_ended" {
+			if rs := e.reservation(l.ID); rs.ReleasedAt == nil || rs.ReleaseReason != "run_ended" {
 				t.Errorf("reservation = %+v", rs)
 			}
 			if st := e.storedWorker(w); st.Reservations != 0 || st.Resources.Free.CPU != 16 {
@@ -74,7 +74,7 @@ func TestCancel_WithAnAcceptedLeaseKeepsTheLeaseAndTheReservation(t *testing.T) 
 	if got := e.storedLease(l.ID); got.State != domain.LeaseAccepted {
 		t.Errorf("lease = %s", got.State)
 	}
-	if rs := ReservationOf(t, e, l.ID); rs.ReleasedAt != nil {
+	if rs := e.reservation(l.ID); rs.ReleasedAt != nil {
 		t.Errorf("the reservation of a Run that may be starting was released")
 	}
 	got, err := e.app.Runs.Get(t.Context(), run.ID)
@@ -98,7 +98,7 @@ func TestCancel_FailureRollsBackTheLeaseToo(t *testing.T) {
 	if got := e.storedLease(l.ID); got.State != domain.LeasePending {
 		t.Errorf("lease = %s", got.State)
 	}
-	if rs := ReservationOf(t, e, l.ID); rs.ReleasedAt != nil {
+	if rs := e.reservation(l.ID); rs.ReleasedAt != nil {
 		t.Error("reservation released")
 	}
 	if r := e.storedRun(run.ID); r.State != domain.RunQueued || r.LeaseID != l.ID {

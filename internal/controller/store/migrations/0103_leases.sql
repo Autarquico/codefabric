@@ -28,7 +28,7 @@ CREATE TABLE leases (
 CREATE UNIQUE INDEX leases_one_live_per_run ON leases (run_id) WHERE state IN ('pending', 'accepted');
 CREATE INDEX leases_pending_due ON leases (accept_by) WHERE state = 'pending';
 CREATE INDEX leases_worker_state ON leases (worker_id, state);
-CREATE INDEX leases_recent_rejections ON leases (closed_at) WHERE state = 'rejected';
+CREATE INDEX leases_recent_misses ON leases (closed_at) WHERE state IN ('rejected', 'expired');
 
 -- What a lease holds on its Worker (§10.5). The scheduler counts open
 -- reservations, never real usage. Releasing one is part of the transaction of
@@ -73,7 +73,9 @@ CREATE TABLE worker_commands (
 CREATE INDEX worker_commands_undelivered ON worker_commands (worker_id, seq) WHERE acked_at IS NULL AND cancelled_at IS NULL;
 CREATE UNIQUE INDEX worker_commands_assign_lease ON worker_commands (lease_id) WHERE type = 'assign';
 
+-- acked_seq is the highest Seq the Worker has acknowledged cumulatively.
 ALTER TABLE workers ADD COLUMN last_command_seq INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workers ADD COLUMN acked_seq INTEGER NOT NULL DEFAULT 0;
 
 -- The scheduler reads the queue in order of creation.
 CREATE INDEX runs_queued ON runs (created_at, short_n) WHERE state = 'queued';

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -39,6 +41,9 @@ func (s *Server) assignments(w http.ResponseWriter, r *http.Request, c caller) e
 	out, err := s.work.Leases.Assignments(r.Context(), c.Session, leases.AssignmentsQuery{
 		AfterSeq: after, Wait: time.Duration(min(wait, 3600)) * time.Second, Limit: int(min(limit, 1<<16)),
 	})
+	if errors.Is(err, context.Canceled) {
+		return nil // the Worker hung up: there is nobody to answer and nothing failed
+	}
 	if err != nil {
 		return err
 	}

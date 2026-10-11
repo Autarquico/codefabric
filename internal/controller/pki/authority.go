@@ -335,8 +335,10 @@ func (j Joined) Session() (Session, error) {
 // RequireCaller is the authorisation decision of every mutating operation,
 // inside the caller's own transaction (see requireCaller). Operations outside
 // this package use it so that their decision is the same as the Authority's.
-func RequireCaller(ctx context.Context, tx *store.Tx, s Session, now time.Time) (store.Identity, error) {
-	return requireCaller(ctx, tx, s, now, false)
+// A read that outlives its request, like a long-poll, asks it again from a
+// read snapshot each time it looks.
+func RequireCaller(ctx context.Context, q store.Querier, s Session, now time.Time) (store.Identity, error) {
+	return requireCaller(ctx, q, s, now, false)
 }
 
 // requireCaller is the authorisation decision of every mutating operation:
@@ -344,8 +346,8 @@ func RequireCaller(ctx context.Context, tx *store.Tx, s Session, now time.Time) 
 // the identity must exist, be usable, and the session's certificate must be in
 // validity and be the identity's current one (or, only when allowSuperseded,
 // its previous one within the grace). Authenticate is just a per-request filter.
-func requireCaller(ctx context.Context, tx *store.Tx, s Session, now time.Time, allowSuperseded bool) (store.Identity, error) {
-	ident, err := tx.IdentityByID(ctx, s.Principal.ID)
+func requireCaller(ctx context.Context, q store.Querier, s Session, now time.Time, allowSuperseded bool) (store.Identity, error) {
+	ident, err := store.IdentityByID(ctx, q, s.Principal.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.Identity{}, errNotAuthenticated()
 	}

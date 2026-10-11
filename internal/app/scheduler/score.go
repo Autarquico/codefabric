@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/runs"
 )
 
 // Weights of the score (§10.1). They are integers, never floats, so the same
@@ -26,7 +27,7 @@ type Score struct {
 	Affinity int64
 }
 
-func score(req Request, w Worker) Score {
+func score(req runs.Placement, w Worker) Score {
 	var s Score
 	if i := slices.Index(req.Prefer, w.Name); i >= 0 {
 		s.Prefer = int64(weightPrefer * (len(req.Prefer) - i))

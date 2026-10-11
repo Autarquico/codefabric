@@ -87,7 +87,12 @@ func (db *DB) Identities(ctx context.Context, kind domain.Kind) ([]Identity, err
 
 // IdentityByID reads an identity inside the transaction.
 func (t *Tx) IdentityByID(ctx context.Context, id domain.ID) (Identity, error) {
-	return scanIdentity(t.QueryRow(ctx, `SELECT `+identityColumns+` FROM identities WHERE id = ?`, string(id)))
+	return IdentityByID(ctx, t, id)
+}
+
+// IdentityByID reads an identity from a transaction or a read snapshot.
+func IdentityByID(ctx context.Context, q Querier, id domain.ID) (Identity, error) {
+	return scanIdentity(q.QueryRow(ctx, `SELECT `+identityColumns+` FROM identities WHERE id = ?`, string(id)))
 }
 
 // InsertIdentity stores a new identity.

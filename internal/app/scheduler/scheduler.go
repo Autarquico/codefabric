@@ -2,11 +2,12 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/app/runs"
@@ -42,10 +43,25 @@ func New(db *store.DB, clk clock.Clock, ls *leases.Service) *Service {
 
 // Result is what a pass did. More says that it stopped at the bound of
 // assignments with Runs left to try, so another pass should follow at once.
+// Problems are what went wrong with one Run or one lease without stopping the
+// pass, each naming its subject: the caller logs them.
 type Result struct {
 	Expired  int
 	Assigned int
 	More     bool
+	Problems []error
+}
+
+// errUnreadableSpec marks a Run whose stored spec cannot be read. It is a
+// problem of that Run alone: it waits, with its reason, and the queue goes on.
+var errUnreadableSpec = errors.New("unreadable spec")
+
+func placementOf(run store.Run) (runs.Placement, error) {
+	p, err := runs.PlacementOf(run.Spec)
+	if err != nil {
+		return p, fmt.Errorf("scheduler: run %s: %w: %w", run.ID, errUnreadableSpec, err)
+	}
+	return p, nil
 }
 
 // Pass expires the leases nobody answered and then walks the queue once, in
@@ -57,21 +73,28 @@ type Result struct {
 // remain without a Worker get their queued_reason in one batch at the end.
 func (s *Service) Pass(ctx context.Context) (Result, error) {
 	var res Result
-	var err error
-	if res.Expired, err = s.leases.SweepExpired(ctx); err != nil {
-		return res, err
+	expired, err := s.leases.SweepExpired(ctx)
+	res.Expired = expired
+	if err != nil {
+		res.Problems = append(res.Problems, err) // one lease failing must not stop the rest of the pass
 	}
-	candidates, waiting, err := s.plan(ctx)
+	candidates, waiting, problems, err := s.plan(ctx)
 	if err != nil {
 		return res, err
 	}
+	res.Problems = append(res.Problems, problems...)
 	for _, run := range candidates {
 		if res.Assigned >= MaxAssignmentsPerPass {
 			res.More = true
 			break
 		}
 		outcome, err := s.assign(ctx, run)
-		if err != nil {
+		switch {
+		case errors.Is(err, errUnreadableSpec):
+			res.Problems = append(res.Problems, err)
+			waiting = append(waiting, run)
+			continue
+		case err != nil:
 			return res, fmt.Errorf("scheduler: assigning %s: %w", run.ID, err)
 		}
 		switch outcome {
@@ -87,11 +110,12 @@ func (s *Service) Pass(ctx context.Context) (Result, error) {
 // plan reads the queue and the Workers once and splits the queue into the Runs
 // that some Worker could take now and those that none could. It subtracts
 // nothing as it goes: it only avoids a transaction for Runs that cannot be placed.
-func (s *Service) plan(ctx context.Context) (candidates, waiting []store.Run, err error) {
+// A Run whose spec cannot be read is one that none could take, and a problem.
+func (s *Service) plan(ctx context.Context) (candidates, waiting []store.Run, problems []error, err error) {
 	var (
-		queue      []store.Run
-		workers    []store.Worker
-		rejections []store.Rejection
+		queue   []store.Run
+		workers []store.Worker
+		misses  []store.Miss
 	)
 	now := s.clock.Now()
 	err = s.db.Read(ctx, func(q store.Querier) (err error) {
@@ -101,24 +125,26 @@ func (s *Service) plan(ctx context.Context) (candidates, waiting []store.Run, er
 		if workers, err = store.Workers(ctx, q, false); err != nil {
 			return err
 		}
-		rejections, err = store.RejectionsSince(ctx, q, now.Add(-domain.LeaseRejectBackoff))
+		misses, err = store.MissesSince(ctx, q, now.Add(-domain.LeaseRejectBackoff))
 		return err
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for _, run := range queue {
-		placement, err := runs.PlacementOf(run.Spec)
+		placement, err := placementOf(run)
 		if err != nil {
-			return nil, nil, fmt.Errorf("scheduler: %s: %w", run.ID, err)
+			problems = append(problems, err)
+			waiting = append(waiting, run)
+			continue
 		}
-		if Decide(requestOf(placement), snapshot(workers, rejections, run.ID, nil), now).Chosen != nil {
+		if Decide(placement, snapshot(workers, misses, run.ID, nil), now).Chosen != nil {
 			candidates = append(candidates, run)
 		} else {
 			waiting = append(waiting, run)
 		}
 	}
-	return candidates, waiting, nil
+	return candidates, waiting, problems, nil
 }
 
 type outcome int
@@ -128,6 +154,25 @@ const (
 	waits                   // no Worker takes the Run now
 	moved                   // the Run is no longer in the queue
 )
+
+// decide ranks the Workers for the Run as q shows them: the Workers with their
+// reservations, who missed the Run lately and who already worked for its Project.
+// It returns the Workers it read, so that the chosen one is among them.
+func decide(ctx context.Context, q store.Querier, run store.Run, project domain.ID, placement runs.Placement, now time.Time) (Decision, []store.Worker, error) {
+	workers, err := store.Workers(ctx, q, false)
+	if err != nil {
+		return Decision{}, nil, err
+	}
+	misses, err := store.MissesSince(ctx, q, now.Add(-domain.LeaseRejectBackoff))
+	if err != nil {
+		return Decision{}, nil, err
+	}
+	known, err := store.ProjectWorkers(ctx, q, project)
+	if err != nil {
+		return Decision{}, nil, err
+	}
+	return Decide(placement, snapshot(workers, misses, run.ID, known), now), workers, nil
+}
 
 // assign decides and, if a Worker is chosen, creates the lease, in one
 // transaction that reads the Run, the Workers, their reservations and the
@@ -148,33 +193,23 @@ func (s *Service) assign(ctx context.Context, queued store.Run) (outcome, error)
 		if err != nil {
 			return err
 		}
-		placement, err := runs.PlacementOf(run.Spec)
+		placement, err := placementOf(run)
 		if err != nil {
 			return err
 		}
-		workers, err := store.Workers(ctx, tx, false)
+		decision, workers, err := decide(ctx, tx, run, task.ProjectID, placement, now)
 		if err != nil {
 			return err
 		}
-		rejections, err := store.RejectionsSince(ctx, tx, now.Add(-domain.LeaseRejectBackoff))
-		if err != nil {
-			return err
-		}
-		known, err := store.ProjectWorkers(ctx, tx, task.ProjectID)
-		if err != nil {
-			return err
-		}
-		decision := Decide(requestOf(placement), snapshot(workers, rejections, run.ID, known), now)
 		if decision.Chosen == nil {
 			result = waits
 			return nil
 		}
-		chosen, err := store.WorkerByID(ctx, tx, decision.Chosen.ID)
-		if err != nil {
-			return err
+		i := slices.IndexFunc(workers, func(w store.Worker) bool { return w.ID == decision.Chosen.ID })
+		if i < 0 {
+			return fmt.Errorf("scheduler: chosen worker %s is not among the ones read", decision.Chosen.ID)
 		}
-		reserve := requestOf(placement).Resources
-		if _, err := s.leases.CreateIn(ctx, tx, mutation.Act{Actor: systemActor, Now: now}, run, task, chosen, reserve); err != nil {
+		if _, err := s.leases.CreateIn(ctx, tx, mutation.Act{Actor: systemActor, Now: now}, run, task, workers[i], placement.Resources); err != nil {
 			return err
 		}
 		result = assigned
@@ -219,6 +254,9 @@ func (s *Service) Run(ctx context.Context, tick time.Duration, log *slog.Logger)
 		if err != nil && ctx.Err() == nil {
 			log.ErrorContext(ctx, "scheduler pass failed", "err", err)
 		}
+		for _, problem := range res.Problems {
+			log.ErrorContext(ctx, "scheduler problem", "err", problem)
+		}
 		log.DebugContext(ctx, "scheduler pass", "expired", res.Expired, "assigned", res.Assigned, "more", res.More)
 		if err == nil && res.More {
 			continue
@@ -231,19 +269,11 @@ func (s *Service) Run(ctx context.Context, tick time.Duration, log *slog.Logger)
 	}
 }
 
-func requestOf(p runs.Placement) Request {
-	return Request{
-		Harness: p.Harness, Capabilities: p.Capabilities,
-		Resources: v1.Capacity{CPU: p.Resources.CPU, MemoryMB: p.Resources.MemoryMB},
-		Prefer:    p.Prefer, Avoid: p.Avoid, Require: p.Require,
-	}
-}
-
-// snapshot is the Workers as the filters and the score read them. rejections
+// snapshot is the Workers as the filters and the score read them. misses
 // are those of any Run; only the ones of this Run count. known is the set of
 // Workers that already accepted a Run of the Run's Project, nil when it is
 // not needed.
-func snapshot(workers []store.Worker, rejections []store.Rejection, run domain.ID, known map[domain.ID]bool) []Worker {
+func snapshot(workers []store.Worker, misses []store.Miss, run domain.ID, known map[domain.ID]bool) []Worker {
 	out := make([]Worker, 0, len(workers))
 	for _, w := range workers {
 		c := Worker{
@@ -251,10 +281,10 @@ func snapshot(workers []store.Worker, rejections []store.Rejection, run domain.I
 			Allocatable: w.Resources.Allocatable, Reserved: w.Reserved, Reservations: w.Reservations,
 			MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, KnowsProject: known[w.ID],
 		}
-		for _, r := range rejections {
-			if r.RunID == run && r.WorkerID == w.ID {
-				at := r.At
-				c.RejectedAt = &at
+		for _, m := range misses {
+			if m.RunID == run && m.WorkerID == w.ID {
+				at := m.At
+				c.MissedAt = &at
 			}
 		}
 		out = append(out, c)

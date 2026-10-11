@@ -112,28 +112,30 @@ func PendingLeasesDue(ctx context.Context, q Querier, now time.Time) ([]Lease, e
 		string(domain.LeasePending), now.UnixNano())
 }
 
-// Rejection is when a Worker last rejected a lease of a Run.
-type Rejection struct {
+// Miss is when a Worker last failed to take a Run it was offered: it rejected
+// the lease or let it expire unanswered.
+type Miss struct {
 	RunID    domain.ID
 	WorkerID domain.ID
 	At       time.Time
 }
 
-// RejectionsSince lists, per Run and Worker, the latest rejection closed after since.
-func RejectionsSince(ctx context.Context, q Querier, since time.Time) ([]Rejection, error) {
-	return collect(ctx, q, func(row rowScanner) (Rejection, error) {
+// MissesSince lists, per Run and Worker, the latest miss closed after since.
+func MissesSince(ctx context.Context, q Querier, since time.Time) ([]Miss, error) {
+	return collect(ctx, q, func(row rowScanner) (Miss, error) {
 		var (
-			r        Rejection
+			m        Miss
 			run, wrk string
 			at       int64
 		)
 		if err := row.Scan(&run, &wrk, &at); err != nil {
-			return r, scanErr(err, "rejection")
+			return m, scanErr(err, "miss")
 		}
-		r.RunID, r.WorkerID, r.At = domain.ID(run), domain.ID(wrk), time.Unix(0, at).UTC()
-		return r, nil
-	}, `SELECT run_id, worker_id, MAX(closed_at) FROM leases WHERE state = ? AND closed_at > ? GROUP BY run_id, worker_id`,
-		string(domain.LeaseRejected), since.UnixNano())
+		m.RunID, m.WorkerID, m.At = domain.ID(run), domain.ID(wrk), time.Unix(0, at).UTC()
+		return m, nil
+	}, `SELECT run_id, worker_id, MAX(closed_at) FROM leases
+	    WHERE (state = ? OR (state = ? AND close_code = ?)) AND closed_at > ? GROUP BY run_id, worker_id`,
+		string(domain.LeaseRejected), string(domain.LeaseExpired), domain.LeaseCloseAcceptTimeout, since.UnixNano())
 }
 
 // ProjectWorkers lists the Workers that accepted a lease of a Run of the Project.
@@ -164,24 +166,6 @@ type Reservation struct {
 	ReleaseReason string
 }
 
-const reservationColumns = `lease_id, run_id, worker_id, cpu, memory_mb, disk_mb, created_at, released_at, COALESCE(release_reason, '')`
-
-func scanReservation(row rowScanner) (Reservation, error) {
-	var (
-		r                  Reservation
-		lease, run, worker string
-		created            int64
-		released           sql.NullInt64
-	)
-	if err := row.Scan(&lease, &run, &worker, &r.Amount.CPU, &r.Amount.MemoryMB, &r.Amount.DiskMB,
-		&created, &released, &r.ReleaseReason); err != nil {
-		return Reservation{}, scanErr(err, "reservation")
-	}
-	r.LeaseID, r.RunID, r.WorkerID = domain.ID(lease), domain.ID(run), domain.ID(worker)
-	r.CreatedAt, r.ReleasedAt = time.Unix(0, created).UTC(), timePtr(released)
-	return r, nil
-}
-
 // InsertReservation opens the reservation of a lease.
 func (t *Tx) InsertReservation(ctx context.Context, r Reservation) error {
 	_, err := t.Exec(ctx,
@@ -200,9 +184,4 @@ func (t *Tx) ReleaseReservation(ctx context.Context, lease domain.ID, reason str
 		`UPDATE reservations SET released_at = ?, release_reason = ? WHERE lease_id = ? AND released_at IS NULL`,
 		at.UnixNano(), reason, string(lease))
 	return changedOne(res, err, "releasing reservation")
-}
-
-// ReservationByLease returns ErrNotFound for a lease without one.
-func ReservationByLease(ctx context.Context, q Querier, lease domain.ID) (Reservation, error) {
-	return scanReservation(q.QueryRow(ctx, `SELECT `+reservationColumns+` FROM reservations WHERE lease_id = ?`, string(lease)))
 }

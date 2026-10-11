@@ -167,11 +167,11 @@ func (s runSpec) encode() (raw []byte, digest string, err error) {
 }
 
 // Placement is what the scheduler reads of a frozen spec: where the Run may
-// go and what it reserves there.
+// go and what it reserves there. Disk is 0 until Tasks can ask for it.
 type Placement struct {
 	Harness      string
 	Capabilities []string
-	Resources    v1.Resources
+	Resources    v1.Capacity
 	Prefer       []string // in order of preference
 	Avoid        []string
 	Require      []string
@@ -189,7 +189,7 @@ func PlacementOf(spec []byte) (Placement, error) {
 	r := stored.Requirements
 	return Placement{
 		Harness: r.Harness, Capabilities: r.Capabilities,
-		Resources: v1.Resources{CPU: r.Resources.CPU, MemoryMB: r.Resources.MemoryMB},
+		Resources: v1.Capacity{CPU: r.Resources.CPU, MemoryMB: r.Resources.MemoryMB},
 		Prefer:    r.Workers.Prefer, Avoid: r.Workers.Avoid, Require: r.Workers.Require,
 	}, nil
 }

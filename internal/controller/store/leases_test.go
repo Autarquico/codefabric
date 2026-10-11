@@ -346,8 +346,22 @@ func TestCommands_AreDeliveredUntilAcknowledgedOrCancelled(t *testing.T) {
 	f.tx(func(tx *Tx) error { return tx.AckAssign(ctx, leases[1].ID, epoch0) }) // both marks coexist
 	equal(pending(0), 1, 3, 4)
 
-	f.tx(func(tx *Tx) error { return tx.AckCommandsThrough(ctx, f.alpha.ID, 3, epoch0.Add(time.Second)) })
-	f.tx(func(tx *Tx) error { return tx.AckCommandsThrough(ctx, f.alpha.ID, 3, epoch0.Add(time.Hour)) }) // idempotent
+	ack := func(upTo uint64, at time.Time) (through uint64) {
+		f.tx(func(tx *Tx) (err error) {
+			through, err = tx.AckCommandsThrough(ctx, f.alpha.ID, upTo, at)
+			return err
+		})
+		return through
+	}
+	if got := ack(3, epoch0.Add(time.Second)); got != 3 {
+		t.Errorf("ack through 3 answered %d", got)
+	}
+	if got := ack(3, epoch0.Add(time.Hour)); got != 3 { // idempotent
+		t.Errorf("repeated ack answered %d", got)
+	}
+	if got := ack(1, epoch0.Add(time.Hour)); got != 3 { // a lower one later does not lower the watermark
+		t.Errorf("a lower ack answered %d", got)
+	}
 	equal(pending(0), 4)
 
 	cmd, err := commandOf(f, leases[0].ID)
@@ -360,13 +374,10 @@ func TestCommands_AreDeliveredUntilAcknowledgedOrCancelled(t *testing.T) {
 	}
 }
 
+// commandOf is the assign command of a lease.
 func commandOf(f *leaseFixture, lease domain.ID) (WorkerCommand, error) {
-	var c WorkerCommand
-	err := f.db.Read(f.t.Context(), func(q Querier) (err error) {
-		c, err = CommandOfLease(f.t.Context(), q, lease)
-		return err
-	})
-	return c, err
+	return scanCommand(f.db.Reader().QueryRowContext(f.t.Context(),
+		`SELECT `+commandColumns+` FROM worker_commands WHERE lease_id = ? AND type = 'assign'`, string(lease)))
 }
 
 func TestCommands_AckAndCancelOfALeaseWithoutAssignAreErrors(t *testing.T) {
@@ -383,33 +394,63 @@ func TestCommands_AckAndCancelOfALeaseWithoutAssignAreErrors(t *testing.T) {
 	}
 }
 
-func TestRejectionsSince_KeepsTheLatestPerRunAndWorker(t *testing.T) {
+func TestMissesSince_CountRejectionsAndTimeoutsAndKeepTheLatestPerRunAndWorker(t *testing.T) {
 	f := newLeaseFixture(t)
 	ctx := t.Context()
-	run := f.queuedRun(1)
-	first := f.assign(run, f.alpha, v1.Capacity{})
+	run, other := f.queuedRun(1), f.queuedRun(2)
+	rejected := f.assign(run, f.alpha, v1.Capacity{})
 	f.tx(func(tx *Tx) error {
-		return tx.CloseLease(ctx, first.ID, domain.LeaseRejected, string(domain.CodeWorkerCapacity), "full", epoch0.Add(5*time.Second))
+		if err := tx.CloseLease(ctx, rejected.ID, domain.LeaseRejected, string(domain.CodeWorkerCapacity), "full", epoch0.Add(5*time.Second)); err != nil {
+			return err
+		}
+		return tx.ReleaseReservation(ctx, rejected.ID, "lease_rejected", epoch0)
 	})
 	f.tx(func(tx *Tx) error { return tx.ClearRunLease(ctx, f.run(run.ID)) })
+	timedOut := f.assign(other, f.beta, v1.Capacity{})
+	f.tx(func(tx *Tx) error {
+		if err := tx.CloseLease(ctx, timedOut.ID, domain.LeaseExpired, domain.LeaseCloseAcceptTimeout, "", epoch0.Add(7*time.Second)); err != nil {
+			return err
+		}
+		return tx.ReleaseReservation(ctx, timedOut.ID, "lease_expired", epoch0)
+	})
+	f.tx(func(tx *Tx) error { return tx.ClearRunLease(ctx, f.run(other.ID)) })
+	// A lease that expired because its Run ended is no Worker's fault.
+	ended := f.queuedRun(3)
+	endedLease := f.assign(ended, f.alpha, v1.Capacity{})
+	f.tx(func(tx *Tx) error {
+		if err := tx.CloseLease(ctx, endedLease.ID, domain.LeaseExpired, domain.LeaseCloseRunEnded, "", epoch0.Add(8*time.Second)); err != nil {
+			return err
+		}
+		return tx.ReleaseReservation(ctx, endedLease.ID, "run_ended", epoch0)
+	})
 
-	var got []Rejection
+	var got []Miss
 	read := func(since time.Time) {
 		got = nil
 		if err := f.db.Read(ctx, func(q Querier) (err error) {
-			got, err = RejectionsSince(ctx, q, since)
+			got, err = MissesSince(ctx, q, since)
 			return err
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	read(epoch0)
-	if len(got) != 1 || got[0].RunID != run.ID || got[0].WorkerID != f.alpha.ID || !got[0].At.Equal(epoch0.Add(5*time.Second)) {
-		t.Errorf("rejections = %+v", got)
+	if len(got) != 2 {
+		t.Fatalf("misses = %+v, want the rejection and the timeout", got)
 	}
-	read(epoch0.Add(5 * time.Second))
+	byRun := map[domain.ID]Miss{}
+	for _, m := range got {
+		byRun[m.RunID] = m
+	}
+	if m := byRun[run.ID]; m.WorkerID != f.alpha.ID || !m.At.Equal(epoch0.Add(5*time.Second)) {
+		t.Errorf("rejection = %+v", m)
+	}
+	if m := byRun[other.ID]; m.WorkerID != f.beta.ID || !m.At.Equal(epoch0.Add(7*time.Second)) {
+		t.Errorf("timeout = %+v", m)
+	}
+	read(epoch0.Add(7 * time.Second))
 	if len(got) != 0 {
-		t.Errorf("a rejection at the cut-off counts: %+v", got)
+		t.Errorf("a miss at the cut-off counts: %+v", got)
 	}
 }
 

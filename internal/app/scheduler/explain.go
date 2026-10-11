@@ -30,14 +30,14 @@ func (s *Service) Explain(ctx context.Context, ref string) (v1.RunExplanation, e
 		if err != nil {
 			return err
 		}
-		placement, err := runs.PlacementOf(run.Spec)
+		placement, err := placementOf(run)
 		if err != nil {
 			return err
 		}
 		now := s.clock.Now()
 		out = v1.RunExplanation{
 			RunID: string(run.ID), Short: domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(), State: run.State,
-			QueuedReason: run.QueuedReason, Requested: placement.Resources, EvaluatedAt: now, Workers: []v1.WorkerVerdict{},
+			QueuedReason: run.QueuedReason, Requested: v1.Resources{CPU: placement.Resources.CPU, MemoryMB: placement.Resources.MemoryMB}, EvaluatedAt: now, Workers: []v1.WorkerVerdict{},
 			Decision: v1.DecisionNotQueued,
 		}
 		switch {
@@ -70,19 +70,10 @@ func (s *Service) explainQueued(ctx context.Context, q store.Querier, run store.
 	if err != nil {
 		return err
 	}
-	workers, err := store.Workers(ctx, q, false)
+	decision, _, err := decide(ctx, q, run, task.ProjectID, placement, now)
 	if err != nil {
 		return err
 	}
-	rejections, err := store.RejectionsSince(ctx, q, now.Add(-domain.LeaseRejectBackoff))
-	if err != nil {
-		return err
-	}
-	known, err := store.ProjectWorkers(ctx, q, task.ProjectID)
-	if err != nil {
-		return err
-	}
-	decision := Decide(requestOf(placement), snapshot(workers, rejections, run.ID, known), now)
 	out.Decision = v1.DecisionNoWorker
 	if decision.Chosen != nil {
 		out.Decision, out.Chosen = v1.DecisionWouldAssign, decision.Chosen.Name

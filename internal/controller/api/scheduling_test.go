@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -166,16 +167,21 @@ func TestSchedulingRoutesAreScoped(t *testing.T) {
 	}
 }
 
+var conflictCodes = []domain.Code{
+	domain.CodeStaleLease, domain.CodeWorkerCapacity, domain.CodeNoEligibleWorker,
+	domain.CodeHarnessUnavailable, domain.CodeVersionIncompatible,
+}
+
 func TestSchedulerCodesTravelAs409(t *testing.T) {
 	tc := newControllerWithRoutes(t, time.Now(), func(s *api.Server) {
-		for _, code := range []domain.Code{domain.CodeStaleLease, domain.CodeWorkerCapacity, domain.CodeNoEligibleWorker} {
+		for _, code := range conflictCodes {
 			s.AddRoute("GET /v1/test/"+string(code), []domain.Kind{domain.KindClient}, func(http.ResponseWriter, *http.Request) error {
 				return domain.NewError(code, "x", nil)
 			})
 		}
 	})
 	hc := tc.httpClientFor(tc.ownerDir)
-	for _, code := range []domain.Code{domain.CodeStaleLease, domain.CodeWorkerCapacity, domain.CodeNoEligibleWorker} {
+	for _, code := range conflictCodes {
 		if status, body, _ := tc.call(hc, http.MethodGet, "/v1/test/"+string(code), ""); status != http.StatusConflict || body.Code != code {
 			t.Errorf("%s: %d %s", code, status, body.Code)
 		}
@@ -207,5 +213,35 @@ func TestAssignmentsLongPollOverHTTP(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the long-poll did not return when its order was committed")
+	}
+}
+
+// A Worker that hangs up in the middle of a long-poll is not an error of the Controller.
+func TestAssignmentsHangUpIsNotAnError(t *testing.T) {
+	f := newSchedulingFixture(t)
+	_, err := f.beta.Assignments(t.Context(), 0, 0, 0) // beta has nothing: its poll waits
+	must(t, err)
+	ctx, hangUp := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.beta.Assignments(ctx, 0, 20*time.Second, 0)
+		done <- err
+	}()
+	time.Sleep(200 * time.Millisecond) // the request is on the server, waiting
+	hangUp()
+	if err := <-done; err == nil {
+		t.Fatal("the cancelled poll succeeded")
+	}
+	// The fixture polled once and the test once more: the third is the hung-up request, logged when its handler returns.
+	deadline := time.Now().Add(5 * time.Second)
+	for strings.Count(f.logs.String(), "path=/v1/worker/assignments") < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the hung-up request was never logged:\n%s", f.logs.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	logs := f.logs.String()
+	if strings.Contains(logs, "level=ERROR") || strings.Contains(logs, "status=500") || strings.Contains(logs, "request failed") {
+		t.Errorf("a hang-up was logged as a failure:\n%s", logs)
 	}
 }

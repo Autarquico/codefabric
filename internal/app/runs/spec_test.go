@@ -174,7 +174,7 @@ func TestPlacementOf_ReadsWhatTheSpecFroze(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Placement{
-		Harness: "claude", Capabilities: []string{"docker", "gpu"}, Resources: v1.Resources{CPU: 6, MemoryMB: 8192},
+		Harness: "claude", Capabilities: []string{"docker", "gpu"}, Resources: v1.Capacity{CPU: 6, MemoryMB: 8192},
 		Prefer: []string{"b", "a"}, Avoid: []string{"c"}, Require: []string{"a", "b"},
 	}
 	if jsonOf(got) != jsonOf(want) {
@@ -183,7 +183,7 @@ func TestPlacementOf_ReadsWhatTheSpecFroze(t *testing.T) {
 	if _, err := PlacementOf([]byte(`{`)); err == nil {
 		t.Error("a corrupt spec was read")
 	}
-	if p, err := PlacementOf([]byte(`{}`)); err != nil || p.Resources != (v1.Resources{}) {
+	if p, err := PlacementOf([]byte(`{}`)); err != nil || p.Resources != (v1.Capacity{}) {
 		t.Errorf("an empty spec = %+v (%v)", p, err)
 	}
 }

@@ -24,7 +24,7 @@ func TestPrintExplanation_QueuedRun(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"Run run-42 (queued) reason CF_NO_ELIGIBLE_WORKER · requests cpu 2, memory 4.0 GB",
-		"alpha", "rejected", "capabilities: missing capabilities: gpu",
+		"alpha", "ineligible", "capabilities: missing capabilities: gpu",
 		"beta", "chosen", "score 1100 (prefer 0, free 1000, load 0, affinity 100)",
 	} {
 		if !strings.Contains(got, want) {

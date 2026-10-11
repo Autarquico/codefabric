@@ -60,16 +60,26 @@ func TestScenario_SchedulerLeasesReservations_Expiracion(t *testing.T) {
 		t.Fatalf("pass before accept_by = %+v", res)
 	}
 
-	// At accept_by the pass expires it and, in the same pass, assigns the Run again with epoch + 1.
+	// At accept_by the pass expires it. The Worker that let it expire is left alone for the
+	// backoff, so the Run is not handed straight back to it...
 	e.clock.Advance(time.Nanosecond)
-	if res := e.pass(); res.Expired != 1 || res.Assigned != 1 {
+	if res := e.pass(); res.Expired != 1 || res.Assigned != 0 {
 		t.Fatalf("pass at accept_by = %+v", res)
+	}
+	e.clock.Advance(domain.LeaseRejectBackoff - time.Nanosecond)
+	if res := e.pass(); res.Assigned != 0 {
+		t.Fatalf("assigned within the backoff: %+v", res)
+	}
+	// ...and once it has passed, the Run is assigned again with epoch + 1.
+	e.clock.Advance(time.Nanosecond)
+	if res := e.pass(); res.Assigned != 1 {
+		t.Fatalf("pass after the backoff = %+v", res)
 	}
 	old := e.storedLease(first)
 	if old.State != domain.LeaseExpired || old.CloseCode != domain.LeaseCloseAcceptTimeout {
 		t.Errorf("first lease = %+v", old)
 	}
-	if r := ReservationOf(t, e, first); r.ReleasedAt == nil || r.ReleaseReason != "lease_expired" {
+	if r := e.reservation(first); r.ReleasedAt == nil || r.ReleaseReason != "lease_expired" {
 		t.Errorf("first reservation = %+v", r)
 	}
 	r := e.storedRun(run.ID)
@@ -89,17 +99,6 @@ func TestScenario_SchedulerLeasesReservations_Expiracion(t *testing.T) {
 	}
 }
 
-// ReservationOf reads the reservation of a lease.
-func ReservationOf(t *testing.T, e *env, lease domain.ID) store.Reservation {
-	t.Helper()
-	var r store.Reservation
-	must(t, e.db.Read(t.Context(), func(q store.Querier) (err error) {
-		r, err = store.ReservationByLease(t.Context(), q, lease)
-		return err
-	}))
-	return r
-}
-
 func TestScenario_SchedulerLeasesReservations_SinCapacidad(t *testing.T) {
 	e := newEnv(t)
 	alpha := e.joinWorker("alpha")
@@ -109,7 +108,7 @@ func TestScenario_SchedulerLeasesReservations_SinCapacidad(t *testing.T) {
 
 	_, err := e.reject(alpha, l, domain.CodeWorkerCapacity)
 	must(t, err)
-	if r := ReservationOf(t, e, l.ID); r.ReleasedAt == nil || r.ReleaseReason != "lease_rejected" {
+	if r := e.reservation(l.ID); r.ReleasedAt == nil || r.ReleaseReason != "lease_rejected" {
 		t.Errorf("reservation = %+v", r)
 	}
 	if r := e.storedRun(run.ID); r.State != domain.RunQueued || r.WorkerID != "" {
@@ -175,7 +174,7 @@ func TestScenario_SchedulerLeasesReservations_Drain_Pass(t *testing.T) {
 	if st.State != domain.WorkerDraining || st.Reservations != 1 {
 		t.Errorf("Worker is %s with %d reservations: drain keeps the ones it has", st.State, st.Reservations)
 	}
-	if r := ReservationOf(t, e, l.ID); r.ReleasedAt != nil {
+	if r := e.reservation(l.ID); r.ReleasedAt != nil {
 		t.Errorf("drain released a reservation: %+v", r)
 	}
 
@@ -229,7 +228,7 @@ func TestPass_NeverOvercommitsAWorker(t *testing.T) {
 			t.Errorf("assigned: %q %q %q: the second big Run does not fit but the small one behind it does (backfill)",
 				e.workerOfRun(big1.ID), e.workerOfRun(big2.ID), e.workerOfRun(small.ID))
 		}
-		r := ReservationOf(t, e, e.storedRun(big1.ID).LeaseID)
+		r := e.reservation(e.storedRun(big1.ID).LeaseID)
 		if r.Amount != (v1.Capacity{CPU: 10, MemoryMB: 8192}) {
 			t.Errorf("reservation = %+v", r.Amount)
 		}
@@ -451,7 +450,7 @@ func TestExplain(t *testing.T) {
 		for _, v := range got.Workers {
 			byName[v.Name] = v
 		}
-		if v := byName["alpha"]; v.Eligible || v.Failed[0].Filter != scheduler.FilterRecentReject {
+		if v := byName["alpha"]; v.Eligible || v.Failed[0].Filter != scheduler.FilterRecentMiss {
 			t.Errorf("alpha = %+v", v)
 		}
 		if v := byName["beta"]; v.Eligible || v.Failed[0].Filter != scheduler.FilterCapabilities || !strings.Contains(v.Failed[0].Message, "docker") {
@@ -584,12 +583,13 @@ func TestLoop(t *testing.T) {
 		eventually(t, "the Run to be assigned", func() bool { return e.storedRun(run.ID).LeaseID != "" })
 	})
 
-	t.Run("it expires a lease on the tick and reassigns", func(t *testing.T) {
+	t.Run("it expires a lease on the tick and reassigns it to a Worker that answers", func(t *testing.T) {
 		e := newEnv(t)
 		e.joinWorker("alpha")
 		run := e.queuedRun("x")
 		e.pass()
 		first := e.storedRun(run.ID).LeaseID
+		e.joinWorker("beta")
 		passes, _ := e.startLoop(2 * time.Second)
 		e.blockUntilPolling()
 		eventually(t, "the first pass", func() bool { return passes.n.Load() >= 1 })
@@ -599,8 +599,79 @@ func TestLoop(t *testing.T) {
 			id := e.storedRun(run.ID).LeaseID
 			return id != "" && id != first
 		})
-		if r := e.storedRun(run.ID); r.LeaseEpoch != 2 {
-			t.Errorf("epoch = %d", r.LeaseEpoch)
+		if r := e.storedRun(run.ID); r.LeaseEpoch != 2 || e.workerOfRun(run.ID) != "beta" {
+			t.Errorf("epoch = %d with %q", r.LeaseEpoch, e.workerOfRun(run.ID))
 		}
 	})
+}
+
+// A Worker that is online but never answers does not hold a Run while another Worker could take it.
+func TestPass_AWorkerThatLetALeaseExpireIsLeftAloneForTheBackoff(t *testing.T) {
+	e := newEnv(t)
+	e.joinWorker("alpha")
+	run := e.queuedRun("x")
+	e.pass()
+	e.clock.Advance(acceptBy)
+	e.joinWorker("beta")
+
+	if res := e.pass(); res.Expired != 1 || res.Assigned != 1 {
+		t.Fatalf("pass = %+v", res)
+	}
+	if got := e.workerOfRun(run.ID); got != "beta" {
+		t.Errorf("the Run went back to %q", got)
+	}
+	got, err := e.app.Scheduler.Explain(t.Context(), run.ID)
+	must(t, err)
+	if got.Lease == nil || got.Chosen != "beta" {
+		t.Errorf("explanation = %+v", got)
+	}
+}
+
+// A Run whose spec cannot be read is its own problem: the queue behind it is served.
+func TestPass_AnUnreadableSpecIsOneRunsProblem(t *testing.T) {
+	e := newEnv(t)
+	e.joinWorker("alpha")
+	broken := e.queuedRun("broken")
+	good := e.queuedRun("good")
+	must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(t.Context(), `UPDATE runs SET spec = '{' WHERE id = ?`, broken.ID)
+		return err
+	}))
+
+	res := e.pass()
+	if res.Assigned != 1 || len(res.Problems) != 1 || !strings.Contains(res.Problems[0].Error(), broken.ID) {
+		t.Fatalf("pass = %+v", res)
+	}
+	if e.workerOfRun(good.ID) != "alpha" {
+		t.Error("the Run behind the broken one was not assigned")
+	}
+	if got := e.storedRun(broken.ID).QueuedReason; got != string(domain.CodeNoEligibleWorker) {
+		t.Errorf("queued_reason of the broken Run = %q", got)
+	}
+}
+
+// A lease that fails to expire does not stop the expiry of the others.
+func TestSweepExpired_ALeaseThatFailsDoesNotStopTheOthers(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	first, second := e.queuedRun("a"), e.queuedRun("b")
+	stuck := e.offer(first.ID, w)
+	e.clock.Advance(time.Second)
+	fine := e.offer(second.ID, w)
+	e.refuseEventsOfRun(domain.EventLeaseExpired, first.ID)
+	e.clock.Advance(acceptBy)
+
+	n, err := e.app.Leases.SweepExpired(t.Context())
+	if n != 1 || err == nil || !strings.Contains(err.Error(), string(stuck.ID)) {
+		t.Fatalf("expired %d (%v), want one expired and the error of the stuck lease", n, err)
+	}
+	if e.storedLease(fine.ID).State != domain.LeaseExpired || e.storedLease(stuck.ID).State != domain.LeasePending {
+		t.Errorf("leases: %s and %s", e.storedLease(fine.ID).State, e.storedLease(stuck.ID).State)
+	}
+
+	// Through a pass it is a problem to log, not a failed pass.
+	res, err := e.app.Scheduler.Pass(t.Context())
+	if err != nil || len(res.Problems) != 1 {
+		t.Errorf("pass = %+v (%v)", res, err)
+	}
 }

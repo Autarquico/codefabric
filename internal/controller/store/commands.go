@@ -81,23 +81,24 @@ func UndeliveredCommands(ctx context.Context, q Querier, worker domain.ID, after
 		string(worker), after, limit)
 }
 
-// CommandOfLease returns the assign command of a lease, or ErrNotFound.
-func CommandOfLease(ctx context.Context, q Querier, lease domain.ID) (WorkerCommand, error) {
-	return scanCommand(q.QueryRow(ctx,
-		`SELECT `+commandColumns+` FROM worker_commands WHERE lease_id = ? AND type = ?`,
-		string(lease), string(domain.CommandAssign)))
-}
-
 // AckCommandsThrough marks as acknowledged every command of the Worker up to
-// and including seq that is not yet. It is cumulative and idempotent.
-func (t *Tx) AckCommandsThrough(ctx context.Context, worker domain.ID, seq uint64, at time.Time) error {
+// and including seq that is not yet, and returns the highest Seq the Worker
+// has acknowledged cumulatively so far: an older, lower ACK arriving later
+// does not lower it. It is cumulative and idempotent.
+func (t *Tx) AckCommandsThrough(ctx context.Context, worker domain.ID, seq uint64, at time.Time) (uint64, error) {
 	_, err := t.Exec(ctx,
 		`UPDATE worker_commands SET acked_at = ? WHERE worker_id = ? AND seq <= ? AND acked_at IS NULL`,
 		at.UnixNano(), string(worker), seq)
 	if err != nil {
-		return fmt.Errorf("store: acknowledging commands: %w", err)
+		return 0, fmt.Errorf("store: acknowledging commands: %w", err)
 	}
-	return nil
+	var through uint64
+	err = t.QueryRow(ctx,
+		`UPDATE workers SET acked_seq = MAX(acked_seq, ?) WHERE id = ? RETURNING acked_seq`, seq, string(worker)).Scan(&through)
+	if err != nil {
+		return 0, fmt.Errorf("store: recording the acknowledged seq: %w", scanErr(err, "worker"))
+	}
+	return through, nil
 }
 
 // AckAssign acknowledges the assign command of a lease, which the Worker

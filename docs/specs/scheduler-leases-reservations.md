@@ -80,9 +80,9 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 Detalladas en el Apéndice B5 de `docs/codefabric-spec.md`:
 
-- La migración `0103_leases.sql` añade `leases`, `reservations` y `worker_commands` (solo el tipo `assign`), `workers.last_command_seq` e `runs_queued`.
+- La migración `0103_leases.sql` añade `leases`, `reservations` y `worker_commands` (solo el tipo `assign`), `workers.last_command_seq`, `workers.acked_seq` y `runs_queued`.
 - `accept_by` es exclusivo; no hay estado `revoked` (una lease invalidada antes del accept queda `expired` con `close_code: run_ended`).
-- `queued_reason` es siempre `CF_NO_ELIGIBLE_WORKER`; `idle` no es elegible; tras un rechazo hay un backoff de 10 s (`domain.LeaseRejectBackoff`).
+- `queued_reason` es siempre `CF_NO_ELIGIBLE_WORKER`; `idle` no es elegible; tras un rechazo o una expiración sin respuesta hay un backoff de 10 s (`domain.LeaseRejectBackoff`).
 - Accept y reject comparten un helper: Worker por identidad, lease propia, epoch, y solo entonces el estado.
 - Long-poll con cursor `after_seq` persistido, reentrega hasta el ACK, `limit` y tope de bytes; un solo plazo de 20 s con el reloj inyectable.
 - Cancelar o completar una Task expira la lease pendiente de su Run con su reserva; con la lease aceptada las conserva hasta la milestone del Worker.

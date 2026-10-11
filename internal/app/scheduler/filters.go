@@ -7,6 +7,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -24,7 +25,7 @@ const (
 	FilterResources    = "resources"
 	FilterConcurrency  = "concurrency"
 	FilterCapacity     = "capacity"
-	FilterRecentReject = "recent_reject"
+	FilterRecentMiss   = "recent_miss"
 )
 
 // Failure is a filter that a Worker does not pass.
@@ -37,7 +38,7 @@ type Failure struct {
 
 type filter struct {
 	name  string
-	check func(Request, Worker, time.Time) *Failure
+	check func(runs.Placement, Worker, time.Time) *Failure
 }
 
 var filters = []filter{
@@ -50,10 +51,10 @@ var filters = []filter{
 	{FilterResources, checkResources},
 	{FilterConcurrency, checkConcurrency},
 	{FilterCapacity, checkCapacity},
-	{FilterRecentReject, checkRecentReject},
+	{FilterRecentMiss, checkRecentMiss},
 }
 
-func failures(req Request, w Worker, now time.Time) []Failure {
+func failures(req runs.Placement, w Worker, now time.Time) []Failure {
 	var failed []Failure
 	for _, f := range filters {
 		if failure := f.check(req, w, now); failure != nil {
@@ -64,7 +65,7 @@ func failures(req Request, w Worker, now time.Time) []Failure {
 	return failed
 }
 
-func checkState(_ Request, w Worker, _ time.Time) *Failure {
+func checkState(_ runs.Placement, w Worker, _ time.Time) *Failure {
 	if w.State == domain.WorkerOnline {
 		return nil
 	}
@@ -81,7 +82,7 @@ func checkState(_ Request, w Worker, _ time.Time) *Failure {
 // checkAvailability: a manual Worker takes only the Runs that name it, and
 // idle needs a signal of inactivity that does not exist yet, so no Run can
 // know the Worker is idle.
-func checkAvailability(req Request, w Worker, _ time.Time) *Failure {
+func checkAvailability(req runs.Placement, w Worker, _ time.Time) *Failure {
 	switch w.Availability {
 	case domain.AvailabilityManual:
 		if slices.Contains(req.Require, w.Name) {
@@ -100,7 +101,7 @@ func checkAvailability(req Request, w Worker, _ time.Time) *Failure {
 	return nil
 }
 
-func checkRequire(req Request, w Worker, _ time.Time) *Failure {
+func checkRequire(req runs.Placement, w Worker, _ time.Time) *Failure {
 	if len(req.Require) == 0 || slices.Contains(req.Require, w.Name) {
 		return nil
 	}
@@ -110,14 +111,14 @@ func checkRequire(req Request, w Worker, _ time.Time) *Failure {
 	}
 }
 
-func checkAvoid(req Request, w Worker, _ time.Time) *Failure {
+func checkAvoid(req runs.Placement, w Worker, _ time.Time) *Failure {
 	if !slices.Contains(req.Avoid, w.Name) {
 		return nil
 	}
 	return &Failure{Code: domain.CodeNoEligibleWorker, Message: "the Run avoids this Worker"}
 }
 
-func checkCapabilities(req Request, w Worker, _ time.Time) *Failure {
+func checkCapabilities(req runs.Placement, w Worker, _ time.Time) *Failure {
 	var missing []string
 	for _, c := range req.Capabilities {
 		if !slices.Contains(w.Capabilities, c) {
@@ -135,7 +136,7 @@ func checkCapabilities(req Request, w Worker, _ time.Time) *Failure {
 
 // checkHarness looks for the capability harness:<id> until Workers report
 // their installed harnesses (§10.1). A Run that names no harness passes.
-func checkHarness(req Request, w Worker, _ time.Time) *Failure {
+func checkHarness(req runs.Placement, w Worker, _ time.Time) *Failure {
 	if req.Harness == "" || slices.Contains(w.Capabilities, HarnessCapability(req.Harness)) {
 		return nil
 	}
@@ -149,7 +150,7 @@ func checkHarness(req Request, w Worker, _ time.Time) *Failure {
 func HarnessCapability(harness string) string { return "harness:" + harness }
 
 // checkResources fails a Worker that could never take the Run, however empty.
-func checkResources(req Request, w Worker, _ time.Time) *Failure {
+func checkResources(req runs.Placement, w Worker, _ time.Time) *Failure {
 	if over := exceeded(req.Resources, w.Allocatable); len(over) > 0 {
 		return &Failure{
 			Code: domain.CodeNoEligibleWorker, Message: "the Run asks for more than the Worker contributes: " + strings.Join(over, ", "),
@@ -161,7 +162,7 @@ func checkResources(req Request, w Worker, _ time.Time) *Failure {
 
 // checkConcurrency counts open reservations, not active Runs: a reservation
 // outlives the Run's process until it is stopped and sealed (§10.5).
-func checkConcurrency(_ Request, w Worker, _ time.Time) *Failure {
+func checkConcurrency(_ runs.Placement, w Worker, _ time.Time) *Failure {
 	if w.Reservations < w.MaxConcurrentRuns {
 		return nil
 	}
@@ -172,7 +173,7 @@ func checkConcurrency(_ Request, w Worker, _ time.Time) *Failure {
 	}
 }
 
-func checkCapacity(req Request, w Worker, _ time.Time) *Failure {
+func checkCapacity(req runs.Placement, w Worker, _ time.Time) *Failure {
 	taken := sum(w.Reserved, req.Resources)
 	if over := exceeded(taken, w.Allocatable); len(over) > 0 {
 		return &Failure{
@@ -183,14 +184,14 @@ func checkCapacity(req Request, w Worker, _ time.Time) *Failure {
 	return nil
 }
 
-func checkRecentReject(_ Request, w Worker, now time.Time) *Failure {
-	if w.RejectedAt == nil || now.Sub(*w.RejectedAt) >= domain.LeaseRejectBackoff {
+func checkRecentMiss(_ runs.Placement, w Worker, now time.Time) *Failure {
+	if w.MissedAt == nil || now.Sub(*w.MissedAt) >= domain.LeaseRejectBackoff {
 		return nil
 	}
 	return &Failure{
 		Code:    domain.CodeWorkerCapacity,
-		Message: fmt.Sprintf("worker rejected this Run %s ago; it is left alone for %s", now.Sub(*w.RejectedAt).Round(time.Second), domain.LeaseRejectBackoff),
-		Details: map[string]any{"rejected_at": w.RejectedAt.UTC().Format(time.RFC3339Nano)},
+		Message: fmt.Sprintf("worker did not take this Run %s ago (it rejected it or let it expire); it is left alone for %s", now.Sub(*w.MissedAt).Round(time.Second), domain.LeaseRejectBackoff),
+		Details: map[string]any{"missed_at": w.MissedAt.UTC().Format(time.RFC3339Nano)},
 	}
 }
 

@@ -10,23 +10,13 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-// Request is what a Run asks of a Worker: the part of its frozen spec that
-// the scheduler reads. Disk is 0 until Tasks can ask for it.
-type Request struct {
-	Harness      string
-	Capabilities []string
-	Resources    v1.Capacity
-	Prefer       []string // in order of preference
-	Avoid        []string
-	Require      []string
-}
-
 // Worker is a candidate as the scheduler sees it. Reserved and Reservations
-// are the open reservations (§10.5), never the real usage; RejectedAt is when
-// the Worker last rejected a lease of this Run; KnowsProject says that it
+// are the open reservations (§10.5), never the real usage; MissedAt is when
+// the Worker last rejected a lease of this Run or let one expire; KnowsProject says that it
 // already accepted a Run of the Run's Project (the affinity of §10.1).
 type Worker struct {
 	ID                domain.ID
@@ -38,7 +28,7 @@ type Worker struct {
 	Reserved          v1.Capacity
 	Reservations      int
 	MaxConcurrentRuns int
-	RejectedAt        *time.Time
+	MissedAt          *time.Time
 	KnowsProject      bool
 }
 
@@ -66,7 +56,7 @@ type Decision struct {
 // give the same Decision whatever the order of workers, because the highest
 // score wins and a tie goes to the lowest name (§10.6). Names are unique among
 // live Workers.
-func Decide(req Request, workers []Worker, now time.Time) Decision {
+func Decide(req runs.Placement, workers []Worker, now time.Time) Decision {
 	sorted := slices.SortedFunc(slices.Values(workers), func(a, b Worker) int { return cmp.Compare(a.Name, b.Name) })
 	d := Decision{Verdicts: make([]Verdict, len(sorted))}
 	for i, w := range sorted {

@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"testing"
 	"time"
@@ -197,4 +198,36 @@ func (e *env) workerOfRun(run string) string {
 		return err
 	}))
 	return w.Name
+}
+
+// reservation reads the reservation of a lease.
+func (e *env) reservation(lease domain.ID) store.Reservation {
+	e.t.Helper()
+	var (
+		r              store.Reservation
+		l, run, worker string
+		created        int64
+		released       sql.NullInt64
+	)
+	must(e.t, e.db.Reader().QueryRowContext(e.t.Context(),
+		`SELECT lease_id, run_id, worker_id, cpu, memory_mb, disk_mb, created_at, released_at, COALESCE(release_reason, '')
+		 FROM reservations WHERE lease_id = ?`, string(lease)).
+		Scan(&l, &run, &worker, &r.Amount.CPU, &r.Amount.MemoryMB, &r.Amount.DiskMB, &created, &released, &r.ReleaseReason))
+	if released.Valid {
+		at := time.Unix(0, released.Int64).UTC()
+		r.ReleasedAt = &at
+	}
+	r.LeaseID, r.RunID, r.WorkerID = domain.ID(l), domain.ID(run), domain.ID(worker)
+	return r
+}
+
+// refuseEventsOfRun refuses the events of the type that are about one Run.
+func (e *env) refuseEventsOfRun(eventType domain.EventType, run string) {
+	e.t.Helper()
+	must(e.t, e.db.WithTx(e.t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(e.t.Context(),
+			`CREATE TRIGGER refuse_run BEFORE INSERT ON events WHEN NEW.type = '`+string(eventType)+`' AND NEW.run_id = '`+run+`'
+			 BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+		return err
+	}))
 }
