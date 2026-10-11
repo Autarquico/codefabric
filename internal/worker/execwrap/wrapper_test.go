@@ -227,6 +227,16 @@ func TestWrapperKillsWhatIsLeftOfTheGroupAfterAnExit(t *testing.T) {
 	}
 }
 
+func TestTheGroupIsKilledEvenWhenTheExitCannotBeWritten(t *testing.T) {
+	// A directory where exit.json goes makes its write fail.
+	s := launch(t, execwrap.Launch{Argv: shell("mkdir " + execwrap.ExitFile + "; (trap '' TERM; sleep 300) & echo $! > child.pid; exit 0"), Grace: 300 * time.Millisecond}, true)
+	child := s.pidFile("child.pid")
+	waitDead(t, child)
+	if empty, err := procident.GroupEmpty(s.cmd.Process.Pid); err != nil || !empty {
+		t.Errorf("group empty = %v, %v", empty, err)
+	}
+}
+
 func TestScenario_WorkerExecutorTmux_StopConHijosRebeldes_Wrapper(t *testing.T) {
 	script := `trap '' TERM
 (trap '' TERM; sleep 300) &

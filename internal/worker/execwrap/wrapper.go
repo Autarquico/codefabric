@@ -315,12 +315,13 @@ func (w *wrapper) count() int {
 
 // endByKillingGroup writes the exit and then, as the last thing this process
 // does, kills the whole group, itself included. The exit is on disk before the
-// kill, so the daemon finds it and finds the wrapper gone.
+// kill, so the daemon finds it and finds the wrapper gone. The group is killed
+// even when the exit cannot be written: the daemon then settles a lost wrapper.
 func (w *wrapper) endByKillingGroup(log *os.File, exit Exit) error {
 	exit.ExitedAt = w.clock.Now()
 	_ = log.Sync()
 	if err := Write(w.o.RunDir, ExitFile, exit); err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "cf worker exec: writing the exit: %v; killing the group all the same\n", err)
 	}
 	w.killGroup()
 	return nil
