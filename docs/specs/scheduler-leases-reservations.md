@@ -2,7 +2,7 @@
 codename: codefabric
 title: Scheduler, leases y reservas
 type: task
-status: active
+status: shipped
 priority: P0
 size: L
 issue: 10
