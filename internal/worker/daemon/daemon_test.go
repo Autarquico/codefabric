@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
@@ -31,9 +32,11 @@ type controller struct {
 	paths config.Paths
 	owner *client.Client
 	stop  func()
+
+	mutate []func(*controllerdaemon.Options)
 }
 
-func newController(t *testing.T) *controller {
+func newController(t *testing.T, mutate ...func(*controllerdaemon.Options)) *controller {
 	t.Helper()
 	root := t.TempDir()
 	paths := config.Paths{ConfigDir: filepath.Join(root, "config"), DataDir: filepath.Join(root, "data")}
@@ -46,7 +49,7 @@ func newController(t *testing.T) *controller {
 	if _, err := controllerdaemon.Init(t.Context(), controllerdaemon.InitOptions{Paths: paths, Advertise: addr, Listen: addr, OwnerName: "owner"}); err != nil {
 		t.Fatal(err)
 	}
-	c := &controller{t: t, paths: paths}
+	c := &controller{t: t, paths: paths, mutate: mutate}
 	c.start()
 	t.Cleanup(c.stopIt)
 	if c.owner, err = client.Open(paths.CredentialsDir()); err != nil {
@@ -58,7 +61,11 @@ func newController(t *testing.T) *controller {
 func (c *controller) start() {
 	c.t.Helper()
 	ctx, cancel := context.WithCancel(c.t.Context())
-	ctrl, err := controllerdaemon.Start(ctx, controllerdaemon.Options{Paths: c.paths, Logger: slog.New(slog.DiscardHandler)})
+	opts := controllerdaemon.Options{Paths: c.paths, Logger: slog.New(slog.DiscardHandler)}
+	for _, m := range c.mutate {
+		m(&opts)
+	}
+	ctrl, err := controllerdaemon.Start(ctx, opts)
 	if err != nil {
 		cancel()
 		c.t.Fatalf("Start: %v", err)
@@ -125,13 +132,17 @@ func (r *running) stop() error {
 	return r.err
 }
 
-func run(t *testing.T, paths config.Paths, out *logs) *running {
+func run(t *testing.T, paths config.Paths, out *logs, rt ...cfruntime.Runtime) *running {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	r := &running{cancel: cancel, done: make(chan struct{})}
+	opts := daemon.Options{Paths: paths, Interval: interval, Logger: slog.New(slog.NewTextHandler(out, nil))}
+	if len(rt) > 0 {
+		opts.Runtime = rt[0]
+	}
 	go func() {
 		defer close(r.done)
-		r.err = daemon.Run(ctx, daemon.Options{Paths: paths, Interval: interval, Logger: slog.New(slog.NewTextHandler(out, nil))})
+		r.err = daemon.Run(ctx, opts)
 	}()
 	t.Cleanup(func() { _ = r.stop() })
 	return r

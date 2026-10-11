@@ -6,8 +6,28 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/buildinfo"
+	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
+
+// heartbeatOnce brings a joined Worker online with one heartbeat of its own,
+// without running its daemon.
+func heartbeatOnce(t *testing.T, box config.Paths) {
+	t.Helper()
+	c, err := client.Open(box.WorkerCredentialsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Heartbeat(t.Context(), v1.HeartbeatRequest{
+		Epoch: "01J00000000000000000000000", DaemonVersion: buildinfo.Get().Version, Hostname: "box", OS: "linux", Arch: "amd64",
+		Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 500000}, Health: v1.Health{Status: v1.HealthOK},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestScenario_SchedulerLeasesReservations_SinWorkerElegible(t *testing.T) {
 	host, _ := bringUpController(t)
@@ -78,8 +98,9 @@ func TestScenario_SchedulerLeasesReservations_RunAsignado(t *testing.T) {
 	invite := workerInvite(t, host)
 	box := machine(t)
 	ok[map[string]any](t, "worker", "join", invite, "--name", "alpha")
-	stop := startWorker(t, host, box, "alpha")
-	defer stop()
+	// Online, but with no daemon to answer: a daemon rejects a Run that names no
+	// harness (worker-executor-tmux), and this test is about the lease it leaves pending.
+	heartbeatOnce(t, box)
 
 	use(t, host)
 	newOrigin(t).clone(t)
