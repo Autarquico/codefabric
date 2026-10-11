@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -734,8 +735,8 @@ func TestAfterARebootNothingIsSignalledWhateverLivesInThatGroupNow(t *testing.T)
 	k := f.started("echo hi")
 	// The record is of another boot, and the group it names is alive: it is this
 	// test's own, standing for whatever got that pid after the reboot.
-	f.writeWrapper(k, execwrap.Wrapper{PID: os.Getpid(), PGID: syscall.Getpgrp(), Start: "another-boot|1", StartedAt: t0})
-	f.writeStarted(k, execwrap.Wrapper{PID: os.Getpid(), PGID: syscall.Getpgrp()}, t0)
+	f.writeWrapper(k, execwrap.Wrapper{PID: syscall.Getpgrp(), PGID: syscall.Getpgrp(), Start: "another-boot|1", StartedAt: t0})
+	f.writeStarted(k, execwrap.Wrapper{PID: syscall.Getpgrp(), PGID: syscall.Getpgrp()}, t0)
 	if !f.e.step(t.Context(), k) {
 		t.Fatalf("not settled: %s", f.run(k).Phase) // a signal to the group would have ended this test
 	}
@@ -747,8 +748,8 @@ func TestAfterARebootNothingIsSignalledWhateverLivesInThatGroupNow(t *testing.T)
 	// The same with an exit file that nobody read.
 	g := newFixture(t)
 	k = g.started("echo hi")
-	g.writeWrapper(k, execwrap.Wrapper{PID: os.Getpid(), PGID: syscall.Getpgrp(), Start: "another-boot|1", StartedAt: t0})
-	g.writeStarted(k, execwrap.Wrapper{PID: os.Getpid(), PGID: syscall.Getpgrp()}, t0)
+	g.writeWrapper(k, execwrap.Wrapper{PID: syscall.Getpgrp(), PGID: syscall.Getpgrp(), Start: "another-boot|1", StartedAt: t0})
+	g.writeStarted(k, execwrap.Wrapper{PID: syscall.Getpgrp(), PGID: syscall.Getpgrp()}, t0)
 	g.writeExit(k, execwrap.Exit{ExitCode: intp(3), ExitedAt: t0, Cause: execwrap.CauseExit})
 	if !g.e.step(t.Context(), k) {
 		t.Fatalf("not settled: %s", g.run(k).Phase)
@@ -762,8 +763,8 @@ func TestAReusedPidOfARecordThatDoesNotLeadItsGroupSaysNothing(t *testing.T) {
 	f := newFixture(t)
 	k := f.started("echo hi")
 	w := newWrapperProcess(t, "sleep 60")
-	odd := altered(w.w)
-	odd.PGID = odd.PID + 1 // it could not have led the group: the record is not to be trusted
+	odd := w.w // even the right process: a record whose pgid is not its pid says nothing of a group
+	odd.PGID = odd.PID + 1
 	f.writeWrapper(k, odd)
 	if f.e.step(t.Context(), k) || f.run(k).Phase != state.PhaseRunning || !w.alive() {
 		t.Errorf("phase %s", f.run(k).Phase)
@@ -892,6 +893,11 @@ func TestAStopDuringThePreparationOfARunAbortsItBeforeStart(t *testing.T) {
 	if r := f.run(k); r.Phase != state.PhaseAborted || f.rt.startCount() != 0 {
 		t.Errorf("phase %s, %d starts", r.Phase, f.rt.startCount())
 	}
+	f.e.mu.Lock()
+	defer f.e.mu.Unlock()
+	if len(f.e.locks) != 0 || len(f.e.memos) != 0 {
+		t.Errorf("%d locks and %d memos left for a Run that is over", len(f.e.locks), len(f.e.memos))
+	}
 	if got := kinds(f.reports(k)); !slices.Equal(got, []v1.RunReportKind{v1.ReportStopped}) {
 		t.Errorf("reports = %v", got)
 	}
@@ -988,21 +994,32 @@ func TestReportMessagesAreMadeToFitWhatTheControllerChecks(t *testing.T) {
 	}
 }
 
-func TestACrashBetweenTheControllersAcceptAndTheLocalRecordSurvivesAChangedMind(t *testing.T) {
+func TestACrashBetweenTheControllersAcceptAndTheLocalRecordIsNotRunOverTheCapacity(t *testing.T) {
 	f := newFixture(t)
-	k := f.assign(specJSON("echo hi", "command", "headless"))
-	// The Controller accepted (the daemon died before it wrote that down); the new
-	// daemon now has no room, so it tries to reject, and the lease is accepted already.
-	f.restart("01J0000000000000000000000E2")
-	f.e.SetLimits(Limits{MaxConcurrentRuns: 0, CPU: 16, MemoryMB: 65536})
+	f.e.SetLimits(Limits{MaxConcurrentRuns: 1, CPU: 16, MemoryMB: 65536})
+	first := f.accepted("echo one") // takes the only place
+	second := f.assign(specJSON("echo two", "command", "headless"))
+	// The Controller accepted the second before the daemon died; the new one finds no room,
+	// tries to reject, and the lease turns out to be accepted already.
 	f.ctrl.reject = func(string, v1.RejectLeaseRequest) error {
 		return domain.NewError(domain.CodeInvalidTransition, "accepted already", nil)
 	}
 	if f.e.decideOnce(t.Context()) {
 		t.Fatal("retry")
 	}
-	if got := f.run(k).Phase; got != state.PhaseAccepted || len(f.ctrl.accepted) != 1 {
-		t.Fatalf("phase %s, %d accepts: the acceptance of the Controller must be taken as it is", got, len(f.ctrl.accepted))
+	r := f.run(second)
+	if r.Phase != state.PhaseStopped || !r.NeverStarted || len(f.ctrl.accepted) != 2 {
+		t.Fatalf("phase %s, never_started %v, %d accepts", r.Phase, r.NeverStarted, len(f.ctrl.accepted))
+	}
+	reports := f.reports(second)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportPrepareFailed, v1.ReportStopped}) || !reports[1].NeverStarted || reports[0].Message == "" {
+		t.Errorf("reports = %+v: the Controller must be told that the Run never ran, to release it", reports)
+	}
+	if load, _ := state.Occupied(t.Context(), f.db.Reader()); load.Runs != 1 || f.run(first).Phase != state.PhaseAccepted {
+		t.Errorf("load = %+v: the Run that does not fit was started over the capacity", load)
+	}
+	if f.rt.startCount() != 0 {
+		t.Error("something started")
 	}
 }
 
@@ -1017,5 +1034,40 @@ func TestWhatTheExecutorRemembersOfARunGoesWithTheRun(t *testing.T) {
 	defer f.e.mu.Unlock()
 	if _, ok := f.e.memos[k]; ok {
 		t.Error("the memo of a Run that is over is still there")
+	}
+}
+
+func TestAStopTheWorkerOrderedItselfStillReportsAFailureToPrepare(t *testing.T) {
+	for source, want := range map[string][]v1.RunReportKind{
+		SourceController: {v1.ReportStarted, v1.ReportStopped},
+		SourceWorker:     {v1.ReportStarted, v1.ReportPrepareFailed, v1.ReportStopped},
+	} {
+		f := newFixture(t)
+		k := f.started("echo hi")
+		if err := f.e.Stop(t.Context(), k.RunID, 1, "x", source); err != nil {
+			t.Fatal(err)
+		}
+		f.e.step(t.Context(), k)
+		if got := kinds(f.reports(k)); !slices.Equal(got, want) {
+			t.Errorf("%s: reports = %v, want %v", source, got, want)
+		}
+	}
+}
+
+func TestAnUnidentifiableWrapperIsLoggedAtWarnOnceAndThenAtDebug(t *testing.T) {
+	var out syncLog
+	f := newFixture(t, func(o *Options) {
+		o.Log = slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	})
+	k := f.started("echo hi")
+	w := newWrapperProcess(t, "sleep 60")
+	unknown := w.w
+	unknown.Start = ""
+	f.writeWrapper(k, unknown)
+	for range 4 {
+		f.e.step(t.Context(), k)
+	}
+	if warns, debugs := strings.Count(out.String(), "level=WARN"), strings.Count(out.String(), "level=DEBUG"); warns != 1 || debugs != 3 {
+		t.Errorf("%d warnings and %d debug lines:\n%s", warns, debugs, out.String())
 	}
 }

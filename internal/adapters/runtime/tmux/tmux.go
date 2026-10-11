@@ -14,6 +14,7 @@ import (
 	"time"
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+	"github.com/Autarquico/codefabric/internal/support/envutil"
 )
 
 const (
@@ -225,15 +226,7 @@ func isMissing(err error) bool {
 // environment is that of the daemon without the variables of a tmux client, so
 // that a daemon started from inside tmux does not talk to that tmux.
 func environment() []string {
-	env := os.Environ()
-	out := env[:0:0]
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
+	return envutil.WithoutTmux(os.Environ())
 }
 
 // shellQuote quotes s for /bin/sh, which tmux runs a pipe-pane command with.

@@ -8,11 +8,11 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/support/envutil"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
 )
 
@@ -125,7 +125,7 @@ func (w *wrapper) run() error {
 
 	cmd := exec.Command(w.launch.Argv[0], w.launch.Argv[1:]...) //nolint:gosec,noctx // the argv is what the Run asked for; nothing ends the harness but the wrapper
 	cmd.Dir = w.launch.Dir
-	cmd.Env = append(withoutTmux(os.Environ()), w.launch.Env...)
+	cmd.Env = append(envutil.WithoutTmux(os.Environ()), w.launch.Env...)
 	copied, parentEnds, err := w.wire(cmd, log)
 	if err != nil {
 		return w.fail("wiring the output: %v", err)
@@ -246,19 +246,6 @@ func (w *wrapper) supervise(waited <-chan struct{}) {
 // the Run. SIGTERM and SIGHUP (the session closing) always stop.
 func (w *wrapper) stops(sig os.Signal) bool {
 	return sig != syscall.SIGINT || w.launch.Mode != ModeInteractive
-}
-
-// withoutTmux is env without the variables that make a process think it is in a
-// tmux client: the harness is not a user of the server of the Worker.
-func withoutTmux(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
 }
 
 // beginStop asks the group to end and starts the grace.

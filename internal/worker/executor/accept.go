@@ -86,13 +86,40 @@ func (e *Executor) decide(ctx context.Context, k state.Key) (retry bool) {
 		if errors.As(err, &coded) && coded.Code == domain.CodeInvalidTransition {
 			// The lease is accepted already: an earlier accept got to the Controller and
 			// the daemon died before it wrote it down, and what it sees now is different.
-			// Accepting again is idempotent and says whether it is still ours; the Run
-			// then fails on its own if it cannot run.
-			return e.answer(ctx, r, e.accept(ctx, r), state.PhaseAccepted)
+			// Accepting again is idempotent and says whether it is still ours. If it is, the
+			// Controller holds a Run this Worker has just found it cannot take (no room, no
+			// such harness): it is not started, so it cannot go over the capacity. It is
+			// failed and stopped as one that never ran, which releases its reservation.
+			return e.abandon(ctx, r, v, e.accept(ctx, r))
 		}
 		return e.answer(ctx, r, err, state.PhaseRejected)
 	}
 	return e.answer(ctx, r, e.accept(ctx, r), state.PhaseAccepted)
+}
+
+// abandon ends an assignment that the Controller holds as accepted and that the
+// Worker will not run. acceptErr is the answer to the accept that confirmed it.
+func (e *Executor) abandon(ctx context.Context, r state.Run, v verdict, acceptErr error) (retry bool) {
+	if acceptErr != nil {
+		return e.answer(ctx, r, acceptErr, state.PhaseAccepted) // stale, unknown or unreachable: as ever
+	}
+	now := e.clock.Now()
+	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		if err := e.report(ctx, tx, r.Key, v1.ReportPrepareFailed, now, func(en *v1.RunReportEntry) { en.Message = v.message }); err != nil {
+			return err
+		}
+		if err := e.report(ctx, tx, r.Key, v1.ReportStopped, now, func(en *v1.RunReportEntry) { en.NeverStarted = true }); err != nil {
+			return err
+		}
+		return state.Close(ctx, tx, r.Key, []state.Phase{state.PhaseAssigned}, state.PhaseStopped, true, now)
+	})
+	if err != nil {
+		e.log.ErrorContext(ctx, "abandoning an assignment", "run", r.RunID, "err", err)
+		return true
+	}
+	e.o.Journal.Notify()
+	e.forget(r.Key)
+	return false
 }
 
 func (e *Executor) accept(ctx context.Context, r state.Run) error {

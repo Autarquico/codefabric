@@ -103,19 +103,30 @@ type Executor struct {
 
 	mu    sync.Mutex
 	memos map[state.Key]*runMemo
+	locks map[state.Key]*runLock
 	spawn func(state.Key) // starts the supervisor of a Run; set by Run
 }
 
 // runMemo is what the executor remembers of a Run apart from state.db, and
-// drops whole when the Run is over. Its fields are guarded by Executor.mu, but
-// lock, which serialises the changes to the Run.
+// drops whole when the Run is over: a Run is forgotten only once its phase is
+// final, so nothing it remembers is needed again. Its fields are guarded by
+// Executor.mu.
 type runMemo struct {
-	lock     sync.Mutex
 	spawned  bool
 	failures int       // times the Runtime failed to start the session
 	lastErr  string    // why
 	signaled bool      // the stop was signalled in this life of the daemon
 	retryAt  time.Time // when an unverified stop is verified again
+
+	unresolved bool // the identity of its wrapper could not be established, and the log said so
+}
+
+// runLock serialises the changes to a Run. It exists only while someone holds
+// it or waits for it, so it is never dropped from under a holder and nothing
+// accumulates.
+type runLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 // memo returns the memo of a Run, making it if it is new. Callers hold e.mu.
@@ -135,7 +146,7 @@ func New(o Options) (*Executor, error) {
 	}
 	e := &Executor{
 		o: o, harnesses: map[string]harness.Launcher{}, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, grace: o.StopGrace,
-		wake: make(chan struct{}, 1), memos: map[state.Key]*runMemo{},
+		wake: make(chan struct{}, 1), memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
 	}
 	if e.clock == nil {
 		e.clock = clock.Real{}
@@ -209,10 +220,22 @@ func (e *Executor) kickDecider() {
 // and the answer to its assignment.
 func (e *Executor) lock(k state.Key) func() {
 	e.mu.Lock()
-	m := e.memo(k)
+	l := e.locks[k]
+	if l == nil {
+		l = new(runLock)
+		e.locks[k] = l
+	}
+	l.refs++
 	e.mu.Unlock()
-	m.lock.Lock()
-	return m.lock.Unlock
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if l.refs--; l.refs == 0 {
+			delete(e.locks, k)
+		}
+	}
 }
 
 // Run recovers what the previous daemon left, and then takes assignments until

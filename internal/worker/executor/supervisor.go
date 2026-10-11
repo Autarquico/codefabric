@@ -31,6 +31,7 @@ func (e *Executor) step(ctx context.Context, k state.Key) (done bool) {
 		return false
 	}
 	if !r.Phase.Live() {
+		e.forget(k)
 		return true
 	}
 	var prepErr error
@@ -44,6 +45,9 @@ func (e *Executor) step(ctx context.Context, k state.Key) (done bool) {
 	unlock := e.lock(k)
 	defer unlock()
 	if r, err = state.RunBy(ctx, e.o.DB.Reader(), k); err != nil || !r.Phase.Live() {
+		if err == nil {
+			e.forget(k)
+		}
 		return err == nil
 	}
 	switch r.Phase {
@@ -218,6 +222,25 @@ func (e *Executor) firstLook(k state.Key) bool {
 	return true
 }
 
+// firstUnresolved is true the first time a Run's wrapper cannot be identified,
+// until it can be again.
+func (e *Executor) firstUnresolved(k state.Key) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m := e.memo(k)
+	first := !m.unresolved
+	m.unresolved = true
+	return first
+}
+
+func (e *Executor) resolved(k state.Key) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if m := e.memos[k]; m != nil {
+		m.unresolved = false
+	}
+}
+
 func (e *Executor) lastError(k state.Key, fallback string) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -285,6 +308,7 @@ func readMarker[T any](dir, name string) (*T, error) {
 func (e *Executor) pollWrapper(ctx context.Context, r state.Run, m markers) (done bool) {
 	switch v := verdictOf(m.wrapper); v {
 	case procident.Same:
+		e.resolved(r.Key)
 		switch r.Phase {
 		case state.PhaseStarting:
 			return e.adopt(ctx, r, m)
@@ -304,6 +328,7 @@ func (e *Executor) pollWrapper(ctx context.Context, r state.Run, m markers) (don
 		}
 		return false
 	case procident.Gone, procident.Rebooted, procident.Different:
+		e.resolved(r.Key)
 		return e.settleLost(ctx, r, m, v)
 	default:
 		return e.unresolved(ctx, r, "the identity of the wrapper cannot be verified")

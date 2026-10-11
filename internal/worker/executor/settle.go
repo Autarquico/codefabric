@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"log/slog"
 	"syscall"
 	"time"
 
@@ -13,23 +14,23 @@ import (
 
 // facts is what finalizing a Run knows about how it ended.
 type facts struct {
-	at      time.Time
-	exit    *execwrap.Exit    // nil if the wrapper left none
-	started *execwrap.Started // nil if the harness never spawned
-	lost    bool              // the wrapper died and left no exit
-	ordered bool              // a stop was ordered
-	message string
+	at           time.Time
+	exit         *execwrap.Exit    // nil if the wrapper left none
+	started      *execwrap.Started // nil if the harness never spawned
+	lost         bool              // the wrapper died and left no exit
+	ordered      bool              // a stop was ordered
+	byController bool              // ... by the Controller, which then knows that the Run is over
+	message      string
 }
 
 // verdictOf says what the process with the wrapper's pid is now. The wrapper
 // leads its own group (pgid == pid), which is what lets a verdict about the pid
 // say something about the group; a record where that is not so says nothing.
 func verdictOf(w *execwrap.Wrapper) procident.Verdict {
-	v := procident.Verify(w.PID, w.Start)
-	if (v == procident.Gone || v == procident.Different) && w.PGID != w.PID {
+	if w.PGID != w.PID {
 		return procident.Unknown
 	}
-	return v
+	return procident.Verify(w.PID, w.Start)
 }
 
 // unresolved is a wrapper whose identity cannot be established. Nothing is
@@ -40,7 +41,11 @@ func (e *Executor) unresolved(ctx context.Context, r state.Run, why string) (don
 	if r.Phase == state.PhaseStopping || r.Phase == state.PhaseStopUnverified {
 		return e.markUnverified(ctx, r, why)
 	}
-	e.log.WarnContext(ctx, "the wrapper of a Run cannot be identified; looking again", "run", r.RunID, "why", why)
+	level := slog.LevelDebug
+	if e.firstUnresolved(r.Key) {
+		level = slog.LevelWarn // once, on entering the state
+	}
+	e.log.Log(ctx, level, "the wrapper of a Run cannot be identified; looking again", "run", r.RunID, "why", why)
 	return false
 }
 
@@ -165,12 +170,14 @@ func (e *Executor) markUnverified(ctx context.Context, r state.Run, why string) 
 // harness is known to have spawned. A harness that spawned (started.json) ends
 // with exited and stopped. One that never spawned ends with prepare_failed and
 // stopped, whether the failure was seen before or after `started`, and its
-// publication stays none; but if a stop was ordered the Controller already knows
-// that the Run is over, and only the stop is left to confirm. stopped says
+// publication stays none; but if the Controller ordered a stop it already knows
+// that the Run is over, and only the stop is left to confirm. A stop the Worker
+// ordered of itself is not known to it, so the failure is reported as without an order. stopped says
 // never_started only if `started` was never reported.
 func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done bool) {
-	_, orderErr := state.StopOrderOf(ctx, e.o.DB.Reader(), r.Key)
+	order, orderErr := state.StopOrderOf(ctx, e.o.DB.Reader(), r.Key)
 	f.ordered = orderErr == nil
+	f.byController = f.ordered && order.Source == SourceController
 	spawned := f.started != nil
 	reportedStart := r.StartedAt != nil || spawned
 	now := e.clock.Now()
@@ -190,7 +197,7 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 			if err := e.report(ctx, tx, r.Key, v1.ReportExited, f.at, func(en *v1.RunReportEntry) { fillExit(en, f) }); err != nil {
 				return err
 			}
-		case !f.ordered:
+		case !f.byController:
 			message := f.message
 			if f.exit != nil && f.exit.Error != "" {
 				message = f.exit.Error

@@ -315,8 +315,34 @@ func TestARejectionFencesTheRunKeepsItsReportsAndDoesNotStopOtherRuns(t *testing
 	}
 }
 
-func TestAnErrorOfTheWholeRequestFencesNothingAndLosesNothing(t *testing.T) {
-	for _, code := range []domain.Code{domain.CodeNotFound, domain.CodeStaleLease, domain.CodeInvalidRequest, domain.CodeUnauthenticated, domain.CodePolicyDenied, domain.CodeInternal, domain.CodeControllerUnreachable} {
+func TestARequestRefusedAsMalformedOrUnknownFencesThatRunAloneWithoutDelayingTheOthers(t *testing.T) {
+	for _, code := range []domain.Code{domain.CodeInvalidRequest, domain.CodeNotFound} {
+		f := newFixture(t)
+		j := journal.New("01J0000000000000000000000E1", f.clock)
+		f.write(j, "run_a", lifecycle...)
+		f.write(j, "run_b", lifecycle...)
+		c := &controller{answer: func(run string, _ v1.RunReportRequest) (v1.RunReportResponse, error) {
+			if run == "run_a" {
+				return v1.RunReportResponse{}, domain.NewError(code, "at is out of range", nil)
+			}
+			return v1.RunReportResponse{}, nil
+		}}
+		if _, err := f.sender(c, j).Flush(t.Context()); err != nil {
+			t.Fatalf("%s: %v: the Run is fenced, and there is nothing to back off for", code, err)
+		}
+		a, _ := state.RunBy(t.Context(), f.db.Reader(), state.Key{RunID: "run_a", LeaseEpoch: 1})
+		b, _ := state.RunBy(t.Context(), f.db.Reader(), state.Key{RunID: "run_b", LeaseEpoch: 1})
+		if a.FencedCode != string(code) || b.FencedCode != "" {
+			t.Errorf("%s: fenced %q and %q", code, a.FencedCode, b.FencedCode)
+		}
+		if f.pending() != 3 {
+			t.Errorf("%s: %d rows left, want the 3 of run_a kept", code, f.pending())
+		}
+	}
+}
+
+func TestAnErrorOfTheRequestThatSaysNothingOfTheEntriesFencesNothingAndLosesNothing(t *testing.T) {
+	for _, code := range []domain.Code{domain.CodeStaleLease, domain.CodeUnauthenticated, domain.CodePolicyDenied, domain.CodeInternal, domain.CodeControllerUnreachable} {
 		f := newFixture(t)
 		j := journal.New("01J0000000000000000000000E1", f.clock)
 		f.write(j, "run_a", lifecycle...)
@@ -336,7 +362,6 @@ func TestAnErrorOfTheWholeRequestFencesNothingAndLosesNothing(t *testing.T) {
 				t.Errorf("%s: %s was fenced by an error of the request", code, id)
 			}
 		}
-		// The failing Run keeps its three rows; the other Run went through.
 		if f.pending() != 3 {
 			t.Errorf("%s: %d rows left, want the 3 of run_a", code, f.pending())
 		}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -424,3 +425,21 @@ func groupSize(pgid int) int {
 
 // runID is a valid Run ID for the n-th Run of a test.
 func runID(n uint64) string { return fmt.Sprintf("run_01J0000000000000000000%04d", n) }
+
+// syncLog is a log destination that tests can read while the executor writes.
+type syncLog struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *syncLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}

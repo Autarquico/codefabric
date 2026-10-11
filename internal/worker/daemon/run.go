@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -22,6 +23,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/journal"
+	"github.com/Autarquico/codefabric/internal/worker/procident"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
 )
@@ -130,9 +132,18 @@ func Run(ctx context.Context, o Options) error {
 	return g.Wait()
 }
 
+// selfIdentity is how the daemon checks that a wrapper of this machine can
+// identify itself; tests replace it.
+var selfIdentity = procident.StartOf
+
 // runtimeAndHarnesses are what this Worker can run Runs with. The harness
 // `command` needs a Runtime; without one the Worker offers none.
 func (d *daemon) runtimeAndHarnesses(ctx context.Context, o Options) (cfruntime.Runtime, []harness.Launcher) {
+	if _, err := selfIdentity(os.Getpid()); err != nil {
+		// The wrapper has to identify itself, or it starts nothing: no harness is offered.
+		d.log.WarnContext(ctx, "this process cannot be identified: this Worker offers no harness and will reject the Runs it is given", "err", err)
+		return unavailable{}, nil
+	}
 	rt := o.Runtime
 	if rt == nil {
 		t, err := tmux.New(tmux.Options{Socket: tmux.SocketName(o.Paths.WorkerDataDir())})

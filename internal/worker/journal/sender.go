@@ -32,9 +32,11 @@ const (
 // A rejection of an entry (stale lease, unknown lease epoch, a transition the Run
 // no longer allows) fences the Run: the sender stops sending its reports and
 // keeps them, so that the reconciliation of the Controller decides what they are
-// worth. An error of the whole request (no connection, authentication, a server
-// that fails) says nothing of the entries and fences nothing: it is retried with
-// a backoff and loses nothing.
+// worth. So does a request the Controller refuses as malformed or for a Run it
+// does not know (CF_INVALID_REQUEST, CF_NOT_FOUND): it would be refused every
+// time, and only that Run is affected. Any other error of the whole request (no
+// connection, authentication, a server that fails) says nothing of the entries
+// and fences nothing: it is retried with a backoff and loses nothing.
 type Sender struct {
 	DB       *state.DB
 	Reporter Reporter
@@ -122,8 +124,18 @@ func (s *Sender) Flush(ctx context.Context) (int, error) {
 			n, fenced, err := s.send(ctx, g.key, batch)
 			settled += n
 			if err != nil {
-				// An error of the request says nothing of the entries: the rest of this
-				// Run waits, the other Runs go on, and the sender backs off.
+				var coded *domain.Error
+				if errors.As(err, &coded) && (coded.Code == domain.CodeInvalidRequest || coded.Code == domain.CodeNotFound) {
+					// The Controller refuses these reports as they are, and will every time: for
+					// this Run alone that is final. Nothing about the other Runs, and no backoff.
+					if fenceErr := s.fence(ctx, g.key, coded.Code, nil, coded.Message); fenceErr != nil {
+						first = cmp.Or(first, fenceErr)
+					}
+					break
+				}
+				// Any other error of the request (network, authentication, a server that
+				// fails) says nothing of the entries: this Run waits, the other Runs go on,
+				// and the sender backs off.
 				first = cmp.Or(first, err)
 				break
 			}
