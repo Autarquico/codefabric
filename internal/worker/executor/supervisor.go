@@ -196,7 +196,7 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 		return e.pollWrapper(ctx, r, m)
 	case alive:
 		// The wrapper writes its marker as the first thing it does.
-		if r.StartedAt != nil && e.clock.Now().Sub(*r.StartedAt) > noWrapperLimit {
+		if e.clock.Now().Sub(r.UpdatedAt) > noWrapperLimit {
 			e.log.WarnContext(ctx, "the session has no wrapper after too long: ending it", "run", r.RunID)
 			_ = e.o.Runtime.Stop(ctx, e.o.Runtime.HandleFor(e.sessionName(r.Key)))
 		}

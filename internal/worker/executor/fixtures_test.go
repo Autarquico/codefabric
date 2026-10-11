@@ -231,7 +231,7 @@ func (f *fixture) assign(spec []byte, mutate ...func(*v1.AssignCommand)) state.K
 	f.t.Helper()
 	f.nextID++
 	a := v1.AssignCommand{
-		LeaseID: fmt.Sprintf("lease_%d", f.nextID), RunID: fmt.Sprintf("run_%d", f.nextID), RunShort: fmt.Sprintf("run-%d", f.nextID),
+		LeaseID: fmt.Sprintf("lease_%d", f.nextID), RunID: runID(f.nextID), RunShort: fmt.Sprintf("run-%d", f.nextID),
 		TaskID: "task_1", ProjectID: "project_1", Epoch: 1, AcceptBy: t0.Add(time.Minute), SourceCommit: "abc",
 		Resources: v1.Capacity{CPU: 2, MemoryMB: 4096}, Spec: spec,
 	}
@@ -404,3 +404,6 @@ func groupSize(pgid int) int {
 	members, _ := procident.GroupMembers(pgid)
 	return len(members)
 }
+
+// runID is a valid Run ID for the n-th Run of a test.
+func runID(n uint64) string { return fmt.Sprintf("run_01J0000000000000000000%04d", n) }

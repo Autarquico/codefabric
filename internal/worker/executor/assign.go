@@ -95,6 +95,14 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 				return nil
 			}
 			a := c.Assign
+			if kind, _, err := domain.ParseID(a.RunID); err != nil || kind != domain.KindRun {
+				// Its ID would name directories: it is not stored, and the lease runs out on the Controller.
+				e.log.ErrorContext(ctx, "an assignment names a Run by something that is not a Run ID; it is ignored", "seq", c.Seq)
+				if err := state.SetCursor(ctx, tx, c.Seq); err != nil {
+					return err
+				}
+				continue
+			}
 			spec := parseSpec(a.Spec)
 			if _, err := state.InsertAssigned(ctx, tx, state.Run{
 				Key: state.Key{RunID: a.RunID, LeaseEpoch: a.Epoch}, LeaseID: a.LeaseID, RunShort: a.RunShort, TaskID: a.TaskID,

@@ -172,7 +172,7 @@ func TestDecideAsksAgainAfterATransientFailureAndStartsOnce(t *testing.T) {
 
 func TestPersistStoresAssignmentsWithTheCursorAndIgnoresRedelivery(t *testing.T) {
 	f := newFixture(t)
-	a := v1.AssignCommand{LeaseID: "lease_1", RunID: "run_1", Epoch: 1, AcceptBy: t0, Resources: v1.Capacity{CPU: 2, MemoryMB: 1}, Spec: specJSON("x", "command", "headless")}
+	a := v1.AssignCommand{LeaseID: "lease_1", RunID: runID(1), Epoch: 1, AcceptBy: t0, Resources: v1.Capacity{CPU: 2, MemoryMB: 1}, Spec: specJSON("x", "command", "headless")}
 	cmds := []v1.WorkerCommand{{Seq: 3, Type: domain.CommandAssign, Assign: &a}}
 	for range 2 {
 		if blocked, err := f.e.persist(t.Context(), cmds); err != nil || blocked {
@@ -188,8 +188,8 @@ func TestPersistStoresAssignmentsWithTheCursorAndIgnoresRedelivery(t *testing.T)
 
 func TestAnUnknownOrderBlocksTheQueueAndDegradesTheWorker(t *testing.T) {
 	f := newFixture(t)
-	a := func(n int) *v1.AssignCommand {
-		return &v1.AssignCommand{LeaseID: fmt.Sprint("lease_", n), RunID: fmt.Sprint("run_", n), Epoch: 1, AcceptBy: t0, Spec: specJSON("x", "command", "headless")}
+	a := func(n uint64) *v1.AssignCommand {
+		return &v1.AssignCommand{LeaseID: fmt.Sprint("lease_", n), RunID: runID(n), Epoch: 1, AcceptBy: t0, Spec: specJSON("x", "command", "headless")}
 	}
 	blocked, err := f.e.persist(t.Context(), []v1.WorkerCommand{
 		{Seq: 1, Type: domain.CommandAssign, Assign: a(1)},
@@ -212,7 +212,7 @@ func TestAnUnknownOrderBlocksTheQueueAndDegradesTheWorker(t *testing.T) {
 func TestAssignLoopPollsFromTheCursorAcknowledgesWhatItPersistedAndBlocksOnAnUnknownOrder(t *testing.T) {
 	f := newFixture(t)
 	a := func(n string) *v1.AssignCommand {
-		return &v1.AssignCommand{LeaseID: "lease_" + n, RunID: "run_" + n, Epoch: 1, AcceptBy: t0, Spec: specJSON("x", "command", "headless")}
+		return &v1.AssignCommand{LeaseID: "lease_" + n, RunID: runID(uint64(n[0])), Epoch: 1, AcceptBy: t0, Spec: specJSON("x", "command", "headless")}
 	}
 	f.ctrl.blocked = make(chan struct{})
 	f.ctrl.pages = []v1.AssignmentsResponse{
@@ -766,5 +766,57 @@ func TestEveryReportIsInTheTransactionOfItsChange(t *testing.T) {
 	o, _ := state.StopOrderOf(t.Context(), f.db.Reader(), k)
 	if r.Phase.Live() || o.DoneAt == nil || len(f.reports(k)) != 1 {
 		t.Errorf("phase %s, order %+v, %d reports", r.Phase, o, len(f.reports(k)))
+	}
+}
+
+func TestAnAssignmentThatDoesNotNameARunByAnIDIsIgnored(t *testing.T) {
+	f := newFixture(t)
+	a := &v1.AssignCommand{LeaseID: "lease_1", RunID: "../../etc", Epoch: 1, AcceptBy: t0, Spec: specJSON("x", "command", "headless")}
+	blocked, err := f.e.persist(t.Context(), []v1.WorkerCommand{{Seq: 1, Type: domain.CommandAssign, Assign: a}})
+	live, _ := state.LiveRuns(t.Context(), f.db.Reader())
+	cursor, _ := state.Cursor(t.Context(), f.db.Reader())
+	if err != nil || blocked || len(live) != 0 || cursor != 1 {
+		t.Errorf("blocked=%v err=%v live=%d cursor=%d: the order must be passed over, not stored and not left in the way", blocked, err, len(live), cursor)
+	}
+}
+
+func TestAStopDuringThePreparationOfARunAbortsItBeforeStart(t *testing.T) {
+	var f *fixture
+	var stopErr error
+	f = newFixture(t, func(o *Options) {
+		o.Preparer = func(ctx context.Context, r state.Run, dir string) error {
+			stopErr = f.e.Stop(ctx, r.RunID, r.LeaseEpoch, "cancel", SourceController)
+			return emptyWorktree(ctx, r, dir)
+		}
+	})
+	k := f.accepted("echo hi")
+	if !f.e.step(t.Context(), k) {
+		t.Fatalf("the Run goes on: %s", f.run(k).Phase)
+	}
+	if stopErr != nil {
+		t.Fatal(stopErr)
+	}
+	if r := f.run(k); r.Phase != state.PhaseAborted || f.rt.startCount() != 0 {
+		t.Errorf("phase %s, %d starts", r.Phase, f.rt.startCount())
+	}
+	if got := kinds(f.reports(k)); !slices.Equal(got, []v1.RunReportKind{v1.ReportStopped}) {
+		t.Errorf("reports = %v", got)
+	}
+}
+
+func TestASessionWithNoWrapperAfterTooLongIsEnded(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	f.e.step(t.Context(), k)
+	if f.rt.sessions["cf-"+k.RunID+"-e1"] != true {
+		t.Fatal("the session should be alive")
+	}
+	f.clock.Advance(noWrapperLimit + time.Second)
+	f.e.step(t.Context(), k)
+	if f.rt.sessions["cf-"+k.RunID+"-e1"] {
+		t.Error("a session whose wrapper never showed up was left")
+	}
+	if !f.e.step(t.Context(), k) {
+		t.Errorf("not settled: %s", f.run(k).Phase)
 	}
 }
