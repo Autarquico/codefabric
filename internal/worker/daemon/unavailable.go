@@ -16,6 +16,7 @@ type unavailable struct{}
 func (unavailable) Start(context.Context, cfruntime.Spec) (cfruntime.Handle, error) {
 	return cfruntime.Handle{}, errNoRuntime
 }
+func (unavailable) Wire(context.Context, cfruntime.Spec) error   { return errNoRuntime }
 func (unavailable) Stop(context.Context, cfruntime.Handle) error { return nil }
 func (unavailable) Status(context.Context, cfruntime.Handle) (cfruntime.Status, error) {
 	return cfruntime.Status{}, nil

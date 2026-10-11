@@ -169,7 +169,8 @@ func TestRealRunOfAnInteractiveScriptCapturesTheTerminal(t *testing.T) {
 
 func TestScenario_WorkerExecutorTmux_AdopcionDeSesion(t *testing.T) {
 	f := newRealFixture(t, 2*time.Second)
-	k := f.assign(specJSON("echo $$ > harness.pid; exec sleep 300", "command", "headless"))
+	// The first session is held by a barrier until the test releases it.
+	k := f.assign(specJSON("echo $$ > harness.pid; echo adopted-once; while [ ! -e release ]; do sleep 0.05; done; echo finished", "command", "headless"))
 	ctx := t.Context()
 	f.e.decideOnce(ctx)
 
@@ -182,26 +183,18 @@ func TestScenario_WorkerExecutorTmux_AdopcionDeSesion(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	dir := f.runDir(k)
-	if _, err := f.rt.Runtime.Start(ctx, cfruntime.Spec{
-		Name: "cf-" + k.RunID + "-e1", Dir: dir, Command: append(append([]string{}, f.e.wrapper...), "--run-dir", dir),
-	}); err != nil {
+	if _, err := f.rt.Runtime.Start(ctx, f.e.sessionSpec(f.run(k))); err != nil {
 		t.Fatal(err)
 	}
 	wrapperBefore := f.wrapperOf(k)
-	waitFor(t, "started.json", func() bool { _, err := os.Stat(filepath.Join(dir, execwrap.StartedFile)); return err == nil })
+	waitFor(t, "started.json", func() bool { _, err := os.Stat(filepath.Join(f.runDir(k), execwrap.StartedFile)); return err == nil })
 	harnessBefore := f.pidFile(k, "harness.pid")
-	// The shell became the harness (exec): the group is the wrapper and the harness, and stays so.
-	waitFor(t, "the group to settle", func() bool {
-		members, _ := procident.GroupMembers(wrapperBefore.PGID)
-		return len(members) == 2
-	})
-	membersBefore, _ := procident.GroupMembers(wrapperBefore.PGID)
 
 	// The daemon comes back.
 	f.restart("01J0000000000000000000000E2")
 	f.rt.starts.Store(0)
 	stop := f.runLoops()
+	defer stop()
 	f.waitPhase(k, state.PhaseRunning)
 
 	if n := f.rt.starts.Load(); n != 0 {
@@ -214,20 +207,96 @@ func TestScenario_WorkerExecutorTmux_AdopcionDeSesion(t *testing.T) {
 	if wrapperAfter := f.wrapperOf(k); wrapperAfter.PID != wrapperBefore.PID {
 		t.Errorf("wrapper %d became %d: a second wrapper started", wrapperBefore.PID, wrapperAfter.PID)
 	}
-	membersAfter, _ := procident.GroupMembers(wrapperBefore.PGID)
-	if len(membersAfter) != len(membersBefore) || processGone(harnessBefore) {
-		t.Errorf("group %v -> %v: the process tree changed", membersBefore, membersAfter)
+	if again := f.pidFile(k, "harness.pid"); again != harnessBefore || processGone(harnessBefore) {
+		t.Errorf("harness %d is now %d (alive: %v): a second harness started", harnessBefore, again, !processGone(harnessBefore))
 	}
 	if got := kinds(f.reports(k)); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted}) {
 		t.Errorf("reports = %v", got)
 	}
 
-	// Stopping it through the new daemon works, which proves it is the same Run.
-	if err := f.e.Stop(ctx, k.RunID, 1, "test over", SourceWorker); err != nil {
+	// Release it: the one harness ends, once, through the new daemon.
+	if err := os.WriteFile(filepath.Join(f.paths.WorkerWorktreeDir(k.RunID, k.LeaseEpoch), "release"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.waitPhase(k, state.PhaseStopped)
-	stop()
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) || reports[1].ExitCode == nil || *reports[1].ExitCode != 0 {
+		t.Errorf("reports = %+v", reports)
+	}
+	log, _ := os.ReadFile(filepath.Join(f.runDir(k), execwrap.OutputLog)) //nolint:gosec // a file of the test
+	if strings.Count(string(log), "adopted-once") != 1 || strings.Count(string(log), "finished") != 1 {
+		t.Errorf("output.log = %q: the output of one harness appears once", log)
+	}
+}
+
+// A daemon that dies half way through Start of an interactive Run leaves a session
+// that is not wired. The next daemon, finding it with a wrapper alive, finishes
+// the wiring without a second Start: one wrapper, one harness, all the output.
+func TestAnInterruptedStartOfAnInteractiveRunIsCompletedByTheNextDaemon(t *testing.T) {
+	for _, stage := range []string{"created", "captured", "opened"} {
+		t.Run(stage, func(t *testing.T) {
+			f := newRealFixture(t, 2*time.Second)
+			k := f.assign(specJSON("echo captured-line", "command", "interactive"))
+			ctx := t.Context()
+			f.e.decideOnce(ctx)
+			if err := f.e.prepare(ctx, f.run(k)); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.db.WithTx(ctx, func(tx *state.Tx) error {
+				return state.Advance(ctx, tx, k, state.PhaseAccepted, state.PhaseStarting, f.clock.Now())
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			// The part of Start that the first daemon did, with tmux itself.
+			spec := f.e.sessionSpec(f.run(k))
+			tm := func(args ...string) {
+				t.Helper()
+				cmd := exec.CommandContext(ctx, "tmux", append([]string{"-L", tmux.SocketName(f.paths.DataDir), "-f", "/dev/null"}, args...)...) //nolint:gosec // tmux
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("tmux %v: %v\n%s", args, err, out)
+				}
+			}
+			tm(append([]string{"new-session", "-d", "-s", spec.Name, "-c", spec.Dir, "-x", "200", "-y", "50"}, spec.Command...)...)
+			if stage != "created" {
+				tm("pipe-pane", "-o", "-t", "="+spec.Name+":", "cat >> '"+spec.Capture+"'")
+			}
+			if stage == "opened" {
+				if err := os.WriteFile(spec.Ready, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wrapperBefore := f.wrapperOf(k)
+
+			f.restart("01J0000000000000000000000E2")
+			f.rt.starts.Store(0)
+			defer f.runLoops()()
+			defer func() {
+				if t.Failed() {
+					ents, _ := os.ReadDir(f.runDir(k))
+					for _, e := range ents {
+						t.Log("file", e.Name())
+					}
+					t.Log("phase", f.run(k).Phase)
+				}
+			}()
+			f.waitPhase(k, state.PhaseStopped)
+
+			if n := f.rt.starts.Load(); n != 0 {
+				t.Errorf("Start was called %d times", n)
+			}
+			if after := f.wrapperOf(k); after.PID != wrapperBefore.PID {
+				t.Errorf("wrapper %d became %d", wrapperBefore.PID, after.PID)
+			}
+			if got := kinds(f.reports(k)); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) {
+				t.Errorf("reports = %v", got)
+			}
+			waitFor(t, "the whole output", func() bool {
+				log, _ := os.ReadFile(filepath.Join(f.runDir(k), execwrap.OutputLog)) //nolint:gosec // a file of the test
+				return strings.Count(string(log), "captured-line") == 1
+			})
+		})
+	}
 }
 
 func TestScenario_WorkerExecutorTmux_StopConHijosRebeldes(t *testing.T) {

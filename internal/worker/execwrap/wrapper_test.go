@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -420,5 +421,55 @@ func TestTheHarnessDoesNotInheritTheTmuxVariables(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(s.dir, "tmuxvars")) //nolint:gosec // a file of the test
 	if err != nil || strings.TrimSpace(string(raw)) != "[][]" {
 		t.Errorf("tmuxvars = %q (%v)", raw, err)
+	}
+}
+
+func TestWhatDoesNotEndWithTheGraceIsKilledWithTheGroupAfterTheExitIsWritten(t *testing.T) {
+	// The harness ends at once and leaves a process that ignores SIGTERM.
+	s := launch(t, execwrap.Launch{Argv: shell(`(trap '' TERM; sleep 300) & echo $! > rebel.pid; exit 0`), Grace: 300 * time.Millisecond}, true)
+	rebel := s.pidFile("rebel.pid")
+	exit := s.waitExit()
+	if exit.ExitCode == nil || *exit.ExitCode != 0 || !exit.GroupKilled || exit.RemnantsKilled < 1 {
+		t.Errorf("exit.json = %+v", exit)
+	}
+	waitDead(t, rebel)
+	if empty, err := procident.GroupEmpty(s.cmd.Process.Pid); err != nil || !empty {
+		t.Errorf("group empty = %v, %v", empty, err)
+	}
+}
+
+func TestAHarnessThatIgnoresTheStopIsKilledWithTheGroupAndSaysSo(t *testing.T) {
+	s := launch(t, execwrap.Launch{Argv: shell("trap '' TERM; touch ready; while :; do sleep 0.05; done"), Grace: 300 * time.Millisecond}, true)
+	s.waitFor("ready")
+	var w execwrap.Wrapper
+	if ok, err := execwrap.Read(s.dir, execwrap.WrapperFile, &w); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	_ = syscall.Kill(-w.PGID, syscall.SIGTERM)
+	exit := s.waitExit()
+	if exit.Cause != execwrap.CauseStop || exit.Signal != "SIGKILL" || !exit.GroupKilled {
+		t.Errorf("exit.json = %+v", exit)
+	}
+	if empty, err := procident.GroupEmpty(w.PGID); err != nil || !empty {
+		t.Errorf("group empty = %v, %v", empty, err)
+	}
+}
+
+// A pid that was listed can end, be reaped and be reused outside the group. The
+// wrapper therefore signals only groups, never a pid on its own: every
+// syscall.Kill in it has a negative target.
+func TestTheWrapperNeverSignalsAPidOnItsOwn(t *testing.T) {
+	src, err := os.ReadFile("wrapper.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := regexp.MustCompile(`syscall\.Kill\(([^,]+),`).FindAllStringSubmatch(string(src), -1)
+	if len(calls) == 0 {
+		t.Fatal("no signals found: the check is blind")
+	}
+	for _, c := range calls {
+		if !strings.HasPrefix(strings.TrimSpace(c[1]), "-") {
+			t.Errorf("syscall.Kill(%s, ...) signals a pid on its own", c[1])
+		}
 	}
 }

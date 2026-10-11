@@ -344,7 +344,7 @@ func TestReport_FencingAndAuthorization(t *testing.T) {
 	_, err = e.app.Runs.Report(t.Context(), alpha, "nonsense", v1.RunReportRequest{Entries: []v1.RunReportEntry{r.entry(v1.ReportStarted)}})
 	wantCode(t, err, domain.CodeNotFound)
 	_, err = e.app.Runs.Report(t.Context(), e.owner, r.run.ID, v1.RunReportRequest{Entries: []v1.RunReportEntry{r.entry(v1.ReportStarted)}})
-	wantCode(t, err, domain.CodeNotFound) // a client is not a Worker
+	wantCode(t, err, domain.CodeUnauthenticated) // a client is not a Worker: an error of the identity, not of the Run
 
 	// An epoch the Worker never had.
 	bad := r.entry(v1.ReportStarted, func(en *v1.RunReportEntry) { en.LeaseEpoch = 9 })

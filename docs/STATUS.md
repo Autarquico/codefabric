@@ -24,7 +24,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_(nada)_
+- #11 Ejecutor del Worker con tmux, wrapper y journal
 <!-- /pm-sync:in-progress -->
 
 ---

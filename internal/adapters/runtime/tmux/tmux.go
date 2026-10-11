@@ -85,12 +85,8 @@ func (r *Runtime) Start(ctx context.Context, spec cfruntime.Spec) (cfruntime.Han
 	if len(spec.Command) == 0 {
 		return cfruntime.Handle{}, errors.New("tmux: a session needs a command")
 	}
-	// tmux expands '#' in a start directory and in a pipe-pane command as a format:
-	// a path with one would not mean what it says.
-	for _, path := range []string{spec.Dir, spec.Capture, spec.Ready} {
-		if strings.Contains(path, "#") {
-			return cfruntime.Handle{}, fmt.Errorf("tmux: the path %q has a '#', which tmux would read as a format: move the data directory", path)
-		}
+	if err := checkPaths(spec); err != nil {
+		return cfruntime.Handle{}, err
 	}
 	h := r.HandleFor(spec.Name)
 	exists, err := r.hasSession(ctx, spec.Name)
@@ -106,30 +102,51 @@ func (r *Runtime) Start(ctx context.Context, spec cfruntime.Spec) (cfruntime.Han
 			}
 		}
 	}
-	if err := r.wire(ctx, spec); err != nil {
+	if err := r.Wire(ctx, spec); err != nil {
 		return cfruntime.Handle{}, err
 	}
 	return h, nil
 }
 
-// wire captures the output of the terminal and then opens the gate, in that
-// order: what the command prints once the gate is open is never lost. A session
-// that has already ended is not wired and not an error: its wrapper left the
-// files that say what happened.
-func (r *Runtime) wire(ctx context.Context, spec cfruntime.Spec) error {
+// Wire captures the output of the terminal and then opens the gate, in that
+// order: what the command prints once the gate is open is never lost. It can be
+// repeated: the pipe is opened only if the pane has none, and the gate is a
+// file. A session that has already ended is not wired and not an error: its
+// wrapper left the files that say what happened.
+func (r *Runtime) Wire(ctx context.Context, spec cfruntime.Spec) error {
+	if err := checkPaths(spec); err != nil {
+		return err
+	}
 	if spec.Capture != "" {
-		_, stderr, err := r.exec(ctx, "pipe-pane", "-o", "-t", "="+spec.Name+":", "cat >> "+shellQuote(spec.Capture))
-		if err != nil {
+		if err := r.capture(ctx, spec); err != nil {
 			if alive, checkErr := r.hasSession(ctx, spec.Name); checkErr == nil && !alive {
 				return nil
 			}
-			return fmt.Errorf("tmux: capturing the output of %s: %w (%s)", spec.Name, err, strings.TrimSpace(stderr))
+			return err
 		}
 	}
 	if spec.Ready != "" {
 		if err := os.WriteFile(spec.Ready, nil, 0o600); err != nil {
 			return fmt.Errorf("tmux: opening the gate of %s: %w", spec.Name, err)
 		}
+	}
+	return nil
+}
+
+// capture opens the pipe of the terminal unless the pane has one. `pipe-pane -o`
+// would not do: with a pipe open it closes it, so repeating it would turn the
+// capture off.
+func (r *Runtime) capture(ctx context.Context, spec cfruntime.Spec) error {
+	target := "=" + spec.Name + ":"
+	out, stderr, err := r.exec(ctx, "display-message", "-p", "-t", target, "#{pane_pipe}")
+	if err != nil {
+		return fmt.Errorf("tmux: looking at the pipe of %s: %w (%s)", spec.Name, err, strings.TrimSpace(stderr))
+	}
+	if strings.TrimSpace(out) == "1" {
+		return nil
+	}
+	if _, stderr, err := r.exec(ctx, "pipe-pane", "-t", target, "cat >> "+shellQuote(spec.Capture)); err != nil {
+		return fmt.Errorf("tmux: capturing the output of %s: %w (%s)", spec.Name, err, strings.TrimSpace(stderr))
 	}
 	return nil
 }
@@ -231,3 +248,14 @@ func environment() []string {
 
 // shellQuote quotes s for /bin/sh, which tmux runs a pipe-pane command with.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// checkPaths refuses what tmux would read as a format: it expands '#' in a start
+// directory and in a pipe-pane command, so a path with one would not mean what it says.
+func checkPaths(spec cfruntime.Spec) error {
+	for _, path := range []string{spec.Dir, spec.Capture, spec.Ready} {
+		if strings.Contains(path, "#") {
+			return fmt.Errorf("tmux: the path %q has a '#', which tmux would read as a format: move the data directory", path)
+		}
+	}
+	return nil
+}

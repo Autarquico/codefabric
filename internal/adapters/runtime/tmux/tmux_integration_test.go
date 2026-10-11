@@ -247,3 +247,26 @@ func TestStartRefusesAPathWithAHash(t *testing.T) {
 		t.Errorf("sessions = %v", sessions)
 	}
 }
+
+func TestWiringTwiceKeepsTheCaptureOpen(t *testing.T) {
+	r := newRuntime(t)
+	dir := t.TempDir()
+	gate, capture, later := filepath.Join(dir, "ready"), filepath.Join(dir, "output.log"), filepath.Join(dir, "later")
+	script := `while [ ! -e ` + gate + ` ]; do sleep 0.05; done; echo first-line; while [ ! -e ` + later + ` ]; do sleep 0.05; done; echo second-line`
+	spec := cfruntime.Spec{Name: cfruntime.NameFor("run_w", 1), Dir: dir, Command: sh(script), Capture: capture, Ready: gate}
+	if _, err := r.Start(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // as often as a daemon that keeps dying would
+		if err := r.Wire(t.Context(), spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(later, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "both lines", func() bool {
+		raw, _ := readFile(capture)
+		return strings.Contains(string(raw), "first-line") && strings.Contains(string(raw), "second-line")
+	})
+}

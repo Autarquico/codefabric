@@ -138,14 +138,7 @@ func (e *Executor) startSession(ctx context.Context, r state.Run) error {
 	if h := e.o.Hooks.BeforeRuntimeStart; h != nil {
 		h(r)
 	}
-	dir := e.runDir(r.Key)
-	spec := cfruntime.Spec{
-		Name: e.sessionName(r.Key), Dir: dir,
-		Command: append(append([]string{}, e.wrapper...), "--run-dir", dir),
-	}
-	if parseSpec(r.Spec).Mode == execwrap.ModeInteractive {
-		spec.Capture, spec.Ready = filepath.Join(dir, execwrap.OutputLog), filepath.Join(dir, paneReady)
-	}
+	spec := e.sessionSpec(r)
 	handle, err := e.o.Runtime.Start(ctx, spec)
 	if err != nil {
 		e.noteFailure(r.Key, err)
@@ -174,6 +167,19 @@ func (e *Executor) startSession(ctx context.Context, r state.Run) error {
 	return nil
 }
 
+// sessionSpec is the session of a Run: the same whenever it is asked for.
+func (e *Executor) sessionSpec(r state.Run) cfruntime.Spec {
+	dir := e.runDir(r.Key)
+	spec := cfruntime.Spec{
+		Name: e.sessionName(r.Key), Dir: dir,
+		Command: append(append([]string{}, e.wrapper...), "--run-dir", dir),
+	}
+	if parseSpec(r.Spec).Mode == execwrap.ModeInteractive {
+		spec.Capture, spec.Ready = filepath.Join(dir, execwrap.OutputLog), filepath.Join(dir, paneReady)
+	}
+	return spec
+}
+
 // poll looks at a Run that has been started and does what the evidence on disk
 // calls for. The session is read before the markers: if it is gone by then, the
 // markers are everything it ever left.
@@ -187,6 +193,9 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 	if err != nil {
 		e.log.ErrorContext(ctx, "reading the markers of a Run", "run", r.RunID, "err", err)
 		return false
+	}
+	if h := e.o.Hooks.AfterMarkers; h != nil {
+		h(r)
 	}
 	if r.Phase == state.PhaseStopping && m.exit == nil && e.firstLook(r.Key) {
 		// A stop the previous daemon began: the signal may not have been sent.
@@ -338,6 +347,12 @@ func (e *Executor) pollWrapper(ctx context.Context, r state.Run, m markers) (don
 // adopt records, for a Run found in phase starting with its wrapper alive, that
 // the session is running: what the daemon that died would have recorded.
 func (e *Executor) adopt(ctx context.Context, r state.Run, m markers) (done bool) {
+	// The daemon may have died between creating the session and wiring it: the
+	// wiring is finished before the Run is taken as started, without a second Start.
+	if err := e.o.Runtime.Wire(ctx, e.sessionSpec(r)); err != nil {
+		e.log.WarnContext(ctx, "wiring an adopted session failed; it will be tried again", "run", r.RunID, "err", err)
+		return false
+	}
 	at := e.clock.Now()
 	if m.started != nil {
 		at = m.started.StartedAt

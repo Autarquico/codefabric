@@ -22,9 +22,6 @@ const (
 	GateTimeout  = 30 * time.Second
 	defaultGrace = 30 * time.Second
 	poll         = 50 * time.Millisecond
-	// killRounds bounds how long a group that keeps forking is chased once the
-	// grace is over: killRounds polls.
-	killRounds = 200
 )
 
 // Options parameterise Run. Stdin, Stdout and Stderr are the terminal of the pane.
@@ -73,7 +70,7 @@ type wrapper struct {
 
 	launch   Launch
 	stopping bool
-	expired  bool             // the grace of a stop (or of a clean-up) is over
+
 	deadline <-chan time.Time // its end, nil when not armed
 	timer    clock.Timer
 }
@@ -141,7 +138,8 @@ func (w *wrapper) run() error {
 	if err := Write(w.o.RunDir, StartedFile, Started{
 		PID: cmd.Process.Pid, PGID: w.pgid, WrapperPID: w.self, Argv: w.launch.Argv, StartedAt: w.clock.Now(),
 	}); err != nil {
-		w.killOthers()
+		err = w.fail("recording the start of the harness: %v", err)
+		w.killGroup() // the harness runs unrecorded: it goes, and so does this process
 		return err
 	}
 
@@ -150,21 +148,27 @@ func (w *wrapper) run() error {
 		_ = cmd.Wait()
 		close(waited)
 	}()
-	w.supervise(waited)
-	remnants, leftover := w.cleanup()
+	exit := Exit{Cause: CauseExit}
+	if !w.supervise(waited) {
+		// The harness ignored the stop for the whole grace: it is killed with the
+		// group, and says so.
+		return w.endByKillingGroup(log, Exit{Cause: CauseStop, Signal: "SIGKILL", GroupKilled: true, RemnantsKilled: w.count()})
+	}
+	exit.ExitCode, exit.Signal = outcome(cmd.ProcessState)
+	if w.stopping {
+		exit.Cause = CauseStop
+	}
+	found, survivors := w.settleGroup()
+	exit.RemnantsKilled = found
+	if survivors {
+		exit.GroupKilled = true
+		return w.endByKillingGroup(log, exit)
+	}
 	<-copied // every writer is gone: the pipe is at its end
 	if err := log.Sync(); err != nil {
 		return w.fail("syncing the output log: %v", err)
 	}
-
-	exit := Exit{ExitedAt: w.clock.Now(), Cause: CauseExit, RemnantsKilled: remnants}
-	if w.stopping {
-		exit.Cause = CauseStop
-	}
-	if leftover != nil {
-		exit.Error = leftover.Error()
-	}
-	exit.ExitCode, exit.Signal = outcome(cmd.ProcessState)
+	exit.ExitedAt = w.clock.Now()
 	return Write(w.o.RunDir, ExitFile, exit)
 }
 
@@ -223,19 +227,20 @@ func (w *wrapper) waitForGate() (stopped bool, err error) {
 	}
 }
 
-// supervise waits for the harness to end, starting the stop when asked to.
-func (w *wrapper) supervise(waited <-chan struct{}) {
+// supervise waits for the harness to end, starting the stop when asked to. It
+// returns false if the grace of a stop ran out with the harness alive.
+func (w *wrapper) supervise(waited <-chan struct{}) bool {
 	for {
 		select {
 		case <-waited:
-			return
+			return true
 		case sig := <-w.signals:
 			if w.stops(sig) {
 				w.beginStop()
 			}
 		case <-w.deadline:
-			w.deadline, w.expired = nil, true
-			w.killOthers()
+			w.deadline = nil
+			return false
 		}
 	}
 }
@@ -263,72 +268,67 @@ func (w *wrapper) arm() {
 	w.deadline = w.timer.C()
 }
 
-// cleanup makes sure that nothing of the group is left but the wrapper, after
-// the harness exited. What survives is asked to end and killed after the
-// grace. It returns how many processes it found and, if some survive even
-// SIGKILL for killRounds polls, an error that says so.
-func (w *wrapper) cleanup() (found int, leftover error) {
-	others, err := w.others()
-	if err != nil {
-		return 0, err
+// settleGroup is what happens to the group once the harness exited. If other
+// processes are left, the group is asked to end and given the grace; it returns
+// how many were found and whether some are still there when the grace is over.
+// Nothing is signalled by pid: a pid that was listed can end, be reaped and be
+// reused outside the group, and only a signal to the group, sent while this
+// process is alive and so keeps the group's ID, cannot reach a stranger.
+func (w *wrapper) settleGroup() (found int, survivors bool) {
+	found = w.count()
+	if found == 0 {
+		return 0, false
 	}
-	if len(others) == 0 {
-		return 0, nil
-	}
-	found = len(others)
-	if !w.stopping && !w.expired && w.deadline == nil {
-		_ = syscall.Kill(-w.pgid, syscall.SIGTERM)
+	if !w.stopping && w.deadline == nil {
+		_ = syscall.Kill(-w.pgid, syscall.SIGTERM) // this process catches it too
 		w.arm()
 	}
 	ticker := w.clock.NewTicker(poll)
 	defer ticker.Stop()
-	for rounds := 0; ; {
-		if others, err = w.others(); err != nil {
-			return found, err
-		}
-		if len(others) == 0 {
-			return found, nil
-		}
-		if w.expired {
-			if rounds++; rounds > killRounds {
-				return found, fmt.Errorf("%d processes of the group survive SIGKILL", len(others))
-			}
-			w.killOthers()
-		}
+	for w.count() > 0 {
 		select {
 		case <-w.deadline:
-			w.deadline, w.expired = nil, true
+			w.deadline = nil
+			return found, w.count() > 0
 		case <-ticker.C():
 		}
 	}
+	return found, false
 }
 
-// others lists the live processes of the group but this one.
-func (w *wrapper) others() ([]int, error) {
+// count is the number of live processes of the group but this one. It only
+// counts: it is never used to choose whom to signal. If it cannot tell, it
+// says 1, so that the group is asked to end rather than assumed empty.
+func (w *wrapper) count() int {
 	members, err := procident.GroupMembers(w.pgid)
 	if err != nil {
-		return nil, err
+		return 1
 	}
-	out := members[:0]
+	n := 0
 	for _, pid := range members {
 		if pid != w.self {
-			out = append(out, pid)
+			n++
 		}
 	}
-	return out, nil
+	return n
 }
 
-// killOthers kills every process of the group but this one, by pid: a signal to
-// the group would kill the wrapper before it said what happened.
-func (w *wrapper) killOthers() {
-	others, err := w.others()
-	if err != nil {
-		return
+// endByKillingGroup writes the exit and then, as the last thing this process
+// does, kills the whole group, itself included. The exit is on disk before the
+// kill, so the daemon finds it and finds the wrapper gone.
+func (w *wrapper) endByKillingGroup(log *os.File, exit Exit) error {
+	exit.ExitedAt = w.clock.Now()
+	_ = log.Sync()
+	if err := Write(w.o.RunDir, ExitFile, exit); err != nil {
+		return err
 	}
-	for _, pid := range others {
-		_ = syscall.Kill(pid, syscall.SIGKILL)
-	}
+	w.killGroup()
+	return nil
 }
+
+// killGroup is SIGKILL to the group this process leads and keeps reserved by
+// being alive. It is the only way this process kills anything.
+func (w *wrapper) killGroup() { _ = syscall.Kill(-w.pgid, syscall.SIGKILL) }
 
 // outcome reads how the harness ended: its exit code, or the signal that killed it.
 func outcome(ps *os.ProcessState) (code *int, sig string) {

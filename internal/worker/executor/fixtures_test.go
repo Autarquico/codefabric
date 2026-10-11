@@ -102,6 +102,7 @@ type fakeRuntime struct {
 	mu       sync.Mutex
 	sessions map[string]bool
 	starts   []cfruntime.Spec
+	wired    []cfruntime.Spec
 	stops    []string
 	startErr error
 }
@@ -121,6 +122,13 @@ func (r *fakeRuntime) Start(_ context.Context, spec cfruntime.Spec) (cfruntime.H
 	}
 	r.sessions[spec.Name] = true
 	return r.HandleFor(spec.Name), nil
+}
+
+func (r *fakeRuntime) Wire(_ context.Context, spec cfruntime.Spec) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wired = append(r.wired, spec)
+	return nil
 }
 
 func (r *fakeRuntime) Stop(_ context.Context, h cfruntime.Handle) error {
@@ -322,15 +330,27 @@ type helper struct {
 // newWrapperProcess starts `sh -c script` as the leader of its own group.
 func newWrapperProcess(t *testing.T, script string) *helper {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", script) //nolint:gosec // the script of a test
+	// The script waits on its input until the identity is taken, so that one that
+	// ends at once (`exit 0`) cannot be gone before it is registered.
+	input, hold, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "read _go; "+script) //nolint:gosec // the script of a test
+	cmd.Stdin = input
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	_ = input.Close()
 	start, err := procident.StartOf(cmd.Process.Pid)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := hold.WriteString("go\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = hold.Close()
 	h := &helper{cmd: cmd, ended: make(chan struct{}), w: execwrap.Wrapper{PID: cmd.Process.Pid, PGID: cmd.Process.Pid, Start: start, StartedAt: t0}}
 	go func() {
 		_ = cmd.Wait()

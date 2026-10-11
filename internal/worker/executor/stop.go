@@ -106,7 +106,7 @@ func (e *Executor) signalStop(ctx context.Context, r state.Run, m markers) {
 	}
 	switch verdictOf(m.wrapper) {
 	case procident.Same:
-		if err := syscall.Kill(m.wrapper.PID, syscall.SIGTERM); err != nil {
+		if err := syscall.Kill(-m.wrapper.PGID, syscall.SIGTERM); err != nil {
 			e.log.WarnContext(ctx, "signalling the wrapper failed", "run", r.RunID, "err", err)
 		}
 	case procident.Gone, procident.Rebooted, procident.Different:

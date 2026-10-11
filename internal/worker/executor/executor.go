@@ -54,6 +54,8 @@ const (
 type Hooks struct {
 	BeforeRuntimeStart func(state.Run)
 	AfterRuntimeStart  func(state.Run)
+	// AfterMarkers runs between reading the markers of a Run and acting on them.
+	AfterMarkers func(state.Run)
 }
 
 // Options parameterise New.

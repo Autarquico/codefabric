@@ -50,7 +50,7 @@ func (s *Service) Report(ctx context.Context, by pki.Session, runID string, req 
 	}{runID, req}, func(tx *store.Tx, act mutation.Act) (v1.RunReportResponse, error) {
 		w, err := store.WorkerByIdentity(ctx, tx, by.Principal.ID)
 		if errors.Is(err, store.ErrNotFound) {
-			return v1.RunReportResponse{}, domain.NewError(domain.CodeNotFound, "this identity is not a Worker", nil)
+			return v1.RunReportResponse{}, domain.NewError(domain.CodeUnauthenticated, "this identity is not a Worker", nil)
 		}
 		if err != nil {
 			return v1.RunReportResponse{}, err

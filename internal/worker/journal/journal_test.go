@@ -430,3 +430,30 @@ func waitTimers(t *testing.T, clk *clock.Fake, n int) {
 		t.Fatalf("waiting for %d timers: %v", n, err)
 	}
 }
+
+func TestAnErrorOfIdentityIsNotFencedAndTheReportsGoOutAgainUnchanged(t *testing.T) {
+	f := newFixture(t)
+	j := journal.New("01J0000000000000000000000E1", f.clock)
+	f.write(j, "run_a", lifecycle...)
+	down := &controller{answer: func(string, v1.RunReportRequest) (v1.RunReportResponse, error) {
+		return v1.RunReportResponse{}, domain.NewError(domain.CodeUnauthenticated, "this identity is not a Worker", nil)
+	}}
+	if _, err := f.sender(down, j).Flush(t.Context()); err == nil {
+		t.Fatal("an identity error was not an error")
+	}
+	if run, _ := state.RunBy(t.Context(), f.db.Reader(), state.Key{RunID: "run_a", LeaseEpoch: 1}); run.FencedCode != "" {
+		t.Fatalf("fenced by an error of identity: %q", run.FencedCode)
+	}
+	up := &controller{}
+	if _, err := f.sender(up, j).Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range up.sent() {
+		got = append(got, fmt.Sprintf("%s/%d/%s", e.epoch, e.seq, e.kind))
+	}
+	want := []string{"01J0000000000000000000000E1/1/started", "01J0000000000000000000000E1/2/exited", "01J0000000000000000000000E1/3/stopped"}
+	if !slices.Equal(got, want) || f.pending() != 0 {
+		t.Errorf("sent %v, %d rows left", got, f.pending())
+	}
+}

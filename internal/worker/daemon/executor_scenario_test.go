@@ -31,6 +31,7 @@ func (r *recordingRuntime) Start(context.Context, cfruntime.Spec) (cfruntime.Han
 	r.starts++
 	return cfruntime.Handle{Runtime: "fake", Ref: "x/y"}, nil
 }
+func (r *recordingRuntime) Wire(context.Context, cfruntime.Spec) error   { return nil }
 func (r *recordingRuntime) Stop(context.Context, cfruntime.Handle) error { return nil }
 func (r *recordingRuntime) Status(context.Context, cfruntime.Handle) (cfruntime.Status, error) {
 	return cfruntime.Status{}, nil

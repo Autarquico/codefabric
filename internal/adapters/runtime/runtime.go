@@ -51,6 +51,11 @@ type Runtime interface {
 	// Start creates the session of the Spec, or adopts the one that exists
 	// under its Name: it is idempotent by Name.
 	Start(ctx context.Context, spec Spec) (Handle, error)
+	// Wire finishes what makes a session usable: capturing its terminal and opening
+	// the gate (Spec.Capture, Spec.Ready). It is idempotent, and Start does it, but
+	// a daemon that died half way through Start finds a session that exists and
+	// has to complete it without starting another.
+	Wire(ctx context.Context, spec Spec) error
 	// Stop destroys the session. Stopping one that does not exist is not an error.
 	// Ending the processes in an orderly way is the caller's: this is the last resort.
 	Stop(ctx context.Context, h Handle) error

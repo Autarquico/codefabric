@@ -85,8 +85,11 @@ type Exit struct {
 	Signal         string    `json:"signal,omitempty"`
 	ExitedAt       time.Time `json:"exited_at"`
 	Cause          string    `json:"cause"`
-	RemnantsKilled int       `json:"remnants_killed"`
-	Error          string    `json:"error,omitempty"`
+	RemnantsKilled int       `json:"remnants_killed"` // processes of the group found after the harness exited
+	// GroupKilled: some did not end within the grace, and the wrapper killed the
+	// group as its last act, after writing this file.
+	GroupKilled bool   `json:"group_killed,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // Write stores v as the file in dir, atomically.

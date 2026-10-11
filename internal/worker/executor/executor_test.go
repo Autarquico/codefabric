@@ -1071,3 +1071,62 @@ func TestAnUnidentifiableWrapperIsLoggedAtWarnOnceAndThenAtDebug(t *testing.T) {
 		t.Errorf("%d warnings and %d debug lines:\n%s", warns, debugs, out.String())
 	}
 }
+
+func TestAnExitAndAStartWrittenWhileTheMarkersWereBeingReadAreNotMissed(t *testing.T) {
+	var f *fixture
+	var armed bool
+	f = newFixture(t, func(o *Options) {
+		o.Hooks.AfterMarkers = func(r state.Run) {
+			if !armed {
+				return
+			}
+			armed = false
+			// The wrapper writes both between the first reading and the check of its identity.
+			f.writeStarted(r.Key, execwrap.Wrapper{PID: 1, PGID: 1}, t0.Add(time.Second))
+			f.writeExit(r.Key, execwrap.Exit{ExitCode: intp(5), ExitedAt: t0.Add(2 * time.Second), Cause: execwrap.CauseExit})
+		}
+	})
+	k := f.accepted("echo hi")
+	w := newWrapperProcess(t, "exit 0")
+	<-w.ended
+	f.writeWrapper(k, w.w) // only the wrapper marker exists at the first reading
+	if err := f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+		return state.Advance(t.Context(), tx, k, state.PhaseAccepted, state.PhaseStarting, t0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	armed = true
+	if !f.e.step(t.Context(), k) {
+		t.Fatalf("not settled: %s", f.run(k).Phase)
+	}
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) ||
+		reports[1].ExitCode == nil || *reports[1].ExitCode != 5 || reports[1].Cause != v1.ExitCauseExit {
+		t.Errorf("reports = %+v: the exit of the harness is its exit, not a loss", reports)
+	}
+}
+
+func TestAMarkerThatCannotBeReadAgainStopsTheSettlement(t *testing.T) {
+	var f *fixture
+	armed := true
+	f = newFixture(t, func(o *Options) {
+		o.Hooks.AfterMarkers = func(r state.Run) {
+			if armed {
+				armed = false
+				if err := os.WriteFile(filepath.Join(f.runDir(r.Key), execwrap.StartedFile), []byte("{"), 0o600); err != nil {
+					t.Error(err)
+				}
+			}
+		}
+	})
+	k := f.started("echo hi")
+	w := newWrapperProcess(t, "exit 0")
+	<-w.ended
+	f.writeWrapper(k, w.w)
+	if f.e.step(t.Context(), k) {
+		t.Fatal("settled on markers it could not read")
+	}
+	if r := f.run(k); r.Phase != state.PhaseRunning || len(f.reports(k)) != 1 {
+		t.Errorf("phase %s, %d reports", r.Phase, len(f.reports(k)))
+	}
+}

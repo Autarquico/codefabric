@@ -78,7 +78,28 @@ func (e *Executor) settleExit(ctx context.Context, r state.Run, m markers) (done
 		}
 	}
 	e.endSession(ctx, r.Key)
-	return e.finalize(ctx, r, facts{at: m.exit.ExitedAt, exit: m.exit, started: m.started})
+	fresh, ok := e.refresh(ctx, r, m)
+	if !ok {
+		return false
+	}
+	if fresh.exit == nil {
+		fresh.exit = m.exit
+	}
+	return e.finalize(ctx, r, facts{at: fresh.exit.ExitedAt, exit: fresh.exit, started: fresh.started})
+}
+
+// refresh reads the markers of a Run again, once its wrapper is known to be
+// over: what the first reading saw was taken while the wrapper could still write,
+// and a started or an exit written in between would be missed. The wrapper record
+// that was verified stays. ok is false if they cannot be read.
+func (e *Executor) refresh(ctx context.Context, r state.Run, m markers) (markers, bool) {
+	fresh, err := e.markers(r.Key)
+	if err != nil {
+		e.log.ErrorContext(ctx, "reading the markers of a Run again", "run", r.RunID, "err", err)
+		return markers{}, false
+	}
+	fresh.wrapper = m.wrapper
+	return fresh, true
 }
 
 // settleLost is the wrapper being gone with no exit. Only if it is gone in the
@@ -86,9 +107,12 @@ func (e *Executor) settleExit(ctx context.Context, r state.Run, m markers) (done
 // after a reboot, or with the pid in other hands, nothing is signalled and the
 // group counts as empty.
 func (e *Executor) settleLost(ctx context.Context, r state.Run, m markers, v procident.Verdict) (done bool) {
-	if exit, err := readMarker[execwrap.Exit](e.runDir(r.Key), execwrap.ExitFile); err == nil && exit != nil {
-		m.exit = exit // it wrote its exit and then died: that is not a loss
-		return e.settleExit(ctx, r, m)
+	fresh, ok := e.refresh(ctx, r, m)
+	if !ok {
+		return false
+	}
+	if m = fresh; m.exit != nil {
+		return e.settleExit(ctx, r, m) // it wrote its exit and then died: that is not a loss
 	}
 	w := m.wrapper
 	e.log.WarnContext(ctx, "the wrapper of a Run is gone without an exit", "run", r.RunID, "verdict", v.String())
@@ -97,6 +121,12 @@ func (e *Executor) settleLost(ctx context.Context, r state.Run, m markers, v pro
 		return false
 	}
 	e.endSession(ctx, r.Key)
+	if m, ok = e.refresh(ctx, r, m); !ok {
+		return false
+	}
+	if m.exit != nil {
+		return e.settleExit(ctx, r, m)
+	}
 	return e.finalize(ctx, r, facts{at: e.clock.Now(), started: m.started, lost: true, message: "the wrapper died without leaving an exit"})
 }
 
