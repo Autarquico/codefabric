@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 )
 
 // Name is how handles say that tmux made them.
@@ -17,7 +19,7 @@ const Name = "tmux"
 // epoch always name the same session, which is what makes Start idempotent. It
 // has no '.' or ':' (tmux reads them as separators in a target).
 func SessionName(runID string, leaseEpoch uint64) string {
-	return fmt.Sprintf("cf-%s-e%d", runID, leaseEpoch)
+	return cfruntime.NameFor(runID, leaseEpoch)
 }
 
 // SocketName names the tmux server of a Worker by its data directory, so that

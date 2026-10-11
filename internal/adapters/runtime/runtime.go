@@ -6,7 +6,17 @@
 // standard library's runtime.
 package runtime
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
+
+// NameFor is the name of the session of a Run under a lease epoch (§6.4). It is
+// derived, never stored apart: the same Run and epoch name the same session,
+// which is what lets Start adopt a session instead of making a second one.
+func NameFor(runID string, leaseEpoch uint64) string {
+	return fmt.Sprintf("cf-%s-e%d", runID, leaseEpoch)
+}
 
 // Spec describes the session of one Run.
 //
