@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: L
 issue: 10
-prs: []
+prs: [34]
 related_issues: [10]
 sub_issues: []
 depends_on: [projects-tasks-runs-api, worker-registry-heartbeat]
