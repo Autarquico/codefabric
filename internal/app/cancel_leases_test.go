@@ -164,3 +164,61 @@ func TestHeartbeat_KeepsFreeNetOfReservations(t *testing.T) {
 		t.Errorf("Free after a heartbeat = %+v", got)
 	}
 }
+
+func TestComplete_WithAnAcceptedLeaseKeepsTheLeaseAndTheReservation(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	run := e.queuedRun("x")
+	l := e.offer(run.ID, w)
+	_, err := e.accept(w, l)
+	must(t, err)
+
+	complete := func() {
+		t.Helper()
+		_, err := e.app.Tasks.Complete(t.Context(), e.owner, run.TaskID, "", v1.ActionRequest{RequestID: "done-1"})
+		must(t, err)
+	}
+	complete()
+	r := e.storedRun(run.ID)
+	if r.State != domain.RunCancelled || r.LeaseID != l.ID || r.WorkerID != w.Principal.ID || r.LeaseEpoch != 1 {
+		t.Errorf("Run = %+v: the references of an accepted lease stay", r)
+	}
+	if got := e.storedLease(l.ID); got.State != domain.LeaseAccepted {
+		t.Errorf("lease = %s", got.State)
+	}
+	if rs := e.reservation(l.ID); rs.ReleasedAt != nil {
+		t.Error("the reservation of a Run that may be starting was released")
+	}
+	events, reservations := len(e.events()), e.storedWorker(w).Reservations
+	complete() // the same request_id again
+	if len(e.events()) != events || e.storedWorker(w).Reservations != reservations || len(e.events(domain.EventLeaseExpired)) != 0 {
+		t.Error("the repeated request changed something")
+	}
+}
+
+// offer, then drain, then accept: a draining Worker answers the lease it had before the drain.
+func TestDrain_AWorkerAcceptsTheLeaseItHadBeforeButGetsNoNewOnes(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	run := e.queuedRun("a")
+	l := e.offer(run.ID, w)
+
+	_, err := e.app.Workers.Drain(t.Context(), e.owner, "alpha", v1.ActionRequest{})
+	must(t, err)
+	if st := e.storedWorker(w); st.State != domain.WorkerDraining {
+		t.Fatalf("Worker is %s: it holds a lease, so it cannot be drained yet", st.State)
+	}
+	got, err := e.accept(w, l)
+	must(t, err)
+	if got.Lease.State != domain.LeaseAccepted || e.storedRun(run.ID).State != domain.RunPreparing {
+		t.Fatalf("accept by a draining Worker = %+v, Run %s", got.Lease, e.storedRun(run.ID).State)
+	}
+
+	next := e.queuedRun("b")
+	if res := e.pass(); res.Assigned != 0 {
+		t.Errorf("a draining Worker was given %d leases", res.Assigned)
+	}
+	if e.workerOfRun(next.ID) != "" || e.storedWorker(w).Reservations != 1 || e.storedWorker(w).State != domain.WorkerDraining {
+		t.Error("the draining Worker took the new Run or lost its reservation")
+	}
+}

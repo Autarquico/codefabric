@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/leases"
+	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -705,5 +707,142 @@ func TestLongPoll_IsAuthorisedAgainAtEveryLook(t *testing.T) {
 	wantCode(t, err, domain.CodeUnauthenticated)
 	if len(page.Commands) != 0 {
 		t.Errorf("page = %+v", page)
+	}
+}
+
+// offerAll gives every queued Run of the list to the Worker in one transaction.
+func (e *env) offerAll(w pki.Session, runs []string) {
+	e.t.Helper()
+	ctx := e.t.Context()
+	_, err := mutation.Do(ctx, e.db, e.clock, e.owner, "test.offer-all", "", runs,
+		func(tx *store.Tx, act mutation.Act) (int, error) {
+			worker, err := store.WorkerByID(ctx, tx, w.Principal.ID)
+			if err != nil {
+				return 0, err
+			}
+			for _, id := range runs {
+				r, err := store.RunByID(ctx, tx, domain.ID(id))
+				if err != nil {
+					return 0, err
+				}
+				task, err := store.TaskByID(ctx, tx, r.TaskID)
+				if err != nil {
+					return 0, err
+				}
+				if _, err := e.app.Leases.CreateIn(ctx, tx, act, r, task, worker, v1.Capacity{CPU: 1, MemoryMB: 1}); err != nil {
+					return 0, err
+				}
+			}
+			return len(runs), nil
+		})
+	must(e.t, err)
+}
+
+func TestAssignments_LimitsOfAPageAreTheDefaultAndTheMaximum(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	e.queuedRun("seed")
+	const total = 70
+	e.seedQueuedRuns(total, `{}`)
+	runs := make([]string, 0, total)
+	for i := range total {
+		runs = append(runs, fmt.Sprintf("run_bulk%d", i))
+	}
+	e.offerAll(w, runs)
+
+	first, err := e.app.Leases.Assignments(t.Context(), w, leases.AssignmentsQuery{})
+	must(t, err)
+	if len(first.Commands) != leases.DefaultLimit || first.LastSeq != uint64(leases.DefaultLimit) {
+		t.Fatalf("default page = %d orders, last %d, want %d", len(first.Commands), first.LastSeq, leases.DefaultLimit)
+	}
+	big, err := e.app.Leases.Assignments(t.Context(), w, leases.AssignmentsQuery{Limit: 1000})
+	must(t, err)
+	if len(big.Commands) != leases.MaxLimit || big.LastSeq != uint64(leases.MaxLimit) {
+		t.Fatalf("page over the maximum = %d orders, last %d, want %d", len(big.Commands), big.LastSeq, leases.MaxLimit)
+	}
+	rest, err := e.app.Leases.Assignments(t.Context(), w, leases.AssignmentsQuery{AfterSeq: big.LastSeq, Limit: 1000})
+	must(t, err)
+	if len(rest.Commands) != total-leases.MaxLimit || rest.Commands[0].Seq != uint64(leases.MaxLimit)+1 || rest.LastSeq != total {
+		t.Fatalf("the rest = %d orders from %d, last %d", len(rest.Commands), rest.Commands[0].Seq, rest.LastSeq)
+	}
+	// Walking by the default page reaches every order once, in order.
+	var seen []uint64
+	for after := uint64(0); ; {
+		page, err := e.app.Leases.Assignments(t.Context(), w, leases.AssignmentsQuery{AfterSeq: after})
+		must(t, err)
+		if len(page.Commands) == 0 {
+			break
+		}
+		for _, c := range page.Commands {
+			seen = append(seen, c.Seq)
+		}
+		after = page.LastSeq
+	}
+	if len(seen) != total {
+		t.Fatalf("walked %d orders", len(seen))
+	}
+	for i, seq := range seen {
+		if seq != uint64(i+1) {
+			t.Fatalf("seq %d at position %d: an order was skipped or repeated", seq, i)
+		}
+	}
+}
+
+func TestAssignments_AnOrderOverTheByteBoundIsSentAloneAndTheNextFollows(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	e.offer(e.queuedRun("a").ID, w)
+	e.offer(e.queuedRun("b").ID, w)
+	e.offer(e.queuedRun("c").ID, w)
+	e.bloat(1, strings.Repeat("x", 600<<10)) // each of the first two is over 512 KiB on its own
+	e.bloat(2, strings.Repeat("y", 600<<10))
+
+	var seqs []uint64
+	for after := uint64(0); ; {
+		page, err := e.app.Leases.Assignments(t.Context(), w, leases.AssignmentsQuery{AfterSeq: after})
+		must(t, err)
+		if len(page.Commands) == 0 {
+			break
+		}
+		if after < 2 && len(page.Commands) != 1 {
+			t.Fatalf("a page after %d held %d orders: a big order travels alone", after, len(page.Commands))
+		}
+		for _, c := range page.Commands {
+			seqs = append(seqs, c.Seq)
+		}
+		after = page.LastSeq
+	}
+	if len(seqs) != 3 || seqs[0] != 1 || seqs[1] != 2 || seqs[2] != 3 {
+		t.Errorf("orders delivered = %v", seqs)
+	}
+}
+
+// A certificate that expires while the Worker waits ends the poll, on a commit and at the deadline.
+func TestLongPoll_ACertificateThatExpiresDuringTheWaitEndsIt(t *testing.T) {
+	for _, via := range []string{"a commit", "the deadline"} {
+		t.Run(via, func(t *testing.T) {
+			e := newEnv(t)
+			w := e.joinWorker("alpha")
+			e.clock.Advance(w.Certificate.NotAfter.Sub(e.clock.Now()) - 5*time.Second) // five seconds of certificate left
+			result := e.poll(w, 0, leases.MaxWait)
+			e.blockUntilPolling()
+
+			if via == "a commit" {
+				e.clock.Advance(6 * time.Second) // past the certificate, short of the deadline
+				must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+					_, _, err := tx.AppendEvent(t.Context(), domain.Event{
+						Type: domain.EventWorkerDraining, Actor: domain.ActorRef{Kind: domain.ActorSystem, ID: "controller"},
+					})
+					return err
+				}))
+			} else {
+				e.clock.Advance(leases.MaxWait)
+			}
+			got := e.receive(result)
+			wantCode(t, got.err, domain.CodeUnauthenticated)
+			if len(got.Commands) != 0 {
+				t.Errorf("orders were delivered with an expired certificate: %+v", got.Commands)
+			}
+		})
 	}
 }

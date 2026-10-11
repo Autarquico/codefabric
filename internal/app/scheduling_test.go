@@ -808,3 +808,38 @@ func TestLoop_ReportsAProblemOnceAtErrorLevel(t *testing.T) {
 		t.Errorf("%d errors and %d debug records for a Run that stayed broken: %v", errs, debugs, h.levels)
 	}
 }
+
+// Two passes at once and one slot: a single reservation, and the other Run still queued.
+func TestPass_TwoPassesCompetingForTheOnlySlotReserveOnce(t *testing.T) {
+	for round := range 5 {
+		e := newEnv(t)
+		w := e.joinWorkerWith("alpha", v1.WorkerSettings{MaxConcurrentRuns: 1})
+		first, second := e.queuedRun("a"), e.queuedRun("b")
+
+		results := make(chan scheduler.Result, 2)
+		for range 2 {
+			go func() {
+				res, err := e.app.Scheduler.Pass(t.Context())
+				if err != nil {
+					t.Error(err)
+				}
+				results <- res
+			}()
+		}
+		total := (<-results).Assigned + (<-results).Assigned
+		if total != 1 || e.count("reservations") != 1 || e.storedWorker(w).Reservations != 1 {
+			t.Fatalf("round %d: %d assignments, %d reservations", round, total, e.count("reservations"))
+		}
+		held := 0
+		for _, id := range []string{first.ID, second.ID} {
+			if e.workerOfRun(id) != "" {
+				held++
+			} else if r := e.storedRun(id); r.State != domain.RunQueued || r.LeaseID != "" {
+				t.Errorf("round %d: the waiting Run = %+v", round, r)
+			}
+		}
+		if held != 1 {
+			t.Fatalf("round %d: %d Runs hold a Worker", round, held)
+		}
+	}
+}
