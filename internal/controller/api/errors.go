@@ -22,6 +22,11 @@ var statusByCode = map[domain.Code]int{
 	domain.CodeIdempotencyMismatch: http.StatusConflict,
 	domain.CodeWorkerBusy:          http.StatusConflict,
 	domain.CodeWorkerOffline:       http.StatusConflict,
+	domain.CodeStaleLease:          http.StatusConflict,
+	domain.CodeWorkerCapacity:      http.StatusConflict,
+	domain.CodeNoEligibleWorker:    http.StatusConflict,
+	domain.CodeHarnessUnavailable:  http.StatusConflict,
+	domain.CodeVersionIncompatible: http.StatusConflict,
 	domain.CodeNotImplemented:      http.StatusNotImplemented,
 }
 

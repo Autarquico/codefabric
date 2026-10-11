@@ -77,6 +77,14 @@ type Run struct {
 	CreatedAt    time.Time
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
+
+	// LeaseID and WorkerID name the live lease and its Worker, or the accepted
+	// one a Run keeps after it ended (§10.4.5); both are "" for a Run that has
+	// none. LeaseEpoch is the last epoch issued and never goes down. LeaseState
+	// is that of LeaseID, read with the Run and never written through it.
+	LeaseID    domain.ID
+	LeaseEpoch uint64
+	LeaseState domain.LeaseState
 }
 
 func scanErr(err error, what string) error {
@@ -380,22 +388,25 @@ func TaskCandidates(ctx context.Context, q Querier) ([]domain.Candidate, error) 
 
 const runColumns = `id, short_n, task_id, attempt, lineage_kind, spec, spec_digest, source_commit, state,
     COALESCE(end_reason, ''), COALESCE(queued_reason, ''), publication, evaluation, runtime, promoted,
-    COALESCE(worker_id, ''), created_at, started_at, finished_at`
+    COALESCE(worker_id, ''), created_at, started_at, finished_at,
+    COALESCE(lease_id, ''), COALESCE(lease_epoch, 0), COALESCE((SELECT l.state FROM leases l WHERE l.id = runs.lease_id), '')`
 
 func scanRun(row rowScanner) (Run, error) {
 	var (
 		r                 Run
 		id, task, worker  string
-		spec              string
+		spec, lease       string
+		leaseState        string
 		created           int64
 		started, finished sql.NullInt64
 	)
 	if err := row.Scan(&id, &r.Short, &task, &r.Attempt, &r.Lineage, &spec, &r.SpecDigest, &r.SourceCommit, &r.State,
 		&r.EndReason, &r.QueuedReason, &r.Publication, &r.Evaluation, &r.Runtime, &r.Promoted,
-		&worker, &created, &started, &finished); err != nil {
+		&worker, &created, &started, &finished, &lease, &r.LeaseEpoch, &leaseState); err != nil {
 		return Run{}, scanErr(err, "run")
 	}
 	r.ID, r.TaskID, r.WorkerID, r.Spec = domain.ID(id), domain.ID(task), domain.ID(worker), []byte(spec)
+	r.LeaseID, r.LeaseState = domain.ID(lease), domain.LeaseState(leaseState)
 	r.CreatedAt, r.StartedAt, r.FinishedAt = time.Unix(0, created).UTC(), timePtr(started), timePtr(finished)
 	return r, nil
 }
@@ -416,16 +427,75 @@ func (t *Tx) InsertRun(ctx context.Context, r Run) error {
 	return nil
 }
 
-// FinishRun moves a Run from one state to a terminal one, but only if it is
-// still in from (compare-and-set, §11.7). It reports whether the Run moved.
-func (t *Tx) FinishRun(ctx context.Context, id domain.ID, from, to domain.RunState, reason domain.EndReason, at time.Time) (bool, error) {
+// FinishRun moves a Run from its state to a terminal one. It is a
+// compare-and-set (§11.7) on everything that identifies the Run's current
+// ownership, its state and its lease, so a decision taken on a stale read
+// cannot land: if the Run is not as run says, ErrNoRowChanged.
+func (t *Tx) FinishRun(ctx context.Context, run Run, to domain.RunState, reason domain.EndReason, at time.Time) error {
 	res, err := t.Exec(ctx,
-		`UPDATE runs SET state = ?, end_reason = ?, finished_at = ? WHERE id = ? AND state = ?`,
-		string(to), nullable(string(reason)), at.UnixNano(), string(id), string(from))
-	if err != nil {
-		return false, fmt.Errorf("store: finishing run: %w", err)
+		`UPDATE runs SET state = ?, end_reason = ?, finished_at = ?
+		 WHERE id = ? AND state = ? AND lease_id IS ? AND COALESCE(lease_epoch, 0) = ?`,
+		string(to), nullable(string(reason)), at.UnixNano(),
+		string(run.ID), string(run.State), nullable(string(run.LeaseID)), run.LeaseEpoch)
+	return changedOne(res, err, "finishing run")
+}
+
+// AssignRun gives a queued Run without a lease to a Worker under a new lease,
+// whose epoch must be the next one after the Run's last. The Run stays queued
+// and no longer waits for any reason (§10.4.1).
+func (t *Tx) AssignRun(ctx context.Context, run Run, lease domain.ID, worker domain.ID, epoch uint64) error {
+	res, err := t.Exec(ctx,
+		`UPDATE runs SET worker_id = ?, lease_id = ?, lease_epoch = ?, queued_reason = NULL
+		 WHERE id = ? AND state = ? AND lease_id IS NULL AND COALESCE(lease_epoch, 0) = ? AND ? = COALESCE(lease_epoch, 0) + 1`,
+		string(worker), string(lease), epoch, string(run.ID), string(domain.RunQueued), run.LeaseEpoch, epoch)
+	return changedOne(res, err, "assigning run")
+}
+
+// ClearRunLease takes a queued Run back from its Worker when its pending
+// lease ends without being accepted. The epoch stays: it never goes down.
+func (t *Tx) ClearRunLease(ctx context.Context, run Run) error {
+	res, err := t.Exec(ctx,
+		`UPDATE runs SET worker_id = NULL, lease_id = NULL
+		 WHERE id = ? AND state = ? AND lease_id = ? AND lease_epoch = ?`,
+		string(run.ID), string(domain.RunQueued), string(run.LeaseID), run.LeaseEpoch)
+	return changedOne(res, err, "clearing run lease")
+}
+
+// AdvanceRun moves a Run that holds a lease from one state to the next one of
+// the machine (§11.7), but only while it is in the state and under the lease
+// that run says.
+func (t *Tx) AdvanceRun(ctx context.Context, run Run, to domain.RunState) error {
+	res, err := t.Exec(ctx,
+		`UPDATE runs SET state = ? WHERE id = ? AND state = ? AND lease_id = ? AND lease_epoch = ?`,
+		string(to), string(run.ID), string(run.State), string(run.LeaseID), run.LeaseEpoch)
+	return changedOne(res, err, "advancing run")
+}
+
+// QueuedRuns lists the Runs that wait for a Worker (queued, without a lease)
+// in the order the scheduler serves them: the Task's priority first, then age.
+func QueuedRuns(ctx context.Context, q Querier) ([]Run, error) {
+	return collect(ctx, q, scanRun,
+		`SELECT `+runColumns+` FROM runs WHERE state = ? AND lease_id IS NULL
+		 ORDER BY (SELECT t.priority FROM tasks t WHERE t.id = runs.task_id) DESC, created_at, short_n`,
+		string(domain.RunQueued))
+}
+
+// SetQueuedReasons stores why each of the Runs waits, but only on those that
+// still wait without a lease at the epoch they were read at and whose reason
+// is another: it changes nothing else, so a pass that finds the same
+// reasons writes nothing. Unlike the other writes of a Run this one is meant to
+// match no row when the Run moved on, which is why it is not a changedOne.
+func (t *Tx) SetQueuedReasons(ctx context.Context, runs []Run, reason string) error {
+	for _, run := range runs {
+		_, err := t.Exec(ctx,
+			`UPDATE runs SET queued_reason = ?
+			 WHERE id = ? AND state = ? AND lease_id IS NULL AND COALESCE(lease_epoch, 0) = ? AND queued_reason IS NOT ?`,
+			reason, string(run.ID), string(domain.RunQueued), run.LeaseEpoch, reason)
+		if err != nil {
+			return fmt.Errorf("store: setting queued reason: %w", err)
+		}
 	}
-	return rowsChanged(res)
+	return nil
 }
 
 // RunByID returns ErrNotFound for an unknown ID.

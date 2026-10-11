@@ -6,14 +6,14 @@ status: active
 priority: P0
 size: L
 issue: 10
-prs: []
+prs: [34]
 related_issues: [10]
 sub_issues: []
 depends_on: [projects-tasks-runs-api, worker-registry-heartbeat]
 supersedes: []
 related_specs: [codefabric-spec, phase-1-workers]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 
 # Scheduler, leases y reservas
@@ -75,6 +75,18 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+
+## Decisiones de implementación
+
+Detalladas en el Apéndice B5 de `docs/codefabric-spec.md`:
+
+- La migración `0103_leases.sql` añade `leases`, `reservations` y `worker_commands` (solo el tipo `assign`), `workers.last_command_seq`, `workers.acked_seq` y `runs_queued`.
+- `accept_by` es exclusivo; no hay estado `revoked` (una lease invalidada antes del accept queda `expired` con `close_code: run_ended`).
+- `queued_reason` es siempre `CF_NO_ELIGIBLE_WORKER`; `idle` no es elegible; tras un rechazo o una expiración sin respuesta hay un backoff de 10 s (`domain.LeaseMissBackoff`).
+- Accept y reject comparten un helper: Worker por identidad, lease propia, epoch, y solo entonces el estado.
+- Long-poll con cursor `after_seq` persistido, reentrega hasta el ACK, `limit` y tope de bytes; un solo plazo de 20 s con el reloj inyectable.
+- Cancelar o completar una Task expira la lease pendiente de su Run con su reserva; con la lease aceptada las conserva hasta la milestone del Worker.
+- `cf run explain` y `GET /v1/runs/{ref}/explain`; `cf worker remove` también se bloquea con reservas abiertas.
 
 ## Referencias
 

@@ -4,9 +4,11 @@ import (
 	"context"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/projects"
 	"github.com/Autarquico/codefabric/internal/app/refs"
 	"github.com/Autarquico/codefabric/internal/app/runs"
+	"github.com/Autarquico/codefabric/internal/app/scheduler"
 	"github.com/Autarquico/codefabric/internal/app/tasks"
 	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/controller/store"
@@ -17,10 +19,12 @@ import (
 // Services are the use cases of the Controller, wired to one store. The clock
 // must be the one the store was opened with.
 type Services struct {
-	Projects *projects.Service
-	Tasks    *tasks.Service
-	Runs     *runs.Service
-	Workers  *workers.Service
+	Projects  *projects.Service
+	Tasks     *tasks.Service
+	Runs      *runs.Service
+	Workers   *workers.Service
+	Leases    *leases.Service
+	Scheduler *scheduler.Service
 
 	db *store.DB
 }
@@ -29,12 +33,15 @@ type Services struct {
 // handed over as a function because tasks imports runs.
 func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, workersCfg workers.Config) *Services {
 	runService := runs.New(db, ids, tasks.Rederive)
+	leaseService := leases.New(db, clk, ids, tasks.Rederive)
 	return &Services{
-		Projects: projects.New(db, clk, ids),
-		Tasks:    tasks.New(db, clk, ids, runService),
-		Runs:     runService,
-		Workers:  workers.New(db, clk, workersCfg),
-		db:       db,
+		Projects:  projects.New(db, clk, ids),
+		Tasks:     tasks.New(db, clk, ids, runService),
+		Runs:      runService,
+		Workers:   workers.New(db, clk, workersCfg),
+		Leases:    leaseService,
+		Scheduler: scheduler.New(db, clk, leaseService),
+		db:        db,
 	}
 }
 

@@ -81,6 +81,7 @@ type Worker struct {
 	Availability      domain.AvailabilityPolicy `json:"availability"`
 	MaxConcurrentRuns int                       `json:"max_concurrent_runs"`
 	ActiveRuns        int                       `json:"active_runs"`
+	Reservations      int                       `json:"reservations"`
 	Contribution      WorkerSettings            `json:"contribution"`
 	Resources         WorkerResources           `json:"resources"`
 	Health            Health                    `json:"health"`

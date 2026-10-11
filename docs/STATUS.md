@@ -15,6 +15,7 @@
 - #5 Identidad del Controller, TLS y tokens de cliente
 - #6 API, Client SDK y `cf status`
 - #8 Projects, Tasks y Runs: API y CLI
+- #9 Registro de Workers y heartbeats
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -22,7 +23,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-- #9 Registro de Workers y heartbeats
+- #10 Scheduler, leases y reservas
 <!-- /pm-sync:in-progress -->
 
 ---

@@ -54,6 +54,7 @@ func TestProjects_CreateShowSetAndAudit(t *testing.T) {
 		must(t, rows.Scan(&s))
 		actions = append(actions, s)
 	}
+	must(t, rows.Err())
 	owner := string(e.owner.Principal.ID)
 	want := []string{"project.created " + owner, "project.created " + owner, "project.updated " + owner, "project.updated " + owner}
 	if !equal(actions, want) {

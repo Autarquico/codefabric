@@ -94,7 +94,7 @@ func (s *Service) view(w store.Worker) v1.Worker {
 		DaemonVersion: w.Report.DaemonVersion, Epoch: w.Report.Epoch,
 		Compatible:   domain.WorkerVersionCompatible(s.version, w.Report.DaemonVersion),
 		Capabilities: nonNil(w.Report.Capabilities), Availability: w.Settings.Availability,
-		MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, ActiveRuns: w.ActiveRuns, Contribution: w.Settings,
+		MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, ActiveRuns: w.ActiveRuns, Reservations: w.Reservations, Contribution: w.Settings,
 		Resources: w.Resources, Health: w.Health,
 		LastHeartbeatAt: w.LastHeartbeatAt, CreatedAt: w.CreatedAt, RemovedAt: w.RemovedAt,
 	}
@@ -197,10 +197,10 @@ func (s *Service) Remove(ctx context.Context, by pki.Session, ref string, req v1
 		if w.State == domain.WorkerRemoved {
 			return nil
 		}
-		if w.ActiveRuns > 0 {
+		if w.ActiveRuns > 0 || w.Reservations > 0 {
 			return domain.NewError(domain.CodeWorkerBusy,
-				fmt.Sprintf("worker %s has %d active Runs: drain it and let them end first", w.Name, w.ActiveRuns),
-				map[string]any{"active_runs": w.ActiveRuns})
+				fmt.Sprintf("worker %s has %d active Runs and %d open reservations: drain it and let them end first", w.Name, w.ActiveRuns, w.Reservations),
+				map[string]any{"active_runs": w.ActiveRuns, "reservations": w.Reservations})
 		}
 		before := w.State
 		moved, err := move(ctx, tx, w, domain.WorkerEventRemove, domain.WorkerFacts{ActiveRuns: w.ActiveRuns}, act.Now)

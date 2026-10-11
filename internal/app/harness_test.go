@@ -34,6 +34,8 @@ type env struct {
 	authority *pki.Authority
 	app       *app.Services
 	owner     pki.Session
+	epochs    map[domain.ID]string
+	sessions  map[string]pki.Session
 }
 
 func newEnv(t *testing.T) *env {
@@ -47,21 +49,27 @@ func newEnv(t *testing.T) *env {
 	ids := domain.NewIDGenerator(clk.Now, rand.Reader)
 	e := &env{
 		t: t, db: db, clock: clk,
-		authority: pki.NewAuthority(pki.AuthorityConfig{DB: db, CA: ca, Clock: clk, IDs: ids, CertTTL: domain.Defaults().IdentityCertTTL}),
-		app:       app.New(db, clk, ids, workers.Config{}),
+		authority: pki.NewAuthority(pki.AuthorityConfig{
+			DB: db, CA: ca, Clock: clk, IDs: ids, CertTTL: domain.Defaults().IdentityCertTTL, EnrollWorker: workers.Enroll,
+		}),
+		app: app.New(db, clk, ids, workers.Config{}),
 	}
 	e.owner = e.newClient("owner")
 	return e
 }
 
-func (e *env) newClient(name string) pki.Session {
+func (e *env) csr() string {
 	e.t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	must(e.t, err)
 	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
 	must(e.t, err)
-	csr := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}))
-	joined, err := e.authority.BootstrapOwner(e.t.Context(), csr, name)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}))
+}
+
+func (e *env) newClient(name string) pki.Session {
+	e.t.Helper()
+	joined, err := e.authority.BootstrapOwner(e.t.Context(), e.csr(), name)
 	must(e.t, err)
 	s, err := joined.Session()
 	must(e.t, err)

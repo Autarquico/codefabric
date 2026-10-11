@@ -60,9 +60,8 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 				Epoch: req.Epoch, DaemonVersion: req.DaemonVersion, Hostname: req.Hostname,
 				OS: req.OS, Arch: req.Arch, Capabilities: req.Capabilities,
 			}
-			// Free is Allocatable until Runs reserve resources.
-			allocatable := allocatable(req.Total, w.Settings)
-			resources := v1.WorkerResources{Total: req.Total, Allocatable: allocatable, Free: allocatable}
+			// Free is not the Worker's to say, nor kept: it is read as Allocatable less the reservations.
+			resources := v1.WorkerResources{Total: req.Total, Allocatable: allocatable(req.Total, w.Settings)}
 			if err := tx.RecordHeartbeat(ctx, w.ID, report, resources, req.Health, act.Now); err != nil {
 				return v1.HeartbeatResponse{}, err
 			}

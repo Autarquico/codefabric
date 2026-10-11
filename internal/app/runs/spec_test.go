@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"encoding/json"
 	"testing"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -157,4 +158,37 @@ func TestInherit_PrefersTheFrozenCompletion(t *testing.T) {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
 		}
 	}
+}
+
+// The scheduler reads the placement from the stored spec: what the Run froze is what it reserves.
+func TestPlacementOf_ReadsWhatTheSpecFroze(t *testing.T) {
+	task := store.Task{Prompt: "x", Requirements: v1.Requirements{
+		Harness: "claude", Capabilities: []string{"gpu", "docker"},
+		Resources: &v1.Resources{CPU: 6, MemoryMB: 8192},
+		Workers:   v1.WorkerPreferences{Prefer: []string{"b", "a"}, Avoid: []string{"c"}, Require: []string{"a", "b"}},
+	}}
+	raw, _ := digestOf(t, task, store.Project{DefaultBranch: "main"}, commit)
+
+	got, err := PlacementOf([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := domain.Placement{
+		Harness: "claude", Capabilities: []string{"docker", "gpu"}, Resources: domain.Capacity{CPU: 6, MemoryMB: 8192},
+		Prefer: []string{"b", "a"}, Avoid: []string{"c"}, Require: []string{"a", "b"},
+	}
+	if jsonOf(got) != jsonOf(want) {
+		t.Errorf("placement = %+v, want %+v", got, want)
+	}
+	if _, err := PlacementOf([]byte(`{`)); err == nil {
+		t.Error("a corrupt spec was read")
+	}
+	if p, err := PlacementOf([]byte(`{}`)); err != nil || p.Resources != (domain.Capacity{}) {
+		t.Errorf("an empty spec = %+v (%v)", p, err)
+	}
+}
+
+func jsonOf(v any) string {
+	raw, _ := json.Marshal(v)
+	return string(raw)
 }

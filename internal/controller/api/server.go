@@ -123,6 +123,10 @@ func New(c Config) (*Server, error) {
 	if s.work.Workers != nil {
 		s.registerWorkerRoutes()
 	}
+	if s.work.Leases != nil && s.work.Scheduler != nil {
+		s.registerWorkerSchedulingRoutes()
+		s.handle("GET /v1/runs/{ref}/explain", clientsOnly, s.explainRun)
+	}
 	return s, nil
 }
 

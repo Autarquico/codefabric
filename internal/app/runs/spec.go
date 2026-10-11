@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"slices"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -163,4 +164,21 @@ func (s runSpec) encode() (raw []byte, digest string, err error) {
 	}
 	sum := sha256.Sum256(raw)
 	return raw, "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// PlacementOf reads the placement out of a Run's stored spec. A spec without
+// requirements asks for nothing.
+func PlacementOf(spec []byte) (domain.Placement, error) {
+	var stored struct {
+		Requirements specRequirements `json:"requirements"`
+	}
+	if err := json.Unmarshal(spec, &stored); err != nil {
+		return domain.Placement{}, fmt.Errorf("runs: reading the placement of a spec: %w", err)
+	}
+	r := stored.Requirements
+	return domain.Placement{
+		Harness: r.Harness, Capabilities: r.Capabilities,
+		Resources: domain.Capacity{CPU: r.Resources.CPU, MemoryMB: r.Resources.MemoryMB},
+		Prefer:    r.Workers.Prefer, Avoid: r.Workers.Avoid, Require: r.Workers.Require,
+	}, nil
 }
