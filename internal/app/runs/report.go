@@ -93,7 +93,9 @@ func (s *Service) Report(ctx context.Context, by pki.Session, runID string, req 
 // reportEntry decides one entry. Everything that can reject it comes before
 // the first write.
 func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Act, w store.Worker, runID domain.ID, e v1.RunReportEntry) (v1.RunReportOutcome, error) {
-	outcome := func(result string) v1.RunReportOutcome { return v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: result} }
+	outcome := func(result string) v1.RunReportOutcome {
+		return v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: result}
+	}
 	digest := reportDigest(runID, e)
 
 	stored, found, err := store.WorkerEvent(ctx, tx, w.ID, e.WorkerEpoch, e.WorkerSeq)
