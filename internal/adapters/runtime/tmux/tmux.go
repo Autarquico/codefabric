@@ -1,0 +1,245 @@
+// Package tmux is the Runtime of v0.x (§6.2): one session per Run, in a tmux
+// server that belongs to the Worker. Nothing outside this package knows it is
+// tmux that runs underneath.
+package tmux
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+)
+
+const (
+	minMajor = 3
+	// waitDelay bounds how long a tmux command waits for its output after it
+	// exits: the server it may have started must not hold it.
+	waitDelay = 5 * time.Second
+	width     = 200
+	height    = 50
+)
+
+// Options parameterise New. Socket is the name of the tmux server (-L); the
+// Worker derives it from its data directory with SocketName.
+type Options struct {
+	Socket string
+	Binary string // defaults to "tmux" on the PATH
+}
+
+// Runtime runs sessions in tmux.
+type Runtime struct {
+	socket string
+	binary string
+}
+
+var _ cfruntime.Runtime = (*Runtime)(nil)
+
+// New builds the Runtime. It does not check that tmux works: Check does.
+func New(o Options) (*Runtime, error) {
+	if !validSocket.MatchString(o.Socket) {
+		return nil, fmt.Errorf("tmux: %q is not a valid socket name", o.Socket)
+	}
+	bin := o.Binary
+	if bin == "" {
+		bin = "tmux"
+	}
+	return &Runtime{socket: o.Socket, binary: bin}, nil
+}
+
+// Check says whether tmux is here and recent enough (3.0, which runs a command
+// given as several arguments without a shell).
+func (r *Runtime) Check(ctx context.Context) error {
+	out, _, err := r.exec(ctx, "-V")
+	if err != nil {
+		return fmt.Errorf("tmux: not available: %w", err)
+	}
+	major, minor, err := parseVersion(out)
+	if err != nil {
+		return err
+	}
+	if major < minMajor {
+		return fmt.Errorf("tmux: version %d.%d is too old: 3.0 or later is needed", major, minor)
+	}
+	return nil
+}
+
+// HandleFor is the handle of the session with a name.
+func (r *Runtime) HandleFor(name string) cfruntime.Handle {
+	return cfruntime.Handle{Runtime: Name, Ref: ref(r.socket, name)}
+}
+
+// Start creates the session, or adopts the one that has the name already. An
+// adopted session is wired again (output capture and ready file are both
+// idempotent), so a daemon that died half way through Start finishes it.
+func (r *Runtime) Start(ctx context.Context, spec cfruntime.Spec) (cfruntime.Handle, error) {
+	if !validSession.MatchString(spec.Name) {
+		return cfruntime.Handle{}, fmt.Errorf("tmux: %q is not a valid session name", spec.Name)
+	}
+	if len(spec.Command) == 0 {
+		return cfruntime.Handle{}, errors.New("tmux: a session needs a command")
+	}
+	h := r.HandleFor(spec.Name)
+	exists, err := r.hasSession(ctx, spec.Name)
+	if err != nil {
+		return cfruntime.Handle{}, err
+	}
+	if !exists {
+		args := append([]string{"new-session", "-d", "-s", spec.Name, "-c", spec.Dir, "-x", fmt.Sprint(width), "-y", fmt.Sprint(height)}, spec.Command...)
+		if _, stderr, err := r.exec(ctx, args...); err != nil {
+			// A concurrent Start, or a daemon that died after its own, made it first.
+			if again, checkErr := r.hasSession(ctx, spec.Name); checkErr != nil || !again {
+				return cfruntime.Handle{}, fmt.Errorf("tmux: starting session %s: %w (%s)", spec.Name, err, strings.TrimSpace(stderr))
+			}
+		}
+	}
+	if err := r.wire(ctx, spec); err != nil {
+		return cfruntime.Handle{}, err
+	}
+	return h, nil
+}
+
+// wire captures the output of the terminal and then opens the gate, in that
+// order: what the command prints once the gate is open is never lost. A session
+// that has already ended is not wired and not an error: its wrapper left the
+// files that say what happened.
+func (r *Runtime) wire(ctx context.Context, spec cfruntime.Spec) error {
+	if spec.Capture != "" {
+		_, stderr, err := r.exec(ctx, "pipe-pane", "-o", "-t", "="+spec.Name+":", "cat >> "+shellQuote(spec.Capture))
+		if err != nil {
+			if alive, checkErr := r.hasSession(ctx, spec.Name); checkErr == nil && !alive {
+				return nil
+			}
+			return fmt.Errorf("tmux: capturing the output of %s: %w (%s)", spec.Name, err, strings.TrimSpace(stderr))
+		}
+	}
+	if spec.Ready != "" {
+		if err := os.WriteFile(spec.Ready, nil, 0o600); err != nil {
+			return fmt.Errorf("tmux: opening the gate of %s: %w", spec.Name, err)
+		}
+	}
+	return nil
+}
+
+// Stop destroys the session.
+func (r *Runtime) Stop(ctx context.Context, h cfruntime.Handle) error {
+	session, err := r.session(h)
+	if err != nil {
+		return err
+	}
+	if _, stderr, err := r.exec(ctx, "kill-session", "-t", "="+session); err != nil && !isMissing(err) {
+		return fmt.Errorf("tmux: stopping session %s: %w (%s)", session, err, strings.TrimSpace(stderr))
+	}
+	return nil
+}
+
+// Status says whether the session exists.
+func (r *Runtime) Status(ctx context.Context, h cfruntime.Handle) (cfruntime.Status, error) {
+	session, err := r.session(h)
+	if err != nil {
+		return cfruntime.Status{}, err
+	}
+	alive, err := r.hasSession(ctx, session)
+	return cfruntime.Status{Alive: alive}, err
+}
+
+// Attach connects the terminal of the caller to the session.
+func (r *Runtime) Attach(ctx context.Context, h cfruntime.Handle) error {
+	session, err := r.session(h)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, r.binary, append(r.base(), "attach-session", "-t", "="+session)...) //nolint:gosec // the binary is tmux
+	cmd.Env = environment()
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// KillServer ends the tmux server of this Runtime and every session in it. It
+// is for tests and for tearing a Worker down.
+func (r *Runtime) KillServer(ctx context.Context) error {
+	if _, _, err := r.exec(ctx, "kill-server"); err != nil && !isMissing(err) {
+		return err
+	}
+	return nil
+}
+
+// Sessions lists the names of the sessions of this server.
+func (r *Runtime) Sessions(ctx context.Context) ([]string, error) {
+	out, _, err := r.exec(ctx, "list-sessions", "-F", "#{session_name}")
+	if isMissing(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(out), nil
+}
+
+func (r *Runtime) session(h cfruntime.Handle) (string, error) {
+	if h.Runtime != Name {
+		return "", fmt.Errorf("tmux: a handle of %q is not mine", h.Runtime)
+	}
+	socket, session, ok := parseRef(h.Ref)
+	if !ok || socket != r.socket {
+		return "", fmt.Errorf("tmux: %q is not a session of this server", h.Ref)
+	}
+	return session, nil
+}
+
+func (r *Runtime) hasSession(ctx context.Context, name string) (bool, error) {
+	_, stderr, err := r.exec(ctx, "has-session", "-t", "="+name)
+	switch {
+	case err == nil:
+		return true, nil
+	case isMissing(err):
+		return false, nil
+	}
+	return false, fmt.Errorf("tmux: has-session %s: %w (%s)", name, err, strings.TrimSpace(stderr))
+}
+
+// base is what every command starts with: the server of this Worker, and no
+// configuration file, so that the user's own settings (remain-on-exit,
+// default-command...) cannot change how a Run behaves.
+func (r *Runtime) base() []string { return []string{"-L", r.socket, "-f", "/dev/null"} }
+
+// exec runs a tmux command and returns its output.
+func (r *Runtime) exec(ctx context.Context, args ...string) (stdout, stderr string, err error) {
+	var out, errOut bytes.Buffer
+	cmd := exec.CommandContext(ctx, r.binary, append(r.base(), args...)...) //nolint:gosec // the binary is tmux
+	cmd.Env = environment()
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	cmd.WaitDelay = waitDelay
+	err = cmd.Run()
+	return out.String(), errOut.String(), err
+}
+
+// isMissing reports a tmux that ran and said no: has-session, kill-session and
+// list-sessions exit 1 for a session that does not exist and for a server that
+// is not running. A tmux that could not run at all is another thing.
+func isMissing(err error) bool {
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
+}
+
+// environment is that of the daemon without the variables of a tmux client, so
+// that a daemon started from inside tmux does not talk to that tmux.
+func environment() []string {
+	env := os.Environ()
+	out := env[:0:0]
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// shellQuote quotes s for /bin/sh, which tmux runs a pipe-pane command with.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
