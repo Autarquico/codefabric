@@ -6,14 +6,14 @@ status: active
 priority: P0
 size: L
 issue: 11
-prs: []
+prs: [35]
 related_issues: [11]
 sub_issues: []
 depends_on: [worker-registry-heartbeat]
 supersedes: []
 related_specs: [codefabric-spec, phase-1-workers]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 
 # Ejecutor del Worker con tmux, wrapper y journal
