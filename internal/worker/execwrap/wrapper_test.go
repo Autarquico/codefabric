@@ -133,15 +133,25 @@ func (s *spawned) waitFor(name string) {
 func (s *spawned) pidFile(name string) int {
 	s.t.Helper()
 	s.waitFor(name)
-	raw, err := os.ReadFile(filepath.Join(s.dir, name)) //nolint:gosec // a file of the test
-	if err != nil {
-		s.t.Fatal(err)
+	// The shell creates the file before it writes the pid: wait for a whole line.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		raw, err := os.ReadFile(filepath.Join(s.dir, name)) //nolint:gosec // a file of the test
+		if err != nil {
+			s.t.Fatal(err)
+		}
+		if strings.HasSuffix(string(raw), "\n") {
+			pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if err != nil {
+				s.t.Fatalf("%s: %q", name, raw)
+			}
+			return pid
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("%s: %q, no whole line", name, raw)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil {
-		s.t.Fatalf("%s: %q", name, raw)
-	}
-	return pid
 }
 
 func alive(pid int) bool {
