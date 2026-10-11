@@ -77,6 +77,10 @@ type Run struct {
 	CreatedAt    time.Time
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
+	// ExitCode is that of the harness, nil if it has not exited or left none.
+	// RuntimeHandle is what the Worker gave with `started`, opaque to us.
+	ExitCode      *int
+	RuntimeHandle string
 
 	// LeaseID and WorkerID name the live lease and its Worker, or the accepted
 	// one a Run keeps after it ended (§10.4.5); both are "" for a Run that has
@@ -389,7 +393,8 @@ func TaskCandidates(ctx context.Context, q Querier) ([]domain.Candidate, error) 
 const runColumns = `id, short_n, task_id, attempt, lineage_kind, spec, spec_digest, source_commit, state,
     COALESCE(end_reason, ''), COALESCE(queued_reason, ''), publication, evaluation, runtime, promoted,
     COALESCE(worker_id, ''), created_at, started_at, finished_at,
-    COALESCE(lease_id, ''), COALESCE(lease_epoch, 0), COALESCE((SELECT l.state FROM leases l WHERE l.id = runs.lease_id), '')`
+    COALESCE(lease_id, ''), COALESCE(lease_epoch, 0), COALESCE((SELECT l.state FROM leases l WHERE l.id = runs.lease_id), ''),
+    exit_code, COALESCE(runtime_handle, '')`
 
 func scanRun(row rowScanner) (Run, error) {
 	var (
@@ -399,15 +404,20 @@ func scanRun(row rowScanner) (Run, error) {
 		leaseState        string
 		created           int64
 		started, finished sql.NullInt64
+		exitCode          sql.NullInt64
 	)
 	if err := row.Scan(&id, &r.Short, &task, &r.Attempt, &r.Lineage, &spec, &r.SpecDigest, &r.SourceCommit, &r.State,
 		&r.EndReason, &r.QueuedReason, &r.Publication, &r.Evaluation, &r.Runtime, &r.Promoted,
-		&worker, &created, &started, &finished, &lease, &r.LeaseEpoch, &leaseState); err != nil {
+		&worker, &created, &started, &finished, &lease, &r.LeaseEpoch, &leaseState, &exitCode, &r.RuntimeHandle); err != nil {
 		return Run{}, scanErr(err, "run")
 	}
 	r.ID, r.TaskID, r.WorkerID, r.Spec = domain.ID(id), domain.ID(task), domain.ID(worker), []byte(spec)
 	r.LeaseID, r.LeaseState = domain.ID(lease), domain.LeaseState(leaseState)
 	r.CreatedAt, r.StartedAt, r.FinishedAt = time.Unix(0, created).UTC(), timePtr(started), timePtr(finished)
+	if exitCode.Valid {
+		code := int(exitCode.Int64)
+		r.ExitCode = &code
+	}
 	return r, nil
 }
 
