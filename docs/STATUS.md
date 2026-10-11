@@ -23,7 +23,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_(nada)_
+- #10 Scheduler, leases y reservas
 <!-- /pm-sync:in-progress -->
 
 ---
