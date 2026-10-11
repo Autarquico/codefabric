@@ -61,6 +61,27 @@ linters:
               desc: interfaces must go through internal/client (invariant 7)
             - pkg: github.com/Autarquico/codefabric/internal/adapters
               desc: interfaces must go through internal/client (invariant 7)
+        # The Worker reaches the Controller only through the SDK (ADR 0001); its
+        # tests may stand a real Controller up.
+        worker:
+          list-mode: lax
+          files: ["**/internal/worker/**", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/controller
+              desc: the Worker talks to the Controller through internal/client
+            - pkg: github.com/Autarquico/codefabric/internal/app
+              desc: the use cases of the Controller are not the Worker's
+        # Adapters implement ports: they know nothing of who calls them.
+        adapters:
+          list-mode: lax
+          files: ["**/internal/adapters/**", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/controller
+              desc: an adapter does not know the Controller
+            - pkg: github.com/Autarquico/codefabric/internal/app
+              desc: an adapter does not know the use cases
+            - pkg: github.com/Autarquico/codefabric/internal/worker
+              desc: an adapter does not know the Worker that uses it
         store:
           list-mode: lax
           files: ["**/internal/controller/store/**"]
