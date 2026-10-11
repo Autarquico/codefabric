@@ -166,30 +166,19 @@ func (s runSpec) encode() (raw []byte, digest string, err error) {
 	return raw, "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// Placement is what the scheduler reads of a frozen spec: where the Run may
-// go and what it reserves there. Disk is 0 until Tasks can ask for it.
-type Placement struct {
-	Harness      string
-	Capabilities []string
-	Resources    v1.Capacity
-	Prefer       []string // in order of preference
-	Avoid        []string
-	Require      []string
-}
-
 // PlacementOf reads the placement out of a Run's stored spec. A spec without
 // requirements asks for nothing.
-func PlacementOf(spec []byte) (Placement, error) {
+func PlacementOf(spec []byte) (domain.Placement, error) {
 	var stored struct {
 		Requirements specRequirements `json:"requirements"`
 	}
 	if err := json.Unmarshal(spec, &stored); err != nil {
-		return Placement{}, fmt.Errorf("runs: reading the placement of a spec: %w", err)
+		return domain.Placement{}, fmt.Errorf("runs: reading the placement of a spec: %w", err)
 	}
 	r := stored.Requirements
-	return Placement{
+	return domain.Placement{
 		Harness: r.Harness, Capabilities: r.Capabilities,
-		Resources: v1.Capacity{CPU: r.Resources.CPU, MemoryMB: r.Resources.MemoryMB},
+		Resources: domain.Capacity{CPU: r.Resources.CPU, MemoryMB: r.Resources.MemoryMB},
 		Prefer:    r.Workers.Prefer, Avoid: r.Workers.Avoid, Require: r.Workers.Require,
 	}, nil
 }

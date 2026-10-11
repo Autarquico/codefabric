@@ -7,7 +7,6 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/refs"
-	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -30,23 +29,26 @@ func (s *Service) Explain(ctx context.Context, ref string) (v1.RunExplanation, e
 		if err != nil {
 			return err
 		}
-		placement, err := placementOf(run)
-		if err != nil {
-			return err
-		}
 		now := s.clock.Now()
 		out = v1.RunExplanation{
 			RunID: string(run.ID), Short: domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(), State: run.State,
-			QueuedReason: run.QueuedReason, Requested: v1.Resources{CPU: placement.Resources.CPU, MemoryMB: placement.Resources.MemoryMB}, EvaluatedAt: now, Workers: []v1.WorkerVerdict{},
-			Decision: v1.DecisionNotQueued,
+			QueuedReason: run.QueuedReason, EvaluatedAt: now, Workers: []v1.WorkerVerdict{}, Decision: v1.DecisionNotQueued,
 		}
+		// The spec is read when the answer needs it. What it asks for is shown if it can be read; a
+		// Run that holds a lease, or is not queued, is explained without it.
+		placement, specErr := placementOf(run)
+		out.Requested = v1.Resources{CPU: placement.Resources.CPU, MemoryMB: placement.Resources.MemoryMB}
 		switch {
 		case run.LeaseID != "":
 			return s.explainLease(ctx, q, run, &out)
-		case run.State == domain.RunQueued:
-			return s.explainQueued(ctx, q, run, placement, now, &out)
+		case run.State != domain.RunQueued:
+			return nil
+		case specErr != nil:
+			// A Run that cannot be read cannot be placed: it waits, and says why.
+			out.Decision, out.Problem = v1.DecisionNoWorker, "the frozen spec of the Run cannot be read"
+			return nil
 		}
-		return nil
+		return s.explainQueued(ctx, q, run, placement, now, &out)
 	})
 	return out, err
 }
@@ -65,7 +67,7 @@ func (s *Service) explainLease(ctx context.Context, q store.Querier, run store.R
 	return nil
 }
 
-func (s *Service) explainQueued(ctx context.Context, q store.Querier, run store.Run, placement runs.Placement, now time.Time, out *v1.RunExplanation) error {
+func (s *Service) explainQueued(ctx context.Context, q store.Querier, run store.Run, placement domain.Placement, now time.Time, out *v1.RunExplanation) error {
 	task, err := store.TaskByID(ctx, q, run.TaskID)
 	if err != nil {
 		return err

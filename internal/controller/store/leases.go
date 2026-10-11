@@ -112,30 +112,54 @@ func PendingLeasesDue(ctx context.Context, q Querier, now time.Time) ([]Lease, e
 		string(domain.LeasePending), now.UnixNano())
 }
 
-// Miss is when a Worker last failed to take a Run it was offered: it rejected
-// the lease or let it expire unanswered.
+const missesQuery = `SELECT run_id, worker_id, closed_at, state, COALESCE(close_code, '') FROM leases
+    WHERE closed_at > ? AND (state = ? OR (state = ? AND close_code = ?)) ORDER BY closed_at, id`
+
+// Miss is when a Worker last failed to take a Run it was offered, and why: it
+// rejected the lease, with the code it gave, or let it expire unanswered
+// (CF_NO_ELIGIBLE_WORKER, since nothing says the Worker lacked capacity).
 type Miss struct {
 	RunID    domain.ID
 	WorkerID domain.ID
 	At       time.Time
+	Code     domain.Code
 }
 
 // MissesSince lists, per Run and Worker, the latest miss closed after since.
+// closed_at leads the condition so that the index on it serves the query.
 func MissesSince(ctx context.Context, q Querier, since time.Time) ([]Miss, error) {
-	return collect(ctx, q, func(row rowScanner) (Miss, error) {
+	all, err := collect(ctx, q, func(row rowScanner) (Miss, error) {
 		var (
-			m        Miss
-			run, wrk string
-			at       int64
+			m                     Miss
+			run, wrk, state, code string
+			at                    int64
 		)
-		if err := row.Scan(&run, &wrk, &at); err != nil {
+		if err := row.Scan(&run, &wrk, &at, &state, &code); err != nil {
 			return m, scanErr(err, "miss")
 		}
-		m.RunID, m.WorkerID, m.At = domain.ID(run), domain.ID(wrk), time.Unix(0, at).UTC()
+		m.RunID, m.WorkerID, m.At, m.Code = domain.ID(run), domain.ID(wrk), time.Unix(0, at).UTC(), domain.Code(code)
+		if domain.LeaseState(state) == domain.LeaseExpired {
+			m.Code = domain.CodeNoEligibleWorker
+		}
 		return m, nil
-	}, `SELECT run_id, worker_id, MAX(closed_at) FROM leases
-	    WHERE (state = ? OR (state = ? AND close_code = ?)) AND closed_at > ? GROUP BY run_id, worker_id`,
-		string(domain.LeaseRejected), string(domain.LeaseExpired), domain.LeaseCloseAcceptTimeout, since.UnixNano())
+	}, missesQuery,
+		since.UnixNano(), string(domain.LeaseRejected), string(domain.LeaseExpired), domain.LeaseCloseAcceptTimeout)
+	if err != nil {
+		return nil, err
+	}
+	type key struct{ run, worker domain.ID }
+	latest := map[key]int{}
+	var out []Miss
+	for _, m := range all {
+		k := key{m.RunID, m.WorkerID}
+		if i, ok := latest[k]; ok {
+			out[i] = m
+			continue
+		}
+		latest[k] = len(out)
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 // ProjectWorkers lists the Workers that accepted a lease of a Run of the Project.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -66,7 +67,7 @@ func TestScenario_SchedulerLeasesReservations_Expiracion(t *testing.T) {
 	if res := e.pass(); res.Expired != 1 || res.Assigned != 0 {
 		t.Fatalf("pass at accept_by = %+v", res)
 	}
-	e.clock.Advance(domain.LeaseRejectBackoff - time.Nanosecond)
+	e.clock.Advance(domain.LeaseMissBackoff - time.Nanosecond)
 	if res := e.pass(); res.Assigned != 0 {
 		t.Fatalf("assigned within the backoff: %+v", res)
 	}
@@ -116,7 +117,7 @@ func TestScenario_SchedulerLeasesReservations_SinCapacidad(t *testing.T) {
 	}
 
 	// Nobody else can take it, and alpha is left alone for the backoff: its rejection wins.
-	e.clock.Advance(domain.LeaseRejectBackoff - time.Nanosecond)
+	e.clock.Advance(domain.LeaseMissBackoff - time.Nanosecond)
 	if res := e.pass(); res.Assigned != 0 {
 		t.Fatalf("assigned within the backoff: %+v", res)
 	}
@@ -460,7 +461,7 @@ func TestExplain(t *testing.T) {
 			t.Errorf("gamma = %+v", v)
 		}
 
-		e.clock.Advance(domain.LeaseRejectBackoff)
+		e.clock.Advance(domain.LeaseMissBackoff)
 		got, err = e.app.Scheduler.Explain(t.Context(), run.ID)
 		must(t, err)
 		alpha := got.Workers[0]
@@ -639,7 +640,7 @@ func TestPass_AnUnreadableSpecIsOneRunsProblem(t *testing.T) {
 	}))
 
 	res := e.pass()
-	if res.Assigned != 1 || len(res.Problems) != 1 || !strings.Contains(res.Problems[0].Error(), broken.ID) {
+	if res.Assigned != 1 || len(res.Problems) != 1 || !strings.Contains(res.Problems[0].Error(), broken.ID) || !strings.Contains(res.Problems[0].Error(), "unreadable spec") {
 		t.Fatalf("pass = %+v", res)
 	}
 	if e.workerOfRun(good.ID) != "alpha" {
@@ -673,5 +674,137 @@ func TestSweepExpired_ALeaseThatFailsDoesNotStopTheOthers(t *testing.T) {
 	res, err := e.app.Scheduler.Pass(t.Context())
 	if err != nil || len(res.Problems) != 1 {
 		t.Errorf("pass = %+v (%v)", res, err)
+	}
+}
+
+// Whatever fails for one Run while it is assigned is that Run's problem, not the pass's.
+func TestPass_AnErrorOfOneRunDoesNotStopTheOthers(t *testing.T) {
+	e := newEnv(t)
+	e.joinWorker("alpha")
+	failing := e.queuedRun("failing")
+	good := e.queuedRun("good")
+	e.refuseEventsOfRun(domain.EventRunAssigned, failing.ID)
+
+	res, err := e.app.Scheduler.Pass(t.Context())
+	if err != nil {
+		t.Fatalf("the pass failed: %v", err)
+	}
+	if res.Assigned != 1 || len(res.Problems) != 1 || !strings.Contains(res.Problems[0].Error(), failing.ID) {
+		t.Fatalf("pass = %+v", res)
+	}
+	if e.workerOfRun(good.ID) != "alpha" || e.workerOfRun(failing.ID) != "" {
+		t.Errorf("good with %q, failing with %q", e.workerOfRun(good.ID), e.workerOfRun(failing.ID))
+	}
+	if got := e.storedRun(failing.ID).QueuedReason; got != string(domain.CodeNoEligibleWorker) {
+		t.Errorf("queued_reason of the failing Run = %q", got)
+	}
+	// A cancelled context is not a Run's problem.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := e.app.Scheduler.Pass(ctx); err == nil {
+		t.Error("a pass under a cancelled context succeeded")
+	}
+}
+
+func TestExplain_ReadsTheSpecOnlyWhenItNeedsIt(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	waiting := e.queuedRun("waiting")
+	leased := e.queuedRun("leased")
+	e.offer(leased.ID, w)
+	for _, id := range []string{waiting.ID, leased.ID} {
+		must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+			_, err := tx.Exec(t.Context(), `UPDATE runs SET spec = '{' WHERE id = ?`, id)
+			return err
+		}))
+	}
+
+	// A queued Run that cannot be read cannot be placed: a decision and a visible problem, no error.
+	got, err := e.app.Scheduler.Explain(t.Context(), waiting.ID)
+	must(t, err)
+	if got.Decision != v1.DecisionNoWorker || got.Problem == "" || got.Requested != (v1.Resources{}) || len(got.Workers) != 0 {
+		t.Errorf("explanation of an unreadable queued Run = %+v", got)
+	}
+	// A Run that has its lease is explained without its spec.
+	got, err = e.app.Scheduler.Explain(t.Context(), leased.ID)
+	must(t, err)
+	if got.Decision != v1.DecisionAssigned || got.Chosen != "alpha" || got.Problem != "" {
+		t.Errorf("explanation of a leased Run = %+v", got)
+	}
+	// So is one that is not queued.
+	_, err = e.app.Tasks.Cancel(t.Context(), e.owner, waiting.TaskID, "", v1.ActionRequest{})
+	must(t, err)
+	got, err = e.app.Scheduler.Explain(t.Context(), waiting.ID)
+	must(t, err)
+	if got.Decision != v1.DecisionNotQueued || got.Problem != "" {
+		t.Errorf("explanation of a cancelled Run = %+v", got)
+	}
+}
+
+// problemLevels records the level of each "scheduler problem" the loop logs.
+type problemLevels struct {
+	mu     sync.Mutex
+	levels []slog.Level
+	passes atomic.Int64
+}
+
+func (h *problemLevels) Enabled(context.Context, slog.Level) bool { return true }
+func (h *problemLevels) Handle(_ context.Context, r slog.Record) error {
+	switch r.Message {
+	case "scheduler problem":
+		h.mu.Lock()
+		h.levels = append(h.levels, r.Level)
+		h.mu.Unlock()
+	case "scheduler pass":
+		h.passes.Add(1)
+	}
+	return nil
+}
+func (h *problemLevels) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *problemLevels) WithGroup(string) slog.Handler      { return h }
+
+// A broken Run is reported as an error once; while it stays broken it goes to debug.
+func TestLoop_ReportsAProblemOnceAtErrorLevel(t *testing.T) {
+	e := newEnv(t)
+	e.joinWorker("alpha")
+	broken := e.queuedRun("broken")
+	must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(t.Context(), `UPDATE runs SET spec = '{' WHERE id = ?`, broken.ID)
+		return err
+	}))
+	h := &problemLevels{}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.app.Scheduler.Run(ctx, 2*time.Second, slog.New(h))
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	e.blockUntilPolling()
+
+	eventually(t, "the first pass", func() bool { return h.passes.Load() >= 1 })
+	for range 3 {
+		eventually(t, "the loop to settle", func() bool {
+			a := h.passes.Load()
+			time.Sleep(30 * time.Millisecond)
+			return h.passes.Load() == a
+		})
+		before := h.passes.Load()
+		e.clock.Advance(2 * time.Second)
+		eventually(t, "another pass", func() bool { return h.passes.Load() > before })
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var errs, debugs int
+	for _, l := range h.levels {
+		switch l {
+		case slog.LevelError:
+			errs++
+		case slog.LevelDebug:
+			debugs++
+		}
+	}
+	if errs != 1 || debugs < 3 {
+		t.Errorf("%d errors and %d debug records for a Run that stayed broken: %v", errs, debugs, h.levels)
 	}
 }

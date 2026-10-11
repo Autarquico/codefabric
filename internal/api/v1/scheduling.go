@@ -142,6 +142,7 @@ type RunExplanation struct {
 	QueuedReason string          `json:"queued_reason,omitempty"`
 	Requested    Resources       `json:"requested"`
 	Decision     string          `json:"decision"`
+	Problem      string          `json:"problem,omitempty"` // why the Run cannot be placed at all, when it is not a matter of the Workers
 	Chosen       string          `json:"chosen,omitempty"`
 	Lease        *Lease          `json:"lease,omitempty"`
 	EvaluatedAt  time.Time       `json:"evaluated_at"`

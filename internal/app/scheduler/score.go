@@ -3,8 +3,7 @@ package scheduler
 import (
 	"slices"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/runs"
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 // Weights of the score (§10.1). They are integers, never floats, so the same
@@ -27,12 +26,12 @@ type Score struct {
 	Affinity int64
 }
 
-func score(req runs.Placement, w Worker) Score {
+func score(req domain.Placement, w Worker) Score {
 	var s Score
 	if i := slices.Index(req.Prefer, w.Name); i >= 0 {
 		s.Prefer = int64(weightPrefer * (len(req.Prefer) - i))
 	}
-	left := v1.Capacity{
+	left := domain.Capacity{
 		CPU:      w.Allocatable.CPU - w.Reserved.CPU - req.Resources.CPU,
 		MemoryMB: w.Allocatable.MemoryMB - w.Reserved.MemoryMB - req.Resources.MemoryMB,
 	}

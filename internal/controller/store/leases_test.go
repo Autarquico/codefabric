@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -442,10 +443,10 @@ func TestMissesSince_CountRejectionsAndTimeoutsAndKeepTheLatestPerRunAndWorker(t
 	for _, m := range got {
 		byRun[m.RunID] = m
 	}
-	if m := byRun[run.ID]; m.WorkerID != f.alpha.ID || !m.At.Equal(epoch0.Add(5*time.Second)) {
+	if m := byRun[run.ID]; m.WorkerID != f.alpha.ID || !m.At.Equal(epoch0.Add(5*time.Second)) || m.Code != domain.CodeWorkerCapacity {
 		t.Errorf("rejection = %+v", m)
 	}
-	if m := byRun[other.ID]; m.WorkerID != f.beta.ID || !m.At.Equal(epoch0.Add(7*time.Second)) {
+	if m := byRun[other.ID]; m.WorkerID != f.beta.ID || !m.At.Equal(epoch0.Add(7*time.Second)) || m.Code != domain.CodeNoEligibleWorker {
 		t.Errorf("timeout = %+v", m)
 	}
 	read(epoch0.Add(7 * time.Second))
@@ -522,5 +523,33 @@ func TestOpen_UpgradesAPhase1DatabaseWithoutLeases(t *testing.T) {
 		return err
 	}); err != nil || len(queued) != 1 || queued[0].LeaseEpoch != 0 {
 		t.Errorf("queue after the upgrade = %+v (%v)", queued, err)
+	}
+}
+
+// The query of the recent misses reads the leases closed lately through an
+// index, not the whole table.
+func TestMissesSince_UsesTheIndexOnClosedAt(t *testing.T) {
+	f := newLeaseFixture(t)
+	rows, err := f.db.Reader().QueryContext(t.Context(), `EXPLAIN QUERY PLAN `+missesQuery,
+		epoch0.UnixNano(), string(domain.LeaseRejected), string(domain.LeaseExpired), domain.LeaseCloseAcceptTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(plan, "; ")
+	if strings.Contains(joined, "SCAN leases") || !strings.Contains(joined, "leases_closed_at") {
+		t.Errorf("plan = %s, want a search on leases_closed_at", joined)
 	}
 }

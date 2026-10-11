@@ -73,7 +73,7 @@ func (s *Service) Accept(ctx context.Context, by pki.Session, leaseRef string, r
 // its reservation released, the Run returns to the queue with no Worker and
 // the Worker's assign order is confirmed, since it must have received it to
 // answer. Repeating it answers the same closure and writes nothing, so the
-// Worker is not left alone for longer (domain.LeaseRejectBackoff). After
+// Worker is not left alone for longer (domain.LeaseMissBackoff). After
 // accept_by, or on an expired lease, it is CF_STALE_LEASE; on an accepted one,
 // CF_INVALID_TRANSITION.
 func (s *Service) Reject(ctx context.Context, by pki.Session, leaseRef string, req v1.RejectLeaseRequest) (v1.LeaseResponse, error) {

@@ -20,11 +20,11 @@ const (
 	LeaseCloseRunEnded      = "run_ended"
 )
 
-// LeaseRejectBackoff is how long the scheduler leaves a Run alone, as far as
+// LeaseMissBackoff is how long the scheduler leaves a Run alone, as far as
 // the Worker that rejected a lease of it, or let one expire unanswered, goes
 // (§10.5: the Worker's rejection wins). Without it an online Worker that never
 // answers would be given the same Run again and again, ahead of a Worker that would.
-const LeaseRejectBackoff = 10 * time.Second
+const LeaseMissBackoff = 10 * time.Second
 
 // ValidLeaseRejectCode reports whether a Worker may reject a lease with code.
 func ValidLeaseRejectCode(code Code) bool {

@@ -28,7 +28,8 @@ CREATE TABLE leases (
 CREATE UNIQUE INDEX leases_one_live_per_run ON leases (run_id) WHERE state IN ('pending', 'accepted');
 CREATE INDEX leases_pending_due ON leases (accept_by) WHERE state = 'pending';
 CREATE INDEX leases_worker_state ON leases (worker_id, state);
-CREATE INDEX leases_recent_misses ON leases (closed_at) WHERE state IN ('rejected', 'expired');
+-- MissesSince reads the leases closed in the last seconds.
+CREATE INDEX leases_closed_at ON leases (closed_at) WHERE closed_at IS NOT NULL;
 
 -- What a lease holds on its Worker (§10.5). The scheduler counts open
 -- reservations, never real usage. Releasing one is part of the transaction of

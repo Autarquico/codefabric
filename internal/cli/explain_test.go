@@ -53,3 +53,17 @@ func TestPrintExplanation_OtherDecisions(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintExplanation_ShowsTheProblem(t *testing.T) {
+	var out strings.Builder
+	err := printExplanation(&out, v1.RunExplanation{
+		Short: "run-5", State: domain.RunQueued, Decision: v1.DecisionNoWorker,
+		Problem: "the frozen spec of the Run cannot be read",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Problem: the frozen spec of the Run cannot be read.") {
+		t.Errorf("output:\n%s", out.String())
+	}
+}

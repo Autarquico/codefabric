@@ -45,6 +45,9 @@ func printExplanation(out io.Writer, e v1.RunExplanation) error {
 		_, err := fmt.Fprintln(out, "The Run is not waiting for a Worker.")
 		return err
 	}
+	if e.Problem != "" {
+		fmt.Fprintf(out, "Problem: %s.\n", e.Problem)
+	}
 	if len(e.Workers) == 0 {
 		_, err := fmt.Fprintln(out, "There are no Workers.")
 		return err

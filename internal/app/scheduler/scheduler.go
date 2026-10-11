@@ -2,12 +2,12 @@ package scheduler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"time"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/app/runs"
@@ -52,14 +52,10 @@ type Result struct {
 	Problems []error
 }
 
-// errUnreadableSpec marks a Run whose stored spec cannot be read. It is a
-// problem of that Run alone: it waits, with its reason, and the queue goes on.
-var errUnreadableSpec = errors.New("unreadable spec")
-
-func placementOf(run store.Run) (runs.Placement, error) {
+func placementOf(run store.Run) (domain.Placement, error) {
 	p, err := runs.PlacementOf(run.Spec)
 	if err != nil {
-		return p, fmt.Errorf("scheduler: run %s: %w: %w", run.ID, errUnreadableSpec, err)
+		return p, fmt.Errorf("scheduler: run %s has an unreadable spec: %w", run.ID, err)
 	}
 	return p, nil
 }
@@ -89,13 +85,14 @@ func (s *Service) Pass(ctx context.Context) (Result, error) {
 			break
 		}
 		outcome, err := s.assign(ctx, run)
-		switch {
-		case errors.Is(err, errUnreadableSpec):
-			res.Problems = append(res.Problems, err)
+		if ctx.Err() != nil {
+			return res, ctx.Err()
+		}
+		if err != nil {
+			// Whatever fails for one Run is that Run's problem: it waits, and the queue goes on.
+			res.Problems = append(res.Problems, fmt.Errorf("scheduler: assigning %s: %w", run.ID, err))
 			waiting = append(waiting, run)
 			continue
-		case err != nil:
-			return res, fmt.Errorf("scheduler: assigning %s: %w", run.ID, err)
 		}
 		switch outcome {
 		case assigned:
@@ -125,7 +122,7 @@ func (s *Service) plan(ctx context.Context) (candidates, waiting []store.Run, pr
 		if workers, err = store.Workers(ctx, q, false); err != nil {
 			return err
 		}
-		misses, err = store.MissesSince(ctx, q, now.Add(-domain.LeaseRejectBackoff))
+		misses, err = store.MissesSince(ctx, q, now.Add(-domain.LeaseMissBackoff))
 		return err
 	})
 	if err != nil {
@@ -158,12 +155,12 @@ const (
 // decide ranks the Workers for the Run as q shows them: the Workers with their
 // reservations, who missed the Run lately and who already worked for its Project.
 // It returns the Workers it read, so that the chosen one is among them.
-func decide(ctx context.Context, q store.Querier, run store.Run, project domain.ID, placement runs.Placement, now time.Time) (Decision, []store.Worker, error) {
+func decide(ctx context.Context, q store.Querier, run store.Run, project domain.ID, placement domain.Placement, now time.Time) (Decision, []store.Worker, error) {
 	workers, err := store.Workers(ctx, q, false)
 	if err != nil {
 		return Decision{}, nil, err
 	}
-	misses, err := store.MissesSince(ctx, q, now.Add(-domain.LeaseRejectBackoff))
+	misses, err := store.MissesSince(ctx, q, now.Add(-domain.LeaseMissBackoff))
 	if err != nil {
 		return Decision{}, nil, err
 	}
@@ -209,7 +206,7 @@ func (s *Service) assign(ctx context.Context, queued store.Run) (outcome, error)
 		if i < 0 {
 			return fmt.Errorf("scheduler: chosen worker %s is not among the ones read", decision.Chosen.ID)
 		}
-		if _, err := s.leases.CreateIn(ctx, tx, mutation.Act{Actor: systemActor, Now: now}, run, task, workers[i], placement.Resources); err != nil {
+		if _, err := s.leases.CreateIn(ctx, tx, mutation.Act{Actor: systemActor, Now: now}, run, task, workers[i], v1Capacity(placement.Resources)); err != nil {
 			return err
 		}
 		result = assigned
@@ -248,15 +245,24 @@ func (s *Service) Run(ctx context.Context, tick time.Duration, log *slog.Logger)
 	}
 	ticker := s.clock.NewTicker(tick)
 	defer ticker.Stop()
+	reported := map[string]bool{} // the problems of the last pass, so that one that stays is said once
 	for ctx.Err() == nil {
 		seen := s.db.Notifier().Latest()
 		res, err := s.Pass(ctx)
 		if err != nil && ctx.Err() == nil {
 			log.ErrorContext(ctx, "scheduler pass failed", "err", err)
 		}
+		now := map[string]bool{}
 		for _, problem := range res.Problems {
-			log.ErrorContext(ctx, "scheduler problem", "err", problem)
+			text := problem.Error()
+			now[text] = true
+			level := slog.LevelError
+			if reported[text] {
+				level = slog.LevelDebug
+			}
+			log.Log(ctx, level, "scheduler problem", "err", problem)
 		}
+		reported = now
 		log.DebugContext(ctx, "scheduler pass", "expired", res.Expired, "assigned", res.Assigned, "more", res.More)
 		if err == nil && res.More {
 			continue
@@ -278,16 +284,24 @@ func snapshot(workers []store.Worker, misses []store.Miss, run domain.ID, known 
 	for _, w := range workers {
 		c := Worker{
 			ID: w.ID, Name: w.Name, State: w.State, Availability: w.Settings.Availability, Capabilities: w.Report.Capabilities,
-			Allocatable: w.Resources.Allocatable, Reserved: w.Reserved, Reservations: w.Reservations,
+			Allocatable: capacityOf(w.Resources.Allocatable), Reserved: capacityOf(w.Reserved), Reservations: w.Reservations,
 			MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, KnowsProject: known[w.ID],
 		}
 		for _, m := range misses {
 			if m.RunID == run && m.WorkerID == w.ID {
 				at := m.At
-				c.MissedAt = &at
+				c.MissedAt, c.MissCode = &at, m.Code
 			}
 		}
 		out = append(out, c)
 	}
 	return out
+}
+
+func capacityOf(c v1.Capacity) domain.Capacity {
+	return domain.Capacity{CPU: c.CPU, MemoryMB: c.MemoryMB, DiskMB: c.DiskMB}
+}
+
+func v1Capacity(c domain.Capacity) v1.Capacity {
+	return v1.Capacity{CPU: c.CPU, MemoryMB: c.MemoryMB, DiskMB: c.DiskMB}
 }

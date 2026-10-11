@@ -9,8 +9,6 @@ import (
 	"slices"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -24,11 +22,12 @@ type Worker struct {
 	State             domain.WorkerState
 	Availability      domain.AvailabilityPolicy
 	Capabilities      []string
-	Allocatable       v1.Capacity
-	Reserved          v1.Capacity
+	Allocatable       domain.Capacity
+	Reserved          domain.Capacity
 	Reservations      int
 	MaxConcurrentRuns int
-	MissedAt          *time.Time
+	MissedAt          *time.Time  // when it last rejected a lease of the Run or let one expire
+	MissCode          domain.Code // why: the code it rejected with, or CF_NO_ELIGIBLE_WORKER for an expiry
 	KnowsProject      bool
 }
 
@@ -56,7 +55,7 @@ type Decision struct {
 // give the same Decision whatever the order of workers, because the highest
 // score wins and a tie goes to the lowest name (§10.6). Names are unique among
 // live Workers.
-func Decide(req runs.Placement, workers []Worker, now time.Time) Decision {
+func Decide(req domain.Placement, workers []Worker, now time.Time) Decision {
 	sorted := slices.SortedFunc(slices.Values(workers), func(a, b Worker) int { return cmp.Compare(a.Name, b.Name) })
 	d := Decision{Verdicts: make([]Verdict, len(sorted))}
 	for i, w := range sorted {
