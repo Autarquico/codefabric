@@ -32,7 +32,7 @@ type Services struct {
 // New wires the use cases. Runs re-derive their Task through tasks.Rederive,
 // handed over as a function because tasks imports runs.
 func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, workersCfg workers.Config) *Services {
-	runService := runs.New(db, ids, tasks.Rederive)
+	runService := runs.New(db, clk, ids, tasks.Rederive)
 	leaseService := leases.New(db, clk, ids, tasks.Rederive)
 	return &Services{
 		Projects:  projects.New(db, clk, ids),
