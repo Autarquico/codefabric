@@ -8,31 +8,18 @@ package runtime
 
 import (
 	"context"
-	"fmt"
-	"strconv"
-	"strings"
+
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-// NameFor is the name of the session of a Run under a lease epoch (§6.4). It is
-// derived, never stored apart: the same Run and epoch name the same session,
-// which is what lets Start adopt a session instead of making a second one.
-func NameFor(runID string, leaseEpoch uint64) string {
-	return fmt.Sprintf("cf-%s-e%d", runID, leaseEpoch)
-}
+// NameFor is the name of the session of a Run under a lease epoch (§6.4); it
+// is domain.SessionName. The same Run and epoch name the same session, which is
+// what lets Start adopt a session instead of making a second one.
+func NameFor(runID string, leaseEpoch uint64) string { return domain.SessionName(runID, leaseEpoch) }
 
-// ParseName reads the Run and lease epoch of a session name, if it is one
-// NameFor wrote; ok is false for any other.
+// ParseName reads the Run and lease epoch of a session name NameFor wrote.
 func ParseName(name string) (runID string, leaseEpoch uint64, ok bool) {
-	rest, found := strings.CutPrefix(name, "cf-")
-	i := strings.LastIndex(rest, "-e")
-	if !found || i <= 0 {
-		return "", 0, false
-	}
-	epoch, err := strconv.ParseUint(rest[i+2:], 10, 63)
-	if err != nil || epoch == 0 || NameFor(rest[:i], epoch) != name {
-		return "", 0, false
-	}
-	return rest[:i], epoch, true
+	return domain.ParseSessionName(name)
 }
 
 // Spec describes the session of one Run.

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 const appDir = "codefabric"
@@ -39,12 +41,12 @@ func (p Paths) WorkerStateFile() string { return filepath.Join(p.WorkerDataDir()
 // like the session of the Runtime, by Run and epoch, so that two epochs of a Run
 // never share markers.
 func (p Paths) WorkerRunDir(run string, leaseEpoch uint64) string {
-	return filepath.Join(p.WorkerDataDir(), "runs", fmt.Sprintf("%s-e%d", run, leaseEpoch))
+	return filepath.Join(p.WorkerDataDir(), "runs", domain.RunEpoch(run, leaseEpoch))
 }
 
 // WorkerWorktreeDir is the isolated worktree of one Run under one lease epoch (§22.5).
 func (p Paths) WorkerWorktreeDir(run string, leaseEpoch uint64) string {
-	return filepath.Join(p.WorkerDataDir(), "worktrees", fmt.Sprintf("%s-e%d", run, leaseEpoch))
+	return filepath.Join(p.WorkerDataDir(), "worktrees", domain.RunEpoch(run, leaseEpoch))
 }
 
 // WorkerRepoDir is the bare repository of a Project on this Worker, shared by

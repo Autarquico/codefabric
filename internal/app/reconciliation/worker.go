@@ -460,7 +460,7 @@ func (r *reconciler) fail(ctx context.Context, h *held, reason domain.EndReason)
 // that is no lease of this Worker is ended by its name, and nothing changes.
 func (r *reconciler) session(ctx context.Context, name string) (v1.ReconcileVerdict, error) {
 	v := v1.ReconcileVerdict{Session: name, Verdict: v1.ReconcileStopSession}
-	run, epoch, ok := parseSessionName(name)
+	run, epoch, ok := domain.ParseSessionName(name)
 	if !ok {
 		return v, nil
 	}
@@ -483,20 +483,6 @@ func (r *reconciler) session(ctx context.Context, name string) (v1.ReconcileVerd
 	}
 	v.RunID, v.LeaseEpoch = run, epoch
 	return v, nil
-}
-
-// parseSessionName reads cf-<run>-e<epoch>, the one form runtime.NameFor writes.
-func parseSessionName(name string) (string, uint64, bool) {
-	rest, ok := strings.CutPrefix(name, "cf-")
-	i := strings.LastIndex(rest, "-e")
-	if !ok || i < 0 {
-		return "", 0, false
-	}
-	epoch, err := strconv.ParseUint(rest[i+2:], 10, 63)
-	if err != nil || epoch == 0 || fmt.Sprintf("cf-%s-e%d", rest[:i], epoch) != name {
-		return "", 0, false
-	}
-	return rest[:i], epoch, true
 }
 
 // cursor is where a page of the answer starts: a list and the last key served of it.

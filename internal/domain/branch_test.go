@@ -82,3 +82,20 @@ func TestOrphanRef_OneFormOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestRunEpochAndSessionName_OneFormOnly(t *testing.T) {
+	if got := SessionName("run_x", 4); got != "cf-run_x-e4" {
+		t.Fatalf("SessionName = %q", got)
+	}
+	if run, epoch, ok := ParseSessionName("cf-run_x-e4"); !ok || run != "run_x" || epoch != 4 {
+		t.Errorf("ParseSessionName = %q %d %v", run, epoch, ok)
+	}
+	for _, bad := range []string{"cf--e1", "-e1", "cf-run-e0", "cf-run-e04", "cf-run-e", "run-e1x", "xx-run-e1"} {
+		if _, _, ok := ParseSessionName(bad); ok {
+			t.Errorf("%q parsed as a session", bad)
+		}
+	}
+	if _, _, ok := ParseRunEpoch("-e1"); ok {
+		t.Error("an empty run parsed")
+	}
+}

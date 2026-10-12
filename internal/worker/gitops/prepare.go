@@ -34,7 +34,7 @@ const wrapperFile = "wrapper.json"
 // branch checked out in the worktree of the last. The branch of the Run
 // (PrepareSpec.Branch) is only where the result is pushed to.
 func LocalBranch(run string, epoch uint64) string {
-	return fmt.Sprintf("cf-local/%s-e%d", run, epoch)
+	return "cf-local/" + domain.RunEpoch(run, epoch)
 }
 
 func isProject(id string) bool {
@@ -49,11 +49,11 @@ var ErrHarnessLaunched = errors.New("gitops: the harness of this Run was launche
 // PrivateRef is the ref of the Worker that holds the sealed result of a Run
 // under one lease epoch: the commit survives a daemon that dies after making it.
 func PrivateRef(run string, epoch uint64) string {
-	return fmt.Sprintf("refs/cf/results/%s-e%d", run, epoch)
+	return "refs/cf/results/" + domain.RunEpoch(run, epoch)
 }
 
 func sourceRef(run string, epoch uint64) string {
-	return fmt.Sprintf("refs/cf/sources/%s-e%d", run, epoch)
+	return "refs/cf/sources/" + domain.RunEpoch(run, epoch)
 }
 
 // Prepare makes the worktree of a Run: a branch of the Run's name at exactly the

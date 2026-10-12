@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -57,14 +58,45 @@ func ValidBranch(name string) bool {
 	return true
 }
 
+// RunEpoch is how a Run under one lease epoch is named in paths, sessions and
+// refs: <run>-e<epoch>. It is the one form; ParseRunEpoch reads it back.
+func RunEpoch(run string, epoch uint64) string { return fmt.Sprintf("%s-e%d", run, epoch) }
+
+// ParseRunEpoch reads <run>-e<epoch> as RunEpoch writes it: a run that is not
+// empty, and an epoch of at least 1 with no leading zeros.
+func ParseRunEpoch(s string) (run string, epoch uint64, ok bool) {
+	i := strings.LastIndex(s, "-e")
+	if i <= 0 {
+		return "", 0, false
+	}
+	epoch, err := strconv.ParseUint(s[i+2:], 10, 63)
+	if err != nil || epoch == 0 || RunEpoch(s[:i], epoch) != s {
+		return "", 0, false
+	}
+	return s[:i], epoch, true
+}
+
+const sessionPrefix = "cf-"
+
+// SessionName is the name of the session of a Run under a lease epoch (§6.4):
+// derived, never stored apart, so the same Run and epoch name the same session.
+func SessionName(run string, epoch uint64) string { return sessionPrefix + RunEpoch(run, epoch) }
+
+// ParseSessionName reads the Run and epoch of a name SessionName wrote.
+func ParseSessionName(name string) (run string, epoch uint64, ok bool) {
+	rest, found := strings.CutPrefix(name, sessionPrefix)
+	if !found {
+		return "", 0, false
+	}
+	return ParseRunEpoch(rest)
+}
+
 // orphanRefPrefix is where the relay keeps the results of orphans.
 const orphanRefPrefix = "refs/cf/orphans/"
 
 // OrphanRef is the ref of the relay that keeps the result of an orphan (§10.4
 // point 5): the Run and the lease epoch it ran under. It is only ever created.
-func OrphanRef(run ID, epoch uint64) string {
-	return fmt.Sprintf("%s%s-e%d", orphanRefPrefix, run, epoch)
-}
+func OrphanRef(run ID, epoch uint64) string { return orphanRefPrefix + RunEpoch(string(run), epoch) }
 
 // ValidOrphanRef reports whether ref is the ref of an orphan: a Run ID and an
 // epoch, in the one form OrphanRef writes.
@@ -73,17 +105,10 @@ func ValidOrphanRef(ref string) bool {
 	if !ok {
 		return false
 	}
-	i := strings.LastIndex(rest, "-e")
-	if i < 0 {
+	run, _, ok := ParseRunEpoch(rest)
+	if !ok {
 		return false
 	}
-	kind, _, err := ParseID(rest[:i])
-	var epoch uint64
-	if err != nil || kind != KindRun || len(rest[i+2:]) == 0 || rest[i+2] == '0' {
-		return false
-	}
-	if _, err := fmt.Sscanf(rest[i+2:], "%d", &epoch); err != nil || epoch == 0 {
-		return false
-	}
-	return OrphanRef(ID(rest[:i]), epoch) == ref
+	kind, _, err := ParseID(run)
+	return err == nil && kind == KindRun
 }
