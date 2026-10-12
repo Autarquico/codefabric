@@ -7,11 +7,13 @@ import (
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -261,5 +263,46 @@ func TestAnOrphanIsSealedAndPreservedAtItsRefWithTheOneReportTheControllerTakes(
 	reports := f.reports(k)
 	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportOrphanPreserved}) || reports[0].ResultCommit == "" {
 		t.Errorf("reports that would be sent = %+v", reports)
+	}
+}
+
+// A Run whose harness ended while no daemon was looking, and whose state.db was
+// lost, has no session any more: its markers and its worktree are what is left,
+// and they are evidence that it ran here. It is adopted and settled from them,
+// never taken for an assignment that nothing ever started.
+func TestAnUnrecordedRunThatEndedWithoutASessionIsAdoptedFromItsMarkers(t *testing.T) {
+	f := newFixture(t)
+	ended, gone := state.Key{RunID: runID(96), LeaseEpoch: 1}, state.Key{RunID: runID(97), LeaseEpoch: 1}
+	for _, k := range []state.Key{ended, gone} {
+		w := newWrapperProcess(t, "exit 0")
+		<-w.ended
+		must(t, os.MkdirAll(f.runDir(k), 0o700))
+		f.writeWrapper(k, w.w)
+		f.writeStarted(k, w.w, t0)
+		f.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: t0.Add(time.Second), Cause: execwrap.CauseExit})
+	}
+	must(t, os.MkdirAll(f.e.worktree(ended), 0o700)) // gone has lost its worktree
+	var second v1.ReconcileRequest
+	f.answers(func(v1.ReconcileRequest) v1.ReconcileResponse {
+		return v1.ReconcileResponse{Leases: []v1.ReconcileLease{leaseOf(ended, domain.RuntimeActive), leaseOf(gone, domain.RuntimeActive)}}
+	}, func(req v1.ReconcileRequest) v1.ReconcileResponse {
+		second = req
+		return complete(req)
+	})
+	f.e.spawn = func(state.Key) {}
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	got := map[string]string{}
+	for _, o := range second.Unrecorded {
+		got[o.LeaseID] = o.Outcome
+	}
+	if got["lease_"+ended.RunID] != v1.OutcomeAdopted || got["lease_"+gone.RunID] != v1.OutcomeWorktreeLost {
+		t.Fatalf("outcomes = %v", got)
+	}
+	if !f.e.step(t.Context(), ended) {
+		t.Fatal("the adopted Run was not settled from its exit")
+	}
+	reports := f.reports(ended)
+	if kinds := kinds(reports); !slices.Equal(kinds, []v1.RunReportKind{v1.ReportExited, v1.ReportStopped}) || *reports[0].ExitCode != 0 {
+		t.Errorf("reports = %+v: the exit is reported, and no second started", reports)
 	}
 }

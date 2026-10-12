@@ -491,11 +491,23 @@ func (e *Executor) wrapperAlive(k state.Key) bool {
 	return verdictOf(&w) == procident.Same
 }
 
+// ranHere says whether the wrapper of the Run left any marker: it started on
+// this Worker, whatever became of it since.
+func (e *Executor) ranHere(k state.Key) bool {
+	for _, name := range []string{execwrap.WrapperFile, execwrap.StartedFile, execwrap.ExitFile} {
+		if _, err := os.Lstat(filepath.Join(e.runDir(k), name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveLeases decides what became of each lease the Controller listed that
 // this Worker did not name (§10.4 point 8). One it has a record of goes in the
-// runs of the next round. Of one it has none: no session, assignment_unknown;
-// a session without its worktree, worktree_lost; a session with it, the record
-// is rebuilt from the lease and the session adopted.
+// runs of the next round. Of one it has none: no session and no markers of its
+// wrapper, assignment_unknown; a session or markers without its worktree,
+// worktree_lost; with it, the record is rebuilt from the lease and the Run
+// adopted, and the recovery of #11 supervises or settles it from its markers.
 func (e *Executor) resolveLeases(ctx context.Context, leases []v1.ReconcileLease) ([]v1.ReconcileOutcome, error) {
 	var out []v1.ReconcileOutcome
 	for _, l := range leases {
@@ -524,12 +536,16 @@ func (e *Executor) resolveLease(ctx context.Context, k state.Key, l v1.Reconcile
 	if err != nil {
 		return "", err
 	}
-	if !alive && !e.wrapperAlive(k) {
-		e.log.WarnContext(ctx, "the Controller holds a lease this Worker has no record or session of", "run", k.RunID, "epoch", k.LeaseEpoch)
+	// The session is not the only evidence that the Run executed here: the wrapper
+	// leaves its markers in runs/<run>-e<epoch>, and a harness that ended while no
+	// daemon was looking has a session no more, but an exit.json and a worktree to
+	// seal. Only with neither did nothing ever run.
+	if !alive && !e.ranHere(k) {
+		e.log.WarnContext(ctx, "the Controller holds a lease this Worker has no record, session or markers of", "run", k.RunID, "epoch", k.LeaseEpoch)
 		return v1.OutcomeAssignmentUnknown, nil
 	}
 	if _, err := os.Stat(e.worktree(k)); err != nil {
-		e.log.WarnContext(ctx, "a session lives on without its worktree", "run", k.RunID, "epoch", k.LeaseEpoch)
+		e.log.WarnContext(ctx, "a Run executed here and its worktree is gone", "run", k.RunID, "epoch", k.LeaseEpoch, "session", alive)
 		return v1.OutcomeWorktreeLost, nil
 	}
 	a := l.Assign
@@ -546,8 +562,10 @@ func (e *Executor) resolveLease(ctx context.Context, k state.Key, l v1.Reconcile
 	if l.Runtime == domain.RuntimeNone {
 		r.Phase = state.PhaseStarting
 	} else {
-		if err := e.o.Runtime.Wire(ctx, e.sessionSpec(r)); err != nil {
-			return "", fmt.Errorf("executor: wiring an adopted session: %w", err)
+		if alive {
+			if err := e.o.Runtime.Wire(ctx, e.sessionSpec(r)); err != nil {
+				return "", fmt.Errorf("executor: wiring an adopted session: %w", err)
+			}
 		}
 		at := e.clock.Now()
 		if l.StartedAt != nil {
@@ -555,7 +573,7 @@ func (e *Executor) resolveLease(ctx context.Context, k state.Key, l v1.Reconcile
 		}
 		r.Phase, r.StartedAt, r.Handle = state.PhaseRunning, &at, mustJSON(*e.runtimeHandle(k))
 	}
-	e.log.InfoContext(ctx, "a session this Worker had no record of is adopted", "run", k.RunID, "epoch", k.LeaseEpoch, "phase", r.Phase)
+	e.log.InfoContext(ctx, "a Run this Worker had no record of is adopted", "run", k.RunID, "epoch", k.LeaseEpoch, "phase", r.Phase, "session", alive)
 	if err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 		_, err := state.InsertAdopted(ctx, tx, r)
 		return err

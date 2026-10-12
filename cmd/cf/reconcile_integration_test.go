@@ -465,13 +465,38 @@ func TestScenario_StopCancelLostReconcile_CaidaDelControllerNoCuenta_E2E(t *test
 	}
 }
 
+// adopted says whether the Worker of box rebuilt its record of the Run.
+func adopted(t *testing.T, box config.Paths, run string) bool {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+box.WorkerStateFile()+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var n int
+	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM local_runs WHERE run_id = ? AND adopted = 1`, run).Scan(&n); err != nil {
+		return false
+	}
+	return n == 1
+}
+
+// TestScenario_StopCancelLostReconcile_AsignacionSinRegistroLocal_E2E: the
+// daemon is killed and state.db lost. With nothing of the Run left on the disk
+// (no session, no markers, no worktree) the assignment is unknown: the Run fails
+// with assignment_lost and its retry is queued. With the session alive, or with
+// a harness that ended while no daemon was looking (no session, but its markers
+// and worktree), the record is rebuilt and the Run is adopted, reported once and
+// published.
 func TestScenario_StopCancelLostReconcile_AsignacionSinRegistroLocal_E2E(t *testing.T) {
-	for _, live := range []bool{false, true} {
-		name := "sin sesión"
-		if live {
-			name = "sesión viva"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		diskLost, before bool
+	}{
+		{name: "sin sesión", diskLost: true},
+		{name: "sesión viva"},
+		{name: "terminó sin daemon", before: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			host, _, _ := initController(t)
 			serve(t, host, daemon.Options{})
 			b := newReconcileBox(t, host)
@@ -490,8 +515,19 @@ func TestScenario_StopCancelLostReconcile_AsignacionSinRegistroLocal_E2E(t *test
 					t.Fatal(err)
 				}
 			}
-			if !live {
+			switch {
+			case tc.diskLost:
 				killRuns(t, b.box)
+				for _, dir := range []string{b.box.WorkerRunDir(run, 1), b.box.WorkerWorktreeDir(run, 1)} {
+					if err := os.RemoveAll(dir); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case tc.before:
+				b.release(run)
+				eventually(t, "the harness to end with no daemon", func() bool {
+					return fileExists(filepath.Join(b.box.WorkerRunDir(run, 1), execwrap.ExitFile))
+				})
 			}
 			second := b.start()
 			defer func() {
@@ -500,7 +536,7 @@ func TestScenario_StopCancelLostReconcile_AsignacionSinRegistroLocal_E2E(t *test
 					t.Logf("run: %+v\ndaemon:\n%s", r, second.out.String())
 				}
 			}()
-			if !live {
+			if tc.diskLost {
 				eventually(t, "the Run to fail for its lost assignment", func() bool {
 					r := b.run(run)
 					return r.State == domain.RunFailed && r.EndReason == domain.EndAssignmentLost && r.Runtime == domain.RuntimeStopped
@@ -511,16 +547,19 @@ func TestScenario_StopCancelLostReconcile_AsignacionSinRegistroLocal_E2E(t *test
 				})
 				return
 			}
-			eventually(t, "the session to be adopted", func() bool {
-				return b.run(run).State == domain.RunRunning
-			})
-			b.release(run)
+			eventually(t, "the Run to be adopted", func() bool { return adopted(t, b.box, run) })
+			if !tc.before {
+				b.release(run)
+			}
 			got := b.waitPublished(run)
 			if got.State != domain.RunCompleted {
 				t.Errorf("Run = %+v", got)
 			}
 			if n := len(eventSeqs(t, host, run, domain.EventRunStarted)); n != 1 {
 				t.Errorf("RunStarted events = %d: an adoption reports no second start", n)
+			}
+			if runs, err := b.admin.Runs(t.Context(), client.RunQuery{Task: created.Task.ID}); err != nil || len(runs) != 1 {
+				t.Errorf("runs = %d, %v: an adopted Run is not retried", len(runs), err)
 			}
 			b.waitNoReservations()
 		})
