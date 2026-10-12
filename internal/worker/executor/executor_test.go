@@ -1178,6 +1178,33 @@ func TestAStartedAndAnExitThatCannotBeReadAreAHarnessThatRanAndWasLost(t *testin
 	}
 }
 
+func TestAStartedThatCannotBeReadIsDatedByTheWrapperNeverAfterTheExit(t *testing.T) {
+	f := newFixture(t)
+	k := f.accepted("echo hi")
+	w := newWrapperProcess(t, "exit 0")
+	<-w.ended
+	f.writeWrapper(k, w.w) // started at t0
+	if err := os.WriteFile(filepath.Join(f.runDir(k), execwrap.StartedFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code := 0
+	f.writeExit(k, execwrap.Exit{ExitCode: &code, Cause: execwrap.CauseExit, ExitedAt: t0.Add(time.Second)})
+	if err := f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+		return state.Advance(t.Context(), tx, k, state.PhaseAccepted, state.PhaseStarting, t0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.clock.Advance(time.Hour) // the recovery happens long after the exit
+	if !f.e.step(t.Context(), k) {
+		t.Fatalf("not settled: %s", f.run(k).Phase)
+	}
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) ||
+		!reports[0].At.Equal(t0) || reports[0].At.After(reports[1].At) {
+		t.Errorf("reports = %+v: started at the wrapper's start, before the exit", reports)
+	}
+}
+
 func TestAWrapperRecordThatCannotBeReadSignalsNothingAndNeverSettlesTheRun(t *testing.T) {
 	f := newFixture(t)
 	k := f.started("echo hi")

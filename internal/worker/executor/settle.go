@@ -101,9 +101,23 @@ func (e *Executor) refresh(r state.Run, m markers) markers {
 	fresh := e.markers(r.Key)
 	fresh.wrapper, fresh.wrapperErr = m.wrapper, nil
 	if fresh.startedErr != nil {
-		fresh.started = &execwrap.Started{StartedAt: e.clock.Now()}
+		fresh.started = &execwrap.Started{StartedAt: launchedAt(fresh, e.clock.Now())}
 	}
 	return fresh
+}
+
+// launchedAt is when a harness whose started marker cannot be read was
+// launched: when its wrapper started, never after its exit, and now only when
+// neither is known.
+func launchedAt(m markers, now time.Time) time.Time {
+	at := now
+	if m.wrapper != nil && !m.wrapper.StartedAt.IsZero() {
+		at = m.wrapper.StartedAt
+	}
+	if m.exit != nil && at.After(m.exit.ExitedAt) {
+		at = m.exit.ExitedAt
+	}
+	return at
 }
 
 // settleLost is the wrapper being gone with no exit. Only if it is gone in the
