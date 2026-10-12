@@ -23,10 +23,7 @@ const (
 	envExpectedOID = "CF_RELAY_EXPECTED_OID"
 )
 
-var (
-	oidPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-	zeroOID    = regexp.MustCompile(`^0{40}(?:0{24})?$`)
-)
+var zeroOID = regexp.MustCompile(`^0{40}(?:0{24})?$`)
 
 // Git is how the hook asks the repository questions. The real one runs git in
 // the environment the hook was given (quarantine included).
@@ -46,7 +43,7 @@ func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 		return deny("this request is not authorised to push")
 	}
 	branch, ok := strings.CutPrefix(allowed, "refs/heads/")
-	if !ok || !domain.ValidBranch(branch) || !oidPattern.MatchString(expected) {
+	if !ok || !domain.ValidBranch(branch) || !domain.ValidCommitID(expected) {
 		return deny("this request is not authorised to push")
 	}
 	var updates [][3]string
@@ -68,7 +65,7 @@ func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 	switch {
 	case ref != allowed:
 		return deny("this push may only update " + branch)
-	case !oidPattern.MatchString(oldOID) || !oidPattern.MatchString(newOID):
+	case !domain.ValidCommitID(oldOID) || !domain.ValidCommitID(newOID):
 		return deny("malformed update")
 	case zeroOID.MatchString(newOID):
 		return deny("deleting " + branch + " is not allowed")

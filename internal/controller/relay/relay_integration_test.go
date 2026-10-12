@@ -499,6 +499,7 @@ func TestRelay_AUploadThatDripsIsCutAtTheTotalDeadline(t *testing.T) {
 			}
 		}
 	}()
+	timeout := time.After(10 * time.Second)
 loop:
 	for {
 		select {
@@ -508,7 +509,7 @@ loop:
 			if _, err := conn.Write([]byte("x")); err != nil {
 				break loop
 			}
-		case <-time.After(10 * time.Second):
+		case <-timeout:
 			t.Fatal("the upload was not cut")
 		}
 	}
@@ -523,7 +524,12 @@ loop:
 	assertGone(t, g.pgids)
 }
 
-func TestRelay_ALongAnswerAfterTheBodyIsNotCancelledByTheIdleDeadline(t *testing.T) {
+// This is a smoke test: with the idle deadline (1 s) shorter than the answer of the
+// backend (3 s) and the body already read, a request must not be cancelled. It
+// also passes without the reset of the read deadline after the body (Go 1.27's
+// background read does not cancel on it), so it does not prove that line; it
+// guards the behaviour.
+func TestRelay_SmokeALongAnswerAfterTheBodyIsNotCancelledByTheIdleDeadline(t *testing.T) {
 	script, pgids := recordingGit(t, "sleep 3; printf 'Status: 200 OK\\r\\nContent-Type: text/plain\\r\\n\\r\\nhello\\n'")
 	g := newRig(t, func(c *Config) { c.GitPath = script; c.IdleRead = time.Second })
 	g.pgids = pgids
@@ -565,4 +571,6 @@ func TestRelay_AWorkerHasTwoRequestsInFlightWhateverTheyAre(t *testing.T) {
 	} else {
 		_ = c.Body.Close()
 	}
+	cancel()
+	assertGone(t, g.pgids)
 }

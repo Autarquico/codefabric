@@ -117,8 +117,8 @@ func (e *Executor) seal(ctx context.Context, p state.Publication) bool {
 		e.later(p)
 		return false
 	}
-	if p.ParentOID == "" && p.Generation > 1 {
-		// A new try after a worktree that was no repository: it may be one now.
+	if p.ParentOID == "" {
+		// The exit could not read HEAD (no repository, or git failing): read it again.
 		if head, err := e.o.Git.Head(ctx, e.worktree(p.Key)); err == nil {
 			txErr := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.SetParent(ctx, tx, p, head, e.clock.Now()) })
 			if txErr != nil {

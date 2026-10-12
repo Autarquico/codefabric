@@ -610,34 +610,46 @@ func TestPush_AcceptedButNotRecordedIsPushedAgainWithTheSameCommit(t *testing.T)
 	}
 }
 
-func TestFinalize_AHeadThatCannotBeReadKeepsThePhaseOpen(t *testing.T) {
-	f, g := newGitFixture(t)
-	k := f.started("echo hi")
-	w := newWrapperProcess(t, "exit 0")
-	<-w.ended
-	f.writeWrapper(k, w.w)
-	f.writeStarted(k, w.w, t0.Add(time.Second))
-	f.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: exitedAt, Cause: execwrap.CauseExit})
-	g.mu.Lock()
-	g.headErr = errors.New("git is on fire")
-	g.mu.Unlock()
-	if f.e.step(t.Context(), k) {
-		t.Fatal("the Run was closed without knowing its HEAD")
-	}
-	if r := f.run(k); !r.Phase.Live() {
-		t.Fatalf("phase = %s", r.Phase)
-	}
-	if _, err := state.PublicationOf(t.Context(), f.db.Reader(), k); !errors.Is(err, state.ErrNotFound) {
-		t.Errorf("an intent without a parent was stored: %v", err)
-	}
-	g.mu.Lock()
-	g.headErr = nil
-	g.mu.Unlock()
-	if !f.e.step(t.Context(), k) {
-		t.Fatal("the Run was not settled once HEAD could be read")
-	}
-	if p := f.publication(k); p.ParentOID != headOID {
-		t.Errorf("parent = %q", p.ParentOID)
+func TestFinalize_AnUnreadableHeadClosesTheRunAndTheSealingReadsItAgainOrFails(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recovers  bool
+		wantState state.PubState
+	}{{"HEAD is readable when sealing", true, state.PubSealed}, {"HEAD stays unreadable", false, state.PubFailed}} {
+		f, g := newGitFixture(t)
+		g.seal = func(in gitops.Intent) (gitops.Sealed, error) {
+			if in.ParentOID == "" {
+				return gitops.Sealed{}, errors.New("no repository to seal")
+			}
+			return gitops.Sealed{Commit: resultOID}, nil
+		}
+		g.headErr = errors.New("git is on fire")
+		k := f.exitedRun() // the Run is settled whatever git says
+		if r := f.run(k); r.Phase != state.PhaseStopped {
+			t.Fatalf("%s: phase = %s", tc.name, r.Phase)
+		}
+		if got := publicationKinds(f, k); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) {
+			t.Fatalf("%s: reports = %v", tc.name, got)
+		}
+		if p := f.publication(k); p.ParentOID != "" || p.State != state.PubSealing {
+			t.Fatalf("%s: publication = %+v", tc.name, p)
+		}
+		if tc.recovers {
+			g.mu.Lock()
+			g.headErr = nil
+			g.mu.Unlock()
+		}
+		f.turn()
+		p := f.publication(k)
+		if p.State != tc.wantState || (tc.recovers && p.ParentOID != headOID) {
+			t.Errorf("%s: publication = %+v", tc.name, p)
+		}
+		if !tc.recovers {
+			reports := f.reports(k)
+			if last := reports[len(reports)-1]; last.Kind != v1.ReportPublicationFailed || last.Phase != v1.PhaseSeal {
+				t.Errorf("%s: last report = %+v", tc.name, last)
+			}
+		}
 	}
 }
 

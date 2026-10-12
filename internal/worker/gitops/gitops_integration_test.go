@@ -232,6 +232,9 @@ func TestSeal_CapturesTheWorktreeAndLeavesItAlone(t *testing.T) {
 	if gittest.Run(t, r.bare(), "rev-parse", got.Commit+"^") != parent {
 		t.Error("the commit is not on top of the parent")
 	}
+	if head := gittest.Run(t, r.worktree, "rev-parse", "HEAD"); head != got.Commit {
+		t.Errorf("HEAD of the worktree = %s, want the result %s", head, got.Commit)
+	}
 	if tip := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+gitops.LocalBranch(run, 1)); tip != got.Commit {
 		t.Errorf("branch = %s", tip)
 	}
@@ -504,6 +507,14 @@ func TestPush_ClassifiesWhatTheRelayDoesAndNeverLeaksTheToken(t *testing.T) {
 	_, _ = f.WriteString(hostile)
 	_ = f.Close()
 	untrusted := newStub(t, http.StatusUnauthorized)
+	// ... and the same keys for the exact URL of the relay, which are as specific as ours.
+	exact := "[http \"" + untrusted.srv.URL + "/p.git\"]\n\tsslVerify = false\n\tproxy = http://127.0.0.1:1\n\tsslCAInfo = /nonexistent/ca.pem\n"
+	cfgFile, err := os.OpenFile(filepath.Join(r.bare(), "config"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = cfgFile.WriteString(exact)
+	_ = cfgFile.Close()
 	err = r.g.Push(t.Context(), project, r.source, branch, gitops.PushAuth{
 		URL: untrusted.srv.URL + "/p.git", Token: token, Cert: untrusted.cert, Key: untrusted.key, CA: untrusted.cert,
 	})
