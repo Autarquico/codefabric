@@ -264,10 +264,14 @@ func TestWorkers_ActiveRunsCountOnlyTheNonTerminalRunsOfTheWorker(t *testing.T) 
 			domain.RunQueued, domain.RunPreparing, domain.RunRunning, domain.RunWaitingInput, domain.RunCheckpointing,
 			domain.RunSuspended, domain.RunCompleted, domain.RunFailed, domain.RunCancelled, domain.RunLost,
 		} {
+			publication := domain.PublicationNone
+			if state == domain.RunCompleted {
+				publication = domain.PublicationPending // a completed Run never has none (§22.6)
+			}
 			run := Run{
 				ID: domain.ID("run_" + string(state)), Short: uint64(i + 1), TaskID: task.ID, Attempt: i + 1,
 				Lineage: domain.LineageInitial, Spec: []byte(`{}`), SpecDigest: "d", SourceCommit: "c", State: state,
-				Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone, Runtime: domain.RuntimeNone,
+				Publication: publication, Evaluation: domain.EvaluationNone, Runtime: domain.RuntimeNone,
 				WorkerID: w.ID, CreatedAt: epoch0,
 			}
 			if err := tx.InsertRun(ctx, run); err != nil {

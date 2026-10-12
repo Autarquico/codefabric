@@ -66,7 +66,14 @@ type Run struct {
 	Spec         []byte
 	SpecDigest   string
 	SourceCommit string
-	State        domain.RunState
+	// Branch is frozen with the Run; "" for a Run from before it was stored.
+	// ResultCommit is what the Worker sealed ("" until then); ResultExcluded are
+	// the paths the sealing left out, cut at ResultExcludedTruncated.
+	Branch                  string
+	ResultCommit            string
+	ResultExcluded          []string
+	ResultExcludedTruncated bool
+	State                   domain.RunState
 	EndReason    domain.EndReason
 	QueuedReason string
 	Publication  domain.Publication
@@ -394,7 +401,7 @@ const runColumns = `id, short_n, task_id, attempt, lineage_kind, spec, spec_dige
     COALESCE(end_reason, ''), COALESCE(queued_reason, ''), publication, evaluation, runtime, promoted,
     COALESCE(worker_id, ''), created_at, started_at, finished_at,
     COALESCE(lease_id, ''), COALESCE(lease_epoch, 0), COALESCE((SELECT l.state FROM leases l WHERE l.id = runs.lease_id), ''),
-    exit_code, COALESCE(runtime_handle, '')`
+    exit_code, COALESCE(runtime_handle, ''), COALESCE(branch, ''), COALESCE(result_commit, ''), COALESCE(result_excluded, '')`
 
 func scanRun(row rowScanner) (Run, error) {
 	var (
@@ -405,11 +412,20 @@ func scanRun(row rowScanner) (Run, error) {
 		created           int64
 		started, finished sql.NullInt64
 		exitCode          sql.NullInt64
+		excluded          string
 	)
 	if err := row.Scan(&id, &r.Short, &task, &r.Attempt, &r.Lineage, &spec, &r.SpecDigest, &r.SourceCommit, &r.State,
 		&r.EndReason, &r.QueuedReason, &r.Publication, &r.Evaluation, &r.Runtime, &r.Promoted,
-		&worker, &created, &started, &finished, &lease, &r.LeaseEpoch, &leaseState, &exitCode, &r.RuntimeHandle); err != nil {
+		&worker, &created, &started, &finished, &lease, &r.LeaseEpoch, &leaseState, &exitCode, &r.RuntimeHandle,
+		&r.Branch, &r.ResultCommit, &excluded); err != nil {
 		return Run{}, scanErr(err, "run")
+	}
+	if excluded != "" {
+		var doc excludedDoc
+		if err := json.Unmarshal([]byte(excluded), &doc); err != nil {
+			return Run{}, fmt.Errorf("store: run %s has a corrupt result_excluded: %w", id, err)
+		}
+		r.ResultExcluded, r.ResultExcludedTruncated = doc.Paths, doc.Truncated
 	}
 	r.ID, r.TaskID, r.WorkerID, r.Spec = domain.ID(id), domain.ID(task), domain.ID(worker), []byte(spec)
 	r.LeaseID, r.LeaseState = domain.ID(lease), domain.LeaseState(leaseState)
@@ -425,12 +441,12 @@ func scanRun(row rowScanner) (Run, error) {
 func (t *Tx) InsertRun(ctx context.Context, r Run) error {
 	_, err := t.Exec(ctx,
 		`INSERT INTO runs (id, short_n, task_id, attempt, lineage_kind, spec, spec_digest, source_commit, state,
-		     end_reason, queued_reason, publication, evaluation, runtime, promoted, worker_id, created_at, started_at, finished_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     end_reason, queued_reason, publication, evaluation, runtime, promoted, worker_id, created_at, started_at, finished_at, branch)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(r.ID), r.Short, string(r.TaskID), r.Attempt, string(r.Lineage), string(r.Spec), r.SpecDigest, r.SourceCommit,
 		string(r.State), nullable(string(r.EndReason)), nullable(r.QueuedReason),
 		string(r.Publication), string(r.Evaluation), string(r.Runtime), r.Promoted, nullable(string(r.WorkerID)),
-		r.CreatedAt.UnixNano(), nanosOrNil(r.StartedAt), nanosOrNil(r.FinishedAt))
+		r.CreatedAt.UnixNano(), nanosOrNil(r.StartedAt), nanosOrNil(r.FinishedAt), nullable(r.Branch))
 	if err != nil {
 		return fmt.Errorf("store: inserting run: %w", err)
 	}

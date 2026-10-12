@@ -198,6 +198,9 @@ func (e *env) seedRun(worker string, state domain.RunState) domain.ID {
 			finished := e.clock.Now()
 			run.FinishedAt = &finished
 		}
+		if state == domain.RunCompleted {
+			run.Publication = domain.PublicationPending // a completed Run never has none (§22.6)
+		}
 		return tx.InsertRun(ctx, run)
 	}))
 	return id
