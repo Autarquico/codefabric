@@ -23,6 +23,12 @@ func parseVersion(text string) (version, bool) {
 	return version{major, minor}, errMajor == nil && errMinor == nil
 }
 
+// MinWorkerVersion is the oldest Worker any Controller assigns to: v0.2 is the
+// first minor whose Worker carries out stop orders and reconciles (§10.7,
+// §27.3, #13). A Worker before it is incompatible whatever the policy of the
+// minor before says, since it would block on the orders it does not know.
+var MinWorkerVersion = version{0, 2}
+
 // WorkerVersionCompatible is the upgrade policy of §41: a Controller supports
 // Workers of its own minor version and of the one before it, within the same
 // major. Patch levels and pre-release suffixes do not matter.
@@ -36,6 +42,9 @@ func WorkerVersionCompatible(controller, worker string) bool {
 	c, controllerParses := parseVersion(controller)
 	if !workerParses || !controllerParses {
 		return controller == worker
+	}
+	if w.major < MinWorkerVersion.major || (w.major == MinWorkerVersion.major && w.minor < MinWorkerVersion.minor) {
+		return false
 	}
 	return w.major == c.major && (w.minor == c.minor || w.minor == c.minor-1)
 }
