@@ -25,15 +25,17 @@ const (
 
 // Service runs the Task use cases.
 type Service struct {
-	db    *store.DB
-	clock clock.Clock
-	ids   *domain.IDGenerator
-	runs  *runs.Service
+	db       *store.DB
+	clock    clock.Clock
+	ids      *domain.IDGenerator
+	runs     *runs.Service
+	rederive Rederive
 }
 
-// New builds the service. runs must have been built with Rederive.
+// New builds the service. runs must have been built with a Rederive made by
+// NewRederive with the same ids.
 func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, runs *runs.Service) *Service {
-	return &Service{db: db, clock: clk, ids: ids, runs: runs}
+	return &Service{db: db, clock: clk, ids: ids, runs: runs, rederive: NewRederive(ids)}
 }
 
 // Create makes a Task in a Project and, unless req.NoStart, its first Run.
@@ -232,7 +234,7 @@ func (s *Service) change(ctx context.Context, by pki.Session, operation, ref, pr
 			if err := apply(tx, act, &task); err != nil {
 				return v1.Task{}, err
 			}
-			if err := Rederive(ctx, tx, act, id); err != nil {
+			if err := s.rederive(ctx, tx, act, id); err != nil {
 				return v1.Task{}, err
 			}
 			return viewOf(ctx, tx, id)

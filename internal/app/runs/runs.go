@@ -266,7 +266,8 @@ func view(r store.Run, withSpec bool) v1.Run {
 	out := v1.Run{
 		ID: string(r.ID), Short: shortID(r.Short), TaskID: string(r.TaskID), Attempt: r.Attempt,
 		State: r.State, EndReason: r.EndReason, ExitCode: r.ExitCode, QueuedReason: r.QueuedReason, Lineage: r.Lineage,
-		SpecDigest: r.SpecDigest, SourceCommit: r.SourceCommit, Publication: r.Publication,
+		LineageParent: string(r.LineageParent),
+		SpecDigest:    r.SpecDigest, SourceCommit: r.SourceCommit, Publication: r.Publication,
 		Evaluation: r.Evaluation, Runtime: r.Runtime, Promoted: r.Promoted, WorkerID: string(r.WorkerID),
 		CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
 		Branch: r.Branch, ResultCommit: r.ResultCommit, ResultExcluded: r.ResultExcluded, ResultExcludedTruncated: r.ResultExcludedTruncated,

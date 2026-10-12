@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"crypto/rand"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -72,7 +73,9 @@ func TestRederive_MaterialisesRows6To8OfTheTable(t *testing.T) {
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			rederive := func() error {
-				return db.WithTx(t.Context(), func(tx *store.Tx) error { return Rederive(t.Context(), tx, act, ids[i]) })
+				return db.WithTx(t.Context(), func(tx *store.Tx) error {
+					return NewRederive(domain.NewIDGenerator(clk.Now, rand.Reader))(t.Context(), tx, act, ids[i])
+				})
 			}
 			if err := rederive(); err != nil {
 				t.Fatal(err)

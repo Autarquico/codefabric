@@ -17,7 +17,22 @@ import (
 // cancelling, completing, archiving and changing the completion. State is
 // materialised (invariant 16 keeps deriving it, never editing it), so a change
 // that skips Rederive leaves lists and filters wrong.
-func Rederive(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID) error {
+//
+// A Task that derives queued because its last Run failed or was lost and the
+// retry policy reschedules it (§11.7 row 12) gets the Run of the retry here,
+// in the same transaction, before anything else: the state holds only once
+// that Run exists. It is created before the state is compared with the stored
+// one, which may be queued already. The state is then derived once more.
+type Rederive func(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID) error
+
+// NewRederive is the Rederive of the use cases; ids names the Runs of the retries.
+func NewRederive(ids *domain.IDGenerator) Rederive {
+	return func(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID) error {
+		return rederive(ctx, tx, act, ids, taskID)
+	}
+}
+
+func rederive(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.IDGenerator, taskID domain.ID) error {
 	task, err := store.TaskByID(ctx, tx, taskID)
 	if err != nil {
 		return err
@@ -30,7 +45,15 @@ func Rederive(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain
 	if err != nil {
 		return err
 	}
-	state, reason, err := derive(task, project, summaries)
+	if domain.RetryDue(taskView(task, project, summaries)) {
+		if err := retryIn(ctx, tx, act, ids, task); err != nil {
+			return err
+		}
+		if summaries, err = store.RunSummaries(ctx, tx, taskID); err != nil {
+			return err
+		}
+	}
+	state, reason, err := domain.DeriveTaskState(taskView(task, project, summaries))
 	if err != nil {
 		return err
 	}
@@ -55,8 +78,12 @@ func Rederive(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain
 // derive applies the §11.7 table. Dependencies arrive with Plans (Phase 8),
 // so for now every Task has them satisfied.
 func derive(t store.Task, p store.Project, summaries []domain.RunSummary) (domain.TaskState, domain.WaitingReason, error) {
+	return domain.DeriveTaskState(taskView(t, p, summaries))
+}
+
+func taskView(t store.Task, p store.Project, summaries []domain.RunSummary) domain.TaskView {
 	in := runs.Inherit(t, p)
-	return domain.DeriveTaskState(domain.TaskView{
+	return domain.TaskView{
 		Markers: domain.Markers{
 			Cancelled: t.CancelledAt != nil, Archived: t.ArchivedAt != nil, CompletedManually: t.CompletedManuallyAt != nil,
 		},
@@ -68,7 +95,7 @@ func derive(t store.Task, p store.Project, summaries []domain.RunSummary) (domai
 			AttemptsLeft: max(0, in.Retry.MaxAttempts-len(summaries)),
 		},
 		Runs: summaries,
-	})
+	}
 }
 
 // View is the API shape of a Task, with what it inherits already resolved.
