@@ -88,6 +88,12 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 	now := e.clock.Now()
 	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 		for _, c := range cmds {
+			if c.Type == domain.CommandPublish && c.Publish != nil {
+				if err := e.persistPublish(ctx, tx, c, now); err != nil {
+					return err
+				}
+				continue
+			}
 			if c.Type != domain.CommandAssign || c.Assign == nil {
 				blocked = true
 				e.setDegraded(reasonUnknownCommand)
@@ -107,6 +113,7 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 			if _, err := state.InsertAssigned(ctx, tx, state.Run{
 				Key: state.Key{RunID: a.RunID, LeaseEpoch: a.Epoch}, LeaseID: a.LeaseID, RunShort: a.RunShort, TaskID: a.TaskID,
 				ProjectID: a.ProjectID, CommandSeq: c.Seq, AcceptBy: a.AcceptBy, SourceCommit: a.SourceCommit,
+				Branch: a.Branch, Repo: a.Repo,
 				CPU: a.Resources.CPU, MemoryMB: a.Resources.MemoryMB, Spec: a.Spec,
 				Harness: spec.Requirements.Harness, Mode: spec.Mode, CreatedAt: now,
 			}); err != nil {

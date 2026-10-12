@@ -225,6 +225,17 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 	f.byController = f.ordered && order.Source == SourceController
 	spawned := f.started != nil
 	reportedStart := r.StartedAt != nil || spawned
+	// A Run whose harness ran is to be sealed (§22.6). The intent, which is all that sealing depends
+	// on, is stored with the exit; HEAD is read before the transaction because git is not in it.
+	sealing := spawned && e.o.Git != nil
+	var parent string
+	if sealing {
+		var err error
+		if parent, err = e.o.Git.Head(ctx, e.worktree(r.Key)); err != nil {
+			e.log.WarnContext(ctx, "the worktree of a Run has no HEAD: it cannot be sealed", "run", r.RunID, "err", err)
+			parent = ""
+		}
+	}
 	now := e.clock.Now()
 	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 		if spawned && r.StartedAt == nil {
@@ -257,6 +268,11 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 		if err := state.Close(ctx, tx, r.Key, state.OccupyingPhases, state.PhaseStopped, !reportedStart, now); err != nil {
 			return err
 		}
+		if sealing {
+			if _, err := state.InsertPublication(ctx, tx, state.Publication{Key: r.Key, ParentOID: parent, SealedAt: f.at, CreatedAt: now}); err != nil {
+				return err
+			}
+		}
 		return state.CompleteStopOrder(ctx, tx, r.Key, now)
 	})
 	if err != nil {
@@ -264,6 +280,9 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 		return false
 	}
 	e.o.Journal.Notify()
+	if sealing {
+		e.kickPublisher()
+	}
 	e.forget(r.Key)
 	return true
 }

@@ -185,15 +185,8 @@ func TestPublication_EntriesThatDoNotFit(t *testing.T) {
 	if got := results(r.mustSend(r.entry(v1.ReportPublished, publishedAs(sha2)))); got != "rejected:CF_INVALID_REQUEST" {
 		t.Errorf("published another commit = %s", got)
 	}
-	// A seal failure after sealing, and a push failure before.
-	if got := results(r.mustSend(r.entry(v1.ReportPublicationFailed, phase(v1.PhaseSeal)))); got != "rejected:CF_INVALID_TRANSITION" {
-		t.Errorf("seal failure of a sealed Run = %s", got)
-	}
 	o := e.acceptedRun(e.joinWorker("gamma"), "c")
 	o.exitedAndStopped(0)
-	if got := results(o.mustSend(o.entry(v1.ReportPublicationFailed, phase(v1.PhasePush)))); got != "rejected:CF_INVALID_TRANSITION" {
-		t.Errorf("push failure of an unsealed Run = %s", got)
-	}
 	// Shapes.
 	for name, mutate := range map[string]func(*v1.RunReportEntry){
 		"bad commit":     func(en *v1.RunReportEntry) { en.ResultCommit = "abc" },

@@ -4,6 +4,7 @@ package daemon_test
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	controllerdaemon "github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/worker/daemon"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -167,5 +169,25 @@ func TestRun_OffersTheCommandHarnessWhenItHasARuntime(t *testing.T) {
 	})
 	if len(w.Capabilities) != 1 || w.Capabilities[0] != "harness:command" || w.Health.Status != v1.HealthOK {
 		t.Errorf("worker = %+v", w)
+	}
+}
+
+func TestRun_OffersNoHarnessWithoutAUsableGit(t *testing.T) {
+	c := newController(t)
+	paths := machine(t)
+	c.join("box", paths)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = daemon.Run(ctx, daemon.Options{
+			Paths: paths, Interval: interval, Logger: slog.New(slog.DiscardHandler), Runtime: &recordingRuntime{},
+			GitPath: "/nonexistent/git",
+		})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	w := c.eventually("box", "the Worker to be online", func(w v1.Worker) bool { return w.State == domain.WorkerOnline })
+	if len(w.Capabilities) != 0 {
+		t.Errorf("a Worker without git offers %v", w.Capabilities)
 	}
 }

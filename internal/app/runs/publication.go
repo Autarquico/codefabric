@@ -95,10 +95,6 @@ func (s *Service) publicationEntry(ctx context.Context, tx *store.Tx, act mutati
 		return s.failPublication(ctx, tx, act, run, l), nil, nil
 
 	default: // publication_failed
-		if (e.Phase == v1.PhaseSeal) != (run.ResultCommit == "") {
-			return nil, nil, domain.NewError(domain.CodeInvalidTransition,
-				fmt.Sprintf("a %s failure does not fit a Run whose result commit is %q", e.Phase, run.ResultCommit), nil)
-		}
 		ev.Type, ev.Level, ev.Message = domain.EventRunPublicationFailed, "warn", "run publication failed"
 		ev.Data["phase"] = e.Phase
 		return s.failPublication(ctx, tx, act, run, l), nil, nil

@@ -457,3 +457,40 @@ func TestAnErrorOfIdentityIsNotFencedAndTheReportsGoOutAgainUnchanged(t *testing
 		t.Errorf("sent %v, %d rows left", got, f.pending())
 	}
 }
+
+func TestSender_HandsTheViewOfTheRunToTheStateInTheTransactionThatDeletesTheReports(t *testing.T) {
+	f := newFixture(t)
+	j := journal.New("01J0000000000000000000000E1", f.clock)
+	f.write(j, "run_a", v1.ReportPublished)
+	c := &controller{answer: func(string, v1.RunReportRequest) (v1.RunReportResponse, error) {
+		return v1.RunReportResponse{}, nil // falls through to the default
+	}}
+	s := f.sender(c, j)
+	var views []v1.Run
+	failOnce := true
+	s.OnView = func(_ context.Context, _ *state.Tx, _ state.Key, run v1.Run) error {
+		views = append(views, run)
+		if failOnce {
+			failOnce = false
+			return fmt.Errorf("could not write")
+		}
+		return nil
+	}
+	// A hook that fails rolls the deletion back: the reports are sent again, and nothing is lost.
+	if _, err := s.Flush(t.Context()); err == nil {
+		t.Fatal("the failure of the hook was not reported")
+	}
+	rows, err := state.PendingJournal(t.Context(), f.db.Reader(), 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("pending after a failed hook = %d (%v)", len(rows), err)
+	}
+	if n, err := s.Flush(t.Context()); err != nil || n != 1 {
+		t.Fatalf("second flush = %d, %v", n, err)
+	}
+	if rows, _ = state.PendingJournal(t.Context(), f.db.Reader(), 10); len(rows) != 0 {
+		t.Errorf("%d rows left", len(rows))
+	}
+	if len(views) != 2 {
+		t.Errorf("the hook was called %d times", len(views))
+	}
+}
