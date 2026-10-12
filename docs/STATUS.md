@@ -17,6 +17,7 @@
 - #8 Projects, Tasks y Runs: API y CLI
 - #9 Registro de Workers y heartbeats
 - #10 Scheduler, leases y reservas
+- #11 Ejecutor del Worker con tmux, wrapper y journal
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -24,7 +25,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-- #11 Ejecutor del Worker con tmux, wrapper y journal
+_(nada)_
 <!-- /pm-sync:in-progress -->
 
 ---

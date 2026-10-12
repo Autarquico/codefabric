@@ -2,7 +2,7 @@
 codename: codefabric
 title: Ejecutor del Worker con tmux, wrapper y journal
 type: task
-status: active
+status: shipped
 priority: P0
 size: L
 issue: 11
@@ -13,7 +13,7 @@ depends_on: [worker-registry-heartbeat]
 supersedes: []
 related_specs: [codefabric-spec, phase-1-workers]
 created: 2026-10-10
-updated: 2026-10-11
+updated: 2026-10-12
 ---
 
 # Ejecutor del Worker con tmux, wrapper y journal
