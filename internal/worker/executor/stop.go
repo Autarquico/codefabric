@@ -20,7 +20,9 @@ const (
 // Stop ends a Run (§10.7). The order is written first, in the same transaction as
 // what it does to the phase; then it is carried out:
 //
-//   - not accepted yet: the assignment is aborted, and will not be answered;
+//   - not accepted yet: the assignment is aborted, and will not be answered
+//     (a stop of the Controller means it is accepted there: it is told);
+//   - over: the order is done;
 //   - accepted and not started: it is aborted, Start refuses it, and the
 //     Controller is told RunStopped(never_started);
 //   - started: the wrapper is asked to end the group, waits stop.grace and kills
@@ -39,11 +41,13 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 	if err != nil {
 		return err
 	}
-	if !r.Phase.Live() {
-		return nil
-	}
 	now := e.clock.Now()
 	order := state.StopOrder{Key: k, Reason: reason, Source: source, CreatedAt: now}
+	if !r.Phase.Live() {
+		// Nothing of it runs: an order that reached it is done.
+		err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.CompleteStopOrder(ctx, tx, k, now) })
+		return err
+	}
 	switch r.Phase {
 	case state.PhaseAssigned, state.PhaseAccepted:
 		err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
@@ -53,7 +57,9 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 			if err := state.Close(ctx, tx, k, []state.Phase{r.Phase}, state.PhaseAborted, true, now); err != nil {
 				return err
 			}
-			if r.Phase == state.PhaseAccepted { // the Controller holds our acceptance: it is told
+			// The Controller holds our acceptance: it is told. A stop of the Controller
+			// is only ever of an accepted lease, even if the answer to it was not written here.
+			if r.Phase == state.PhaseAccepted || source == SourceController {
 				if err := e.report(ctx, tx, k, v1.ReportStopped, now, func(en *v1.RunReportEntry) { en.NeverStarted = true }); err != nil {
 					return err
 				}

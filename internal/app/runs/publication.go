@@ -37,7 +37,7 @@ func (s *Service) publicationEntry(ctx context.Context, tx *store.Tx, act mutati
 	}
 	switch e.Kind {
 	case v1.ReportSealed:
-		if run.StartedAt == nil {
+		if run.StartedAt == nil && (run.HarnessRan == nil || !*run.HarnessRan) {
 			return nil, domain.NewError(domain.CodeInvalidTransition, "the harness of this Run never started: there is nothing to seal", nil)
 		}
 		if run.ResultCommit != "" && run.ResultCommit != e.ResultCommit {

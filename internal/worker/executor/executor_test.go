@@ -419,7 +419,7 @@ func TestAStopBetweenTheRuntimeStartAndTheLocalCommitWaitsForIt(t *testing.T) {
 		t.Fatalf("phase = %s", r.Phase)
 	}
 	reports := f.reports(k)
-	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportStopped}) || reports[1].NeverStarted {
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportPrepareFailed, v1.ReportStopped}) || reports[2].NeverStarted {
 		t.Errorf("reports = %+v: started was reported, so stopped says the session did start", reports)
 	}
 }
@@ -1037,9 +1037,11 @@ func TestWhatTheExecutorRemembersOfARunGoesWithTheRun(t *testing.T) {
 	}
 }
 
-func TestAStopTheWorkerOrderedItselfStillReportsAFailureToPrepare(t *testing.T) {
+func TestAStopReportsAFailureToPrepareWhoeverOrderedIt(t *testing.T) {
+	// The Controller notes a late prepare_failed (#13): it is what lets it release
+	// the reservation of a Run whose harness never ran.
 	for source, want := range map[string][]v1.RunReportKind{
-		SourceController: {v1.ReportStarted, v1.ReportStopped},
+		SourceController: {v1.ReportStarted, v1.ReportPrepareFailed, v1.ReportStopped},
 		SourceWorker:     {v1.ReportStarted, v1.ReportPrepareFailed, v1.ReportStopped},
 	} {
 		f := newFixture(t)

@@ -16,6 +16,21 @@ import (
 // progress is signalled again, and a Run whose processes could not be verified
 // is verified again.
 func (e *Executor) recoverRuns(ctx context.Context) error {
+	// A stop of the Controller that the previous daemon persisted and did not
+	// carry out is carried out first: an accepted Run with one never starts.
+	pending, err := state.PendingStopOrders(ctx, e.o.DB.Reader())
+	if err != nil {
+		return fmt.Errorf("executor: reading the stops to resume: %w", err)
+	}
+	for _, o := range pending {
+		r, err := state.RunBy(ctx, e.o.DB.Reader(), o.Key)
+		if err != nil || o.Source != SourceController || r.Phase == state.PhaseStopping || r.Phase == state.PhaseStopUnverified {
+			continue
+		}
+		if err := e.Stop(ctx, o.RunID, o.LeaseEpoch, o.Reason, o.Source); err != nil {
+			e.log.ErrorContext(ctx, "resuming a stop", "run", o.RunID, "err", err)
+		}
+	}
 	live, err := state.LiveRuns(ctx, e.o.DB.Reader())
 	if err != nil {
 		return fmt.Errorf("executor: reading the Runs to recover: %w", err)

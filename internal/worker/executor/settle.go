@@ -15,13 +15,12 @@ import (
 
 // facts is what finalizing a Run knows about how it ended.
 type facts struct {
-	at           time.Time
-	exit         *execwrap.Exit    // nil if the wrapper left none
-	started      *execwrap.Started // nil if the harness never spawned
-	lost         bool              // the wrapper died and left no exit
-	ordered      bool              // a stop was ordered
-	byController bool              // ... by the Controller, which then knows that the Run is over
-	message      string
+	at      time.Time
+	exit    *execwrap.Exit    // nil if the wrapper left none
+	started *execwrap.Started // nil if the harness never spawned
+	lost    bool              // the wrapper died and left no exit
+	ordered bool              // a stop was ordered
+	message string
 }
 
 // verdictOf says what the process with the wrapper's pid is now. The wrapper
@@ -214,15 +213,13 @@ func (e *Executor) markUnverified(ctx context.Context, r state.Run, why string) 
 // `started` means that the session was created, so it is reported before the
 // harness is known to have spawned. A harness that spawned (started.json) ends
 // with exited and stopped. One that never spawned ends with prepare_failed and
-// stopped, whether the failure was seen before or after `started`, and its
-// publication stays none; but if the Controller ordered a stop it already knows
-// that the Run is over, and only the stop is left to confirm. A stop the Worker
-// ordered of itself is not known to it, so the failure is reported as without an order. stopped says
-// never_started only if `started` was never reported.
+// stopped, whether the failure was seen before or after `started` and whoever
+// ordered the stop: the Controller notes it on a Run it ended, and it is the
+// evidence that releases its reservation (B5). stopped says never_started only
+// if `started` was never reported.
 func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done bool) {
 	order, orderErr := state.StopOrderOf(ctx, e.o.DB.Reader(), r.Key)
-	f.ordered = orderErr == nil
-	f.byController = f.ordered && order.Source == SourceController
+	f.ordered = orderErr == nil && order.Reason != ""
 	spawned := f.started != nil
 	reportedStart := r.StartedAt != nil || spawned
 	// A Run whose harness ran is to be sealed (§22.6). The intent, which is all that sealing depends
@@ -255,7 +252,7 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 			if err := e.report(ctx, tx, r.Key, v1.ReportExited, f.at, func(en *v1.RunReportEntry) { fillExit(en, f) }); err != nil {
 				return err
 			}
-		case !f.byController:
+		default:
 			message := f.message
 			if f.exit != nil && f.exit.Error != "" {
 				message = f.exit.Error
