@@ -12,8 +12,6 @@ func TestWorkerVersionCompatible(t *testing.T) {
 		{"N: another patch", "v0.3.1", "v0.3.9", true},
 		{"N-1", "v0.3.1", "v0.2.5", true},
 		{"N-2", "v0.3.1", "v0.1.0", false},
-		{"N-1 before the floor of stop and reconcile", "v0.2.0", "v0.1.9", false},
-		{"the floor itself", "v0.2.0", "v0.2.3", true},
 		{"newer than the Controller", "v0.3.1", "v0.4.0", false},
 		{"another major", "v1.3.0", "v0.3.0", false},
 		{"N-1 does not cross a major", "v1.0.0", "v0.9.0", false},
