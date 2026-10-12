@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -179,7 +180,21 @@ func (r *Runtime) KillServer(ctx context.Context) error {
 	if _, _, err := r.exec(ctx, "kill-server"); err != nil && !isMissing(err) {
 		return err
 	}
+	// tmux can leave the socket file of a server that is gone.
+	if err := os.Remove(socketPath(r.socket)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("tmux: removing the socket: %w", err)
+	}
 	return nil
+}
+
+// socketPath is where tmux puts the socket named by -L: $TMUX_TMPDIR, or /tmp,
+// then tmux-<uid>/<name>.
+func socketPath(name string) string {
+	dir := os.Getenv("TMUX_TMPDIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, fmt.Sprintf("tmux-%d", os.Getuid()), name)
 }
 
 // List names the sessions of Runs of this server.

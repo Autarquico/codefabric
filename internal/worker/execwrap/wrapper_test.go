@@ -442,8 +442,9 @@ func TestTheHarnessDoesNotInheritTheTmuxVariables(t *testing.T) {
 }
 
 func TestWhatDoesNotEndWithTheGraceIsKilledWithTheGroupAfterTheExitIsWritten(t *testing.T) {
-	// The harness ends at once and leaves a process that ignores SIGTERM.
-	s := launch(t, execwrap.Launch{Argv: shell(`(trap '' TERM; sleep 300) & echo $! > rebel.pid; exit 0`), Grace: 300 * time.Millisecond}, true)
+	// The harness ends once it leaves a process that ignores SIGTERM: it waits for
+	// the trap to be in place, so the stop cannot reach the rebel before it.
+	s := launch(t, execwrap.Launch{Argv: shell(`(trap '' TERM; : > rebel.ready; sleep 300) & echo $! > rebel.pid; while [ ! -f rebel.ready ]; do sleep 0.01; done; exit 0`), Grace: 300 * time.Millisecond}, true)
 	rebel := s.pidFile("rebel.pid")
 	exit := s.waitExit()
 	if exit.ExitCode == nil || *exit.ExitCode != 0 || !exit.GroupKilled || exit.RemnantsKilled < 1 {
