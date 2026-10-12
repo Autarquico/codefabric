@@ -15,6 +15,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/procident"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -179,6 +180,7 @@ func (e *Executor) snapshot(ctx context.Context) ([]v1.ReconcileRun, map[state.K
 		if err != nil {
 			return nil, nil, err
 		}
+		alive = alive || (r.Phase.Live() && e.wrapperAlive(r.Key))
 		entry := v1.ReconcileRun{
 			RunID: r.RunID, LeaseID: r.LeaseID, LeaseEpoch: r.LeaseEpoch, Phase: string(r.Phase), Alive: alive,
 			Started: r.StartedAt != nil, FencedCode: r.FencedCode, PendingReports: it.n, HarnessRan: e.harnessRan(r),
@@ -478,6 +480,17 @@ func (e *Executor) applyPublications(ctx context.Context, views []v1.ReconcilePu
 	return nil
 }
 
+// wrapperAlive says whether the wrapper of the Run is the process it recorded
+// and alive: a session is only as sure as the Runtime that answers for it, and
+// the markers of the Run are the evidence that does not depend on it.
+func (e *Executor) wrapperAlive(k state.Key) bool {
+	var w execwrap.Wrapper
+	if found, err := execwrap.Read(e.runDir(k), execwrap.WrapperFile, &w); err != nil || !found {
+		return false
+	}
+	return verdictOf(&w) == procident.Same
+}
+
 // resolveLeases decides what became of each lease the Controller listed that
 // this Worker did not name (§10.4 point 8). One it has a record of goes in the
 // runs of the next round. Of one it has none: no session, assignment_unknown;
@@ -511,7 +524,7 @@ func (e *Executor) resolveLease(ctx context.Context, k state.Key, l v1.Reconcile
 	if err != nil {
 		return "", err
 	}
-	if !alive {
+	if !alive && !e.wrapperAlive(k) {
 		e.log.WarnContext(ctx, "the Controller holds a lease this Worker has no record or session of", "run", k.RunID, "epoch", k.LeaseEpoch)
 		return v1.OutcomeAssignmentUnknown, nil
 	}

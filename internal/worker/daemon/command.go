@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -90,7 +91,8 @@ func newJoinCmd() *cobra.Command {
 }
 
 func newRunCmd() *cobra.Command {
-	return &cobra.Command{
+	var interval time.Duration
+	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run the Worker daemon until interrupted",
 		Args:  cobra.NoArgs,
@@ -103,11 +105,15 @@ func newRunCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return Run(ctx, Options{
-				Paths: paths, Controller: controller,
+				Paths: paths, Controller: controller, Interval: interval,
 				Logger: slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil)),
 			})
 		},
 	}
+	// Tests of a run_lost_timeout of seconds need heartbeats closer than Appendix A's.
+	cmd.Flags().DurationVar(&interval, "heartbeat-interval", 0, "time between heartbeats (default: that of Appendix A)")
+	_ = cmd.Flags().MarkHidden("heartbeat-interval")
+	return cmd
 }
 
 // newExecCmd is the wrapper the Runtime starts in the session of a Run (§6.4).
