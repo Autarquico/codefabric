@@ -34,6 +34,7 @@ type env struct {
 	authority *pki.Authority
 	app       *app.Services
 	owner     pki.Session
+	relay     *fakeRelay
 	epochs    map[domain.ID]string
 	sessions  map[string]pki.Session
 }
@@ -52,8 +53,9 @@ func newEnv(t *testing.T) *env {
 		authority: pki.NewAuthority(pki.AuthorityConfig{
 			DB: db, CA: ca, Clock: clk, IDs: ids, CertTTL: domain.Defaults().IdentityCertTTL, EnrollWorker: workers.Enroll,
 		}),
-		app: app.New(db, clk, ids, workers.Config{}),
+		relay: &fakeRelay{},
 	}
+	e.app = app.New(db, clk, ids, workers.Config{}, runs.WithRelay(e.relay))
 	e.owner = e.newClient("owner")
 	return e
 }

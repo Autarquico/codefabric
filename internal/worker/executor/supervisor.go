@@ -101,7 +101,7 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err := mkdir(dir); err != nil {
 		return err
 	}
-	if err := e.o.Preparer(ctx, r, worktree); err != nil {
+	if err := e.makeWorktree(ctx, r, spec, worktree); err != nil {
 		return err
 	}
 	launch, err := launcher.Launch(harness.LaunchSpec{RunDir: dir, Worktree: worktree, Prompt: spec.Prompt, Mode: domain.Mode(spec.Mode)})

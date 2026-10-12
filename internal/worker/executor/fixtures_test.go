@@ -40,8 +40,11 @@ type fakeController struct {
 	accepted []string
 	rejected []v1.RejectLeaseRequest
 	acks     []uint64
+	tokens   []string
 	after    []uint64
-	blocked  chan struct{}
+	// relayToken, if set, answers RelayToken.
+	relayToken func(run string, epoch uint64) (v1.RelayTokenResponse, error)
+	blocked    chan struct{}
 }
 
 func (c *fakeController) Assignments(ctx context.Context, after uint64, _ time.Duration, _ int) (v1.AssignmentsResponse, error) {
@@ -89,6 +92,18 @@ func (c *fakeController) RejectLease(_ context.Context, lease string, req v1.Rej
 	c.rejected = append(c.rejected, req)
 	return v1.Lease{ID: lease, State: domain.LeaseRejected}, nil
 }
+
+func (c *fakeController) RelayToken(_ context.Context, run string, epoch uint64) (v1.RelayTokenResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tokens = append(c.tokens, fmt.Sprintf("%s-e%d", run, epoch))
+	if c.relayToken != nil {
+		return c.relayToken(run, epoch)
+	}
+	return v1.RelayTokenResponse{Token: "token-" + run, Path: "/v1/relay/project_1.git", Write: true}, nil
+}
+
+func (c *fakeController) RelayURL(path string) string { return "https://controller.test" + path }
 
 func (c *fakeController) AckCommands(_ context.Context, upTo uint64) (v1.AckCommandsResponse, error) {
 	c.mu.Lock()
@@ -240,6 +255,7 @@ func (f *fixture) assign(spec []byte, mutate ...func(*v1.AssignCommand)) state.K
 	a := v1.AssignCommand{
 		LeaseID: fmt.Sprintf("lease_%d", f.nextID), RunID: runID(f.nextID), RunShort: fmt.Sprintf("run-%d", f.nextID),
 		TaskID: "task_1", ProjectID: "project_1", Epoch: 1, AcceptBy: t0.Add(time.Minute), SourceCommit: "abc",
+		Branch: fmt.Sprintf("cf/t/run-%d", f.nextID), Repo: "/srv/r",
 		Resources: v1.Capacity{CPU: 2, MemoryMB: 4096}, Spec: spec,
 	}
 	for _, m := range mutate {

@@ -7,9 +7,12 @@ const specSchema = 2
 
 // specView is the part of the frozen spec the Worker acts on.
 type specView struct {
-	Schema       int    `json:"schema"`
-	Prompt       string `json:"prompt"`
-	Mode         string `json:"mode"`
+	Schema int    `json:"schema"`
+	Prompt string `json:"prompt"`
+	Mode   string `json:"mode"`
+	Source struct {
+		Ref string `json:"ref"`
+	} `json:"source"`
 	Requirements struct {
 		Harness string `json:"harness"`
 	} `json:"requirements"`

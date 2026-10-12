@@ -74,8 +74,11 @@ type Options struct {
 	// StopGrace is stop.grace (Appendix A): how long a harness has to end after
 	// it is asked to, before it is killed. It defaults to that of Appendix A.
 	StopGrace time.Duration
-	// Preparer makes the working directory of a Run; it defaults to an empty one.
-	Preparer Preparer
+	// Git prepares, seals and pushes. Without one a Run gets an empty directory
+	// and its result is not published (tests).
+	Git Git
+	// RelayTLS are the files git presents to the relay when it pushes.
+	RelayTLS RelayTLS
 	Hooks    Hooks
 }
 
@@ -101,7 +104,11 @@ type Executor struct {
 
 	degraded atomic.Pointer[string]
 
-	wake chan struct{} // the decider has something new
+	wake    chan struct{} // the decider has something new
+	pubWake chan struct{} // the publisher has something new
+
+	backoffMu sync.Mutex
+	pubMemos  map[state.Key]*pubMemo // what the publisher remembers of a publication between turns
 
 	mu    sync.Mutex
 	memos map[state.Key]*runMemo
@@ -148,7 +155,7 @@ func New(o Options) (*Executor, error) {
 	}
 	e := &Executor{
 		o: o, harnesses: map[string]harness.Launcher{}, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, grace: o.StopGrace,
-		wake: make(chan struct{}, 1), memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
+		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
 	}
 	if e.clock == nil {
 		e.clock = clock.Real{}
@@ -165,9 +172,6 @@ func New(o Options) (*Executor, error) {
 			return nil, fmt.Errorf("executor: locating this binary: %w", err)
 		}
 		e.wrapper = []string{self, "worker", "exec"}
-	}
-	if e.o.Preparer == nil {
-		e.o.Preparer = emptyWorktree
 	}
 	for _, h := range o.Harnesses {
 		e.harnesses[h.ID()] = h
@@ -262,6 +266,9 @@ func (e *Executor) Run(ctx context.Context) error {
 		return err
 	}
 	wg.Go(func() { e.decideLoop(ctx) })
+	if e.o.Git != nil {
+		wg.Go(func() { e.publishLoop(ctx) })
+	}
 	e.assignLoop(ctx)
 	return nil
 }
@@ -295,13 +302,18 @@ func (e *Executor) sessionName(k state.Key) string { return cfruntime.NameFor(k.
 
 // report adds a report to the transaction that makes the change it tells about.
 func (e *Executor) report(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) error {
+	_, err := e.reportSeq(ctx, tx, k, kind, at, fill)
+	return err
+}
+
+// reportSeq is report, and says the seq the report was given in the journal.
+func (e *Executor) reportSeq(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) (uint64, error) {
 	entry := v1.RunReportEntry{Kind: kind, At: at}
 	if fill != nil {
 		fill(&entry)
 	}
 	entry.Message = reportable(entry.Message)
-	_, err := e.o.Journal.AppendTx(ctx, tx, k, entry)
-	return err
+	return e.o.Journal.AppendTx(ctx, tx, k, entry)
 }
 
 func (e *Executor) runtimeHandle(k state.Key) *v1.RuntimeHandle {

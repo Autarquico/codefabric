@@ -187,7 +187,7 @@ func TestWorkers_AdministrationThroughTheSDK(t *testing.T) {
 		t.Fatalf("the Worker lost access after a refused removal: %v", err)
 	}
 	must(t, tc.db.WithTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET state = 'completed', finished_at = ?`, time.Now().UnixNano())
+		_, err := tx.Exec(ctx, `UPDATE runs SET state = 'completed', publication = 'pending', finished_at = ?`, time.Now().UnixNano())
 		return err
 	}))
 

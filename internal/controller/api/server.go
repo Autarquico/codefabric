@@ -14,6 +14,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
+	"github.com/Autarquico/codefabric/internal/controller/relay"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
@@ -63,6 +64,9 @@ type Config struct {
 	Build      buildinfo.Info // what /v1/status reports as the version
 	Logger     *slog.Logger   // defaults to slog.Default()
 	Timeouts   Timeouts       // tests shorten them
+	// Relay is the git relay (§22.1); nil when this machine cannot serve one,
+	// and then its routes answer CF_INTERNAL.
+	Relay *relay.Relay
 }
 
 // Server is the Controller API over mutual TLS.
@@ -72,6 +76,7 @@ type Server struct {
 	log       *slog.Logger
 	store     Store
 	work      *app.Services
+	relay     *relay.Relay
 	clock     clock.Clock
 	startedAt time.Time
 	build     buildinfo.Info
@@ -103,6 +108,7 @@ func New(c Config) (*Server, error) {
 		log:       log,
 		store:     c.Store,
 		work:      c.Work,
+		relay:     c.Relay,
 		clock:     clk,
 		startedAt: c.StartedAt,
 		build:     c.Build,
@@ -126,6 +132,7 @@ func New(c Config) (*Server, error) {
 	if s.work.Leases != nil && s.work.Scheduler != nil {
 		s.registerWorkerSchedulingRoutes()
 		s.registerWorkerReportRoutes()
+		s.registerRelayRoutes()
 		s.handle("GET /v1/runs/{ref}/explain", clientsOnly, s.explainRun)
 	}
 	return s, nil

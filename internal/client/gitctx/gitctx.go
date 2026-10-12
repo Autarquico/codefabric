@@ -17,6 +17,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 )
 
 // ErrNoOrigin means the directory has no "origin" remote to take a repository from.
@@ -87,9 +88,9 @@ func resolveRef(ctx context.Context, dir, remote, ref string, timeout time.Durat
 	out, err := git(lsCtx, dir, "ls-remote", "--", remote, ref, ref+"^{}")
 	if err != nil {
 		if ctx.Err() == nil && errors.Is(lsCtx.Err(), context.DeadlineExceeded) {
-			return "", fmt.Errorf("resolving %q on %s: no answer within %s", ref, redact(remote), timeout)
+			return "", fmt.Errorf("resolving %q on %s: no answer within %s", ref, redact.Text(remote), timeout)
 		}
-		return "", fmt.Errorf("resolving %q on %s: %w", ref, redact(remote), err)
+		return "", fmt.Errorf("resolving %q on %s: %w", ref, redact.Text(remote), err)
 	}
 	found := map[string]string{}
 	for _, line := range strings.Split(out, "\n") {
@@ -103,7 +104,7 @@ func resolveRef(ctx context.Context, dir, remote, ref string, timeout time.Durat
 		}
 	}
 	return "", domain.NewError(domain.CodeNotFound,
-		fmt.Sprintf("ref %q was not found on %s", ref, redact(remote)), map[string]any{"ref": ref})
+		fmt.Sprintf("ref %q was not found on %s", ref, redact.Text(remote)), map[string]any{"ref": ref})
 }
 
 // candidates are the ref names that ref may stand for, best first.
@@ -123,24 +124,9 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return "", fmt.Errorf("git %s: %s", args[0], redact(msg))
+			return "", fmt.Errorf("git %s: %s", args[0], redact.Text(msg))
 		}
 		return "", fmt.Errorf("git %s: %w", args[0], err)
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
-
-// redact is a blunt defence in depth: git only sees URLs that passed
-// domain.ValidRepoURL, or an origin that equals one. Every white-space
-// separated word that has an '@', or a "://" with a '?' or '#', is replaced
-// whole; the rest of s is untouched.
-func redact(s string) string {
-	return word.ReplaceAllStringFunc(s, func(w string) string {
-		if strings.Contains(w, "@") || (strings.Contains(w, "://") && strings.ContainsAny(w, "?#")) {
-			return "<redacted>"
-		}
-		return w
-	})
-}
-
-var word = regexp.MustCompile(`\S+`)

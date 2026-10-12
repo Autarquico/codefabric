@@ -194,16 +194,22 @@ type Run struct {
 	Lineage      domain.LineageKind `json:"lineage"`
 	SpecDigest   string             `json:"spec_digest"`
 	SourceCommit string             `json:"source_commit"`
-	Publication  domain.Publication `json:"publication"`
-	Evaluation   domain.Evaluation  `json:"evaluation"`
-	Runtime      domain.Runtime     `json:"runtime"`
-	Promoted     bool               `json:"promoted"`
-	WorkerID     string             `json:"worker_id,omitempty"`
-	Lease        *RunLease          `json:"lease,omitempty"`
-	CreatedAt    time.Time          `json:"created_at"`
-	StartedAt    *time.Time         `json:"started_at,omitempty"`
-	FinishedAt   *time.Time         `json:"finished_at,omitempty"`
-	Spec         json.RawMessage    `json:"spec,omitempty"`
+	Branch       string             `json:"branch,omitempty"`
+	ResultCommit string             `json:"result_commit,omitempty"`
+	// ResultExcluded are the untracked paths the sealing left out (§23.1), as
+	// metadata of the Run: the commit does not name them.
+	ResultExcluded          []string           `json:"result_excluded,omitempty"`
+	ResultExcludedTruncated bool               `json:"result_excluded_truncated,omitempty"`
+	Publication             domain.Publication `json:"publication"`
+	Evaluation              domain.Evaluation  `json:"evaluation"`
+	Runtime                 domain.Runtime     `json:"runtime"`
+	Promoted                bool               `json:"promoted"`
+	WorkerID                string             `json:"worker_id,omitempty"`
+	Lease                   *RunLease          `json:"lease,omitempty"`
+	CreatedAt               time.Time          `json:"created_at"`
+	StartedAt               *time.Time         `json:"started_at,omitempty"`
+	FinishedAt              *time.Time         `json:"finished_at,omitempty"`
+	Spec                    json.RawMessage    `json:"spec,omitempty"`
 }
 
 // ListRunsResponse is GET /v1/runs.

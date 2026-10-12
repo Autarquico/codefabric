@@ -22,6 +22,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
+	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/journal"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
 	"github.com/Autarquico/codefabric/internal/worker/state"
@@ -49,6 +50,8 @@ type Options struct {
 	WrapperArgv []string
 	// StopGrace replaces stop.grace (Appendix A), for tests.
 	StopGrace time.Duration
+	// GitPath replaces the git found on the PATH, for tests.
+	GitPath string
 }
 
 // Run sends a heartbeat now and then every Interval until ctx ends, and returns
@@ -109,10 +112,19 @@ func Run(ctx context.Context, o Options) error {
 	defer func() { _ = db.Close() }()
 	jrn := journal.New(d.epoch, d.clock)
 	rt, launchers := d.runtimeAndHarnesses(ctx, o)
-	ex, err := executor.New(executor.Options{
+	eo := executor.Options{
 		DB: db, Controller: c, Runtime: rt, Journal: jrn, Harnesses: launchers, Paths: o.Paths, Clock: d.clock, Log: d.log,
 		WrapperArgv: o.WrapperArgv, StopGrace: o.StopGrace,
-	})
+	}
+	// Publishing the result of a Run needs git: without it this Worker offers no harness.
+	if git, gitErr := gitops.New(ctx, gitops.Options{Paths: o.Paths, Clock: d.clock, Log: d.log, GitPath: o.GitPath}); gitErr != nil {
+		d.log.WarnContext(ctx, "git is not usable: this Worker offers no harness and will reject the Runs it is given", "err", gitErr)
+		eo.Runtime, eo.Harnesses, launchers = unavailable{}, nil, nil
+	} else {
+		files := c.TLSFiles()
+		eo.Git, eo.RelayTLS = git, executor.RelayTLS{Cert: files.Cert, Key: files.Key, CA: files.CA}
+	}
+	ex, err := executor.New(eo)
 	if err != nil {
 		return err
 	}
@@ -123,7 +135,7 @@ func Run(ctx context.Context, o Options) error {
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
 	}
 	d.executorHealth = ex.Health
-	sender := &journal.Sender{DB: db, Reporter: c, Journal: jrn, Clock: d.clock, Log: d.log}
+	sender := &journal.Sender{DB: db, Reporter: c, Journal: jrn, Clock: d.clock, Log: d.log, OnView: ex.ConfirmView}
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return d.loop(gctx) })

@@ -44,6 +44,10 @@ type Sender struct {
 	Clock    clock.Clock
 	Log      *slog.Logger
 	Tick     time.Duration // 0 means a second
+	// OnView, if set, is called for each request the Controller applied, with the Run
+	// as the Controller shows it and the seqs of the reports it settled, in the transaction that deletes the confirmed reports.
+	// An error rolls that transaction back and the reports are sent again.
+	OnView func(ctx context.Context, tx *state.Tx, k state.Key, confirmed []uint64, run v1.Run) error
 }
 
 // Run sends until ctx ends.
@@ -199,7 +203,15 @@ func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow
 	if refusal != nil {
 		return len(done), true, s.fence(ctx, k, refusal.Code, done, refusal.Message)
 	}
-	return len(done), false, s.DB.WithTx(ctx, func(tx *state.Tx) error { return state.DeleteJournal(ctx, tx, done) })
+	return len(done), false, s.DB.WithTx(ctx, func(tx *state.Tx) error {
+		if err := state.DeleteJournal(ctx, tx, done); err != nil {
+			return err
+		}
+		if s.OnView != nil && len(done) > 0 {
+			return s.OnView(ctx, tx, k, done, resp.Run)
+		}
+		return nil
+	})
 }
 
 // fence deletes what the Controller confirmed and marks the Run: from here its

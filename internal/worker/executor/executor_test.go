@@ -3,7 +3,6 @@
 package executor
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +18,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -446,7 +446,7 @@ func TestARuntimeThatKeepsFailingEndsTheRunWithoutHavingStartedIt(t *testing.T) 
 
 func TestAFailureToPrepareEndsTheRunBeforeAnythingStarts(t *testing.T) {
 	f := newFixture(t, func(o *Options) {
-		o.Preparer = func(context.Context, state.Run, string) error { return errors.New("clone failed") }
+		o.Git = &fakeGit{prepareErr: errors.New("clone failed")}
 	})
 	k := f.accepted("echo hi")
 	if !f.e.step(t.Context(), k) {
@@ -878,10 +878,10 @@ func TestAStopDuringThePreparationOfARunAbortsItBeforeStart(t *testing.T) {
 	var f *fixture
 	var stopErr error
 	f = newFixture(t, func(o *Options) {
-		o.Preparer = func(ctx context.Context, r state.Run, dir string) error {
-			stopErr = f.e.Stop(ctx, r.RunID, r.LeaseEpoch, "cancel", SourceController)
-			return emptyWorktree(ctx, r, dir)
-		}
+		o.Git = &fakeGit{onPrepare: func(s gitops.PrepareSpec, _ string) error {
+			stopErr = f.e.Stop(t.Context(), s.Run, s.LeaseEpoch, "cancel", SourceController)
+			return nil
+		}}
 	})
 	k := f.accepted("echo hi")
 	if !f.e.step(t.Context(), k) {
@@ -984,7 +984,7 @@ func TestReportMessagesAreMadeToFitWhatTheControllerChecks(t *testing.T) {
 	}
 	// Through a real report: the message of a failed preparation.
 	f := newFixture(t, func(o *Options) {
-		o.Preparer = func(context.Context, state.Run, string) error { return errors.New("clone failed:\n" + multibyte) }
+		o.Git = &fakeGit{prepareErr: errors.New("clone failed:\n" + multibyte)}
 	})
 	k := f.accepted("echo hi")
 	f.e.step(t.Context(), k)

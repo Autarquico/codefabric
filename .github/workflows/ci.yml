@@ -49,10 +49,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y git tmux
       - if: runner.os == 'macOS'
         run: brew install tmux
-      # Without tmux the tests of the Runtime skip; here they must run.
+      - run: git --version && tmux -V
+      # Without tmux or git the tests that need them skip; here they must run.
       - run: make test-integration
         env:
           CF_REQUIRE_TMUX: "1"
+          CF_REQUIRE_GIT: "1"
 
   cross-build:
     runs-on: ubuntu-latest

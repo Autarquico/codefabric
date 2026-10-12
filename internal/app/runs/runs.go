@@ -4,10 +4,10 @@ package runs
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/input"
@@ -30,14 +30,30 @@ type Service struct {
 	clock    clock.Clock
 	ids      *domain.IDGenerator
 	rederive Rederive
+	relay    Relay
+	tokenKey []byte
 }
 
-// New builds the service. The clock is the one the store was opened with.
-func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, rederive Rederive) *Service {
-	return &Service{db: db, clock: clk, ids: ids, rederive: rederive}
-}
+// Option adjusts New.
+type Option func(*Service)
 
-var commitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+// WithRelay gives the service the git relay it verifies publications against.
+// Without one, a `published` report cannot be verified and is retried.
+func WithRelay(r Relay) Option { return func(s *Service) { s.relay = r } }
+
+// New builds the service. The clock is the one the store was opened with. The
+// key that signs relay tokens is drawn here and lives in memory only: a
+// Controller that restarts invalidates the tokens, and the Workers ask for new ones.
+func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, rederive Rederive, opts ...Option) *Service {
+	s := &Service{db: db, clock: clk, ids: ids, rederive: rederive, tokenKey: make([]byte, 32)}
+	if _, err := rand.Read(s.tokenKey); err != nil {
+		panic(fmt.Sprintf("runs: drawing the relay token key: %v", err)) // no caller can recover from a broken entropy source
+	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
+}
 
 // Source is what a Run starts from: the commit the client resolved and the ref
 // it resolved it from, which travel together (ADR 0002 D1).
@@ -54,7 +70,7 @@ type Source struct{ Ref, Commit string }
 // to a version is Phase 2, and freezing the bare reference would pin nothing.
 func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID, source Source) (v1.Run, error) {
 	commit := source.Commit
-	if !commitSHA.MatchString(commit) {
+	if !domain.ValidCommitID(commit) {
 		return v1.Run{}, input.Invalid("source_commit must be a full lower-case hex commit ID")
 	}
 	if err := input.Ref("resolved_ref", source.Ref); err != nil {
@@ -94,7 +110,8 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	run := store.Run{
 		ID: s.ids.New(domain.KindRun), Short: short, TaskID: taskID, Attempt: len(previous) + 1,
 		Lineage: domain.LineageInitial, Spec: raw, SpecDigest: digest, SourceCommit: commit,
-		State: domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,
+		Branch: domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: short}),
+		State:  domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,
 		Runtime: domain.RuntimeNone, CreatedAt: act.Now,
 	}
 	if task.Completion == "" {
@@ -187,7 +204,11 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]v1.Run, error) {
 		}
 		rows, err := store.Runs(ctx, q, filter)
 		for _, r := range rows {
-			out = append(out, view(r, false))
+			v, verr := s.viewOf(ctx, q, r, false)
+			if verr != nil {
+				return verr
+			}
+			out = append(out, v)
 		}
 		return err
 	})
@@ -203,13 +224,34 @@ func (s *Service) Get(ctx context.Context, ref string) (v1.Run, error) {
 			return err
 		}
 		r, err := store.RunByID(ctx, q, id)
-		out = view(r, true)
+		if err != nil {
+			return err
+		}
+		out, err = s.viewOf(ctx, q, r, true)
 		return err
 	})
 	return out, err
 }
 
 func shortID(n uint64) string { return domain.ShortID{Kind: domain.KindRun, N: n}.String() }
+
+// viewOf is view with the branch of a Run that has none stored, which are those
+// created before it was: the same rule that froze it for the others.
+func (s *Service) viewOf(ctx context.Context, q store.Querier, r store.Run, withSpec bool) (v1.Run, error) {
+	if r.Branch == "" {
+		task, err := store.TaskByID(ctx, q, r.TaskID)
+		if err != nil {
+			return v1.Run{}, err
+		}
+		r.Branch = branchOf(task, r)
+	}
+	return view(r, withSpec), nil
+}
+
+// branchOf is the branch of a Run: the frozen one, or the one the rule gives.
+func branchOf(task store.Task, r store.Run) string {
+	return domain.RunBranch(r.Branch, task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: r.Short})
+}
 
 func view(r store.Run, withSpec bool) v1.Run {
 	out := v1.Run{
@@ -218,6 +260,7 @@ func view(r store.Run, withSpec bool) v1.Run {
 		SpecDigest: r.SpecDigest, SourceCommit: r.SourceCommit, Publication: r.Publication,
 		Evaluation: r.Evaluation, Runtime: r.Runtime, Promoted: r.Promoted, WorkerID: string(r.WorkerID),
 		CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+		Branch: r.Branch, ResultCommit: r.ResultCommit, ResultExcluded: r.ResultExcluded, ResultExcludedTruncated: r.ResultExcludedTruncated,
 	}
 	if r.LeaseID != "" {
 		out.Lease = &v1.RunLease{ID: string(r.LeaseID), Epoch: r.LeaseEpoch, State: r.LeaseState}

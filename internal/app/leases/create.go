@@ -35,10 +35,15 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if err != nil {
 		return store.Lease{}, err
 	}
+	project, err := store.ProjectByID(ctx, tx, task.ProjectID)
+	if err != nil {
+		return store.Lease{}, err
+	}
+	branch := domain.RunBranch(run.Branch, task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: run.Short})
 	payload, err := json.Marshal(v1.AssignCommand{
 		LeaseID: string(l.ID), RunID: string(run.ID), RunShort: domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(),
 		TaskID: string(run.TaskID), ProjectID: string(task.ProjectID), Epoch: l.Epoch, AcceptBy: l.AcceptBy,
-		SourceCommit: run.SourceCommit, Resources: reserve, Spec: json.RawMessage(run.Spec),
+		SourceCommit: run.SourceCommit, Branch: branch, Repo: project.Repo, Resources: reserve, Spec: json.RawMessage(run.Spec),
 	})
 	if err != nil {
 		return store.Lease{}, fmt.Errorf("leases: encoding the assign order: %w", err)

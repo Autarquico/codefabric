@@ -6,14 +6,14 @@ status: active
 priority: P0
 size: L
 issue: 12
-prs: []
+prs: [36]
 related_issues: [12]
 sub_issues: []
 depends_on: [projects-tasks-runs-api, worker-executor-tmux]
 supersedes: []
 related_specs: [codefabric-spec, phase-1-workers]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-12
 ---
 
 # Git relay y publicación del resultado
@@ -75,6 +75,10 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+
+## Decisiones de implementación
+
+Las decisiones de #12 (relay vacío, transporte CGI propio, token por lease, sellado determinista con intención durable, publicación con estados locales y verificación en el Controller) están en el Apéndice B5 de `docs/codefabric-spec.md`.
 
 ## Referencias
 

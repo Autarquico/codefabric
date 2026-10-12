@@ -14,4 +14,8 @@ type Controller interface {
 	AcceptLease(ctx context.Context, lease string, epoch uint64) (v1.Lease, error)
 	RejectLease(ctx context.Context, lease string, req v1.RejectLeaseRequest) (v1.Lease, error)
 	AckCommands(ctx context.Context, upToSeq uint64) (v1.AckCommandsResponse, error)
+	// RelayToken asks for the token of the git relay under the lease epoch of a Run;
+	// RelayURL turns the path it answers into the URL git dials.
+	RelayToken(ctx context.Context, run string, leaseEpoch uint64) (v1.RelayTokenResponse, error)
+	RelayURL(path string) string
 }

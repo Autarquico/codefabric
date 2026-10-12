@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/app"
+	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/api"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
+	"github.com/Autarquico/codefabric/internal/controller/relay"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -37,6 +39,8 @@ type Options struct {
 	// SchedulerTick is how often the scheduler looks at the queue when no
 	// event has woken it; zero means scheduler.DefaultTick.
 	SchedulerTick time.Duration
+	// RelayHookArgv replaces `<this binary> relay hook pre-receive`, for tests.
+	RelayHookArgv []string
 }
 
 const serverCertCheckEvery = 12 * time.Hour
@@ -103,14 +107,28 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		return nil, fmt.Errorf("listening on %s: %w", cfg.Listen, err)
 	}
 
+	// A machine without a usable git still runs the Controller: the relay is off.
+	var (
+		gitRelay *relay.Relay
+		runOpts  []runs.Option
+	)
+	if gitRelay, err = relay.Open(ctx, relay.Config{
+		Dir: p.RelayDir(), HookArgv: o.RelayHookArgv, MaxPushBytes: cfg.RelayMaxPushBytes, Log: o.Logger,
+	}); err != nil {
+		o.Logger.ErrorContext(ctx, "the git relay is disabled: Workers cannot publish results", "err", err)
+		gitRelay = nil
+	} else {
+		runOpts = append(runOpts, runs.WithRelay(gitRelay))
+	}
+
 	build := buildinfo.Get()
 	offlineTTL := cmp.Or(o.WorkerOfflineTTL, time.Duration(cfg.WorkerOfflineTTL))
 	startedAt := o.Clock.Now()
 	services := app.New(db, o.Clock, domain.NewIDGenerator(o.Clock.Now, rand.Reader),
-		workers.Config{ControllerVersion: build.Version, OfflineTTL: offlineTTL, StartedAt: startedAt})
+		workers.Config{ControllerVersion: build.Version, OfflineTTL: offlineTTL, StartedAt: startedAt}, runOpts...)
 	srv, err := api.New(api.Config{
 		Authority: newAuthority(db, ca, o.Clock, host, port), CA: ca, ServerCert: serverCert,
-		Store: db, Work: services,
+		Store: db, Work: services, Relay: gitRelay,
 		Clock: o.Clock, StartedAt: startedAt, Build: build, Logger: o.Logger,
 	})
 	if err != nil {

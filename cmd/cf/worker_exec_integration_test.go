@@ -193,7 +193,7 @@ exit 7`
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.ExitCode == nil || *run.ExitCode != 7 || run.EndReason != domain.EndExitCode || run.Publication != domain.PublicationPending {
+	if run.ExitCode == nil || *run.ExitCode != 7 || run.EndReason != domain.EndExitCode || run.Publication == domain.PublicationNone {
 		t.Errorf("Run = %+v", run)
 	}
 	log, _ := os.ReadFile(filepath.Join(runDir, execwrap.OutputLog)) //nolint:gosec // a file of the test
@@ -201,21 +201,27 @@ exit 7`
 		t.Errorf("output.log = %q", log)
 	}
 
+	// The publication follows the exit in its own transactions: wait for it to
+	// end and for the Controller to have every report before the daemon goes.
+	db, err := state.Open(t.Context(), box.WorkerStateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	eventually(t, "the publication to end and every report to be confirmed", func() bool {
+		var settled bool
+		err := db.Reader().QueryRowContext(t.Context(), `SELECT
+			EXISTS (SELECT 1 FROM publications WHERE run_id = ? AND state IN ('published', 'failed'))
+			AND NOT EXISTS (SELECT 1 FROM journal)`, runID).Scan(&settled)
+		return err == nil && settled
+	})
+
 	second.interrupt()
 	if n := countEvents(t, host, runID, domain.EventRunFailed); n != 1 {
 		t.Errorf("%d RunFailed events: the exit must be reported once", n)
 	}
 	if n := countEvents(t, host, runID, domain.EventRunStarted); n != 1 {
 		t.Errorf("%d RunStarted events", n)
-	}
-	db, err := state.Open(t.Context(), box.WorkerStateFile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-	var n int
-	if err := db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM journal`).Scan(&n); err != nil || n != 0 {
-		t.Errorf("the journal has %d rows (%v): the Controller confirmed everything", n, err)
 	}
 }
 

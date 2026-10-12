@@ -112,6 +112,10 @@ func TestReport_StartedExitedStoppedInOneBatchLeaveTheRunFailedAndPublicationPen
 			t.Errorf("%s events = %+v", typ, evs)
 		}
 	}
+	if res := e.reservation(r.lease.ID); res.ReleasedAt != nil {
+		t.Errorf("the reservation of a Run that is not sealed was released: %+v", res)
+	}
+	r.mustSend(r.entry(v1.ReportSealed, sealedTo(sha1)))
 	if res := e.reservation(r.lease.ID); res.ReleasedAt == nil || res.ReleaseReason != "run_stopped" {
 		t.Errorf("reservation = %+v", res)
 	}
@@ -194,19 +198,27 @@ func TestScenario_WorkerExecutorTmux_StopAntesDeArrancar_Controller(t *testing.T
 	}
 }
 
-func TestReleasable_StartedRunIsReleasedOnStopUntilSealingExists(t *testing.T) {
-	// TEMPORARY EXCEPTION of worker-executor-tmux (B5): a terminal Run whose
-	// harness started releases its reservation at RunStopped. git-relay-publication
-	// (#12) requires the sealing too and must invert this test.
+func TestReleasable_StartedRunIsReleasedOnlyOnceSealed(t *testing.T) {
 	e := newEnv(t)
-	r := e.acceptedRun(e.joinWorker("alpha"), "x")
-	r.mustSend(r.entry(v1.ReportStarted), r.entry(v1.ReportExited, exitCode(0)))
-	if res := e.reservation(r.lease.ID); res.ReleasedAt != nil {
-		t.Fatal("released before RunStopped")
-	}
-	r.mustSend(r.entry(v1.ReportStopped))
-	if res := e.reservation(r.lease.ID); res.ReleasedAt == nil {
-		t.Error("the reservation of a stopped Run whose harness started was kept")
+	for name, closing := range map[string]func(r *reporter) v1.RunReportEntry{
+		"sealed": func(r *reporter) v1.RunReportEntry { return r.entry(v1.ReportSealed, sealedTo(sha1)) },
+		"publication failed": func(r *reporter) v1.RunReportEntry {
+			return r.entry(v1.ReportPublicationFailed, func(en *v1.RunReportEntry) { en.Phase = v1.PhaseSeal })
+		},
+	} {
+		r := e.acceptedRun(e.joinWorker(strings.ReplaceAll(name, " ", "-")), "x")
+		r.mustSend(r.entry(v1.ReportStarted), r.entry(v1.ReportExited, exitCode(0)))
+		if res := e.reservation(r.lease.ID); res.ReleasedAt != nil {
+			t.Fatalf("%s: released before RunStopped", name)
+		}
+		r.mustSend(r.entry(v1.ReportStopped))
+		if res := e.reservation(r.lease.ID); res.ReleasedAt != nil {
+			t.Fatalf("%s: a stopped Run that is not sealed released its reservation", name)
+		}
+		r.mustSend(closing(r))
+		if res := e.reservation(r.lease.ID); res.ReleasedAt == nil {
+			t.Errorf("%s: the reservation of a sealed (or given-up) Run was kept", name)
+		}
 	}
 }
 
