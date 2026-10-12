@@ -39,10 +39,7 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if err != nil {
 		return store.Lease{}, err
 	}
-	branch := run.Branch
-	if branch == "" { // a Run from before the branch was frozen: the same rule gives it
-		branch = domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: run.Short})
-	}
+	branch := domain.RunBranch(run.Branch, task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: run.Short})
 	payload, err := json.Marshal(v1.AssignCommand{
 		LeaseID: string(l.ID), RunID: string(run.ID), RunShort: domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(),
 		TaskID: string(run.TaskID), ProjectID: string(task.ProjectID), Epoch: l.Epoch, AcceptBy: l.AcceptBy,

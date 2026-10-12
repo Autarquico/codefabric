@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/input"
@@ -56,8 +55,6 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, rederive Rederi
 	return s
 }
 
-var commitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-
 // Source is what a Run starts from: the commit the client resolved and the ref
 // it resolved it from, which travel together (ADR 0002 D1).
 type Source struct{ Ref, Commit string }
@@ -73,7 +70,7 @@ type Source struct{ Ref, Commit string }
 // to a version is Phase 2, and freezing the bare reference would pin nothing.
 func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID, source Source) (v1.Run, error) {
 	commit := source.Commit
-	if !commitSHA.MatchString(commit) {
+	if !domain.ValidCommitID(commit) {
 		return v1.Run{}, input.Invalid("source_commit must be a full lower-case hex commit ID")
 	}
 	if err := input.Ref("resolved_ref", source.Ref); err != nil {
@@ -253,10 +250,7 @@ func (s *Service) viewOf(ctx context.Context, q store.Querier, r store.Run, with
 
 // branchOf is the branch of a Run: the frozen one, or the one the rule gives.
 func branchOf(task store.Task, r store.Run) string {
-	if r.Branch != "" {
-		return r.Branch
-	}
-	return domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: r.Short})
+	return domain.RunBranch(r.Branch, task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: r.Short})
 }
 
 func view(r store.Run, withSpec bool) v1.Run {

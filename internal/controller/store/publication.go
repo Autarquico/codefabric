@@ -29,37 +29,31 @@ func (t *Tx) SealRun(ctx context.Context, run Run, commit string, excluded []str
 	return changedOne(res, err, "sealing run")
 }
 
-// PublishRun is the result being in the relay. It is a compare-and-set on the
-// pending publication of the result that was verified.
+// PublishRun is the result being in the relay: a compare-and-set on the pending
+// publication of the result that was verified.
 func (t *Tx) PublishRun(ctx context.Context, run Run, commit string) error {
-	return t.setPublication(ctx, run, commit, domain.PublicationPending, domain.PublicationPublished, "publishing run")
+	run.ResultCommit = commit
+	return t.setPublication(ctx, run, domain.PublicationPending, domain.PublicationPublished, "publishing run")
 }
 
 // FailPublication is the Worker giving up, or the relay not holding what the
 // Worker pushed. A Run that was not sealed has no result commit to match.
 func (t *Tx) FailPublication(ctx context.Context, run Run) error {
-	res, err := t.Exec(ctx,
-		`UPDATE runs SET publication = ?
-		 WHERE id = ? AND publication = ? AND COALESCE(result_commit, '') = ? AND lease_id = ? AND lease_epoch = ?`,
-		string(domain.PublicationFailed), string(run.ID), string(domain.PublicationPending), run.ResultCommit,
-		string(run.LeaseID), run.LeaseEpoch)
-	return changedOne(res, err, "failing publication")
+	return t.setPublication(ctx, run, domain.PublicationPending, domain.PublicationFailed, "failing publication")
 }
 
 // RetryPublication puts a failed publication back to pending, for `cf run publish`.
 func (t *Tx) RetryPublication(ctx context.Context, run Run) error {
+	return t.setPublication(ctx, run, domain.PublicationFailed, domain.PublicationPending, "retrying publication")
+}
+
+// setPublication moves the publication of a Run from one state to another. It is
+// a compare-and-set on the state, the result commit ("" until sealed) and the
+// lease the caller read, and it must hit one row.
+func (t *Tx) setPublication(ctx context.Context, run Run, from, to domain.Publication, what string) error {
 	res, err := t.Exec(ctx,
 		`UPDATE runs SET publication = ?
 		 WHERE id = ? AND publication = ? AND COALESCE(result_commit, '') = ? AND lease_id = ? AND lease_epoch = ?`,
-		string(domain.PublicationPending), string(run.ID), string(domain.PublicationFailed), run.ResultCommit,
-		string(run.LeaseID), run.LeaseEpoch)
-	return changedOne(res, err, "retrying publication")
-}
-
-func (t *Tx) setPublication(ctx context.Context, run Run, commit string, from, to domain.Publication, what string) error {
-	res, err := t.Exec(ctx,
-		`UPDATE runs SET publication = ?
-		 WHERE id = ? AND publication = ? AND result_commit = ? AND lease_id = ? AND lease_epoch = ?`,
-		string(to), string(run.ID), string(from), commit, string(run.LeaseID), run.LeaseEpoch)
+		string(to), string(run.ID), string(from), run.ResultCommit, string(run.LeaseID), run.LeaseEpoch)
 	return changedOne(res, err, what)
 }

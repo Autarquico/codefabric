@@ -122,7 +122,7 @@ exit 0`
 			t.Errorf("%d %s events, want %d", n, typ, want)
 		}
 	}
-	repo := host.RelayRepoDir(created.Task.ProjectID)
+	repo := filepath.Join(host.RelayDir(), created.Task.ProjectID+".git")
 	if tip := gittest.Run(t, repo, "rev-parse", "refs/heads/"+run.Branch); tip != run.ResultCommit {
 		t.Errorf("the relay has %s on the branch, want %s", tip, run.ResultCommit)
 	}

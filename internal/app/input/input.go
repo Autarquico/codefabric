@@ -57,8 +57,7 @@ func Repo(repo string) error {
 
 // Ref checks a branch, tag or other git ref loosely; git has the last word.
 func Ref(what, ref string) error {
-	if ref == "" || len(ref) > maxRefLen || strings.HasPrefix(ref, "-") ||
-		strings.Contains(ref, "..") || hasSpaceOrControl(ref) {
+	if !domain.ValidSourceRef(ref) {
 		return Invalid("%s must be a git ref of at most %d characters", what, maxRefLen)
 	}
 	return nil

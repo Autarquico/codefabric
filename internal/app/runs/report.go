@@ -66,13 +66,12 @@ func (s *Service) Report(ctx context.Context, by pki.Session, runID string, req 
 		}
 		out := v1.RunReportResponse{Outcomes: make([]v1.RunReportOutcome, 0, len(req.Entries))}
 		stopped := false
-		budget := verifyBudget(maxVerificationsPerReport)
 		for _, e := range req.Entries {
 			if stopped {
 				out.Outcomes = append(out.Outcomes, v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: v1.ReportNotApplied})
 				continue
 			}
-			outcome, err := s.reportEntry(ctx, tx, act, w, run, e, &budget)
+			outcome, err := s.reportEntry(ctx, tx, act, w, run, e)
 			var rejection *domain.Error
 			switch {
 			case errors.As(err, &rejection):
@@ -80,9 +79,6 @@ func (s *Service) Report(ctx context.Context, by pki.Session, runID string, req 
 				stopped = true
 			case err != nil:
 				return v1.RunReportResponse{}, err
-			}
-			if outcome.Result == v1.ReportNotApplied {
-				stopped = true // the entry waits for the next request: so does what follows it
 			}
 			out.Outcomes = append(out.Outcomes, outcome)
 		}
@@ -109,7 +105,7 @@ func ownsLive(run store.Run, worker domain.ID, entries []v1.RunReportEntry) bool
 
 // reportEntry decides one entry. Everything that can reject it comes before
 // the first write.
-func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Act, w store.Worker, runID domain.ID, e v1.RunReportEntry, budget *verifyBudget) (v1.RunReportOutcome, error) {
+func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Act, w store.Worker, runID domain.ID, e v1.RunReportEntry) (v1.RunReportOutcome, error) {
 	outcome := func(result string) v1.RunReportOutcome {
 		return v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: result}
 	}
@@ -223,12 +219,8 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 			return s.releaseIfAllowed(ctx, tx, act, run, l)
 		}
 	case v1.ReportSealed, v1.ReportPublished, v1.ReportPublicationFailed:
-		var early *v1.RunReportOutcome
-		if apply, early, err = s.publicationEntry(ctx, tx, act, &ev, run, task, l, e, budget); err != nil {
+		if apply, err = s.publicationEntry(ctx, tx, act, &ev, run, task, l, e); err != nil {
 			return outcome(""), err
-		}
-		if early != nil {
-			return *early, nil
 		}
 	default:
 		return outcome(""), input.Invalid("unknown report kind %q", e.Kind)
@@ -316,7 +308,7 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		return input.Invalid("kind must be started, exited, prepare_failed, stopped, sealed, published or publication_failed")
 	case e.At.Before(earliestAt) || e.At.After(now.Add(maxAhead)):
 		return input.Invalid("at must be after the year 2000 and at most %s ahead of the Controller", maxAhead)
-	case len(e.Message) > v1.MaxReportMessageLen || hasHidden(e.Message):
+	case len(e.Message) > v1.MaxReportMessageLen || !domain.Printable(e.Message):
 		return input.Invalid("message must print and be at most %d characters", v1.MaxReportMessageLen)
 	case e.Kind != v1.ReportSealed && e.Kind != v1.ReportPublished && e.ResultCommit != "":
 		return input.Invalid("only sealed and published carry a result commit")
@@ -339,7 +331,7 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 			return input.Invalid("handle needs a runtime and a ref of at most %d bytes with no spaces", v1.MaxHandleLen)
 		}
 	case v1.ReportSealed, v1.ReportPublished:
-		if !commitSHA.MatchString(e.ResultCommit) {
+		if !domain.ValidCommitID(e.ResultCommit) {
 			return input.Invalid("result_commit must be a full lower-case hex commit ID")
 		}
 		return validateExcluded(e)
@@ -357,13 +349,9 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		if e.Cause == v1.ExitCauseWrapperLost && (e.ExitCode != nil || e.Signal != "") {
 			return input.Invalid("a lost wrapper leaves no exit code or signal")
 		}
-		if len(e.Signal) > 32 || hasHidden(e.Signal) {
+		if len(e.Signal) > 32 || !domain.Printable(e.Signal) {
 			return input.Invalid("signal must print and be at most 32 characters")
 		}
 	}
 	return nil
-}
-
-func hasHidden(s string) bool {
-	return strings.ContainsFunc(s, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) })
 }

@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestBranchOf(t *testing.T) {
 	task, run := ShortID{Kind: KindTask, N: 7}, ShortID{Kind: KindRun, N: 42}
@@ -28,5 +31,37 @@ func TestValidBranchRefusesWhatGitRefuses(t *testing.T) {
 		if ValidBranch(bad) {
 			t.Errorf("%q was accepted", bad)
 		}
+	}
+}
+
+func TestRunBranchPrefersTheStoredOne(t *testing.T) {
+	task, run := ShortID{Kind: KindTask, N: 7}, ShortID{Kind: KindRun, N: 42}
+	if got := RunBranch("cf/x/run-1", "auth", task, run); got != "cf/x/run-1" {
+		t.Errorf("got %q", got)
+	}
+	if got := RunBranch("", "auth", task, run); got != "cf/auth/run-42" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestValidSourceRefIsARefNotARefspec(t *testing.T) {
+	for _, ok := range []string{"main", "feature/x", "v1.0.0", "release-2026_10", "refs/heads/main"} {
+		if !ValidSourceRef(ok) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{"", "-x", "+main", "a:b", "main:other", "a*", "a^", "a~1", "a?", "a[b", `a\b`, "a@{1}", "a..b", "a b", "a\nb", "a\u200bb", strings.Repeat("a", 256)} {
+		if ValidSourceRef(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestValidCommitIDAndPrintable(t *testing.T) {
+	if !ValidCommitID(strings.Repeat("a", 40)) || !ValidCommitID(strings.Repeat("0", 64)) || ValidCommitID(strings.Repeat("A", 40)) || ValidCommitID("abc") {
+		t.Error("ValidCommitID")
+	}
+	if !Printable("ñ ok") || Printable("a\nb") || Printable("a\u200bb") || Printable("\xff") {
+		t.Error("Printable")
 	}
 }

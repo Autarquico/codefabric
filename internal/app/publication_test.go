@@ -380,3 +380,32 @@ func TestAssignCarriesTheBranchAndTheRepoOfTheProject(t *testing.T) {
 		t.Errorf("assign = %+v", a)
 	}
 }
+
+func TestPublish_ATaskThatIsArchivedIsNotPublishedAgain(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	r.exitedAndStopped(0)
+	r.mustSend(r.entry(v1.ReportPublicationFailed, phase(v1.PhaseSeal)))
+	_, err := e.app.Tasks.Archive(t.Context(), e.owner, r.run.TaskID, "", v1.ActionRequest{})
+	must(t, err)
+	_, err = e.app.Runs.Publish(t.Context(), e.owner, r.run.ID, v1.ActionRequest{})
+	wantCode(t, err, domain.CodeInvalidTransition)
+	if got := e.storedRun(r.run.ID).Publication; got != domain.PublicationFailed {
+		t.Errorf("publication = %s", got)
+	}
+}
+
+func TestReleasable_ACancelledRunThatStartedKeepsItsReservationUntilSomeoneSealsIt(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	r.mustSend(r.entry(v1.ReportStarted))
+	_, err := e.app.Tasks.Cancel(t.Context(), e.owner, r.run.TaskID, "", v1.ActionRequest{})
+	must(t, err)
+	// started, cancelled, stopped: the worktree is not sealed, so the reservation stays (#13 closes this).
+	if got := results(r.mustSend(r.entry(v1.ReportStopped))); got != "applied" {
+		t.Fatalf("stopped = %s", got)
+	}
+	if res := e.reservation(r.lease.ID); res.ReleasedAt != nil {
+		t.Errorf("the reservation of a cancelled Run that started was released: %+v", res)
+	}
+}

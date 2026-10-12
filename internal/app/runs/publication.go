@@ -22,32 +22,25 @@ type Relay interface {
 	BranchTip(ctx context.Context, project domain.ID, branch string) (oid string, found bool, err error)
 }
 
-// maxVerificationsPerReport bounds the rev-parse calls one report makes inside
-// its transaction: each is a child process that the single writer waits for.
-// The `published` entries past it are not applied and are sent again.
-const maxVerificationsPerReport = 8
-
-// verifyBudget is what is left of them in one report.
-type verifyBudget int
-
 // publicationEntry decides the entries that tell of the publication of a result
 // (§22.6): sealed, published and publication_failed. Everything that can reject
-// one comes before the closure it returns, which is what writes. early is set
-// instead when the entry is not for this request.
+// one comes before the closure it returns, which is what writes. A report
+// is for one Run, and a Run is published at most once per try, so one request
+// verifies at most once: the only bound needed is the timeout of the relay.
 func (s *Service) publicationEntry(ctx context.Context, tx *store.Tx, act mutation.Act, ev *domain.Event,
-	run store.Run, task store.Task, l store.Lease, e v1.RunReportEntry, budget *verifyBudget,
-) (apply func() error, early *v1.RunReportOutcome, err error) {
+	run store.Run, task store.Task, l store.Lease, e v1.RunReportEntry,
+) (apply func() error, err error) {
 	if run.Publication != domain.PublicationPending {
-		return nil, nil, domain.NewError(domain.CodeInvalidTransition,
+		return nil, domain.NewError(domain.CodeInvalidTransition,
 			fmt.Sprintf("the publication of this Run is %s, not pending", run.Publication), nil)
 	}
 	switch e.Kind {
 	case v1.ReportSealed:
 		if run.StartedAt == nil {
-			return nil, nil, domain.NewError(domain.CodeInvalidTransition, "the harness of this Run never started: there is nothing to seal", nil)
+			return nil, domain.NewError(domain.CodeInvalidTransition, "the harness of this Run never started: there is nothing to seal", nil)
 		}
 		if run.ResultCommit != "" && run.ResultCommit != e.ResultCommit {
-			return nil, nil, domain.NewError(domain.CodeInvalidTransition, "this Run was sealed to another commit: a result never changes", nil)
+			return nil, domain.NewError(domain.CodeInvalidTransition, "this Run was sealed to another commit: a result never changes", nil)
 		}
 		ev.Type, ev.Message = domain.EventRunSealed, "run sealed"
 		ev.Data["result_commit"], ev.Data["excluded"], ev.Data["excluded_truncated"] = e.ResultCommit, len(e.Excluded), e.ExcludedTruncated
@@ -59,23 +52,19 @@ func (s *Service) publicationEntry(ctx context.Context, tx *store.Tx, act mutati
 			}
 			run.ResultCommit = e.ResultCommit
 			return s.releaseIfAllowed(ctx, tx, act, run, l)
-		}, nil, nil
+		}, nil
 
 	case v1.ReportPublished:
 		if run.ResultCommit != e.ResultCommit {
-			return nil, nil, domain.NewError(domain.CodeInvalidRequest, "result_commit is not the commit this Run was sealed to", nil)
+			return nil, domain.NewError(domain.CodeInvalidRequest, "result_commit is not the commit this Run was sealed to", nil)
 		}
-		if *budget <= 0 {
-			return nil, &v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: v1.ReportNotApplied}, nil
-		}
-		*budget--
 		if s.relay == nil {
-			return nil, nil, internalError{errors.New("runs: there is no git relay to verify a publication against")}
+			return nil, internalError{errors.New("runs: there is no git relay to verify a publication against")}
 		}
 		branch := branchOf(task, run)
 		tip, found, err := s.relay.BranchTip(ctx, task.ProjectID, branch)
 		if err != nil {
-			return nil, nil, internalError{fmt.Errorf("runs: verifying a publication: %w", err)}
+			return nil, internalError{fmt.Errorf("runs: verifying a publication: %w", err)}
 		}
 		if found && tip == run.ResultCommit {
 			ev.Type, ev.Message = domain.EventRunPublished, "run published"
@@ -86,18 +75,18 @@ func (s *Service) publicationEntry(ctx context.Context, tx *store.Tx, act mutati
 				}
 				run.Publication = domain.PublicationPublished
 				return s.releaseIfAllowed(ctx, tx, act, run, l)
-			}, nil, nil
+			}, nil
 		}
 		// The Worker says it pushed and the relay does not have it: the publication failed.
 		// It is applied, not rejected: a rejection would fence the Run.
 		ev.Type, ev.Level, ev.Message = domain.EventRunPublicationFailed, "warn", "run publication failed: the relay does not hold the result"
 		ev.Data["phase"], ev.Data["result_commit"], ev.Data["branch"] = v1.PhaseVerify, run.ResultCommit, branch
-		return s.failPublication(ctx, tx, act, run, l), nil, nil
+		return s.failPublication(ctx, tx, act, run, l), nil
 
 	default: // publication_failed
 		ev.Type, ev.Level, ev.Message = domain.EventRunPublicationFailed, "warn", "run publication failed"
 		ev.Data["phase"] = e.Phase
-		return s.failPublication(ctx, tx, act, run, l), nil, nil
+		return s.failPublication(ctx, tx, act, run, l), nil
 	}
 }
 
@@ -120,7 +109,7 @@ func validateExcluded(e v1.RunReportEntry) error {
 	bytes := 0
 	for _, p := range e.Excluded {
 		bytes += len(p)
-		if p == "" || hasHidden(p) {
+		if p == "" || !domain.Printable(p) {
 			return input.Invalid("excluded paths must print")
 		}
 	}
@@ -169,6 +158,9 @@ func (s *Service) Publish(ctx context.Context, by pki.Session, ref string, req v
 		task, err := store.TaskByID(ctx, tx, run.TaskID)
 		if err != nil {
 			return v1.Run{}, err
+		}
+		if task.ArchivedAt != nil {
+			return v1.Run{}, domain.NewError(domain.CodeInvalidTransition, "the Task of this Run is archived", nil)
 		}
 		if err := tx.RetryPublication(ctx, run); err != nil {
 			return v1.Run{}, err

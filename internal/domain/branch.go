@@ -18,6 +18,16 @@ func BranchOf(taskName string, task, run ShortID) string {
 	return fmt.Sprintf("cf/%s/%s", component, run)
 }
 
+// RunBranch is the branch of a Run: the one frozen when it was created, or, for
+// a Run that has none stored, the one BranchOf gives. It is the one rule for
+// whoever reads a Run.
+func RunBranch(stored, taskName string, task, run ShortID) string {
+	if stored != "" {
+		return stored
+	}
+	return BranchOf(taskName, task, run)
+}
+
 // ValidRefComponent reports whether s can be one component of a git ref, by the
 // rules of git-check-ref-format that matter for the names CodeFabric builds.
 func ValidRefComponent(s string) bool {

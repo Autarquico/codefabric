@@ -139,6 +139,10 @@ func (s *Service) MintRelayToken(ctx context.Context, by pki.Session, runID stri
 	if kind, _, err := domain.ParseID(runID); err != nil || kind != domain.KindRun {
 		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeNotFound, "run not found", nil)
 	}
+	if s.relay == nil {
+		// The Worker asks again with a backoff: the relay may be enabled when git is installed.
+		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeInternal, "the Controller has no relay", nil)
+	}
 	var out v1.RelayTokenResponse
 	err := s.db.Read(ctx, func(q store.Querier) error {
 		now := s.clock.Now()

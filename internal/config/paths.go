@@ -57,12 +57,6 @@ func (p Paths) WorkerRepoDir(project string) string {
 // of the Projects, the hooks they share and the scratch space of the transport.
 func (p Paths) RelayDir() string { return filepath.Join(p.DataDir, "relay") }
 
-// RelayRepoDir is the bare repository of a Project in the relay. The caller
-// passes a validated Project ID, never text from a request.
-func (p Paths) RelayRepoDir(project string) string {
-	return filepath.Join(p.RelayDir(), project+".git")
-}
-
 // ControllerConfigFile is the Controller's settings file.
 func (p Paths) ControllerConfigFile() string { return filepath.Join(p.ConfigDir, "controller.json") }
 

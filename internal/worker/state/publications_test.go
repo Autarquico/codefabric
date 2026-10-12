@@ -169,7 +169,7 @@ func TestPublication_RequeueKeepsTheCommitAndAnOldTryCannotOverwriteTheNewOne(t 
 	}
 }
 
-func TestPublication_DueAndPending(t *testing.T) {
+func TestPublication_Due(t *testing.T) {
 	db, _ := open(t)
 	a, b, c := intent("run_a"), intent("run_b"), intent("run_c")
 	tx(t, db, func(x *state.Tx) error {
@@ -189,14 +189,6 @@ func TestPublication_DueAndPending(t *testing.T) {
 	}
 	if due, _ = state.DuePublications(t.Context(), db.Reader(), t0.Add(2*time.Hour), 10); len(due) != 2 {
 		t.Errorf("due later = %d", len(due))
-	}
-	pending, err := state.PendingPublications(t.Context(), db.Reader())
-	if err != nil || len(pending) != 2 {
-		t.Errorf("pending = %+v (%v)", pending, err)
-	}
-	next, ok, err := state.NextPublicationDue(t.Context(), db.Reader())
-	if err != nil || !ok || !next.Equal(t0) {
-		t.Errorf("next = %v %v %v", next, ok, err)
 	}
 }
 

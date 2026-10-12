@@ -124,25 +124,6 @@ func DuePublications(ctx context.Context, q Querier, now time.Time, limit int) (
 		 ORDER BY next_attempt_at, created_at, run_id LIMIT ?`, now.UnixNano(), limit)
 }
 
-// PendingPublications lists every publication that is not final: what a Worker
-// still owes the Controller about the Runs it executed, for the reconciliation.
-func PendingPublications(ctx context.Context, q Querier) ([]Publication, error) {
-	return collectPublications(ctx, q,
-		`SELECT `+pubColumns+` FROM publications WHERE state IN ('sealing', 'sealed', 'pushed') ORDER BY created_at, run_id`)
-}
-
-// NextPublicationDue is when the earliest waiting publication wants attention; false if none waits.
-func NextPublicationDue(ctx context.Context, q Querier) (time.Time, bool, error) {
-	var next sql.NullInt64
-	if err := q.QueryRowContext(ctx, `SELECT MIN(next_attempt_at) FROM publications WHERE state IN ('sealing', 'sealed')`).Scan(&next); err != nil {
-		return time.Time{}, false, fmt.Errorf("state: reading the next publication: %w", err)
-	}
-	if !next.Valid {
-		return time.Time{}, false, nil
-	}
-	return time.Unix(0, next.Int64).UTC(), true, nil
-}
-
 // MarkSealed records the commit of the sealing. It is a compare-and-set on the
 // generation of the try and on the state sealing.
 func MarkSealed(ctx context.Context, tx *Tx, p Publication, commit string, excluded []string, truncated bool, at time.Time) error {
