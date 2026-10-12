@@ -8,6 +8,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/cli"
 	"github.com/Autarquico/codefabric/internal/controller/daemon"
+	"github.com/Autarquico/codefabric/internal/controller/relay"
 	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
 )
 
@@ -23,7 +24,7 @@ func TestMain(m *testing.M) {
 		if len(os.Args) > 2 && os.Args[1] == "worker" && os.Args[2] == "exec" {
 			_ = os.Unsetenv(asCF)
 		}
-		os.Exit(cli.Execute(daemon.Command(), workerdaemon.Command()))
+		os.Exit(cli.Execute(daemon.Command(), workerdaemon.Command(), relay.Command()))
 	}
 	os.Exit(m.Run())
 }

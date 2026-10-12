@@ -23,11 +23,13 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app"
+	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/controller/api"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
+	"github.com/Autarquico/codefabric/internal/controller/relay"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -62,6 +64,17 @@ func newController(t *testing.T, start time.Time, opts ...func(*api.Config)) *te
 // the server starts.
 func newControllerWithRoutes(t *testing.T, start time.Time, routes func(*api.Server), opts ...func(*api.Config)) *testController {
 	t.Helper()
+	return buildController(t, start, routes, nil, opts...)
+}
+
+// buildController is newControllerWithRoutes with a git relay: the API serves
+// it and the Run use cases verify publications against it.
+func buildController(t *testing.T, start time.Time, routes func(*api.Server), gitRelay *relay.Relay, opts ...func(*api.Config)) *testController {
+	t.Helper()
+	var runOpts []runs.Option
+	if gitRelay != nil {
+		runOpts = append(runOpts, runs.WithRelay(gitRelay))
+	}
 	tc := &testController{t: t, clock: clock.NewFake(start), logs: &logBuffer{}}
 	dir := t.TempDir()
 
@@ -87,7 +100,8 @@ func newControllerWithRoutes(t *testing.T, start time.Time, routes func(*api.Ser
 	cfg := api.Config{
 		Authority: tc.authority, CA: tc.ca, ServerCert: serverCert,
 		Work: app.New(tc.db, tc.clock, domain.NewIDGenerator(tc.clock.Now, rand.Reader),
-			workers.Config{ControllerVersion: controllerVersion}),
+			workers.Config{ControllerVersion: controllerVersion}, runOpts...),
+		Relay: gitRelay,
 		Store: tc.db, Clock: tc.clock, StartedAt: tc.clock.Now(), Build: buildinfo.Info{Version: "test", Commit: "abc123"},
 		Logger: slog.New(slog.NewTextHandler(tc.logs, nil)),
 	}

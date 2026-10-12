@@ -48,9 +48,15 @@ func Run(t testing.TB, dir string, args ...string) string {
 // Try runs git in dir and returns its trimmed combined output and its error.
 func Try(t testing.TB, dir string, args ...string) (string, error) {
 	t.Helper()
+	return TryEnv(t, dir, nil, args...)
+}
+
+// TryEnv is Try with more environment variables.
+func TryEnv(t testing.TB, dir string, extra []string, args ...string) (string, error) {
+	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", args...) //nolint:gosec // a test helper
 	cmd.Dir = dir
-	cmd.Env = Env(t.TempDir())
+	cmd.Env = append(Env(t.TempDir()), extra...)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()

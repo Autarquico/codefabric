@@ -6,9 +6,10 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/cli"
 	"github.com/Autarquico/codefabric/internal/controller/daemon"
+	"github.com/Autarquico/codefabric/internal/controller/relay"
 	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
 )
 
 func main() {
-	os.Exit(cli.Execute(daemon.Command(), workerdaemon.Command()))
+	os.Exit(cli.Execute(daemon.Command(), workerdaemon.Command(), relay.Command()))
 }
