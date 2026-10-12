@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: L
 issue: 12
-prs: []
+prs: [36]
 related_issues: [12]
 sub_issues: []
 depends_on: [projects-tasks-runs-api, worker-executor-tmux]
