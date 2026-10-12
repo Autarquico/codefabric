@@ -47,7 +47,7 @@ func TestOrphanToken_OnlyForAnOrphanOfTheWorkerAndOnlyToCreateItsRef(t *testing.
 		t.Fatalf("token = %+v", tok)
 	}
 	g, err := e.authorize(alpha, project, true, tok.Token)
-	if err != nil || !g.CreateOnly || g.Ref != tok.Ref || g.ExpectedOID != sha1 || g.Branch != "" {
+	if err != nil || g.Ref != tok.Ref || g.ExpectedOID != sha1 || g.Branch != "" {
 		t.Fatalf("grant = %+v, %v", g, err)
 	}
 	if _, err := e.authorize(alpha, project, false, tok.Token); err == nil {

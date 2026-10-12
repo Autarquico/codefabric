@@ -97,7 +97,7 @@ func (s *Server) serveRelay(w http.ResponseWriter, r *http.Request, c caller, ep
 	}
 	err = s.relay.Serve(w, r, ep, relay.Grant{
 		Project: grant.Project, Worker: grant.Worker, Write: grant.Write, Branch: grant.Branch, Ref: grant.Ref,
-		CreateOnly: grant.CreateOnly, ExpectedOID: grant.ExpectedOID,
+		ExpectedOID: grant.ExpectedOID,
 	})
 	switch {
 	case err == nil:

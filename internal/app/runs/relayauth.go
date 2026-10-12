@@ -42,11 +42,10 @@ type RelayGrant struct {
 	Worker  domain.ID
 	Write   bool
 	// Branch and ExpectedOID are set for a write: the one ref it may update and
-	// the one commit it may set it to. An orphan's write has Ref instead, the ref
-	// it may only create.
+	// the one commit it may set it to. An orphan's write has Ref instead, a ref
+	// outside refs/heads/ that the hook only lets it create.
 	Branch      string
 	Ref         string
-	CreateOnly  bool
 	ExpectedOID string
 }
 
@@ -330,7 +329,7 @@ func (s *Service) authorizeOrphan(ctx context.Context, by pki.Session, claims re
 		}
 		grant = RelayGrant{
 			Project: t.ProjectID, Worker: w.ID, Write: true, Ref: domain.OrphanRef(claims.Run, claims.Epoch),
-			CreateOnly: true, ExpectedOID: claims.Commit,
+			ExpectedOID: claims.Commit,
 		}
 		return nil
 	})

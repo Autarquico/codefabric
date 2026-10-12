@@ -86,7 +86,7 @@ func TestHookScriptQuotesEveryWord(t *testing.T) {
 
 func TestPreReceiveOnlyCreatesTheRefOfAnOrphan(t *testing.T) {
 	orphan := domain.OrphanRef("run_01J00000000000000000000000", 1)
-	granted := map[string]string{envAllowedRef: orphan, envExpectedOID: oidB, envCreateOnly: "1"}
+	granted := map[string]string{envAllowedRef: orphan, envExpectedOID: oidB}
 	git := fakeGit{types: map[string]string{oidB: "commit", oidA: "commit"}, ff: true}
 	for name, tc := range map[string]struct {
 		env   map[string]string
