@@ -711,3 +711,51 @@ func isCode(err error, code domain.Code) bool {
 	var coded *domain.Error
 	return errors.As(err, &coded) && coded.Code == code
 }
+
+// dropTrigger removes a trigger refuseEvents made.
+func (e *env) dropTrigger(eventType domain.EventType) {
+	e.t.Helper()
+	must(e.t, e.db.WithTx(e.t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(e.t.Context(), `DROP TRIGGER refuse_`+string(eventType))
+		return err
+	}))
+}
+
+func TestLost_ACrashBeforeTheCommitLeavesNothingAndTheNextSweepLoses(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorker("alpha")
+	r := e.runningRun(alpha, "x")
+	e.clock.Advance(lostTimeout + time.Minute)
+	e.refuseEvents(domain.EventRunLost)
+	if _, err := e.app.Reconciliation.SweepLost(t.Context()); err == nil {
+		t.Fatal("the sweep did not fail")
+	}
+	if run := e.storedRun(r.run.ID); run.State != domain.RunRunning || run.Publication != domain.PublicationNone || len(e.stops(alpha)) != 0 {
+		t.Fatalf("a failed sweep left %+v and %d stops", run, len(e.stops(alpha)))
+	}
+	e.dropTrigger(domain.EventRunLost)
+	if n := e.sweepLost(); n != 1 || len(e.stops(alpha)) != 1 {
+		t.Errorf("lost %d with %d stops", n, len(e.stops(alpha)))
+	}
+}
+
+func TestReconcile_ACrashBeforeTheCommitOfTheSecondRoundLeavesNothing(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorker("alpha")
+	r := e.runningRun(alpha, "x", withRetry(domain.RetryReschedule, domain.RetryAsk, 2))
+	outcome := []v1.ReconcileOutcome{{LeaseID: string(r.lease.ID), LeaseEpoch: r.lease.Epoch, Outcome: v1.OutcomeAssignmentUnknown}}
+	e.refuseEvents(domain.EventWorkerReconciled)
+	if _, err := e.round(alpha).send(nil, outcome); err == nil {
+		t.Fatal("the round did not fail")
+	}
+	if run := e.storedRun(r.run.ID); run.State != domain.RunRunning || len(e.runsOf(r.run.TaskID)) != 1 || e.reconciled(alpha) {
+		t.Fatalf("a failed round left %+v", run)
+	}
+	e.dropTrigger(domain.EventWorkerReconciled)
+	if out := e.round(alpha).mustSend(nil, outcome); !out.Ack.Complete {
+		t.Fatalf("answer %+v", out)
+	}
+	if run := e.storedRun(r.run.ID); run.EndReason != domain.EndAssignmentLost || len(e.runsOf(r.run.TaskID)) != 2 {
+		t.Errorf("after the round: %+v", run)
+	}
+}
