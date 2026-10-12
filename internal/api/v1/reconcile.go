@@ -110,6 +110,10 @@ type ReconcileVerdict struct {
 	Verdict    string `json:"verdict"`
 	Resend     bool   `json:"resend,omitempty"`
 	Drop       bool   `json:"drop,omitempty"`
+	// Publication is the Controller's view of a publication the Worker pushed
+	// and holds no confirmation of: it confirms the push only if SettledSeq is
+	// the seq of the Worker's own published report.
+	Publication *ReconcilePublicationView `json:"publication,omitempty"`
 }
 
 // ReconcileLease is an accepted lease of the Worker with its reservation open

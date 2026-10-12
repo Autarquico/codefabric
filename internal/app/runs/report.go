@@ -267,6 +267,12 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 // releaseIfAllowed releases the reservation of the lease once the rules of
 // §10.5 allow it, in the transaction of the report that allows it.
 func (s *Service) releaseIfAllowed(ctx context.Context, tx *store.Tx, act mutation.Act, run store.Run, l store.Lease) error {
+	return ReleaseIfAllowedIn(ctx, tx, act, run, l)
+}
+
+// ReleaseIfAllowedIn releases the reservation of the lease in tx if §10.5
+// allows it for run as it is now; it does nothing otherwise, or if it is released.
+func ReleaseIfAllowedIn(ctx context.Context, tx *store.Tx, act mutation.Act, run store.Run, l store.Lease) error {
 	if !releasable(run) {
 		return nil
 	}
