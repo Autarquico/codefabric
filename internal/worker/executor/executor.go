@@ -104,6 +104,13 @@ type Executor struct {
 
 	degraded atomic.Pointer[string]
 
+	// reconciled gates the answers to leases (§27.3): false until a reconciliation
+	// completes, and again whenever one is asked for. reconcileGen counts the
+	// requests, so that a reconciliation overtaken by a newer one counts for nothing.
+	reconciled    atomic.Bool
+	reconcileGen  atomic.Uint64
+	reconcileWake chan struct{}
+
 	wake    chan struct{} // the decider has something new
 	pubWake chan struct{} // the publisher has something new
 
@@ -155,7 +162,7 @@ func New(o Options) (*Executor, error) {
 	}
 	e := &Executor{
 		o: o, harnesses: map[string]harness.Launcher{}, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, grace: o.StopGrace,
-		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
+		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), reconcileWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
 	}
 	if e.clock == nil {
 		e.clock = clock.Real{}
@@ -265,6 +272,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	if err := e.recoverRuns(ctx); err != nil {
 		return err
 	}
+	wg.Go(func() { e.reconcileLoop(ctx) })
 	wg.Go(func() { e.decideLoop(ctx) })
 	if e.o.Git != nil {
 		wg.Go(func() { e.publishLoop(ctx) })

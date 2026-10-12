@@ -18,4 +18,6 @@ type Controller interface {
 	// RelayURL turns the path it answers into the URL git dials.
 	RelayToken(ctx context.Context, run string, leaseEpoch uint64) (v1.RelayTokenResponse, error)
 	RelayURL(path string) string
+	// Reconcile sends one request of a reconciliation (§27.3).
+	Reconcile(ctx context.Context, req v1.ReconcileRequest) (v1.ReconcileResponse, error)
 }

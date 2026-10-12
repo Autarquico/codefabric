@@ -35,12 +35,13 @@ func AppendJournal(ctx context.Context, tx *Tx, r JournalRow) (uint64, error) {
 }
 
 // PendingJournal lists up to limit rows in the order of their seq, leaving out
-// those of fenced assignments, which are kept for the reconciliation.
+// those of fenced assignments, which are kept for the reconciliation, and those
+// of orphans, which the Controller never takes but for orphan_preserved.
 func PendingJournal(ctx context.Context, q Querier, limit int) ([]JournalRow, error) {
 	rows, err := q.QueryContext(ctx,
 		`SELECT j.seq, j.epoch, j.run_id, j.lease_epoch, j.kind, j.payload, j.created_at 
 		 FROM journal j LEFT JOIN local_runs r ON r.run_id = j.run_id AND r.lease_epoch = j.lease_epoch
-		 WHERE r.fenced_code IS NULL ORDER BY j.seq LIMIT ?`, limit)
+		 WHERE r.fenced_code IS NULL AND (r.orphaned_at IS NULL OR j.kind = 'orphan_preserved') ORDER BY j.seq LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("state: reading the journal: %w", err)
 	}

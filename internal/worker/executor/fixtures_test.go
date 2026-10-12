@@ -46,6 +46,24 @@ type fakeController struct {
 	// relayToken, if set, answers RelayToken.
 	relayToken func(run string, epoch uint64) (v1.RelayTokenResponse, error)
 	blocked    chan struct{}
+	// reconcile, if set, answers Reconcile; by default every run goes on and the round is complete.
+	reconcile  func(req v1.ReconcileRequest) (v1.ReconcileResponse, error)
+	reconciles []v1.ReconcileRequest
+}
+
+func (c *fakeController) Reconcile(_ context.Context, req v1.ReconcileRequest) (v1.ReconcileResponse, error) {
+	c.mu.Lock()
+	c.reconciles = append(c.reconciles, req)
+	answer := c.reconcile
+	c.mu.Unlock()
+	if answer != nil {
+		return answer(req)
+	}
+	out := v1.ReconcileResponse{Ack: v1.ReconcileAck{Complete: true}}
+	for _, r := range req.Runs {
+		out.Verdicts = append(out.Verdicts, v1.ReconcileVerdict{RunID: r.RunID, LeaseEpoch: r.LeaseEpoch, Verdict: v1.ReconcileContinue})
+	}
+	return out, nil
 }
 
 func (c *fakeController) Assignments(ctx context.Context, after uint64, _ time.Duration, _ int) (v1.AssignmentsResponse, error) {
@@ -239,6 +257,8 @@ func (f *fixture) build() *Executor {
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	// The tests that drive the steps by hand stand for a Worker that reconciled.
+	e.reconciled.Store(true)
 	return e
 }
 
