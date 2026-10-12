@@ -28,9 +28,6 @@ const (
 	pubsPerPage   = 256
 )
 
-// Local phases a Worker reports for a Run that is over on its side.
-var finalPhases = map[string]bool{"stopped": true, "aborted": true, "rejected": true, "discarded": true}
-
 // errRestartRound answers a fragment or a page that does not follow what the
 // Controller holds of the round: the Worker starts the round again.
 func errRestartRound() error {
@@ -215,14 +212,21 @@ func (r *reconciler) lookup(ctx context.Context, run string, epoch uint64, lease
 	if err != nil {
 		return held{}, false, err
 	}
+	h, err := r.heldOf(ctx, l)
+	return h, err == nil, err
+}
+
+// heldOf reads the Run and the Task of a lease of this Worker.
+func (r *reconciler) heldOf(ctx context.Context, l store.Lease) (held, error) {
 	h := held{lease: l}
+	var err error
 	if h.run, err = store.RunByID(ctx, r.tx, l.RunID); err != nil {
-		return held{}, false, err
+		return held{}, err
 	}
 	if h.task, err = store.TaskByID(ctx, r.tx, h.run.TaskID); err != nil {
-		return held{}, false, err
+		return held{}, err
 	}
-	return h, true, nil
+	return h, nil
 }
 
 // run decides one Run the Worker holds a record of.
@@ -247,7 +251,7 @@ func (r *reconciler) run(ctx context.Context, e v1.ReconcileRun) (v1.ReconcileVe
 		v.Verdict, v.Resend = v1.ReconcileContinue, fenced
 		return v, nil
 	}
-	settled := !e.Alive && finalPhases[e.Phase] && (e.PendingReports == 0 || fenced)
+	settled := !e.Alive && v1.FinalPhase(e.Phase) && (e.PendingReports == 0 || fenced)
 	if err := r.terminal(ctx, &h, e, settled); err != nil {
 		return v, err
 	}
@@ -366,7 +370,7 @@ func (r *reconciler) outcome(ctx context.Context, o v1.ReconcileOutcome) (v1.Rec
 	if err != nil {
 		return v, leaseKey{}, err
 	}
-	h, _, err := r.lookup(ctx, string(l.RunID), l.Epoch, string(l.ID))
+	h, err := r.heldOf(ctx, l)
 	if err != nil {
 		return v, leaseKey{}, err
 	}
@@ -386,7 +390,7 @@ func (r *reconciler) outcome(ctx context.Context, o v1.ReconcileOutcome) (v1.Rec
 				return v, key, err
 			}
 		}
-		if _, err := runs.OrderStopIn(ctx, r.tx, r.act, h.run, h.task, h.lease, runs.StopReasonOf(h.run)); err != nil {
+		if _, err := runs.OrderStopIn(ctx, r.tx, r.act, h.run, h.task, h.lease, domain.StopWorktreeLost); err != nil {
 			return v, key, err
 		}
 		v.Verdict = v1.ReconcileStop

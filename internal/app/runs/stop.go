@@ -66,7 +66,8 @@ func ControllerEnded(run store.Run) bool {
 	return false
 }
 
-// StopReasonOf is why a Run the Controller ended is stopped.
+// StopReasonOf is why a Run the Controller ended is stopped; it is only for a
+// Run of which ControllerEnded is true.
 func StopReasonOf(run store.Run) domain.StopReason {
 	switch {
 	case run.State == domain.RunCancelled:

@@ -144,7 +144,8 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		// Something reports under a lease the Run is no longer under: whatever runs
 		// with it is an orphan. Its stop and RunOrphaned are written although the
 		// entry is rejected: the rejection does not roll the request back (B5).
-		if l.Epoch < run.LeaseEpoch {
+		// A stopped says that nothing runs any more under it: there is no process to stop.
+		if l.Epoch < run.LeaseEpoch && e.Kind != v1.ReportStopped {
 			if _, err := OrphanIn(ctx, tx, act, run, task, l); err != nil {
 				return outcome(""), internalError{err}
 			}

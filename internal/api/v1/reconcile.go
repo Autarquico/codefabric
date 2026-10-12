@@ -41,6 +41,20 @@ const (
 	OutcomeWorktreeLost      = "worktree_lost"      // the session lives and its worktree does not
 )
 
+// Local phases of a Run on a Worker that are over: it reports them in
+// ReconcileRun.Phase, and nothing of the Run runs any more.
+const (
+	PhaseStopped   = "stopped"
+	PhaseAborted   = "aborted"
+	PhaseRejected  = "rejected"
+	PhaseDiscarded = "discarded"
+)
+
+// FinalPhase says whether a local phase is one of those.
+func FinalPhase(p string) bool {
+	return p == PhaseStopped || p == PhaseAborted || p == PhaseRejected || p == PhaseDiscarded
+}
+
 // ReconcileFragment places a request in its round: index from 0 to count-1, and
 // the round they all share. Only the last fragment is answered with the leases,
 // stops and publications, and only it may complete the round.

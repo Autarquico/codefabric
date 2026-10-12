@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 )
 
 // Phase is where the Worker stands with an assignment. It is local: the
@@ -28,10 +30,10 @@ const (
 	PhaseRunning        Phase = "running"
 	PhaseStopping       Phase = "stopping"
 	PhaseStopUnverified Phase = "stop_unverified"
-	PhaseStopped        Phase = "stopped"
-	PhaseAborted        Phase = "aborted"
-	PhaseRejected       Phase = "rejected"
-	PhaseDiscarded      Phase = "discarded"
+	PhaseStopped        Phase = v1.PhaseStopped
+	PhaseAborted        Phase = v1.PhaseAborted
+	PhaseRejected       Phase = v1.PhaseRejected
+	PhaseDiscarded      Phase = v1.PhaseDiscarded
 )
 
 // LivePhases are those in which the assignment still needs the daemon's

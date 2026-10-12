@@ -223,3 +223,23 @@ func TestScenario_StopCancelLostReconcile_Epochs(t *testing.T) {
 		t.Errorf("stops = %+v, want the orphan's and the cancel's", stops)
 	}
 }
+
+func TestEpochs_AStoppedUnderAnOldEpochIsStaleAndNoOrphan(t *testing.T) {
+	e := newEnv(t)
+	alpha := e.joinWorker("alpha")
+	run := e.queuedRun("x")
+	first := e.offer(run.ID, alpha)
+	e.clock.Advance(domain.Defaults().LeaseAcceptBy + time.Second)
+	_, err := e.app.Leases.SweepExpired(t.Context())
+	must(t, err)
+	second := e.offer(run.ID, alpha)
+	_, err = e.accept(alpha, second)
+	must(t, err)
+	old := &reporter{e: e, w: alpha, run: run, lease: first, epoch: reportEpoch}
+	if got := results(old.mustSend(old.entry(v1.ReportStopped, neverStarted))); got != "rejected:CF_STALE_LEASE" {
+		t.Fatalf("stopped under the old epoch = %s", got)
+	}
+	if n := len(e.events(domain.EventRunOrphaned)); n != 0 || len(e.stops(alpha)) != 0 {
+		t.Errorf("RunOrphaned %d, stops %d: a stopped has no process to stop", n, len(e.stops(alpha)))
+	}
+}
