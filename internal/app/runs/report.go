@@ -66,12 +66,13 @@ func (s *Service) Report(ctx context.Context, by pki.Session, runID string, req 
 		}
 		out := v1.RunReportResponse{Outcomes: make([]v1.RunReportOutcome, 0, len(req.Entries))}
 		stopped := false
+		budget := verifyBudget(maxVerificationsPerReport)
 		for _, e := range req.Entries {
 			if stopped {
 				out.Outcomes = append(out.Outcomes, v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: v1.ReportNotApplied})
 				continue
 			}
-			outcome, err := s.reportEntry(ctx, tx, act, w, run, e)
+			outcome, err := s.reportEntry(ctx, tx, act, w, run, e, &budget)
 			var rejection *domain.Error
 			switch {
 			case errors.As(err, &rejection):
@@ -80,13 +81,18 @@ func (s *Service) Report(ctx context.Context, by pki.Session, runID string, req 
 			case err != nil:
 				return v1.RunReportResponse{}, err
 			}
+			if outcome.Result == v1.ReportNotApplied {
+				stopped = true // the entry waits for the next request: so does what follows it
+			}
 			out.Outcomes = append(out.Outcomes, outcome)
 		}
 		current, err := store.RunByID(ctx, tx, run)
 		if err != nil {
 			return v1.RunReportResponse{}, err
 		}
-		out.Run = view(current, false)
+		if out.Run, err = s.viewOf(ctx, tx, current, false); err != nil {
+			return v1.RunReportResponse{}, err
+		}
 		if !ownsLive(current, w.ID, req.Entries) {
 			// A lease that is no longer the Run's tells nothing of who has it now.
 			out.Run = v1.Run{ID: out.Run.ID, State: current.State, Runtime: current.Runtime, Publication: current.Publication}
@@ -103,7 +109,7 @@ func ownsLive(run store.Run, worker domain.ID, entries []v1.RunReportEntry) bool
 
 // reportEntry decides one entry. Everything that can reject it comes before
 // the first write.
-func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Act, w store.Worker, runID domain.ID, e v1.RunReportEntry) (v1.RunReportOutcome, error) {
+func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Act, w store.Worker, runID domain.ID, e v1.RunReportEntry, budget *verifyBudget) (v1.RunReportOutcome, error) {
 	outcome := func(result string) v1.RunReportOutcome {
 		return v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: result}
 	}
@@ -214,7 +220,15 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 				return err
 			}
 			run.Runtime = domain.RuntimeStopped
-			return s.releaseIfAllowed(ctx, tx, act, run, l, e)
+			return s.releaseIfAllowed(ctx, tx, act, run, l)
+		}
+	case v1.ReportSealed, v1.ReportPublished, v1.ReportPublicationFailed:
+		var early *v1.RunReportOutcome
+		if apply, early, err = s.publicationEntry(ctx, tx, act, &ev, run, task, l, e, budget); err != nil {
+			return outcome(""), err
+		}
+		if early != nil {
+			return *early, nil
 		}
 	default:
 		return outcome(""), input.Invalid("unknown report kind %q", e.Kind)
@@ -237,8 +251,8 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 
 // releaseIfAllowed releases the reservation of the lease once the rules of
 // §10.5 allow it, in the transaction of the report that allows it.
-func (s *Service) releaseIfAllowed(ctx context.Context, tx *store.Tx, act mutation.Act, run store.Run, l store.Lease, e v1.RunReportEntry) error {
-	if !releasable(run, e.NeverStarted) {
+func (s *Service) releaseIfAllowed(ctx context.Context, tx *store.Tx, act mutation.Act, run store.Run, l store.Lease) error {
+	if !releasable(run) {
 		return nil
 	}
 	open, err := store.OpenReservation(ctx, tx, l.ID)
@@ -299,11 +313,17 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 	case e.LeaseEpoch == 0 || e.LeaseEpoch > maxSeq:
 		return input.Invalid("lease_epoch must be between 1 and %d", maxSeq)
 	case !e.Kind.IsValid():
-		return input.Invalid("kind must be started, exited, prepare_failed or stopped")
+		return input.Invalid("kind must be started, exited, prepare_failed, stopped, sealed, published or publication_failed")
 	case e.At.Before(earliestAt) || e.At.After(now.Add(maxAhead)):
 		return input.Invalid("at must be after the year 2000 and at most %s ahead of the Controller", maxAhead)
 	case len(e.Message) > v1.MaxReportMessageLen || hasHidden(e.Message):
 		return input.Invalid("message must print and be at most %d characters", v1.MaxReportMessageLen)
+	case e.Kind != v1.ReportSealed && e.Kind != v1.ReportPublished && e.ResultCommit != "":
+		return input.Invalid("only sealed and published carry a result commit")
+	case e.Kind != v1.ReportSealed && (len(e.Excluded) > 0 || e.ExcludedTruncated):
+		return input.Invalid("only sealed carries excluded paths")
+	case e.Kind != v1.ReportPublicationFailed && e.Phase != "":
+		return input.Invalid("only publication_failed carries a phase")
 	case e.Kind != v1.ReportStarted && e.Handle != nil:
 		return input.Invalid("only started carries a handle")
 	case e.Kind != v1.ReportExited && (e.ExitCode != nil || e.Signal != "" || e.Cause != ""):
@@ -317,6 +337,15 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		if h == nil || h.Runtime == "" || h.Ref == "" || len(h.Runtime)+len(h.Ref) > v1.MaxHandleLen ||
 			strings.ContainsFunc(h.Runtime+h.Ref, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
 			return input.Invalid("handle needs a runtime and a ref of at most %d bytes with no spaces", v1.MaxHandleLen)
+		}
+	case v1.ReportSealed, v1.ReportPublished:
+		if !commitSHA.MatchString(e.ResultCommit) {
+			return input.Invalid("result_commit must be a full lower-case hex commit ID")
+		}
+		return validateExcluded(e)
+	case v1.ReportPublicationFailed:
+		if e.Phase != v1.PhaseSeal && e.Phase != v1.PhasePush {
+			return input.Invalid("phase must be seal or push")
 		}
 	case v1.ReportExited:
 		if !slices.Contains([]string{v1.ExitCauseExit, v1.ExitCauseStop, v1.ExitCauseWrapperLost}, e.Cause) {

@@ -30,9 +30,10 @@ type Services struct {
 }
 
 // New wires the use cases. Runs re-derive their Task through tasks.Rederive,
-// handed over as a function because tasks imports runs.
-func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, workersCfg workers.Config) *Services {
-	runService := runs.New(db, clk, ids, tasks.Rederive)
+// handed over as a function because tasks imports runs. The options are those
+// of the Run use cases (the git relay).
+func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, workersCfg workers.Config, opts ...runs.Option) *Services {
+	runService := runs.New(db, clk, ids, tasks.Rederive, opts...)
 	leaseService := leases.New(db, clk, ids, tasks.Rederive)
 	return &Services{
 		Projects:  projects.New(db, clk, ids),

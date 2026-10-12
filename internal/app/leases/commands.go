@@ -112,11 +112,19 @@ func (s *Service) page(ctx context.Context, by pki.Session, after uint64, limit 
 
 func commandView(c store.WorkerCommand) (v1.WorkerCommand, error) {
 	out := v1.WorkerCommand{Seq: c.Seq, Type: c.Type, CreatedAt: c.CreatedAt}
-	if c.Type == domain.CommandAssign {
+	var target any
+	switch c.Type {
+	case domain.CommandAssign:
 		out.Assign = new(v1.AssignCommand)
-		if err := json.Unmarshal(c.Payload, out.Assign); err != nil {
-			return v1.WorkerCommand{}, fmt.Errorf("leases: command %d of %s has a corrupt payload: %w", c.Seq, c.WorkerID, err)
-		}
+		target = out.Assign
+	case domain.CommandPublish:
+		out.Publish = new(v1.PublishCommand)
+		target = out.Publish
+	default:
+		return out, nil
+	}
+	if err := json.Unmarshal(c.Payload, target); err != nil {
+		return v1.WorkerCommand{}, fmt.Errorf("leases: command %d of %s has a corrupt payload: %w", c.Seq, c.WorkerID, err)
 	}
 	return out, nil
 }
