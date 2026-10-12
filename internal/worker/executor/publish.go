@@ -167,6 +167,9 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 		e.later(ctx, p, "the Run could not be read")
 		return false
 	}
+	if local.OrphanedAt != nil {
+		return e.preserveOrphan(ctx, p, local)
+	}
 	tok, err := e.o.Controller.RelayToken(ctx, p.RunID, p.LeaseEpoch)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -208,6 +211,44 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 	}
 	e.log.WarnContext(ctx, "pushing a result failed", "run", p.RunID, "class", pe.Class, "err", pe.Message)
 	return e.pushFailed(ctx, p, pe.Counts(), pe.Message)
+}
+
+// preserveOrphan keeps the sealed result of an orphan in the relay, at the ref
+// only it may create (§10.4 point 5), and tells the Controller with the one
+// report it takes under an epoch that is not the live one.
+func (e *Executor) preserveOrphan(ctx context.Context, p state.Publication, local state.Run) bool {
+	tok, err := e.o.Controller.OrphanToken(ctx, p.RunID, p.LeaseEpoch, p.ResultCommit)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false
+		}
+		return e.tokenFailed(ctx, p, err)
+	}
+	pushErr := e.o.Git.PushRef(ctx, local.ProjectID, p.ResultCommit, tok.Ref, gitops.PushAuth{
+		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
+		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
+	})
+	if ctx.Err() != nil {
+		return false
+	}
+	if pushErr != nil {
+		var pe *gitops.PushError
+		if !errors.As(pushErr, &pe) {
+			pe = &gitops.PushError{Class: gitops.PushLocal, Message: briefErr(pushErr)}
+		}
+		e.log.WarnContext(ctx, "preserving the result of an orphan failed", "run", p.RunID, "class", pe.Class, "err", pe.Message)
+		return e.pushFailed(ctx, p, pe.Counts(), pe.Message)
+	}
+	e.forgetBackoff(p.Key)
+	now := e.clock.Now()
+	e.log.InfoContext(ctx, "the result of an orphan is kept in the relay", "run", p.RunID, "epoch", p.LeaseEpoch, "ref", tok.Ref)
+	txErr := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		if err := e.report(ctx, tx, p.Key, v1.ReportOrphanPreserved, now, func(en *v1.RunReportEntry) { en.ResultCommit = p.ResultCommit }); err != nil {
+			return err
+		}
+		return state.MarkPreserved(ctx, tx, p, now)
+	})
+	return e.settled(ctx, p, txErr, "recording an orphan preserved")
 }
 
 // tokenFailed handles a token the Controller would not give. What says the Run is

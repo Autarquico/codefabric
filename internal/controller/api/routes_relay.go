@@ -17,6 +17,7 @@ import (
 // retry of a publication. Nothing else of git's HTTP protocol is routed.
 func (s *Server) registerRelayRoutes() {
 	s.handle("POST /v1/worker/runs/{run}/relay-token", workersOnly, s.relayToken)
+	s.handle("POST /v1/worker/runs/{run}/orphan-token", workersOnly, s.orphanToken)
 	s.handle("GET /v1/relay/{repo}/info/refs", workersOnly, s.relayInfoRefs)
 	s.handle("POST /v1/relay/{repo}/git-upload-pack", workersOnly, s.relayRequest(relay.UploadPack))
 	s.handle("POST /v1/relay/{repo}/git-receive-pack", workersOnly, s.relayRequest(relay.ReceivePack))
@@ -29,6 +30,19 @@ func (s *Server) relayToken(w http.ResponseWriter, r *http.Request, c caller) er
 		return err
 	}
 	out, err := s.work.Runs.MintRelayToken(r.Context(), c.Session, r.PathValue("run"), req)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (s *Server) orphanToken(w http.ResponseWriter, r *http.Request, c caller) error {
+	var req v1.OrphanTokenRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		return err
+	}
+	out, err := s.work.Runs.MintOrphanToken(r.Context(), c.Session, r.PathValue("run"), req)
 	if err != nil {
 		return err
 	}
@@ -82,7 +96,8 @@ func (s *Server) serveRelay(w http.ResponseWriter, r *http.Request, c caller, ep
 		return domain.NewError(domain.CodeInternal, "the git relay is not available on this Controller", nil)
 	}
 	err = s.relay.Serve(w, r, ep, relay.Grant{
-		Project: grant.Project, Worker: grant.Worker, Write: grant.Write, Branch: grant.Branch, ExpectedOID: grant.ExpectedOID,
+		Project: grant.Project, Worker: grant.Worker, Write: grant.Write, Branch: grant.Branch, Ref: grant.Ref,
+		CreateOnly: grant.CreateOnly, ExpectedOID: grant.ExpectedOID,
 	})
 	switch {
 	case err == nil:

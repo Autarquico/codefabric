@@ -21,6 +21,8 @@ import (
 const (
 	envAllowedRef  = "CF_RELAY_ALLOWED_REF"
 	envExpectedOID = "CF_RELAY_EXPECTED_OID"
+	// envCreateOnly says the ref may only be created, never moved: the ref of an orphan.
+	envCreateOnly = "CF_RELAY_CREATE_ONLY"
 )
 
 var zeroOID = regexp.MustCompile(`^0{40}(?:0{24})?$`)
@@ -42,9 +44,18 @@ func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 	if allowed == "" || expected == "" {
 		return deny("this request is not authorised to push")
 	}
-	branch, ok := strings.CutPrefix(allowed, "refs/heads/")
-	if !ok || !domain.ValidBranch(branch) || !domain.ValidCommitID(expected) {
+	// The ref of an orphan is only ever created; a branch moves by fast-forwards.
+	branch, isBranch := strings.CutPrefix(allowed, "refs/heads/")
+	createOnly := getenv(envCreateOnly) == "1" || !isBranch
+	switch {
+	case !domain.ValidCommitID(expected):
 		return deny("this request is not authorised to push")
+	case isBranch && !domain.ValidBranch(branch):
+		return deny("this request is not authorised to push")
+	case !isBranch && !domain.ValidOrphanRef(allowed):
+		return deny("this request is not authorised to push")
+	case !isBranch:
+		branch = allowed
 	}
 	var updates [][3]string
 	sc := bufio.NewScanner(io.LimitReader(stdin, 1<<20))
@@ -74,6 +85,9 @@ func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 	}
 	if typ, err := git.ObjectType(newOID); err != nil || typ != "commit" {
 		return deny(branch + " must point to a commit")
+	}
+	if createOnly && !zeroOID.MatchString(oldOID) {
+		return deny(branch + " exists: it is never moved")
 	}
 	if !zeroOID.MatchString(oldOID) {
 		ff, err := git.IsAncestor(oldOID, newOID)

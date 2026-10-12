@@ -83,3 +83,36 @@ func TestHookScriptQuotesEveryWord(t *testing.T) {
 		t.Errorf("script = %q, want %q", got, want)
 	}
 }
+
+func TestPreReceiveOnlyCreatesTheRefOfAnOrphan(t *testing.T) {
+	orphan := domain.OrphanRef("run_01J00000000000000000000000", 1)
+	granted := map[string]string{envAllowedRef: orphan, envExpectedOID: oidB, envCreateOnly: "1"}
+	git := fakeGit{types: map[string]string{oidB: "commit", oidA: "commit"}, ff: true}
+	for name, tc := range map[string]struct {
+		env   map[string]string
+		input string
+		deny  string
+	}{
+		"creating it":                    {granted, zero + " " + oidB + " " + orphan + "\n", ""},
+		"moving it":                      {granted, oidA + " " + oidB + " " + orphan + "\n", "never moved"},
+		"moving it without the flag":     {map[string]string{envAllowedRef: orphan, envExpectedOID: oidB}, oidA + " " + oidB + " " + orphan + "\n", "never moved"},
+		"deleting it":                    {granted, oidB + " " + zero + " " + orphan + "\n", "deleting"},
+		"another orphan":                 {granted, zero + " " + oidB + " " + domain.OrphanRef("run_01J00000000000000000000000", 2) + "\n", "may only update"},
+		"another commit":                 {granted, zero + " " + oidA + " " + orphan + "\n", "only the commit"},
+		"a ref under cf that is not one": {map[string]string{envAllowedRef: "refs/cf/orphans/x", envExpectedOID: oidB}, zero + " " + oidB + " refs/cf/orphans/x\n", "not authorised"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := PreReceive(strings.NewReader(tc.input), envOf(tc.env), git)
+			if tc.deny == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			var coded *domain.Error
+			if !errors.As(err, &coded) || !strings.Contains(coded.Message, tc.deny) {
+				t.Fatalf("got %v, want a denial mentioning %q", err, tc.deny)
+			}
+		})
+	}
+}

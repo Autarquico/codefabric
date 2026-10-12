@@ -77,6 +77,10 @@ func (g *fakeGit) Push(_ context.Context, project, commit, branch string, a gito
 	return nil
 }
 
+func (g *fakeGit) PushRef(ctx context.Context, project, commit, ref string, a gitops.PushAuth) error {
+	return g.Push(ctx, project, commit, ref, a)
+}
+
 func (g *fakeGit) sealCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()

@@ -240,3 +240,26 @@ func TestReconcile_APushedPublicationIsConfirmedByTheSeqOfItsOwnReport(t *testin
 		t.Errorf("state = %s", got.State)
 	}
 }
+
+func TestAnOrphanIsSealedAndPreservedAtItsRefWithTheOneReportTheControllerTakes(t *testing.T) {
+	f, g := newGitFixture(t)
+	k := f.exitedRun()
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+		if err := state.MarkOrphaned(t.Context(), tx, k, t0); err != nil {
+			return err
+		}
+		return state.DeleteJournalOf(t.Context(), tx, k)
+	}))
+	for f.turn() {
+	}
+	if g.pushCount() != 1 || g.pushes[0].Branch != string(domain.OrphanRef(domain.ID(k.RunID), k.LeaseEpoch)) || g.pushes[0].Auth.Token != "orphan-"+k.RunID {
+		t.Fatalf("pushes = %+v", g.pushes)
+	}
+	if p := f.publication(k); p.State != state.PubPublished {
+		t.Errorf("publication = %s", p.State)
+	}
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportOrphanPreserved}) || reports[0].ResultCommit == "" {
+		t.Errorf("reports that would be sent = %+v", reports)
+	}
+}

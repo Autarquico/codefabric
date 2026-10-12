@@ -28,7 +28,13 @@ type relayClaims struct {
 	Epoch   uint64    `json:"e"`
 	Project domain.ID `json:"p"`
 	Expires int64     `json:"x"` // Unix nanoseconds
+	// Scope is "" for the token of a lease and scopeOrphan for that of an
+	// orphan, which may only create its ref at Commit.
+	Scope  string `json:"s,omitempty"`
+	Commit string `json:"c,omitempty"`
 }
+
+const scopeOrphan = "orphan"
 
 // RelayGrant is what AuthorizeRelay concedes to one request.
 type RelayGrant struct {
@@ -36,8 +42,11 @@ type RelayGrant struct {
 	Worker  domain.ID
 	Write   bool
 	// Branch and ExpectedOID are set for a write: the one ref it may update and
-	// the one commit it may set it to.
+	// the one commit it may set it to. An orphan's write has Ref instead, the ref
+	// it may only create.
 	Branch      string
+	Ref         string
+	CreateOnly  bool
 	ExpectedOID string
 }
 
@@ -182,6 +191,9 @@ func (s *Service) AuthorizeRelay(ctx context.Context, by pki.Session, project st
 	if kind, _, err := domain.ParseID(project); err != nil || kind != domain.KindProject {
 		return RelayGrant{}, errRelayDenied()
 	}
+	if claims.Scope == scopeOrphan {
+		return s.authorizeOrphan(ctx, by, claims, project, write, now)
+	}
 	var grant RelayGrant
 	err := s.db.Read(ctx, func(q store.Querier) error {
 		c, err := resolveChain(ctx, q, by, now, claims.Run, claims.Epoch)
@@ -206,6 +218,120 @@ func (s *Service) AuthorizeRelay(ctx context.Context, by pki.Session, project st
 			return errRelayDenied()
 		}
 		grant.Write, grant.Branch, grant.ExpectedOID = true, branchOf(c.task, c.run), c.run.ResultCommit
+		return nil
+	})
+	return grant, err
+}
+
+// orphanChain is what an orphan's token stands on, resolved from the database:
+// the Worker of the caller, its lease of the Run under that epoch (in any
+// state), the orphan the Controller recorded of it and not yet preserved, and
+// the Task, not archived.
+func orphanChain(ctx context.Context, q store.Querier, by pki.Session, now time.Time, run domain.ID, epoch uint64) (store.Worker, store.Task, error) {
+	if _, err := pki.RequireCaller(ctx, q, by, now); err != nil {
+		return store.Worker{}, store.Task{}, err
+	}
+	w, err := store.WorkerByIdentity(ctx, q, by.Principal.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Worker{}, store.Task{}, domain.NewError(domain.CodeUnauthenticated, "this identity is not a Worker", nil)
+	}
+	if err != nil {
+		return store.Worker{}, store.Task{}, err
+	}
+	notFound := domain.NewError(domain.CodeNotFound, "orphan not found", nil)
+	l, err := store.LeaseByRunEpoch(ctx, q, run, epoch)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && l.WorkerID != w.ID) {
+		return store.Worker{}, store.Task{}, notFound
+	}
+	if err != nil {
+		return store.Worker{}, store.Task{}, err
+	}
+	o, err := store.OrphanOf(ctx, q, w.ID, run, epoch)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Worker{}, store.Task{}, notFound
+	}
+	if err != nil {
+		return store.Worker{}, store.Task{}, err
+	}
+	if o.Preserved != store.OrphanInWorker {
+		return store.Worker{}, store.Task{}, domain.NewError(domain.CodeInvalidTransition, "the orphan is preserved already", nil)
+	}
+	r, err := store.RunByID(ctx, q, run)
+	if err != nil {
+		return store.Worker{}, store.Task{}, err
+	}
+	t, err := store.TaskByID(ctx, q, r.TaskID)
+	if err != nil {
+		return store.Worker{}, store.Task{}, err
+	}
+	if t.ArchivedAt != nil {
+		return store.Worker{}, store.Task{}, notFound
+	}
+	return w, t, nil
+}
+
+// MintOrphanToken gives a Worker a token that may only create the ref of an
+// orphan it holds, at the commit it sealed (§10.4 point 5): the Controller must
+// have detected the orphan on this Worker under that epoch, and it must not be
+// preserved yet. It does not relax the tokens of a lease.
+func (s *Service) MintOrphanToken(ctx context.Context, by pki.Session, runID string, req v1.OrphanTokenRequest) (v1.RelayTokenResponse, error) {
+	if kind, _, err := domain.ParseID(runID); err != nil || kind != domain.KindRun {
+		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeNotFound, "run not found", nil)
+	}
+	if !domain.ValidCommitID(req.ResultCommit) || req.LeaseEpoch == 0 {
+		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeInvalidRequest, "an orphan token needs a lease epoch and a commit ID", nil)
+	}
+	if s.relay == nil {
+		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeInternal, "the Controller has no relay", nil)
+	}
+	var out v1.RelayTokenResponse
+	err := s.db.Read(ctx, func(q store.Querier) error {
+		now := s.clock.Now()
+		w, t, err := orphanChain(ctx, q, by, now, domain.ID(runID), req.LeaseEpoch)
+		if err != nil {
+			return err
+		}
+		expires := now.Add(RelayTokenTTL)
+		out = v1.RelayTokenResponse{
+			Token: s.sign(relayClaims{
+				Worker: w.ID, Run: domain.ID(runID), Epoch: req.LeaseEpoch, Project: t.ProjectID, Expires: expires.UnixNano(),
+				Scope: scopeOrphan, Commit: req.ResultCommit,
+			}),
+			ExpiresAt: expires, Path: v1.RelayPathPrefix + string(t.ProjectID) + ".git", Write: true,
+			Ref: domain.OrphanRef(domain.ID(runID), req.LeaseEpoch),
+		}
+		return nil
+	})
+	return out, err
+}
+
+// authorizeOrphan decides a request made with an orphan's token: only a push,
+// by the Worker it was issued to, of the one ref of the orphan, created at the
+// one commit, while the orphan is still not preserved.
+func (s *Service) authorizeOrphan(ctx context.Context, by pki.Session, claims relayClaims, project string, write bool, now time.Time) (RelayGrant, error) {
+	if !write {
+		return RelayGrant{}, errRelayDenied()
+	}
+	var grant RelayGrant
+	err := s.db.Read(ctx, func(q store.Querier) error {
+		w, t, err := orphanChain(ctx, q, by, now, claims.Run, claims.Epoch)
+		if err != nil {
+			var coded *domain.Error
+			if errors.As(err, &coded) && coded.Code == domain.CodeUnauthenticated {
+				return err
+			}
+			if errors.As(err, &coded) {
+				return errRelayDenied()
+			}
+			return err
+		}
+		if w.ID != claims.Worker || t.ProjectID != domain.ID(project) {
+			return errRelayDenied()
+		}
+		grant = RelayGrant{
+			Project: t.ProjectID, Worker: w.ID, Write: true, Ref: domain.OrphanRef(claims.Run, claims.Epoch),
+			CreateOnly: true, ExpectedOID: claims.Commit,
+		}
 		return nil
 	})
 	return grant, err

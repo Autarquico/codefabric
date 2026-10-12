@@ -37,13 +37,27 @@ func (e Endpoint) writes() bool { return e == InfoRefsReceive || e == ReceivePac
 
 // Grant is what a request has been authorised to do, resolved by the server
 // from its own state for this request alone. For a write, Branch is the one
-// branch the push may update and ExpectedOID the one commit it may set it to.
+// branch the push may update, or Ref the one full ref it may create (the ref of
+// an orphan, CreateOnly), and ExpectedOID the one commit it may set it to.
 type Grant struct {
 	Project     domain.ID
 	Worker      domain.ID
 	Write       bool
 	Branch      string
+	Ref         string
+	CreateOnly  bool
 	ExpectedOID string
+}
+
+// allowedRef is the one ref a write may touch.
+func (g Grant) allowedRef() string {
+	if g.Ref != "" {
+		return g.Ref
+	}
+	if g.Branch == "" {
+		return ""
+	}
+	return "refs/heads/" + g.Branch
 }
 
 // Errors of Serve that are answered before anything is written. The caller
@@ -85,7 +99,7 @@ var (
 // The Authorization header of the request is never passed on: the environment
 // of the hooks is the environment of the child.
 func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g Grant) error {
-	if ep.writes() && (!g.Write || g.Branch == "" || g.ExpectedOID == "") {
+	if ep.writes() && (!g.Write || g.allowedRef() == "" || g.ExpectedOID == "") {
 		return errors.New("relay: a write was not granted")
 	}
 	// One deadline for the whole request, the upload included, on real time: it
@@ -294,7 +308,10 @@ func (r *Relay) cgiEnv(req *http.Request, ep Endpoint, g Grant, size int64) ([]s
 		env = append(env, "HTTP_GIT_PROTOCOL="+p)
 	}
 	if ep.writes() {
-		env = append(env, "CF_RELAY_ALLOWED_REF=refs/heads/"+g.Branch, "CF_RELAY_EXPECTED_OID="+g.ExpectedOID)
+		env = append(env, "CF_RELAY_ALLOWED_REF="+g.allowedRef(), "CF_RELAY_EXPECTED_OID="+g.ExpectedOID)
+		if g.CreateOnly {
+			env = append(env, envCreateOnly+"=1")
+		}
 	}
 	return env, nil
 }

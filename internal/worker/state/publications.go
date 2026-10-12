@@ -255,3 +255,14 @@ func GiveUpPublication(ctx context.Context, tx *Tx, k Key, why string, at time.T
 	}
 	return nil
 }
+
+// MarkPreserved ends the publication of an orphan whose commit the relay keeps
+// at the ref of the orphan: published here, since nothing more is to be done
+// with it. Compare-and-set on the generation, the attempts and the state sealed.
+func MarkPreserved(ctx context.Context, tx *Tx, p Publication, at time.Time) error {
+	res, err := tx.exec(ctx,
+		`UPDATE publications SET state = ?, updated_at = ?
+		 WHERE run_id = ? AND lease_epoch = ? AND generation = ? AND attempts = ? AND state = ?`,
+		string(PubPublished), at.UnixNano(), p.RunID, p.LeaseEpoch, p.Generation, p.Attempts, string(PubSealed))
+	return changedOne(res, err, "preserving an orphan")
+}

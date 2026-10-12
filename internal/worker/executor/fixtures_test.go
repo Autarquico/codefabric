@@ -122,6 +122,13 @@ func (c *fakeController) RelayToken(_ context.Context, run string, epoch uint64)
 	return v1.RelayTokenResponse{Token: "token-" + run, Path: "/v1/relay/project_1.git", Write: true}, nil
 }
 
+func (c *fakeController) OrphanToken(_ context.Context, run string, epoch uint64, commit string) (v1.RelayTokenResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tokens = append(c.tokens, fmt.Sprintf("orphan:%s-e%d:%s", run, epoch, commit))
+	return v1.RelayTokenResponse{Token: "orphan-" + run, Path: "/v1/relay/project_1.git", Write: true, Ref: domain.OrphanRef(domain.ID(run), epoch)}, nil
+}
+
 func (c *fakeController) RelayURL(path string) string { return "https://controller.test" + path }
 
 func (c *fakeController) AckCommands(_ context.Context, upTo uint64) (v1.AckCommandsResponse, error) {

@@ -13,6 +13,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/controller/api"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
+	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/gittest"
 )
@@ -227,4 +228,57 @@ func TestRelay_AnExpiredTokenAndTheWrongKindOfIdentityAreRefused(t *testing.T) {
 	if out, err := f.git(f.alpha, fresh.Token, "ls-remote", remote); err != nil {
 		t.Errorf("a new token: %v\n%s", err, out)
 	}
+}
+
+func TestOrphanRefIsOnlyCreatedAtTheSealedCommitWithItsOwnToken(t *testing.T) {
+	f := newRelayFixture(t)
+	ctx := t.Context()
+	run := domain.ID(f.run.ID)
+	// The Controller detected an orphan of alpha under the lease's epoch.
+	must(t, f.db.WithTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.InsertOrphan(ctx, mustWorker(t, f), run, f.assign.Epoch, time.Now())
+		return err
+	}))
+	if _, err := f.beta.OrphanToken(ctx, f.run.ID, f.assign.Epoch, f.commit); err == nil {
+		t.Error("beta got a token for alpha's orphan")
+	}
+	tok, err := f.alpha.OrphanToken(ctx, f.run.ID, f.assign.Epoch, f.commit)
+	must(t, err)
+	ref := domain.OrphanRef(run, f.assign.Epoch)
+	if tok.Ref != ref {
+		t.Fatalf("ref = %q", tok.Ref)
+	}
+	remote := f.alpha.RelayURL(tok.Path)
+	other := gittest.Commit(t, f.work, "other.txt", "x\n", "another commit")
+	for name, refspec := range map[string]string{
+		"a branch":       f.commit + ":refs/heads/cf/x/run-1",
+		"another commit": other + ":" + ref,
+	} {
+		if out, err := f.git(f.alpha, tok.Token, "push", remote, refspec); err == nil {
+			t.Errorf("%s was accepted:\n%s", name, out)
+		}
+	}
+	if out, err := f.git(f.alpha, tok.Token, "push", remote, f.commit+":"+ref); err != nil {
+		t.Fatalf("creating the orphan's ref: %v\n%s", err, out)
+	}
+	if out, err := f.git(f.alpha, tok.Token, "push", "--force", remote, other+":"+ref); err == nil {
+		t.Errorf("the orphan's ref moved:\n%s", out)
+	}
+	if out, err := f.git(f.alpha, tok.Token, "push", remote, ":"+ref); err == nil {
+		t.Errorf("the orphan's ref was deleted:\n%s", out)
+	}
+	if out, err := f.git(f.alpha, tok.Token, "fetch", remote, "main"); err == nil {
+		t.Errorf("an orphan's token read:\n%s", out)
+	}
+}
+
+func mustWorker(t *testing.T, f *relayFixture) domain.ID {
+	t.Helper()
+	var id domain.ID
+	must(t, f.db.Read(t.Context(), func(q store.Querier) error {
+		l, err := store.LeaseByID(t.Context(), q, domain.ID(f.assign.LeaseID))
+		id = l.WorkerID
+		return err
+	}))
+	return id
 }
