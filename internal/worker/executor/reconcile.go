@@ -58,10 +58,13 @@ func (e *Executor) reconcileLoop(ctx context.Context) {
 			e.reconciledGen.Store(gen)
 			e.log.InfoContext(ctx, "the Worker is reconciled with the Controller")
 			e.kickDecider()
-			select {
-			case <-ctx.Done():
-				return
-			case <-e.reconcileWake:
+			// A wake for a request this round already answered asks for nothing.
+			for e.Reconciled() {
+				select {
+				case <-ctx.Done():
+					return
+				case <-e.reconcileWake:
+				}
 			}
 			continue
 		case err != nil && !errors.Is(err, errStaleRound):

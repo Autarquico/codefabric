@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -410,5 +411,113 @@ func TestAStopOfARunRebuiltMeanwhileStopsTheRecordThatExists(t *testing.T) {
 	}
 	if r := f.run(k); r.Phase != state.PhaseAccepted || r.Adopted {
 		t.Errorf("the record was touched: %+v", r)
+	}
+}
+
+// The loop of the reconciliation, run as the daemon runs it: until a round
+// completes for the latest request, the decider answers no lease. A failure is
+// retried after a backoff on the clock, and a round overtaken by a newer
+// request counts for nothing.
+func TestTheReconcileLoopHoldsTheLeasesUntilARoundCompletesForTheLatestRequest(t *testing.T) {
+	f := newFixture(t)
+	f.e = f.build()
+	f.e.reconciledGen.Store(0) // as New leaves it: the start asks for a reconciliation
+	f.e.SetLimits(Limits{MaxConcurrentRuns: 4, CPU: 16, MemoryMB: 65536})
+	a := v1.AssignCommand{
+		LeaseID: "lease_1", RunID: runID(101), RunShort: "run-1", TaskID: "task_1", ProjectID: "project_1", Epoch: 1,
+		AcceptBy: t0.Add(time.Minute), SourceCommit: "abc", Branch: "cf/t/run-1", Repo: "/srv/r",
+		Resources: v1.Capacity{CPU: 2, MemoryMB: 4096}, Spec: specJSON("x", "command", "headless"),
+	}
+	f.ctrl.pages = []v1.AssignmentsResponse{{Commands: []v1.WorkerCommand{{Seq: 1, Type: domain.CommandAssign, Assign: &a}}, LastSeq: 1}}
+	var (
+		calls           int
+		acceptedEarlier int
+	)
+	f.ctrl.reconcile = func(req v1.ReconcileRequest) (v1.ReconcileResponse, error) {
+		f.ctrl.mu.Lock()
+		calls++
+		n := calls
+		acceptedEarlier += len(f.ctrl.accepted)
+		f.ctrl.mu.Unlock()
+		switch n {
+		case 1:
+			return v1.ReconcileResponse{}, errors.New("the Controller is unreachable")
+		case 2:
+			f.e.RequestReconcile() // a newer request overtakes this round
+		}
+		return complete(req), nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- f.e.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	waitFor(t, "the assignment to be persisted", func() bool {
+		_, err := state.RunBy(t.Context(), f.db.Reader(), state.Key{RunID: a.RunID, LeaseEpoch: 1})
+		return err == nil
+	})
+	waitFor(t, "the first round to fail", func() bool {
+		f.ctrl.mu.Lock()
+		defer f.ctrl.mu.Unlock()
+		return calls == 1
+	})
+	f.e.kickDecider()
+	if f.e.Reconciled() || len(f.ctrl.accepted) != 0 {
+		t.Fatal("a lease was answered before any reconciliation")
+	}
+	for { // the backoff of the failure passes on the clock
+		f.ctrl.mu.Lock()
+		c := calls
+		f.ctrl.mu.Unlock()
+		if c >= 3 {
+			break
+		}
+		f.clock.Advance(retryMax)
+		time.Sleep(time.Millisecond)
+	}
+	waitFor(t, "the lease to be accepted", func() bool {
+		f.ctrl.mu.Lock()
+		defer f.ctrl.mu.Unlock()
+		return len(f.ctrl.accepted) == 1
+	})
+	if acceptedEarlier != 0 {
+		t.Errorf("a lease was accepted before the round of the latest request: %d", acceptedEarlier)
+	}
+	if calls != 3 {
+		t.Errorf("rounds = %d, want the failed one, the overtaken one and the good one", calls)
+	}
+}
+
+func TestAnAdoptedInteractiveSessionIsWiredAndAnExitThatComesAfterIsSettled(t *testing.T) {
+	f := newFixture(t)
+	k := state.Key{RunID: runID(102), LeaseEpoch: 1}
+	f.rt.setAlive(cfruntime.NameFor(k.RunID, k.LeaseEpoch), true)
+	must(t, os.MkdirAll(f.e.worktree(k), 0o700))
+	w := newWrapperProcess(t, "exit 0")
+	<-w.ended
+	must(t, os.MkdirAll(f.runDir(k), 0o700))
+	f.writeWrapper(k, w.w)
+	f.writeStarted(k, w.w, t0)
+	lease := leaseOf(k, domain.RuntimeActive)
+	lease.Assign.Spec = specJSON("x", "command", "interactive") // no pane.ready: the wiring never finished
+	f.answers(func(v1.ReconcileRequest) v1.ReconcileResponse {
+		return v1.ReconcileResponse{Leases: []v1.ReconcileLease{lease}}
+	}, complete)
+	f.e.spawn = func(state.Key) {}
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	if len(f.rt.wired) != 1 || f.rt.wired[0].Ready == "" || f.rt.wired[0].Capture == "" {
+		t.Fatalf("wired = %+v: the adoption completes the capture before the Run is running", f.rt.wired)
+	}
+	// The harness exits between the adoption and the first step of its supervisor.
+	f.writeExit(k, execwrap.Exit{ExitCode: intp(3), ExitedAt: t0.Add(time.Second), Cause: execwrap.CauseExit})
+	f.rt.setAlive(cfruntime.NameFor(k.RunID, k.LeaseEpoch), false)
+	if !f.e.step(t.Context(), k) {
+		t.Fatal("the exit was not settled")
+	}
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportExited, v1.ReportStopped}) || *reports[0].ExitCode != 3 {
+		t.Errorf("reports = %+v", reports)
 	}
 }

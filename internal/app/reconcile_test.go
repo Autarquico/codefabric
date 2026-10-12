@@ -790,3 +790,109 @@ func TestReconcile_ARoundThatListedAnAbsentLeaseNeverCompletesOnALaterPage(t *te
 		t.Errorf("complete=%v leases=%d reconciled=%v", out.Ack.Complete, len(out.Leases), e.reconciled(alpha))
 	}
 }
+
+// Crash after the commit, with the answer lost: the caller sends the same
+// request again, and nothing is done or said twice.
+func TestAfterTheCommitWithTheAnswerLost_TheSameRequestAgainDoesNothingTwice(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorker("alpha")
+
+	// cancel, repeated with its request_id
+	c := e.runningRun(alpha, "cancel")
+	for range 2 {
+		_, err := e.app.Tasks.Cancel(t.Context(), e.owner, c.run.TaskID, "", v1.ActionRequest{RequestID: "cancel-1"})
+		must(t, err)
+	}
+	// lost, swept again
+	l := e.runningRun(alpha, "lost", withRetry(domain.RetryNone, domain.RetryReschedule, 2))
+	e.clock.Advance(lostTimeout + time.Minute)
+	e.sweepLost()
+	e.sweepLost()
+	// the second round, sent again
+	u := e.runningRun(alpha, "unknown", withRetry(domain.RetryReschedule, domain.RetryAsk, 2))
+	e.beat(alpha)
+	outcome := []v1.ReconcileOutcome{{LeaseID: string(u.lease.ID), LeaseEpoch: u.lease.Epoch, Outcome: v1.OutcomeAssignmentUnknown}}
+	e.round(alpha).mustSend(nil, outcome)
+	e.round(alpha).mustSend(nil, outcome)
+
+	for typ, want := range map[domain.EventType]int{domain.EventRunCancelled: 1, domain.EventRunLost: 1} {
+		if n := len(e.events(typ)); n != want {
+			t.Errorf("%s = %d, want %d", typ, n, want)
+		}
+	}
+	countRun := func(run string, typ domain.EventType) int {
+		n := 0
+		for _, ev := range e.events(typ) {
+			if string(ev.RunID) == run {
+				n++
+			}
+		}
+		return n
+	}
+	if n := countRun(u.run.ID, domain.EventRunFailed); n != 1 {
+		t.Errorf("RunFailed of the unknown assignment = %d", n)
+	}
+	if n := countRun(u.run.ID, domain.EventRunStopped); n != 1 {
+		t.Errorf("RunStopped of the unknown assignment = %d", n)
+	}
+	for _, r := range []*reporter{l, u} {
+		if runs := e.runsOf(r.run.TaskID); len(runs) != 2 {
+			t.Errorf("%s: runs = %d, want the Run and one retry", r.run.ID, len(runs))
+		}
+	}
+	if stops := e.stops(alpha); len(stops) != 2 {
+		t.Errorf("stops = %d, want the cancel's and the lost one's", len(stops))
+	}
+}
+
+func TestLost_ARoundOfTheWorkerBetweenTheChoiceAndTheTransactionDoesNotSaveTheRun(t *testing.T) {
+	var (
+		e     *env
+		alpha pki.Session
+		r     *reporter
+	)
+	e = newEnvWith(t, func(cfg *app.Config, clk *clock.Fake) {
+		startedNow(cfg, clk)
+		cfg.ReconciliationHooks.BeforeLose = func(domain.ID) {
+			// A reconciliation is no heartbeat: the Worker is as silent as before.
+			e.round(alpha).mustSend([]v1.ReconcileRun{held(r, "running", true)}, nil)
+		}
+	})
+	alpha = e.joinWorker("alpha")
+	r = e.runningRun(alpha, "x")
+	e.clock.Advance(lostTimeout + time.Minute)
+	if n := e.sweepLost(); n != 1 {
+		t.Fatalf("lost = %d", n)
+	}
+	// The next round of the Worker finds it lost and stops the process: one stop, one orphan.
+	out := e.round(alpha).mustSend([]v1.ReconcileRun{held(r, "running", true)}, nil)
+	if verdicts(out) != "stop" || len(e.stops(alpha)) != 1 || len(e.events(domain.EventRunOrphaned)) != 1 {
+		t.Errorf("verdicts %s, stops %d, orphans %d", verdicts(out), len(e.stops(alpha)), len(e.events(domain.EventRunOrphaned)))
+	}
+}
+
+func TestReconcile_ContradictoryOutcomesAreDecidedOnTheRunAsItIs(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorker("alpha")
+	r := e.runningRun(alpha, "x")
+	o := func(outcome string) []v1.ReconcileOutcome {
+		return []v1.ReconcileOutcome{{LeaseID: string(r.lease.ID), LeaseEpoch: r.lease.Epoch, Outcome: outcome}}
+	}
+	// adopted, and then the Worker finds nothing of it: the Run fails.
+	e.round(alpha).mustSend(nil, o(v1.OutcomeAdopted))
+	if got := e.storedRun(r.run.ID); got.State != domain.RunRunning {
+		t.Fatalf("adopted moved the Run: %s", got.State)
+	}
+	e.round(alpha).mustSend(nil, o(v1.OutcomeAssignmentUnknown))
+	if got := e.storedRun(r.run.ID); got.State != domain.RunFailed || got.EndReason != domain.EndAssignmentLost {
+		t.Fatalf("after assignment_unknown: %+v", got)
+	}
+	// and then adopted again: the Run stays failed, and what may run is stopped.
+	out := e.round(alpha).mustSend(nil, o(v1.OutcomeAdopted))
+	if verdicts(out) != "stop" || len(e.stops(alpha)) != 1 {
+		t.Errorf("verdicts %s, stops %d", verdicts(out), len(e.stops(alpha)))
+	}
+	if got := e.storedRun(r.run.ID); got.State != domain.RunFailed || got.EndReason != domain.EndAssignmentLost {
+		t.Errorf("a failed Run came back: %+v", got)
+	}
+}
