@@ -52,11 +52,11 @@ func mayHaveRun(run store.Run) bool {
 	return run.Runtime == domain.RuntimeActive
 }
 
-// controllerEnded says whether the Controller ended the Run, and not its
+// ControllerEnded says whether the Controller ended the Run, and not its
 // harness: it was cancelled, lost, or failed for the loss of its assignment or
 // its worktree. What the Worker says later of such a Run is noted, never
 // turned into a transition: its terminal state and the cause stay (B5).
-func controllerEnded(run store.Run) bool {
+func ControllerEnded(run store.Run) bool {
 	switch run.State {
 	case domain.RunCancelled, domain.RunLost:
 		return true
@@ -66,8 +66,8 @@ func controllerEnded(run store.Run) bool {
 	return false
 }
 
-// stopReasonOf is why a Run the Controller ended is stopped.
-func stopReasonOf(run store.Run) domain.StopReason {
+// StopReasonOf is why a Run the Controller ended is stopped.
+func StopReasonOf(run store.Run) domain.StopReason {
 	switch {
 	case run.State == domain.RunCancelled:
 		return domain.StopCancel

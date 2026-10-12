@@ -111,3 +111,18 @@ func (t *Tx) PreserveOrphan(ctx context.Context, worker, run domain.ID, epoch ui
 		OrphanInRelay, commit, at.UnixNano(), string(worker), string(run), epoch, OrphanInWorker)
 	return changedOne(res, err, "preserving an orphan")
 }
+
+// UnstoppedEndedRuns lists the Runs the Controller ended (cancelled, lost, or
+// failed for a lost assignment or worktree) under an accepted lease whose
+// runtime is not known to be stopped: each must have its stop ordered (§27.1
+// point 5).
+func UnstoppedEndedRuns(ctx context.Context, q Querier) ([]Run, error) {
+	return collect(ctx, q, scanRun,
+		`SELECT `+runColumns+` FROM runs
+		 WHERE runtime <> ? AND lease_id IS NOT NULL
+		   AND (state IN (?, ?) OR (state = ? AND end_reason IN (?, ?)))
+		   AND (SELECT l.state FROM leases l WHERE l.id = runs.lease_id) = ?
+		 ORDER BY short_n`,
+		string(domain.RuntimeStopped), string(domain.RunCancelled), string(domain.RunLost),
+		string(domain.RunFailed), string(domain.EndAssignmentLost), string(domain.EndWorktreeLost), string(domain.LeaseAccepted))
+}

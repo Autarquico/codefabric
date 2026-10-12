@@ -67,6 +67,7 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 			}
 			return v1.HeartbeatResponse{
 				State: w.State, MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, Allocatable: resources.Allocatable,
+				ReconcileRequired: w.ReconciledEpoch != req.Epoch || w.ReconciledAt == nil || w.ReconciledAt.Before(s.started),
 			}, nil
 		})
 }

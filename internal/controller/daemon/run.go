@@ -36,6 +36,9 @@ type Options struct {
 	// WorkerOfflineTTL overrides controller.json's worker_offline_ttl; zero
 	// takes that, and failing that the default of Appendix A.
 	WorkerOfflineTTL time.Duration
+	// RunLostTimeout overrides controller.json's run_lost_timeout; zero takes
+	// that, and failing that the default of Appendix A.
+	RunLostTimeout time.Duration
 	// SchedulerTick is how often the scheduler looks at the queue when no
 	// event has woken it; zero means scheduler.DefaultTick.
 	SchedulerTick time.Duration
@@ -124,8 +127,16 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	build := buildinfo.Get()
 	offlineTTL := cmp.Or(o.WorkerOfflineTTL, time.Duration(cfg.WorkerOfflineTTL))
 	startedAt := o.Clock.Now()
-	services := app.New(db, o.Clock, domain.NewIDGenerator(o.Clock.Now, rand.Reader),
-		workers.Config{ControllerVersion: build.Version, OfflineTTL: offlineTTL, StartedAt: startedAt}, runOpts...)
+	services := app.New(db, o.Clock, domain.NewIDGenerator(o.Clock.Now, rand.Reader), app.Config{
+		Workers:        workers.Config{ControllerVersion: build.Version, OfflineTTL: offlineTTL, StartedAt: startedAt},
+		RunLostTimeout: cmp.Or(o.RunLostTimeout, time.Duration(cfg.RunLostTimeout)),
+	}, runOpts...)
+	// §27.1: the stops that are owed are resumed before anything is served.
+	if err := services.Reconciliation.Startup(ctx, o.Logger); err != nil {
+		_ = ln.Close()
+		_ = db.Close()
+		return nil, err
+	}
 	srv, err := api.New(api.Config{
 		Authority: newAuthority(db, ca, o.Clock, host, port), CA: ca, ServerCert: serverCert,
 		Store: db, Work: services, Relay: gitRelay,
@@ -148,7 +159,11 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 			}, srv.SetServerCert, o.Logger)
 		})
 		background.Go(func() { services.Workers.RunSweeper(runCtx, o.Logger) })
-		background.Go(func() { services.Scheduler.Run(runCtx, o.SchedulerTick, o.Logger) })
+		background.Go(func() { services.Reconciliation.RunGate(runCtx, o.Logger) })
+		background.Go(func() { services.Reconciliation.RunLostSweeper(runCtx, o.Logger) })
+		background.Go(func() {
+			services.Scheduler.RunAfter(runCtx, services.Reconciliation.Ready(), o.SchedulerTick, o.Logger)
+		})
 		serveErr := srv.Serve(ctx, ln)
 		stop()
 		background.Wait()

@@ -168,7 +168,7 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 
 	var apply func() error
 	switch {
-	case controllerEnded(run) && (e.Kind == v1.ReportStarted || e.Kind == v1.ReportExited || e.Kind == v1.ReportPrepareFailed):
+	case ControllerEnded(run) && (e.Kind == v1.ReportStarted || e.Kind == v1.ReportExited || e.Kind == v1.ReportPrepareFailed):
 		if apply, err = s.lateEntry(ctx, tx, act, &ev, run, task, l, e); err != nil {
 			return outcome(""), err
 		}

@@ -9,7 +9,6 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/app/runs"
-	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -120,7 +119,7 @@ func TestRelayAuth_EveryLinkOfTheChainIsCheckedOnEveryRequest(t *testing.T) {
 	}
 
 	// A token from before a restart of the Controller: another key.
-	restarted := app.New(e.db, e.clock, domain.NewIDGenerator(e.clock.Now, rand.Reader), workers.Config{}, runs.WithRelay(e.relay))
+	restarted := app.New(e.db, e.clock, domain.NewIDGenerator(e.clock.Now, rand.Reader), app.Config{}, runs.WithRelay(e.relay))
 	_, err = restarted.Runs.AuthorizeRelay(t.Context(), r.w, project, false, tok)
 	wantCode(t, err, domain.CodePolicyDenied)
 

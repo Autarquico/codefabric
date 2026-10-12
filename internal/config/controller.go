@@ -22,6 +22,10 @@ type Controller struct {
 	// WorkerOfflineTTL is how long a Worker may stay silent before it is
 	// offline, e.g. "45s". Unset, it is the default of Appendix A.
 	WorkerOfflineTTL Duration `json:"worker_offline_ttl,omitempty"`
+	// RunLostTimeout is how long a Worker may stay silent, with the Controller
+	// running, before its Runs are lost (§27.2), e.g. "30m". Unset, it is the
+	// default of Appendix A.
+	RunLostTimeout Duration `json:"run_lost_timeout,omitempty"`
 	// RelayMaxPushBytes bounds one push to the git relay. Unset, it is 2 GiB.
 	RelayMaxPushBytes int64 `json:"relay_max_push_bytes,omitempty"`
 }

@@ -29,6 +29,9 @@ type Worker struct {
 	MissedAt          *time.Time  // when it last rejected a lease of the Run or let one expire
 	MissCode          domain.Code // why: the code it rejected with, or CF_NO_ELIGIBLE_WORKER for an expiry
 	KnowsProject      bool
+	// Unreconciled: the Worker has live work it has not reconciled since the
+	// Controller started (§27.1); it gets nothing more until it has.
+	Unreconciled bool
 }
 
 // Verdict is what the scheduler found of one Worker: the filters it fails, in

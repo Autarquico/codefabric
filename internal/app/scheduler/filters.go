@@ -24,6 +24,7 @@ const (
 	FilterConcurrency  = "concurrency"
 	FilterCapacity     = "capacity"
 	FilterRecentMiss   = "recent_miss"
+	FilterReconcile    = "reconcile"
 )
 
 // Failure is a filter that a Worker does not pass.
@@ -50,6 +51,19 @@ var filters = []filter{
 	{FilterConcurrency, checkConcurrency},
 	{FilterCapacity, checkCapacity},
 	{FilterRecentMiss, checkRecentMiss},
+	{FilterReconcile, checkReconcile},
+}
+
+// checkReconcile keeps a Worker whose live work is not reconciled since the
+// Controller started from getting more: it may not know what it holds (§27.1, §27.3).
+func checkReconcile(_ domain.Placement, w Worker, _ time.Time) *Failure {
+	if !w.Unreconciled {
+		return nil
+	}
+	return &Failure{
+		Code:    domain.CodeNoEligibleWorker,
+		Message: "the Worker has not reconciled its live Runs since the Controller started",
+	}
 }
 
 func failures(req domain.Placement, w Worker, now time.Time) []Failure {

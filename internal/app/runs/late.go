@@ -47,7 +47,7 @@ func (s *Service) lateEntry(ctx context.Context, tx *store.Tx, act mutation.Act,
 			if err := MarkExecutedIn(ctx, tx, &run); err != nil {
 				return err
 			}
-			if _, err := OrderStopIn(ctx, tx, act, run, task, l, stopReasonOf(run)); err != nil {
+			if _, err := OrderStopIn(ctx, tx, act, run, task, l, StopReasonOf(run)); err != nil {
 				return err
 			}
 			if run.State == domain.RunLost {
