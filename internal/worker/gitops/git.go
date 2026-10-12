@@ -234,8 +234,10 @@ func (g *Git) sleep(ctx context.Context, d time.Duration) {
 // the user. "" if there is none.
 func (g *Git) userExcludesFile(ctx context.Context) string {
 	home := os.Getenv("HOME")
-	if res, err := g.run(ctx, cmd{dir: os.TempDir(), env: userEnv(), timeout: quickTimeout,
-		args: []string{"config", "--global", "--get", "core.excludesFile"}}); err == nil && res.exit == 0 {
+	if res, err := g.run(ctx, cmd{
+		dir: os.TempDir(), env: userEnv(), timeout: quickTimeout,
+		args: []string{"config", "--global", "--get", "core.excludesFile"},
+	}); err == nil && res.exit == 0 {
 		if path := expandHome(strings.TrimSpace(res.stdout), home); path != "" && fileExists(path) {
 			return path
 		}
@@ -268,6 +270,6 @@ func expandHome(path, home string) string {
 }
 
 func fileExists(path string) bool {
-	info, err := os.Stat(path)
+	info, err := os.Stat(path) //nolint:gosec // the path of the ignore file of the user, from their own git configuration
 	return err == nil && info.Mode().IsRegular()
 }

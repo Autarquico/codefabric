@@ -53,8 +53,10 @@ func (g *Git) Head(ctx context.Context, worktree string) (string, error) {
 		}
 		return "", fmt.Errorf("gitops: looking at the worktree: %w", err)
 	}
-	res, err := g.run(ctx, cmd{dir: worktree, env: isolatedEnv(worktree), timeout: quickTimeout,
-		args: []string{"rev-parse", "--verify", "--quiet", "HEAD^{commit}"}})
+	res, err := g.run(ctx, cmd{
+		dir: worktree, env: isolatedEnv(worktree), timeout: quickTimeout,
+		args: []string{"rev-parse", "--verify", "--quiet", "HEAD^{commit}"},
+	})
 	if err != nil {
 		return "", err
 	}
@@ -114,8 +116,10 @@ func (g *Git) Seal(ctx context.Context, worktree string, in Intent) (Sealed, err
 	ref := PrivateRef(in.Run, in.LeaseEpoch)
 	// A private ref from an earlier life of the daemon is the result only if it is a
 	// sealing of this intent: the parent itself, or a commit on top of it.
-	if res, err := g.run(ctx, cmd{dir: worktree, env: env, timeout: quickTimeout,
-		args: []string{"rev-parse", "--verify", "--quiet", ref + "^{commit}"}}); err == nil && res.exit == 0 {
+	if res, err := g.run(ctx, cmd{
+		dir: worktree, env: env, timeout: quickTimeout,
+		args: []string{"rev-parse", "--verify", "--quiet", ref + "^{commit}"},
+	}); err == nil && res.exit == 0 {
 		existing := strings.TrimSpace(res.stdout)
 		if existing == in.ParentOID || g.firstParent(ctx, worktree, existing) == in.ParentOID {
 			out.Commit = existing

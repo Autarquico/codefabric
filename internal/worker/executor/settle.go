@@ -3,12 +3,14 @@ package executor
 import (
 	"cmp"
 	"context"
+	"errors"
 	"log/slog"
 	"syscall"
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -231,9 +233,15 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 	var parent string
 	if sealing {
 		var err error
-		if parent, err = e.o.Git.Head(ctx, e.worktree(r.Key)); err != nil {
-			e.log.WarnContext(ctx, "the worktree of a Run has no HEAD: it cannot be sealed", "run", r.RunID, "err", err)
+		switch parent, err = e.o.Git.Head(ctx, e.worktree(r.Key)); {
+		case errors.Is(err, gitops.ErrNotRepository):
+			// Nothing to seal: the sealing fails, reports it, and `cf run publish` may try again.
+			e.log.WarnContext(ctx, "the worktree of a Run is not a repository: it cannot be sealed", "run", r.RunID, "err", err)
 			parent = ""
+		case err != nil:
+			// We cannot tell yet: the phase stays open and the next tick asks again.
+			e.log.ErrorContext(ctx, "reading HEAD of the worktree of a Run failed; finalizing it later", "run", r.RunID, "err", err)
+			return false
 		}
 	}
 	now := e.clock.Now()

@@ -111,7 +111,7 @@ func TestScenario_GitRelayPublication_Sellado_Executor(t *testing.T) {
 	if !f.turn() {
 		t.Fatal("the publisher did nothing")
 	}
-	if g.sealCount() != 1 || g.seals[0].ParentOID != headOID || !g.seals[0].At.Equal(exitedAt) || g.seals[0].Branch == "" {
+	if g.sealCount() != 1 || g.seals[0].ParentOID != headOID || !g.seals[0].At.Equal(exitedAt) {
 		t.Fatalf("seals = %+v", g.seals)
 	}
 	p = f.publication(k)
@@ -233,7 +233,7 @@ func TestSeal_WhenTheStateCannotBeWrittenEitherNothingIsReportedAndItIsTriedAgai
 
 func TestSeal_ARunWithoutARepositoryFailsToSeal(t *testing.T) {
 	f, g := newGitFixture(t)
-	g.headErr = errors.New("not a git repository")
+	g.headErr = gitops.ErrNotRepository
 	g.seal = func(in gitops.Intent) (gitops.Sealed, error) {
 		if in.ParentOID == "" {
 			return gitops.Sealed{}, errors.New("no repository to seal")
@@ -522,7 +522,7 @@ func TestPublish_ARetryPushesTheSameCommitWithoutSealingAgain(t *testing.T) {
 }
 
 func TestPublish_ATryThatWasSlowCannotOverwriteTheNewOne(t *testing.T) {
-	f, g := newGitFixture(t)
+	f, _ := newGitFixture(t)
 	k := f.sealedRun()
 	old := f.publication(k) // the old try read this, and is about to push
 	f.turn()
@@ -530,17 +530,14 @@ func TestPublish_ATryThatWasSlowCannotOverwriteTheNewOne(t *testing.T) {
 	f.publishOrder(k) // generation 2, sealed
 	reportsBefore := len(f.reports(k))
 
-	// The old try finishes now.
-	if !f.e.push(t.Context(), old) {
-		t.Log("the old try reported no progress")
-	}
+	// The old try finishes now: its push may have reached the relay, but it records nothing.
+	f.e.push(t.Context(), old)
 	if p := f.publication(k); p.State != state.PubSealed || p.Generation != 2 {
 		t.Errorf("the old try overwrote the new one: %+v", p)
 	}
 	if len(f.reports(k)) != reportsBefore {
 		t.Error("the old try reported")
 	}
-	_ = g
 }
 
 func TestPublish_AnOrderForARunThisWorkerNeverHeardOfIsAnswered(t *testing.T) {
@@ -609,6 +606,62 @@ func TestPush_AcceptedButNotRecordedIsPushedAgainWithTheSameCommit(t *testing.T)
 		t.Errorf("pushes = %+v: the same commit, as a plain push", g.pushes)
 	}
 	if p := f.publication(k); p.State != state.PubPushed {
+		t.Errorf("publication = %+v", p)
+	}
+}
+
+func TestFinalize_AHeadThatCannotBeReadKeepsThePhaseOpen(t *testing.T) {
+	f, g := newGitFixture(t)
+	k := f.started("echo hi")
+	w := newWrapperProcess(t, "exit 0")
+	<-w.ended
+	f.writeWrapper(k, w.w)
+	f.writeStarted(k, w.w, t0.Add(time.Second))
+	f.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: exitedAt, Cause: execwrap.CauseExit})
+	g.mu.Lock()
+	g.headErr = errors.New("git is on fire")
+	g.mu.Unlock()
+	if f.e.step(t.Context(), k) {
+		t.Fatal("the Run was closed without knowing its HEAD")
+	}
+	if r := f.run(k); !r.Phase.Live() {
+		t.Fatalf("phase = %s", r.Phase)
+	}
+	if _, err := state.PublicationOf(t.Context(), f.db.Reader(), k); !errors.Is(err, state.ErrNotFound) {
+		t.Errorf("an intent without a parent was stored: %v", err)
+	}
+	g.mu.Lock()
+	g.headErr = nil
+	g.mu.Unlock()
+	if !f.e.step(t.Context(), k) {
+		t.Fatal("the Run was not settled once HEAD could be read")
+	}
+	if p := f.publication(k); p.ParentOID != headOID {
+		t.Errorf("parent = %q", p.ParentOID)
+	}
+}
+
+func TestPublish_ANewTryRereadsTheHeadOfAWorktreeThatWasNotARepository(t *testing.T) {
+	f, g := newGitFixture(t)
+	g.headErr = gitops.ErrNotRepository
+	g.seal = func(in gitops.Intent) (gitops.Sealed, error) {
+		if in.ParentOID == "" {
+			return gitops.Sealed{}, errors.New("no repository to seal")
+		}
+		return gitops.Sealed{Commit: resultOID}, nil
+	}
+	k := f.exitedRun()
+	f.turn()
+	if p := f.publication(k); p.State != state.PubFailed || p.ParentOID != "" {
+		t.Fatalf("publication = %+v", p)
+	}
+	g.mu.Lock()
+	g.headErr = nil
+	g.mu.Unlock()
+	f.publishOrder(k)
+	f.turn()
+	p := f.publication(k)
+	if p.State != state.PubSealed || p.ParentOID != headOID {
 		t.Errorf("publication = %+v", p)
 	}
 }

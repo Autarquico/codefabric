@@ -10,7 +10,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -65,7 +64,7 @@ func TestScenario_GitRelayPublication_ControllerCaido(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	startDaemon(t, box)
+	worker := startDaemon(t, box)
 	eventually(t, "the Worker to offer the harness", func() bool {
 		w, err := admin.Worker(t.Context(), "alpha")
 		return err == nil && w.State == domain.WorkerOnline && len(w.Capabilities) == 1
@@ -100,7 +99,10 @@ exit 0`
 		state, _, found := publicationOf(t, box, runID)
 		return found && state == "sealed"
 	})
-	time.Sleep(3 * time.Second) // several tries with nobody to answer
+	// The publisher asked for a token and found nobody: that is logged once, and spends no attempt.
+	eventually(t, "the Worker to try the push with the Controller down", func() bool {
+		return strings.Contains(worker.out.String(), "asking for a token failed")
+	})
 	if state, attempts, _ := publicationOf(t, box, runID); state != "sealed" || attempts != 0 {
 		t.Fatalf("publication = %s after %d attempts: an outage spends none", state, attempts)
 	}

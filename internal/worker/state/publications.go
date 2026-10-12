@@ -124,6 +124,17 @@ func DuePublications(ctx context.Context, q Querier, now time.Time, limit int) (
 		 ORDER BY next_attempt_at, created_at, run_id LIMIT ?`, now.UnixNano(), limit)
 }
 
+// SetParent completes an intent that had no parent because the worktree was not
+// a repository when the harness exited, for a new try that finds it is one now.
+// Compare-and-set on the generation and the state sealing.
+func SetParent(ctx context.Context, tx *Tx, p Publication, parent string, at time.Time) error {
+	res, err := tx.exec(ctx,
+		`UPDATE publications SET parent_oid = ?, updated_at = ?
+		 WHERE run_id = ? AND lease_epoch = ? AND generation = ? AND state = ? AND parent_oid = ''`,
+		parent, at.UnixNano(), p.RunID, p.LeaseEpoch, p.Generation, string(PubSealing))
+	return changedOne(res, err, "completing a sealing intent")
+}
+
 // MarkSealed records the commit of the sealing. It is a compare-and-set on the
 // generation of the try and on the state sealing.
 func MarkSealed(ctx context.Context, tx *Tx, p Publication, commit string, excluded []string, truncated bool, at time.Time) error {

@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -46,8 +47,6 @@ func (e *Executor) persistPublish(ctx context.Context, tx *state.Tx, c v1.Worker
 			return err
 		}
 	}
-	e.kickPublisher()
-	e.o.Journal.Notify()
 	return state.SetCursor(ctx, tx, c.Seq)
 }
 
@@ -118,8 +117,18 @@ func (e *Executor) seal(ctx context.Context, p state.Publication) bool {
 		e.later(p)
 		return false
 	}
+	if p.ParentOID == "" && p.Generation > 1 {
+		// A new try after a worktree that was no repository: it may be one now.
+		if head, err := e.o.Git.Head(ctx, e.worktree(p.Key)); err == nil {
+			txErr := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.SetParent(ctx, tx, p, head, e.clock.Now()) })
+			if txErr != nil {
+				return e.settled(ctx, p, txErr, "completing a sealing intent")
+			}
+			p.ParentOID = head
+		}
+	}
 	sealed, err := e.o.Git.Seal(ctx, e.worktree(p.Key), gitops.Intent{
-		Project: local.ProjectID, Run: p.RunID, LeaseEpoch: p.LeaseEpoch, Branch: local.Branch, ParentOID: p.ParentOID, At: p.SealedAt,
+		Project: local.ProjectID, Run: p.RunID, LeaseEpoch: p.LeaseEpoch, ParentOID: p.ParentOID, At: p.SealedAt,
 	})
 	now := e.clock.Now()
 	if err != nil {
@@ -211,7 +220,11 @@ func (e *Executor) tokenFailed(ctx context.Context, p state.Publication, err err
 			return e.pushFailed(ctx, p, true, "the Controller does not accept the credentials of this Worker")
 		}
 	}
-	e.log.DebugContext(ctx, "asking for a token failed; it will be tried again", "run", p.RunID, "err", err)
+	level := slog.LevelDebug
+	if e.firstDelay(p.Key) {
+		level = slog.LevelWarn // once per publication; the next tries are not news
+	}
+	e.log.Log(ctx, level, "asking for a token failed; it will be tried again", "run", p.RunID, "err", err)
 	e.later(p)
 	return false
 }
@@ -285,6 +298,14 @@ func (e *Executor) nextBackoff(k state.Key) time.Duration {
 	}
 	m.delay = min(max(m.delay*2, publishBackoffInitial), publishBackoffMax)
 	return m.delay
+}
+
+// firstDelay says whether the publication has not waited yet.
+func (e *Executor) firstDelay(k state.Key) bool {
+	e.backoffMu.Lock()
+	defer e.backoffMu.Unlock()
+	m := e.pubMemos[k]
+	return m == nil || m.delay == 0
 }
 
 func (e *Executor) forgetBackoff(k state.Key) {

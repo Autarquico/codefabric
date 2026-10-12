@@ -200,17 +200,11 @@ func TestScenario_WorkerExecutorTmux_StopAntesDeArrancar_Controller(t *testing.T
 
 func TestReleasable_StartedRunIsReleasedOnlyOnceSealed(t *testing.T) {
 	e := newEnv(t)
-	for name, tc := range map[string]struct {
-		rest []func(r *reporter) v1.RunReportEntry
-	}{
-		"sealed": {[]func(r *reporter) v1.RunReportEntry{
-			func(r *reporter) v1.RunReportEntry { return r.entry(v1.ReportSealed, sealedTo(sha1)) },
-		}},
-		"publication failed": {[]func(r *reporter) v1.RunReportEntry{
-			func(r *reporter) v1.RunReportEntry {
-				return r.entry(v1.ReportPublicationFailed, func(en *v1.RunReportEntry) { en.Phase = v1.PhaseSeal })
-			},
-		}},
+	for name, closing := range map[string]func(r *reporter) v1.RunReportEntry{
+		"sealed": func(r *reporter) v1.RunReportEntry { return r.entry(v1.ReportSealed, sealedTo(sha1)) },
+		"publication failed": func(r *reporter) v1.RunReportEntry {
+			return r.entry(v1.ReportPublicationFailed, func(en *v1.RunReportEntry) { en.Phase = v1.PhaseSeal })
+		},
 	} {
 		r := e.acceptedRun(e.joinWorker(strings.ReplaceAll(name, " ", "-")), "x")
 		r.mustSend(r.entry(v1.ReportStarted), r.entry(v1.ReportExited, exitCode(0)))
@@ -221,9 +215,7 @@ func TestReleasable_StartedRunIsReleasedOnlyOnceSealed(t *testing.T) {
 		if res := e.reservation(r.lease.ID); res.ReleasedAt != nil {
 			t.Fatalf("%s: a stopped Run that is not sealed released its reservation", name)
 		}
-		for _, entry := range tc.rest {
-			r.mustSend(entry(r))
-		}
+		r.mustSend(closing(r))
 		if res := e.reservation(r.lease.ID); res.ReleasedAt == nil {
 			t.Errorf("%s: the reservation of a sealed (or given-up) Run was kept", name)
 		}

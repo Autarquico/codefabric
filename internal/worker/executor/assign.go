@@ -86,12 +86,20 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 		return false, nil
 	}
 	now := e.clock.Now()
+	published := false
+	defer func() {
+		if published && err == nil {
+			e.kickPublisher() // after the transaction that stores the order has committed
+			e.o.Journal.Notify()
+		}
+	}()
 	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 		for _, c := range cmds {
 			if c.Type == domain.CommandPublish && c.Publish != nil {
 				if err := e.persistPublish(ctx, tx, c, now); err != nil {
 					return err
 				}
+				published = true
 				continue
 			}
 			if c.Type != domain.CommandAssign || c.Assign == nil {
