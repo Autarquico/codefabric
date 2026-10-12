@@ -315,7 +315,17 @@ func (e *Executor) report(ctx context.Context, tx *state.Tx, k state.Key, kind v
 }
 
 // reportSeq is report, and says the seq the report was given in the journal.
+//
+// An orphan's reports are never taken by the Controller, but orphan_preserved:
+// nothing else of it is written, so no row is left that can never be sent.
 func (e *Executor) reportSeq(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) (uint64, error) {
+	if kind != v1.ReportOrphanPreserved {
+		if r, err := state.RunBy(ctx, tx, k); err == nil && r.OrphanedAt != nil {
+			return 0, nil
+		} else if err != nil && !errors.Is(err, state.ErrNotFound) {
+			return 0, err
+		}
+	}
 	entry := v1.RunReportEntry{Kind: kind, At: at}
 	if fill != nil {
 		fill(&entry)

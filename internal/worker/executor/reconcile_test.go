@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -304,5 +305,58 @@ func TestAnUnrecordedRunThatEndedWithoutASessionIsAdoptedFromItsMarkers(t *testi
 	reports := f.reports(ended)
 	if kinds := kinds(reports); !slices.Equal(kinds, []v1.RunReportKind{v1.ReportExited, v1.ReportStopped}) || *reports[0].ExitCode != 0 {
 		t.Errorf("reports = %+v: the exit is reported, and no second started", reports)
+	}
+}
+
+func TestAStopVerdictOfALostRunUnderItsLiveEpochIsNoOrphan(t *testing.T) {
+	f, _ := newGitFixture(t)
+	k := f.started("echo hi")
+	f.answers(func(req v1.ReconcileRequest) v1.ReconcileResponse {
+		out := complete(req)
+		for _, r := range req.Runs {
+			out.Verdicts = append(out.Verdicts, v1.ReconcileVerdict{RunID: r.RunID, LeaseEpoch: r.LeaseEpoch, Verdict: v1.ReconcileStop})
+		}
+		return out
+	})
+	f.e.spawn = func(state.Key) {}
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	if r := f.run(k); r.OrphanedAt != nil || r.Phase != state.PhaseStopping {
+		t.Fatalf("run = %+v", r)
+	}
+	waitFor(t, "the Run to be settled", func() bool { return f.e.step(t.Context(), k) })
+	for f.turn() {
+	}
+	for _, tok := range f.ctrl.tokens {
+		if strings.HasPrefix(tok, "orphan:") {
+			t.Errorf("an orphan token was asked for a Run under its live epoch: %v", f.ctrl.tokens)
+		}
+	}
+}
+
+func TestAnOrphanTokenForAnotherRefIsNotUsed(t *testing.T) {
+	f, g := newGitFixture(t)
+	k := f.exitedRun()
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error { return state.MarkOrphaned(t.Context(), tx, k, t0) }))
+	f.ctrl.orphanRef = "refs/cf/orphans/run_01J00000000000000000000000-e9"
+	for f.turn() {
+	}
+	if g.pushCount() != 0 {
+		t.Errorf("pushed with a token for another ref: %+v", g.pushes)
+	}
+}
+
+func TestAnOrphanWritesNoReportButOrphanPreserved(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+		if err := state.MarkOrphaned(t.Context(), tx, k, t0); err != nil {
+			return err
+		}
+		return state.DeleteJournalOf(t.Context(), tx, k)
+	}))
+	must(t, f.e.Stop(t.Context(), k.RunID, k.LeaseEpoch, "orphan", SourceController))
+	waitFor(t, "the orphan to be settled", func() bool { return f.e.step(t.Context(), k) })
+	if n, _ := state.JournalCounts(t.Context(), f.db.Reader()); n[k] != 0 {
+		t.Errorf("an orphan left %d rows in the journal", n[k])
 	}
 }

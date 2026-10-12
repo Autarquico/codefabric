@@ -223,8 +223,8 @@ func (s *Service) AuthorizeRelay(ctx context.Context, by pki.Session, project st
 }
 
 // orphanChain is what an orphan's token stands on, resolved from the database:
-// the Worker of the caller, its lease of the Run under that epoch (in any
-// state), the orphan the Controller recorded of it and not yet preserved, and
+// the Worker of the caller, its lease of the Run under that epoch, which is not
+// the live one of the Run (in any state), the orphan the Controller recorded of it and not yet preserved, and
 // the Task, not archived.
 func orphanChain(ctx context.Context, q store.Querier, by pki.Session, now time.Time, run domain.ID, epoch uint64) (store.Worker, store.Task, error) {
 	if _, err := pki.RequireCaller(ctx, q, by, now); err != nil {
@@ -245,6 +245,15 @@ func orphanChain(ctx context.Context, q store.Querier, by pki.Session, now time.
 	if err != nil {
 		return store.Worker{}, store.Task{}, err
 	}
+	r, err := store.RunByID(ctx, q, run)
+	if err != nil {
+		return store.Worker{}, store.Task{}, err
+	}
+	// The live lease of a Run is never an orphan's, a lost Run's included: it
+	// publishes its branch by the token of its lease.
+	if l.Epoch >= r.LeaseEpoch && l.State == domain.LeaseAccepted {
+		return store.Worker{}, store.Task{}, notFound
+	}
 	o, err := store.OrphanOf(ctx, q, w.ID, run, epoch)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.Worker{}, store.Task{}, notFound
@@ -254,10 +263,6 @@ func orphanChain(ctx context.Context, q store.Querier, by pki.Session, now time.
 	}
 	if o.Preserved != store.OrphanInWorker {
 		return store.Worker{}, store.Task{}, domain.NewError(domain.CodeInvalidTransition, "the orphan is preserved already", nil)
-	}
-	r, err := store.RunByID(ctx, q, run)
-	if err != nil {
-		return store.Worker{}, store.Task{}, err
 	}
 	t, err := store.TaskByID(ctx, q, r.TaskID)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
+	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -90,4 +91,36 @@ func TestOrphanPreserved_TheRelayMustHoldTheCommit(t *testing.T) {
 	if n := len(e.events(domain.EventRunOrphanPreserved)); n != 0 {
 		t.Errorf("RunOrphanPreserved = %d", n)
 	}
+}
+
+func TestOrphanToken_ALostRunUnderItsLiveEpochPublishesByItsLease(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorker("alpha")
+	r := e.runningRun(alpha, "x")
+	e.clock.Advance(lostTimeout + time.Minute)
+	e.sweepLost()
+	e.beat(alpha)
+	e.round(alpha).mustSend([]v1.ReconcileRun{held(r, "running", true)}, nil) // the orphan of a lost Run, under its live epoch
+	if n := len(e.events(domain.EventRunOrphaned)); n != 1 {
+		t.Fatalf("RunOrphaned = %d", n)
+	}
+	_, err := e.app.Runs.MintOrphanToken(t.Context(), alpha, r.run.ID, v1.OrphanTokenRequest{LeaseEpoch: r.lease.Epoch, ResultCommit: sha1})
+	wantCode(t, err, domain.CodeNotFound)
+	r.mustSend(r.entry(v1.ReportExited, cause(v1.ExitCauseStop)), r.entry(v1.ReportStopped), r.entry(v1.ReportSealed, sealedTo(sha1)))
+	if tok := r.token(); !tok.Write || tok.Ref != "" {
+		t.Errorf("the lease's token = %+v: a lost Run publishes its branch", tok)
+	}
+}
+
+func TestOrphanToken_ARevokedIdentityIsUnauthenticatedNotDenied(t *testing.T) {
+	e := newEnv(t)
+	alpha := e.joinWorker("alpha")
+	old, _ := e.orphanUnderOldEpoch(alpha)
+	tok, err := e.app.Runs.MintOrphanToken(t.Context(), alpha, old.run.ID, v1.OrphanTokenRequest{LeaseEpoch: old.lease.Epoch, ResultCommit: sha1})
+	must(t, err)
+	must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		return tx.Revoke(t.Context(), alpha.Principal.ID, domain.KindWorker, e.clock.Now())
+	}))
+	_, err = e.authorize(alpha, old.projectID(), true, tok.Token)
+	wantCode(t, err, domain.CodeUnauthenticated)
 }

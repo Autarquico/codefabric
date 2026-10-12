@@ -224,7 +224,12 @@ func (e *Executor) preserveOrphan(ctx context.Context, p state.Publication, loca
 		}
 		return e.tokenFailed(ctx, p, err)
 	}
-	pushErr := e.o.Git.PushRef(ctx, local.ProjectID, p.ResultCommit, tok.Ref, gitops.PushAuth{
+	ref := domain.OrphanRef(domain.ID(p.RunID), p.LeaseEpoch)
+	if tok.Ref != ref {
+		// The token is for another ref than the one of this orphan: it is not used.
+		return e.tokenFailed(ctx, p, domain.NewError(domain.CodePolicyDenied, "the token is for another ref than the orphan's", nil))
+	}
+	pushErr := e.o.Git.PushRef(ctx, local.ProjectID, p.ResultCommit, ref, gitops.PushAuth{
 		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
 		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
 	})
@@ -241,7 +246,7 @@ func (e *Executor) preserveOrphan(ctx context.Context, p state.Publication, loca
 	}
 	e.forgetBackoff(p.Key)
 	now := e.clock.Now()
-	e.log.InfoContext(ctx, "the result of an orphan is kept in the relay", "run", p.RunID, "epoch", p.LeaseEpoch, "ref", tok.Ref)
+	e.log.InfoContext(ctx, "the result of an orphan is kept in the relay", "run", p.RunID, "epoch", p.LeaseEpoch, "ref", ref)
 	txErr := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 		if err := e.report(ctx, tx, p.Key, v1.ReportOrphanPreserved, now, func(en *v1.RunReportEntry) { en.ResultCommit = p.ResultCommit }); err != nil {
 			return err

@@ -49,6 +49,8 @@ type fakeController struct {
 	// reconcile, if set, answers Reconcile; by default every run goes on and the round is complete.
 	reconcile  func(req v1.ReconcileRequest) (v1.ReconcileResponse, error)
 	reconciles []v1.ReconcileRequest
+	// orphanRef, if set, is the ref OrphanToken answers with.
+	orphanRef string
 }
 
 func (c *fakeController) Reconcile(_ context.Context, req v1.ReconcileRequest) (v1.ReconcileResponse, error) {
@@ -126,7 +128,11 @@ func (c *fakeController) OrphanToken(_ context.Context, run string, epoch uint64
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.tokens = append(c.tokens, fmt.Sprintf("orphan:%s-e%d:%s", run, epoch, commit))
-	return v1.RelayTokenResponse{Token: "orphan-" + run, Path: "/v1/relay/project_1.git", Write: true, Ref: domain.OrphanRef(domain.ID(run), epoch)}, nil
+	ref := domain.OrphanRef(domain.ID(run), epoch)
+	if c.orphanRef != "" {
+		ref = c.orphanRef
+	}
+	return v1.RelayTokenResponse{Token: "orphan-" + run, Path: "/v1/relay/project_1.git", Write: true, Ref: ref}, nil
 }
 
 func (c *fakeController) RelayURL(path string) string { return "https://controller.test" + path }
