@@ -201,21 +201,25 @@ exit 7`
 		t.Errorf("output.log = %q", log)
 	}
 
+	// The publication reports follow the exit: wait for the Controller to have
+	// them all before the daemon goes.
+	db, err := state.Open(t.Context(), box.WorkerStateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	eventually(t, "the Controller to confirm every report", func() bool {
+		var n int
+		err := db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM journal`).Scan(&n)
+		return err == nil && n == 0
+	})
+
 	second.interrupt()
 	if n := countEvents(t, host, runID, domain.EventRunFailed); n != 1 {
 		t.Errorf("%d RunFailed events: the exit must be reported once", n)
 	}
 	if n := countEvents(t, host, runID, domain.EventRunStarted); n != 1 {
 		t.Errorf("%d RunStarted events", n)
-	}
-	db, err := state.Open(t.Context(), box.WorkerStateFile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-	var n int
-	if err := db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM journal`).Scan(&n); err != nil || n != 0 {
-		t.Errorf("the journal has %d rows (%v): the Controller confirmed everything", n, err)
 	}
 }
 

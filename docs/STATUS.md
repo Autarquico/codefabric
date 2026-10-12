@@ -25,7 +25,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_(nada)_
+- #12 Git relay y publicación del resultado
 <!-- /pm-sync:in-progress -->
 
 ---
