@@ -57,3 +57,15 @@ func (t *Tx) setPublication(ctx context.Context, run Run, from, to domain.Public
 		string(to), string(run.ID), string(from), run.ResultCommit, string(run.LeaseID), run.LeaseEpoch)
 	return changedOne(res, err, what)
 }
+
+// MarkExecuted is a Run whose harness may have run being given a result to
+// seal: its publication goes from none to pending (§22.6).
+func (t *Tx) MarkExecuted(ctx context.Context, run Run) error {
+	return t.setPublication(ctx, run, domain.PublicationNone, domain.PublicationPending, "marking a run executed")
+}
+
+// ClearPublication is a Run that turned out never to have run its harness:
+// the pending publication with no result goes back to none.
+func (t *Tx) ClearPublication(ctx context.Context, run Run) error {
+	return t.setPublication(ctx, run, domain.PublicationPending, domain.PublicationNone, "clearing a publication")
+}

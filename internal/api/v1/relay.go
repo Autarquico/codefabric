@@ -1,11 +1,22 @@
 package v1
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 // RelayTokenRequest is POST /v1/worker/runs/{run}/relay-token: the token of
 // the lease the Worker holds the Run under.
 type RelayTokenRequest struct {
 	LeaseEpoch uint64 `json:"lease_epoch"`
+}
+
+// OrphanTokenRequest is POST /v1/worker/runs/{run}/orphan-token: a token that
+// may only create refs/cf/orphans/<run>-e<epoch> at the sealed commit of an
+// orphan the Controller detected under that epoch (§10.4 point 5).
+type OrphanTokenRequest struct {
+	LeaseEpoch   uint64 `json:"lease_epoch"`
+	ResultCommit string `json:"result_commit"`
 }
 
 // RelayTokenResponse carries a token for the git relay (§16.8). The token goes
@@ -19,6 +30,14 @@ type RelayTokenResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	Path      string    `json:"path"`
 	Write     bool      `json:"write"`
+	// Ref is the one ref an orphan token may create; empty for the token of a lease.
+	Ref string `json:"ref,omitempty"`
+}
+
+// OrphanRef is where the result of an orphan is kept in the relay: a ref that
+// is only ever created, never moved or deleted.
+func OrphanRef(run string, epoch uint64) string {
+	return "refs/cf/orphans/" + run + "-e" + strconv.FormatUint(epoch, 10)
 }
 
 // RelayPathPrefix is where the Controller serves the git relay.

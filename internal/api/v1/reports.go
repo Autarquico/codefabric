@@ -40,12 +40,17 @@ const (
 	ReportPublished RunReportKind = "published"
 	// ReportPublicationFailed: the Worker gave up sealing or pushing the result.
 	ReportPublicationFailed RunReportKind = "publication_failed"
+	// ReportOrphanPreserved: the result of an orphan, a Run under a lease epoch
+	// that is not the live one, is in the relay (refs/cf/orphans/<run>-e<epoch>).
+	// It is the only report taken under a stale epoch.
+	ReportOrphanPreserved RunReportKind = "orphan_preserved"
 )
 
 // IsValid reports whether k is a kind the Controller knows.
 func (k RunReportKind) IsValid() bool {
 	switch k {
-	case ReportStarted, ReportExited, ReportPrepareFailed, ReportStopped, ReportSealed, ReportPublished, ReportPublicationFailed:
+	case ReportStarted, ReportExited, ReportPrepareFailed, ReportStopped, ReportSealed, ReportPublished, ReportPublicationFailed,
+		ReportOrphanPreserved:
 		return true
 	}
 	return false
@@ -89,7 +94,7 @@ type RunReportEntry struct {
 	NeverStarted bool           `json:"never_started,omitempty"` // stopped
 	Message      string         `json:"message,omitempty"`
 
-	ResultCommit      string   `json:"result_commit,omitempty"`      // sealed, published
+	ResultCommit      string   `json:"result_commit,omitempty"`      // sealed, published, orphan_preserved
 	Excluded          []string `json:"excluded,omitempty"`           // sealed: untracked paths the sealing left out
 	ExcludedTruncated bool     `json:"excluded_truncated,omitempty"` // sealed
 	Phase             string   `json:"phase,omitempty"`              // publication_failed: PhaseSeal or PhasePush

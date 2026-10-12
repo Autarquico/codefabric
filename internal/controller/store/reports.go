@@ -75,14 +75,15 @@ func (t *Tx) StartRun(ctx context.Context, run Run, at time.Time, handle string)
 
 // ExitRun is the harness having exited: the Run goes to a terminal state with
 // its exit code (nil if it left none) and, in the same statement,
-// publication: pending, which §22.6 demands of any Run whose harness started.
+// publication: pending, which §22.6 demands of any Run whose harness started,
+// and the knowledge that its harness ran.
 func (t *Tx) ExitRun(ctx context.Context, run Run, to domain.RunState, reason domain.EndReason, code *int, at time.Time) error {
 	var exit any
 	if code != nil {
 		exit = *code
 	}
 	res, err := t.Exec(ctx,
-		`UPDATE runs SET state = ?, end_reason = ?, exit_code = ?, finished_at = ?, publication = ?
+		`UPDATE runs SET state = ?, end_reason = ?, exit_code = ?, finished_at = ?, publication = ?, harness_ran = 1
 		 WHERE id = ? AND state = ? AND publication = ? AND lease_id = ? AND lease_epoch = ?`,
 		string(to), nullable(string(reason)), exit, at.UnixNano(), string(domain.PublicationPending),
 		string(run.ID), string(run.State), string(domain.PublicationNone), string(run.LeaseID), run.LeaseEpoch)
@@ -97,4 +98,41 @@ func (t *Tx) StopRuntime(ctx context.Context, run Run) error {
 		`UPDATE runs SET runtime = ? WHERE id = ? AND runtime = ? AND lease_id = ? AND lease_epoch = ?`,
 		string(domain.RuntimeStopped), string(run.ID), string(run.Runtime), string(run.LeaseID), run.LeaseEpoch)
 	return changedOne(res, err, "stopping runtime")
+}
+
+// NoteStart is a session that started after the Controller ended its Run
+// (§10.4 point 5, B5): the state does not move, the runtime goes from none to
+// active with the handle and the time, and nothing else. A runtime that is
+// active or stopped is never started again.
+func (t *Tx) NoteStart(ctx context.Context, run Run, at time.Time, handle string) error {
+	res, err := t.Exec(ctx,
+		`UPDATE runs SET runtime = ?, started_at = COALESCE(started_at, ?), runtime_handle = ?
+		 WHERE id = ? AND state = ? AND runtime = ? AND lease_id = ? AND lease_epoch = ?`,
+		string(domain.RuntimeActive), at.UnixNano(), handle,
+		string(run.ID), string(run.State), string(domain.RuntimeNone), string(run.LeaseID), run.LeaseEpoch)
+	return changedOne(res, err, "noting a late start")
+}
+
+// NoteExit is the harness of a Run the Controller had ended exiting after it:
+// the state does not move; the exit code is kept if there was none, and the
+// harness is known to have run.
+func (t *Tx) NoteExit(ctx context.Context, run Run, code *int) error {
+	var exit any
+	if code != nil {
+		exit = *code
+	}
+	res, err := t.Exec(ctx,
+		`UPDATE runs SET exit_code = COALESCE(exit_code, ?), harness_ran = 1
+		 WHERE id = ? AND state = ? AND lease_id = ? AND lease_epoch = ?`,
+		exit, string(run.ID), string(run.State), string(run.LeaseID), run.LeaseEpoch)
+	return changedOne(res, err, "noting a late exit")
+}
+
+// SetHarnessRan records whether the harness of the Run was launched, which
+// nobody knew. It is a compare-and-set on the unknown.
+func (t *Tx) SetHarnessRan(ctx context.Context, run Run, ran bool) error {
+	res, err := t.Exec(ctx,
+		`UPDATE runs SET harness_ran = ? WHERE id = ? AND harness_ran IS NULL AND lease_id = ? AND lease_epoch = ?`,
+		ran, string(run.ID), string(run.LeaseID), run.LeaseEpoch)
+	return changedOne(res, err, "recording whether the harness ran")
 }

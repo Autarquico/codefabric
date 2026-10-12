@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -117,4 +118,61 @@ func (t *Tx) CancelAssign(ctx context.Context, lease domain.ID, at time.Time) er
 		`UPDATE worker_commands SET cancelled_at = COALESCE(cancelled_at, ?) WHERE lease_id = ? AND type = ?`,
 		at.UnixNano(), string(lease), string(domain.CommandAssign))
 	return changedOne(res, err, "cancelling assign")
+}
+
+// EnqueueStopOnce queues c, a stop, unless the Worker already has a stop of the
+// Run under that epoch, whatever its reason: there is one stop per Worker, Run
+// and epoch (§10.7), and the first reason stands. It says whether it queued one.
+func (t *Tx) EnqueueStopOnce(ctx context.Context, c WorkerCommand) (bool, error) {
+	if c.Type != domain.CommandStop {
+		return false, fmt.Errorf("store: %s is not a stop", c.Type)
+	}
+	var found int
+	err := t.QueryRow(ctx, `SELECT 1 FROM worker_commands WHERE worker_id = ? AND run_id = ? AND epoch = ? AND type = ?`,
+		string(c.WorkerID), string(c.RunID), c.Epoch, string(domain.CommandStop)).Scan(&found)
+	switch {
+	case err == nil:
+		return false, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return false, fmt.Errorf("store: looking for a stop: %w", err)
+	}
+	if _, err := t.EnqueueCommand(ctx, c); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// HasStop says whether the Worker was ordered to stop the Run under the epoch.
+func HasStop(ctx context.Context, q Querier, worker, run domain.ID, epoch uint64) (bool, error) {
+	var found int
+	err := q.QueryRow(ctx, `SELECT 1 FROM worker_commands WHERE worker_id = ? AND run_id = ? AND epoch = ? AND type = ?`,
+		string(worker), string(run), epoch, string(domain.CommandStop)).Scan(&found)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("store: looking for a stop: %w", err)
+	}
+	return true, nil
+}
+
+// OpenStopsOf lists, by Seq after the given one and up to limit, the stops of
+// the Worker that are not known to be done: under the live epoch of the Run,
+// those whose runtime is not stopped; under another epoch (an orphan), those
+// the Worker has not acknowledged. A Worker that lost its disk gets them all
+// back from the reconciliation (§27.3).
+func OpenStopsOf(ctx context.Context, q Querier, worker domain.ID, after uint64, limit int) ([]WorkerCommand, error) {
+	return collect(ctx, q, scanCommand,
+		`SELECT `+commandColumns+` FROM worker_commands c
+		 WHERE c.worker_id = ? AND c.type = ? AND c.seq > ? AND EXISTS (
+		     SELECT 1 FROM runs r WHERE r.id = c.run_id AND (
+		         (r.lease_epoch = c.epoch AND r.runtime <> ?) OR (r.lease_epoch <> c.epoch AND c.acked_at IS NULL)))
+		 ORDER BY c.seq LIMIT ?`,
+		string(worker), string(domain.CommandStop), after, string(domain.RuntimeStopped), limit)
+}
+
+// AssignOf is the assign order of a lease, which holds the whole assignment.
+func AssignOf(ctx context.Context, q Querier, lease domain.ID) (WorkerCommand, error) {
+	return scanCommand(q.QueryRow(ctx,
+		`SELECT `+commandColumns+` FROM worker_commands WHERE lease_id = ? AND type = ?`, string(lease), string(domain.CommandAssign)))
 }

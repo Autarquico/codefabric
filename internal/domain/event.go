@@ -15,6 +15,7 @@ const (
 	EventWorkerDraining    EventType = "WorkerDraining"
 	EventWorkerDrained     EventType = "WorkerDrained"
 	EventWorkerRemoved     EventType = "WorkerRemoved"
+	EventWorkerReconciled  EventType = "WorkerReconciled" // a Worker and the Controller agreed on its Runs (§27.3)
 
 	EventPlanCreated      EventType = "PlanCreated"
 	EventPlanStateChanged EventType = "PlanStateChanged"
@@ -40,7 +41,9 @@ const (
 	EventRunCancelled            EventType = "RunCancelled"
 	EventRunStopped              EventType = "RunStopped" // the Worker confirms that no process of the Run is left (§10.7)
 	EventRunLost                 EventType = "RunLost"
-	EventRunOrphaned             EventType = "RunOrphaned"
+	EventRunOrphaned             EventType = "RunOrphaned"        // a process of a Run the Controller no longer owns (§10.4)
+	EventRunOrphanPreserved      EventType = "RunOrphanPreserved" // the result of an orphan is kept in the relay
+	EventRunExited               EventType = "RunExited"          // the harness of a Run the Controller had ended exited after it
 	EventRunForked               EventType = "RunForked"
 	EventRunContinued            EventType = "RunContinued"
 	EventRunPromoted             EventType = "RunPromoted"
