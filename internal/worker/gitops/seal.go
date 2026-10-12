@@ -9,8 +9,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -28,7 +26,6 @@ type Intent struct {
 	Project    string
 	Run        string
 	LeaseEpoch uint64
-	Branch     string
 	ParentOID  string    // HEAD of the worktree when the harness exited
 	At         time.Time // when the harness exited: the date of the commit
 }
@@ -42,17 +39,43 @@ type Sealed struct {
 	Truncated bool
 }
 
+// ErrNotRepository means the worktree is not a repository with a commit: it has
+// no .git, or git says it is not one, or HEAD points to nothing. Any other
+// failure of Head says nothing of the worktree.
+var ErrNotRepository = errors.New("gitops: the worktree is not a repository with a commit")
+
 // Head is the commit the worktree is at: the parent of a sealing. It is read
-// when the harness exits, and an error says the worktree is not a repository.
+// when the harness exits.
 func (g *Git) Head(ctx context.Context, worktree string) (string, error) {
-	return g.ok(ctx, cmd{
-		dir: worktree, env: isolatedEnv(worktree), timeout: quickTimeout,
-		args: []string{"rev-parse", "--verify", "--quiet", "HEAD^{commit}"},
-	})
+	if _, err := os.Stat(filepath.Join(worktree, ".git")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", ErrNotRepository
+		}
+		return "", fmt.Errorf("gitops: looking at the worktree: %w", err)
+	}
+	res, err := g.run(ctx, cmd{dir: worktree, env: isolatedEnv(worktree), timeout: quickTimeout,
+		args: []string{"rev-parse", "--verify", "--quiet", "HEAD^{commit}"}})
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case res.exit == 0:
+		return strings.TrimSpace(res.stdout), nil
+	case res.exit == 1 || strings.Contains(res.stderr, "not a git repository"):
+		return "", ErrNotRepository
+	}
+	return "", fmt.Errorf("gitops: reading HEAD failed (%d): %s", res.exit, strings.TrimSpace(res.stderr))
 }
 
-func hardened(args ...string) []string {
-	return append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"}, args...)
+// hardened puts git's configuration of the command line before the verb. The
+// filters of the repository are its own configuration, of the same uid as the
+// Worker: they are inside the threat model of the runtime (B5), not outside it.
+func (g *Git) hardened(args ...string) []string {
+	cfg := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "commit.gpgSign=false"}
+	if g.excludes != "" {
+		cfg = append(cfg, "-c", "core.excludesFile="+g.excludes)
+	}
+	return append(cfg, args...)
 }
 
 // Seal turns the worktree into a commit on top of the parent of the intent, and
@@ -68,11 +91,8 @@ func hardened(args ...string) []string {
 //   - Otherwise the commit has the parent, a fixed message and author, and the
 //     date of the intent: it is the same commit every time.
 func (g *Git) Seal(ctx context.Context, worktree string, in Intent) (Sealed, error) {
-	if !fullCommit.MatchString(in.ParentOID) {
+	if !domain.ValidCommitID(in.ParentOID) {
 		return Sealed{}, errors.New("gitops: there is no repository to seal: the worktree has no commit")
-	}
-	if !domain.ValidBranch(in.Branch) {
-		return Sealed{}, errors.New("gitops: the branch of the Run is not valid")
 	}
 	ctx, cancel := context.WithTimeout(ctx, sealTimeout)
 	defer cancel()
@@ -92,12 +112,15 @@ func (g *Git) Seal(ctx context.Context, worktree string, in Intent) (Sealed, err
 	out := Sealed{Excluded: excluded, Truncated: truncated}
 
 	ref := PrivateRef(in.Run, in.LeaseEpoch)
-	if res, err := g.run(ctx, cmd{
-		dir: worktree, env: env, timeout: quickTimeout,
-		args: []string{"rev-parse", "--verify", "--quiet", ref + "^{commit}"},
-	}); err == nil && res.exit == 0 {
-		out.Commit = strings.TrimSpace(res.stdout)
-		return out, g.publishRefs(ctx, worktree, in, out.Commit)
+	// A private ref from an earlier life of the daemon is the result only if it is a
+	// sealing of this intent: the parent itself, or a commit on top of it.
+	if res, err := g.run(ctx, cmd{dir: worktree, env: env, timeout: quickTimeout,
+		args: []string{"rev-parse", "--verify", "--quiet", ref + "^{commit}"}}); err == nil && res.exit == 0 {
+		existing := strings.TrimSpace(res.stdout)
+		if existing == in.ParentOID || g.firstParent(ctx, worktree, existing) == in.ParentOID {
+			out.Commit = existing
+			return out, g.record(ctx, worktree, in, "", out.Commit)
+		}
 	}
 
 	scratch, err := os.MkdirTemp(g.o.Paths.WorkerDataDir(), "seal-")
@@ -107,21 +130,21 @@ func (g *Git) Seal(ctx context.Context, worktree string, in Intent) (Sealed, err
 	defer func() { _ = os.RemoveAll(scratch) }()
 	sealEnv := append(slices.Clone(env), "GIT_INDEX_FILE="+filepath.Join(scratch, "seal.index"))
 
-	if _, err := git(cmd{env: sealEnv, args: hardened("read-tree", in.ParentOID)}); err != nil {
+	if _, err := git(cmd{env: sealEnv, args: g.hardened("read-tree", in.ParentOID)}); err != nil {
 		return Sealed{}, err
 	}
-	add := hardened("add", "-A", "--", ".")
+	add := g.hardened("add", "-A", "--", ".")
 	for _, pattern := range exclusions {
 		add = append(add, ":(exclude,glob)"+pattern)
 	}
 	if _, err := git(cmd{env: sealEnv, args: add}); err != nil {
 		return Sealed{}, err
 	}
-	tree, err := git(cmd{env: sealEnv, args: hardened("write-tree")})
+	tree, err := git(cmd{env: sealEnv, args: g.hardened("write-tree")})
 	if err != nil {
 		return Sealed{}, err
 	}
-	parentTree, err := git(cmd{args: hardened("rev-parse", "--verify", in.ParentOID+"^{tree}")})
+	parentTree, err := git(cmd{args: g.hardened("rev-parse", "--verify", in.ParentOID+"^{tree}")})
 	if err != nil {
 		return Sealed{}, err
 	}
@@ -132,32 +155,46 @@ func (g *Git) Seal(ctx context.Context, worktree string, in Intent) (Sealed, err
 		commitEnv := append(slices.Clone(env),
 			"GIT_AUTHOR_NAME=CodeFabric", "GIT_AUTHOR_EMAIL=codefabric@localhost", "GIT_AUTHOR_DATE="+date,
 			"GIT_COMMITTER_NAME=CodeFabric", "GIT_COMMITTER_EMAIL=codefabric@localhost", "GIT_COMMITTER_DATE="+date)
-		if out.Commit, err = git(cmd{env: commitEnv, args: hardened("commit-tree", tree, "-p", in.ParentOID, "-m", "cf: uncommitted changes at exit")}); err != nil {
+		if out.Commit, err = git(cmd{env: commitEnv, args: g.hardened("commit-tree", tree, "-p", in.ParentOID, "-m", "cf: uncommitted changes at exit")}); err != nil {
 			return Sealed{}, err
 		}
 	}
-	unlock := g.projectLock(in.Project)
-	defer unlock()
-	if _, err := git(cmd{args: []string{"update-ref", ref, out.Commit}}); err != nil {
-		return Sealed{}, err
-	}
-	return out, g.publishRefs(ctx, worktree, in, out.Commit)
+	return out, g.record(ctx, worktree, in, ref, out.Commit)
 }
 
-// publishRefs points the branch of the Run at the result. The caller may hold
-// the lock of the Project.
-func (g *Git) publishRefs(ctx context.Context, worktree string, in Intent, commit string) error {
-	_, err := g.ok(ctx, cmd{
-		dir: worktree, env: isolatedEnv(worktree), timeout: quickTimeout,
-		args: []string{"update-ref", "refs/heads/" + in.Branch, commit},
-	})
-	return err
+// firstParent is the first parent of a commit, or "" if it has none or git fails.
+func (g *Git) firstParent(ctx context.Context, worktree, commit string) string {
+	res, err := g.run(ctx, cmd{dir: worktree, env: isolatedEnv(worktree), timeout: quickTimeout, args: []string{"rev-parse", "--verify", "--quiet", commit + "^1"}})
+	if err != nil || res.exit != 0 {
+		return ""
+	}
+	return strings.TrimSpace(res.stdout)
+}
+
+// record points the refs of the bare repository at the result: the private ref
+// of the Worker (when privateRef is not empty) and the local branch of the
+// worktree. Both are changes to the repository shared by the worktrees of the
+// Project, so they hold its lock.
+func (g *Git) record(ctx context.Context, worktree string, in Intent, privateRef, commit string) error {
+	unlock := g.projectLock(in.Project)
+	defer unlock()
+	env := isolatedEnv(worktree)
+	refs := []string{"refs/heads/" + LocalBranch(in.Run, in.LeaseEpoch)}
+	if privateRef != "" {
+		refs = append([]string{privateRef}, refs...)
+	}
+	for _, ref := range refs {
+		if _, err := g.ok(ctx, cmd{dir: worktree, env: env, timeout: quickTimeout, args: []string{"update-ref", ref, commit}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // excludedPaths lists the untracked files that match an exclusion and are not
 // ignored: what a sealing would have captured and did not.
 func (g *Git) excludedPaths(ctx context.Context, worktree string) (paths []string, truncated bool, err error) {
-	args := hardened("ls-files", "--others", "--exclude-standard", "-z", "--")
+	args := g.hardened("ls-files", "--others", "--exclude-standard", "-z", "--")
 	for _, pattern := range exclusions {
 		args = append(args, ":(glob)"+pattern)
 	}
@@ -185,7 +222,7 @@ func bound(paths []string) ([]string, bool) {
 	size := 0
 	truncated := false
 	for _, p := range paths {
-		if !printable(p) {
+		if p == "" || !domain.Printable(p) {
 			truncated = true
 			continue
 		}
@@ -196,10 +233,4 @@ func bound(paths []string) ([]string, bool) {
 		size += len(p)
 	}
 	return out, truncated
-}
-
-// printable is the check the Controller makes of a path in a report: a refusal
-// there would fence the Run.
-func printable(p string) bool {
-	return p != "" && utf8.ValidString(p) && !strings.ContainsFunc(p, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) })
 }

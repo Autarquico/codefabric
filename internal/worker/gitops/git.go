@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -55,6 +56,9 @@ type Git struct {
 	clk clock.Clock
 	log *slog.Logger
 
+	// excludes is the global ignore file of the user, resolved when the daemon starts.
+	excludes string
+
 	mu       sync.Mutex
 	projects map[string]*sync.Mutex
 }
@@ -73,6 +77,7 @@ func New(ctx context.Context, o Options) (*Git, error) {
 	if g.log == nil {
 		g.log = slog.Default()
 	}
+	g.excludes = g.userExcludesFile(ctx)
 	g.log.InfoContext(ctx, "git ready", "version", fmt.Sprintf("%d.%d", major, minor))
 	return g, nil
 }
@@ -219,4 +224,50 @@ func (g *Git) sleep(ctx context.Context, d time.Duration) {
 	case <-ctx.Done():
 	case <-t.C():
 	}
+}
+
+// userExcludesFile is the global ignore file of the user, which the sealing
+// honours as the user's own git does: core.excludesFile of the global
+// configuration, else $XDG_CONFIG_HOME/git/ignore, else ~/.config/git/ignore,
+// whichever exists. It is read with the real HOME once, at start, and handed to
+// the sealing explicitly, since the sealing runs without any configuration of
+// the user. "" if there is none.
+func (g *Git) userExcludesFile(ctx context.Context) string {
+	home := os.Getenv("HOME")
+	if res, err := g.run(ctx, cmd{dir: os.TempDir(), env: userEnv(), timeout: quickTimeout,
+		args: []string{"config", "--global", "--get", "core.excludesFile"}}); err == nil && res.exit == 0 {
+		if path := expandHome(strings.TrimSpace(res.stdout), home); path != "" && fileExists(path) {
+			return path
+		}
+	}
+	candidates := []string{}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(xdg) {
+		candidates = append(candidates, filepath.Join(xdg, "git", "ignore"))
+	}
+	if home != "" {
+		candidates = append(candidates, filepath.Join(home, ".config", "git", "ignore"))
+	}
+	for _, c := range candidates {
+		if fileExists(c) {
+			return c
+		}
+	}
+	return ""
+}
+
+func expandHome(path, home string) string {
+	switch {
+	case path == "~":
+		return home
+	case strings.HasPrefix(path, "~/") && home != "":
+		return filepath.Join(home, path[2:])
+	case filepath.IsAbs(path):
+		return path
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }

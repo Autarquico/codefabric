@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -53,8 +54,10 @@ type PushAuth struct {
 }
 
 var (
-	unreachable = regexp.MustCompile(`(?i)could not resolve host|failed to connect|connection (refused|reset|timed out)|timed out|operation too slow|ssl_error_syscall|empty reply|unexpected disconnect|http (status )?code|returned error: (5\d\d|429)|rpc failed|early eof|couldn't connect|network is unreachable|no route to host|send failure|recv failure`)
-	badCert     = regexp.MustCompile(`(?i)ssl certificate problem|certificate verify failed|unknown ca|bad certificate|certificate (has expired|required)|tlsv1 alert`)
+	// status reads the HTTP status git reports: "returned error: 403", "HTTP 500".
+	status      = regexp.MustCompile(`(?i)(?:returned error:|\bHTTP(?:/\d(?:\.\d)?)?(?: code)?)\s*(\d{3})\b`)
+	unreachable = regexp.MustCompile(`(?i)could not resolve host|failed to connect|connection (refused|reset|timed out)|timed out|operation too slow|ssl_error_syscall|empty reply|unexpected disconnect|early eof|couldn't connect|network is unreachable|no route to host|send failure|recv failure|non-properly terminated|handshake\(\) failed: the tls connection`)
+	badCert     = regexp.MustCompile(`(?i)ssl certificate problem|certificate verify failed|unknown ca|bad certificate|certificate (has expired|required)|tlsv1 alert|server (certificate )?verification failed|certificate signer not trusted`)
 )
 
 // Push sends the commit to refs/heads/<branch> of the relay, without force and
@@ -63,24 +66,35 @@ var (
 // in neither argv nor any file; redirects are not followed.
 func (g *Git) Push(ctx context.Context, project, commit, branch string, a PushAuth) error {
 	switch {
-	case !projectID.MatchString(project) || !fullCommit.MatchString(commit) || !domain.ValidBranch(branch):
+	case !isProject(project) || !domain.ValidCommitID(commit) || !domain.ValidBranch(branch):
 		return &PushError{Class: PushLocal, Message: "the project, commit or branch is not valid"}
 	case a.URL == "" || a.Token == "" || a.Cert == "" || a.Key == "" || a.CA == "":
 		return &PushError{Class: PushLocal, Message: "the credentials for the relay are incomplete"}
 	}
 	bare := g.o.Paths.WorkerRepoDir(project)
-	env := append(isolatedEnv(bare),
-		"GIT_CONFIG_COUNT=8",
-		"GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=/dev/null",
-		"GIT_CONFIG_KEY_1=http.sslCert", "GIT_CONFIG_VALUE_1="+a.Cert,
-		"GIT_CONFIG_KEY_2=http.sslKey", "GIT_CONFIG_VALUE_2="+a.Key,
-		"GIT_CONFIG_KEY_3=http.sslCAInfo", "GIT_CONFIG_VALUE_3="+a.CA,
-		"GIT_CONFIG_KEY_4=http."+a.URL+".extraHeader", "GIT_CONFIG_VALUE_4=Authorization: Bearer "+a.Token,
-		"GIT_CONFIG_KEY_5=http.followRedirects", "GIT_CONFIG_VALUE_5=false",
-		"GIT_CONFIG_KEY_6=http.lowSpeedLimit", "GIT_CONFIG_VALUE_6=1000",
-		"GIT_CONFIG_KEY_7=http.lowSpeedTime", "GIT_CONFIG_VALUE_7=120",
-		"GIT_CONFIG_PARAMETERS=", // nothing inherited reaches it
-	)
+	// The keys of the TLS and of the proxy are those of this URL, which win over any
+	// the repository may carry for it or in general; the rest are in the scope of the
+	// command, above the configuration of the repository.
+	scoped := func(key string) string { return "http." + a.URL + "." + key }
+	config := [][2]string{
+		{"core.hooksPath", "/dev/null"},
+		{"core.askPass", ""},
+		{"credential.helper", ""},
+		{"http.followRedirects", "false"},
+		{"http.lowSpeedLimit", "1000"},
+		{"http.lowSpeedTime", "120"},
+		{"http.sslVerify", "true"},
+		{scoped("sslVerify"), "true"},
+		{scoped("sslCert"), a.Cert},
+		{scoped("sslKey"), a.Key},
+		{scoped("sslCAInfo"), a.CA},
+		{scoped("proxy"), ""},
+		{scoped("extraHeader"), "Authorization: Bearer " + a.Token},
+	}
+	env := append(isolatedEnv(bare), "GIT_CONFIG_COUNT="+strconv.Itoa(len(config)))
+	for i, kv := range config {
+		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
+	}
 	res, err := g.run(ctx, cmd{
 		dir: bare, env: env, timeout: pushTimeout, secrets: []string{a.Token},
 		args: []string{"push", "--porcelain", "--no-verify", "--no-progress", "--end-of-options", a.URL, commit + ":refs/heads/" + branch},
@@ -103,14 +117,14 @@ func classify(res result, token string) *PushError {
 	switch {
 	case strings.Contains(text, "[remote rejected]") || strings.Contains(text, "[rejected]") || strings.Contains(text, "hook declined"):
 		e.Class = PushRefused
-	case strings.Contains(text, "error: 403") || strings.Contains(text, "returned error: 403"):
-		e.Class = PushForbidden
-	case strings.Contains(text, "returned error: 401") || strings.Contains(text, "could not read Username") || strings.Contains(text, "terminal prompts disabled"):
+	case strings.Contains(text, "could not read Username") || strings.Contains(text, "terminal prompts disabled"):
+		e.Class = PushPermanent // a 401 that git would have answered with a prompt
+	case hasStatus(text):
+		e.Class = classOfStatus(statusOf(text))
+	case badCert.MatchString(text):
 		e.Class = PushPermanent
 	case unreachable.MatchString(text):
 		e.Class = PushUnreachable
-	case badCert.MatchString(text):
-		e.Class = PushPermanent
 	default:
 		e.Class = PushLocal
 	}
@@ -118,4 +132,28 @@ func classify(res result, token string) *PushError {
 		e.Message = fmt.Sprintf("git push exited %d", res.exit)
 	}
 	return e
+}
+
+func hasStatus(text string) bool { return statusOf(text) != 0 }
+
+func statusOf(text string) int {
+	m := status.FindStringSubmatch(text)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+// classOfStatus: a server that fails or is busy says nothing of the result; a 403
+// is the relay forbidding the push (the token is new at each attempt); any other
+// answer that is not a success will not change by itself.
+func classOfStatus(code int) PushClass {
+	switch {
+	case code >= 500 || code == 429 || code == 408:
+		return PushUnreachable
+	case code == 403:
+		return PushForbidden
+	}
+	return PushPermanent
 }

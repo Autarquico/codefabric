@@ -45,6 +45,9 @@ type rig struct {
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	gittest.Require(t)
+	// The home of the user is empty: nothing of the machine of whoever runs the tests changes them.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
 	paths := config.Paths{ConfigDir: t.TempDir(), DataDir: t.TempDir()}
 	g, err := gitops.New(t.Context(), gitops.Options{Paths: paths, Log: slog.New(slog.DiscardHandler)})
 	if err != nil {
@@ -73,7 +76,7 @@ func (r *rig) prepare() {
 
 func (r *rig) intent(parent string) gitops.Intent {
 	return gitops.Intent{
-		Project: project, Run: run, LeaseEpoch: 1, Branch: branch, ParentOID: parent,
+		Project: project, Run: run, LeaseEpoch: 1, ParentOID: parent,
 		At: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC),
 	}
 }
@@ -97,7 +100,7 @@ func TestPrepare_MakesAWorktreeAtTheExactSourceCommit(t *testing.T) {
 	if got := gittest.Run(t, r.worktree, "rev-parse", "HEAD"); got != r.source {
 		t.Errorf("HEAD = %s, want %s", got, r.source)
 	}
-	if got := gittest.Run(t, r.worktree, "rev-parse", "--abbrev-ref", "HEAD"); got != branch {
+	if got := gittest.Run(t, r.worktree, "rev-parse", "--abbrev-ref", "HEAD"); got != gitops.LocalBranch(run, 1) {
 		t.Errorf("branch = %s", got)
 	}
 	if got := gittest.Run(t, r.bare(), "rev-parse", "refs/cf/sources/"+run+"-e1"); got != r.source {
@@ -164,9 +167,12 @@ func TestPrepare_RefusesWhatItShouldNotRunGitWith(t *testing.T) {
 	r := newRig(t)
 	for name, mutate := range map[string]func(*gitops.PrepareSpec){
 		"a project that is a path": func(s *gitops.PrepareSpec) { s.Project = "../x" },
+		"a task as the project":    func(s *gitops.PrepareSpec) { s.Project = "task_01ARZ3NDEKTSV4RRFFQ69G5FAV" },
 		"a bad commit":             func(s *gitops.PrepareSpec) { s.SourceCommit = "--upload-pack=x" },
 		"a bad branch":             func(s *gitops.PrepareSpec) { s.Branch = "main" },
 		"an option as the ref":     func(s *gitops.PrepareSpec) { s.SourceRef = "--upload-pack=touch /tmp/x" },
+		"a refspec as the ref":     func(s *gitops.PrepareSpec) { s.SourceRef = "+main:refs/heads/other" },
+		"a revision as the ref":    func(s *gitops.PrepareSpec) { s.SourceRef = "main~1" },
 		"an option as the repo":    func(s *gitops.PrepareSpec) { s.Repo = "--upload-pack=x" },
 		"no repo":                  func(s *gitops.PrepareSpec) { s.Repo = "" },
 	} {
@@ -226,7 +232,7 @@ func TestSeal_CapturesTheWorktreeAndLeavesItAlone(t *testing.T) {
 	if gittest.Run(t, r.bare(), "rev-parse", got.Commit+"^") != parent {
 		t.Error("the commit is not on top of the parent")
 	}
-	if tip := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+branch); tip != got.Commit {
+	if tip := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+gitops.LocalBranch(run, 1)); tip != got.Commit {
 		t.Errorf("branch = %s", tip)
 	}
 	if ref := gittest.Run(t, r.bare(), "rev-parse", gitops.PrivateRef(run, 1)); ref != got.Commit {
@@ -278,7 +284,7 @@ func TestSeal_NothingToCaptureIsTheParent(t *testing.T) {
 	if len(got.Excluded) != 0 {
 		t.Logf("excluded: %v", got.Excluded)
 	}
-	if tip := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+branch); tip != r.source {
+	if tip := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+gitops.LocalBranch(run, 1)); tip != r.source {
 		t.Errorf("branch = %s", tip)
 	}
 }
@@ -320,7 +326,7 @@ func TestSeal_AHeadThatLeftTheBranchIsSealedOnItsOwnParent(t *testing.T) {
 	if err != nil || gittest.Run(t, r.bare(), "rev-parse", got.Commit+"^") != parent {
 		t.Fatalf("seal = %+v (%v)", got, err)
 	}
-	if tip := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+branch); tip != got.Commit {
+	if tip := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+gitops.LocalBranch(run, 1)); tip != got.Commit {
 		t.Errorf("the branch of the Run is at %s, not at the result", tip)
 	}
 }
@@ -333,7 +339,7 @@ func TestScenario_GitRelayPublication_SelladoFallido_Git(t *testing.T) {
 	r.prepare()
 	r.write("work.txt", "w\n")
 	statusBefore := gittest.Run(t, r.worktree, "status", "--porcelain=v1")
-	branchBefore := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+branch)
+	branchBefore := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+gitops.LocalBranch(run, 1))
 
 	// The disk takes no more objects.
 	objects := filepath.Join(r.bare(), "objects")
@@ -362,7 +368,7 @@ func TestScenario_GitRelayPublication_SelladoFallido_Git(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(r.worktree, "work.txt")); string(b) != "w\n" {
 		t.Error("the file of the user changed")
 	}
-	if tip := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+branch); tip != branchBefore {
+	if tip := gittest.Run(t, r.bare(), "rev-parse", "refs/heads/"+gitops.LocalBranch(run, 1)); tip != branchBefore {
 		t.Errorf("the branch moved to %s", tip)
 	}
 	if _, perr := gittest.Try(t, r.bare(), "rev-parse", "--verify", "--quiet", gitops.PrivateRef(run, 1)); perr == nil {
@@ -488,10 +494,40 @@ func TestPush_ClassifiesWhatTheRelayDoesAndNeverLeaksTheToken(t *testing.T) {
 		t.Error("the token is in the configuration of the repository")
 	}
 
+	// A repository whose own configuration tries to turn verification off, to use a proxy or to run a credential helper.
+	helperRan := filepath.Join(t.TempDir(), "helper-ran")
+	hostile := "[http]\n\tsslVerify = false\n\tproxy = http://127.0.0.1:1\n[credential]\n\thelper = !sh -c 'echo ran > " + helperRan + "'\n"
+	f, err := os.OpenFile(filepath.Join(r.bare(), "config"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(hostile)
+	_ = f.Close()
+	untrusted := newStub(t, http.StatusUnauthorized)
+	err = r.g.Push(t.Context(), project, r.source, branch, gitops.PushAuth{
+		URL: untrusted.srv.URL + "/p.git", Token: token, Cert: untrusted.cert, Key: untrusted.key, CA: untrusted.cert,
+	})
+	if pe, ok := err.(*gitops.PushError); !ok || pe.Class != gitops.PushPermanent { //nolint:errorlint // the concrete type is under test
+		t.Errorf("verification was turned off by the repository: %v", err)
+	}
+	trusted := newStub(t, http.StatusUnauthorized)
+	_ = r.g.Push(t.Context(), project, r.source, branch, gitops.PushAuth{
+		URL: trusted.srv.URL + "/p.git", Token: token, Cert: trusted.cert, Key: trusted.key, CA: trusted.ca,
+	})
+	if _, err := os.Stat(helperRan); err == nil {
+		t.Error("a credential helper of the repository ran")
+	}
+	trusted.mu.Lock()
+	sawRequest := len(trusted.headers) > 0
+	trusted.mu.Unlock()
+	if !sawRequest {
+		t.Error("the proxy of the repository was used")
+	}
+
 	// A certificate the Worker does not trust is permanent.
 	stub := newStub(t, http.StatusOK)
 	other := stub // a CA that did not sign the certificate of the server
-	err := r.g.Push(t.Context(), project, r.source, branch, gitops.PushAuth{
+	err = r.g.Push(t.Context(), project, r.source, branch, gitops.PushAuth{
 		URL: stub.srv.URL + "/p.git", Token: token, Cert: stub.cert, Key: stub.key, CA: other.cert,
 	})
 	if pe, ok := err.(*gitops.PushError); !ok || pe.Class != gitops.PushPermanent { //nolint:errorlint // the concrete type is under test
@@ -500,5 +536,60 @@ func TestPush_ClassifiesWhatTheRelayDoesAndNeverLeaksTheToken(t *testing.T) {
 	// Invalid input never reaches git.
 	if err := r.g.Push(t.Context(), project, "--force", branch, gitops.PushAuth{URL: "https://x", Token: token, Cert: "c", Key: "k", CA: "a"}); err == nil {
 		t.Error("a bad commit was pushed")
+	}
+}
+
+func TestSeal_APrivateRefOfAnotherIntentIsNotTheResult(t *testing.T) {
+	r := newRig(t)
+	r.prepare()
+	r.write("work.txt", "w\n")
+	// A stale ref, whose commit is neither the parent nor on top of it.
+	stray := gittest.Run(t, r.origin, "commit-tree", "-m", "stray", gittest.Run(t, r.origin, "rev-parse", "HEAD^{tree}"))
+	gittest.Run(t, r.bare(), "fetch", "--quiet", r.origin, stray)
+	gittest.Run(t, r.bare(), "update-ref", gitops.PrivateRef(run, 1), stray)
+	got, err := r.g.Seal(t.Context(), r.worktree, r.intent(r.source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Commit == stray || gittest.Run(t, r.bare(), "rev-parse", got.Commit+"^") != r.source {
+		t.Errorf("the result is %s: a private ref that is not of this intent was reused", got.Commit)
+	}
+	if ref := gittest.Run(t, r.bare(), "rev-parse", gitops.PrivateRef(run, 1)); ref != got.Commit {
+		t.Errorf("private ref = %s", ref)
+	}
+}
+
+func TestSeal_HonoursTheGlobalIgnoreFileOfTheUserAndNeverSigns(t *testing.T) {
+	gittest.Require(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	ignore := filepath.Join(home, "global-ignore")
+	if err := os.WriteFile(ignore, []byte("*.scratch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "[core]\n\texcludesFile = ~/global-ignore\n[commit]\n\tgpgSign = true\n"
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths := config.Paths{ConfigDir: t.TempDir(), DataDir: t.TempDir()}
+	g, err := gitops.New(t.Context(), gitops.Options{Paths: paths, Log: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &rig{t: t, g: g, paths: paths}
+	r.origin = gittest.InitRepo(t)
+	r.source = gittest.Run(t, r.origin, "rev-parse", "HEAD")
+	r.worktree, r.runDir = paths.WorkerWorktreeDir(run, 1), paths.WorkerRunDir(run, 1)
+	r.prepare()
+	r.write("notes.scratch", "ignored only globally\n")
+	r.write("real.txt", "real\n")
+	got, err := g.Seal(t.Context(), r.worktree, r.intent(r.source))
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	files := r.sealedTree(got.Commit)
+	if contains(files, "notes.scratch") || !contains(files, "real.txt") {
+		t.Errorf("files = %v", files)
 	}
 }

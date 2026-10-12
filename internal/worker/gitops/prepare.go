@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strings"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -29,10 +29,18 @@ type PrepareSpec struct {
 // WrapperFile is the marker the wrapper of the harness writes first (execwrap).
 const wrapperFile = "wrapper.json"
 
-var (
-	fullCommit = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-	projectID  = regexp.MustCompile(`^project_[0-9A-Z]{26}$`)
-)
+// LocalBranch is the branch of the bare repository of the Worker that a worktree
+// is on, one per Run and lease epoch: a retry under a new epoch never finds its
+// branch checked out in the worktree of the last. The branch of the Run
+// (PrepareSpec.Branch) is only where the result is pushed to.
+func LocalBranch(run string, epoch uint64) string {
+	return fmt.Sprintf("cf-local/%s-e%d", run, epoch)
+}
+
+func isProject(id string) bool {
+	kind, _, err := domain.ParseID(id)
+	return err == nil && kind == domain.KindProject
+}
 
 // ErrHarnessLaunched means the worktree cannot be prepared again: the harness
 // of this Run was launched in it and what it left is evidence.
@@ -82,29 +90,30 @@ func (g *Git) Prepare(ctx context.Context, s PrepareSpec, worktree string) (err 
 	}); err != nil {
 		return err
 	}
+	local := LocalBranch(s.Run, s.LeaseEpoch)
 	defer func() {
 		if err != nil && !launched(s.RunDir) {
-			g.removeWorktree(ctx, bare, worktree, s.Branch)
+			g.removeWorktree(ctx, bare, worktree, local)
 		}
 	}()
 	// Whatever is at the path is from an earlier try of this same epoch, and the
 	// harness never ran in it (checked above): it is made again.
-	g.removeWorktree(ctx, bare, worktree, s.Branch)
+	g.removeWorktree(ctx, bare, worktree, local)
 	if err := os.MkdirAll(filepath.Dir(worktree), 0o700); err != nil {
 		return fmt.Errorf("gitops: making the directory of the worktrees: %w", err)
 	}
 	_, err = g.ok(ctx, cmd{
 		dir: bare, env: isolatedEnv(bare), timeout: quickTimeout,
-		args: []string{"-c", "core.hooksPath=/dev/null", "worktree", "add", "--force", "--quiet", "-B", s.Branch, worktree, s.SourceCommit},
+		args: []string{"-c", "core.hooksPath=/dev/null", "worktree", "add", "--force", "--quiet", "-B", local, worktree, s.SourceCommit},
 	})
 	return err
 }
 
 func validate(s PrepareSpec, worktree string) error {
 	switch {
-	case !projectID.MatchString(s.Project):
+	case !isProject(s.Project):
 		return errors.New("gitops: the Project of the Run is not a Project ID")
-	case !fullCommit.MatchString(s.SourceCommit):
+	case !domain.ValidCommitID(s.SourceCommit):
 		return errors.New("gitops: the source commit is not a full commit ID")
 	case !domain.ValidBranch(s.Branch):
 		return errors.New("gitops: the branch of the Run is not valid")
@@ -112,8 +121,8 @@ func validate(s PrepareSpec, worktree string) error {
 		return errors.New("gitops: this assignment names no repository to fetch from")
 	case !domain.ValidRepoURL(s.Repo):
 		return errors.New("gitops: the repository of the Project is not a form of URL this Worker fetches from")
-	case s.SourceRef == "" || s.SourceRef[0] == '-':
-		return errors.New("gitops: the source ref is not valid")
+	case !domain.ValidSourceRef(s.SourceRef):
+		return errors.New("gitops: the source ref is not a plain ref")
 	case !filepath.IsAbs(worktree):
 		return errors.New("gitops: the worktree path must be absolute")
 	}
@@ -193,7 +202,7 @@ func (g *Git) removeWorktree(ctx context.Context, bare, worktree, branch string)
 	_, _ = g.run(ctx, cmd{dir: bare, env: env, timeout: quickTimeout, args: []string{"worktree", "remove", "--force", worktree}})
 	_ = os.RemoveAll(worktree)
 	_, _ = g.run(ctx, cmd{dir: bare, env: env, timeout: quickTimeout, args: []string{"worktree", "prune"}})
-	if domain.ValidBranch(branch) {
+	if strings.HasPrefix(branch, "cf-local/") {
 		_, _ = g.run(ctx, cmd{dir: bare, env: env, timeout: quickTimeout, args: []string{"branch", "-D", "--quiet", branch}})
 	}
 }
