@@ -521,6 +521,14 @@ func TestPush_ClassifiesWhatTheRelayDoesAndNeverLeaksTheToken(t *testing.T) {
 	if pe, ok := err.(*gitops.PushError); !ok || pe.Class != gitops.PushPermanent { //nolint:errorlint // the concrete type is under test
 		t.Errorf("verification was turned off by the repository: %v", err)
 	}
+	// A refused certificate and a 401 are both permanent: what tells them apart is
+	// that a verified TLS handshake never lets the request reach the server.
+	untrusted.mu.Lock()
+	reached := len(untrusted.headers)
+	untrusted.mu.Unlock()
+	if reached != 0 {
+		t.Error("TLS verification was turned off by the repository: the request reached the server")
+	}
 	trusted := newStub(t, http.StatusUnauthorized)
 	_ = r.g.Push(t.Context(), project, r.source, branch, gitops.PushAuth{
 		URL: trusted.srv.URL + "/p.git", Token: token, Cert: trusted.cert, Key: trusted.key, CA: trusted.ca,
