@@ -31,6 +31,10 @@ func (f *fakeRelay) BranchTip(_ context.Context, project domain.ID, branch strin
 	return oid, ok, nil
 }
 
+func (f *fakeRelay) RefTip(ctx context.Context, project domain.ID, ref string) (string, bool, error) {
+	return f.BranchTip(ctx, project, ref)
+}
+
 // pushes records that the Worker pushed commit to the branch of the Run.
 func (e *env) pushes(r *reporter, commit string) {
 	e.t.Helper()

@@ -65,3 +65,20 @@ func TestValidCommitIDAndPrintable(t *testing.T) {
 		t.Error("Printable")
 	}
 }
+
+func TestOrphanRef_OneFormOnly(t *testing.T) {
+	run := ID("run_01J00000000000000000000000")
+	ref := OrphanRef(run, 3)
+	if ref != "refs/cf/orphans/run_01J00000000000000000000000-e3" || !ValidOrphanRef(ref) {
+		t.Fatalf("OrphanRef = %q", ref)
+	}
+	for _, bad := range []string{
+		"refs/cf/orphans/run_01J00000000000000000000000-e0", "refs/cf/orphans/run_01J00000000000000000000000-e03",
+		"refs/cf/orphans/run_01J00000000000000000000000-e", "refs/cf/orphans/task_01J00000000000000000000000-e1",
+		"refs/cf/orphans/run_01J00000000000000000000000-e1x", "refs/heads/cf/x/run-1", "refs/cf/orphans/../x-e1",
+	} {
+		if ValidOrphanRef(bad) {
+			t.Errorf("%q is taken for an orphan ref", bad)
+		}
+	}
+}

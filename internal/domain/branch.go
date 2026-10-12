@@ -56,3 +56,34 @@ func ValidBranch(name string) bool {
 	}
 	return true
 }
+
+// orphanRefPrefix is where the relay keeps the results of orphans.
+const orphanRefPrefix = "refs/cf/orphans/"
+
+// OrphanRef is the ref of the relay that keeps the result of an orphan (§10.4
+// point 5): the Run and the lease epoch it ran under. It is only ever created.
+func OrphanRef(run ID, epoch uint64) string {
+	return fmt.Sprintf("%s%s-e%d", orphanRefPrefix, run, epoch)
+}
+
+// ValidOrphanRef reports whether ref is the ref of an orphan: a Run ID and an
+// epoch, in the one form OrphanRef writes.
+func ValidOrphanRef(ref string) bool {
+	rest, ok := strings.CutPrefix(ref, orphanRefPrefix)
+	if !ok {
+		return false
+	}
+	i := strings.LastIndex(rest, "-e")
+	if i < 0 {
+		return false
+	}
+	kind, _, err := ParseID(rest[:i])
+	var epoch uint64
+	if err != nil || kind != KindRun || len(rest[i+2:]) == 0 || rest[i+2] == '0' {
+		return false
+	}
+	if _, err := fmt.Sscanf(rest[i+2:], "%d", &epoch); err != nil || epoch == 0 {
+		return false
+	}
+	return OrphanRef(ID(rest[:i]), epoch) == ref
+}

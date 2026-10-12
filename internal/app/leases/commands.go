@@ -120,6 +120,9 @@ func commandView(c store.WorkerCommand) (v1.WorkerCommand, error) {
 	case domain.CommandPublish:
 		out.Publish = new(v1.PublishCommand)
 		target = out.Publish
+	case domain.CommandStop:
+		out.Stop = new(v1.StopCommand)
+		target = out.Stop
 	default:
 		return out, nil
 	}

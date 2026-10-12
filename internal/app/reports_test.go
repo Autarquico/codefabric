@@ -383,17 +383,15 @@ func TestReport_AnObsoleteEpochIsStale(t *testing.T) {
 	}
 }
 
-func TestReport_AStartedOnATerminalRunIsAnInvalidTransitionButAStopIsAccepted(t *testing.T) {
+func TestReport_AStartedOnARunThatExitedIsAnInvalidTransitionButAStopIsAccepted(t *testing.T) {
 	e := newEnv(t)
 	r := e.acceptedRun(e.joinWorker("alpha"), "x")
-	if _, err := e.app.Tasks.Cancel(t.Context(), e.owner, r.run.TaskID, "", v1.ActionRequest{}); err != nil {
-		t.Fatal(err)
-	}
+	r.mustSend(r.entry(v1.ReportStarted), r.entry(v1.ReportExited, exitCode(1)))
 	if got := results(r.mustSend(r.entry(v1.ReportStarted))); got != "rejected:CF_INVALID_TRANSITION" {
-		t.Errorf("started on a cancelled Run = %s", got)
+		t.Errorf("started on a failed Run = %s", got)
 	}
 	if got := results(r.mustSend(r.entry(v1.ReportStopped))); got != "applied" {
-		t.Errorf("stopped on a cancelled Run = %s", got)
+		t.Errorf("stopped on a failed Run = %s", got)
 	}
 }
 

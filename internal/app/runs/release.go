@@ -18,11 +18,13 @@ const releaseRunStopped = "run_stopped"
 //     is sealed (§10.5): publishing is not a reason to keep the CPU.
 //   - pending without a result: the sealing is not finished, and sealing
 //     needs the worktree the reservation stands for.
-//   - none: nothing to seal, for a harness that never ran. A Run that failed in
-//     preparation after its session started is the same. A Run cancelled after
-//     it started has a worktree nobody sealed: it is kept until stop-cancel-lost-reconcile
-//     (#13) makes it pending, since it cannot be told here from one that left
-//     nothing behind.
+//   - none: nothing to seal, for a harness that never ran: its session never
+//     started, the Worker said it never launched the harness (harness_ran 0, or
+//     the end reason of a failed preparation), or the Controller gave the
+//     assignment up as lost (assignment_lost: the Worker had nothing). A Run
+//     whose session started and of which nobody knows more is kept: a Run that
+//     the Controller ended while its session was alive is pending, not none
+//     (MarkExecutedIn).
 func releasable(run store.Run) bool {
 	if !run.State.IsTerminal() || run.Runtime != domain.RuntimeStopped || run.Evaluation == domain.EvaluationPending {
 		return false
@@ -33,6 +35,7 @@ func releasable(run store.Run) bool {
 	case domain.PublicationPending:
 		return run.ResultCommit != ""
 	default:
-		return run.StartedAt == nil || run.EndReason == domain.EndEnvironment
+		return run.StartedAt == nil || (run.HarnessRan != nil && !*run.HarnessRan) ||
+			run.EndReason == domain.EndEnvironment || run.EndReason == domain.EndAssignmentLost
 	}
 }

@@ -251,11 +251,24 @@ func (r *Relay) BranchTip(ctx context.Context, project domain.ID, branch string)
 	if !domain.ValidBranch(branch) {
 		return "", false, fmt.Errorf("relay: %q is not a branch of CodeFabric", branch)
 	}
+	return r.RefTip(ctx, project, "refs/heads/"+branch)
+}
+
+// RefTip returns the commit a full ref points to in the repository of the
+// Project, and false if there is no such ref. Only the refs CodeFabric writes
+// are asked about: a branch cf/*, or the ref of an orphan.
+func (r *Relay) RefTip(ctx context.Context, project domain.ID, ref string) (oid string, found bool, err error) {
+	if kind, _, perr := domain.ParseID(string(project)); perr != nil || kind != domain.KindProject {
+		return "", false, fmt.Errorf("relay: %q is not a Project ID", project)
+	}
+	if !ourRef(ref) {
+		return "", false, fmt.Errorf("relay: %q is not a ref of CodeFabric", ref)
+	}
 	dir := r.RepoDir(project)
 	if !exists(dir) {
 		return "", false, nil
 	}
-	out, err := r.run(ctx, verifyTimeout, dir, "-C", dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+	out, err := r.run(ctx, verifyTimeout, dir, "-C", dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
 	switch {
 	case errors.Is(err, errPlainNo):
 		return "", false, nil // --verify --quiet: the ref is not there
@@ -263,6 +276,14 @@ func (r *Relay) BranchTip(ctx context.Context, project domain.ID, branch string)
 		return "", false, err
 	}
 	return strings.TrimSpace(out), true, nil
+}
+
+// ourRef says whether ref is one CodeFabric writes in the relay.
+func ourRef(ref string) bool {
+	if branch, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+		return domain.ValidBranch(branch)
+	}
+	return domain.ValidOrphanRef(ref)
 }
 
 // baseEnv is the environment of every git the relay runs or serves: nothing of

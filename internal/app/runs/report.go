@@ -133,13 +133,27 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 	if err != nil {
 		return outcome(""), err
 	}
-	if l.Epoch < run.LeaseEpoch || l.State != domain.LeaseAccepted {
-		return outcome(""), domain.NewError(domain.CodeStaleLease, "this report is not under the live lease of the Run",
-			map[string]any{"lease": string(l.ID), "epoch": l.Epoch, "state": string(l.State)})
-	}
 	task, err := store.TaskByID(ctx, tx, run.TaskID)
 	if err != nil {
 		return outcome(""), err
+	}
+	if l.Epoch < run.LeaseEpoch || l.State != domain.LeaseAccepted {
+		if e.Kind == v1.ReportOrphanPreserved {
+			return s.orphanPreserved(ctx, tx, act, w, run, task, l, e, digest)
+		}
+		// Something reports under a lease the Run is no longer under: whatever runs
+		// with it is an orphan. Its stop and RunOrphaned are written although the
+		// entry is rejected: the rejection does not roll the request back (B5).
+		if l.Epoch < run.LeaseEpoch {
+			if _, err := OrphanIn(ctx, tx, act, run, task, l); err != nil {
+				return outcome(""), internalError{err}
+			}
+		}
+		return outcome(""), domain.NewError(domain.CodeStaleLease, "this report is not under the live lease of the Run",
+			map[string]any{"lease": string(l.ID), "epoch": l.Epoch, "state": string(l.State)})
+	}
+	if e.Kind == v1.ReportOrphanPreserved {
+		return outcome(""), domain.NewError(domain.CodeInvalidTransition, "the Run is not an orphan under this lease", nil)
 	}
 
 	ev := act.Event("", "") // each kind below gives it its type
@@ -153,8 +167,12 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 	}
 
 	var apply func() error
-	switch e.Kind {
-	case v1.ReportStarted:
+	switch {
+	case controllerEnded(run) && (e.Kind == v1.ReportStarted || e.Kind == v1.ReportExited || e.Kind == v1.ReportPrepareFailed):
+		if apply, err = s.lateEntry(ctx, tx, act, &ev, run, task, l, e); err != nil {
+			return outcome(""), err
+		}
+	case e.Kind == v1.ReportStarted:
 		if _, err := domain.NextRunState(domain.RunStatus{State: run.State}, domain.RunEventHarnessStarted); err != nil {
 			return outcome(""), err
 		}
@@ -165,7 +183,7 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		ev.Type, ev.Message = domain.EventRunStarted, "run started"
 		ev.Data["handle"] = e.Handle
 		apply = func() error { return tx.StartRun(ctx, run, e.At, string(raw)) }
-	case v1.ReportExited:
+	case e.Kind == v1.ReportExited:
 		event, reason := domain.RunEventExitNonZero, domain.EndExitCode
 		if e.ExitCode != nil && *e.ExitCode == 0 && e.Cause != v1.ExitCauseWrapperLost {
 			event = domain.RunEventExitZero
@@ -184,7 +202,7 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		}
 		ev.Data["exit_code"], ev.Data["signal"], ev.Data["cause"] = e.ExitCode, e.Signal, e.Cause
 		apply = func() error { return tx.ExitRun(ctx, run, next.State, reason, e.ExitCode, e.At) }
-	case v1.ReportPrepareFailed:
+	case e.Kind == v1.ReportPrepareFailed:
 		// `started` means that the session was created. The harness can still fail to
 		// spawn, and then the Run was `running` for the Controller: it fails all the same,
 		// as a Run that never ran (publication none).
@@ -198,8 +216,13 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		}
 		ev.Type, ev.Message = domain.EventRunFailed, "run failed before the harness ran"
 		ev.Data["phase"] = string(phase)
-		apply = func() error { return tx.FinishRun(ctx, run, next.State, domain.EndEnvironment, e.At) }
-	case v1.ReportStopped:
+		apply = func() error {
+			if err := tx.FinishRun(ctx, run, next.State, domain.EndEnvironment, e.At); err != nil {
+				return err
+			}
+			return tx.SetHarnessRan(ctx, run, false)
+		}
+	case e.Kind == v1.ReportStopped:
 		if run.Runtime == domain.RuntimeStopped {
 			return outcome(""), domain.NewError(domain.CodeInvalidTransition, "the runtime of this Run is stopped already", nil)
 		}
@@ -218,7 +241,7 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 			run.Runtime = domain.RuntimeStopped
 			return s.releaseIfAllowed(ctx, tx, act, run, l)
 		}
-	case v1.ReportSealed, v1.ReportPublished, v1.ReportPublicationFailed:
+	case e.Kind == v1.ReportSealed || e.Kind == v1.ReportPublished || e.Kind == v1.ReportPublicationFailed:
 		if apply, err = s.publicationEntry(ctx, tx, act, &ev, run, task, l, e); err != nil {
 			return outcome(""), err
 		}
@@ -305,13 +328,13 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 	case e.LeaseEpoch == 0 || e.LeaseEpoch > maxSeq:
 		return input.Invalid("lease_epoch must be between 1 and %d", maxSeq)
 	case !e.Kind.IsValid():
-		return input.Invalid("kind must be started, exited, prepare_failed, stopped, sealed, published or publication_failed")
+		return input.Invalid("kind must be started, exited, prepare_failed, stopped, sealed, published, publication_failed or orphan_preserved")
 	case e.At.Before(earliestAt) || e.At.After(now.Add(maxAhead)):
 		return input.Invalid("at must be after the year 2000 and at most %s ahead of the Controller", maxAhead)
 	case len(e.Message) > v1.MaxReportMessageLen || !domain.Printable(e.Message):
 		return input.Invalid("message must print and be at most %d characters", v1.MaxReportMessageLen)
-	case e.Kind != v1.ReportSealed && e.Kind != v1.ReportPublished && e.ResultCommit != "":
-		return input.Invalid("only sealed and published carry a result commit")
+	case e.Kind != v1.ReportSealed && e.Kind != v1.ReportPublished && e.Kind != v1.ReportOrphanPreserved && e.ResultCommit != "":
+		return input.Invalid("only sealed, published and orphan_preserved carry a result commit")
 	case e.Kind != v1.ReportSealed && (len(e.Excluded) > 0 || e.ExcludedTruncated):
 		return input.Invalid("only sealed carries excluded paths")
 	case e.Kind != v1.ReportPublicationFailed && e.Phase != "":
@@ -330,7 +353,7 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 			strings.ContainsFunc(h.Runtime+h.Ref, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
 			return input.Invalid("handle needs a runtime and a ref of at most %d bytes with no spaces", v1.MaxHandleLen)
 		}
-	case v1.ReportSealed, v1.ReportPublished:
+	case v1.ReportSealed, v1.ReportPublished, v1.ReportOrphanPreserved:
 		if !domain.ValidCommitID(e.ResultCommit) {
 			return input.Invalid("result_commit must be a full lower-case hex commit ID")
 		}
