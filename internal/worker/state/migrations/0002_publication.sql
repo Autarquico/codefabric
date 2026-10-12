@@ -16,6 +16,9 @@ ALTER TABLE local_runs ADD COLUMN repo   TEXT NOT NULL DEFAULT '';
 -- however many times, and in whatever life of the daemon, it runs.
 -- result_commit is set when the commit exists; excluded is JSON
 -- ({"paths": [...], "truncated": bool}) of the paths left out.
+-- published_seq is the seq, in the journal, of the `published` report of the push
+-- that is waiting to be confirmed (state pushed): the confirmation of any other
+-- report is about another try and does not touch the row.
 -- generation grows when a new try begins (a publish order): the result of an
 -- older try does not overwrite that of a newer one. attempts counts the pushes
 -- the relay refused or that failed for good; unreachable does not count.
@@ -28,6 +31,7 @@ CREATE TABLE publications (
     result_commit   TEXT,
     excluded        TEXT,
     generation      INTEGER NOT NULL DEFAULT 1,
+    published_seq   INTEGER,
     attempts        INTEGER NOT NULL DEFAULT 0,
     next_attempt_at INTEGER NOT NULL,
     last_error      TEXT,

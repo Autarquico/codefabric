@@ -468,7 +468,10 @@ func TestSender_HandsTheViewOfTheRunToTheStateInTheTransactionThatDeletesTheRepo
 	s := f.sender(c, j)
 	var views []v1.Run
 	failOnce := true
-	s.OnView = func(_ context.Context, _ *state.Tx, _ state.Key, run v1.Run) error {
+	s.OnView = func(_ context.Context, _ *state.Tx, _ state.Key, confirmed []uint64, run v1.Run) error {
+		if len(confirmed) != 1 {
+			t.Errorf("the hook was told of %d settled reports", len(confirmed))
+		}
 		views = append(views, run)
 		if failOnce {
 			failOnce = false

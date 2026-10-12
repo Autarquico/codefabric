@@ -9,15 +9,19 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -610,5 +614,62 @@ func TestSeal_HonoursTheGlobalIgnoreFileOfTheUserAndNeverSigns(t *testing.T) {
 	files := r.sealedTree(got.Commit)
 	if contains(files, "notes.scratch") || !contains(files, "real.txt") {
 		t.Errorf("files = %v", files)
+	}
+}
+
+func TestPush_ADeadlineIsUnreachableSpendsNoAttemptAndKillsTheGroup(t *testing.T) {
+	gittest.Require(t)
+	t.Setenv("HOME", t.TempDir())
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	pgids := filepath.Join(dir, "pgids")
+	script := filepath.Join(dir, "git")
+	body := "#!/bin/sh\ncase \"$1\" in\npush)\n  ps -o pgid= -p $$ | tr -d ' ' >> '" + pgids + "'\n  sleep 300 &\n  wait\n  ;;\n*) exec '" + realGit + "' \"$@\" ;;\nesac\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil { //nolint:gosec // a test script
+		t.Fatal(err)
+	}
+	paths := config.Paths{ConfigDir: t.TempDir(), DataDir: t.TempDir()}
+	g, err := gitops.New(t.Context(), gitops.Options{Paths: paths, Log: slog.New(slog.DiscardHandler), GitPath: script, PushTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(paths.WorkerRepoDir(project), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, paths.WorkerRepoDir(project), "init", "--bare", "--quiet")
+	stub := newStub(t, http.StatusOK)
+	start := time.Now()
+	err = g.Push(t.Context(), project, strings.Repeat("a", 40), branch, gitops.PushAuth{
+		URL: stub.srv.URL + "/p.git", Token: "tok-0123456789abcdef", Cert: stub.cert, Key: stub.key, CA: stub.ca,
+	})
+	pe, ok := err.(*gitops.PushError) //nolint:errorlint // the concrete type is under test
+	if !ok || pe.Class != gitops.PushUnreachable || pe.Counts() {
+		t.Fatalf("a push that hit its deadline: %v", err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("the deadline of 1s took %s", took)
+	}
+	raw, err := os.ReadFile(pgids) //nolint:gosec // a path of this test
+	if err != nil {
+		t.Fatal(err)
+	}
+	pgid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pgid <= 1 {
+		t.Fatalf("pgid %q", raw)
+	}
+	waitFor(t, "the process group of the push to be gone", func() bool { return errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH) })
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

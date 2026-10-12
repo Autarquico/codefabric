@@ -45,9 +45,9 @@ type Sender struct {
 	Log      *slog.Logger
 	Tick     time.Duration // 0 means a second
 	// OnView, if set, is called for each request the Controller applied, with the Run
-	// as the Controller shows it, in the transaction that deletes the confirmed reports.
+	// as the Controller shows it and the seqs of the reports it settled, in the transaction that deletes the confirmed reports.
 	// An error rolls that transaction back and the reports are sent again.
-	OnView func(ctx context.Context, tx *state.Tx, k state.Key, run v1.Run) error
+	OnView func(ctx context.Context, tx *state.Tx, k state.Key, confirmed []uint64, run v1.Run) error
 }
 
 // Run sends until ctx ends.
@@ -208,7 +208,7 @@ func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow
 			return err
 		}
 		if s.OnView != nil && len(done) > 0 {
-			return s.OnView(ctx, tx, k, resp.Run)
+			return s.OnView(ctx, tx, k, done, resp.Run)
 		}
 		return nil
 	})

@@ -114,7 +114,7 @@ func (e *Executor) seal(ctx context.Context, p state.Publication) bool {
 	local, err := state.RunBy(ctx, e.o.DB.Reader(), p.Key)
 	if err != nil {
 		e.log.ErrorContext(ctx, "reading the Run to seal", "run", p.RunID, "err", err)
-		e.later(p)
+		e.later(ctx, p, "the Run could not be read")
 		return false
 	}
 	if p.ParentOID == "" {
@@ -164,7 +164,7 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 	local, err := state.RunBy(ctx, e.o.DB.Reader(), p.Key)
 	if err != nil {
 		e.log.ErrorContext(ctx, "reading the Run to push", "run", p.RunID, "err", err)
-		e.later(p)
+		e.later(ctx, p, "the Run could not be read")
 		return false
 	}
 	tok, err := e.o.Controller.RelayToken(ctx, p.RunID, p.LeaseEpoch)
@@ -178,7 +178,7 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 		// The Controller does not have the sealing yet (its report is on its way) or no
 		// longer waits for this result. Not an attempt: look again later.
 		e.log.DebugContext(ctx, "the relay gives no write access yet", "run", p.RunID)
-		e.later(p)
+		e.later(ctx, p, "the relay gives no write access yet")
 		return false
 	}
 	pushErr := e.o.Git.Push(ctx, local.ProjectID, p.ResultCommit, local.Branch, gitops.PushAuth{
@@ -192,10 +192,13 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 	if pushErr == nil {
 		e.forgetBackoff(p.Key)
 		txErr := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
-			if err := state.MarkPushed(ctx, tx, p, now); err != nil {
+			// The seq of the `published` report is kept with the push: only the confirmation of
+			// that very report may end this try.
+			seq, err := e.reportSeq(ctx, tx, p.Key, v1.ReportPublished, now, func(en *v1.RunReportEntry) { en.ResultCommit = p.ResultCommit })
+			if err != nil {
 				return err
 			}
-			return e.report(ctx, tx, p.Key, v1.ReportPublished, now, func(en *v1.RunReportEntry) { en.ResultCommit = p.ResultCommit })
+			return state.MarkPushed(ctx, tx, p, seq, now)
 		})
 		return e.settled(ctx, p, txErr, "recording a push")
 	}
@@ -225,7 +228,7 @@ func (e *Executor) tokenFailed(ctx context.Context, p state.Publication, err err
 		level = slog.LevelWarn // once per publication; the next tries are not news
 	}
 	e.log.Log(ctx, level, "asking for a token failed; it will be tried again", "run", p.RunID, "err", err)
-	e.later(p)
+	e.later(ctx, p, "the Controller gave no token: "+briefErr(err))
 	return false
 }
 
@@ -274,7 +277,7 @@ func (e *Executor) settled(ctx context.Context, p state.Publication, err error, 
 		return true
 	case ctx.Err() == nil:
 		e.log.ErrorContext(ctx, "the state of the Worker could not be written; it will be tried again", "run", p.RunID, "doing", what, "err", err)
-		e.later(p)
+		e.later(ctx, p, "the state of the Worker could not be written")
 	}
 	return false
 }
@@ -314,13 +317,20 @@ func (e *Executor) forgetBackoff(k state.Key) {
 	delete(e.pubMemos, k)
 }
 
-// later keeps the publisher from spinning on a publication that cannot move
-// now. Nothing is written: the persisted time is only for tries that were made.
-func (e *Executor) later(p state.Publication) {
+// later postpones a publication that cannot move now. The postponement is
+// persisted (compare-and-set on the try), so that publications that are waiting
+// do not take the place of those that are due; if even that cannot be written
+// the wait is kept in memory.
+func (e *Executor) later(ctx context.Context, p state.Publication, why string) {
 	wait := e.nextBackoff(p.Key)
+	now := e.clock.Now()
+	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.Defer(ctx, tx, p, now.Add(wait), why, now) })
+	if err == nil || errors.Is(err, state.ErrChanged) {
+		return
+	}
 	e.backoffMu.Lock()
 	defer e.backoffMu.Unlock()
-	e.pubMemos[p.Key].notBefore = e.clock.Now().Add(wait)
+	e.pubMemos[p.Key].notBefore = now.Add(wait)
 }
 
 func (e *Executor) deferred(k state.Key) bool {
@@ -336,9 +346,11 @@ func briefErr(err error) string { return reportable(err.Error()) }
 // ConfirmView is what the sender hands over for each Run view the Controller
 // answered with, in the transaction that deletes the confirmed reports: a push
 // is confirmed (or failed) only when the Controller's own view of the Run says
-// so. A view of another lease, or of a Run that is not waiting for it, changes
-// nothing.
-func (e *Executor) ConfirmView(ctx context.Context, tx *state.Tx, k state.Key, run v1.Run) error {
+// so. confirmed are the seqs of the reports that request settled: the view
+// confirms the push whose `published` report is among them, and no other, so the
+// answer to an older try never moves a newer one. A view of another lease, or of a
+// Run that is not waiting for it, changes nothing.
+func (e *Executor) ConfirmView(ctx context.Context, tx *state.Tx, k state.Key, confirmed []uint64, run v1.Run) error {
 	if run.Lease == nil || run.Lease.Epoch != k.LeaseEpoch {
 		return nil
 	}
@@ -351,6 +363,6 @@ func (e *Executor) ConfirmView(ctx context.Context, tx *state.Tx, k state.Key, r
 	default:
 		return nil
 	}
-	_, err := state.ConfirmPublication(ctx, tx, k, to, e.clock.Now())
+	_, err := state.ConfirmPublication(ctx, tx, k, confirmed, to, e.clock.Now())
 	return err
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -37,6 +38,7 @@ type Publication struct {
 	Excluded          []string
 	ExcludedTruncated bool
 	Generation        int
+	PublishedSeq      uint64 // the journal seq of the `published` report of a push waiting to be confirmed; 0 if none
 	Attempts          int
 	NextAttemptAt     time.Time
 	LastError         string
@@ -50,7 +52,7 @@ type excludedDoc struct {
 }
 
 const pubColumns = `run_id, lease_epoch, state, parent_oid, sealed_at, COALESCE(result_commit, ''), COALESCE(excluded, ''),
-    generation, attempts, next_attempt_at, COALESCE(last_error, ''), created_at, updated_at`
+    generation, COALESCE(published_seq, 0), attempts, next_attempt_at, COALESCE(last_error, ''), created_at, updated_at`
 
 func scanPublication(row scanner) (Publication, error) {
 	var (
@@ -59,7 +61,7 @@ func scanPublication(row scanner) (Publication, error) {
 		sealed, next, created, updated int64
 	)
 	if err := row.Scan(&p.RunID, &p.LeaseEpoch, &state, &p.ParentOID, &sealed, &p.ResultCommit, &excluded,
-		&p.Generation, &p.Attempts, &next, &p.LastError, &created, &updated); err != nil {
+		&p.Generation, &p.PublishedSeq, &p.Attempts, &next, &p.LastError, &created, &updated); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Publication{}, ErrNotFound
 		}
@@ -149,14 +151,26 @@ func MarkSealed(ctx context.Context, tx *Tx, p Publication, commit string, exclu
 	return changedOne(res, err, "sealing a publication")
 }
 
-// MarkPushed records that the relay took the push. Compare-and-set on the
-// generation, the state sealed and the attempt it was made in.
-func MarkPushed(ctx context.Context, tx *Tx, p Publication, at time.Time) error {
+// MarkPushed records that the relay took the push, and the seq of its `published`
+// report. Compare-and-set on the generation, the state sealed and the attempt it
+// was made in.
+func MarkPushed(ctx context.Context, tx *Tx, p Publication, seq uint64, at time.Time) error {
 	res, err := tx.exec(ctx,
-		`UPDATE publications SET state = ?, updated_at = ?
+		`UPDATE publications SET state = ?, published_seq = ?, updated_at = ?
 		 WHERE run_id = ? AND lease_epoch = ? AND generation = ? AND attempts = ? AND state = ?`,
-		string(PubPushed), at.UnixNano(), p.RunID, p.LeaseEpoch, p.Generation, p.Attempts, string(PubSealed))
+		string(PubPushed), seq, at.UnixNano(), p.RunID, p.LeaseEpoch, p.Generation, p.Attempts, string(PubSealed))
 	return changedOne(res, err, "recording a push")
+}
+
+// Defer postpones the next try of a publication that cannot move now, without
+// counting an attempt. Compare-and-set on the generation, the state and the
+// attempts it was read with: the postponement of an older try does not delay a newer one.
+func Defer(ctx context.Context, tx *Tx, p Publication, next time.Time, why string, at time.Time) error {
+	res, err := tx.exec(ctx,
+		`UPDATE publications SET next_attempt_at = ?, last_error = ?, updated_at = ?
+		 WHERE run_id = ? AND lease_epoch = ? AND generation = ? AND attempts = ? AND state = ?`,
+		next.UnixNano(), why, at.UnixNano(), p.RunID, p.LeaseEpoch, p.Generation, p.Attempts, string(p.State))
+	return changedOne(res, err, "postponing a publication")
 }
 
 // Retry schedules the next try of a sealed (or sealing) publication. counted says
@@ -185,12 +199,21 @@ func FailPublication(ctx context.Context, tx *Tx, p Publication, why string, at 
 }
 
 // ConfirmPublication ends a pushed publication with what the Controller's view
-// of the Run says: published or failed. A publication that is not pushed any more
-// is left as it is, since the view is about an older try.
-func ConfirmPublication(ctx context.Context, tx *Tx, k Key, to PubState, at time.Time) (confirmed bool, err error) {
+// of the Run says: published or failed. It does so only if the `published` report
+// of that push is one of the seqs the Controller just settled; a publication that
+// is not pushed any more, or whose push is another, is left as it is, since the
+// view is about an older try.
+func ConfirmPublication(ctx context.Context, tx *Tx, k Key, confirmed []uint64, to PubState, at time.Time) (bool, error) {
+	if len(confirmed) == 0 {
+		return false, nil
+	}
+	args := []any{string(to), at.UnixNano(), k.RunID, k.LeaseEpoch, string(PubPushed)}
+	for _, seq := range confirmed {
+		args = append(args, seq)
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(confirmed)), ",")
 	res, err := tx.exec(ctx,
-		`UPDATE publications SET state = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ? AND state = ?`,
-		string(to), at.UnixNano(), k.RunID, k.LeaseEpoch, string(PubPushed))
+		`UPDATE publications SET state = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ? AND state = ? AND published_seq IN (`+marks+`)`, args...) //nolint:gosec // only placeholders are concatenated
 	if err != nil {
 		return false, fmt.Errorf("state: confirming a publication: %w", err)
 	}
@@ -204,7 +227,7 @@ func ConfirmPublication(ctx context.Context, tx *Tx, k Key, to PubState, at time
 func RequeuePublication(ctx context.Context, tx *Tx, k Key, at time.Time) (requeued bool, err error) {
 	res, err := tx.exec(ctx,
 		`UPDATE publications SET state = CASE WHEN result_commit IS NULL THEN ? ELSE ? END, generation = generation + 1,
-		        attempts = 0, next_attempt_at = ?, last_error = NULL, updated_at = ?
+		        published_seq = NULL, attempts = 0, next_attempt_at = ?, last_error = NULL, updated_at = ?
 		 WHERE run_id = ? AND lease_epoch = ? AND state IN ('failed', 'pushed', 'published')`,
 		string(PubSealing), string(PubSealed), at.UnixNano(), at.UnixNano(), k.RunID, k.LeaseEpoch)
 	if err != nil {

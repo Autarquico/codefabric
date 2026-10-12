@@ -295,7 +295,13 @@ func viewOf(k state.Key, p domain.Publication) v1.Run {
 
 func (f *fixture) confirm(k state.Key, run v1.Run) {
 	f.t.Helper()
-	if err := f.db.WithTx(f.t.Context(), func(tx *state.Tx) error { return f.e.ConfirmView(f.t.Context(), tx, k, run) }); err != nil {
+	// The view answers the report of the push that is waiting, as the Controller would.
+	f.confirmSeqs(k, []uint64{f.publication(k).PublishedSeq}, run)
+}
+
+func (f *fixture) confirmSeqs(k state.Key, seqs []uint64, run v1.Run) {
+	f.t.Helper()
+	if err := f.db.WithTx(f.t.Context(), func(tx *state.Tx) error { return f.e.ConfirmView(f.t.Context(), tx, k, seqs, run) }); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -675,5 +681,53 @@ func TestPublish_ANewTryRereadsTheHeadOfAWorktreeThatWasNotARepository(t *testin
 	p := f.publication(k)
 	if p.State != state.PubSealed || p.ParentOID != headOID {
 		t.Errorf("publication = %+v", p)
+	}
+}
+
+func TestPublish_TheAnswerToAnOlderTryNeverMovesTheNewOne(t *testing.T) {
+	f, g := newGitFixture(t)
+	k := f.sealedRun()
+	f.turn() // generation 1 is pushed, with its `published` report
+	first := f.publication(k)
+	if first.State != state.PubPushed || first.PublishedSeq == 0 {
+		t.Fatalf("publication = %+v", first)
+	}
+	// The answer to that report is held back (a barrier) while a new try goes by.
+	f.publishOrder(k)
+	f.turn()
+	second := f.publication(k)
+	if second.State != state.PubPushed || second.Generation != 2 || second.PublishedSeq == first.PublishedSeq {
+		t.Fatalf("publication = %+v", second)
+	}
+	if g.pushCount() != 2 {
+		t.Fatalf("%d pushes", g.pushCount())
+	}
+	// The held answer arrives: it is about the first report, and says failed.
+	f.confirmSeqs(k, []uint64{first.PublishedSeq}, viewOf(k, domain.PublicationFailed))
+	if p := f.publication(k); p.State != state.PubPushed {
+		t.Fatalf("the answer to generation 1 moved generation 2: %+v", p)
+	}
+	// The answer to the new report does.
+	f.confirmSeqs(k, []uint64{second.PublishedSeq}, viewOf(k, domain.PublicationPublished))
+	if p := f.publication(k); p.State != state.PubPublished {
+		t.Errorf("publication = %+v", p)
+	}
+}
+
+func TestPublish_PublicationsThatWaitDoNotTakeThePlaceOfThoseThatAreDue(t *testing.T) {
+	f, _ := newGitFixture(t)
+	f.ctrl.mu.Lock()
+	f.ctrl.relayToken = func(string, uint64) (v1.RelayTokenResponse, error) {
+		return v1.RelayTokenResponse{Token: "t", Path: "/v1/relay/project_1.git", Write: false}, nil
+	}
+	f.ctrl.mu.Unlock()
+	for range publishBatch {
+		f.exitedRun()
+		f.turn()
+	}
+	last := f.exitedRun()
+	f.turn() // the batch is full of waiting publications; the new one is still reached
+	if p := f.publication(last); p.State != state.PubSealed {
+		t.Fatalf("the 17th publication is %s: the ones that wait took its place", p.State)
 	}
 }

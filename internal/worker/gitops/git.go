@@ -47,6 +47,8 @@ type Options struct {
 	Log   *slog.Logger
 	// GitPath replaces the git found on the PATH, for tests.
 	GitPath string
+	// PushTimeout replaces the deadline of a push (30 min), for tests.
+	PushTimeout time.Duration
 }
 
 // Git runs the git operations of the Worker.
@@ -172,10 +174,11 @@ func (g *Git) run(ctx context.Context, c cmd) (result, error) {
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
+	case ctx.Err() != nil:
+		// The deadline (or the caller) killed it: that is what happened, whatever the exit says.
+		return res, fmt.Errorf("gitops: git %s: %w", c.args[0], ctx.Err())
 	case errors.As(err, &exit):
 		res.exit = exit.ExitCode()
-	case ctx.Err() != nil:
-		return res, fmt.Errorf("gitops: git %s: %w", c.args[0], ctx.Err())
 	default:
 		return res, fmt.Errorf("gitops: starting git %s: %w", c.args[0], err)
 	}

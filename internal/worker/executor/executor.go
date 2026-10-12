@@ -302,13 +302,18 @@ func (e *Executor) sessionName(k state.Key) string { return cfruntime.NameFor(k.
 
 // report adds a report to the transaction that makes the change it tells about.
 func (e *Executor) report(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) error {
+	_, err := e.reportSeq(ctx, tx, k, kind, at, fill)
+	return err
+}
+
+// reportSeq is report, and says the seq the report was given in the journal.
+func (e *Executor) reportSeq(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) (uint64, error) {
 	entry := v1.RunReportEntry{Kind: kind, At: at}
 	if fill != nil {
 		fill(&entry)
 	}
 	entry.Message = reportable(entry.Message)
-	_, err := e.o.Journal.AppendTx(ctx, tx, k, entry)
-	return err
+	return e.o.Journal.AppendTx(ctx, tx, k, entry)
 }
 
 func (e *Executor) runtimeHandle(k state.Key) *v1.RuntimeHandle {

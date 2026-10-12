@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -96,7 +97,7 @@ func (g *Git) Push(ctx context.Context, project, commit, branch string, a PushAu
 		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
 	}
 	res, err := g.run(ctx, cmd{
-		dir: bare, env: env, timeout: pushTimeout, secrets: []string{a.Token},
+		dir: bare, env: env, timeout: g.pushTimeout(), secrets: []string{a.Token},
 		args: []string{"push", "--porcelain", "--no-verify", "--no-progress", "--end-of-options", a.URL, commit + ":refs/heads/" + branch},
 	})
 	if err != nil {
@@ -156,4 +157,11 @@ func classOfStatus(code int) PushClass {
 		return PushForbidden
 	}
 	return PushPermanent
+}
+
+func (g *Git) pushTimeout() time.Duration {
+	if g.o.PushTimeout > 0 {
+		return g.o.PushTimeout
+	}
+	return pushTimeout
 }

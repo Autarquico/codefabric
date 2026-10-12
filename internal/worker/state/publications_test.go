@@ -83,11 +83,11 @@ func TestPublication_TheStepsAreCompareAndSetsOnGenerationAndAttempt(t *testing.
 	if attempts != 1 {
 		t.Errorf("attempts = %d", attempts)
 	}
-	if err := db.WithTx(t.Context(), func(x *state.Tx) error { return state.MarkPushed(t.Context(), x, sealed, t0) }); !errors.Is(err, state.ErrChanged) {
+	if err := db.WithTx(t.Context(), func(x *state.Tx) error { return state.MarkPushed(t.Context(), x, sealed, 7, t0) }); !errors.Is(err, state.ErrChanged) {
 		t.Errorf("the push of an old attempt: %v", err)
 	}
 	fresh := read(t, db.Reader(), p.Key)
-	tx(t, db, func(x *state.Tx) error { return state.MarkPushed(t.Context(), x, fresh, t0) })
+	tx(t, db, func(x *state.Tx) error { return state.MarkPushed(t.Context(), x, fresh, 7, t0) })
 	if got := read(t, db.Reader(), p.Key).State; got != state.PubPushed {
 		t.Fatalf("state = %s", got)
 	}
@@ -99,14 +99,14 @@ func TestPublication_TheStepsAreCompareAndSetsOnGenerationAndAttempt(t *testing.
 
 	ok := false
 	tx(t, db, func(x *state.Tx) (err error) {
-		ok, err = state.ConfirmPublication(t.Context(), x, p.Key, state.PubPublished, t0)
+		ok, err = state.ConfirmPublication(t.Context(), x, p.Key, []uint64{7}, state.PubPublished, t0)
 		return err
 	})
 	if !ok || read(t, db.Reader(), p.Key).State != state.PubPublished {
 		t.Fatal("not confirmed")
 	}
 	tx(t, db, func(x *state.Tx) (err error) {
-		ok, err = state.ConfirmPublication(t.Context(), x, p.Key, state.PubFailed, t0)
+		ok, err = state.ConfirmPublication(t.Context(), x, p.Key, []uint64{7}, state.PubFailed, t0)
 		return err
 	})
 	if ok {
@@ -137,7 +137,7 @@ func TestPublication_RequeueKeepsTheCommitAndAnOldTryCannotOverwriteTheNewOne(t 
 	}
 	// The attempt of the old try that was running meanwhile reports back: it changes nothing.
 	for name, fn := range map[string]func(x *state.Tx) error{
-		"push":  func(x *state.Tx) error { return state.MarkPushed(t.Context(), x, old, t0) },
+		"push":  func(x *state.Tx) error { return state.MarkPushed(t.Context(), x, old, 7, t0) },
 		"fail":  func(x *state.Tx) error { return state.FailPublication(t.Context(), x, old, "late", t0) },
 		"retry": func(x *state.Tx) error { _, err := state.Retry(t.Context(), x, old, true, t0, "late", t0); return err },
 	} {
@@ -200,5 +200,58 @@ func TestAssignmentKeepsTheBranchAndTheRepo(t *testing.T) {
 	got, err := state.RunBy(t.Context(), db.Reader(), a.Key)
 	if err != nil || got.Branch != "cf/x/run-1" || got.Repo != "/srv/r" {
 		t.Errorf("run = %+v (%v)", got, err)
+	}
+}
+
+func TestPublication_AConfirmationOnlyEndsThePushItIsAbout(t *testing.T) {
+	db, _ := open(t)
+	p := intent("run_a")
+	tx(t, db, func(x *state.Tx) error {
+		if _, err := state.InsertPublication(t.Context(), x, p); err != nil {
+			return err
+		}
+		if err := state.MarkSealed(t.Context(), x, read(t, x, p.Key), result, nil, false, t0); err != nil {
+			return err
+		}
+		return state.MarkPushed(t.Context(), x, read(t, x, p.Key), 10, t0)
+	})
+	if got := read(t, db.Reader(), p.Key); got.PublishedSeq != 10 {
+		t.Fatalf("published seq = %d", got.PublishedSeq)
+	}
+	var ok bool
+	confirm := func(seqs ...uint64) {
+		tx(t, db, func(x *state.Tx) (err error) {
+			ok, err = state.ConfirmPublication(t.Context(), x, p.Key, seqs, state.PubPublished, t0)
+			return err
+		})
+	}
+	confirm(9, 11)
+	if ok || read(t, db.Reader(), p.Key).State != state.PubPushed {
+		t.Fatal("the confirmation of other reports moved the push")
+	}
+	confirm()
+	if ok {
+		t.Fatal("an empty confirmation moved the push")
+	}
+	confirm(3, 10)
+	if !ok || read(t, db.Reader(), p.Key).State != state.PubPublished {
+		t.Fatal("the confirmation of its own report did not")
+	}
+}
+
+func TestPublication_DeferMovesOnlyTheTryItWasReadWith(t *testing.T) {
+	db, _ := open(t)
+	p := intent("run_a")
+	tx(t, db, func(x *state.Tx) error { _, err := state.InsertPublication(t.Context(), x, p); return err })
+	old := read(t, db.Reader(), p.Key)
+	tx(t, db, func(x *state.Tx) error { return state.Defer(t.Context(), x, old, t0.Add(time.Hour), "waiting", t0) })
+	if got := read(t, db.Reader(), p.Key); !got.NextAttemptAt.Equal(t0.Add(time.Hour)) || got.Attempts != 0 {
+		t.Errorf("publication = %+v", got)
+	}
+	tx(t, db, func(x *state.Tx) error { _, err := state.RequeuePublication(t.Context(), x, p.Key, t0); return err }) // no-op: it is trying
+	tx(t, db, func(x *state.Tx) error { return state.FailPublication(t.Context(), x, read(t, x, p.Key), "x", t0) })
+	tx(t, db, func(x *state.Tx) error { _, err := state.RequeuePublication(t.Context(), x, p.Key, t0); return err })
+	if err := db.WithTx(t.Context(), func(x *state.Tx) error { return state.Defer(t.Context(), x, old, t0.Add(2*time.Hour), "late", t0) }); !errors.Is(err, state.ErrChanged) {
+		t.Errorf("the postponement of an old try: %v", err)
 	}
 }
