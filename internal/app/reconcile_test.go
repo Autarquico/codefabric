@@ -222,6 +222,7 @@ func TestScenario_StopCancelLostReconcile_Arranque_TheGateOpensAtTheTTL(t *testi
 	must(t, e.clock.BlockUntil(ctx, 1))
 	gateClosed(t, e.app.Reconciliation, "at the start")
 	e.clock.Advance(44 * time.Second)
+	must(t, e.clock.BlockUntil(ctx, 1))
 	gateClosed(t, e.app.Reconciliation, "before the TTL")
 	e.clock.Advance(time.Second)
 	select {
@@ -237,9 +238,10 @@ func TestScenario_StopCancelLostReconcile_Arranque_TheGateOpensAtTheTTL(t *testi
 	}
 }
 
+// gateClosed says the gate stays closed. It is called once the gate is waiting
+// on the clock again (BlockUntil), that is, once it has looked and not opened.
 func gateClosed(t *testing.T, s *reconciliation.Service, when string) {
 	t.Helper()
-	time.Sleep(20 * time.Millisecond)
 	select {
 	case <-s.Ready():
 		t.Fatalf("the gate is open %s", when)

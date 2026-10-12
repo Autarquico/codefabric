@@ -29,6 +29,9 @@ import (
 // of seconds needs them closer than Appendix A's.
 const heartbeatEvery = "300ms"
 
+// heartbeatGap bounds how far apart two heartbeats are, with a margin.
+const heartbeatGap = time.Second
+
 // waitScript is a harness that says it is ready and waits for a file named go.
 const waitScript = `touch ready
 echo $$ > harness.pid
@@ -355,7 +358,6 @@ func TestScenario_StopCancelLostReconcile_ReinicioDelController(t *testing.T) {
 	}
 
 	ctrl.kill()
-	time.Sleep(500 * time.Millisecond)
 	for _, pid := range pids {
 		if !processAlive(pid) {
 			t.Fatal("a harness died with the Controller")
@@ -449,10 +451,23 @@ func TestScenario_StopCancelLostReconcile_CaidaDelControllerNoCuenta_E2E(t *test
 	created := b.running(waitScript)
 	run := created.Run.ID
 
+	before, err := b.admin.Worker(t.Context(), "alpha")
+	if err != nil || before.LastHeartbeatAt == nil {
+		t.Fatalf("worker = %+v, %v", before, err)
+	}
 	ctrl.kill()
-	time.Sleep(5 * time.Second) // down for longer than run_lost_timeout
+	// Down for longer than run_lost_timeout since the last heartbeat it had.
+	eventually(t, "the outage to outlast run_lost_timeout", func() bool {
+		return time.Since(*before.LastHeartbeatAt) > 3*time.Second+heartbeatGap
+	})
 	startController(t, host)
-	time.Sleep(4 * time.Second) // longer than the timeout since the start, with the Worker heartbeating
+	restarted := time.Now()
+	// Until a heartbeat comes more than the timeout after the start, the Run would
+	// have been lost by then if the outage counted.
+	eventually(t, "a heartbeat past the timeout after the start", func() bool {
+		w, err := b.admin.Worker(t.Context(), "alpha")
+		return err == nil && w.LastHeartbeatAt != nil && w.LastHeartbeatAt.After(restarted.Add(3*time.Second+heartbeatGap))
+	})
 	if r := b.run(run); r.State != domain.RunRunning {
 		t.Fatalf("the Run is %s after the Controller came back", r.State)
 	}

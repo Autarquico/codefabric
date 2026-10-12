@@ -57,8 +57,6 @@ func (s *Service) Ready() <-chan struct{} { return s.ready }
 // RunGate evaluates the gate until it opens or ctx ends: at every commit and
 // every tick of the clock.
 func (s *Service) RunGate(ctx context.Context, log *slog.Logger) {
-	ticker := s.clock.NewTicker(readyTick)
-	defer ticker.Stop()
 	for {
 		seen := s.db.Notifier().Latest()
 		open, waiting, err := s.gateOpen(ctx)
@@ -70,11 +68,16 @@ func (s *Service) RunGate(ctx context.Context, log *slog.Logger) {
 			close(s.ready)
 			return
 		}
+		// A timer per wait: it is armed only once the gate was looked at, so a test
+		// that waits for it knows the look is over.
+		timer := s.clock.NewTimer(readyTick)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C():
+		case <-timer.C():
 		case <-s.db.Notifier().Changed(seen):
+			timer.Stop()
 		}
 	}
 }
