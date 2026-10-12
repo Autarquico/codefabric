@@ -2,6 +2,8 @@ package state
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -77,4 +79,53 @@ func forSeqs(ctx context.Context, tx *Tx, prefix string, seqs []uint64) error {
 		return fmt.Errorf("state: updating the journal: %w", err)
 	}
 	return nil
+}
+
+// DeleteJournalOf removes every report of an assignment: the Controller will
+// never take them (an orphan, or reports it said are worth nothing).
+func DeleteJournalOf(ctx context.Context, tx *Tx, k Key) error {
+	_, err := tx.exec(ctx, `DELETE FROM journal WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch)
+	if err != nil {
+		return fmt.Errorf("state: dropping the reports of an assignment: %w", err)
+	}
+	return nil
+}
+
+// JournalCounts says how many reports wait in the journal for each assignment.
+func JournalCounts(ctx context.Context, q Querier) (map[Key]int, error) {
+	rows, err := q.QueryContext(ctx, `SELECT run_id, lease_epoch, COUNT(*) FROM journal GROUP BY run_id, lease_epoch`)
+	if err != nil {
+		return nil, fmt.Errorf("state: counting the journal: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[Key]int{}
+	for rows.Next() {
+		var (
+			k Key
+			n int
+		)
+		if err := rows.Scan(&k.RunID, &k.LeaseEpoch, &n); err != nil {
+			return nil, fmt.Errorf("state: scanning the journal: %w", err)
+		}
+		out[k] = n
+	}
+	return out, rows.Err()
+}
+
+// HasJournalSeq says whether the report with the seq is still in the journal.
+func HasJournalSeq(ctx context.Context, q Querier, seq uint64) (bool, error) {
+	var n int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM journal WHERE seq = ?`, seq).Scan(&n); err != nil {
+		return false, fmt.Errorf("state: reading the journal: %w", err)
+	}
+	return n > 0, nil
+}
+
+// LastJournalSeq is the highest seq the journal ever gave.
+func LastJournalSeq(ctx context.Context, q Querier) (uint64, error) {
+	var seq sql.NullInt64
+	if err := q.QueryRowContext(ctx, `SELECT seq FROM sqlite_sequence WHERE name = 'journal'`).Scan(&seq); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("state: reading the journal sequence: %w", err)
+	}
+	return uint64(seq.Int64), nil //nolint:gosec // a seq is never negative
 }

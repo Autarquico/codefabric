@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -159,6 +160,19 @@ func (r *fakeRuntime) Status(_ context.Context, h cfruntime.Handle) (cfruntime.S
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return cfruntime.Status{Alive: r.sessions[h.Ref[len("sock/"):]]}, nil
+}
+
+func (r *fakeRuntime) List(context.Context) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for name, alive := range r.sessions {
+		if alive {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func (r *fakeRuntime) startCount() int {

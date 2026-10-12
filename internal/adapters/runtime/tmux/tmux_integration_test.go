@@ -270,3 +270,19 @@ func TestWiringTwiceKeepsTheCaptureOpen(t *testing.T) {
 		return strings.Contains(string(raw), "first-line") && strings.Contains(string(raw), "second-line")
 	})
 }
+
+func TestListNamesOnlyTheSessionsOfRuns(t *testing.T) {
+	r := newRuntime(t)
+	if names, err := r.List(t.Context()); err != nil || len(names) != 0 {
+		t.Fatalf("a server that is not running: %v, %v", names, err)
+	}
+	for _, name := range []string{cfruntime.NameFor("run_c", 2), "someone-else"} {
+		if _, err := r.Start(t.Context(), cfruntime.Spec{Name: name, Dir: t.TempDir(), Command: sh("sleep 60")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names, err := r.List(t.Context())
+	if err != nil || len(names) != 1 || names[0] != cfruntime.NameFor("run_c", 2) {
+		t.Errorf("List = %v, %v", names, err)
+	}
+}

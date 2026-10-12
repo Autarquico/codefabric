@@ -9,6 +9,8 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // NameFor is the name of the session of a Run under a lease epoch (§6.4). It is
@@ -16,6 +18,21 @@ import (
 // which is what lets Start adopt a session instead of making a second one.
 func NameFor(runID string, leaseEpoch uint64) string {
 	return fmt.Sprintf("cf-%s-e%d", runID, leaseEpoch)
+}
+
+// ParseName reads the Run and lease epoch of a session name, if it is one
+// NameFor wrote; ok is false for any other.
+func ParseName(name string) (runID string, leaseEpoch uint64, ok bool) {
+	rest, found := strings.CutPrefix(name, "cf-")
+	i := strings.LastIndex(rest, "-e")
+	if !found || i <= 0 {
+		return "", 0, false
+	}
+	epoch, err := strconv.ParseUint(rest[i+2:], 10, 63)
+	if err != nil || epoch == 0 || NameFor(rest[:i], epoch) != name {
+		return "", 0, false
+	}
+	return rest[:i], epoch, true
 }
 
 // Spec describes the session of one Run.
@@ -62,4 +79,7 @@ type Runtime interface {
 	Status(ctx context.Context, h Handle) (Status, error)
 	// HandleFor is the handle Start returns for a Name, without starting anything.
 	HandleFor(name string) Handle
+	// List names the sessions of Runs the Runtime has, whoever started them:
+	// those whose name NameFor could have written.
+	List(ctx context.Context) ([]string, error)
 }

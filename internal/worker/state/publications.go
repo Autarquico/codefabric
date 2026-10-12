@@ -236,3 +236,22 @@ func RequeuePublication(ctx context.Context, tx *Tx, k Key, at time.Time) (reque
 	n, err := res.RowsAffected()
 	return n == 1, err
 }
+
+// UnsettledPublications lists the publications the Controller has not settled
+// here: sealing, sealed or pushed.
+func UnsettledPublications(ctx context.Context, q Querier) ([]Publication, error) {
+	return collectPublications(ctx, q, `SELECT `+pubColumns+` FROM publications WHERE state IN ('sealing', 'sealed', 'pushed') ORDER BY run_id, lease_epoch`)
+}
+
+// GiveUpPublication ends, without a report, the publication of an assignment the
+// Controller will never take a report of (an orphan): whatever its state, it is
+// failed here, and its result kept.
+func GiveUpPublication(ctx context.Context, tx *Tx, k Key, why string, at time.Time) error {
+	_, err := tx.exec(ctx, `UPDATE publications SET state = ?, last_error = ?, updated_at = ?
+		WHERE run_id = ? AND lease_epoch = ? AND state IN ('sealing', 'sealed', 'pushed')`,
+		string(PubFailed), why, at.UnixNano(), k.RunID, k.LeaseEpoch)
+	if err != nil {
+		return fmt.Errorf("state: giving up a publication: %w", err)
+	}
+	return nil
+}

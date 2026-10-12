@@ -182,6 +182,21 @@ func (r *Runtime) KillServer(ctx context.Context) error {
 	return nil
 }
 
+// List names the sessions of Runs of this server.
+func (r *Runtime) List(ctx context.Context) ([]string, error) {
+	all, err := r.Sessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, name := range all {
+		if _, _, ok := cfruntime.ParseName(name); ok {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
 // Sessions lists the names of the sessions of this server.
 func (r *Runtime) Sessions(ctx context.Context) ([]string, error) {
 	out, _, err := r.exec(ctx, "list-sessions", "-F", "#{session_name}")
