@@ -9,4 +9,6 @@ type WorkerCommandType string
 const (
 	// CommandAssign offers a Run to the Worker under a lease (§10.4).
 	CommandAssign WorkerCommandType = "assign"
+	// CommandPublish asks the Worker to push the sealed result of a Run again (§22.6).
+	CommandPublish WorkerCommandType = "publish"
 )

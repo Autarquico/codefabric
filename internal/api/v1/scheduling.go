@@ -61,8 +61,18 @@ type AssignCommand struct {
 	Epoch        uint64          `json:"epoch"`
 	AcceptBy     time.Time       `json:"accept_by"`
 	SourceCommit string          `json:"source_commit"`
+	Branch       string          `json:"branch"`
+	Repo         string          `json:"repo"`
 	Resources    Capacity        `json:"resources"`
 	Spec         json.RawMessage `json:"spec"`
+}
+
+// PublishCommand asks the Worker to push the sealed result of a Run again, under
+// the lease the Run was accepted with.
+type PublishCommand struct {
+	RunID   string `json:"run_id"`
+	LeaseID string `json:"lease_id"`
+	Epoch   uint64 `json:"epoch"`
 }
 
 // WorkerCommand is one order of the Controller→Worker queue. Seq is per
@@ -72,6 +82,7 @@ type WorkerCommand struct {
 	Type      domain.WorkerCommandType `json:"type"`
 	CreatedAt time.Time                `json:"created_at"`
 	Assign    *AssignCommand           `json:"assign,omitempty"`
+	Publish   *PublishCommand          `json:"publish,omitempty"`
 }
 
 // AssignmentsResponse is GET /v1/worker/assignments: the orders the Worker has

@@ -125,6 +125,9 @@ func TestWorkerPathsLiveUnderTheirOwnDirectory(t *testing.T) {
 		p.WorkerStateFile():             "/d/worker/state.db",
 		p.WorkerRunDir("run_X", 2):      "/d/worker/runs/run_X-e2",
 		p.WorkerWorktreeDir("run_X", 2): "/d/worker/worktrees/run_X-e2",
+		p.WorkerRepoDir("project_X"):    "/d/worker/repos/project_X.git",
+		p.RelayDir():                    "/d/relay",
+		p.RelayRepoDir("project_X"):     "/d/relay/project_X.git",
 	} {
 		if got != want {
 			t.Errorf("got %s, want %s", got, want)
