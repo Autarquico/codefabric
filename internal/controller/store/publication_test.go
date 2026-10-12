@@ -73,7 +73,9 @@ func TestPublication_EveryChangeIsACompareAndSetOnOneRow(t *testing.T) {
 		t.Fatalf("sealed run = %+v", sealed)
 	}
 	for name, fn := range map[string]func(tx *Tx) error{
-		"seal again":                 func(tx *Tx) error { return tx.SealRun(ctx, sealed, "2222222222222222222222222222222222222222", nil, false) },
+		"seal again": func(tx *Tx) error {
+			return tx.SealRun(ctx, sealed, "2222222222222222222222222222222222222222", nil, false)
+		},
 		"publish another commit":     func(tx *Tx) error { return tx.PublishRun(ctx, sealed, "2222222222222222222222222222222222222222") },
 		"retry what is not failed":   func(tx *Tx) error { return tx.RetryPublication(ctx, sealed) },
 		"fail a stale result commit": func(tx *Tx) error { stale := sealed; stale.ResultCommit = ""; return tx.FailPublication(ctx, stale) },

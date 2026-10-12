@@ -74,16 +74,16 @@ type Run struct {
 	ResultExcluded          []string
 	ResultExcludedTruncated bool
 	State                   domain.RunState
-	EndReason    domain.EndReason
-	QueuedReason string
-	Publication  domain.Publication
-	Evaluation   domain.Evaluation
-	Runtime      domain.Runtime
-	Promoted     bool
-	WorkerID     domain.ID
-	CreatedAt    time.Time
-	StartedAt    *time.Time
-	FinishedAt   *time.Time
+	EndReason               domain.EndReason
+	QueuedReason            string
+	Publication             domain.Publication
+	Evaluation              domain.Evaluation
+	Runtime                 domain.Runtime
+	Promoted                bool
+	WorkerID                domain.ID
+	CreatedAt               time.Time
+	StartedAt               *time.Time
+	FinishedAt              *time.Time
 	// ExitCode is that of the harness, nil if it has not exited or left none.
 	// RuntimeHandle is what the Worker gave with `started`, opaque to us.
 	ExitCode      *int
