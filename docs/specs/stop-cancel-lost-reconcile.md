@@ -16,7 +16,7 @@ depends_on:
 supersedes: []
 related_specs: [codefabric-spec, phase-1-workers]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-12
 ---
 
 # Stop, cancel, lost y reconciliación
@@ -76,6 +76,21 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+
+## Decisiones de implementación
+
+Las decisiones de #13 (orden `stop` única por Worker, Run y epoch; reportes tardíos anotados sobre Runs que terminó el Controller; `harness_ran` como evidencia de liberación; reconciliación por rondas con fragmentos y páginas; puerta del scheduler; `lost` revalidado; reintento en `Rederive`; huérfanos conservados en el relay; suelo de compatibilidad v0.2) están en el Apéndice B5 de `docs/codefabric-spec.md`.
+
+Tests por scenario:
+
+| Scenario | Tests |
+|---|---|
+| Cancel | `TestScenario_StopCancelLostReconcile_Cancel` (app), `_Cancel_Executor`, `_Cancel_RealStop` (executor, tmux), `_Cancel_E2E` (cmd/cf) |
+| Reinicio del Controller | `_Arranque`, `_Arranque_TheGateOpensAtTheTTL` (app), `_ReinicioDelController` (cmd/cf, kill -9 del Controller) |
+| Lost y huérfano | `_LostYHuerfano_Lost`, `_LostYHuerfano` (app), `_LostYHuerfano_E2E` (cmd/cf, kill -9 del daemon) |
+| Caída del Controller no cuenta | `_CaidaDelControllerNoCuenta` (app), `_CaidaDelControllerNoCuenta_E2E` (cmd/cf) |
+| Asignación sin registro local | `_AsignacionSinRegistroLocal` (app), `_AsignacionSinRegistroLocal_Executor`, `_AsignacionSinRegistroLocal_E2E` (cmd/cf) |
+| Epochs | `_Epochs` (app), `_Epochs_Executor` |
 
 ## Referencias
 
