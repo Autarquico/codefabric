@@ -588,3 +588,27 @@ func TestPublish_ARestartKeepsWhereThePublicationWas(t *testing.T) {
 		t.Error("a pushed publication was pushed after a restart")
 	}
 }
+
+func TestPush_AcceptedButNotRecordedIsPushedAgainWithTheSameCommit(t *testing.T) {
+	f, g := newGitFixture(t)
+	k := f.sealedRun()
+
+	// The relay takes the push and the state of the Worker cannot be written.
+	f.failJournal(true)
+	f.turn()
+	if g.pushCount() != 1 {
+		t.Fatalf("%d pushes", g.pushCount())
+	}
+	if p := f.publication(k); p.State != state.PubSealed {
+		t.Fatalf("publication = %+v: a push that was not recorded did not happen for the Worker", p)
+	}
+	f.failJournal(false)
+	f.passBackoff()
+	f.turn()
+	if g.pushCount() != 2 || g.pushes[0].Commit != g.pushes[1].Commit || g.pushes[1].Commit != resultOID {
+		t.Errorf("pushes = %+v: the same commit, as a plain push", g.pushes)
+	}
+	if p := f.publication(k); p.State != state.PubPushed {
+		t.Errorf("publication = %+v", p)
+	}
+}

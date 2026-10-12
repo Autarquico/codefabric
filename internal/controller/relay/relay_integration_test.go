@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,7 +32,7 @@ type rig struct {
 	r       *Relay
 	srv     *httptest.Server
 	project domain.ID
-	grant   func(ep Endpoint) Grant
+	grant   atomic.Pointer[func(ep Endpoint) Grant]
 }
 
 func newRig(t *testing.T, tweak func(*Config)) *rig {
@@ -65,7 +66,7 @@ func newRig(t *testing.T, tweak func(*Config)) *rig {
 }
 
 func (g *rig) serve(w http.ResponseWriter, req *http.Request, ep Endpoint) {
-	grant := g.grant(ep)
+	grant := (*g.grant.Load())(ep)
 	req.Header.Del("Authorization")
 	err := g.r.Serve(w, req, ep, grant)
 	switch {
@@ -85,10 +86,12 @@ func (g *rig) url() string { return g.srv.URL + "/" + string(g.project) + ".git"
 
 // allow authorises pushes of oid to branch, and reads, by one Worker.
 func (g *rig) allow(branch, oid string) {
-	g.grant = func(Endpoint) Grant {
+	g.setGrant(func(Endpoint) Grant {
 		return Grant{Project: g.project, Worker: "worker_1", Write: true, Branch: branch, ExpectedOID: oid}
-	}
+	})
 }
+
+func (g *rig) setGrant(f func(Endpoint) Grant) { g.grant.Store(&f) }
 
 func (g *rig) tip(branch string) (string, bool) {
 	g.t.Helper()
@@ -309,7 +312,7 @@ func slowGit(t *testing.T) (script, dump string) {
 func TestRelay_KillsTheWholeGroupWhenTheClientGoes(t *testing.T) {
 	script, dump := slowGit(t)
 	g := newRig(t, func(c *Config) { c.GitPath = script })
-	g.grant = func(Endpoint) Grant { return Grant{Project: g.project, Worker: "worker_1"} }
+	g.setGrant(func(Endpoint) Grant { return Grant{Project: g.project, Worker: "worker_1"} })
 
 	ctx, cancel := context.WithCancel(t.Context())
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, g.url()+"/info/refs?service=git-upload-pack", nil)
@@ -346,9 +349,9 @@ func TestRelay_KillsTheWholeGroupWhenTheClientGoes(t *testing.T) {
 func TestRelay_BusyWhenTheSlotsOrTheWorkersPushAreTaken(t *testing.T) {
 	script, _ := slowGit(t)
 	g := newRig(t, func(c *Config) { c.GitPath = script; c.Concurrency = 2 })
-	g.grant = func(Endpoint) Grant {
+	g.setGrant(func(Endpoint) Grant {
 		return Grant{Project: g.project, Worker: "worker_1", Write: true, Branch: branch1, ExpectedOID: strings.Repeat("a", 40)}
-	}
+	})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	start := func(method, path, ctype string) *http.Response {

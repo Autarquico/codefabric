@@ -9,6 +9,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/controller/api"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
@@ -196,5 +197,34 @@ func TestScenario_GitRelayPublication_FetchNoAutorizado(t *testing.T) {
 		if code, _, _ := f.call(hc, "GET", path, ""); code != 404 {
 			t.Errorf("%s: %d", path, code)
 		}
+	}
+}
+
+func TestRelay_AnExpiredTokenAndTheWrongKindOfIdentityAreRefused(t *testing.T) {
+	f := newRelayFixture(t)
+	f.seal()
+	ctx := t.Context()
+	tok, err := f.alpha.RelayToken(ctx, f.run.ID, f.assign.Epoch)
+	must(t, err)
+	remote := f.alpha.RelayURL(tok.Path)
+	if out, err := f.git(f.alpha, tok.Token, "ls-remote", remote); err != nil {
+		t.Fatalf("before it expires: %v\n%s", err, out)
+	}
+
+	// A client (the owner) is not a Worker, token or not.
+	out, err := f.git(f.owner, tok.Token, "ls-remote", remote)
+	if err == nil || !strings.Contains(out, "403") {
+		t.Errorf("a client at the relay: %v\n%s", err, out)
+	}
+
+	f.clock.Advance(runs.RelayTokenTTL + time.Minute)
+	out, err = f.git(f.alpha, tok.Token, "ls-remote", remote)
+	if err == nil || !strings.Contains(out, "403") {
+		t.Errorf("an expired token: %v\n%s", err, out)
+	}
+	fresh, err := f.alpha.RelayToken(ctx, f.run.ID, f.assign.Epoch)
+	must(t, err)
+	if out, err := f.git(f.alpha, fresh.Token, "ls-remote", remote); err != nil {
+		t.Errorf("a new token: %v\n%s", err, out)
 	}
 }

@@ -81,6 +81,9 @@ func initController(t *testing.T) (host config.Paths, addr, firstInvite string) 
 func serve(t *testing.T, paths config.Paths, opts daemon.Options) (stop func()) {
 	t.Helper()
 	opts.Paths = paths
+	if opts.RelayHookArgv == nil {
+		opts.RelayHookArgv = testRelayHook()
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}

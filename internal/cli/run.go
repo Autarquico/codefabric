@@ -18,7 +18,7 @@ func newDoCmd() *cobra.Command {
 
 func newRunCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "run", Short: "Inspect and explain Runs"}
-	cmd.AddCommand(newRunListCmd(), newRunShowCmd(), newRunExplainCmd(),
+	cmd.AddCommand(newRunListCmd(), newRunShowCmd(), newRunExplainCmd(), newRunPublishCmd(),
 		newFutureRunCmd("fork", "Start a new Run from an existing one", (*client.Client).ForkRun),
 		newFutureRunCmd("promote", "Promote the result of a Run", (*client.Client).PromoteRun))
 	return cmd
@@ -69,8 +69,30 @@ func newRunShowCmd() *cobra.Command {
 				if len(r.Spec) > 0 {
 					spec, _ = json.MarshalIndent(r.Spec, "  ", "  ")
 				}
-				_, err := fmt.Fprintf(w, "ID           %s (%s)\nTask         %s\nAttempt      %d\nState        %s\nCommit       %s\nSpec digest  %s\nCreated      %s\nSpec         %s\n",
-					r.ID, r.Short, r.TaskID, r.Attempt, r.State, r.SourceCommit, r.SpecDigest, local(r.CreatedAt), spec)
+				_, err := fmt.Fprintf(w, "ID           %s (%s)\nTask         %s\nAttempt      %d\nState        %s\nCommit       %s\nBranch       %s\nResult       %s\nPublication  %s\nSpec digest  %s\nCreated      %s\nSpec         %s\n",
+					r.ID, r.Short, r.TaskID, r.Attempt, r.State, r.SourceCommit, dash(r.Branch), dash(r.ResultCommit), r.Publication, r.SpecDigest, local(r.CreatedAt), spec)
+				return err
+			})
+		},
+	}
+}
+
+func newRunPublishCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "publish <run>",
+		Short: "Try again to publish the result of a Run whose publication failed",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := openClient(cmd)
+			if err != nil {
+				return err
+			}
+			r, err := c.PublishRun(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			return emit(cmd, r, func(w io.Writer) error {
+				_, err := fmt.Fprintf(w, "Run %s: publication %s; the Worker that holds the result was asked to publish it again.\n", r.Short, r.Publication)
 				return err
 			})
 		},
