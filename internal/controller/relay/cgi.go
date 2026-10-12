@@ -54,9 +54,13 @@ var (
 	ErrBadBody  = errors.New("relay: the request body cannot be read")
 )
 
-// idleRead is how long a peer may stay silent while it sends a body. It is an
-// infrastructure deadline of the connection, on real time.
-const idleRead = 60 * time.Second
+// DefaultIdleRead is how long a peer may stay silent while it sends a body. It
+// is an infrastructure deadline of the connection, on real time.
+const DefaultIdleRead = 60 * time.Second
+
+// maxRequestsPerWorker bounds the requests of the relay one Worker has in
+// flight, whatever they are.
+const maxRequestsPerWorker = 2
 
 // killDelay is how long the pipes of a killed child are waited for.
 const killDelay = 3 * time.Second
@@ -84,6 +88,9 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 	if ep.writes() && (!g.Write || g.Branch == "" || g.ExpectedOID == "") {
 		return errors.New("relay: a write was not granted")
 	}
+	// One deadline for the whole request, the upload included, on real time: it
+	// bounds infrastructure. Nothing below may outlast it.
+	deadline := time.Now().Add(r.cfg.Deadline)
 	release, err := r.acquire(ep, g.Worker)
 	if err != nil {
 		return err
@@ -94,11 +101,14 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 	}
 
 	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Now().Add(r.cfg.Deadline))
-	body, size, err := r.spool(req, rc, ep)
+	_ = rc.SetWriteDeadline(deadline)
+	body, size, err := r.spool(req, rc, ep, deadline)
 	if err != nil {
 		return err
 	}
+	// net/http reads in the background once the body is read: the deadline of the
+	// last read of the body must not cancel a request that is only being answered.
+	_ = rc.SetReadDeadline(deadline)
 	if body != nil {
 		defer body.Close()
 	}
@@ -107,7 +117,7 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(req.Context(), r.cfg.Deadline)
+	ctx, cancel := context.WithDeadline(req.Context(), deadline)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, r.git, "http-backend") //nolint:gosec // git is the located executable
 	cmd.Dir, cmd.Env = r.cfg.Dir, env
@@ -172,21 +182,23 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 	return nil
 }
 
-// acquire takes the slots a request needs: one of the relay's, and for a push
-// the single push a Worker may have in flight. It never waits.
+// acquire takes the slots a request needs: one of the relay's, one of the
+// few requests a Worker may have in flight, and for a push the single push it
+// may have. It never waits.
 func (r *Relay) acquire(ep Endpoint, worker domain.ID) (release func(), err error) {
 	select {
 	case r.slots <- struct{}{}:
 	default:
 		return nil, ErrBusy
 	}
-	if ep != ReceivePack {
-		return func() { <-r.slots }, nil
-	}
 	r.mu.Lock()
-	_, busy := r.pushing[worker]
+	_, pushBusy := r.pushing[worker]
+	busy := r.inflight[worker] >= maxRequestsPerWorker || (ep == ReceivePack && pushBusy)
 	if !busy {
-		r.pushing[worker] = struct{}{}
+		r.inflight[worker]++
+		if ep == ReceivePack {
+			r.pushing[worker] = struct{}{}
+		}
 	}
 	r.mu.Unlock()
 	if busy {
@@ -195,7 +207,12 @@ func (r *Relay) acquire(ep Endpoint, worker domain.ID) (release func(), err erro
 	}
 	return func() {
 		r.mu.Lock()
-		delete(r.pushing, worker)
+		if r.inflight[worker]--; r.inflight[worker] <= 0 {
+			delete(r.inflight, worker)
+		}
+		if ep == ReceivePack {
+			delete(r.pushing, worker)
+		}
 		r.mu.Unlock()
 		<-r.slots
 	}, nil
@@ -204,7 +221,7 @@ func (r *Relay) acquire(ep Endpoint, worker domain.ID) (release func(), err erro
 // spool copies the body of a POST, as net/http decoded it (chunked included),
 // to a temporary file that is already deleted, bounded by the limit of its
 // endpoint. It returns the file rewound and its size; a GET has no body.
-func (r *Relay) spool(req *http.Request, rc *http.ResponseController, ep Endpoint) (*os.File, int64, error) {
+func (r *Relay) spool(req *http.Request, rc *http.ResponseController, ep Endpoint, deadline time.Time) (*os.File, int64, error) {
 	if req.Method != http.MethodPost {
 		return nil, 0, nil
 	}
@@ -217,7 +234,7 @@ func (r *Relay) spool(req *http.Request, rc *http.ResponseController, ep Endpoin
 		return nil, 0, fmt.Errorf("relay: spooling a request: %w", err)
 	}
 	_ = os.Remove(f.Name()) // the open descriptor is all that is needed
-	n, err := io.Copy(f, io.LimitReader(activityReader{r: req.Body, rc: rc}, limit+1))
+	n, err := io.Copy(f, io.LimitReader(activityReader{r: req.Body, rc: rc, idle: r.cfg.IdleRead, deadline: deadline}, limit+1))
 	switch {
 	case err != nil:
 		_ = f.Close()
@@ -309,12 +326,18 @@ func (r *Relay) logChild(ep Endpoint, g Grant, stderr string, err error) {
 // activityReader asks for a deadline to the next byte before each read, so a
 // peer that goes quiet does not hold a slot of the relay.
 type activityReader struct {
-	r  io.Reader
-	rc *http.ResponseController
+	r        io.Reader
+	rc       *http.ResponseController
+	idle     time.Duration
+	deadline time.Time
 }
 
 func (a activityReader) Read(p []byte) (int, error) {
-	_ = a.rc.SetReadDeadline(time.Now().Add(idleRead))
+	next := time.Now().Add(a.idle)
+	if next.After(a.deadline) {
+		next = a.deadline
+	}
+	_ = a.rc.SetReadDeadline(next)
 	return a.r.Read(p)
 }
 

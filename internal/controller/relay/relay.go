@@ -58,6 +58,8 @@ type Config struct {
 	MaxPushBytes int64
 	// Deadline bounds one request, from its first byte to the last.
 	Deadline time.Duration
+	// IdleRead is how long a peer may be silent while it uploads; DefaultIdleRead if zero.
+	IdleRead time.Duration
 	// Concurrency is how many requests the relay serves at once.
 	Concurrency int
 	Log         *slog.Logger
@@ -73,6 +75,7 @@ type Relay struct {
 	mu       sync.Mutex
 	initLock map[domain.ID]*sync.Mutex
 	pushing  map[domain.ID]struct{} // Workers with a push in flight
+	inflight map[domain.ID]int      // requests in flight per Worker
 	slots    chan struct{}
 }
 
@@ -88,6 +91,9 @@ func Open(ctx context.Context, cfg Config) (*Relay, error) {
 	}
 	if cfg.Deadline <= 0 {
 		cfg.Deadline = DefaultDeadline
+	}
+	if cfg.IdleRead <= 0 {
+		cfg.IdleRead = DefaultIdleRead
 	}
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = DefaultConcurrency
@@ -107,7 +113,7 @@ func Open(ctx context.Context, cfg Config) (*Relay, error) {
 		return nil, fmt.Errorf("relay: %w", err)
 	}
 	r := &Relay{
-		cfg: cfg, git: git, initLock: map[domain.ID]*sync.Mutex{}, pushing: map[domain.ID]struct{}{},
+		cfg: cfg, git: git, initLock: map[domain.ID]*sync.Mutex{}, pushing: map[domain.ID]struct{}{}, inflight: map[domain.ID]int{},
 		slots: make(chan struct{}, cfg.Concurrency),
 	}
 	for _, dir := range []string{cfg.Dir, r.hooksDir(), r.tmpDir()} {

@@ -15,8 +15,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -33,6 +35,7 @@ type rig struct {
 	srv     *httptest.Server
 	project domain.ID
 	grant   atomic.Pointer[func(ep Endpoint) Grant]
+	pgids   string // where the fake git writes the process group of every backend it runs
 }
 
 func newRig(t *testing.T, tweak func(*Config)) *rig {
@@ -42,14 +45,18 @@ func newRig(t *testing.T, tweak func(*Config)) *rig {
 		Dir: t.TempDir(), Log: discard(),
 		HookArgv: []string{"env", asCF + "=1", mustExecutable(t), "relay", "hook", "pre-receive"},
 	}
+	var pgids string
 	if tweak != nil {
 		tweak(&cfg)
+	}
+	if cfg.GitPath == "" { // every backend is recorded, so a test can prove none is left
+		cfg.GitPath, pgids = recordingGit(t, "exec '"+realGitPath(t)+"' \"$@\"")
 	}
 	r, err := Open(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	g := &rig{t: t, r: r, project: domain.NewIDGenerator(time.Now, rand.Reader).New(domain.KindProject)}
+	g := &rig{t: t, r: r, pgids: pgids, project: domain.NewIDGenerator(time.Now, rand.Reader).New(domain.KindProject)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{repo}/info/refs", func(w http.ResponseWriter, req *http.Request) {
 		ep := InfoRefsUpload
@@ -134,9 +141,7 @@ func TestRelay_PushesTheGrantedCommitAndServesIt(t *testing.T) {
 	if got := gittest.Run(t, filepath.Join(clone, "out"), "rev-parse", "HEAD"); got != head {
 		t.Errorf("clone is at %s, want %s", got, head)
 	}
-	if left := gittest.Descendants(t); len(left) != 0 {
-		t.Errorf("processes left behind: %v", left)
-	}
+	assertGone(t, g.pgids)
 }
 
 func TestRelay_RefusesWhatTheGrantDoesNotAllow(t *testing.T) {
@@ -246,9 +251,7 @@ func TestRelay_PushAboveTheLimitIsRefusedAndLeavesNothing(t *testing.T) {
 	if _, found := g.tip(branch1); found {
 		t.Error("the branch exists")
 	}
-	if left := gittest.Descendants(t); len(left) != 0 {
-		t.Errorf("processes left behind: %v", left)
-	}
+	assertGone(t, g.pgids)
 	if entries, _ := os.ReadDir(g.r.tmpDir()); len(entries) != 0 {
 		t.Errorf("the scratch space keeps %d entries", len(entries))
 	}
@@ -270,9 +273,7 @@ func TestRelay_AClientThatHangsUpMidBodyFreesEverything(t *testing.T) {
 		defer g.r.mu.Unlock()
 		return len(g.r.pushing) == 0 && len(g.r.slots) == 0
 	})
-	if left := gittest.Descendants(t); len(left) != 0 {
-		t.Errorf("processes left behind: %v", left)
-	}
+	assertGone(t, g.pgids)
 	if entries, _ := os.ReadDir(g.r.tmpDir()); len(entries) != 0 {
 		t.Errorf("the scratch space keeps %d entries", len(entries))
 	}
@@ -289,29 +290,64 @@ func eventually(t *testing.T, what string, ok func() bool) {
 	}
 }
 
-// slowGit stands for git where http-backend answers its headers and then
-// takes its time, leaving a child behind that only the group kill can reach.
-// Anything else it hands to the real git. It dumps the environment of the
-// backend to a file.
-func slowGit(t *testing.T) (script, dump string) {
+func realGitPath(t *testing.T) string {
 	t.Helper()
-	realGit, err := exec.LookPath("git")
+	p, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatal(err)
 	}
+	return p
+}
+
+// recordingGit is a git whose http-backend first writes the process group it leads to
+// a file and then does what behaviour (shell) says; anything else is the real git.
+func recordingGit(t *testing.T, behaviour string) (script, pgids string) {
+	t.Helper()
 	dir := t.TempDir()
-	dump = filepath.Join(dir, "env.txt")
+	pgids = filepath.Join(dir, "pgids")
 	script = filepath.Join(dir, "git")
-	body := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in\nhttp-backend)\n  env > '%s'\n  printf 'Status: 200 OK\\r\\nContent-Type: text/plain\\r\\n\\r\\nhello\\n'\n  sleep 300 &\n  wait\n  ;;\n*) exec '%s' \"$@\" ;;\nesac\n", dump, realGit)
+	body := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in\nhttp-backend)\n  ps -o pgid= -p $$ | tr -d ' ' >> '%s'\n  %s\n  ;;\n*) exec '%s' \"$@\" ;;\nesac\n", pgids, behaviour, realGitPath(t))
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil { //nolint:gosec // a test script
 		t.Fatal(err)
 	}
-	return script, dump
+	return script, pgids
+}
+
+// slowGit stands for git where http-backend answers its headers and then
+// takes its time, leaving a child behind that only the group kill can reach.
+// It dumps the environment of the backend to a file.
+func slowGit(t *testing.T) (script, dump, pgids string) {
+	t.Helper()
+	dump = filepath.Join(t.TempDir(), "env.txt")
+	script, pgids = recordingGit(t, fmt.Sprintf("env > '%s'; printf 'Status: 200 OK\\r\\nContent-Type: text/plain\\r\\n\\r\\nhello\\n'; sleep 300 & wait", dump))
+	return script, dump, pgids
+}
+
+// assertGone waits until no process of any group the backends led is left.
+func assertGone(t *testing.T, pgids string) {
+	t.Helper()
+	raw, err := os.ReadFile(pgids) //nolint:gosec // a path of this test
+	if err != nil {
+		if os.IsNotExist(err) {
+			return // no backend ran
+		}
+		t.Fatal(err)
+	}
+	for _, f := range strings.Fields(string(raw)) {
+		pgid, err := strconv.Atoi(f)
+		if err != nil || pgid <= 1 {
+			t.Fatalf("bad process group %q", f)
+		}
+		eventually(t, fmt.Sprintf("the process group %d to be gone", pgid), func() bool {
+			return errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH)
+		})
+	}
 }
 
 func TestRelay_KillsTheWholeGroupWhenTheClientGoes(t *testing.T) {
-	script, dump := slowGit(t)
+	script, dump, pgids := slowGit(t)
 	g := newRig(t, func(c *Config) { c.GitPath = script })
+	g.pgids = pgids
 	g.setGrant(func(Endpoint) Grant { return Grant{Project: g.project, Worker: "worker_1"} })
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -327,7 +363,7 @@ func TestRelay_KillsTheWholeGroupWhenTheClientGoes(t *testing.T) {
 	}
 	cancel()
 	_ = resp.Body.Close()
-	eventually(t, "the children of the backend to be gone", func() bool { return len(gittest.Descendants(t)) == 0 })
+	assertGone(t, g.pgids)
 
 	raw, err := os.ReadFile(dump) //nolint:gosec // a path of this test
 	if err != nil {
@@ -347,7 +383,7 @@ func TestRelay_KillsTheWholeGroupWhenTheClientGoes(t *testing.T) {
 }
 
 func TestRelay_BusyWhenTheSlotsOrTheWorkersPushAreTaken(t *testing.T) {
-	script, _ := slowGit(t)
+	script, _, _ := slowGit(t)
 	g := newRig(t, func(c *Config) { c.GitPath = script; c.Concurrency = 2 })
 	g.setGrant(func(Endpoint) Grant {
 		return Grant{Project: g.project, Worker: "worker_1", Write: true, Branch: branch1, ExpectedOID: strings.Repeat("a", 40)}
@@ -439,5 +475,94 @@ func TestEnsure_IsIdempotentAndConfiguresTheRepository(t *testing.T) {
 	}
 	if _, found, err := g.r.BranchTip(t.Context(), g.project, "main"); err == nil && found {
 		t.Error("an empty relay has a branch")
+	}
+}
+
+func TestRelay_AUploadThatDripsIsCutAtTheTotalDeadline(t *testing.T) {
+	g := newRig(t, func(c *Config) { c.Deadline = 2 * time.Second })
+	g.allow(branch1, strings.Repeat("a", 40))
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", g.srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST /%s.git/git-receive-pack HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-git-receive-pack-request\r\nContent-Length: 100000\r\n\r\n", g.project)
+	start := time.Now()
+	// A byte every 300 ms is never idle for the 60 s of DefaultIdleRead: only the total deadline can end it.
+	gone := make(chan struct{})
+	go func() {
+		defer close(gone)
+		buf := make([]byte, 1024)
+		for {
+			if _, err := conn.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+loop:
+	for {
+		select {
+		case <-gone:
+			break loop
+		case <-time.After(300 * time.Millisecond):
+			if _, err := conn.Write([]byte("x")); err != nil {
+				break loop
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the upload was not cut")
+		}
+	}
+	if took := time.Since(start); took > 8*time.Second {
+		t.Errorf("the upload lasted %s with a deadline of 2s", took)
+	}
+	eventually(t, "the relay to free its slot", func() bool {
+		g.r.mu.Lock()
+		defer g.r.mu.Unlock()
+		return len(g.r.pushing) == 0 && len(g.r.inflight) == 0 && len(g.r.slots) == 0
+	})
+	assertGone(t, g.pgids)
+}
+
+func TestRelay_ALongAnswerAfterTheBodyIsNotCancelledByTheIdleDeadline(t *testing.T) {
+	script, pgids := recordingGit(t, "sleep 3; printf 'Status: 200 OK\\r\\nContent-Type: text/plain\\r\\n\\r\\nhello\\n'")
+	g := newRig(t, func(c *Config) { c.GitPath = script; c.IdleRead = time.Second })
+	g.pgids = pgids
+	g.setGrant(func(Endpoint) Grant { return Grant{Project: g.project, Worker: "worker_1"} })
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, g.url()+"/git-upload-pack", strings.NewReader("0000"))
+	req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("the request was cancelled: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || string(body) != "hello\n" {
+		t.Fatalf("body = %q (%v)", body, err)
+	}
+	assertGone(t, g.pgids)
+}
+
+func TestRelay_AWorkerHasTwoRequestsInFlightWhateverTheyAre(t *testing.T) {
+	script, _, pgids := slowGit(t)
+	g := newRig(t, func(c *Config) { c.GitPath = script })
+	g.pgids = pgids
+	g.setGrant(func(Endpoint) Grant { return Grant{Project: g.project, Worker: "worker_1"} })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	get := func() *http.Response {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, g.url()+"/info/refs?service=git-upload-pack", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	a, b := get(), get()
+	defer a.Body.Close()
+	defer b.Body.Close()
+	if c := get(); c.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("a third request of the same Worker got %d", c.StatusCode)
+	} else {
+		_ = c.Body.Close()
 	}
 }
