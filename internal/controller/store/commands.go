@@ -142,20 +142,6 @@ func (t *Tx) EnqueueStopOnce(ctx context.Context, c WorkerCommand) (bool, error)
 	return true, nil
 }
 
-// HasStop says whether the Worker was ordered to stop the Run under the epoch.
-func HasStop(ctx context.Context, q Querier, worker, run domain.ID, epoch uint64) (bool, error) {
-	var found int
-	err := q.QueryRow(ctx, `SELECT 1 FROM worker_commands WHERE worker_id = ? AND run_id = ? AND epoch = ? AND type = ?`,
-		string(worker), string(run), epoch, string(domain.CommandStop)).Scan(&found)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return false, nil
-	case err != nil:
-		return false, fmt.Errorf("store: looking for a stop: %w", err)
-	}
-	return true, nil
-}
-
 // OpenStopsOf lists, by Seq after the given one and up to limit, the stops of
 // the Worker that are not known to be done: under the live epoch of the Run,
 // those whose runtime is not stopped; under another epoch (an orphan), those

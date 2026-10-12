@@ -133,10 +133,10 @@ func New(c Config) (*Server, error) {
 		s.registerWorkerSchedulingRoutes()
 		s.registerWorkerReportRoutes()
 		s.registerRelayRoutes()
+		s.handle("GET /v1/runs/{ref}/explain", clientsOnly, s.explainRun)
 	}
 	if s.work.Reconciliation != nil {
 		s.registerReconcileRoutes()
-		s.handle("GET /v1/runs/{ref}/explain", clientsOnly, s.explainRun)
 	}
 	return s, nil
 }

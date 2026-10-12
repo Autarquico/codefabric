@@ -243,19 +243,6 @@ func UnsettledPublications(ctx context.Context, q Querier) ([]Publication, error
 	return collectPublications(ctx, q, `SELECT `+pubColumns+` FROM publications WHERE state IN ('sealing', 'sealed', 'pushed') ORDER BY run_id, lease_epoch`)
 }
 
-// GiveUpPublication ends, without a report, the publication of an assignment the
-// Controller will never take a report of (an orphan): whatever its state, it is
-// failed here, and its result kept.
-func GiveUpPublication(ctx context.Context, tx *Tx, k Key, why string, at time.Time) error {
-	_, err := tx.exec(ctx, `UPDATE publications SET state = ?, last_error = ?, updated_at = ?
-		WHERE run_id = ? AND lease_epoch = ? AND state IN ('sealing', 'sealed', 'pushed')`,
-		string(PubFailed), why, at.UnixNano(), k.RunID, k.LeaseEpoch)
-	if err != nil {
-		return fmt.Errorf("state: giving up a publication: %w", err)
-	}
-	return nil
-}
-
 // MarkPreserved ends the publication of an orphan whose commit the relay keeps
 // at the ref of the orphan: published here, since nothing more is to be done
 // with it. Compare-and-set on the generation, the attempts and the state sealed.

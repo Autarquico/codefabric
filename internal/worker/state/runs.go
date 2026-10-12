@@ -370,11 +370,6 @@ func nanosOrNil(t *time.Time) any {
 	return t.UnixNano()
 }
 
-// FencedRuns lists the assignments whose reports the Controller refused, kept for the reconciliation.
-func FencedRuns(ctx context.Context, q Querier) ([]Run, error) {
-	return collectRuns(ctx, q, `SELECT `+runColumns+` FROM local_runs WHERE fenced_code IS NOT NULL ORDER BY command_seq, run_id`)
-}
-
 // AllRuns lists every assignment of the Worker, in the order they came.
 func AllRuns(ctx context.Context, q Querier) ([]Run, error) {
 	return collectRuns(ctx, q, `SELECT `+runColumns+` FROM local_runs ORDER BY command_seq, run_id`)
