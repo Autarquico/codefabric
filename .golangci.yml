@@ -82,6 +82,28 @@ linters:
               desc: an adapter does not know the use cases
             - pkg: github.com/Autarquico/codefabric/internal/worker
               desc: an adapter does not know the Worker that uses it
+        # The git relay serves repositories; who may use them is decided above it.
+        relay:
+          list-mode: lax
+          files: ["**/internal/controller/relay/**", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/app
+              desc: the relay does not know the use cases that authorise it
+            - pkg: github.com/Autarquico/codefabric/internal/controller/api
+              desc: the relay does not know the HTTP layer that serves it
+            - pkg: github.com/Autarquico/codefabric/internal/controller/store
+              desc: the relay does not know the database
+        # gitops runs git for the Worker; the executor that calls it is not its business.
+        gitops:
+          list-mode: lax
+          files: ["**/internal/worker/gitops/**", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/worker/executor
+              desc: gitops does not know the executor
+            - pkg: github.com/Autarquico/codefabric/internal/worker/state
+              desc: gitops does not know the Worker's state
+            - pkg: github.com/Autarquico/codefabric/internal/client
+              desc: gitops does not know the SDK
         store:
           list-mode: lax
           files: ["**/internal/controller/store/**"]
