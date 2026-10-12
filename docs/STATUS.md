@@ -16,6 +16,7 @@
 - #6 API, Client SDK y `cf status`
 - #8 Projects, Tasks y Runs: API y CLI
 - #9 Registro de Workers y heartbeats
+- #10 Scheduler, leases y reservas
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -23,7 +24,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-- #10 Scheduler, leases y reservas
+- #11 Ejecutor del Worker con tmux, wrapper y journal
 <!-- /pm-sync:in-progress -->
 
 ---

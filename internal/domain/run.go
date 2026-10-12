@@ -67,11 +67,14 @@ const (
 	EndCheckpoint     EndReason = "checkpoint"
 	EndEnvironment    EndReason = "environment"
 	EndInputRequired  EndReason = "input_required"
+	// EndWrapperLost: the wrapper died without leaving an exit code, so the
+	// exit of the harness is unknown. It is an observed cause, not an exit.
+	EndWrapperLost EndReason = "wrapper_lost"
 )
 
 var endReasons = []EndReason{
 	EndExitCode, EndDeferred, EndMoved, EndDrained, EndBudget, EndLeaseLost,
-	EndAssignmentLost, EndWorktreeLost, EndCheckpoint, EndEnvironment, EndInputRequired,
+	EndAssignmentLost, EndWorktreeLost, EndCheckpoint, EndEnvironment, EndInputRequired, EndWrapperLost,
 }
 
 // IsValid reports whether r is one of the end reasons named in the spec.

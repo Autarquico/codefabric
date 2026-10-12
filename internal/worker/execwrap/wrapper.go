@@ -1,0 +1,357 @@
+package execwrap
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/support/envutil"
+	"github.com/Autarquico/codefabric/internal/worker/procident"
+)
+
+// Timings the wrapper uses, all on its clock.
+const (
+	// GateTimeout is how long the wrapper waits for the Runtime to wire the terminal.
+	GateTimeout  = 30 * time.Second
+	defaultGrace = 30 * time.Second
+	poll         = 50 * time.Millisecond
+)
+
+// Options parameterise Run. Stdin, Stdout and Stderr are the terminal of the pane.
+type Options struct {
+	RunDir string
+	Clock  clock.Clock // defaults to clock.Real
+	Stdin  *os.File
+	Stdout *os.File
+	Stderr *os.File
+}
+
+// Run is the wrapper (§6.4). It must lead its own process group, which it does
+// in a tmux pane, where the process of the pane leads its session: the harness
+// and everything it starts stay in that group, so the group is known before
+// the harness exists and there is no moment in which the harness runs
+// unregistered. SIGTERM, SIGINT and SIGHUP do not end the wrapper: they ask it
+// to stop the group, which it does by asking, waiting stop.grace and killing.
+// The wrapper is in the group it kills, so it kills the others by pid and
+// stays alive to say so.
+//
+// It returns once exit.json is written. The error is for what stopped the
+// wrapper from writing it, or for a launch that could not happen, which exit.json
+// then says.
+func Run(o Options) error {
+	clk := o.Clock
+	if clk == nil {
+		clk = clock.Real{}
+	}
+	w := &wrapper{o: o, clock: clk, self: os.Getpid(), pgid: syscall.Getpgrp(), signals: make(chan os.Signal, 8)}
+	defer func() {
+		if w.timer != nil {
+			w.timer.Stop()
+		}
+	}()
+	signal.Notify(w.signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	defer signal.Stop(w.signals)
+	return w.run()
+}
+
+type wrapper struct {
+	o       Options
+	clock   clock.Clock
+	self    int
+	pgid    int
+	signals chan os.Signal
+
+	launch   Launch
+	stopping bool
+
+	deadline <-chan time.Time // its end, nil when not armed
+	timer    clock.Timer
+}
+
+func (w *wrapper) grace() time.Duration {
+	if w.launch.Grace > 0 {
+		return w.launch.Grace
+	}
+	return defaultGrace
+}
+
+// fail leaves an exit.json that says why nothing ran, and returns the same cause.
+func (w *wrapper) fail(format string, args ...any) error {
+	msg := fmt.Sprintf(format, args...)
+	return errors.Join(errors.New("execwrap: "+msg),
+		Write(w.o.RunDir, ExitFile, Exit{ExitedAt: w.clock.Now(), Cause: CauseExit, Error: msg}))
+}
+
+func (w *wrapper) run() error {
+	if ok, err := Read(w.o.RunDir, LaunchFile, &w.launch); err != nil || !ok || len(w.launch.Argv) == 0 {
+		return w.fail("the launch file is missing or empty")
+	}
+	if w.pgid != w.self {
+		// Signalling the group of a wrapper that does not lead it would reach
+		// processes that are not ours.
+		return w.fail("the wrapper does not lead its process group")
+	}
+	start, err := procident.StartOf(w.self)
+	if err != nil {
+		// The daemon signals this group only if it can tell this process from another
+		// that gets the pid: a wrapper it could not identify must not run anything.
+		return w.fail("the wrapper cannot identify itself: %v", err)
+	}
+	if err := Write(w.o.RunDir, WrapperFile, Wrapper{PID: w.self, PGID: w.pgid, Start: start, StartedAt: w.clock.Now()}); err != nil {
+		return err
+	}
+	switch stopped, err := w.waitForGate(); {
+	case err != nil:
+		return w.fail("%v", err)
+	case stopped:
+		return Write(w.o.RunDir, ExitFile, Exit{ExitedAt: w.clock.Now(), Cause: CauseStop, Error: "stopped before the harness started"})
+	}
+
+	log, err := os.OpenFile(filepath.Join(w.o.RunDir, OutputLog), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return w.fail("opening the output log: %v", err)
+	}
+	defer func() { _ = log.Close() }()
+
+	cmd := exec.Command(w.launch.Argv[0], w.launch.Argv[1:]...) //nolint:gosec,noctx // the argv is what the Run asked for; nothing ends the harness but the wrapper
+	cmd.Dir = w.launch.Dir
+	cmd.Env = append(envutil.WithoutTmux(os.Environ()), w.launch.Env...)
+	copied, parentEnds, err := w.wire(cmd, log)
+	if err != nil {
+		return w.fail("wiring the output: %v", err)
+	}
+	err = cmd.Start()
+	for _, f := range parentEnds {
+		_ = f.Close() // the harness has its own copy; ours would keep the pipe open
+	}
+	if err != nil {
+		<-copied
+		return w.fail("starting the harness: %v", err)
+	}
+	if err := Write(w.o.RunDir, StartedFile, Started{
+		PID: cmd.Process.Pid, PGID: w.pgid, WrapperPID: w.self, Argv: w.launch.Argv, StartedAt: w.clock.Now(),
+	}); err != nil {
+		err = w.fail("recording the start of the harness: %v", err)
+		w.killGroup() // the harness runs unrecorded: it goes, and so does this process
+		return err
+	}
+
+	waited := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(waited)
+	}()
+	exit := Exit{Cause: CauseExit}
+	if !w.supervise(waited) {
+		// The harness ignored the stop for the whole grace: it is killed with the
+		// group, and says so.
+		return w.endByKillingGroup(log, Exit{Cause: CauseStop, Signal: "SIGKILL", GroupKilled: true, RemnantsKilled: w.count()})
+	}
+	exit.ExitCode, exit.Signal = outcome(cmd.ProcessState)
+	if w.stopping {
+		exit.Cause = CauseStop
+	}
+	found, survivors := w.settleGroup()
+	exit.RemnantsKilled = found
+	if survivors {
+		exit.GroupKilled = true
+		return w.endByKillingGroup(log, exit)
+	}
+	<-copied // every writer is gone: the pipe is at its end
+	if err := log.Sync(); err != nil {
+		return w.fail("syncing the output log: %v", err)
+	}
+	exit.ExitedAt = w.clock.Now()
+	return Write(w.o.RunDir, ExitFile, exit)
+}
+
+// wire connects the harness to the terminal and the log. In interactive mode
+// it uses the terminal of the pane itself, whose output the Runtime captures; in
+// headless mode it has no input and its output goes to the log and the pane.
+// copied closes when the output has been copied to its end; parentEnds are the
+// files of the pipe that this process must close once the harness has started.
+func (w *wrapper) wire(cmd *exec.Cmd, log *os.File) (copied <-chan struct{}, parentEnds []*os.File, err error) {
+	done := make(chan struct{})
+	if w.launch.Mode == ModeInteractive {
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = w.o.Stdin, w.o.Stdout, w.o.Stderr
+		close(done)
+		return done, nil, nil
+	}
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, pw, pw
+	var sink io.Writer = log
+	if w.o.Stdout != nil {
+		sink = io.MultiWriter(log, w.o.Stdout)
+	}
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(sink, pr)
+		_ = pr.Close()
+	}()
+	return done, []*os.File{pw}, nil
+}
+
+// waitForGate waits until the Runtime says that the terminal is wired. stopped
+// is true if a stop came first.
+func (w *wrapper) waitForGate() (stopped bool, err error) {
+	if w.launch.Gate == "" {
+		return false, nil
+	}
+	ticker := w.clock.NewTicker(poll)
+	defer ticker.Stop()
+	timeout := w.clock.NewTimer(GateTimeout)
+	defer timeout.Stop()
+	for {
+		if _, err := os.Stat(w.launch.Gate); err == nil {
+			return false, nil
+		}
+		select {
+		case sig := <-w.signals:
+			if w.stops(sig) {
+				return true, nil
+			}
+		case <-timeout.C():
+			return false, fmt.Errorf("the terminal was not ready after %s", GateTimeout)
+		case <-ticker.C():
+		}
+	}
+}
+
+// supervise waits for the harness to end, starting the stop when asked to. It
+// returns false if the grace of a stop ran out with the harness alive.
+func (w *wrapper) supervise(waited <-chan struct{}) bool {
+	for {
+		select {
+		case <-waited:
+			return true
+		case sig := <-w.signals:
+			if w.stops(sig) {
+				w.beginStop()
+			}
+		case <-w.deadline:
+			w.deadline = nil
+			return false
+		}
+	}
+}
+
+// stops says whether a signal asks the wrapper to stop. In interactive mode the
+// harness has the terminal of the pane: a Ctrl-C of the user reaches it through
+// the foreground group, and it is the harness's to handle, not a reason to end
+// the Run. SIGTERM and SIGHUP (the session closing) always stop.
+func (w *wrapper) stops(sig os.Signal) bool {
+	return sig != syscall.SIGINT || w.launch.Mode != ModeInteractive
+}
+
+// beginStop asks the group to end and starts the grace.
+func (w *wrapper) beginStop() {
+	if w.stopping {
+		return
+	}
+	w.stopping = true
+	_ = syscall.Kill(-w.pgid, syscall.SIGTERM) // this process catches it too
+	w.arm()
+}
+
+func (w *wrapper) arm() {
+	w.timer = w.clock.NewTimer(w.grace())
+	w.deadline = w.timer.C()
+}
+
+// settleGroup is what happens to the group once the harness exited. If other
+// processes are left, the group is asked to end and given the grace; it returns
+// how many were found and whether some are still there when the grace is over.
+// Nothing is signalled by pid: a pid that was listed can end, be reaped and be
+// reused outside the group, and only a signal to the group, sent while this
+// process is alive and so keeps the group's ID, cannot reach a stranger.
+func (w *wrapper) settleGroup() (found int, survivors bool) {
+	found = w.count()
+	if found == 0 {
+		return 0, false
+	}
+	if !w.stopping && w.deadline == nil {
+		_ = syscall.Kill(-w.pgid, syscall.SIGTERM) // this process catches it too
+		w.arm()
+	}
+	ticker := w.clock.NewTicker(poll)
+	defer ticker.Stop()
+	for w.count() > 0 {
+		select {
+		case <-w.deadline:
+			w.deadline = nil
+			return found, w.count() > 0
+		case <-ticker.C():
+		}
+	}
+	return found, false
+}
+
+// count is the number of live processes of the group but this one. It only
+// counts: it is never used to choose whom to signal. If it cannot tell, it
+// says 1, so that the group is asked to end rather than assumed empty.
+func (w *wrapper) count() int {
+	members, err := procident.GroupMembers(w.pgid)
+	if err != nil {
+		return 1
+	}
+	n := 0
+	for _, pid := range members {
+		if pid != w.self {
+			n++
+		}
+	}
+	return n
+}
+
+// endByKillingGroup writes the exit and then, as the last thing this process
+// does, kills the whole group, itself included. The exit is on disk before the
+// kill, so the daemon finds it and finds the wrapper gone. The group is killed
+// even when the exit cannot be written: the daemon then settles a lost wrapper.
+func (w *wrapper) endByKillingGroup(log *os.File, exit Exit) error {
+	exit.ExitedAt = w.clock.Now()
+	_ = log.Sync()
+	if err := Write(w.o.RunDir, ExitFile, exit); err != nil {
+		fmt.Fprintf(os.Stderr, "cf worker exec: writing the exit: %v; killing the group all the same\n", err)
+	}
+	w.killGroup()
+	return nil
+}
+
+// killGroup is SIGKILL to the group this process leads and keeps reserved by
+// being alive. It is the only way this process kills anything.
+func (w *wrapper) killGroup() { _ = syscall.Kill(-w.pgid, syscall.SIGKILL) }
+
+// outcome reads how the harness ended: its exit code, or the signal that killed it.
+func outcome(ps *os.ProcessState) (code *int, sig string) {
+	if ps == nil {
+		return nil, ""
+	}
+	status, ok := ps.Sys().(syscall.WaitStatus)
+	if ok && status.Signaled() {
+		return nil, signalName(status.Signal())
+	}
+	n := ps.ExitCode()
+	return &n, ""
+}
+
+func signalName(s syscall.Signal) string {
+	names := map[syscall.Signal]string{
+		syscall.SIGHUP: "SIGHUP", syscall.SIGINT: "SIGINT", syscall.SIGQUIT: "SIGQUIT", syscall.SIGABRT: "SIGABRT",
+		syscall.SIGKILL: "SIGKILL", syscall.SIGSEGV: "SIGSEGV", syscall.SIGPIPE: "SIGPIPE", syscall.SIGTERM: "SIGTERM",
+		syscall.SIGBUS: "SIGBUS", syscall.SIGFPE: "SIGFPE", syscall.SIGILL: "SIGILL",
+	}
+	if name, ok := names[s]; ok {
+		return name
+	}
+	return fmt.Sprintf("SIG%d", int(s))
+}

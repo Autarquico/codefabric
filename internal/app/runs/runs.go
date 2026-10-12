@@ -16,6 +16,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app/refs"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 // Rederive brings the materialised state of a Task up to date inside the
@@ -26,13 +27,14 @@ type Rederive func(ctx context.Context, tx *store.Tx, act mutation.Act, task dom
 // Service runs the Run use cases.
 type Service struct {
 	db       *store.DB
+	clock    clock.Clock
 	ids      *domain.IDGenerator
 	rederive Rederive
 }
 
-// New builds the service.
-func New(db *store.DB, ids *domain.IDGenerator, rederive Rederive) *Service {
-	return &Service{db: db, ids: ids, rederive: rederive}
+// New builds the service. The clock is the one the store was opened with.
+func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, rederive Rederive) *Service {
+	return &Service{db: db, clock: clk, ids: ids, rederive: rederive}
 }
 
 var commitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
@@ -212,7 +214,7 @@ func shortID(n uint64) string { return domain.ShortID{Kind: domain.KindRun, N: n
 func view(r store.Run, withSpec bool) v1.Run {
 	out := v1.Run{
 		ID: string(r.ID), Short: shortID(r.Short), TaskID: string(r.TaskID), Attempt: r.Attempt,
-		State: r.State, EndReason: r.EndReason, QueuedReason: r.QueuedReason, Lineage: r.Lineage,
+		State: r.State, EndReason: r.EndReason, ExitCode: r.ExitCode, QueuedReason: r.QueuedReason, Lineage: r.Lineage,
 		SpecDigest: r.SpecDigest, SourceCommit: r.SourceCommit, Publication: r.Publication,
 		Evaluation: r.Evaluation, Runtime: r.Runtime, Promoted: r.Promoted, WorkerID: string(r.WorkerID),
 		CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,

@@ -26,7 +26,7 @@ func TestCancel_FailureOfTheLastStepRollsEverythingBack(t *testing.T) {
 	boom := errors.New("rederive failed")
 	failing := func(context.Context, *store.Tx, mutation.Act, domain.ID) error { return boom }
 	ids := domain.NewIDGenerator(e.clock.Now, rand.Reader)
-	broken := tasks.New(e.db, e.clock, ids, runs.New(e.db, ids, failing))
+	broken := tasks.New(e.db, e.clock, ids, runs.New(e.db, e.clock, ids, failing))
 
 	_, err := broken.Cancel(t.Context(), e.owner, created.Task.ID, "", v1.ActionRequest{})
 	if !errors.Is(err, boom) {
@@ -71,7 +71,7 @@ func TestCreateTask_FailureWhileCreatingTheRunLeavesNoTask(t *testing.T) {
 	e.project("backend")
 	boom := errors.New("rederive failed")
 	ids := domain.NewIDGenerator(e.clock.Now, rand.Reader)
-	broken := tasks.New(e.db, e.clock, ids, runs.New(e.db, ids,
+	broken := tasks.New(e.db, e.clock, ids, runs.New(e.db, e.clock, ids,
 		func(context.Context, *store.Tx, mutation.Act, domain.ID) error { return boom }))
 
 	_, err := broken.Create(t.Context(), e.owner, v1.CreateTaskRequest{Project: "backend", Prompt: "x", ResolvedRef: "main", SourceCommit: commitA})

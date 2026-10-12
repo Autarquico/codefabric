@@ -17,13 +17,14 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 )
 
 // Command is the part of `cf worker` that is the daemon's: join and run. The
 // CLI merges it with the administration commands of the same name.
 func Command() *cobra.Command {
 	cmd := &cobra.Command{Use: "worker"}
-	cmd.AddCommand(newJoinCmd(), newRunCmd())
+	cmd.AddCommand(newJoinCmd(), newRunCmd(), newExecCmd())
 	return cmd
 }
 
@@ -107,6 +108,24 @@ func newRunCmd() *cobra.Command {
 			})
 		},
 	}
+}
+
+// newExecCmd is the wrapper the Runtime starts in the session of a Run (§6.4).
+// It is the Worker's, not a person's, so it stays out of the help.
+func newExecCmd() *cobra.Command {
+	var runDir string
+	cmd := &cobra.Command{
+		Use:    "exec",
+		Short:  "Run the harness of a Run under the wrapper (started by the Worker, not by hand)",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return execwrap.Run(execwrap.Options{RunDir: runDir, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+		},
+	}
+	cmd.Flags().StringVar(&runDir, "run-dir", "", "the directory of the Run, with its launch.json")
+	_ = cmd.MarkFlagRequired("run-dir")
+	return cmd
 }
 
 // jsonOutput reads the root command's persistent --json (internal/cli owns

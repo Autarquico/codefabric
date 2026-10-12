@@ -245,3 +245,48 @@ func TestAssignmentsHangUpIsNotAnError(t *testing.T) {
 		t.Errorf("a hang-up was logged as a failure:\n%s", logs)
 	}
 }
+
+func TestRunReportOverHTTP(t *testing.T) {
+	f := newSchedulingFixture(t)
+	ctx := t.Context()
+	_, err := f.alpha.AcceptLease(ctx, f.assign.LeaseID, f.assign.Epoch)
+	must(t, err)
+	at := time.Now().UTC() // an entry sent again says the same thing, time included
+	entry := func(seq uint64, kind v1.RunReportKind) v1.RunReportEntry {
+		en := v1.RunReportEntry{WorkerEpoch: "01J00000000000000000000000", WorkerSeq: seq, LeaseEpoch: 1, Kind: kind, At: at}
+		if kind == v1.ReportStarted {
+			en.Handle = &v1.RuntimeHandle{Runtime: "tmux", Ref: "s/n"}
+		}
+		return en
+	}
+
+	got, err := f.alpha.ReportRun(ctx, f.run.ID, v1.RunReportRequest{Entries: []v1.RunReportEntry{entry(1, v1.ReportStarted)}})
+	must(t, err)
+	if len(got.Outcomes) != 1 || got.Outcomes[0].Result != v1.ReportApplied || got.Run.State != domain.RunRunning || got.Run.Runtime != domain.RuntimeActive {
+		t.Errorf("report = %+v", got)
+	}
+	// Sent again: a duplicate.
+	got, err = f.alpha.ReportRun(ctx, f.run.ID, v1.RunReportRequest{Entries: []v1.RunReportEntry{entry(1, v1.ReportStarted)}})
+	must(t, err)
+	if got.Outcomes[0].Result != v1.ReportDuplicate {
+		t.Errorf("replay = %+v", got.Outcomes)
+	}
+
+	// A Worker that was not offered the Run, and a client, have no access.
+	_, err = f.beta.ReportRun(ctx, f.run.ID, v1.RunReportRequest{Entries: []v1.RunReportEntry{entry(1, v1.ReportStarted)}})
+	wantCode(t, err, domain.CodeNotFound)
+	path := "/v1/worker/runs/" + f.run.ID + "/report"
+	if code, body, _ := f.call(f.httpClientFor(f.ownerDir), http.MethodPost, path, "{}"); code != http.StatusForbidden || body.Code != domain.CodePolicyDenied {
+		t.Errorf("client: %d %s", code, body.Code)
+	}
+	if code, body, _ := f.call(f.httpClient(), http.MethodPost, path, "{}"); code != http.StatusUnauthorized || body.Code != domain.CodeUnauthenticated {
+		t.Errorf("anonymous: %d %s", code, body.Code)
+	}
+	alphaHTTP := f.httpClientFor(f.alphaD)
+	if code, body, _ := f.call(alphaHTTP, http.MethodPost, path, `{"entries":[],"extra":1}`); code != http.StatusBadRequest || body.Code != domain.CodeInvalidRequest {
+		t.Errorf("unknown field: %d %s", code, body.Code)
+	}
+	if code, body, _ := f.call(alphaHTTP, http.MethodPost, path, `{"entries":[]}`); code != http.StatusBadRequest || body.Code != domain.CodeInvalidRequest {
+		t.Errorf("no entries: %d %s", code, body.Code)
+	}
+}

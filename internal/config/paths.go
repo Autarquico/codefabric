@@ -26,6 +26,27 @@ func (p Paths) WorkerCredentialsDir() string {
 	return filepath.Join(p.ConfigDir, "worker", "credentials")
 }
 
+// WorkerDataDir is where the Worker daemon keeps its own files. It is a
+// directory of its own under DataDir, not DataDir itself (§22.5): one machine
+// can be the Controller and a Worker with the same data directory.
+func (p Paths) WorkerDataDir() string { return filepath.Join(p.DataDir, "worker") }
+
+// WorkerStateFile is the Worker's durable state (§6.4).
+func (p Paths) WorkerStateFile() string { return filepath.Join(p.WorkerDataDir(), "state.db") }
+
+// WorkerRunDir holds what the Worker keeps of one Run under one lease epoch: the
+// launch file, the markers of its wrapper and its output (§22.5). It is named
+// like the session of the Runtime, by Run and epoch, so that two epochs of a Run
+// never share markers.
+func (p Paths) WorkerRunDir(run string, leaseEpoch uint64) string {
+	return filepath.Join(p.WorkerDataDir(), "runs", fmt.Sprintf("%s-e%d", run, leaseEpoch))
+}
+
+// WorkerWorktreeDir is the isolated worktree of one Run under one lease epoch (§22.5).
+func (p Paths) WorkerWorktreeDir(run string, leaseEpoch uint64) string {
+	return filepath.Join(p.WorkerDataDir(), "worktrees", fmt.Sprintf("%s-e%d", run, leaseEpoch))
+}
+
 // ControllerConfigFile is the Controller's settings file.
 func (p Paths) ControllerConfigFile() string { return filepath.Join(p.ConfigDir, "controller.json") }
 

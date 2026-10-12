@@ -125,6 +125,7 @@ func New(c Config) (*Server, error) {
 	}
 	if s.work.Leases != nil && s.work.Scheduler != nil {
 		s.registerWorkerSchedulingRoutes()
+		s.registerWorkerReportRoutes()
 		s.handle("GET /v1/runs/{ref}/explain", clientsOnly, s.explainRun)
 	}
 	return s, nil

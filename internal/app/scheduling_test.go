@@ -550,7 +550,7 @@ func TestLoop(t *testing.T) {
 		eventually(t, "the Run to be assigned", func() bool { return e.storedRun(run.ID).LeaseID != "" })
 		eventually(t, "the loop to settle", func() bool {
 			a := passes.n.Load()
-			time.Sleep(30 * time.Millisecond)
+			time.Sleep(300 * time.Millisecond) // longer than a pass under a loaded -race run
 			return passes.n.Load() == a
 		})
 
@@ -575,7 +575,7 @@ func TestLoop(t *testing.T) {
 		e.joinWorker("alpha") // brings no event the loop wakes on
 		eventually(t, "the loop to settle", func() bool {
 			a := passes.n.Load()
-			time.Sleep(30 * time.Millisecond)
+			time.Sleep(300 * time.Millisecond) // longer than a pass under a loaded -race run
 			return passes.n.Load() == a
 		})
 		settled := passes.n.Load()

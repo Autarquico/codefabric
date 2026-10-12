@@ -65,7 +65,9 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 			if err := tx.RecordHeartbeat(ctx, w.ID, report, resources, req.Health, act.Now); err != nil {
 				return v1.HeartbeatResponse{}, err
 			}
-			return v1.HeartbeatResponse{State: w.State}, nil
+			return v1.HeartbeatResponse{
+				State: w.State, MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, Allocatable: resources.Allocatable,
+			}, nil
 		})
 }
 

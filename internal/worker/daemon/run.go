@@ -4,16 +4,27 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/oklog/ulid/v2"
+	"golang.org/x/sync/errgroup"
 
+	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+
+	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
+	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/worker/executor"
+	"github.com/Autarquico/codefabric/internal/worker/journal"
+	"github.com/Autarquico/codefabric/internal/worker/procident"
+	"github.com/Autarquico/codefabric/internal/worker/state"
 	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
 )
 
@@ -30,11 +41,24 @@ type Options struct {
 	Clock   clock.Clock  // defaults to clock.Real
 	// Measure replaces sysinfo.Collect, which tests cannot make fail.
 	Measure func(dir string) (sysinfo.Info, error)
+	// Runtime runs the sessions of the Runs. It defaults to tmux, in a server
+	// of this Worker; with no tmux, the daemon still heartbeats but offers no
+	// harness and rejects what it is given.
+	Runtime cfruntime.Runtime
+	// WrapperArgv replaces `<this binary> worker exec`, for tests.
+	WrapperArgv []string
+	// StopGrace replaces stop.grace (Appendix A), for tests.
+	StopGrace time.Duration
 }
 
 // Run sends a heartbeat now and then every Interval until ctx ends, and returns
 // nil when it does. Each Run is a new instance of the daemon: it has an epoch
 // of its own, which tells the Controller that the daemon restarted.
+//
+// Next to the heartbeat it runs the executor of the Worker (§6.4): it recovers
+// the Runs of the previous instance, takes the assignments of the Controller and
+// supervises the harnesses, and sends the journal of reports. The harnesses do
+// not belong to the daemon: ending Run leaves them running.
 //
 // A Controller that cannot be reached is retried with a backoff that never
 // exceeds the interval, so the Worker is back as soon as the Controller is.
@@ -77,7 +101,62 @@ func Run(ctx context.Context, o Options) error {
 	if d.log == nil {
 		d.log = slog.Default()
 	}
-	return d.loop(ctx)
+
+	db, err := state.Open(ctx, o.Paths.WorkerStateFile())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	jrn := journal.New(d.epoch, d.clock)
+	rt, launchers := d.runtimeAndHarnesses(ctx, o)
+	ex, err := executor.New(executor.Options{
+		DB: db, Controller: c, Runtime: rt, Journal: jrn, Harnesses: launchers, Paths: o.Paths, Clock: d.clock, Log: d.log,
+		WrapperArgv: o.WrapperArgv, StopGrace: o.StopGrace,
+	})
+	if err != nil {
+		return err
+	}
+	for _, l := range launchers {
+		d.capabilities = append(d.capabilities, "harness:"+l.ID())
+	}
+	d.onResponse = func(r v1.HeartbeatResponse) {
+		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
+	}
+	d.executorHealth = ex.Health
+	sender := &journal.Sender{DB: db, Reporter: c, Journal: jrn, Clock: d.clock, Log: d.log}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return d.loop(gctx) })
+	g.Go(func() error { return ex.Run(gctx) })
+	g.Go(func() error { return sender.Run(gctx) })
+	return g.Wait()
+}
+
+// selfIdentity is how the daemon checks that a wrapper of this machine can
+// identify itself; tests replace it.
+var selfIdentity = procident.StartOf
+
+// runtimeAndHarnesses are what this Worker can run Runs with. The harness
+// `command` needs a Runtime; without one the Worker offers none.
+func (d *daemon) runtimeAndHarnesses(ctx context.Context, o Options) (cfruntime.Runtime, []harness.Launcher) {
+	if _, err := selfIdentity(os.Getpid()); err != nil {
+		// The wrapper has to identify itself, or it starts nothing: no harness is offered.
+		d.log.WarnContext(ctx, "this process cannot be identified: this Worker offers no harness and will reject the Runs it is given", "err", err)
+		return unavailable{}, nil
+	}
+	rt := o.Runtime
+	if rt == nil {
+		t, err := tmux.New(tmux.Options{Socket: tmux.SocketName(o.Paths.WorkerDataDir())})
+		if err == nil {
+			err = t.Check(ctx)
+		}
+		if err != nil {
+			d.log.WarnContext(ctx, "no tmux: this Worker offers no harness and will reject the Runs it is given", "err", err)
+			return unavailable{}, nil
+		}
+		rt = t
+	}
+	return rt, []harness.Launcher{command.Launcher{}}
 }
 
 type daemon struct {
@@ -89,6 +168,10 @@ type daemon struct {
 	log      *slog.Logger
 	measure  func(dir string) (sysinfo.Info, error)
 	clock    clock.Clock
+
+	capabilities   []string
+	onResponse     func(v1.HeartbeatResponse)
+	executorHealth func() v1.Health
 
 	lastMeasured    sysinfo.Info
 	hasLastMeasured bool
@@ -108,6 +191,9 @@ func (d *daemon) loop(ctx context.Context) error {
 			return nil
 		case err == nil:
 			failures = 0
+			if d.onResponse != nil {
+				d.onResponse(resp)
+			}
 			if resp.State != state {
 				d.log.InfoContext(ctx, "worker state", "state", resp.State)
 				state = resp.State
@@ -130,10 +216,14 @@ func (d *daemon) beat(ctx context.Context) (v1.HeartbeatResponse, error) {
 	if err != nil {
 		return v1.HeartbeatResponse{}, err
 	}
+	if d.executorHealth != nil && health.Status == v1.HealthOK {
+		health = d.executorHealth()
+	}
 	return d.client.Heartbeat(ctx, v1.HeartbeatRequest{
 		Epoch: d.epoch, DaemonVersion: d.version, Hostname: info.Hostname, OS: info.OS, Arch: info.Arch,
-		Total:  v1.Capacity{CPU: info.CPU, MemoryMB: info.MemoryMB, DiskMB: info.DiskMB},
-		Health: health,
+		Capabilities: d.capabilities,
+		Total:        v1.Capacity{CPU: info.CPU, MemoryMB: info.MemoryMB, DiskMB: info.DiskMB},
+		Health:       health,
 	})
 }
 

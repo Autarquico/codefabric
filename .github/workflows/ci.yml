@@ -46,8 +46,13 @@ jobs:
           go-version: "1.27.x"
           check-latest: true
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y git
+        run: sudo apt-get update && sudo apt-get install -y git tmux
+      - if: runner.os == 'macOS'
+        run: brew install tmux
+      # Without tmux the tests of the Runtime skip; here they must run.
       - run: make test-integration
+        env:
+          CF_REQUIRE_TMUX: "1"
 
   cross-build:
     runs-on: ubuntu-latest

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -91,5 +92,18 @@ func TestSleepEndsWithTheContextWithoutTheTimePassing(t *testing.T) {
 	cancel()
 	if d.sleep(ctx, time.Hour) {
 		t.Error("sleep reported that the time had passed")
+	}
+}
+
+func TestAWorkerThatCannotIdentifyItselfOffersNoHarness(t *testing.T) {
+	d := &daemon{log: slog.New(slog.DiscardHandler)}
+	if _, launchers := d.runtimeAndHarnesses(t.Context(), Options{Runtime: unavailable{}}); len(launchers) != 1 {
+		t.Fatalf("with an identity: %d harnesses", len(launchers))
+	}
+	old := selfIdentity
+	defer func() { selfIdentity = old }()
+	selfIdentity = func(int) (string, error) { return "", errors.New("no way") }
+	if _, launchers := d.runtimeAndHarnesses(t.Context(), Options{Runtime: unavailable{}}); len(launchers) != 0 {
+		t.Errorf("%d harnesses: its wrapper would start nothing", len(launchers))
 	}
 }

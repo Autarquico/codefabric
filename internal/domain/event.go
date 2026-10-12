@@ -38,6 +38,7 @@ const (
 	EventRunCompleted         EventType = "RunCompleted"
 	EventRunFailed            EventType = "RunFailed"
 	EventRunCancelled         EventType = "RunCancelled"
+	EventRunStopped           EventType = "RunStopped" // the Worker confirms that no process of the Run is left (§10.7)
 	EventRunLost              EventType = "RunLost"
 	EventRunOrphaned          EventType = "RunOrphaned"
 	EventRunForked            EventType = "RunForked"
