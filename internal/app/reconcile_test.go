@@ -759,3 +759,32 @@ func TestReconcile_ACrashBeforeTheCommitOfTheSecondRoundLeavesNothing(t *testing
 		t.Errorf("after the round: %+v", run)
 	}
 }
+
+func TestReconcile_WorkerReconciledCountsTheVerdictsOfEveryFragment(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorker("alpha")
+	a, b := e.runningRun(alpha, "a"), e.runningRun(alpha, "b")
+	epoch, id := e.epochOf(alpha), ulid.Make().String()
+	for i, r := range []*reporter{a, b} {
+		_, err := e.app.Reconciliation.Reconcile(t.Context(), alpha, v1.ReconcileRequest{
+			Epoch: epoch, Fragment: v1.ReconcileFragment{RoundID: id, Index: i, Count: 2}, Runs: []v1.ReconcileRun{held(r, "running", true)},
+		})
+		must(t, err)
+	}
+	ev := e.events(domain.EventWorkerReconciled)
+	if len(ev) != 1 || ev[0].Data["verdicts"].(map[string]any)["continue"] != float64(2) {
+		t.Errorf("WorkerReconciled = %+v", ev)
+	}
+}
+
+func TestReconcile_ARoundThatListedAnAbsentLeaseNeverCompletesOnALaterPage(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorkerWith("alpha", v1.WorkerSettings{MaxConcurrentRuns: 64})
+	for i := range 17 { // one page and a lease more
+		e.runningRun(alpha, fmt.Sprintf("r%d", i))
+	}
+	out := e.round(alpha).mustSend(nil, nil)
+	if out.Ack.Complete || len(out.Leases) != 17 || e.reconciled(alpha) {
+		t.Errorf("complete=%v leases=%d reconciled=%v", out.Ack.Complete, len(out.Leases), e.reconciled(alpha))
+	}
+}

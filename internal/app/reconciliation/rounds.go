@@ -20,45 +20,72 @@ type round struct {
 	count     int
 	next      int // the index of the fragment expected next; count once all came
 	named     map[leaseKey]bool
-	absent    int // leases served that the round did not name: it cannot complete
+	absent    int            // leases served that the round did not name: it cannot complete
+	verdicts  map[string]int // how many of each verdict its fragments got
 }
 
-// rounds keeps the latest round of each Worker; a new round replaces it.
+// rounds keeps the latest round of each Worker; a new round replaces it. A
+// Worker's requests are taken one at a time (lock), so what one decides from
+// the round and what it records after its commit never interleave with another.
 type rounds struct {
 	mu       sync.Mutex
 	byWorker map[domain.ID]*round
+	callers  map[domain.ID]*sync.Mutex
 }
 
-func newRounds() *rounds { return &rounds{byWorker: map[domain.ID]*round{}} }
+func newRounds() *rounds {
+	return &rounds{byWorker: map[domain.ID]*round{}, callers: map[domain.ID]*sync.Mutex{}}
+}
+
+// lock serialises the requests of one caller (the identity of a Worker).
+func (r *rounds) lock(caller domain.ID) func() {
+	r.mu.Lock()
+	m := r.callers[caller]
+	if m == nil {
+		m = new(sync.Mutex)
+		r.callers[caller] = m
+	}
+	r.mu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
+func copyCounts(in map[string]int) map[string]int {
+	out := make(map[string]int, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
 
 // peek checks that fragment index follows the ones the Controller has of the
 // round of the Worker (a fragment 0 starts a new round) and returns what the
 // round named so far, without changing anything: advance does once the
 // fragment is committed. false means the Worker starts the round again.
-func (r *rounds) peek(worker domain.ID, epoch, id string, index, count int) (map[leaseKey]bool, bool) {
+func (r *rounds) peek(worker domain.ID, epoch, id string, index, count int) (map[leaseKey]bool, map[string]int, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if index == 0 {
-		return map[leaseKey]bool{}, true
+		return map[leaseKey]bool{}, map[string]int{}, true
 	}
 	cur := r.byWorker[worker]
 	if cur == nil || cur.epoch != epoch || cur.id != id || cur.count != count || cur.next != index {
-		return nil, false
+		return nil, nil, false
 	}
 	named := make(map[leaseKey]bool, len(cur.named))
 	for k := range cur.named {
 		named[k] = true
 	}
-	return named, true
+	return named, copyCounts(cur.verdicts), true
 }
 
-// advance records a committed fragment and the leases it named.
-func (r *rounds) advance(worker domain.ID, epoch, id string, index, count int, named []leaseKey) {
+// advance records a committed fragment, the leases it named and its verdicts.
+func (r *rounds) advance(worker domain.ID, epoch, id string, index, count int, named []leaseKey, verdicts map[string]int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cur := r.byWorker[worker]
 	if index == 0 {
-		cur = &round{epoch: epoch, id: id, count: count, named: map[leaseKey]bool{}}
+		cur = &round{epoch: epoch, id: id, count: count, named: map[leaseKey]bool{}, verdicts: map[string]int{}}
 		r.byWorker[worker] = cur
 	}
 	if cur == nil || cur.id != id || cur.next != index {
@@ -67,10 +94,13 @@ func (r *rounds) advance(worker domain.ID, epoch, id string, index, count int, n
 	for _, k := range named {
 		cur.named[k] = true
 	}
+	for k, n := range verdicts {
+		cur.verdicts[k] += n
+	}
 	cur.next++
 }
 
-// served records that a page of the answer listed absent leases.
+// served records how many absent leases one page of the answer listed.
 func (r *rounds) served(worker domain.ID, id string, absent int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -81,18 +111,18 @@ func (r *rounds) served(worker domain.ID, id string, absent int) {
 
 // complete is the round of the Worker whose fragments all came, for the pages
 // of its answer; false if there is none.
-func (r *rounds) complete(worker domain.ID, epoch, id string) (named map[leaseKey]bool, absent int, ok bool) {
+func (r *rounds) complete(worker domain.ID, epoch, id string) (named map[leaseKey]bool, absent int, verdicts map[string]int, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cur := r.byWorker[worker]
 	if cur == nil || cur.epoch != epoch || cur.id != id || cur.next != cur.count {
-		return nil, 0, false
+		return nil, 0, nil, false
 	}
 	named = make(map[leaseKey]bool, len(cur.named))
 	for k := range cur.named {
 		named[k] = true
 	}
-	return named, cur.absent, true
+	return named, cur.absent, copyCounts(cur.verdicts), true
 }
 
 // forget drops the round of the Worker once it is answered whole.

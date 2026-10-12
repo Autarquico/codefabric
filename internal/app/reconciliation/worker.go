@@ -48,15 +48,19 @@ func (s *Service) Reconcile(ctx context.Context, by pki.Session, req v1.Reconcil
 	if err := validateReconcile(req); err != nil {
 		return v1.ReconcileResponse{}, err
 	}
+	// One request of a Worker at a time: the round it reads and what it records
+	// after its commit are not interleaved with another of the same Worker.
+	defer s.rounds.lock(by.Principal.ID)()
 	var (
 		worker    domain.ID
 		named     []leaseKey
-		absent    int
+		served    int
+		counts    map[string]int
 		completed bool
 	)
 	out, err := mutation.Do(ctx, s.db, s.clock, by, "worker.reconcile", "", req,
 		func(tx *store.Tx, act mutation.Act) (v1.ReconcileResponse, error) {
-			named, absent, completed = nil, 0, false
+			named, served, counts, completed = nil, 0, nil, false
 			w, err := store.WorkerByIdentity(ctx, tx, by.Principal.ID)
 			if errors.Is(err, store.ErrNotFound) {
 				return v1.ReconcileResponse{}, domain.NewError(domain.CodeNotFound, "this identity is not a Worker", nil)
@@ -71,15 +75,18 @@ func (s *Service) Reconcile(ctx context.Context, by pki.Session, req v1.Reconcil
 				return v1.ReconcileResponse{}, err
 			}
 			f := req.Fragment
-			var seen map[leaseKey]bool
+			var (
+				seen   map[leaseKey]bool
+				prior  map[string]int
+				absent int
+				ok     bool
+			)
 			if req.Cursor != "" {
-				var ok bool
-				if seen, absent, ok = s.rounds.complete(w.ID, req.Epoch, f.RoundID); !ok {
+				if seen, absent, prior, ok = s.rounds.complete(w.ID, req.Epoch, f.RoundID); !ok {
 					return v1.ReconcileResponse{}, errRestartRound()
 				}
 			} else {
-				var ok bool
-				if seen, ok = s.rounds.peek(w.ID, req.Epoch, f.RoundID, f.Index, f.Count); !ok {
+				if seen, prior, ok = s.rounds.peek(w.ID, req.Epoch, f.RoundID, f.Index, f.Count); !ok {
 					return v1.ReconcileResponse{}, errRestartRound()
 				}
 				if f.Index == 0 {
@@ -90,6 +97,7 @@ func (s *Service) Reconcile(ctx context.Context, by pki.Session, req v1.Reconcil
 				if named, err = rec.entries(ctx, req, &resp); err != nil {
 					return v1.ReconcileResponse{}, err
 				}
+				counts = rec.verdicts
 				for _, k := range named {
 					seen[k] = true
 				}
@@ -97,15 +105,16 @@ func (s *Service) Reconcile(ctx context.Context, by pki.Session, req v1.Reconcil
 					return resp, nil // only the last fragment is answered with the lists
 				}
 			}
-			n, err := rec.page(ctx, seen, req.Cursor, &resp)
-			if err != nil {
+			if served, err = rec.page(ctx, seen, req.Cursor, &resp); err != nil {
 				return v1.ReconcileResponse{}, err
 			}
-			absent += n
-			if resp.Next != "" || absent > 0 {
+			if resp.Next != "" || absent+served > 0 {
 				return resp, nil
 			}
-			if err := rec.reconciled(ctx, req, &resp); err != nil {
+			for k, n := range rec.verdicts {
+				prior[k] += n
+			}
+			if err := rec.reconciled(ctx, req, prior, &resp); err != nil {
 				return v1.ReconcileResponse{}, err
 			}
 			completed = true
@@ -117,10 +126,10 @@ func (s *Service) Reconcile(ctx context.Context, by pki.Session, req v1.Reconcil
 	// What the round remembers changes only once the transaction is in.
 	f := req.Fragment
 	if req.Cursor == "" {
-		s.rounds.advance(worker, req.Epoch, f.RoundID, f.Index, f.Count, named)
+		s.rounds.advance(worker, req.Epoch, f.RoundID, f.Index, f.Count, named, counts)
 	}
 	if f.Index == f.Count-1 || req.Cursor != "" {
-		s.rounds.served(worker, f.RoundID, absent)
+		s.rounds.served(worker, f.RoundID, served)
 	}
 	if completed {
 		s.rounds.forget(worker, f.RoundID)
@@ -607,7 +616,7 @@ func (r *reconciler) leaseView(ctx context.Context, l store.Lease) (v1.Reconcile
 }
 
 // reconciled closes a complete round: the Worker is reconciled for its epoch.
-func (r *reconciler) reconciled(ctx context.Context, req v1.ReconcileRequest, resp *v1.ReconcileResponse) error {
+func (r *reconciler) reconciled(ctx context.Context, req v1.ReconcileRequest, counts map[string]int, resp *v1.ReconcileResponse) error {
 	if err := r.tx.SetReconciled(ctx, r.w.ID, req.Epoch, r.act.Now); err != nil {
 		return err
 	}
@@ -616,7 +625,7 @@ func (r *reconciler) reconciled(ctx context.Context, req v1.ReconcileRequest, re
 	ev := r.act.Event(domain.EventWorkerReconciled, "worker reconciled")
 	ev.WorkerID = r.w.ID
 	verdicts := map[string]any{}
-	for k, n := range r.verdicts {
+	for k, n := range counts {
 		verdicts[k] = n
 	}
 	ev.Data = map[string]any{
