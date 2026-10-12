@@ -17,7 +17,7 @@ import (
 // is one already, whatever its reason, nothing is queued and it says so.
 func OrderStopIn(ctx context.Context, tx *store.Tx, act mutation.Act, run store.Run, task store.Task, l store.Lease, reason domain.StopReason) (bool, error) {
 	payload, err := orderJSON(v1.StopCommand{
-		RunID: string(run.ID), LeaseID: string(l.ID), Epoch: l.Epoch, Reason: reason,
+		RunID: string(run.ID), LeaseID: string(l.ID), Epoch: l.Epoch, Reason: reason, RunShort: shortID(run.Short),
 		TaskID: string(task.ID), ProjectID: string(task.ProjectID), Branch: branchOf(task, run),
 	})
 	if err != nil {

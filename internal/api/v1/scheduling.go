@@ -84,6 +84,7 @@ type StopCommand struct {
 	LeaseID   string            `json:"lease_id"`
 	Epoch     uint64            `json:"epoch"`
 	Reason    domain.StopReason `json:"reason"`
+	RunShort  string            `json:"run_short_id"`
 	TaskID    string            `json:"task_id"`
 	ProjectID string            `json:"project_id"`
 	Branch    string            `json:"branch"`

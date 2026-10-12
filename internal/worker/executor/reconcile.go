@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -26,14 +28,13 @@ var errStaleRound = errors.New("executor: a newer reconciliation was asked for")
 // Reconciled says whether the Worker has completed a reconciliation since its
 // last start or since the Controller last asked for one. Until it has, no lease
 // is answered (§27.3).
-func (e *Executor) Reconciled() bool { return e.reconciled.Load() }
+func (e *Executor) Reconciled() bool { return e.reconciledGen.Load() == e.reconcileGen.Load() }
 
 // RequestReconcile asks for a reconciliation, as the answer to a heartbeat does
 // when the Controller has none of this daemon epoch since it started. No lease
 // is answered until it completes. A reconciliation in flight when it is asked
 // is not enough: another one follows it.
 func (e *Executor) RequestReconcile() {
-	e.reconciled.Store(false)
 	e.reconcileGen.Add(1)
 	select {
 	case e.reconcileWake <- struct{}{}:
@@ -54,7 +55,7 @@ func (e *Executor) reconcileLoop(ctx context.Context) {
 			return
 		case err == nil && e.reconcileGen.Load() == gen:
 			backoff = 0
-			e.reconciled.Store(true)
+			e.reconciledGen.Store(gen)
 			e.log.InfoContext(ctx, "the Worker is reconciled with the Controller")
 			e.kickDecider()
 			select {
@@ -194,14 +195,25 @@ func (e *Executor) snapshot(ctx context.Context) ([]v1.ReconcileRun, map[state.K
 }
 
 // harnessRan is what the markers of a Run that is over say of its harness: it
-// ran if it left started.json, and not if it did not. Of a Run still live
-// nothing is said.
+// ran if it left started.json, and not if its directory exists and has none.
+// Of a Run still live, or whose markers cannot be read, nothing is said.
 func (e *Executor) harnessRan(r state.Run) *bool {
 	if r.Phase.Live() {
 		return nil
 	}
+	if _, err := os.Stat(e.runDir(r.Key)); err != nil {
+		return nil
+	}
 	_, err := os.Stat(filepath.Join(e.runDir(r.Key), execwrap.StartedFile))
-	ran := err == nil
+	var ran bool
+	switch {
+	case err == nil:
+		ran = true
+	case errors.Is(err, fs.ErrNotExist):
+		ran = false
+	default:
+		return nil
+	}
 	return &ran
 }
 
@@ -277,7 +289,7 @@ func (e *Executor) round(ctx context.Context, gen uint64, runs []v1.ReconcileRun
 		if e.reconcileGen.Load() != gen {
 			return out, errStaleRound
 		}
-		e.applyVerdicts(ctx, out.Verdicts, held)
+		e.applyVerdicts(ctx, out.Verdicts, held, frag.Sessions)
 	}
 	for out.Next != "" {
 		page, err := e.o.Controller.Reconcile(ctx, v1.ReconcileRequest{
@@ -299,10 +311,13 @@ func (e *Executor) round(ctx context.Context, gen uint64, runs []v1.ReconcileRun
 // applyVerdicts acts on what the Controller decided, each under the lock of its
 // Run and only if the Run is as it was when it was sent: what changed meanwhile
 // is decided by the next round.
-func (e *Executor) applyVerdicts(ctx context.Context, verdicts []v1.ReconcileVerdict, held map[state.Key]sent) {
+func (e *Executor) applyVerdicts(ctx context.Context, verdicts []v1.ReconcileVerdict, held map[state.Key]sent, sessions []string) {
 	for _, v := range verdicts {
 		if v.Session != "" {
-			e.applySessionVerdict(ctx, v)
+			// Only a session this Worker sent, in this fragment, is ended for a verdict.
+			if slices.Contains(sessions, v.Session) {
+				e.applySessionVerdict(ctx, v)
+			}
 			continue
 		}
 		k := state.Key{RunID: v.RunID, LeaseEpoch: v.LeaseEpoch}
@@ -406,10 +421,12 @@ func (e *Executor) applySessionVerdict(ctx context.Context, v v1.ReconcileVerdic
 	if v.Verdict != v1.ReconcileStopSession {
 		return
 	}
-	if run, epoch, ok := cfruntime.ParseName(v.Session); ok {
-		if _, err := state.RunBy(ctx, e.o.DB.Reader(), state.Key{RunID: run, LeaseEpoch: epoch}); err == nil {
-			return // it has a record now: it is stopped the normal way
-		}
+	run, epoch, ok := cfruntime.ParseName(v.Session)
+	if !ok {
+		return // never a session of a Run: not ours to end
+	}
+	if _, err := state.RunBy(ctx, e.o.DB.Reader(), state.Key{RunID: run, LeaseEpoch: epoch}); err == nil {
+		return // it has a record now: it is stopped the normal way
 	}
 	e.log.WarnContext(ctx, "a session that is no Run of this Worker is ended", "session", v.Session)
 	if err := e.o.Runtime.Stop(ctx, e.o.Runtime.HandleFor(v.Session)); err != nil {

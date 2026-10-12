@@ -271,7 +271,7 @@ func (f *fixture) build() *Executor {
 		f.t.Fatal(err)
 	}
 	// The tests that drive the steps by hand stand for a Worker that reconciled.
-	e.reconciled.Store(true)
+	e.reconciledGen.Store(e.reconcileGen.Load())
 	return e
 }
 

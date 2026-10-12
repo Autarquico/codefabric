@@ -40,7 +40,7 @@ func (e *Executor) decideOnce(ctx context.Context) (retry bool) {
 	if _, ok := e.currentLimits(); !ok {
 		return false // the Worker does not know its capacity yet: nothing is decided
 	}
-	if !e.reconciled.Load() {
+	if !e.Reconciled() {
 		return false // until the reconciliation completes no lease is answered (§27.3)
 	}
 	waiting, err := state.AssignedRuns(ctx, e.o.DB.Reader())
@@ -73,7 +73,7 @@ type verdict struct {
 // is and the answer is tried again.
 func (e *Executor) decide(ctx context.Context, k state.Key) (retry bool) {
 	defer e.lock(k)()
-	if !e.reconciled.Load() {
+	if !e.Reconciled() {
 		return false // a reconciliation was asked for meanwhile: the lease waits for it
 	}
 	r, err := state.RunBy(ctx, e.o.DB.Reader(), k)

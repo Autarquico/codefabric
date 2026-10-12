@@ -5,6 +5,7 @@ package executor
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -45,14 +46,15 @@ func leaseOf(k state.Key, runtime domain.Runtime) v1.ReconcileLease {
 
 func TestNoLeaseIsAnsweredBeforeTheReconciliationCompletes(t *testing.T) {
 	f := newFixture(t)
-	f.e.reconciled.Store(false)
+	f.e.RequestReconcile()
 	k := f.assign(specJSON("x", "command", "headless"))
 	f.e.decideOnce(t.Context())
 	if f.run(k).Phase != state.PhaseAssigned || len(f.ctrl.accepted) != 0 {
 		t.Fatal("a lease was answered before the reconciliation")
 	}
-	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
-	f.e.reconciled.Store(true)
+	gen := f.e.reconcileGen.Load()
+	must(t, f.e.reconcile(t.Context(), gen))
+	f.e.reconciledGen.Store(gen)
 	f.e.decideOnce(t.Context())
 	if f.run(k).Phase != state.PhaseAccepted {
 		t.Errorf("phase after the reconciliation = %s", f.run(k).Phase)
@@ -64,7 +66,7 @@ func TestNoLeaseIsAnsweredBeforeTheReconciliationCompletes(t *testing.T) {
 
 func TestAReconciliationOvertakenByANewerRequestCountsForNothing(t *testing.T) {
 	f := newFixture(t)
-	f.e.reconciled.Store(false)
+	f.e.RequestReconcile()
 	f.ctrl.reconcile = func(req v1.ReconcileRequest) (v1.ReconcileResponse, error) {
 		f.e.RequestReconcile()
 		return complete(req), nil
@@ -358,5 +360,55 @@ func TestAnOrphanWritesNoReportButOrphanPreserved(t *testing.T) {
 	waitFor(t, "the orphan to be settled", func() bool { return f.e.step(t.Context(), k) })
 	if n, _ := state.JournalCounts(t.Context(), f.db.Reader()); n[k] != 0 {
 		t.Errorf("an orphan left %d rows in the journal", n[k])
+	}
+}
+
+func TestOnlyASessionTheWorkerSentIsEndedForAVerdict(t *testing.T) {
+	f := newFixture(t)
+	sent, other := "cf-"+runID(98)+"-e1", "cf-"+runID(99)+"-e1"
+	f.rt.setAlive(sent, true)
+	f.rt.setAlive(other, true)
+	f.rt.setAlive("not-a-run", true)
+	f.answers(func(req v1.ReconcileRequest) v1.ReconcileResponse {
+		out := complete(req)
+		for _, s := range append(req.Sessions, other, "not-a-run") {
+			out.Verdicts = append(out.Verdicts, v1.ReconcileVerdict{Session: s, Verdict: v1.ReconcileStopSession})
+		}
+		return out
+	})
+	f.rt.setAlive(other, false) // not running when the round is sent: not sent
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	f.rt.setAlive(other, true)
+	if !slices.Equal(f.rt.stops, []string{sent}) {
+		t.Errorf("ended = %v, want only the session sent", f.rt.stops)
+	}
+}
+
+func TestHarnessRanSaysNothingWithoutTheDirectoryOfTheRun(t *testing.T) {
+	f := newFixture(t)
+	r := state.Run{Key: state.Key{RunID: runID(100), LeaseEpoch: 1}, Phase: state.PhaseStopped}
+	if got := f.e.harnessRan(r); got != nil {
+		t.Errorf("no directory: %v", *got)
+	}
+	must(t, os.MkdirAll(f.runDir(r.Key), 0o700))
+	if got := f.e.harnessRan(r); got == nil || *got {
+		t.Errorf("a directory without started.json: %v", got)
+	}
+	must(t, os.WriteFile(filepath.Join(f.runDir(r.Key), execwrap.StartedFile), []byte("{}"), 0o600))
+	if got := f.e.harnessRan(r); got == nil || !*got {
+		t.Errorf("with started.json: %v", got)
+	}
+}
+
+func TestAStopOfARunRebuiltMeanwhileStopsTheRecordThatExists(t *testing.T) {
+	f := newFixture(t)
+	k := f.accepted("echo hi")
+	adopted, err := f.e.rebuildForStop(t.Context(), v1.StopCommand{RunID: k.RunID, LeaseID: "lease_other", Epoch: k.LeaseEpoch, Reason: domain.StopCancel, RunShort: "run-1"})
+	must(t, err)
+	if !adopted {
+		t.Error("a stop that finds a record does not fall to the normal Stop")
+	}
+	if r := f.run(k); r.Phase != state.PhaseAccepted || r.Adopted {
+		t.Errorf("the record was touched: %+v", r)
 	}
 }

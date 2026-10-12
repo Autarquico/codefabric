@@ -104,11 +104,12 @@ type Executor struct {
 
 	degraded atomic.Pointer[string]
 
-	// reconciled gates the answers to leases (§27.3): false until a reconciliation
-	// completes, and again whenever one is asked for. reconcileGen counts the
-	// requests, so that a reconciliation overtaken by a newer one counts for nothing.
-	reconciled    atomic.Bool
+	// The answers to leases wait for a reconciliation (§27.3). reconcileGen counts
+	// the requests for one (the start is the first); reconciledGen is the request
+	// the last complete reconciliation answered. The Worker is reconciled while
+	// they are equal: a reconciliation overtaken by a newer request counts for nothing.
 	reconcileGen  atomic.Uint64
+	reconciledGen atomic.Uint64
 	reconcileWake chan struct{}
 
 	wake    chan struct{} // the decider has something new
@@ -164,6 +165,7 @@ func New(o Options) (*Executor, error) {
 		o: o, harnesses: map[string]harness.Launcher{}, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, grace: o.StopGrace,
 		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), reconcileWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
 	}
+	e.reconcileGen.Store(1) // the start asks for a reconciliation
 	if e.clock == nil {
 		e.clock = clock.Real{}
 	}

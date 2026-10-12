@@ -67,7 +67,7 @@ func (e *Executor) rebuildForStop(ctx context.Context, s v1.StopCommand) (adopte
 	_, wrapperErr := os.Stat(filepath.Join(dir, execwrap.WrapperFile))
 	now := e.clock.Now()
 	r := state.Run{
-		Key: k, LeaseID: s.LeaseID, RunShort: s.RunID, TaskID: s.TaskID, ProjectID: s.ProjectID, AcceptBy: now,
+		Key: k, LeaseID: s.LeaseID, RunShort: s.RunShort, TaskID: s.TaskID, ProjectID: s.ProjectID, AcceptBy: now,
 		Spec: []byte(`{}`), Branch: s.Branch, CreatedAt: now,
 		// The Controller may know of its start already: `started` is never reported for a rebuilt record.
 		StartedAt: &now, Handle: mustJSON(*e.runtimeHandle(k)),
@@ -75,9 +75,15 @@ func (e *Executor) rebuildForStop(ctx context.Context, s v1.StopCommand) (adopte
 	order := state.StopOrder{Key: k, Reason: string(s.Reason), Source: SourceController, CreatedAt: now}
 	if !alive && dirErr != nil {
 		r.Phase, r.NeverStarted, r.StartedAt, r.Handle = state.PhaseAborted, true, nil, ""
+		existing := false
 		err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
-			if inserted, err := state.InsertAdopted(ctx, tx, r); err != nil || !inserted {
+			inserted, err := state.InsertAdopted(ctx, tx, r)
+			if err != nil {
 				return err
+			}
+			if !inserted {
+				existing = true // a record was written meanwhile: the normal Stop takes it
+				return nil
 			}
 			if _, err := state.AddStopOrder(ctx, tx, order); err != nil {
 				return err
@@ -89,10 +95,10 @@ func (e *Executor) rebuildForStop(ctx context.Context, s v1.StopCommand) (adopte
 			}
 			return state.CompleteStopOrder(ctx, tx, k, now)
 		})
-		if err == nil {
+		if err == nil && !existing {
 			e.o.Journal.Notify()
 		}
-		return false, err
+		return existing, err
 	}
 	r.Phase = state.PhaseStarting
 	if wrapperErr == nil {
