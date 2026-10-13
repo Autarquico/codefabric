@@ -194,7 +194,7 @@ func TestApiSdkCliStatus_JSONIsRecognisedInTheRawArgumentsWhateverItsSpelling(t 
 		"x -- --json":    false,
 		"--name=--json=": false,
 	} {
-		if got := jsonRequested(newRootCmd(), strings.Fields(args)); got != want {
+		if got := jsonRequested(newRootCmd(Options{}), strings.Fields(args)); got != want {
 			t.Errorf("%q: got %v, want %v", args, got, want)
 		}
 	}

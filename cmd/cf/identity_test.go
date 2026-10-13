@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -29,13 +30,15 @@ func cf(t *testing.T, stdin string, args ...string) (code int, stdout, stderr st
 }
 
 func cliRun(stdout, stderr io.Writer, stdin string, args []string) int {
-	return cli.Run(args, strings.NewReader(stdin), stdout, stderr, daemon.Command(), workerdaemon.Command())
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return cli.RunContextWith(ctx, options(), args, strings.NewReader(stdin), stdout, stderr, daemon.Command(), workerdaemon.Command())
 }
 
 // cfContext is cf under a context that ends commands which run until interrupted.
 func cfContext(ctx context.Context, args ...string) (code int, stderr string) {
 	var out, errOut bytes.Buffer
-	code = cli.RunContext(ctx, args, strings.NewReader(""), &out, &errOut, daemon.Command(), workerdaemon.Command())
+	code = cli.RunContextWith(ctx, options(), args, strings.NewReader(""), &out, &errOut, daemon.Command(), workerdaemon.Command())
 	return code, errOut.String()
 }
 

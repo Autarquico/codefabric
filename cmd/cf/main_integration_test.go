@@ -5,11 +5,6 @@ package main
 import (
 	"os"
 	"testing"
-
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/controller/daemon"
-	"github.com/Autarquico/codefabric/internal/controller/relay"
-	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
 )
 
 // asCF makes the test binary behave as `cf`: tests that need a daemon in a
@@ -27,7 +22,7 @@ func TestMain(m *testing.M) {
 		if len(os.Args) > 2 && os.Args[1] == "worker" && os.Args[2] == "exec" {
 			_ = os.Unsetenv(asCF)
 		}
-		os.Exit(cli.Execute(daemon.Command(), workerdaemon.Command(), relay.Command()))
+		os.Exit(run())
 	}
 	os.Exit(m.Run())
 }

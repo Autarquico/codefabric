@@ -22,7 +22,7 @@ func TestCommandsFromOtherPackagesJoinTheGroupOfTheSameName(t *testing.T) {
 		t.Fatalf("worker run: exit %d: %q %q", code, out.String(), errOut.String())
 	}
 
-	root := newRootCmd()
+	root := newRootCmd(Options{})
 	addCommands(root, []*cobra.Command{daemon, {Use: "extra"}})
 	var names []string
 	for _, sub := range commandNamed(t, root, "worker").Commands() {

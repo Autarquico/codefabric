@@ -59,6 +59,10 @@ func (p Paths) WorkerRepoDir(project string) string {
 // of the Projects, the hooks they share and the scratch space of the transport.
 func (p Paths) RelayDir() string { return filepath.Join(p.DataDir, "relay") }
 
+// ClientConfigFile is the client's own settings file (what it trusts, not what
+// it is: the credentials are apart).
+func (p Paths) ClientConfigFile() string { return filepath.Join(p.ConfigDir, "client.json") }
+
 // ControllerConfigFile is the Controller's settings file.
 func (p Paths) ControllerConfigFile() string { return filepath.Join(p.ConfigDir, "controller.json") }
 
