@@ -156,6 +156,10 @@ func (st *sseStream) begin() error {
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Accel-Buffering", "no")
+	// The connection of a stream has a read deadline of its own (newStream) that
+	// ends with its life: it is not offered to another request, which the stale
+	// deadline would cancel at once.
+	h.Set("Connection", "close")
 	st.w.WriteHeader(http.StatusOK)
 	return st.send([]byte(fmt.Sprintf("retry: %d\n\n", v1.SSERetryMillis)))
 }

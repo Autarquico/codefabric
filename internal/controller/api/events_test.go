@@ -116,7 +116,7 @@ func (tc *testController) mustStream(hc *http.Client, path string, header http.H
 	tc.t.Helper()
 	s, status, body := tc.openStream(hc, path, header)
 	if s == nil {
-		tc.t.Fatalf("GET %s = %d %+v", path, status, body)
+		tc.t.Fatalf("GET %s = %d %+v\n%s", path, status, body, tc.logs.String())
 	}
 	return s
 }
