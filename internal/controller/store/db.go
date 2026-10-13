@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/pressly/goose/v3"
@@ -44,6 +45,10 @@ type DB struct {
 	clock    clock.Clock
 	ids      *domain.IDGenerator
 	notifier *eventbus.Notifier
+	// output wakes the readers that follow the output of a Run. It carries a
+	// counter of this process: output has no sequence of its own.
+	output    *eventbus.Notifier
+	outputSeq atomic.Uint64
 
 	controllerID string
 }
@@ -60,7 +65,7 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 		return nil, fmt.Errorf("store: creating directory: %w", err)
 	}
 
-	db := &DB{path: abs, clock: opts.Clock, ids: opts.IDs, notifier: eventbus.NewNotifier()}
+	db := &DB{path: abs, clock: opts.Clock, ids: opts.IDs, notifier: eventbus.NewNotifier(), output: eventbus.NewNotifier()}
 	if db.clock == nil {
 		db.clock = clock.Real{}
 	}
@@ -175,6 +180,10 @@ func (db *DB) Reader() *sql.DB { return db.reader }
 
 // Notifier announces the highest committed event sequence.
 func (db *DB) Notifier() *eventbus.Notifier { return db.notifier }
+
+// OutputNotifier announces that the output of some Run changed: its mark is a
+// counter of this process, meaningful only to compare with itself.
+func (db *DB) OutputNotifier() *eventbus.Notifier { return db.output }
 
 // ControllerID is the identifier generated when the database was first created.
 func (db *DB) ControllerID() string { return db.controllerID }

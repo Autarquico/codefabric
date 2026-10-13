@@ -14,6 +14,7 @@ type Tx struct {
 	db     *DB
 	tx     *sql.Tx
 	maxSeq uint64 // highest event sequence inserted by this transaction
+	output bool   // the transaction changed the output of a Run
 }
 
 // WithTx runs fn inside BEGIN IMMEDIATE on the writer. It commits when fn
@@ -48,6 +49,9 @@ func (db *DB) WithTx(ctx context.Context, fn func(*Tx) error) error {
 
 	if tx.maxSeq > 0 {
 		db.notifier.Notify(tx.maxSeq)
+	}
+	if tx.output {
+		db.output.Notify(db.outputSeq.Add(1))
 	}
 	return nil
 }

@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // EventType lists the minimum events of §20.1.
 type EventType string
@@ -122,18 +125,24 @@ const (
 	LevelError = "error"
 )
 
-var levelRank = map[string]int{LevelDebug: 0, LevelInfo: 1, LevelWarn: 2, LevelError: 3}
+var levels = []string{LevelDebug, LevelInfo, LevelWarn, LevelError}
 
 // ValidLevel reports whether level is one of the four event levels.
-func ValidLevel(level string) bool {
-	_, ok := levelRank[level]
-	return ok
+func ValidLevel(level string) bool { return slices.Contains(levels, level) }
+
+// LevelAtLeast reports whether level is as severe as floorLevel or more. A level
+// that is not one of the four is never at least anything.
+func LevelAtLeast(level, floorLevel string) bool {
+	rank, floor := slices.Index(levels, level), slices.Index(levels, floorLevel)
+	return rank >= 0 && floor >= 0 && rank >= floor
 }
 
-// LevelAtLeast reports whether level is as severe as floorLevel or more. A level that
-// is not one of the four is never at least anything.
-func LevelAtLeast(level, floorLevel string) bool {
-	rank, ok := levelRank[level]
-	floor, okFloor := levelRank[floorLevel]
-	return ok && okFloor && rank >= floor
+// LevelsFrom lists the levels that are as severe as floorLevel or more, least
+// severe first; none if floorLevel is not a level.
+func LevelsFrom(floorLevel string) []string {
+	i := slices.Index(levels, floorLevel)
+	if i < 0 {
+		return nil
+	}
+	return slices.Clone(levels[i:])
 }

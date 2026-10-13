@@ -63,6 +63,10 @@ type WorkerReport struct {
 	OS            string
 	Arch          string
 	Capabilities  []string
+	// SSHTarget and AttachBinaries are what it announces for `cf attach`; "" and
+	// nil if nothing. They are validated by whoever records them.
+	SSHTarget      string
+	AttachBinaries map[string]string
 }
 
 // Status is the Worker's position in the state machine.
@@ -87,7 +91,8 @@ const workerSelect = `SELECT w.id, w.short_n, w.name, w.identity_id, w.state, CO
     COALESCE(rv.cpu, 0), COALESCE(rv.memory_mb, 0), COALESCE(rv.disk_mb, 0), COALESCE(rv.n, 0), w.last_command_seq,
     (SELECT COUNT(*) FROM reservations lr JOIN leases ll ON ll.id = lr.lease_id
       WHERE lr.worker_id = w.id AND lr.released_at IS NULL AND ll.state = 'accepted'),
-    w.reconcile_started_at, COALESCE(w.reconciled_epoch, ''), w.reconciled_at
+    w.reconcile_started_at, COALESCE(w.reconciled_epoch, ''), w.reconciled_at,
+    COALESCE(w.ssh_target, ''), COALESCE(w.attach, '')
   FROM workers w LEFT JOIN worker_heartbeats h ON h.worker_id = w.id
   LEFT JOIN (SELECT worker_id, SUM(cpu) AS cpu, SUM(memory_mb) AS memory_mb, SUM(disk_mb) AS disk_mb, COUNT(*) AS n
              FROM reservations WHERE released_at IS NULL GROUP BY worker_id) rv ON rv.worker_id = w.id`
@@ -109,17 +114,23 @@ func scanWorker(row rowScanner) (Worker, error) {
 		created                 int64
 		payload                 sql.NullString
 		state, beforeOff, avail string
+		attach                  string
 	)
 	if err := row.Scan(&id, &w.Short, &w.Name, &identity, &state, &beforeOff,
 		&w.Report.Epoch, &w.Report.DaemonVersion, &w.Report.Hostname, &w.Report.OS, &w.Report.Arch,
 		&capabilities, &w.Settings.CPUMax, &w.Settings.MemoryMaxMB, &w.Settings.DiskMaxMB, &w.Settings.MaxConcurrentRuns,
 		&avail, &heartbeat, &created, &removed, &payload, &w.ActiveRuns,
 		&w.Reserved.CPU, &w.Reserved.MemoryMB, &w.Reserved.DiskMB, &w.Reservations, &w.LastCommandSeq,
-		&w.LiveLeases, &reconcileStarted, &w.ReconciledEpoch, &reconciledAt); err != nil {
+		&w.LiveLeases, &reconcileStarted, &w.ReconciledEpoch, &reconciledAt, &w.Report.SSHTarget, &attach); err != nil {
 		return Worker{}, scanErr(err, "worker")
 	}
 	if err := json.Unmarshal([]byte(capabilities), &w.Report.Capabilities); err != nil {
 		return Worker{}, fmt.Errorf("store: worker %s has corrupt capabilities: %w", id, err)
+	}
+	if attach != "" {
+		if err := json.Unmarshal([]byte(attach), &w.Report.AttachBinaries); err != nil {
+			return Worker{}, fmt.Errorf("store: worker %s has corrupt attach binaries: %w", id, err)
+		}
 	}
 	if payload.Valid {
 		var hb heartbeatState
@@ -211,11 +222,19 @@ func (t *Tx) RecordHeartbeat(ctx context.Context, id domain.ID, report WorkerRep
 	if err != nil {
 		return err
 	}
+	var attach any
+	if len(report.AttachBinaries) > 0 {
+		raw, err := json.Marshal(report.AttachBinaries)
+		if err != nil {
+			return err
+		}
+		attach = string(raw)
+	}
 	if _, err := t.Exec(ctx,
 		`UPDATE workers SET epoch = ?, daemon_version = ?, hostname = ?, os = ?, arch = ?, capabilities = ?,
-		     last_heartbeat_at = ? WHERE id = ?`,
+		     ssh_target = ?, attach = ?, last_heartbeat_at = ? WHERE id = ?`,
 		report.Epoch, report.DaemonVersion, report.Hostname, report.OS, report.Arch, string(capabilities),
-		at.UnixNano(), string(id)); err != nil {
+		nullable(report.SSHTarget), attach, at.UnixNano(), string(id)); err != nil {
 		return fmt.Errorf("store: recording heartbeat: %w", err)
 	}
 	if _, err := t.Exec(ctx,
