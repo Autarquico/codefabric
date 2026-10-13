@@ -143,11 +143,19 @@ func resolveAttach(ctx context.Context, c *client.Client, ref, project, override
 	return AttachRequest{RunID: target.RunID, LeaseEpoch: target.LeaseEpoch, Handle: target.Handle, Binary: target.Binary, Target: ssh}, nil
 }
 
+// runDirectory is what the Controller says of Runs and Tasks, apart from the
+// attach target: the second opinion the target is checked against.
+type runDirectory interface {
+	Run(ctx context.Context, ref string) (v1.Run, error)
+	Task(ctx context.Context, ref, project string) (v1.Task, error)
+	Resolve(ctx context.Context, kind domain.Kind, ref, project string) (v1.Resolved, error)
+}
+
 // verifyTarget checks the answer against what the Controller says of the Run
 // itself: the Run asked for (by ID, or the Run of the Task asked for), its live
 // lease epoch and its Worker. A Controller or a Worker that points at another
 // Run, epoch or machine is not obeyed.
-func verifyTarget(ctx context.Context, c *client.Client, ref, project string, target v1.AttachTarget) error {
+func verifyTarget(ctx context.Context, c runDirectory, ref, project string, target v1.AttachTarget) error {
 	mismatch := func(what string) error {
 		return notAttachable("target_mismatch", "the attach target is not "+what+": nothing was run")
 	}
