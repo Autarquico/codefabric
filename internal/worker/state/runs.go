@@ -407,14 +407,16 @@ func Unfence(ctx context.Context, tx *Tx, k Key, code string) error {
 	return changedOne(res, err, "unfencing an assignment")
 }
 
-// MarkOrphaned records that the assignment is not the live one of its Run. The first time stays.
-func MarkOrphaned(ctx context.Context, tx *Tx, k Key, at time.Time) error {
-	_, err := tx.exec(ctx, `UPDATE local_runs SET orphaned_at = COALESCE(orphaned_at, ?) WHERE run_id = ? AND lease_epoch = ?`,
+// MarkOrphaned records that the assignment is not the live one of its Run.
+// The first time stays; becameOrphan says whether this call made it one.
+func MarkOrphaned(ctx context.Context, tx *Tx, k Key, at time.Time) (becameOrphan bool, err error) {
+	res, err := tx.exec(ctx, `UPDATE local_runs SET orphaned_at = ? WHERE run_id = ? AND lease_epoch = ? AND orphaned_at IS NULL`,
 		at.UnixNano(), k.RunID, k.LeaseEpoch)
 	if err != nil {
-		return fmt.Errorf("state: marking an orphan: %w", err)
+		return false, fmt.Errorf("state: marking an orphan: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // PendingStopOrders lists the stops not done, oldest first.

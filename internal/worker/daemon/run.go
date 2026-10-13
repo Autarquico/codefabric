@@ -139,7 +139,11 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	d.executorHealth = ex.Health
-	sender := &journal.Sender{DB: db, Reporter: c, Journal: jrn, Clock: d.clock, Log: d.log, OnView: ex.ConfirmView}
+	sender := &journal.Sender{
+		DB: db, Reporter: c, Journal: jrn, Clock: d.clock, Log: d.log, OnView: ex.ConfirmView,
+		// A fence is settled by a reconciliation: one is asked for at once, not at the next restart.
+		OnFence: func(state.Key) { ex.RequestReconcile() },
+	}
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return d.loop(gctx) })

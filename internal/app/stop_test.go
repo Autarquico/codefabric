@@ -296,3 +296,35 @@ func TestStopped_WasRunningWithoutAStartIsRefusedAndReleasesNothing(t *testing.T
 		t.Errorf("the reservation was released: %+v", res)
 	}
 }
+
+// F8, the Controller's side: the stopped the Worker could not have taken (F7)
+// fences the Run; the reconciliation it asks for at once settles it, and the
+// reservation is released.
+func TestARefusedStoppedIsSettledByTheReconciliationItAsksFor(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorker("alpha")
+	r := e.acceptedRun(alpha, "x")
+	e.clock.Advance(lostTimeout + time.Minute)
+	e.sweepLost()
+	e.beat(alpha)
+	e.round(alpha).mustSend(nil, []v1.ReconcileOutcome{{LeaseID: string(r.lease.ID), LeaseEpoch: r.lease.Epoch, Outcome: v1.OutcomeAdopted}})
+	wasRunning := func(en *v1.RunReportEntry) { en.WasRunning = true }
+	if got := results(r.mustSend(r.entry(v1.ReportStopped, wasRunning))); got != "rejected:CF_INVALID_REQUEST" {
+		t.Fatalf("stopped = %s", got)
+	}
+	fenced := held(r, v1.PhaseStopped, false)
+	fenced.Started, fenced.FencedCode, fenced.PendingReports = true, string(domain.CodeInvalidRequest), 1
+	out := e.round(alpha).mustSend([]v1.ReconcileRun{fenced}, nil)
+	if got := verdicts(out); got != "continue+drop" {
+		t.Errorf("verdicts = %s", got)
+	}
+	if run := e.storedRun(r.run.ID); run.Runtime != domain.RuntimeStopped {
+		t.Errorf("runtime = %s", run.Runtime)
+	}
+	if res := e.reservation(r.lease.ID); res.ReleasedAt == nil {
+		t.Error("the reservation was not released")
+	}
+	if n := len(e.events(domain.EventRunOrphaned)); n != 0 {
+		t.Errorf("RunOrphaned = %d", n)
+	}
+}

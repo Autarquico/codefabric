@@ -254,7 +254,7 @@ func TestAnOrphanIsSealedAndPreservedAtItsRefWithTheOneReportTheControllerTakes(
 	f, g := newGitFixture(t)
 	k := f.exitedRun()
 	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error {
-		if err := state.MarkOrphaned(t.Context(), tx, k, t0); err != nil {
+		if _, err := state.MarkOrphaned(t.Context(), tx, k, t0); err != nil {
 			return err
 		}
 		return state.DeleteJournalOf(t.Context(), tx, k)
@@ -342,7 +342,7 @@ func TestAStopVerdictOfALostRunUnderItsLiveEpochIsNoOrphan(t *testing.T) {
 func TestAnOrphanTokenForAnotherRefIsNotUsed(t *testing.T) {
 	f, g := newGitFixture(t)
 	k := f.exitedRun()
-	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error { return state.MarkOrphaned(t.Context(), tx, k, t0) }))
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error { _, err := state.MarkOrphaned(t.Context(), tx, k, t0); return err }))
 	f.ctrl.orphanRef = "refs/cf/orphans/run_01J00000000000000000000000-e9"
 	for f.turn() {
 	}
@@ -355,7 +355,7 @@ func TestAnOrphanWritesNoReportButOrphanPreserved(t *testing.T) {
 	f := newFixture(t)
 	k := f.started("echo hi")
 	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error {
-		if err := state.MarkOrphaned(t.Context(), tx, k, t0); err != nil {
+		if _, err := state.MarkOrphaned(t.Context(), tx, k, t0); err != nil {
 			return err
 		}
 		return state.DeleteJournalOf(t.Context(), tx, k)
@@ -541,7 +541,7 @@ func TestARunOrphanedDuringItsPushIsNotMarkedPushed(t *testing.T) {
 		g.mu.Lock()
 		g.push = nil // only this push races
 		g.mu.Unlock()
-		return f.db.WithTx(context.Background(), func(tx *state.Tx) error { return state.MarkOrphaned(context.Background(), tx, k, t0) })
+		return f.db.WithTx(context.Background(), func(tx *state.Tx) error { _, err := state.MarkOrphaned(context.Background(), tx, k, t0); return err })
 	}
 	g.mu.Unlock()
 	f.turn()
@@ -725,4 +725,98 @@ func staleVerdicts(req v1.ReconcileRequest) v1.ReconcileResponse {
 		out.Verdicts = append(out.Verdicts, v1.ReconcileVerdict{RunID: r.RunID, LeaseEpoch: r.LeaseEpoch, Verdict: v1.ReconcileStale})
 	}
 	return out
+}
+
+func TestAWrapperAliveWithoutStartedIsNotRunning(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	w := newTrappingWrapperProcess(t, "trap 'exit 0' TERM", "while :; do sleep 0.05; done")
+	f.writeWrapper(k, w.w) // no started.json: the harness waits behind the gate
+	f.stopOrder(k, domain.StopLost)
+	if o, err := state.StopOrderOf(t.Context(), f.db.Reader(), k); err != nil || o.WasRunning {
+		t.Errorf("order = %+v, %v: no harness was launched", o, err)
+	}
+}
+
+// F9: a second stale verdict leaves the publication of an orphan as its own tries left it.
+func TestASecondStaleDoesNotRequeueThePublicationOfAnOrphan(t *testing.T) {
+	f, _ := newGitFixture(t)
+	k := f.sealedRun()
+	f.answers(staleVerdicts)
+	f.e.spawn = func(state.Key) {}
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	p := f.publication(k)
+	// The preservation fails for good.
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+		if _, err := state.Retry(t.Context(), tx, p, true, t0, "refused", t0); err != nil {
+			return err
+		}
+		p.Attempts++
+		return state.FailPublication(t.Context(), tx, p, "refused for good", t0)
+	}))
+	before := f.publication(k)
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	after := f.publication(k)
+	if after.State != state.PubFailed || after.Generation != before.Generation || after.Attempts != before.Attempts {
+		t.Errorf("after a second stale: %+v, before %+v", after, before)
+	}
+}
+
+// F8: a fence asks for a reconciliation at once, without a restart: the next
+// round names the fenced Run with its code, for the Controller to settle it.
+func TestAFenceAsksForAReconciliationAtOnce(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	must(t, f.e.Stop(t.Context(), k.RunID, k.LeaseEpoch, "lost", SourceController))
+	waitFor(t, "the Run to be settled", func() bool { return f.e.step(t.Context(), k) })
+	f.e = f.build()
+	f.e.reconciledGen.Store(0)
+	f.e.SetLimits(Limits{MaxConcurrentRuns: 4, CPU: 16, MemoryMB: 65536})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- f.e.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	waitFor(t, "the first round to complete", f.e.Reconciled)
+	refusing := reporterFunc(func(req v1.RunReportRequest) (v1.RunReportResponse, error) {
+		var out v1.RunReportResponse
+		for i, e := range req.Entries {
+			o := v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: v1.ReportApplied}
+			if e.Kind == v1.ReportStopped {
+				o = v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: v1.ReportRejected, Code: domain.CodeInvalidRequest}
+			}
+			if i > 0 && out.Outcomes[i-1].Result != v1.ReportApplied {
+				o = v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: v1.ReportNotApplied}
+			}
+			out.Outcomes = append(out.Outcomes, o)
+		}
+		return out, nil
+	})
+	sender := &journal.Sender{
+		DB: f.db, Reporter: refusing, Journal: f.j, Clock: f.clock, Log: f.opts.Log,
+		OnFence: func(state.Key) { f.e.RequestReconcile() },
+	}
+	if _, err := sender.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a round that names the fenced Run", func() bool {
+		f.ctrl.mu.Lock()
+		defer f.ctrl.mu.Unlock()
+		for _, req := range f.ctrl.reconciles[1:] {
+			for _, r := range req.Runs {
+				if r.RunID == k.RunID && r.FencedCode == string(domain.CodeInvalidRequest) && r.Phase == v1.PhaseStopped && !r.Alive {
+					return true
+				}
+			}
+		}
+		return false
+	})
+}
+
+type reporterFunc func(v1.RunReportRequest) (v1.RunReportResponse, error)
+
+func (f reporterFunc) ReportRun(_ context.Context, _ string, req v1.RunReportRequest) (v1.RunReportResponse, error) {
+	return f(req)
 }

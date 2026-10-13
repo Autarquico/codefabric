@@ -310,7 +310,7 @@ func TestReconcileState_AdoptUnfenceOrphanAndPendingStops(t *testing.T) {
 		t.Errorf("unfencing another code: %v", err)
 	}
 	tx(t, db, func(x *state.Tx) error { return state.Unfence(ctx, x, a.Key, "CF_INVALID_TRANSITION") })
-	tx(t, db, func(x *state.Tx) error { return state.MarkOrphaned(ctx, x, a.Key, t0) })
+	tx(t, db, func(x *state.Tx) error { _, err := state.MarkOrphaned(ctx, x, a.Key, t0); return err })
 	if got, _ := state.RunBy(ctx, db.Reader(), a.Key); got.FencedCode != "" || got.OrphanedAt == nil {
 		t.Errorf("after unfence and orphan: %+v", got)
 	}

@@ -76,7 +76,8 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 	// needs (an orphan of a lost Run), and only now is it there to see: it is kept
 	// with the order and told with RunStopped.
 	m := e.markers(k)
-	running := m.wrapper != nil && m.exit == nil && verdictOf(m.wrapper) == procident.Same
+	// The wrapper writes wrapper.json before its gate: only started.json says the harness was launched.
+	running := m.wrapper != nil && m.started != nil && m.exit == nil && verdictOf(m.wrapper) == procident.Same
 	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 		if _, err := state.AddStopOrder(ctx, tx, order); err != nil {
 			return err

@@ -79,7 +79,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 ## Decisiones de implementación
 
-Las decisiones de #13 (orden `stop` única por Worker, Run y epoch; reportes tardíos anotados sobre Runs que terminó el Controller; `harness_ran` como evidencia de liberación; reconciliación por rondas con fragmentos y páginas; puerta del scheduler; `lost` revalidado; reintento en `Rederive`; huérfanos conservados en el relay; suelo de compatibilidad v0.2) están en el Apéndice B5 de `docs/codefabric-spec.md`.
+Las decisiones de #13 (orden `stop` única por Worker, Run y epoch; reportes tardíos anotados sobre Runs que terminó el Controller; `harness_ran` como evidencia de liberación; reconciliación por rondas con fragmentos y páginas; puerta del scheduler; `lost` revalidado; reintento en `Rederive`; huérfanos conservados en el relay) están en el Apéndice B5 de `docs/codefabric-spec.md`.
 
 Tests por scenario:
 

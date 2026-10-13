@@ -357,13 +357,18 @@ func (e *Executor) applyVerdict(ctx context.Context, k state.Key, before sent, v
 			e.log.WarnContext(ctx, "the Controller does not own this assignment: it is stopped as an orphan, its worktree kept",
 				"run", k.RunID, "epoch", k.LeaseEpoch, "verdict", v.Verdict)
 			if err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
-				if err := state.MarkOrphaned(ctx, tx, k, now); err != nil {
+				became, err := state.MarkOrphaned(ctx, tx, k, now)
+				if err != nil {
 					return err
 				}
 				if err := state.DeleteJournalOf(ctx, tx, k); err != nil {
 					return err
 				}
-				// A publication that gave up, or pushed the branch, is tried again for the orphan's ref.
+				if !became {
+					return nil // an orphan already: its publication is on its own way, attempts and all
+				}
+				// On becoming an orphan, a publication that gave up, or pushed the
+				// branch, is tried again for the orphan's ref; once, not at every stale.
 				return state.RequeueForOrphan(ctx, tx, k, now)
 			}); err != nil {
 				return err

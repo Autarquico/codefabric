@@ -48,6 +48,9 @@ type Sender struct {
 	// as the Controller shows it and the seqs of the reports it settled, in the transaction that deletes the confirmed reports.
 	// An error rolls that transaction back and the reports are sent again.
 	OnView func(ctx context.Context, tx *state.Tx, k state.Key, confirmed []uint64, run v1.Run) error
+	// OnFence, if set, is called once a Run is fenced, after the fence is
+	// committed: the reconciliation is what decides what its reports are worth.
+	OnFence func(k state.Key)
 }
 
 // Run sends until ctx ends.
@@ -226,10 +229,14 @@ func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow
 // reports are kept, not sent.
 func (s *Sender) fence(ctx context.Context, k state.Key, code domain.Code, confirmed []uint64, message string) error {
 	s.Log.WarnContext(ctx, "the Controller refused a report for good: its reports are kept", "run", k.RunID, "lease_epoch", k.LeaseEpoch, "code", code, "message", message)
-	return s.DB.WithTx(ctx, func(tx *state.Tx) error {
+	err := s.DB.WithTx(ctx, func(tx *state.Tx) error {
 		if err := state.DeleteJournal(ctx, tx, confirmed); err != nil {
 			return err
 		}
 		return state.Fence(ctx, tx, k, string(code))
 	})
+	if err == nil && s.OnFence != nil {
+		s.OnFence(k)
+	}
+	return err
 }
