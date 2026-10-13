@@ -328,3 +328,34 @@ func TestARefusedStoppedIsSettledByTheReconciliationItAsksFor(t *testing.T) {
 		t.Errorf("RunOrphaned = %d", n)
 	}
 }
+
+// F11: a reconciliation confirmed that nothing runs; the Worker's own fenced
+// exited, stopped and sealed come again and are all taken, with one RunStopped,
+// so nothing is fenced again and the result is not held up.
+func TestReportsAfterAStopConfirmedByTheReconciliationAreTaken(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorker("alpha")
+	r := e.runningRun(alpha, "x")
+	e.cancelTask(r.run.TaskID)
+	exited, stopped, sealed := r.entry(v1.ReportExited, cause(v1.ExitCauseStop)), r.entry(v1.ReportStopped), r.entry(v1.ReportSealed, sealedTo(sha1))
+	fenced := held(r, v1.PhaseStopped, false)
+	fenced.FencedCode, fenced.PendingReports = string(domain.CodeInvalidTransition), 3
+	fenced.Publication = &v1.ReconcilePublication{State: "sealed", ResultCommit: sha1}
+	if got := verdicts(e.round(alpha).mustSend([]v1.ReconcileRun{fenced}, nil)); got != "continue+resend" {
+		t.Fatalf("verdicts = %s", got)
+	}
+	if got := results(r.mustSend(exited, stopped, sealed)); got != "applied,applied,applied" {
+		t.Fatalf("the resent reports = %s", got)
+	}
+	if n := len(e.events(domain.EventRunStopped)); n != 1 {
+		t.Errorf("RunStopped = %d", n)
+	}
+	if res := e.reservation(r.lease.ID); res.ReleasedAt == nil {
+		t.Error("not released")
+	}
+	// A publication the reconciliation failed: the Worker failing it too is taken.
+	r.mustSend(r.entry(v1.ReportPublicationFailed, phase(v1.PhasePush)))
+	if got := results(r.mustSend(r.entry(v1.ReportPublicationFailed, phase(v1.PhasePush)))); got != "applied" {
+		t.Errorf("a second publication_failed = %s", got)
+	}
+}

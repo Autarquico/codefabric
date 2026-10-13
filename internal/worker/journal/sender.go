@@ -229,13 +229,17 @@ func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow
 // reports are kept, not sent.
 func (s *Sender) fence(ctx context.Context, k state.Key, code domain.Code, confirmed []uint64, message string) error {
 	s.Log.WarnContext(ctx, "the Controller refused a report for good: its reports are kept", "run", k.RunID, "lease_epoch", k.LeaseEpoch, "code", code, "message", message)
+	var fenced bool
 	err := s.DB.WithTx(ctx, func(tx *state.Tx) error {
 		if err := state.DeleteJournal(ctx, tx, confirmed); err != nil {
 			return err
 		}
-		return state.Fence(ctx, tx, k, string(code))
+		var err error
+		fenced, err = state.Fence(ctx, tx, k, string(code))
+		return err
 	})
-	if err == nil && s.OnFence != nil {
+	// Only a new fence asks for a reconciliation: one already there has asked.
+	if err == nil && fenced && s.OnFence != nil {
 		s.OnFence(k)
 	}
 	return err

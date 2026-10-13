@@ -238,14 +238,15 @@ func SetStarted(ctx context.Context, tx *Tx, k Key, handle string, at time.Time)
 }
 
 // Fence records the code of a report the Controller refused for good. The
-// first one stays.
-func Fence(ctx context.Context, tx *Tx, k Key, code string) error {
-	_, err := tx.exec(ctx, `UPDATE local_runs SET fenced_code = ? WHERE run_id = ? AND lease_epoch = ? AND fenced_code IS NULL`,
+// first one stays; fenced says whether this call fenced it.
+func Fence(ctx context.Context, tx *Tx, k Key, code string) (fenced bool, err error) {
+	res, err := tx.exec(ctx, `UPDATE local_runs SET fenced_code = ? WHERE run_id = ? AND lease_epoch = ? AND fenced_code IS NULL`,
 		code, k.RunID, k.LeaseEpoch)
 	if err != nil {
-		return fmt.Errorf("state: fencing an assignment: %w", err)
+		return false, fmt.Errorf("state: fencing an assignment: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // Cursor is the last Seq of the Controller's queue that is persisted here.

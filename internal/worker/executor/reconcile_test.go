@@ -19,6 +19,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/journal"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -169,7 +170,10 @@ func TestReconcile_ResendUnfencesAndDropDrops(t *testing.T) {
 	resend, drop := f.accepted("a"), f.accepted("b")
 	for _, k := range []state.Key{resend, drop} {
 		must(t, f.e.Stop(t.Context(), k.RunID, k.LeaseEpoch, "x", SourceWorker))
-		must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error { return state.Fence(t.Context(), tx, k, "CF_INVALID_TRANSITION") }))
+		must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+			_, err := state.Fence(t.Context(), tx, k, "CF_INVALID_TRANSITION")
+			return err
+		}))
 	}
 	f.answers(func(req v1.ReconcileRequest) v1.ReconcileResponse {
 		out := complete(req)
@@ -632,7 +636,10 @@ func (r *fakeReporter) ReportRun(_ context.Context, _ string, req v1.RunReportRe
 func TestOrphanPreservedGoesThroughTheFenceAndAnotherStaleAndIsTakenOnce(t *testing.T) {
 	f, _ := newGitFixture(t)
 	k := f.exitedRun()
-	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error { return state.Fence(t.Context(), tx, k, string(domain.CodeStaleLease)) }))
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+		_, err := state.Fence(t.Context(), tx, k, string(domain.CodeStaleLease))
+		return err
+	}))
 	stale := func(req v1.ReconcileRequest) v1.ReconcileResponse {
 		out := complete(req)
 		for _, r := range req.Runs {
@@ -819,4 +826,55 @@ type reporterFunc func(v1.RunReportRequest) (v1.RunReportResponse, error)
 
 func (f reporterFunc) ReportRun(_ context.Context, _ string, req v1.RunReportRequest) (v1.RunReportResponse, error) {
 	return f(req)
+}
+
+// F12: a push in flight when the Run becomes an orphan, which then fails on its
+// last attempt, does not end the preservation: the requeue left it behind.
+func TestAPushInFlightWhenTheRunBecomesAnOrphanDoesNotEndThePreservation(t *testing.T) {
+	f, g := newGitFixture(t)
+	k := f.sealedRun()
+	p := f.publication(k)
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error { // one attempt left
+		for range domain.Defaults().PublicationMaxAttempts - 1 {
+			if _, err := state.Retry(t.Context(), tx, p, true, t0, "refused", t0); err != nil {
+				return err
+			}
+			p.Attempts++
+		}
+		return nil
+	}))
+	entered, release := make(chan struct{}), make(chan struct{})
+	g.mu.Lock()
+	g.push = func(pushCall) error {
+		g.mu.Lock()
+		g.push = nil
+		g.mu.Unlock()
+		close(entered)
+		<-release
+		return &gitops.PushError{Class: gitops.PushRefused, Message: "refused"}
+	}
+	g.mu.Unlock()
+	turned := make(chan struct{})
+	go func() {
+		defer close(turned)
+		f.turn()
+	}()
+	<-entered
+	f.answers(staleVerdicts)
+	f.e.spawn = func(state.Key) {}
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	close(release)
+	<-turned
+	if after := f.publication(k); after.State != state.PubSealed || after.Attempts != 0 || after.Generation != p.Generation+1 {
+		t.Fatalf("after the old try failed: %+v", after)
+	}
+	f.passBackoff()
+	for f.turn() {
+	}
+	if after := f.publication(k); after.State != state.PubPublished {
+		t.Errorf("publication = %s: the preservation did not go on", after.State)
+	}
+	if last := g.pushes[len(g.pushes)-1]; last.Branch != domain.OrphanRef(domain.ID(k.RunID), k.LeaseEpoch) {
+		t.Errorf("last push to %s", last.Branch)
+	}
 }

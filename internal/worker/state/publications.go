@@ -255,16 +255,17 @@ func MarkPreserved(ctx context.Context, tx *Tx, p Publication, at time.Time) err
 }
 
 // RequeueForOrphan starts a new try of the publication of an assignment that
-// has just become an orphan, so that its result is kept by the orphan's ref: a
-// try that failed or that pushed the branch goes back to sealed with the
-// commit it has (or to sealing if it has none), under a new generation, so that
-// what an older try answers does not touch it. One that is still sealing or
-// sealed goes on as it is, and one that is published here (preserved) stays.
+// has just become an orphan, so that its result is kept by the orphan's ref:
+// whatever try is under way (sealing, sealed, a push in flight, pushed or
+// failed) goes to sealed with the commit it has (or to sealing if it has none),
+// with its attempts at zero and under a new generation, so that what an older
+// try answers, a push in flight included, does not touch it. One that is
+// published here (preserved) stays.
 func RequeueForOrphan(ctx context.Context, tx *Tx, k Key, at time.Time) error {
 	_, err := tx.exec(ctx,
 		`UPDATE publications SET state = CASE WHEN result_commit IS NULL THEN ? ELSE ? END, generation = generation + 1,
 		        published_seq = NULL, attempts = 0, next_attempt_at = ?, last_error = NULL, updated_at = ?
-		 WHERE run_id = ? AND lease_epoch = ? AND state IN ('failed', 'pushed')`,
+		 WHERE run_id = ? AND lease_epoch = ? AND state IN ('sealing', 'sealed', 'failed', 'pushed')`,
 		string(PubSealing), string(PubSealed), at.UnixNano(), at.UnixNano(), k.RunID, k.LeaseEpoch)
 	if err != nil {
 		return fmt.Errorf("state: requeueing the publication of an orphan: %w", err)

@@ -168,7 +168,10 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		ev.Data["message"] = e.Message
 	}
 
-	var apply func() error
+	var (
+		apply   func() error
+		noEvent bool // the entry says what the Controller knows already: applied, with nothing to tell
+	)
 	switch {
 	case ControllerEnded(run) && (e.Kind == v1.ReportStarted || e.Kind == v1.ReportExited || e.Kind == v1.ReportPrepareFailed):
 		if apply, err = s.lateEntry(ctx, tx, act, &ev, run, task, l, e); err != nil {
@@ -225,9 +228,6 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 			return tx.SetHarnessRan(ctx, run, false)
 		}
 	case e.Kind == v1.ReportStopped:
-		if run.Runtime == domain.RuntimeStopped {
-			return outcome(""), domain.NewError(domain.CodeInvalidTransition, "the runtime of this Run is stopped already", nil)
-		}
 		if e.NeverStarted && run.Runtime == domain.RuntimeActive {
 			return outcome(""), domain.NewError(domain.CodeInvalidTransition, "the harness of this Run did start", nil)
 		}
@@ -241,9 +241,16 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		}
 		ev.Type, ev.Message = domain.EventRunStopped, "run stopped"
 		ev.Data["never_started"], ev.Data["was_running"] = e.NeverStarted, e.WasRunning
+		// A runtime stopped already was confirmed so by a reconciliation: the
+		// Worker's own stopped says the same and is taken as it is, with no
+		// second RunStopped, so that the reports behind it are not held up.
+		confirmed := run.Runtime == domain.RuntimeStopped
+		noEvent = confirmed
 		apply = func() error {
-			if err := tx.StopRuntime(ctx, run); err != nil {
-				return err
+			if !confirmed {
+				if err := tx.StopRuntime(ctx, run); err != nil {
+					return err
+				}
 			}
 			// A lost Run whose process was alive when its stop arrived is an orphan,
 			// whether or not a reconciliation saw it first (§27.2).
@@ -255,6 +262,10 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 			run.Runtime = domain.RuntimeStopped
 			return s.releaseIfAllowed(ctx, tx, act, run, l)
 		}
+	case e.Kind == v1.ReportPublicationFailed && run.Publication == domain.PublicationFailed:
+		// The publication was failed already (by a reconciliation that found the
+		// result lost): the Worker giving it up says the same.
+		noEvent, apply = true, func() error { return nil }
 	case e.Kind == v1.ReportSealed || e.Kind == v1.ReportPublished || e.Kind == v1.ReportPublicationFailed:
 		if apply, err = s.publicationEntry(ctx, tx, act, &ev, run, task, l, e); err != nil {
 			return outcome(""), err
@@ -265,6 +276,9 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 
 	if err := apply(); err != nil {
 		return outcome(""), internalError{err}
+	}
+	if noEvent {
+		return outcome(v1.ReportApplied), nil
 	}
 	if _, dup, err := tx.AppendEvent(ctx, ev); err != nil || dup {
 		if err == nil {

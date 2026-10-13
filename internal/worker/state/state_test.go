@@ -234,7 +234,7 @@ func TestJournalSeqNeverRepeatsAndFencedRunsAreLeftOut(t *testing.T) {
 		return err
 	})
 
-	tx(t, db, func(x *state.Tx) error { return state.Fence(t.Context(), x, a, "CF_STALE_LEASE") })
+	tx(t, db, func(x *state.Tx) error { _, err := state.Fence(t.Context(), x, a, "CF_STALE_LEASE"); return err })
 	pending, err := state.PendingJournal(t.Context(), db.Reader(), 10)
 	if err != nil || len(pending) != 1 || pending[0].Key != b || pending[0].Epoch != "E2" || pending[0].Seq != 5 {
 		t.Errorf("pending = %+v (%v)", pending, err)
@@ -305,7 +305,7 @@ func TestReconcileState_AdoptUnfenceOrphanAndPendingStops(t *testing.T) {
 	if err != nil || !got.Adopted || got.Phase != state.PhaseRunning || got.StartedAt == nil {
 		t.Fatalf("adopted = %+v, %v", got, err)
 	}
-	tx(t, db, func(x *state.Tx) error { return state.Fence(ctx, x, a.Key, "CF_INVALID_TRANSITION") })
+	tx(t, db, func(x *state.Tx) error { _, err := state.Fence(ctx, x, a.Key, "CF_INVALID_TRANSITION"); return err })
 	if err := db.WithTx(ctx, func(x *state.Tx) error { return state.Unfence(ctx, x, a.Key, "CF_STALE_LEASE") }); !errors.Is(err, state.ErrChanged) {
 		t.Errorf("unfencing another code: %v", err)
 	}

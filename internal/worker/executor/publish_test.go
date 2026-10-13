@@ -613,7 +613,7 @@ func TestPublish_AnOrderForARunThisWorkerNeverHeardOfIsAnswered(t *testing.T) {
 func TestPublish_AFencedRunStillPushes(t *testing.T) {
 	f, g := newGitFixture(t)
 	k := f.sealedRun()
-	if err := f.db.WithTx(t.Context(), func(tx *state.Tx) error { return state.Fence(t.Context(), tx, k, "CF_STALE_LEASE") }); err != nil {
+	if err := f.db.WithTx(t.Context(), func(tx *state.Tx) error { _, err := state.Fence(t.Context(), tx, k, "CF_STALE_LEASE"); return err }); err != nil {
 		t.Fatal(err)
 	}
 	f.turn()
