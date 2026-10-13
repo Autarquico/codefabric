@@ -61,6 +61,22 @@ linters:
               desc: interfaces must go through internal/client (invariant 7)
             - pkg: github.com/Autarquico/codefabric/internal/adapters
               desc: interfaces must go through internal/client (invariant 7)
+        # The CLI is a client of the SDK and of the wire types: nothing else of
+        # the module. What it cannot reach (the terminal of `cf attach`) is
+        # composed into it by cmd/cf.
+        cli:
+          list-mode: strict
+          files: ["**/internal/cli/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/spf13/cobra
+            - golang.org/x/sys/unix
+            - github.com/Autarquico/codefabric/internal/cli
+            - github.com/Autarquico/codefabric/internal/client
+            - github.com/Autarquico/codefabric/internal/api/v1
+            - github.com/Autarquico/codefabric/internal/domain
+            - github.com/Autarquico/codefabric/internal/config
+            - github.com/Autarquico/codefabric/internal/buildinfo
         # The Worker reaches the Controller only through the SDK (ADR 0001); its
         # tests may stand a real Controller up.
         worker:
@@ -104,6 +120,13 @@ linters:
               desc: gitops does not know the Worker's state
             - pkg: github.com/Autarquico/codefabric/internal/client
               desc: gitops does not know the SDK
+        # outputship sends output.log to the Controller; the executor that owns the Runs is not its business.
+        outputship:
+          list-mode: lax
+          files: ["**/internal/worker/outputship/**", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/worker/executor
+              desc: outputship does not know the executor
         store:
           list-mode: lax
           files: ["**/internal/controller/store/**"]

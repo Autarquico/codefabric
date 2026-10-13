@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/transport/ssh"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -153,5 +154,22 @@ func TestCommand_ASHReadsBackTheSameWords(t *testing.T) {
 	out, err := exec.CommandContext(t.Context(), "/bin/sh", "-c", command).Output() //nolint:gosec // a quoted command of our own
 	if err != nil || string(out) != "a=b:c +x-y_z.w/1\n" {
 		t.Fatalf("sh -c %s = %q, %v", command, out, err)
+	}
+}
+
+// The interrupt of the terminal reaches ssh with the rest of the foreground
+// group, and the context of the client ends with that same interrupt: ending the
+// context must not end the session.
+func TestAttach_CancellingTheContextAfterItStartedDoesNotKillSSH(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 0.4\nexit 3\n"), 0o700); err != nil { //nolint:gosec // a test script
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+	code, err := ssh.Attach(ctx, ssh.Options{Binary: bin}, target(t, "box"), tmuxArgv, ssh.Stdio{})
+	if err != nil || code != 3 {
+		t.Fatalf("code %d, err %v: ssh was cut by the context", code, err)
 	}
 }
