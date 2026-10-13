@@ -717,3 +717,12 @@ func TestAStopThatFindsTheProcessAliveSaysSoInStopped(t *testing.T) {
 		t.Errorf("stopped = %+v", last)
 	}
 }
+
+// staleVerdicts says stale of every run of a request, in a complete round.
+func staleVerdicts(req v1.ReconcileRequest) v1.ReconcileResponse {
+	out := complete(req)
+	for _, r := range req.Runs {
+		out.Verdicts = append(out.Verdicts, v1.ReconcileVerdict{RunID: r.RunID, LeaseEpoch: r.LeaseEpoch, Verdict: v1.ReconcileStale})
+	}
+	return out
+}

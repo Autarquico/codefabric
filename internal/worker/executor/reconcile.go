@@ -360,10 +360,15 @@ func (e *Executor) applyVerdict(ctx context.Context, k state.Key, before sent, v
 				if err := state.MarkOrphaned(ctx, tx, k, now); err != nil {
 					return err
 				}
-				return state.DeleteJournalOf(ctx, tx, k)
+				if err := state.DeleteJournalOf(ctx, tx, k); err != nil {
+					return err
+				}
+				// A publication that gave up, or pushed the branch, is tried again for the orphan's ref.
+				return state.RequeueForOrphan(ctx, tx, k, now)
 			}); err != nil {
 				return err
 			}
+			e.kickPublisher()
 			stop = r.Phase.Live()
 		case v1.ReconcileStop:
 			stop = r.Phase.Live()

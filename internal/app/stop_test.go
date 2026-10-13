@@ -272,3 +272,27 @@ func TestStopped_WasRunningOnALostRunIsAnOrphanWhoeverSawItFirst(t *testing.T) {
 		t.Errorf("never_started with was_running: %v", err)
 	}
 }
+
+func TestStopped_WasRunningWithoutAStartIsRefusedAndReleasesNothing(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorker("alpha")
+	r := e.acceptedRun(alpha, "x") // preparing: no started
+	e.clock.Advance(lostTimeout + time.Minute)
+	e.sweepLost()
+	if got := e.storedRun(r.run.ID); got.State != domain.RunLost || got.StartedAt != nil {
+		t.Fatalf("run = %+v", got)
+	}
+	wasRunning := func(en *v1.RunReportEntry) { en.WasRunning = true }
+	if got := results(r.mustSend(r.entry(v1.ReportStopped, wasRunning))); got != "rejected:CF_INVALID_REQUEST" {
+		t.Fatalf("stopped{was_running} without a start = %s", got)
+	}
+	if n := len(e.events(domain.EventRunOrphaned)); n != 0 {
+		t.Errorf("RunOrphaned = %d", n)
+	}
+	if got := e.storedRun(r.run.ID); got.Runtime != domain.RuntimeNone {
+		t.Errorf("runtime = %s", got.Runtime)
+	}
+	if res := e.reservation(r.lease.ID); res.ReleasedAt != nil {
+		t.Errorf("the reservation was released: %+v", res)
+	}
+}

@@ -234,6 +234,11 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		if !e.NeverStarted && !run.State.IsTerminal() {
 			return outcome(""), domain.NewError(domain.CodeInvalidTransition, "the Run is not over: only a Run that never started can be stopped before it ends", nil)
 		}
+		// A process alive when the stop came needs a start the Controller knows of:
+		// without one the claim is refused, and nothing is orphaned or released by it.
+		if e.WasRunning && run.StartedAt == nil && (run.HarnessRan == nil || !*run.HarnessRan) {
+			return outcome(""), input.Invalid("was_running needs a Run that started")
+		}
 		ev.Type, ev.Message = domain.EventRunStopped, "run stopped"
 		ev.Data["never_started"], ev.Data["was_running"] = e.NeverStarted, e.WasRunning
 		apply = func() error {

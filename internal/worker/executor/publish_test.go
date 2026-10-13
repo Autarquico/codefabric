@@ -477,12 +477,62 @@ func TestPush_ATokenTheControllerWillNotGiveEndsIt(t *testing.T) {
 	k := f.sealedRun()
 	f.ctrl.mu.Lock()
 	f.ctrl.relayToken = func(string, uint64) (v1.RelayTokenResponse, error) {
-		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeStaleLease, "this is not the live lease of the Run", nil)
+		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeNotFound, "run not found", nil)
 	}
 	f.ctrl.mu.Unlock()
 	f.turn()
 	if p := f.publication(k); p.State != state.PubFailed || g.pushCount() != 0 {
 		t.Errorf("publication = %+v, %d pushes", p, g.pushCount())
+	}
+}
+
+// A lease that is no longer the live one is the reconciliation's to settle: the
+// sealed result waits for it, and is kept by the orphan's ref once it says stale.
+func TestPush_AStaleLeaseLeavesTheResultSealedForTheOrphansRef(t *testing.T) {
+	f, g := newGitFixture(t)
+	k := f.sealedRun()
+	f.ctrl.mu.Lock()
+	f.ctrl.relayToken = func(string, uint64) (v1.RelayTokenResponse, error) {
+		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeStaleLease, "this is not the live lease of the Run", nil)
+	}
+	f.ctrl.mu.Unlock()
+	f.turn()
+	if p := f.publication(k); p.State != state.PubSealed || g.pushCount() != 0 {
+		t.Fatalf("publication = %+v, %d pushes", p, g.pushCount())
+	}
+	f.answers(staleVerdicts)
+	f.e.spawn = func(state.Key) {}
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	f.passBackoff()
+	for f.turn() {
+	}
+	if p := f.publication(k); p.State != state.PubPublished || g.pushCount() != 1 ||
+		g.pushes[0].Branch != domain.OrphanRef(domain.ID(k.RunID), k.LeaseEpoch) {
+		t.Errorf("publication = %s, pushes %+v", p.State, g.pushes)
+	}
+	if got := kinds(f.reports(k)); !slices.Equal(got, []v1.RunReportKind{v1.ReportOrphanPreserved}) {
+		t.Errorf("reports = %v", got)
+	}
+}
+
+// A publication that gave up before the reconciliation said stale is tried again
+// for the orphan's ref, with the commit it sealed and a new generation.
+func TestPush_APublicationThatGaveUpIsRequeuedWhenTheRunBecomesAnOrphan(t *testing.T) {
+	f, g := newGitFixture(t)
+	k := f.sealedRun()
+	before := f.publication(k)
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error { return state.FailPublication(t.Context(), tx, before, "gave up", t0) }))
+	f.answers(staleVerdicts)
+	f.e.spawn = func(state.Key) {}
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	p := f.publication(k)
+	if p.State != state.PubSealed || p.ResultCommit != before.ResultCommit || p.Generation != before.Generation+1 {
+		t.Fatalf("requeued = %+v", p)
+	}
+	for f.turn() {
+	}
+	if p := f.publication(k); p.State != state.PubPublished || g.pushCount() != 1 {
+		t.Errorf("publication = %s after %d pushes", p.State, g.pushCount())
 	}
 }
 
