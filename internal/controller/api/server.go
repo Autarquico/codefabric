@@ -31,6 +31,11 @@ const (
 // Timeouts bound a connection; a zero field takes its production default.
 type Timeouts struct {
 	Read, Write, Idle time.Duration
+	// StreamLifetime is how long a server-sent stream lives before the server
+	// closes it cleanly, for the client to resume with Last-Event-ID; StreamWrite
+	// how long one write to a client may take. Both are deadlines on the
+	// connection, so they run on real time.
+	StreamLifetime, StreamWrite time.Duration
 	// Health bounds the database check behind /v1/status. It is an
 	// infrastructure deadline on a context, so it runs on real time.
 	Health time.Duration
@@ -46,10 +51,30 @@ func (t Timeouts) orDefaults() Timeouts {
 	if t.Idle == 0 {
 		t.Idle = idleTimeout
 	}
+	if t.StreamLifetime == 0 {
+		t.StreamLifetime = streamLifetime
+	}
+	if t.StreamWrite == 0 {
+		t.StreamWrite = streamWriteLimit
+	}
 	if t.Health == 0 {
 		t.Health = healthTimeout
 	}
 	return t
+}
+
+// StreamLimits are the quotas of open server-sent streams; a zero field takes
+// its production default.
+type StreamLimits struct{ PerIdentity, Total int }
+
+func (l StreamLimits) orDefaults() StreamLimits {
+	if l.PerIdentity == 0 {
+		l.PerIdentity = maxStreamsPerID
+	}
+	if l.Total == 0 {
+		l.Total = maxStreamsTotal
+	}
+	return l
 }
 
 // Config wires a Server.
@@ -64,6 +89,7 @@ type Config struct {
 	Build      buildinfo.Info // what /v1/status reports as the version
 	Logger     *slog.Logger   // defaults to slog.Default()
 	Timeouts   Timeouts       // tests shorten them
+	Streams    StreamLimits   // tests lower them
 	// Relay is the git relay (§22.1); nil when this machine cannot serve one,
 	// and then its routes answer CF_INTERNAL.
 	Relay *relay.Relay
@@ -85,6 +111,7 @@ type Server struct {
 	mux       *http.ServeMux
 	routes    map[string]route
 	health    healthCache
+	streams   *streamHub
 }
 
 // New builds the server and its route table. It fails when Config.Work is missing.
@@ -119,8 +146,9 @@ func New(c Config) (*Server, error) {
 			ClientAuth: tls.VerifyClientCertIfGiven,
 			ClientCAs:  roots,
 		},
-		mux:    http.NewServeMux(),
-		routes: map[string]route{},
+		mux:     http.NewServeMux(),
+		routes:  map[string]route{},
+		streams: newStreamHub(c.Streams.orDefaults()),
 	}
 	s.tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return s.cert.Load(), nil }
 	s.SetServerCert(c.ServerCert)
@@ -137,6 +165,9 @@ func New(c Config) (*Server, error) {
 	}
 	if s.work.Reconciliation != nil {
 		s.registerReconcileRoutes()
+	}
+	if s.work.Events != nil {
+		s.registerEventRoutes()
 	}
 	return s, nil
 }
@@ -164,6 +195,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		MaxHeaderBytes:    maxHeaderBytes,
 		ErrorLog:          slog.NewLogLogger(s.log.Handler(), slog.LevelDebug),
 	}
+	// The streams hold their handlers for as long as they live: shutdown ends
+	// them at once, instead of waiting for shutdownTimeout.
+	srv.RegisterOnShutdown(s.streams.shutdown)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

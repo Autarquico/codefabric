@@ -5,6 +5,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/events"
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/projects"
 	"github.com/Autarquico/codefabric/internal/app/reconciliation"
@@ -30,6 +31,8 @@ type Services struct {
 	// Reconciliation is the start of the Controller, the reconciliation of the
 	// Workers and the Runs they lose (§27).
 	Reconciliation *reconciliation.Service
+	// Events reads the event store: pages and follows (§20, §31.4).
+	Events *events.Service
 
 	db *store.DB
 }
@@ -64,7 +67,8 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 			StartedAt: workersCfg.StartedAt, LostTimeout: cfg.RunLostTimeout, OfflineTTL: workersCfg.OfflineTTL,
 			Hooks: cfg.ReconciliationHooks,
 		}),
-		db: db,
+		Events: events.New(db, clk),
+		db:     db,
 	}
 }
 
