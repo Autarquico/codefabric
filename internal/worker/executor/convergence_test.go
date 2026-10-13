@@ -74,6 +74,8 @@ type appController struct {
 	app  *app.Services
 	w    pki.Session
 	lose map[string]bool // the next answer of the operation is lost
+	// between, if set, runs once between an answer of reconcile and its use.
+	between func()
 }
 
 func (c *appController) losing(op string) bool {
@@ -119,6 +121,13 @@ func (c *appController) Reconcile(ctx context.Context, req v1.ReconcileRequest) 
 	out, err := c.app.Reconciliation.Reconcile(ctx, c.w, req)
 	if err == nil && c.losing("reconcile") {
 		return v1.ReconcileResponse{}, errLost
+	}
+	c.mu.Lock()
+	between := c.between
+	c.between = nil
+	c.mu.Unlock()
+	if between != nil {
+		between()
 	}
 	return out, err
 }
@@ -259,6 +268,12 @@ func (w *world) longPoll(lose bool) {
 
 func (w *world) reconcile(lose bool) {
 	w.rounds++
+	if w.rng != nil && w.rng.IntN(4) == 0 {
+		// The orders of the queue are consumed between an answer and its use.
+		w.ctrl.mu.Lock()
+		w.ctrl.between = func() { w.longPoll(false) }
+		w.ctrl.mu.Unlock()
+	}
 	if lose {
 		w.ctrl.mu.Lock()
 		w.ctrl.lose["reconcile"] = true
@@ -333,7 +348,7 @@ func (w *world) runs() []store.Run {
 // and only late enough for the Run to have got somewhere, when the seed says so.
 func (w *world) step(i int, cancelled, lost *bool, task string) {
 	ctx := w.t.Context()
-	action := w.rng.IntN(12)
+	action := w.rng.IntN(13)
 	if action == 7 || action == 8 {
 		// Mostly while the Run runs, which is where they interfere; seldom before.
 		running := false
@@ -394,6 +409,13 @@ func (w *world) step(i int, cancelled, lost *bool, task string) {
 	case 10:
 		_, err := w.ctrl.app.Scheduler.Pass(ctx)
 		must(w.t, err)
+	case 12:
+		// A human asks for another try of a publication that failed (cf run publish).
+		for _, r := range w.runs() {
+			if r.Publication == domain.PublicationFailed {
+				_, _ = w.ctrl.app.Runs.Publish(ctx, w.owner, string(r.ID), v1.ActionRequest{})
+			}
+		}
 	case 11:
 		w.f.clock.Advance(domain.Defaults().LeaseAcceptBy + time.Second)
 		_, err := w.ctrl.app.Leases.SweepExpired(ctx)

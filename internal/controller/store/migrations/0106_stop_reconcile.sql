@@ -45,6 +45,22 @@ CREATE TABLE run_orphans (
     CHECK ((preserved = 'relay') = (preserved_at IS NOT NULL))
 ) STRICT, WITHOUT ROWID;
 
+-- §27.4 (dedupe): every report entry the Controller applied, by its triple,
+-- with the Run, the kind and the digest of what it said. A report that is
+-- applied without an event of its own (one that tells what the Controller knew
+-- already) is found here when it comes again, as a duplicate, and a triple
+-- reused for another report is refused.
+CREATE TABLE report_receipts (
+    worker_id    TEXT    NOT NULL REFERENCES workers (id),
+    worker_epoch TEXT    NOT NULL,
+    worker_seq   INTEGER NOT NULL,
+    run_id       TEXT    NOT NULL REFERENCES runs (id),
+    kind         TEXT    NOT NULL,
+    digest       TEXT    NOT NULL,
+    applied_at   INTEGER NOT NULL,
+    PRIMARY KEY (worker_id, worker_epoch, worker_seq)
+) STRICT, WITHOUT ROWID;
+
 -- The lost sweeper reads the Runs that hold an accepted lease and have not ended.
 CREATE INDEX runs_live_accepted ON runs (worker_id) WHERE state IN ('preparing', 'running', 'waiting_input', 'checkpointing');
 

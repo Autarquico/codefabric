@@ -115,11 +115,23 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 	if err != nil {
 		return outcome(""), err
 	}
+	if !found {
+		// An entry applied with no event of its own left its receipt.
+		receipt, ok, err := store.ReceiptOf(ctx, tx, w.ID, e.WorkerEpoch, e.WorkerSeq)
+		if err != nil {
+			return outcome(""), err
+		}
+		found, stored = ok, domain.Event{RunID: receipt.RunID, Data: map[string]any{dataReportDigest: receipt.Digest}}
+	}
 	if found {
 		if stored.RunID == runID && stored.Data[dataReportDigest] == digest {
 			return outcome(v1.ReportDuplicate), nil
 		}
 		return outcome(""), domain.NewError(domain.CodeInvalidRequest, "worker_seq reused for a different report", nil)
+	}
+	// What is applied from here leaves its receipt, with or without an event.
+	receipt := func() error {
+		return tx.InsertReceipt(ctx, w.ID, e.WorkerEpoch, e.WorkerSeq, store.Receipt{RunID: runID, Kind: string(e.Kind), Digest: digest}, act.Now)
 	}
 
 	l, err := store.LeaseByRunEpoch(ctx, tx, runID, e.LeaseEpoch)
@@ -172,8 +184,14 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		apply   func() error
 		noEvent bool // the entry says what the Controller knows already: applied, with nothing to tell
 	)
+	same := false
+	if e.Kind == v1.ReportExited {
+		if same, err = exitedAlready(ctx, tx, run, e); err != nil {
+			return outcome(""), err
+		}
+	}
 	switch {
-	case e.Kind == v1.ReportExited && exitedAlready(run, e),
+	case same,
 		e.Kind == v1.ReportPrepareFailed && run.State == domain.RunFailed && run.EndReason == domain.EndEnvironment:
 		// The same end, told again under another seq (a daemon that lost its state
 		// and adopted the Run from its markers): the Controller has it.
@@ -282,6 +300,9 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 	if err := apply(); err != nil {
 		return outcome(""), internalError{err}
 	}
+	if err := receipt(); err != nil {
+		return outcome(""), internalError{err}
+	}
 	if noEvent {
 		return outcome(v1.ReportApplied), nil
 	}
@@ -298,19 +319,27 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 }
 
 // exitedAlready says whether the Run ended by the very exit the entry tells:
-// the same cause and the same exit code.
-func exitedAlready(run store.Run, e v1.RunReportEntry) bool {
-	switch {
-	case run.State != domain.RunCompleted && run.State != domain.RunFailed:
-		return false
-	case e.Cause == v1.ExitCauseWrapperLost:
-		return run.EndReason == domain.EndWrapperLost
-	case run.EndReason != domain.EndExitCode:
-		return false
-	case e.ExitCode == nil || run.ExitCode == nil:
-		return e.ExitCode == nil && run.ExitCode == nil
+// its end was the Worker's own exited report, with the same cause, exit code
+// and signal, as its event keeps them.
+func exitedAlready(ctx context.Context, q store.Querier, run store.Run, e v1.RunReportEntry) (bool, error) {
+	if run.State != domain.RunCompleted && run.State != domain.RunFailed {
+		return false, nil
 	}
-	return *e.ExitCode == *run.ExitCode
+	end, found, err := store.RunEndEvent(ctx, q, run.ID)
+	if err != nil || !found {
+		return false, err
+	}
+	cause, _ := end.Data["cause"].(string)
+	signal, _ := end.Data["signal"].(string)
+	if cause != e.Cause || signal != e.Signal {
+		return false, nil
+	}
+	code, hasCode := end.Data["exit_code"].(float64)
+	switch {
+	case e.ExitCode == nil || !hasCode:
+		return e.ExitCode == nil && !hasCode, nil
+	}
+	return float64(*e.ExitCode) == code, nil
 }
 
 // releaseIfAllowed releases the reservation of the lease once the rules of

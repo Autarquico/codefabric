@@ -374,7 +374,43 @@ func TestTheSameExitToldAgainIsTakenAnotherIsNot(t *testing.T) {
 	if n := len(e.events(domain.EventRunCompleted)); n != 1 {
 		t.Errorf("RunCompleted = %d", n)
 	}
-	if got := results(r.mustSend(r.entry(v1.ReportExited, exitCode(3)))); got != "rejected:CF_INVALID_TRANSITION" {
-		t.Errorf("another exit = %s", got)
+	for name, mutate := range map[string]func(*v1.RunReportEntry){
+		"another exit code": exitCode(3),
+		"another cause":     func(en *v1.RunReportEntry) { en.ExitCode, en.Cause = new(int), v1.ExitCauseStop },
+		"another signal":    func(en *v1.RunReportEntry) { en.ExitCode, en.Signal = new(int), "SIGTERM" },
+		"no exit code":      func(en *v1.RunReportEntry) { en.ExitCode = nil },
+	} {
+		if got := results(r.mustSend(r.entry(v1.ReportExited, mutate))); got != "rejected:CF_INVALID_TRANSITION" {
+			t.Errorf("%s = %s", name, got)
+		}
+	}
+}
+
+// F15: an entry applied with no event of its own leaves a receipt: told again
+// after its answer was lost, it is a duplicate, and does nothing to a later try
+// of the publication; its triple cannot be reused for another report.
+func TestAnEntryAppliedWithNoEventIsADuplicateWhenItComesAgain(t *testing.T) {
+	e := newEnv(t)
+	alpha := e.joinWorker("alpha")
+	r := e.acceptedRun(alpha, "x")
+	r.exitedAndStopped(0)
+	r.mustSend(r.entry(v1.ReportPublicationFailed, phase(v1.PhaseSeal)))
+	again := r.entry(v1.ReportPublicationFailed, phase(v1.PhasePush)) // a no-op: the publication is failed
+	if got := results(r.mustSend(again)); got != "applied" {
+		t.Fatalf("the no-op = %s", got)
+	}
+	// Its answer was lost; meanwhile a human asks for another try.
+	_, err := e.app.Runs.Publish(t.Context(), e.owner, r.run.ID, v1.ActionRequest{})
+	must(t, err)
+	if got := results(r.mustSend(again)); got != "duplicate" {
+		t.Errorf("the no-op again = %s", got)
+	}
+	if got := e.storedRun(r.run.ID).Publication; got != domain.PublicationPending {
+		t.Errorf("publication = %s: the replay failed the new try", got)
+	}
+	reused := again
+	reused.Phase = v1.PhaseSeal
+	if got := results(r.mustSend(reused)); got != "rejected:CF_INVALID_REQUEST" {
+		t.Errorf("the triple reused = %s", got)
 	}
 }

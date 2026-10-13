@@ -136,3 +136,60 @@ func (t *Tx) SetHarnessRan(ctx context.Context, run Run, ran bool) error {
 		ran, string(run.ID), string(run.LeaseID), run.LeaseEpoch)
 	return changedOne(res, err, "recording whether the harness ran")
 }
+
+// Receipt is an applied report entry, by its triple.
+type Receipt struct {
+	RunID  domain.ID
+	Kind   string
+	Digest string
+}
+
+// InsertReceipt records that the entry (worker, epoch, seq) was applied.
+func (t *Tx) InsertReceipt(ctx context.Context, worker domain.ID, epoch string, seq uint64, r Receipt, at time.Time) error {
+	_, err := t.Exec(ctx,
+		`INSERT INTO report_receipts (worker_id, worker_epoch, worker_seq, run_id, kind, digest, applied_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		string(worker), epoch, seq, string(r.RunID), r.Kind, r.Digest, at.UnixNano())
+	if err != nil {
+		return fmt.Errorf("store: recording a report: %w", err)
+	}
+	return nil
+}
+
+// ReceiptOf is the receipt of the triple, and false if it has none.
+func ReceiptOf(ctx context.Context, q Querier, worker domain.ID, epoch string, seq uint64) (Receipt, bool, error) {
+	var (
+		r   Receipt
+		run string
+	)
+	err := q.QueryRow(ctx, `SELECT run_id, kind, digest FROM report_receipts WHERE worker_id = ? AND worker_epoch = ? AND worker_seq = ?`,
+		string(worker), epoch, seq).Scan(&run, &r.Kind, &r.Digest)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Receipt{}, false, nil
+	case err != nil:
+		return Receipt{}, false, fmt.Errorf("store: reading a report receipt: %w", err)
+	}
+	r.RunID = domain.ID(run)
+	return r, true, nil
+}
+
+// RunEndEvent is the event of the Worker's report that ended the Run by its
+// exit (RunCompleted or RunFailed with report exited), and false if there is none.
+func RunEndEvent(ctx context.Context, q Querier, run domain.ID) (domain.Event, bool, error) {
+	rows, err := q.Query(ctx, `SELECT `+eventColumns+` FROM events WHERE run_id = ? AND type IN (?, ?) AND worker_seq IS NOT NULL
+		ORDER BY sequence`, string(run), string(domain.EventRunCompleted), string(domain.EventRunFailed))
+	if err != nil {
+		return domain.Event{}, false, fmt.Errorf("store: finding the end of a run: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return domain.Event{}, false, err
+		}
+		if e.Data["report"] == "exited" {
+			return e, true, nil
+		}
+	}
+	return domain.Event{}, false, rows.Err()
+}

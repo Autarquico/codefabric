@@ -153,5 +153,8 @@ func (s *Service) orphanPreserved(ctx context.Context, tx *store.Tx, act mutatio
 		}
 		return outcome(""), internalError{err}
 	}
+	if err := tx.InsertReceipt(ctx, w.ID, e.WorkerEpoch, e.WorkerSeq, store.Receipt{RunID: run.ID, Kind: string(e.Kind), Digest: digest}, act.Now); err != nil {
+		return outcome(""), internalError{err}
+	}
 	return outcome(v1.ReportApplied), nil
 }

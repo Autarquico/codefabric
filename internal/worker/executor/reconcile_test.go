@@ -900,3 +900,39 @@ func TestASealedTryTheControllerFailedIsFailedHere(t *testing.T) {
 		t.Errorf("publication = %s", p.State)
 	}
 }
+
+// F13: a publish order consumed between the answer of the Controller and its
+// application starts a newer try: the view, about the try that was sent, is not
+// applied to it.
+func TestAViewIsNotAppliedToATryNewerThanTheOneSent(t *testing.T) {
+	f, _ := newGitFixture(t)
+	k := f.sealedRun()
+	p := f.publication(k)
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error { return state.MarkPushed(t.Context(), tx, p, 4242, t0) }))
+	f.answers(func(req v1.ReconcileRequest) v1.ReconcileResponse {
+		// The barrier: a publish order is consumed before the answer is applied.
+		blocked, err := f.e.persist(context.Background(), []v1.WorkerCommand{{
+			Seq: 99, Type: domain.CommandPublish,
+			Publish: &v1.PublishCommand{RunID: k.RunID, LeaseID: "lease_1", Epoch: k.LeaseEpoch},
+		}})
+		if err != nil || blocked {
+			t.Errorf("persist: %v %v", blocked, err)
+		}
+		out := complete(req)
+		for _, r := range req.Runs {
+			out.Verdicts = append(out.Verdicts, v1.ReconcileVerdict{
+				RunID: r.RunID, LeaseEpoch: r.LeaseEpoch, Verdict: v1.ReconcileContinue,
+				Publication: &v1.ReconcilePublicationView{
+					RunID: r.RunID, LeaseEpoch: r.LeaseEpoch, Publication: domain.PublicationFailed,
+					ResultCommit: p.ResultCommit, SettledSeq: 4242,
+				},
+			})
+		}
+		return out
+	})
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	after := f.publication(k)
+	if after.State != state.PubSealed || after.Generation != p.Generation+1 {
+		t.Errorf("publication = %s gen %d: the old view closed the new try", after.State, after.Generation)
+	}
+}

@@ -80,6 +80,10 @@ func (e *Executor) reconcileLoop(ctx context.Context) {
 type sent struct {
 	phase  state.Phase
 	fenced string
+	// The try of its publication that was sent, if it had one not settled: a
+	// view of the Controller is applied to that try and to no newer one.
+	pubGeneration int
+	pubState      state.PubState
 }
 
 // reconcile is one reconciliation (§27.3, §10.4 point 8): a round with what
@@ -179,6 +183,13 @@ func (e *Executor) snapshot(ctx context.Context) ([]v1.ReconcileRun, map[state.K
 	held := map[state.Key]sent{}
 	for k, r := range all {
 		held[k] = sent{phase: r.Phase, fenced: r.FencedCode}
+	}
+	for _, it := range items {
+		if p := it.pub; p != nil {
+			h := held[it.run.Key]
+			h.pubGeneration, h.pubState = p.Generation, p.State
+			held[it.run.Key] = h
+		}
 	}
 	out := make([]v1.ReconcileRun, 0, len(items))
 	for _, it := range items {
@@ -389,7 +400,7 @@ func (e *Executor) applyVerdict(ctx context.Context, k state.Key, before sent, v
 			e.o.Journal.Notify()
 		}
 		if p := v.Publication; p != nil {
-			return e.confirmFromView(ctx, k, *p)
+			return e.confirmFromView(ctx, k, before, *p)
 		}
 		return nil
 	}()
@@ -407,10 +418,13 @@ func (e *Executor) applyVerdict(ctx context.Context, k state.Key, before sent, v
 // journal no longer holds (it was applied, and the answer lost with the daemon),
 // from the Controller's view: only if the commit is the one pushed and the
 // report that settled it is this push's own.
-func (e *Executor) confirmFromView(ctx context.Context, k state.Key, view v1.ReconcilePublicationView) error {
+func (e *Executor) confirmFromView(ctx context.Context, k state.Key, before sent, view v1.ReconcilePublicationView) error {
 	p, err := state.PublicationOf(ctx, e.o.DB.Reader(), k)
 	if err != nil {
 		return nil
+	}
+	if p.Generation != before.pubGeneration || p.State != before.pubState {
+		return nil // a newer try (a publish order) or a step of this one came after what was sent
 	}
 	if p.State == state.PubSealing || p.State == state.PubSealed {
 		return e.settleFromView(ctx, p, view)
@@ -442,15 +456,19 @@ func (e *Executor) confirmFromView(ctx context.Context, k state.Key, view v1.Rec
 // Nothing is reported: the Controller has it already.
 func (e *Executor) settleFromView(ctx context.Context, p state.Publication, view v1.ReconcilePublicationView) error {
 	now := e.clock.Now()
+	var err error
 	switch {
 	case view.Publication == domain.PublicationFailed:
-		return e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 			return state.FailPublication(ctx, tx, p, "the Controller settled the publication as failed", now)
 		})
 	case view.Publication == domain.PublicationPublished && p.State == state.PubSealed && p.ResultCommit == view.ResultCommit:
-		return e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.MarkPreserved(ctx, tx, p, now) })
+		err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.MarkPreserved(ctx, tx, p, now) })
 	}
-	return nil
+	if errors.Is(err, state.ErrChanged) {
+		return nil // a newer try took over meanwhile: the view is not about it
+	}
+	return err
 }
 
 // applySessionVerdict ends a session the Controller says is not of a lease of
