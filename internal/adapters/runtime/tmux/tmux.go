@@ -88,7 +88,8 @@ func (r *Runtime) resolveBinary() {
 	if err == nil {
 		path, err = filepath.Abs(path)
 	}
-	if err != nil || !domain.ValidAttachBinary(path) {
+	// A client refuses any other name (AttachArgv): announcing it would only make a Run that cannot be attached.
+	if err != nil || !domain.ValidAttachBinary(path) || filepath.Base(path) != "tmux" {
 		return
 	}
 	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {

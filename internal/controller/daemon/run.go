@@ -100,7 +100,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := store.Open(ctx, p.DatabaseFile(), store.Options{Clock: o.Clock})
+	db, err := store.Open(ctx, p.DatabaseFile(), store.Options{Clock: o.Clock, Logger: o.Logger})
 	if err != nil {
 		return nil, err
 	}

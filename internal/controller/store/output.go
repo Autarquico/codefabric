@@ -76,8 +76,8 @@ func OutputRange(ctx context.Context, q Querier, run domain.ID, epoch, from, to 
 	out := make([]byte, 0, to-from)
 	rows, err := q.Query(ctx,
 		`SELECT chunk_offset, data FROM run_output_chunks
-		 WHERE run_id = ? AND lease_epoch = ? AND chunk_offset < ? AND chunk_offset + length(data) > ?
-		 ORDER BY chunk_offset`, string(run), epoch, to, from)
+		 WHERE run_id = ? AND lease_epoch = ? AND chunk_offset >= ? AND chunk_offset < ? AND chunk_offset + length(data) > ?
+		 ORDER BY chunk_offset`, string(run), epoch, from-min(from, v1.OutputChunkBytes), to, from)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading output: %w", err)
 	}
@@ -162,9 +162,8 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 		data, offset = data[o.End-offset:], o.End
 	}
 
-	if _, err := t.Exec(ctx, `INSERT INTO run_output_chunks (run_id, lease_epoch, chunk_offset, data) VALUES (?, ?, ?, ?)`,
-		string(run), epoch, offset, data); err != nil {
-		return Output{}, fmt.Errorf("store: appending output: %w", err)
+	if err := t.appendChunks(ctx, run, epoch, offset, data); err != nil {
+		return Output{}, err
 	}
 	o.End = offset + uint64(len(data))
 	if o.End-o.Start > v1.OutputTailBytes {
@@ -181,6 +180,40 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 	o.UpdatedAt = at
 	t.MarkOutput()
 	return o, nil
+}
+
+// appendChunks adds data at offset, which is the end of the output. A last chunk
+// that is not full is filled first, so that the rows of a lease are about
+// one per 64 KiB whatever the size of what the Worker sends (a Worker that sends
+// a byte at a time must not make a row of each).
+func (t *Tx) appendChunks(ctx context.Context, run domain.ID, epoch, offset uint64, data []byte) error {
+	var (
+		lastOffset uint64
+		lastLen    int
+	)
+	err := t.QueryRow(ctx,
+		`SELECT chunk_offset, length(data) FROM run_output_chunks WHERE run_id = ? AND lease_epoch = ? ORDER BY chunk_offset DESC LIMIT 1`,
+		string(run), epoch).Scan(&lastOffset, &lastLen)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("store: finding the last chunk: %w", err)
+	case lastLen < v1.OutputChunkBytes && lastOffset+uint64(lastLen) == offset: //nolint:gosec // length() of a chunk is not negative
+		fill := min(len(data), v1.OutputChunkBytes-lastLen)
+		if _, err := t.Exec(ctx, `UPDATE run_output_chunks SET data = CAST(data || ? AS BLOB) WHERE run_id = ? AND lease_epoch = ? AND chunk_offset = ?`,
+			data[:fill], string(run), epoch, lastOffset); err != nil {
+			return fmt.Errorf("store: filling a chunk: %w", err)
+		}
+		data, offset = data[fill:], offset+uint64(fill)
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	if _, err := t.Exec(ctx, `INSERT INTO run_output_chunks (run_id, lease_epoch, chunk_offset, data) VALUES (?, ?, ?, ?)`,
+		string(run), epoch, offset, data); err != nil {
+		return fmt.Errorf("store: appending output: %w", err)
+	}
+	return nil
 }
 
 // checkOverlap compares the bytes sent for [offset, End) with the ones held.
@@ -204,8 +237,8 @@ func (t *Tx) checkOverlap(ctx context.Context, o Output, offset uint64, data []b
 // the part of the chunk that crosses it.
 func (t *Tx) trimOutput(ctx context.Context, run domain.ID, epoch, newStart uint64) error {
 	if _, err := t.Exec(ctx,
-		`DELETE FROM run_output_chunks WHERE run_id = ? AND lease_epoch = ? AND chunk_offset + length(data) <= ?`,
-		string(run), epoch, newStart); err != nil {
+		`DELETE FROM run_output_chunks WHERE run_id = ? AND lease_epoch = ? AND chunk_offset < ? AND chunk_offset + length(data) <= ?`,
+		string(run), epoch, newStart, newStart); err != nil {
 		return fmt.Errorf("store: trimming output: %w", err)
 	}
 	if _, err := t.Exec(ctx,

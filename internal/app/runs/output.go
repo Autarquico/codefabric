@@ -22,36 +22,67 @@ const noMoreOutputAfter = 30 * time.Second
 
 const maxOutputNoteLen = 256
 
+// A batch is applied in transactions of at most these many entries or bytes of
+// data, one after the other: the writer is the Controller's only one, and a
+// transaction that holds it for long delays every event and every other request
+// behind it. The limits of the wire (v1.OutputBatchBytes and v1.OutputBatchMaxItems)
+// are the Worker's to fill.
+const (
+	outputTxEntries = 32
+	outputTxBytes   = 256 << 10
+)
+
 // AppendOutput is POST /v1/worker/output (#14): the output of several Runs of
-// the Worker the caller stands for, applied in order in one transaction. Each
-// entry is authorised on its own, against the lease it names (§16.8: finishing
-// is allowed to a Run that is over), and answered on its own: an entry that is
-// refused stores nothing and says why, and does not stop the others. A caller
-// that is no longer valid fails the whole request.
+// the Worker the caller stands for. Each entry is authorised on its own, against
+// the lease it names (§16.8: finishing is allowed to a Run that is over), and
+// answered on its own: an entry that is refused stores nothing and says why, and
+// does not stop the others. The caller is authorised once per transaction, and a
+// caller that is no longer valid fails the request (what earlier transactions
+// stored stays: an entry sent again is a duplicate, and says so).
 func (s *Service) AppendOutput(ctx context.Context, by pki.Session, batch v1.OutputBatch) (v1.OutputBatchResponse, error) {
 	if len(batch.Entries) > v1.OutputBatchMaxItems {
 		return v1.OutputBatchResponse{}, input.Invalid("at most %d entries in a batch", v1.OutputBatchMaxItems)
 	}
 	out := v1.OutputBatchResponse{Acks: make([]v1.OutputAck, 0, len(batch.Entries))}
+	entries := batch.Entries
+	for first := true; first || len(entries) > 0; first = false {
+		n, size := 0, 0
+		for n < len(entries) && n < outputTxEntries && (n == 0 || size+len(entries[n].Data) <= outputTxBytes) {
+			size += len(entries[n].Data)
+			n++
+		}
+		acks, err := s.appendSome(ctx, by, entries[:n])
+		if err != nil {
+			return v1.OutputBatchResponse{}, err
+		}
+		out.Acks = append(out.Acks, acks...)
+		entries = entries[n:]
+	}
+	return out, nil
+}
+
+func (s *Service) appendSome(ctx context.Context, by pki.Session, entries []v1.OutputEntry) ([]v1.OutputAck, error) {
+	acks := make([]v1.OutputAck, 0, len(entries))
 	err := s.db.WithTx(ctx, func(tx *store.Tx) error {
+		acks = acks[:0]
 		now := s.clock.Now()
-		if _, err := pki.RequireCaller(ctx, tx, by, now); err != nil {
+		w, err := workerOfCaller(ctx, tx, by, now)
+		if err != nil {
 			return err
 		}
-		out.Acks = out.Acks[:0]
-		for _, e := range batch.Entries {
-			ack, err := s.appendEntry(ctx, tx, by, now, e)
+		for _, e := range entries {
+			ack, err := s.appendEntry(ctx, tx, w, now, e)
 			if err != nil {
 				return err
 			}
-			out.Acks = append(out.Acks, ack)
+			acks = append(acks, ack)
 		}
 		return nil
 	})
-	return out, err
+	return acks, err
 }
 
-func (s *Service) appendEntry(ctx context.Context, tx *store.Tx, by pki.Session, now time.Time, e v1.OutputEntry) (v1.OutputAck, error) {
+func (s *Service) appendEntry(ctx context.Context, tx *store.Tx, w store.Worker, now time.Time, e v1.OutputEntry) (v1.OutputAck, error) {
 	ack := v1.OutputAck{RunID: e.RunID, LeaseEpoch: e.LeaseEpoch}
 	refuse := func(err error) (v1.OutputAck, error) {
 		var coded *domain.Error
@@ -64,7 +95,7 @@ func (s *Service) appendEntry(ctx context.Context, tx *store.Tx, by pki.Session,
 	if err := validateOutputEntry(e); err != nil {
 		return refuse(err)
 	}
-	if _, err := resolveChain(ctx, tx, by, now, domain.ID(e.RunID), e.LeaseEpoch); err != nil {
+	if _, err := resolveLease(ctx, tx, w, domain.ID(e.RunID), e.LeaseEpoch); err != nil {
 		return refuse(err)
 	}
 	var (

@@ -486,3 +486,36 @@ func TestOutputFollow_ASlowReaderGetsEverythingInPages(t *testing.T) {
 		t.Fatal("the bytes delivered are not the bytes sent")
 	}
 }
+
+// A big batch goes in transactions of its own, in order; every entry is still answered, and the order is kept.
+func TestOutput_ABigBatchIsAppliedInSeveralTransactionsInOrder(t *testing.T) {
+	e := newEnv(t)
+	o := e.outputRun("alpha")
+	var entries []v1.OutputEntry
+	var want strings.Builder
+	offset := uint64(0)
+	for i := range 100 { // more than 32 entries
+		text := fmt.Sprintf("%03d|", i)
+		entries = append(entries, entry(o, offset, text))
+		want.WriteString(text)
+		offset += uint64(len(text))
+	}
+	for i := range 6 { // and more than 256 KiB of data
+		chunk := strings.Repeat(string(rune('a'+i)), v1.OutputChunkBytes)
+		entries = append(entries, entry(o, offset, chunk))
+		want.WriteString(chunk)
+		offset += uint64(len(chunk))
+	}
+	acks := e.send(o.worker, entries...)
+	for i, ack := range acks {
+		if ack.Code != "" || ack.End != entries[i].Offset+uint64(len(entries[i].Data)) {
+			t.Fatalf("ack %d = %+v", i, ack)
+		}
+	}
+	if got := e.readOutput(runs.OutputRead{Ref: o.run.ID, HasOffset: true, Offset: 0, Limit: 400}); string(got.Data[:8]) != "000|001|" {
+		t.Fatalf("order lost: %q", got.Data)
+	}
+	if got := e.readOutput(runs.OutputRead{Ref: o.run.ID}); got.End != uint64(want.Len()) { //nolint:gosec // a length
+		t.Fatalf("end %d, want %d", got.End, want.Len())
+	}
+}

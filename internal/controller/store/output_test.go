@@ -289,3 +289,39 @@ func TestOutputNotifier_RingsOnlyAfterACommittedChange(t *testing.T) {
 		t.Fatal("an append sent again woke the readers")
 	}
 }
+
+// A Worker that sends a byte at a time must not make a row of each: the rows of
+// a lease stay at about one per chunk of 64 KiB, and the bytes are the bytes.
+func TestAppendOutput_ByteAtATimeAppendsFillTheLastChunk(t *testing.T) {
+	f, run := outputFixture(t)
+	const n = v1.OutputChunkBytes + 3000
+	want := make([]byte, n)
+	err := f.db.WithTx(t.Context(), func(tx *Tx) error {
+		for i := range n {
+			want[i] = byte(i % 251)                                                                              //nolint:gosec // below 256
+			if _, err := tx.AppendOutput(t.Context(), run, 1, uint64(i), want[i:i+1], f.clk.Now()); err != nil { //nolint:gosec // a small index
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err := f.db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM run_output_chunks WHERE run_id = ?`, string(run)).Scan(&rows); err != nil || rows != 2 {
+		t.Fatalf("%d rows for %d one-byte appends: %v", rows, n, err)
+	}
+	if o, data := f.held(run, 1); o.End != n || !bytes.Equal(data, want) {
+		t.Fatalf("held %d bytes, end %d: the content is not what was sent", len(data), o.End)
+	}
+	f.checkRing(run, 1)
+	// Mixed sizes keep the invariant, and a chunk that fills spills into the next.
+	big := bytes.Repeat([]byte("z"), 60000)
+	for i := range 2 {
+		if o, err := f.append(run, 1, uint64(n+i*60000), big); err != nil || o.End != uint64(n+(i+1)*60000) { //nolint:gosec // small
+			t.Fatalf("append = %+v, %v", o, err)
+		}
+		f.checkRing(run, 1)
+	}
+}
