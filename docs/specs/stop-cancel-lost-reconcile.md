@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: L
 issue: 13
-prs: []
+prs: [37]
 related_issues: [13]
 sub_issues: []
 depends_on:
@@ -16,7 +16,7 @@ depends_on:
 supersedes: []
 related_specs: [codefabric-spec, phase-1-workers]
 created: 2026-10-10
-updated: 2026-10-12
+updated: 2026-10-13
 ---
 
 # Stop, cancel, lost y reconciliación
