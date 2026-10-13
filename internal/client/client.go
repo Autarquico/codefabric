@@ -27,6 +27,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 const (
@@ -50,14 +51,24 @@ type Client struct {
 	serverName string
 	// http is replaced by Renew, which installs a transport that presents the
 	// new certificate; renewMu keeps two renewals from racing over the bundle.
-	http    atomic.Pointer[http.Client]
+	http atomic.Pointer[http.Client]
+	// stream is http over the same transport with no overall timeout: a stream
+	// lasts as long as the Controller keeps it, and its own timers (streams.go)
+	// bound the silence.
+	stream  atomic.Pointer[http.Client]
 	renewMu sync.Mutex
+
+	clock  clock.Clock // the timers of streams
+	timing streamTiming
 }
 
 // Option adjusts Open.
 type Option func(*options)
 
-type options struct{ controller, recovery string }
+type options struct {
+	controller, recovery string
+	clock                clock.Clock
+}
 
 // WithRecoveryHint replaces the advice given when the Controller rejects the
 // credentials, for credentials that are not a client's.
@@ -71,6 +82,12 @@ func WithRecoveryHint(hint string) Option {
 // against addr's host, so it must be one that certificate covers.
 func WithController(addr string) Option {
 	return func(o *options) { o.controller = addr }
+}
+
+// WithClock gives the timers of the streams (the wait for headers, the silence
+// watchdog and the reconnection backoff) another clock, for tests.
+func WithClock(clk clock.Clock) Option {
+	return func(o *options) { o.clock = clk }
 }
 
 // Open loads the credentials in dir and returns a client authenticated with them.
@@ -98,6 +115,9 @@ func Open(dir string, opts ...Option) (*Client, error) {
 	if o.recovery != "" {
 		c.recovery = o.recovery
 	}
+	if o.clock != nil {
+		c.clock = o.clock
+	}
 	return c, nil
 }
 
@@ -124,7 +144,10 @@ func newClient(controller string, ca *x509.Certificate, certs []tls.Certificate)
 	}
 	roots := x509.NewCertPool()
 	roots.AddCert(ca)
-	c := &Client{base: "https://" + controller, controller: controller, roots: roots, serverName: host, recovery: renewHint}
+	c := &Client{
+		base: "https://" + controller, controller: controller, roots: roots, serverName: host, recovery: renewHint,
+		clock: clock.Real{}, timing: defaultStreamTiming,
+	}
 	c.useCertificates(certs)
 	return c, nil
 }
@@ -133,20 +156,20 @@ func newClient(controller string, ca *x509.Certificate, certs []tls.Certificate)
 // closes the idle connections of the previous one, which carried the old
 // certificate. Requests already in flight finish on the old transport.
 func (c *Client) useCertificates(certs []tls.Certificate) {
-	next := &http.Client{
-		Timeout: requestTimeout,
-		// A redirect could carry a token or certificate elsewhere.
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport: &http.Transport{
-			IdleConnTimeout: idleConnTimeout,
-			TLSClientConfig: &tls.Config{
-				MinVersion:   tls.VersionTLS13,
-				RootCAs:      c.roots,
-				ServerName:   c.serverName,
-				Certificates: certs,
-			},
+	transport := &http.Transport{
+		IdleConnTimeout: idleConnTimeout,
+		TLSClientConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS13,
+			RootCAs:      c.roots,
+			ServerName:   c.serverName,
+			Certificates: certs,
 		},
 	}
+	// A redirect could carry a token or certificate elsewhere.
+	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	next := &http.Client{Timeout: requestTimeout, CheckRedirect: noRedirect, Transport: transport}
+	nextStream := &http.Client{CheckRedirect: noRedirect, Transport: transport}
+	c.stream.Store(nextStream)
 	if prev := c.http.Swap(next); prev != nil {
 		prev.CloseIdleConnections()
 	}

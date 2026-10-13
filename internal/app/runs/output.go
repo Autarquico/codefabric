@@ -309,6 +309,7 @@ func (s *Service) OpenOutputFollow(ctx context.Context, by pki.Session, q Output
 			}
 			f.pos = o.End - min(tail, o.End)
 		}
+		begin.Offset = f.pos
 		return nil
 	})
 	return f, begin, err

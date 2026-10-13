@@ -129,13 +129,15 @@ type RunOutput struct {
 	Closed     bool   `json:"closed"`
 }
 
-// OutputBegin opens a follow: the epoch it is fixed to and what the Controller
-// holds of it.
+// OutputBegin opens a follow: the epoch it is fixed to, what the Controller
+// holds of it and the offset the follow starts at, which is where a client that
+// loses the connection before the first chunk resumes.
 type OutputBegin struct {
 	RunID      string `json:"run_id"`
 	LeaseEpoch uint64 `json:"lease_epoch"`
 	Start      uint64 `json:"start"`
 	End        uint64 `json:"end"`
+	Offset     uint64 `json:"offset"`
 }
 
 // OutputChunk is bytes of a follow. Gap says that bytes before Offset were never
