@@ -2,7 +2,7 @@
 codename: codefabric
 title: Stop, cancel, lost y reconciliación
 type: task
-status: active
+status: shipped
 priority: P0
 size: L
 issue: 13

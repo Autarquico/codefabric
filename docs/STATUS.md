@@ -19,6 +19,7 @@
 - #10 Scheduler, leases y reservas
 - #11 Ejecutor del Worker con tmux, wrapper y journal
 - #12 Git relay y publicación del resultado
+- #13 Stop, cancel, lost y reconciliación
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -26,7 +27,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-- #13 Stop, cancel, lost y reconciliación
+_(nada)_
 <!-- /pm-sync:in-progress -->
 
 ---
