@@ -511,6 +511,7 @@ func waitGroupEmpty(t *testing.T, pgid int) {
 func TestAHarnessKilledByTheStopBeforeTheWrapperTakesItEndedByTheStop(t *testing.T) {
 	s := launch(t, execwrap.Launch{Argv: shell("touch ready; exec sleep 300"), Grace: time.Minute}, true)
 	s.waitFor("ready")
+	s.waitFor(execwrap.StartedFile) // the harness can be ready before the wrapper writes it
 	var (
 		w       execwrap.Wrapper
 		started execwrap.Started
