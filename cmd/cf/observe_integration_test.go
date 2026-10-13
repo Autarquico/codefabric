@@ -499,6 +499,19 @@ func (s *lineStamps) received(run string, typ domain.EventType) (v1.Event, bool)
 	return v1.Event{}, false
 }
 
+// arrivalOfTask is when the first event line about the Task arrived.
+func (s *lineStamps) arrivalOfTask(task string) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, l := range s.lines {
+		var e v1.Event
+		if json.Unmarshal([]byte(l.line), &e) == nil && e.TaskID == task {
+			return l.at, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // arrival is when the first event line of the type for the Run arrived.
 func (s *lineStamps) arrival(run string, typ domain.EventType) (time.Time, bool) {
 	s.mu.Lock()
