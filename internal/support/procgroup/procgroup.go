@@ -80,7 +80,8 @@ type Group struct {
 // Wait has reaped it, the whole group is killed. cmd must not have a Context of
 // its own (its Cancel could signal the group after the leader is reaped), nor
 // Stdout or Stderr: they go in opts. A Stdin that is not a file is fed by this
-// package.
+// package from a goroutine that Wait does not wait for: it must end on its own
+// without blocking (a bytes or strings Reader), or it outlives the Group.
 func Start(ctx context.Context, cmd *exec.Cmd, opts Options) (_ *Group, err error) {
 	if cmd.Stdout != nil || cmd.Stderr != nil {
 		return nil, errors.New("procgroup: the output of the child goes in Options")
