@@ -203,6 +203,13 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 			}
 			return state.MarkPushed(ctx, tx, p, seq, now)
 		})
+		if errors.Is(txErr, errOrphaned) {
+			// It became an orphan while it pushed: the push is not recorded, and the
+			// next turn keeps its result by the orphan's ref.
+			e.log.InfoContext(ctx, "the Run became an orphan during its push: its result goes to the orphan's ref", "run", p.RunID)
+			e.kickPublisher()
+			return true
+		}
 		return e.settled(ctx, p, txErr, "recording a push")
 	}
 	var pe *gitops.PushError

@@ -223,9 +223,9 @@ func (s *Service) AuthorizeRelay(ctx context.Context, by pki.Session, project st
 }
 
 // orphanChain is what an orphan's token stands on, resolved from the database:
-// the Worker of the caller, its lease of the Run under that epoch, which is not
-// the live one of the Run (in any state), the orphan the Controller recorded of it and not yet preserved, and
-// the Task, not archived.
+// the Worker of the caller; its lease of the Run under that epoch, in any state
+// but never the live one of the Run; the orphan the Controller recorded of it,
+// not yet preserved; and the Task, not archived.
 func orphanChain(ctx context.Context, q store.Querier, by pki.Session, now time.Time, run domain.ID, epoch uint64) (store.Worker, store.Task, error) {
 	if _, err := pki.RequireCaller(ctx, q, by, now); err != nil {
 		return store.Worker{}, store.Task{}, err

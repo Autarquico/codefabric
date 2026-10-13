@@ -440,35 +440,54 @@ func TestScenario_StopCancelLostReconcile_LostYHuerfano_E2E(t *testing.T) {
 	b.waitNoReservations()
 }
 
+// TestScenario_StopCancelLostReconcile_CaidaDelControllerNoCuenta_E2E: the
+// Controller and the daemon go down together, and stay down for longer than
+// run_lost_timeout since the last heartbeat. The Controller comes back first,
+// with the daemon still down: if the outage counted, its first sweep would lose
+// the Run at once. The daemon comes back within the timeout after the start,
+// and the Run goes on. (The boundary itself is fixed with a fake clock in
+// internal/app, TestScenario_StopCancelLostReconcile_CaidaDelControllerNoCuenta.)
 func TestScenario_StopCancelLostReconcile_CaidaDelControllerNoCuenta_E2E(t *testing.T) {
+	const timeout = 3 * time.Second
 	host, _, _ := initController(t)
-	setLostTimeout(t, host, 3*time.Second)
+	setLostTimeout(t, host, timeout)
 	ctrl := startController(t, host)
 	b := newReconcileBox(t, host)
-	b.start()
+	first := b.start()
 	newOrigin(t).clone(t)
 	ok[v1.Project](t, "project", "create", "backend")
 	created := b.running(waitScript)
 	run := created.Run.ID
+	pid := harnessPID(t, b.box, run)
 
 	before, err := b.admin.Worker(t.Context(), "alpha")
 	if err != nil || before.LastHeartbeatAt == nil {
 		t.Fatalf("worker = %+v, %v", before, err)
 	}
+	first.kill()
 	ctrl.kill()
-	// Down for longer than run_lost_timeout since the last heartbeat it had.
 	eventually(t, "the outage to outlast run_lost_timeout", func() bool {
-		return time.Since(*before.LastHeartbeatAt) > 3*time.Second+heartbeatGap
+		return time.Since(*before.LastHeartbeatAt) > timeout+heartbeatGap
 	})
+
 	startController(t, host)
 	restarted := time.Now()
-	// Until a heartbeat comes more than the timeout after the start, the Run would
-	// have been lost by then if the outage counted.
-	eventually(t, "a heartbeat past the timeout after the start", func() bool {
-		w, err := b.admin.Worker(t.Context(), "alpha")
-		return err == nil && w.LastHeartbeatAt != nil && w.LastHeartbeatAt.After(restarted.Add(3*time.Second+heartbeatGap))
+	// The daemon is still down: a sweep that counted the outage would lose the Run now.
+	eventually(t, "the lost sweeper to have looked since the start", func() bool {
+		return time.Since(restarted) > timeout/10+heartbeatGap
 	})
 	if r := b.run(run); r.State != domain.RunRunning {
+		t.Fatalf("the Run is %s before its Worker came back: the outage counted", r.State)
+	}
+	b.start()
+	if time.Since(restarted) >= timeout {
+		t.Fatal("the daemon came back later than the timeout after the start: the test proves nothing")
+	}
+	eventually(t, "a heartbeat past the timeout after the start", func() bool {
+		w, err := b.admin.Worker(t.Context(), "alpha")
+		return err == nil && w.LastHeartbeatAt != nil && w.LastHeartbeatAt.After(restarted.Add(timeout+heartbeatGap))
+	})
+	if r := b.run(run); r.State != domain.RunRunning || !processAlive(pid) {
 		t.Fatalf("the Run is %s after the Controller came back", r.State)
 	}
 	b.release(run)

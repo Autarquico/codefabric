@@ -310,20 +310,27 @@ func (e *Executor) runDir(k state.Key) string { return e.o.Paths.WorkerRunDir(k.
 
 func (e *Executor) sessionName(k state.Key) string { return cfruntime.NameFor(k.RunID, k.LeaseEpoch) }
 
+// errOrphaned says that a report was not written because its Run is an orphan:
+// the Controller never takes an orphan's reports, but orphan_preserved.
+var errOrphaned = errors.New("executor: the Run is an orphan: its reports are not written")
+
 // report adds a report to the transaction that makes the change it tells about.
+// The report of an orphan is not written, and that is no error: the change goes on.
 func (e *Executor) report(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) error {
 	_, err := e.reportSeq(ctx, tx, k, kind, at, fill)
+	if errors.Is(err, errOrphaned) {
+		return nil
+	}
 	return err
 }
 
 // reportSeq is report, and says the seq the report was given in the journal.
-//
-// An orphan's reports are never taken by the Controller, but orphan_preserved:
-// nothing else of it is written, so no row is left that can never be sent.
+// For an orphan it writes nothing and says errOrphaned, so that no row is left
+// that can never be sent, and no caller takes a seq that does not exist.
 func (e *Executor) reportSeq(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) (uint64, error) {
 	if kind != v1.ReportOrphanPreserved {
 		if r, err := state.RunBy(ctx, tx, k); err == nil && r.OrphanedAt != nil {
-			return 0, nil
+			return 0, errOrphaned
 		} else if err != nil && !errors.Is(err, state.ErrNotFound) {
 			return 0, err
 		}

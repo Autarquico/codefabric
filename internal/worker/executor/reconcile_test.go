@@ -467,16 +467,16 @@ func TestTheReconcileLoopHoldsTheLeasesUntilARoundCompletesForTheLatestRequest(t
 	if f.e.Reconciled() || len(f.ctrl.accepted) != 0 {
 		t.Fatal("a lease was answered before any reconciliation")
 	}
-	for { // the backoff of the failure passes on the clock
+	// The backoff of the failure passes on the clock, until the rounds are done.
+	waitFor(t, "the rounds after the backoff", func() bool {
 		f.ctrl.mu.Lock()
 		c := calls
 		f.ctrl.mu.Unlock()
-		if c >= 3 {
-			break
+		if c < 3 {
+			f.clock.Advance(retryMax)
 		}
-		f.clock.Advance(retryMax)
-		time.Sleep(time.Millisecond)
-	}
+		return c >= 3
+	})
 	waitFor(t, "the lease to be accepted", func() bool {
 		f.ctrl.mu.Lock()
 		defer f.ctrl.mu.Unlock()
@@ -519,5 +519,40 @@ func TestAnAdoptedInteractiveSessionIsWiredAndAnExitThatComesAfterIsSettled(t *t
 	reports := f.reports(k)
 	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportExited, v1.ReportStopped}) || *reports[0].ExitCode != 3 {
 		t.Errorf("reports = %+v", reports)
+	}
+}
+
+// The Run becomes an orphan while its branch is pushed: the push is not
+// recorded with a seq that does not exist, and its result goes to the ref of
+// the orphan on the next turn.
+func TestARunOrphanedDuringItsPushIsNotMarkedPushed(t *testing.T) {
+	f, g := newGitFixture(t)
+	k := f.exitedRun()
+	for f.turn() { // sealed
+		if p := f.publication(k); p.State == state.PubSealed {
+			break
+		}
+	}
+	g.mu.Lock()
+	g.push = func(pushCall) error {
+		g.mu.Lock()
+		g.push = nil // only this push races
+		g.mu.Unlock()
+		return f.db.WithTx(context.Background(), func(tx *state.Tx) error { return state.MarkOrphaned(context.Background(), tx, k, t0) })
+	}
+	g.mu.Unlock()
+	f.turn()
+	if p := f.publication(k); p.State != state.PubSealed || p.PublishedSeq != 0 {
+		t.Fatalf("publication = %+v: a push of an orphan was recorded", p)
+	}
+	if kinds := kinds(f.reports(k)); slices.Contains(kinds, v1.ReportPublished) {
+		t.Fatalf("a published report of an orphan: %v", kinds)
+	}
+	f.turn()
+	if p := f.publication(k); p.State != state.PubPublished {
+		t.Errorf("publication = %s, want it preserved", p.State)
+	}
+	if last := g.pushes[len(g.pushes)-1]; last.Branch != domain.OrphanRef(domain.ID(k.RunID), k.LeaseEpoch) {
+		t.Errorf("last push to %q", last.Branch)
 	}
 }
