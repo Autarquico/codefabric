@@ -558,3 +558,38 @@ func TestShip_AGrowingLogKeepsItsFingerprintAndIsNotMistaken(t *testing.T) {
 		t.Fatal("what was sent is not the log")
 	}
 }
+
+// A cursor from before the fingerprint existed (or one that lost it) has bytes
+// sent and none: the next pass learns it without sending anything, and from then on it counts.
+func TestShip_ACursorWithoutAFingerprintLearnsItWithoutSendingAndThenChecksIt(t *testing.T) {
+	f := newFixture(t)
+	k := f.run("run_a", state.PhaseRunning)
+	f.write(k, strings.Repeat("A", 100))
+	f.once()
+	// Make it the cursor of an older Worker: sent up to 100, the file known, no fingerprint.
+	c := f.cursor(k)
+	c.PrefixLen, c.PrefixSum = 0, nil
+	if err := f.db.WithTx(t.Context(), func(tx *state.Tx) error { return state.SaveOutputCursor(t.Context(), tx, c) }); err != nil {
+		t.Fatal(err)
+	}
+	batches := len(f.ctl.batches)
+
+	f.once() // nothing new to send: it only learns
+	if len(f.ctl.batches) != batches {
+		t.Fatal("a pass with nothing new sent something")
+	}
+	if got := f.cursor(k); got.PrefixLen != 100 || len(got.PrefixSum) != 32 || got.Sent != 100 || got.Done {
+		t.Fatalf("the fingerprint was not learnt and kept: %+v", got)
+	}
+
+	// The start of the log is rewritten in place, as long as before: it is no longer that log.
+	if err := os.WriteFile(f.logPath(k), []byte(strings.Repeat("B", 150)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.once()
+	last := f.ctl.batches[len(f.ctl.batches)-1]
+	e := last[len(last)-1]
+	if !e.EOF || e.Note == "" || *e.FinalOffset != 100 || f.sent(k) != strings.Repeat("A", 100) || !f.cursor(k).Done {
+		t.Fatalf("last = %+v, cursor %+v", last, f.cursor(k))
+	}
+}
