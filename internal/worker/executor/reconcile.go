@@ -100,15 +100,18 @@ func (e *Executor) reconcile(ctx context.Context, gen uint64) error {
 		return err
 	}
 	e.applyStops(ctx, out.Stops, out.Leases)
-	if err := e.applyPublications(ctx, out.Publications); err != nil {
+	// The leases this Worker has no record of are resolved before any result is
+	// given up as lost: one it adopts (by its session or its markers) seals and
+	// publishes its result, and of one it cannot the Controller decides.
+	outcomes, err := e.resolveLeases(ctx, out.Leases)
+	if err != nil {
+		return err
+	}
+	if err := e.applyPublications(ctx, out.Publications, out.Leases); err != nil {
 		return err
 	}
 	if out.Ack.Complete {
 		return nil
-	}
-	outcomes, err := e.resolveLeases(ctx, out.Leases)
-	if err != nil {
-		return err
 	}
 	if runs, held, err = e.snapshot(ctx); err != nil {
 		return err
@@ -469,35 +472,51 @@ func (e *Executor) applyStops(ctx context.Context, stops []v1.StopCommand, liste
 
 // applyPublications answers the publications the Controller waits for and this
 // Worker has no record of at all: it cannot publish them, and says so once.
-func (e *Executor) applyPublications(ctx context.Context, views []v1.ReconcilePublicationView) error {
+// One of a lease the round listed is not among them (it was adopted, or the
+// Controller decides of it by its outcome), and each is looked at again under
+// the lock of its Run before its result is said to be lost.
+func (e *Executor) applyPublications(ctx context.Context, views []v1.ReconcilePublicationView, listed []v1.ReconcileLease) error {
+	skip := map[state.Key]bool{}
+	for _, l := range listed {
+		skip[state.Key{RunID: l.Assign.RunID, LeaseEpoch: l.Assign.Epoch}] = true
+	}
 	for _, p := range views {
 		k := state.Key{RunID: p.RunID, LeaseEpoch: p.LeaseEpoch}
-		if kind, _, err := domain.ParseID(p.RunID); err != nil || kind != domain.KindRun || p.LeaseEpoch == 0 {
+		if kind, _, err := domain.ParseID(p.RunID); err != nil || kind != domain.KindRun || p.LeaseEpoch == 0 || skip[k] {
 			continue
 		}
-		if _, err := state.RunBy(ctx, e.o.DB.Reader(), k); err == nil || !errors.Is(err, state.ErrNotFound) {
-			continue
-		}
-		if _, err := state.PublicationOf(ctx, e.o.DB.Reader(), k); !errors.Is(err, state.ErrNotFound) {
-			continue
-		}
-		counts, err := state.JournalCounts(ctx, e.o.DB.Reader())
-		if err != nil {
+		if err := e.publicationLost(ctx, k); err != nil {
 			return err
 		}
-		if counts[k] > 0 {
-			continue // said already, and on its way
-		}
-		if err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
-			return e.report(ctx, tx, k, v1.ReportPublicationFailed, e.clock.Now(), func(en *v1.RunReportEntry) {
-				en.Phase, en.Message = v1.PhaseSeal, "this Worker has no record of the Run"
-			})
-		}); err != nil {
-			return err
-		}
-		e.o.Journal.Notify()
 	}
 	return nil
+}
+
+// publicationLost reports, under the lock of the Run, that this Worker has no
+// result of it, if it still has no record, no publication and no report of it
+// on its way. (A Run whose lease still holds its reservation is listed, and
+// adopted from its markers; this one's result was sealed, and its record is gone.)
+func (e *Executor) publicationLost(ctx context.Context, k state.Key) error {
+	defer e.lock(k)()
+	if _, err := state.RunBy(ctx, e.o.DB.Reader(), k); !errors.Is(err, state.ErrNotFound) {
+		return nil // it has a record, or it cannot be read: not lost
+	}
+	if _, err := state.PublicationOf(ctx, e.o.DB.Reader(), k); !errors.Is(err, state.ErrNotFound) {
+		return nil
+	}
+	counts, err := state.JournalCounts(ctx, e.o.DB.Reader())
+	if err != nil || counts[k] > 0 {
+		return err // said already, and on its way
+	}
+	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		return e.report(ctx, tx, k, v1.ReportPublicationFailed, e.clock.Now(), func(en *v1.RunReportEntry) {
+			en.Phase, en.Message = v1.PhaseSeal, "this Worker has no record of the Run"
+		})
+	})
+	if err == nil {
+		e.o.Journal.Notify()
+	}
+	return err
 }
 
 // wrapperAlive says whether the wrapper of the Run is the process it recorded

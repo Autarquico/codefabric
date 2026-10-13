@@ -261,7 +261,10 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 				return err
 			}
 		}
-		if err := e.report(ctx, tx, r.Key, v1.ReportStopped, f.at, func(en *v1.RunReportEntry) { en.NeverStarted = !reportedStart }); err != nil {
+		wasRunning := orderErr == nil && order.WasRunning
+		if err := e.report(ctx, tx, r.Key, v1.ReportStopped, f.at, func(en *v1.RunReportEntry) {
+			en.NeverStarted, en.WasRunning = !reportedStart, wasRunning && reportedStart
+		}); err != nil {
 			return err
 		}
 		if err := state.Close(ctx, tx, r.Key, state.OccupyingPhases, state.PhaseStopped, !reportedStart, now); err != nil {

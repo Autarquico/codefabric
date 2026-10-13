@@ -72,9 +72,19 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 		}
 		return err
 	}
+	// Whether the process was alive when the stop came is evidence the Controller
+	// needs (an orphan of a lost Run), and only now is it there to see: it is kept
+	// with the order and told with RunStopped.
+	m := e.markers(k)
+	running := m.wrapper != nil && m.exit == nil && verdictOf(m.wrapper) == procident.Same
 	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 		if _, err := state.AddStopOrder(ctx, tx, order); err != nil {
 			return err
+		}
+		if running {
+			if err := state.SetStopWasRunning(ctx, tx, k); err != nil {
+				return err
+			}
 		}
 		if r.Phase == state.PhaseStarting || r.Phase == state.PhaseRunning {
 			return state.Advance(ctx, tx, k, r.Phase, state.PhaseStopping, now)

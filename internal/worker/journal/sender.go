@@ -191,6 +191,14 @@ func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow
 		case v1.ReportApplied, v1.ReportDuplicate:
 			done = append(done, o.WorkerSeq)
 		case v1.ReportRejected:
+			if v1.RunReportKind(batch[i].Kind) == v1.ReportOrphanPreserved {
+				// The one report of an orphan is not behind a fence: refused, it is
+				// final and goes, or it would be sent again for ever.
+				s.Log.WarnContext(ctx, "the Controller refused the preservation of an orphan; it is not sent again",
+					"run", k.RunID, "lease_epoch", k.LeaseEpoch, "code", o.Code, "message", o.Message)
+				done = append(done, o.WorkerSeq)
+				continue
+			}
 			refusal = &resp.Outcomes[i]
 		case v1.ReportNotApplied:
 		default:

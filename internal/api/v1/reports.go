@@ -92,7 +92,11 @@ type RunReportEntry struct {
 	Signal       string         `json:"signal,omitempty"`        // exited
 	Cause        string         `json:"cause,omitempty"`         // exited: ExitCause*
 	NeverStarted bool           `json:"never_started,omitempty"` // stopped
-	Message      string         `json:"message,omitempty"`
+	// WasRunning: the process was alive when the stop of the Controller reached
+	// the Worker (stopped, never with NeverStarted). On a Run that is lost, or
+	// under a lease epoch that is not the live one, it is an orphan.
+	WasRunning bool   `json:"was_running,omitempty"`
+	Message    string `json:"message,omitempty"`
 
 	ResultCommit      string   `json:"result_commit,omitempty"`      // sealed, published, orphan_preserved
 	Excluded          []string `json:"excluded,omitempty"`           // sealed: untracked paths the sealing left out

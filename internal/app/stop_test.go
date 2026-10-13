@@ -243,3 +243,32 @@ func TestEpochs_AStoppedUnderAnOldEpochIsStaleAndNoOrphan(t *testing.T) {
 		t.Errorf("RunOrphaned %d, stops %d: a stopped has no process to stop", n, len(e.stops(alpha)))
 	}
 }
+
+func TestStopped_WasRunningOnALostRunIsAnOrphanWhoeverSawItFirst(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	alpha := e.joinWorker("alpha")
+	lost := e.runningRun(alpha, "lost")
+	cancelled := e.runningRun(alpha, "cancelled")
+	e.cancelTask(cancelled.run.TaskID)
+	e.clock.Advance(lostTimeout + time.Minute)
+	e.sweepLost()
+	e.beat(alpha)
+	// The long-poll won: the stop(lost) was carried out before any reconciliation saw the process.
+	wasRunning := func(en *v1.RunReportEntry) { en.WasRunning = true }
+	if got := results(lost.mustSend(lost.entry(v1.ReportExited, cause(v1.ExitCauseStop)), lost.entry(v1.ReportStopped, wasRunning))); got != "applied,applied" {
+		t.Fatalf("finalization = %s", got)
+	}
+	cancelled.mustSend(cancelled.entry(v1.ReportExited, cause(v1.ExitCauseStop)), cancelled.entry(v1.ReportStopped, wasRunning))
+	orphaned := e.events(domain.EventRunOrphaned)
+	if len(orphaned) != 1 || string(orphaned[0].RunID) != lost.run.ID {
+		t.Fatalf("RunOrphaned = %+v: once, and only for the lost Run", orphaned)
+	}
+	// A reconciliation that sees it later says nothing new.
+	e.round(alpha).mustSend([]v1.ReconcileRun{held(lost, "stopped", false)}, nil)
+	if n := len(e.events(domain.EventRunOrphaned)); n != 1 {
+		t.Errorf("RunOrphaned = %d", n)
+	}
+	if _, err := lost.send(lost.entry(v1.ReportStopped, neverStarted, wasRunning)); !isCode(err, domain.CodeInvalidRequest) {
+		t.Errorf("never_started with was_running: %v", err)
+	}
+}

@@ -318,7 +318,9 @@ func TestScenario_StopCancelLostReconcile_Cancel_E2E(t *testing.T) {
 	use(t, host)
 	ok[v1.Task](t, "task", "cancel", created.Task.ID)
 	shown := b.run(run)
-	if shown.State != domain.RunCancelled || shown.Publication != domain.PublicationPending {
+	// The publication may have converged already; the exact pending right after the
+	// cancel is fixed in internal/app (TestScenario_StopCancelLostReconcile_Cancel).
+	if shown.State != domain.RunCancelled || shown.Publication == domain.PublicationNone {
 		t.Fatalf("right after the cancel: %+v", shown)
 	}
 	eventually(t, "the harness to be stopped", func() bool { return !processAlive(pid) })

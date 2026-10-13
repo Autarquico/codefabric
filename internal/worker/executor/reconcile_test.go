@@ -5,10 +5,12 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/journal"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -554,5 +557,163 @@ func TestARunOrphanedDuringItsPushIsNotMarkedPushed(t *testing.T) {
 	}
 	if last := g.pushes[len(g.pushes)-1]; last.Branch != domain.OrphanRef(domain.ID(k.RunID), k.LeaseEpoch) {
 		t.Errorf("last push to %q", last.Branch)
+	}
+}
+
+// F1: the Controller waits for the publication of a Run whose state.db was lost,
+// and whose exit.json and worktree are here. It is adopted first: its result is
+// sealed and published, never given up as lost.
+func TestAPendingPublicationOfARunWithItsMarkersIsAdoptedNotLost(t *testing.T) {
+	f, g := newGitFixture(t)
+	k := state.Key{RunID: runID(103), LeaseEpoch: 1}
+	w := newWrapperProcess(t, "exit 0")
+	<-w.ended
+	must(t, os.MkdirAll(f.runDir(k), 0o700))
+	must(t, os.MkdirAll(f.e.worktree(k), 0o700))
+	f.writeWrapper(k, w.w)
+	f.writeStarted(k, w.w, t0)
+	f.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: t0.Add(time.Second), Cause: execwrap.CauseExit})
+	lease := leaseOf(k, domain.RuntimeActive)
+	lease.State, lease.Publication = domain.RunCompleted, domain.PublicationPending
+	f.answers(func(v1.ReconcileRequest) v1.ReconcileResponse {
+		return v1.ReconcileResponse{
+			Leases:       []v1.ReconcileLease{lease},
+			Publications: []v1.ReconcilePublicationView{{RunID: k.RunID, LeaseEpoch: k.LeaseEpoch, Publication: domain.PublicationPending}},
+		}
+	}, complete)
+	f.e.spawn = func(state.Key) {}
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	if !f.e.step(t.Context(), k) {
+		t.Fatal("the adopted Run was not settled")
+	}
+	for f.turn() {
+	}
+	got := kinds(f.reports(k))
+	if slices.Contains(got, v1.ReportPublicationFailed) || !slices.Contains(got, v1.ReportSealed) || !slices.Contains(got, v1.ReportPublished) {
+		t.Errorf("reports = %v: sealed and published, never given up", got)
+	}
+	if g.pushCount() != 1 {
+		t.Errorf("pushes = %d", g.pushCount())
+	}
+}
+
+// fakeReporter stands for the Controller as the sender sees it: it keeps the
+// triples it applied and answers duplicate for one it has; lose makes the next
+// answer get lost after the report is applied.
+type fakeReporter struct {
+	mu      sync.Mutex
+	applied map[string]int
+	lose    bool
+}
+
+func (r *fakeReporter) ReportRun(_ context.Context, _ string, req v1.RunReportRequest) (v1.RunReportResponse, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out v1.RunReportResponse
+	for _, e := range req.Entries {
+		key := fmt.Sprintf("%s/%d/%s", e.WorkerEpoch, e.WorkerSeq, e.Kind)
+		result := v1.ReportApplied
+		if r.applied[key] > 0 {
+			result = v1.ReportDuplicate
+		}
+		r.applied[key]++
+		out.Outcomes = append(out.Outcomes, v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: result})
+	}
+	if r.lose {
+		r.lose = false
+		return v1.RunReportResponse{}, errors.New("the answer was lost")
+	}
+	return out, nil
+}
+
+// F2: an orphan whose reports were fenced is preserved; its orphan_preserved
+// goes through the fence, survives another stale verdict, and its lost answer
+// makes it a duplicate: the Controller takes it exactly once.
+func TestOrphanPreservedGoesThroughTheFenceAndAnotherStaleAndIsTakenOnce(t *testing.T) {
+	f, _ := newGitFixture(t)
+	k := f.exitedRun()
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error { return state.Fence(t.Context(), tx, k, string(domain.CodeStaleLease)) }))
+	stale := func(req v1.ReconcileRequest) v1.ReconcileResponse {
+		out := complete(req)
+		for _, r := range req.Runs {
+			out.Verdicts = append(out.Verdicts, v1.ReconcileVerdict{RunID: r.RunID, LeaseEpoch: r.LeaseEpoch, Verdict: v1.ReconcileStale})
+		}
+		return out
+	}
+	f.answers(stale)
+	f.e.spawn = func(state.Key) {}
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	for f.turn() {
+	}
+	if p := f.publication(k); p.State != state.PubPublished {
+		t.Fatalf("publication = %s", p.State)
+	}
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load())) // stale again, after a restart
+	reporter := &fakeReporter{applied: map[string]int{}, lose: true}
+	sender := &journal.Sender{DB: f.db, Reporter: reporter, Journal: f.j, Clock: f.clock, Log: f.opts.Log}
+	if _, err := sender.Flush(t.Context()); err == nil {
+		t.Fatal("the lost answer was not an error")
+	}
+	if _, err := sender.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	preserved := 0
+	for key, n := range reporter.applied {
+		if strings.HasSuffix(key, "/"+string(v1.ReportOrphanPreserved)) {
+			preserved++
+			if n != 2 {
+				t.Errorf("orphan_preserved was sent %d times, want the lost one and its duplicate", n)
+			}
+		} else {
+			t.Errorf("an orphan sent %s", key)
+		}
+	}
+	if preserved != 1 {
+		t.Errorf("orphan_preserved reports = %d", preserved)
+	}
+	if rows, _ := state.PendingJournal(t.Context(), f.db.Reader(), 100); len(rows) != 0 {
+		t.Errorf("rows left = %+v", rows)
+	}
+}
+
+// F3: the daemon dies right after it commits a stop for a Run it has no record
+// of (an obsolete epoch whose session lives): the next daemon stops it.
+func TestAStopWithNoRecordPersistedBeforeACrashIsCarriedOutByTheNextDaemon(t *testing.T) {
+	f := newFixture(t)
+	k := state.Key{RunID: runID(104), LeaseEpoch: 1}
+	name := cfruntime.NameFor(k.RunID, k.LeaseEpoch)
+	f.rt.setAlive(name, true)
+	cmd := v1.WorkerCommand{Seq: 7, Type: domain.CommandStop, Stop: &v1.StopCommand{
+		RunID: k.RunID, LeaseID: "lease_old", Epoch: k.LeaseEpoch, Reason: domain.StopOrphan, RunShort: "run-9", ProjectID: "project_1",
+	}}
+	// The transaction of the cursor commits, and the daemon dies before stopOrdered.
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error { return f.e.persistStop(t.Context(), tx, cmd) }))
+	f.restart("01J0000000000000000000000E2")
+	f.e.spawn = func(state.Key) {}
+	must(t, f.e.recoverRuns(t.Context()))
+	if !slices.Contains(f.rt.stops, name) {
+		t.Fatalf("the session of the stop was not ended: %v", f.rt.stops)
+	}
+	if r := f.run(k); !r.Adopted || r.RunShort != "run-9" {
+		t.Errorf("rebuilt = %+v", r)
+	}
+}
+
+// F4: a stop of the Controller that finds the process alive says so with RunStopped.
+func TestAStopThatFindsTheProcessAliveSaysSoInStopped(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	w := newTrappingWrapperProcess(t, "trap 'exit 0' TERM", "while :; do sleep 0.05; done")
+	f.writeWrapper(k, w.w)
+	f.writeStarted(k, w.w, t0)
+	f.stopOrder(k, domain.StopLost)
+	if o, err := state.StopOrderOf(t.Context(), f.db.Reader(), k); err != nil || !o.WasRunning || len(o.Payload) == 0 {
+		t.Fatalf("order = %+v, %v", o, err)
+	}
+	<-w.ended
+	waitFor(t, "the Run to be settled", func() bool { return f.e.step(t.Context(), k) })
+	reports := f.reports(k)
+	if last := reports[len(reports)-1]; last.Kind != v1.ReportStopped || !last.WasRunning {
+		t.Errorf("stopped = %+v", last)
 	}
 }

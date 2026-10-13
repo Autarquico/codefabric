@@ -12,3 +12,11 @@ ALTER TABLE local_runs ADD COLUMN adopted INTEGER NOT NULL DEFAULT 0 CHECK (adop
 
 -- The stops not done, which recovery resumes.
 CREATE INDEX stop_orders_pending ON stop_orders (created_at) WHERE done_at IS NULL;
+
+-- A stop of the Controller as it came (its v1 payload), in the transaction of
+-- the cursor, so that one for an assignment this Worker has no record of is not
+-- lost if the daemon dies before it rebuilds the record (recovery rebuilds it).
+-- was_running: the process of the Run was alive when the stop reached it,
+-- which the Worker tells the Controller with RunStopped (an orphan of a lost Run).
+ALTER TABLE stop_orders ADD COLUMN payload TEXT;
+ALTER TABLE stop_orders ADD COLUMN was_running INTEGER NOT NULL DEFAULT 0 CHECK (was_running IN (0, 1));

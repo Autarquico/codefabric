@@ -144,8 +144,9 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		// Something reports under a lease the Run is no longer under: whatever runs
 		// with it is an orphan. Its stop and RunOrphaned are written although the
 		// entry is rejected: the rejection does not roll the request back (B5).
-		// A stopped says that nothing runs any more under it: there is no process to stop.
-		if l.Epoch < run.LeaseEpoch && e.Kind != v1.ReportStopped {
+		// A stopped says that nothing runs any more under it: there is no process to
+		// stop, and it was an orphan only if it says the process was alive.
+		if l.Epoch < run.LeaseEpoch && (e.Kind != v1.ReportStopped || e.WasRunning) {
 			if _, err := OrphanIn(ctx, tx, act, run, task, l); err != nil {
 				return outcome(""), internalError{err}
 			}
@@ -234,10 +235,17 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 			return outcome(""), domain.NewError(domain.CodeInvalidTransition, "the Run is not over: only a Run that never started can be stopped before it ends", nil)
 		}
 		ev.Type, ev.Message = domain.EventRunStopped, "run stopped"
-		ev.Data["never_started"] = e.NeverStarted
+		ev.Data["never_started"], ev.Data["was_running"] = e.NeverStarted, e.WasRunning
 		apply = func() error {
 			if err := tx.StopRuntime(ctx, run); err != nil {
 				return err
+			}
+			// A lost Run whose process was alive when its stop arrived is an orphan,
+			// whether or not a reconciliation saw it first (§27.2).
+			if e.WasRunning && run.State == domain.RunLost {
+				if _, err := OrphanIn(ctx, tx, act, run, task, l); err != nil {
+					return err
+				}
 			}
 			run.Runtime = domain.RuntimeStopped
 			return s.releaseIfAllowed(ctx, tx, act, run, l)
@@ -352,6 +360,8 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		return input.Invalid("only exited carries an exit code, a signal or a cause")
 	case e.Kind != v1.ReportStopped && e.NeverStarted:
 		return input.Invalid("only stopped says never_started")
+	case e.WasRunning && (e.Kind != v1.ReportStopped || e.NeverStarted):
+		return input.Invalid("only a stopped of a Run that started says was_running")
 	}
 	switch e.Kind {
 	case v1.ReportStarted:

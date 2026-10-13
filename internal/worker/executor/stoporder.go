@@ -2,7 +2,9 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -13,17 +15,21 @@ import (
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
-// persistStop stores a stop of the Controller in the transaction of the cursor.
-// It says whether the Worker holds a record of the assignment: one it does not
-// is rebuilt after the commit (stopOrdered).
+// persistStop stores a stop of the Controller, whole, in the transaction of the
+// cursor. One for an assignment the Worker has no record of is rebuilt after the
+// commit (stopOrdered), or by the recovery if the daemon dies first.
 func (e *Executor) persistStop(ctx context.Context, tx *state.Tx, c v1.WorkerCommand) error {
 	s := c.Stop
 	k := state.Key{RunID: s.RunID, LeaseEpoch: s.Epoch}
-	if _, err := state.RunBy(ctx, tx, k); err == nil {
-		if _, err := state.AddStopOrder(ctx, tx, state.StopOrder{Key: k, Reason: string(s.Reason), Source: SourceController, CreatedAt: e.clock.Now()}); err != nil {
-			return err
-		}
-	} else if !errors.Is(err, state.ErrNotFound) {
+	payload, err := json.Marshal(s)
+	if err != nil {
+		return fmt.Errorf("executor: encoding a stop: %w", err)
+	}
+	// The order goes in whole, record or not: a daemon that dies before it
+	// rebuilds a missing record finds it pending at its next start.
+	if _, err := state.AddStopOrder(ctx, tx, state.StopOrder{
+		Key: k, Reason: string(s.Reason), Source: SourceController, CreatedAt: e.clock.Now(), Payload: payload,
+	}); err != nil {
 		return err
 	}
 	return state.SetCursor(ctx, tx, c.Seq)

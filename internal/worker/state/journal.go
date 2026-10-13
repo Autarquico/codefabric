@@ -36,12 +36,14 @@ func AppendJournal(ctx context.Context, tx *Tx, r JournalRow) (uint64, error) {
 
 // PendingJournal lists up to limit rows in the order of their seq, leaving out
 // those of fenced assignments, which are kept for the reconciliation, and those
-// of orphans, which the Controller never takes but for orphan_preserved.
+// of orphans, which the Controller never takes but for orphan_preserved: that
+// one goes whatever fence its Run had, which was about its other reports.
 func PendingJournal(ctx context.Context, q Querier, limit int) ([]JournalRow, error) {
 	rows, err := q.QueryContext(ctx,
 		`SELECT j.seq, j.epoch, j.run_id, j.lease_epoch, j.kind, j.payload, j.created_at 
 		 FROM journal j LEFT JOIN local_runs r ON r.run_id = j.run_id AND r.lease_epoch = j.lease_epoch
-		 WHERE r.fenced_code IS NULL AND (r.orphaned_at IS NULL OR j.kind = 'orphan_preserved') ORDER BY j.seq LIMIT ?`, limit)
+		 WHERE (r.orphaned_at IS NULL AND r.fenced_code IS NULL) OR (r.orphaned_at IS NOT NULL AND j.kind = 'orphan_preserved')
+		 ORDER BY j.seq LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("state: reading the journal: %w", err)
 	}
@@ -82,10 +84,11 @@ func forSeqs(ctx context.Context, tx *Tx, prefix string, seqs []uint64) error {
 	return nil
 }
 
-// DeleteJournalOf removes every report of an assignment: the Controller will
-// never take them (an orphan, or reports it said are worth nothing).
+// DeleteJournalOf removes the reports of an assignment the Controller will
+// never take (an orphan's, or reports it said are worth nothing). An
+// orphan_preserved stays: it is the one report of an orphan the Controller takes.
 func DeleteJournalOf(ctx context.Context, tx *Tx, k Key) error {
-	_, err := tx.exec(ctx, `DELETE FROM journal WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch)
+	_, err := tx.exec(ctx, `DELETE FROM journal WHERE run_id = ? AND lease_epoch = ? AND kind <> 'orphan_preserved'`, k.RunID, k.LeaseEpoch)
 	if err != nil {
 		return fmt.Errorf("state: dropping the reports of an assignment: %w", err)
 	}

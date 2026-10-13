@@ -2,8 +2,11 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -23,8 +26,21 @@ func (e *Executor) recoverRuns(ctx context.Context) error {
 		return fmt.Errorf("executor: reading the stops to resume: %w", err)
 	}
 	for _, o := range pending {
+		if o.Source != SourceController {
+			continue
+		}
 		r, err := state.RunBy(ctx, e.o.DB.Reader(), o.Key)
-		if err != nil || o.Source != SourceController || r.Phase == state.PhaseStopping || r.Phase == state.PhaseStopUnverified {
+		if errors.Is(err, state.ErrNotFound) && len(o.Payload) > 0 {
+			// The previous daemon persisted the order and died before it rebuilt the record.
+			var cmd v1.StopCommand
+			if jerr := json.Unmarshal(o.Payload, &cmd); jerr == nil && cmd.RunID == o.RunID && cmd.Epoch == o.LeaseEpoch {
+				if err := e.stopOrdered(ctx, cmd); err != nil {
+					e.log.ErrorContext(ctx, "resuming a stop of a Run with no record", "run", o.RunID, "err", err)
+				}
+			}
+			continue
+		}
+		if err != nil || r.Phase == state.PhaseStopping || r.Phase == state.PhaseStopUnverified {
 			continue
 		}
 		if err := e.Stop(ctx, o.RunID, o.LeaseEpoch, o.Reason, o.Source); err != nil {

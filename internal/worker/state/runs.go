@@ -277,21 +277,25 @@ func SetCursor(ctx context.Context, tx *Tx, seq uint64) error {
 }
 
 // StopOrder is a stop that was ordered. Source is "controller" or "worker".
+// Payload is the order of the Controller as it came (empty for the Worker's
+// own); WasRunning that the process of the Run was alive when it arrived.
 type StopOrder struct {
 	Key
-	Reason    string
-	Source    string
-	CreatedAt time.Time
-	DoneAt    *time.Time
+	Reason     string
+	Source     string
+	CreatedAt  time.Time
+	DoneAt     *time.Time
+	Payload    []byte
+	WasRunning bool
 }
 
 // AddStopOrder persists a stop before anything is signalled. An order that
 // exists is kept, so the first reason stands; created says whether it is new.
 func AddStopOrder(ctx context.Context, tx *Tx, o StopOrder) (created bool, err error) {
 	res, err := tx.exec(ctx,
-		`INSERT INTO stop_orders (run_id, lease_epoch, reason, source, created_at) VALUES (?, ?, ?, ?, ?)
+		`INSERT INTO stop_orders (run_id, lease_epoch, reason, source, created_at, payload, was_running) VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (run_id, lease_epoch) DO NOTHING`,
-		o.RunID, o.LeaseEpoch, o.Reason, o.Source, o.CreatedAt.UnixNano())
+		o.RunID, o.LeaseEpoch, o.Reason, o.Source, o.CreatedAt.UnixNano(), nullText(string(o.Payload)), o.WasRunning)
 	if err != nil {
 		return false, fmt.Errorf("state: storing a stop order: %w", err)
 	}
@@ -299,20 +303,29 @@ func AddStopOrder(ctx context.Context, tx *Tx, o StopOrder) (created bool, err e
 	return n == 1, err
 }
 
-// StopOrderOf returns ErrNotFound if the assignment has none.
-func StopOrderOf(ctx context.Context, q Querier, k Key) (StopOrder, error) {
+// SetStopWasRunning records that the process of the Run was alive when its stop
+// arrived. It is only ever set, never cleared.
+func SetStopWasRunning(ctx context.Context, tx *Tx, k Key) error {
+	_, err := tx.exec(ctx, `UPDATE stop_orders SET was_running = 1 WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch)
+	if err != nil {
+		return fmt.Errorf("state: recording a running process: %w", err)
+	}
+	return nil
+}
+
+const stopColumns = `run_id, lease_epoch, reason, source, created_at, done_at, COALESCE(payload, ''), was_running`
+
+func scanStopOrder(row scanner) (StopOrder, error) {
 	var (
 		o       StopOrder
 		created int64
 		done    sql.NullInt64
+		payload string
 	)
-	err := q.QueryRowContext(ctx, `SELECT run_id, lease_epoch, reason, source, created_at, done_at FROM stop_orders
-		WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch).
-		Scan(&o.RunID, &o.LeaseEpoch, &o.Reason, &o.Source, &created, &done)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return StopOrder{}, ErrNotFound
-	case err != nil:
+	if err := row.Scan(&o.RunID, &o.LeaseEpoch, &o.Reason, &o.Source, &created, &done, &payload, &o.WasRunning); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return StopOrder{}, ErrNotFound
+		}
 		return StopOrder{}, fmt.Errorf("state: reading a stop order: %w", err)
 	}
 	o.CreatedAt = time.Unix(0, created).UTC()
@@ -320,7 +333,15 @@ func StopOrderOf(ctx context.Context, q Querier, k Key) (StopOrder, error) {
 		at := time.Unix(0, done.Int64).UTC()
 		o.DoneAt = &at
 	}
+	if payload != "" {
+		o.Payload = []byte(payload)
+	}
 	return o, nil
+}
+
+// StopOrderOf returns ErrNotFound if the assignment has none.
+func StopOrderOf(ctx context.Context, q Querier, k Key) (StopOrder, error) {
+	return scanStopOrder(q.QueryRowContext(ctx, `SELECT `+stopColumns+` FROM stop_orders WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch))
 }
 
 // CompleteStopOrder marks the stop of an assignment as done, if it has one.
@@ -398,22 +419,17 @@ func MarkOrphaned(ctx context.Context, tx *Tx, k Key, at time.Time) error {
 
 // PendingStopOrders lists the stops not done, oldest first.
 func PendingStopOrders(ctx context.Context, q Querier) ([]StopOrder, error) {
-	rows, err := q.QueryContext(ctx, `SELECT run_id, lease_epoch, reason, source, created_at FROM stop_orders
-		WHERE done_at IS NULL ORDER BY created_at, run_id`)
+	rows, err := q.QueryContext(ctx, `SELECT `+stopColumns+` FROM stop_orders WHERE done_at IS NULL ORDER BY created_at, run_id`)
 	if err != nil {
 		return nil, fmt.Errorf("state: reading the pending stops: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []StopOrder
 	for rows.Next() {
-		var (
-			o       StopOrder
-			created int64
-		)
-		if err := rows.Scan(&o.RunID, &o.LeaseEpoch, &o.Reason, &o.Source, &created); err != nil {
-			return nil, fmt.Errorf("state: scanning a stop: %w", err)
+		o, err := scanStopOrder(rows)
+		if err != nil {
+			return nil, err
 		}
-		o.CreatedAt = time.Unix(0, created).UTC()
 		out = append(out, o)
 	}
 	return out, rows.Err()
