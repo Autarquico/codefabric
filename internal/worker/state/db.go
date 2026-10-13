@@ -151,6 +151,12 @@ func (db *DB) WithTx(ctx context.Context, fn func(*Tx) error) error {
 	return nil
 }
 
+// Snapshot runs fn on one consistent view of the state: nothing commits in
+// between its reads. It writes nothing.
+func (db *DB) Snapshot(ctx context.Context, fn func(Querier) error) error {
+	return db.WithTx(ctx, func(tx *Tx) error { return fn(tx) })
+}
+
 // changedOne turns the result of an UPDATE that must hit one row into an error.
 func changedOne(res sql.Result, err error, what string) error {
 	if err != nil {

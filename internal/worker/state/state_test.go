@@ -234,7 +234,7 @@ func TestJournalSeqNeverRepeatsAndFencedRunsAreLeftOut(t *testing.T) {
 		return err
 	})
 
-	tx(t, db, func(x *state.Tx) error { return state.Fence(t.Context(), x, a, "CF_STALE_LEASE") })
+	tx(t, db, func(x *state.Tx) error { _, err := state.Fence(t.Context(), x, a, "CF_STALE_LEASE"); return err })
 	pending, err := state.PendingJournal(t.Context(), db.Reader(), 10)
 	if err != nil || len(pending) != 1 || pending[0].Key != b || pending[0].Epoch != "E2" || pending[0].Seq != 5 {
 		t.Errorf("pending = %+v (%v)", pending, err)
@@ -280,5 +280,65 @@ func TestTheStateIsPrivateToTheUserOfTheDaemon(t *testing.T) {
 		if err != nil || info.Mode().Perm() != want {
 			t.Errorf("%s: %v %v, want %v", path, info, err, want)
 		}
+	}
+}
+
+func TestReconcileState_AdoptUnfenceOrphanAndPendingStops(t *testing.T) {
+	db, _ := open(t)
+	ctx := t.Context()
+	a := assignment("run_a", 1, 1)
+	a.Phase = state.PhaseRunning
+	started := t0
+	a.StartedAt = &started
+	var inserted []bool
+	for range 2 {
+		tx(t, db, func(x *state.Tx) error {
+			ok, err := state.InsertAdopted(ctx, x, a)
+			inserted = append(inserted, ok)
+			return err
+		})
+	}
+	if !inserted[0] || inserted[1] {
+		t.Errorf("inserted = %v", inserted)
+	}
+	got, err := state.RunBy(ctx, db.Reader(), a.Key)
+	if err != nil || !got.Adopted || got.Phase != state.PhaseRunning || got.StartedAt == nil {
+		t.Fatalf("adopted = %+v, %v", got, err)
+	}
+	tx(t, db, func(x *state.Tx) error { _, err := state.Fence(ctx, x, a.Key, "CF_INVALID_TRANSITION"); return err })
+	if err := db.WithTx(ctx, func(x *state.Tx) error { return state.Unfence(ctx, x, a.Key, "CF_STALE_LEASE") }); !errors.Is(err, state.ErrChanged) {
+		t.Errorf("unfencing another code: %v", err)
+	}
+	tx(t, db, func(x *state.Tx) error { return state.Unfence(ctx, x, a.Key, "CF_INVALID_TRANSITION") })
+	tx(t, db, func(x *state.Tx) error { _, err := state.MarkOrphaned(ctx, x, a.Key, t0); return err })
+	if got, _ := state.RunBy(ctx, db.Reader(), a.Key); got.FencedCode != "" || got.OrphanedAt == nil {
+		t.Errorf("after unfence and orphan: %+v", got)
+	}
+	tx(t, db, func(x *state.Tx) error {
+		_, err := state.AddStopOrder(ctx, x, state.StopOrder{Key: a.Key, Reason: "cancel", Source: "controller", CreatedAt: t0})
+		return err
+	})
+	pending, err := state.PendingStopOrders(ctx, db.Reader())
+	if err != nil || len(pending) != 1 || pending[0].Reason != "cancel" {
+		t.Fatalf("pending stops = %+v, %v", pending, err)
+	}
+	tx(t, db, func(x *state.Tx) error { return state.CompleteStopOrder(ctx, x, a.Key, t0) })
+	if pending, _ := state.PendingStopOrders(ctx, db.Reader()); len(pending) != 0 {
+		t.Errorf("pending after done = %+v", pending)
+	}
+	tx(t, db, func(x *state.Tx) error {
+		_, err := state.AppendJournal(ctx, x, state.JournalRow{Epoch: "e", Key: a.Key, Kind: "started", Payload: []byte("{}"), CreatedAt: t0})
+		return err
+	})
+	counts, err := state.JournalCounts(ctx, db.Reader())
+	if err != nil || counts[a.Key] != 1 {
+		t.Errorf("counts = %v, %v", counts, err)
+	}
+	if last, err := state.LastJournalSeq(ctx, db.Reader()); err != nil || last != 1 {
+		t.Errorf("last seq = %d, %v", last, err)
+	}
+	tx(t, db, func(x *state.Tx) error { return state.DeleteJournalOf(ctx, x, a.Key) })
+	if counts, _ := state.JournalCounts(ctx, db.Reader()); len(counts) != 0 {
+		t.Errorf("counts after dropping = %v", counts)
 	}
 }

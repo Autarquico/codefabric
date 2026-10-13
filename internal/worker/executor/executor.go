@@ -104,6 +104,14 @@ type Executor struct {
 
 	degraded atomic.Pointer[string]
 
+	// The answers to leases wait for a reconciliation (§27.3). reconcileGen counts
+	// the requests for one (the start is the first); reconciledGen is the request
+	// the last complete reconciliation answered. The Worker is reconciled while
+	// they are equal: a reconciliation overtaken by a newer request counts for nothing.
+	reconcileGen  atomic.Uint64
+	reconciledGen atomic.Uint64
+	reconcileWake chan struct{}
+
 	wake    chan struct{} // the decider has something new
 	pubWake chan struct{} // the publisher has something new
 
@@ -155,8 +163,9 @@ func New(o Options) (*Executor, error) {
 	}
 	e := &Executor{
 		o: o, harnesses: map[string]harness.Launcher{}, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, grace: o.StopGrace,
-		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
+		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), reconcileWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
 	}
+	e.reconcileGen.Store(1) // the start asks for a reconciliation
 	if e.clock == nil {
 		e.clock = clock.Real{}
 	}
@@ -265,6 +274,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	if err := e.recoverRuns(ctx); err != nil {
 		return err
 	}
+	wg.Go(func() { e.reconcileLoop(ctx) })
 	wg.Go(func() { e.decideLoop(ctx) })
 	if e.o.Git != nil {
 		wg.Go(func() { e.publishLoop(ctx) })
@@ -300,14 +310,31 @@ func (e *Executor) runDir(k state.Key) string { return e.o.Paths.WorkerRunDir(k.
 
 func (e *Executor) sessionName(k state.Key) string { return cfruntime.NameFor(k.RunID, k.LeaseEpoch) }
 
+// errOrphaned says that a report was not written because its Run is an orphan:
+// the Controller never takes an orphan's reports, but orphan_preserved.
+var errOrphaned = errors.New("executor: the Run is an orphan: its reports are not written")
+
 // report adds a report to the transaction that makes the change it tells about.
+// The report of an orphan is not written, and that is no error: the change goes on.
 func (e *Executor) report(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) error {
 	_, err := e.reportSeq(ctx, tx, k, kind, at, fill)
+	if errors.Is(err, errOrphaned) {
+		return nil
+	}
 	return err
 }
 
 // reportSeq is report, and says the seq the report was given in the journal.
+// For an orphan it writes nothing and says errOrphaned, so that no row is left
+// that can never be sent, and no caller takes a seq that does not exist.
 func (e *Executor) reportSeq(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) (uint64, error) {
+	if kind != v1.ReportOrphanPreserved {
+		if r, err := state.RunBy(ctx, tx, k); err == nil && r.OrphanedAt != nil {
+			return 0, errOrphaned
+		} else if err != nil && !errors.Is(err, state.ErrNotFound) {
+			return 0, err
+		}
+	}
 	entry := v1.RunReportEntry{Kind: kind, At: at}
 	if fill != nil {
 		fill(&entry)

@@ -192,10 +192,12 @@ type Run struct {
 	ExitCode     *int               `json:"exit_code,omitempty"`
 	QueuedReason string             `json:"queued_reason,omitempty"`
 	Lineage      domain.LineageKind `json:"lineage"`
-	SpecDigest   string             `json:"spec_digest"`
-	SourceCommit string             `json:"source_commit"`
-	Branch       string             `json:"branch,omitempty"`
-	ResultCommit string             `json:"result_commit,omitempty"`
+	// LineageParent is the Run this one repeats, for a retry.
+	LineageParent string `json:"lineage_parent_id,omitempty"`
+	SpecDigest    string `json:"spec_digest"`
+	SourceCommit  string `json:"source_commit"`
+	Branch        string `json:"branch,omitempty"`
+	ResultCommit  string `json:"result_commit,omitempty"`
 	// ResultExcluded are the untracked paths the sealing left out (§23.1), as
 	// metadata of the Run: the commit does not name them.
 	ResultExcluded          []string           `json:"result_excluded,omitempty"`

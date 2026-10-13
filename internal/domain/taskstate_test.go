@@ -521,3 +521,27 @@ func TestTaskRows_Golden(t *testing.T) {
 		}
 	}
 }
+
+func TestRetryDue_OnlyRow12(t *testing.T) {
+	reschedule := RetryView{OnFailed: RetryReschedule, OnLost: RetryReschedule, AttemptsLeft: 1}
+	failed := []RunSummary{{ShortN: 1, State: RunFailed, Publication: PublicationNone, Evaluation: EvaluationNone}}
+	cases := []struct {
+		name string
+		v    TaskView
+		want bool
+	}{
+		{"failed and reschedule", TaskView{Completion: CompletionFirstSuccess, DepsSatisfied: true, Retry: reschedule, Runs: failed}, true},
+		{"no attempts left", TaskView{Completion: CompletionFirstSuccess, DepsSatisfied: true, Retry: RetryView{OnFailed: RetryReschedule}, Runs: failed}, false},
+		{"ask", TaskView{Completion: CompletionFirstSuccess, DepsSatisfied: true, Retry: RetryView{OnFailed: RetryAsk, AttemptsLeft: 1}, Runs: failed}, false},
+		{"a queued Run already", TaskView{
+			Completion: CompletionFirstSuccess, DepsSatisfied: true, Retry: reschedule,
+			Runs: append([]RunSummary{{ShortN: 2, State: RunQueued, Publication: PublicationNone, Evaluation: EvaluationNone}}, failed...),
+		}, false},
+		{"cancelled marker", TaskView{Markers: Markers{Cancelled: true}, Completion: CompletionFirstSuccess, DepsSatisfied: true, Retry: reschedule, Runs: failed}, false},
+	}
+	for _, c := range cases {
+		if got := RetryDue(c.v); got != c.want {
+			t.Errorf("%s: RetryDue = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

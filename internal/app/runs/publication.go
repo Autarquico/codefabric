@@ -17,9 +17,10 @@ import (
 )
 
 // Relay is the git relay as the publication of a Run sees it: it can say where
-// a branch of a Project stands. *relay.Relay implements it.
+// a branch, or the ref of an orphan, of a Project stands. *relay.Relay implements it.
 type Relay interface {
 	BranchTip(ctx context.Context, project domain.ID, branch string) (oid string, found bool, err error)
+	RefTip(ctx context.Context, project domain.ID, ref string) (oid string, found bool, err error)
 }
 
 // publicationEntry decides the entries that tell of the publication of a result
@@ -36,7 +37,7 @@ func (s *Service) publicationEntry(ctx context.Context, tx *store.Tx, act mutati
 	}
 	switch e.Kind {
 	case v1.ReportSealed:
-		if run.StartedAt == nil {
+		if run.StartedAt == nil && (run.HarnessRan == nil || !*run.HarnessRan) {
 			return nil, domain.NewError(domain.CodeInvalidTransition, "the harness of this Run never started: there is nothing to seal", nil)
 		}
 		if run.ResultCommit != "" && run.ResultCommit != e.ResultCommit {

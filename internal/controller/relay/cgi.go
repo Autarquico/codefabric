@@ -14,10 +14,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/procgroup"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 )
 
@@ -37,13 +37,27 @@ func (e Endpoint) writes() bool { return e == InfoRefsReceive || e == ReceivePac
 
 // Grant is what a request has been authorised to do, resolved by the server
 // from its own state for this request alone. For a write, Branch is the one
-// branch the push may update and ExpectedOID the one commit it may set it to.
+// branch the push may update, or Ref the one full ref it may write (the ref of
+// an orphan, which the hook only lets it create), and ExpectedOID the one
+// commit it may set it to.
 type Grant struct {
 	Project     domain.ID
 	Worker      domain.ID
 	Write       bool
 	Branch      string
+	Ref         string
 	ExpectedOID string
+}
+
+// allowedRef is the one ref a write may touch.
+func (g Grant) allowedRef() string {
+	if g.Ref != "" {
+		return g.Ref
+	}
+	if g.Branch == "" {
+		return ""
+	}
+	return "refs/heads/" + g.Branch
 }
 
 // Errors of Serve that are answered before anything is written. The caller
@@ -62,7 +76,8 @@ const DefaultIdleRead = 60 * time.Second
 // flight, whatever they are.
 const maxRequestsPerWorker = 2
 
-// killDelay is how long the pipes of a killed child are waited for.
+// killDelay is how long the pipes of a child may stay open once it ended,
+// before what holds them is killed with its group.
 const killDelay = 3 * time.Second
 
 var (
@@ -85,7 +100,7 @@ var (
 // The Authorization header of the request is never passed on: the environment
 // of the hooks is the environment of the child.
 func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g Grant) error {
-	if ep.writes() && (!g.Write || g.Branch == "" || g.ExpectedOID == "") {
+	if ep.writes() && (!g.Write || g.allowedRef() == "" || g.ExpectedOID == "") {
 		return errors.New("relay: a write was not granted")
 	}
 	// One deadline for the whole request, the upload included, on real time: it
@@ -119,47 +134,45 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 
 	ctx, cancel := context.WithDeadline(req.Context(), deadline)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, r.git, "http-backend") //nolint:gosec // git is the located executable
+	// The group of the child is ended by procgroup alone, never after its leader is reaped.
+	cmd := exec.Command(r.git, "http-backend") //nolint:gosec,noctx // git is the located executable; ctx goes to procgroup
 	cmd.Dir, cmd.Env = r.cfg.Dir, env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = killDelay
 	if body != nil {
 		cmd.Stdin = body
 	}
 	var stderr bytes.Buffer
-	cmd.Stderr = &boundedWriter{w: &stderr, max: stderrBytes}
-	stdout, err := cmd.StdoutPipe()
+	child, err := procgroup.Start(ctx, cmd, procgroup.Options{
+		Stderr: &boundedWriter{w: &stderr, max: stderrBytes}, ReadStdout: true, Drain: killDelay,
+	})
 	if err != nil {
-		return fmt.Errorf("relay: pipe of http-backend: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("relay: starting http-backend: %w", err)
 	}
+	stdout := child.Stdout()
 	waited := false
 	wait := func() error {
 		waited = true
-		return cmd.Wait()
+		return child.Wait()
+	}
+	abort := func() {
+		cancel()
+		_ = wait()
 	}
 	defer func() {
 		if !waited {
-			cancel()
-			_ = wait()
+			abort()
 		}
 	}()
 
 	br := bufio.NewReaderSize(stdout, 64<<10)
 	header, err := textproto.NewReader(br).ReadMIMEHeader()
 	if err != nil {
-		cancel()
-		_ = wait()
+		abort()
 		r.logChild(ep, g, stderr.String(), err)
 		return fmt.Errorf("relay: reading the answer of http-backend: %w", err)
 	}
 	status, err := cgiStatus(header)
 	if err != nil {
-		cancel()
-		_ = wait()
+		abort()
 		return err
 	}
 	for _, name := range responseHeaders {
@@ -172,8 +185,7 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 	if copyErr != nil || ctx.Err() != nil {
 		// The peer went away, or the deadline passed: the answer is cut and the
 		// child is gone with its group. The connection must not look complete.
-		cancel()
-		_ = wait()
+		abort()
 		r.logChild(ep, g, stderr.String(), errors.Join(copyErr, ctx.Err()))
 		panic(http.ErrAbortHandler)
 	}
@@ -294,7 +306,7 @@ func (r *Relay) cgiEnv(req *http.Request, ep Endpoint, g Grant, size int64) ([]s
 		env = append(env, "HTTP_GIT_PROTOCOL="+p)
 	}
 	if ep.writes() {
-		env = append(env, "CF_RELAY_ALLOWED_REF=refs/heads/"+g.Branch, "CF_RELAY_EXPECTED_OID="+g.ExpectedOID)
+		env = append(env, "CF_RELAY_ALLOWED_REF="+g.allowedRef(), "CF_RELAY_EXPECTED_OID="+g.ExpectedOID)
 	}
 	return env, nil
 }

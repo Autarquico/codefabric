@@ -236,3 +236,39 @@ func RequeuePublication(ctx context.Context, tx *Tx, k Key, at time.Time) (reque
 	n, err := res.RowsAffected()
 	return n == 1, err
 }
+
+// UnsettledPublications lists the publications the Controller has not settled
+// here: sealing, sealed or pushed.
+func UnsettledPublications(ctx context.Context, q Querier) ([]Publication, error) {
+	return collectPublications(ctx, q, `SELECT `+pubColumns+` FROM publications WHERE state IN ('sealing', 'sealed', 'pushed') ORDER BY run_id, lease_epoch`)
+}
+
+// MarkPreserved ends the publication of an orphan whose commit the relay keeps
+// at the ref of the orphan: published here, since nothing more is to be done
+// with it. Compare-and-set on the generation, the attempts and the state sealed.
+func MarkPreserved(ctx context.Context, tx *Tx, p Publication, at time.Time) error {
+	res, err := tx.exec(ctx,
+		`UPDATE publications SET state = ?, updated_at = ?
+		 WHERE run_id = ? AND lease_epoch = ? AND generation = ? AND attempts = ? AND state = ?`,
+		string(PubPublished), at.UnixNano(), p.RunID, p.LeaseEpoch, p.Generation, p.Attempts, string(PubSealed))
+	return changedOne(res, err, "preserving an orphan")
+}
+
+// RequeueForOrphan starts a new try of the publication of an assignment that
+// has just become an orphan, so that its result is kept by the orphan's ref:
+// whatever try is under way (sealing, sealed, a push in flight, pushed or
+// failed) goes to sealed with the commit it has (or to sealing if it has none),
+// with its attempts at zero and under a new generation, so that what an older
+// try answers, a push in flight included, does not touch it. One that is
+// published here (preserved) stays.
+func RequeueForOrphan(ctx context.Context, tx *Tx, k Key, at time.Time) error {
+	_, err := tx.exec(ctx,
+		`UPDATE publications SET state = CASE WHEN result_commit IS NULL THEN ? ELSE ? END, generation = generation + 1,
+		        published_seq = NULL, attempts = 0, next_attempt_at = ?, last_error = NULL, updated_at = ?
+		 WHERE run_id = ? AND lease_epoch = ? AND state IN ('sealing', 'sealed', 'failed', 'pushed')`,
+		string(PubSealing), string(PubSealed), at.UnixNano(), at.UnixNano(), k.RunID, k.LeaseEpoch)
+	if err != nil {
+		return fmt.Errorf("state: requeueing the publication of an orphan: %w", err)
+	}
+	return nil
+}

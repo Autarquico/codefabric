@@ -39,6 +39,8 @@ func (r *recordingRuntime) Status(context.Context, cfruntime.Handle) (cfruntime.
 	return cfruntime.Status{}, nil
 }
 
+func (r *recordingRuntime) List(context.Context) ([]string, error) { return nil, nil }
+
 func (r *recordingRuntime) HandleFor(name string) cfruntime.Handle {
 	return cfruntime.Handle{Runtime: "fake", Ref: "x/" + name}
 }

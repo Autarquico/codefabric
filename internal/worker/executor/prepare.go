@@ -19,6 +19,8 @@ type Git interface {
 	Head(ctx context.Context, worktree string) (string, error)
 	Seal(ctx context.Context, worktree string, in gitops.Intent) (gitops.Sealed, error)
 	Push(ctx context.Context, project, commit, branch string, a gitops.PushAuth) error
+	// PushRef pushes to a full ref; the ref of an orphan is only ever created.
+	PushRef(ctx context.Context, project, commit, ref string, a gitops.PushAuth) error
 }
 
 // RelayTLS are the PEM files git presents and trusts when it pushes: the

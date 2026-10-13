@@ -143,9 +143,11 @@ func ended(t store.Task) bool {
 
 // CancelLiveIn cancels the Runs of the Task that have not ended. A Run that
 // waits for its Worker's answer to a lease loses the lease and its reservation
-// in the same transaction (§10.5). One whose lease was accepted keeps both:
-// its process may be starting, and the Worker has to stop it (§10.7) before the
-// reservation is released, which arrives with the Worker milestones.
+// in the same transaction (§10.5). One whose lease was accepted keeps both: its
+// process may be starting, so in the same transaction its Worker is ordered to
+// stop it (§10.7), and a Run whose session was created gets publication
+// pending, since its worktree is to be sealed. The reservation is released by
+// RunStopped and the sealing (§10.5).
 func (s *Service) CancelLiveIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID) error {
 	task, err := store.TaskByID(ctx, tx, taskID)
 	if err != nil {
@@ -171,9 +173,16 @@ func (s *Service) CancelLiveIn(ctx context.Context, tx *store.Tx, act mutation.A
 		} else if err != nil {
 			return err
 		}
+		from := run.State
+		run.State = next.State
+		if run.LeaseState == domain.LeaseAccepted {
+			if err := EndByControllerIn(ctx, tx, act, &run, task, domain.StopCancel); err != nil {
+				return err
+			}
+		}
 		ev := act.Event(domain.EventRunCancelled, "run cancelled")
 		ev.ProjectID, ev.TaskID, ev.RunID = task.ProjectID, taskID, run.ID
-		ev.Data = map[string]any{"short_id": shortID(run.Short), "from": string(run.State)}
+		ev.Data = map[string]any{"short_id": shortID(run.Short), "from": string(from), "publication": string(run.Publication)}
 		if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
 			return err
 		}
@@ -257,7 +266,8 @@ func view(r store.Run, withSpec bool) v1.Run {
 	out := v1.Run{
 		ID: string(r.ID), Short: shortID(r.Short), TaskID: string(r.TaskID), Attempt: r.Attempt,
 		State: r.State, EndReason: r.EndReason, ExitCode: r.ExitCode, QueuedReason: r.QueuedReason, Lineage: r.Lineage,
-		SpecDigest: r.SpecDigest, SourceCommit: r.SourceCommit, Publication: r.Publication,
+		LineageParent: string(r.LineageParent),
+		SpecDigest:    r.SpecDigest, SourceCommit: r.SourceCommit, Publication: r.Publication,
 		Evaluation: r.Evaluation, Runtime: r.Runtime, Promoted: r.Promoted, WorkerID: string(r.WorkerID),
 		CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
 		Branch: r.Branch, ResultCommit: r.ResultCommit, ResultExcluded: r.ResultExcluded, ResultExcludedTruncated: r.ResultExcludedTruncated,

@@ -20,7 +20,6 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app"
-	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/api"
@@ -261,7 +260,7 @@ func serveWithPanickingStatus(t *testing.T, p config.Paths) *syncBuffer {
 			CertTTL: domain.Defaults().IdentityCertTTL, Host: host, Port: port,
 		}),
 		CA: ca, ServerCert: serverCert, Store: panickingHealth{db}, Clock: clk, StartedAt: clk.Now(),
-		Work:   app.New(db, clk, domain.NewIDGenerator(clk.Now, rand.Reader), workers.Config{}),
+		Work:   app.New(db, clk, domain.NewIDGenerator(clk.Now, rand.Reader), app.Config{}),
 		Logger: slog.New(slog.NewTextHandler(logs, nil)),
 	})
 	if err != nil {

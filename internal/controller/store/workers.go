@@ -37,6 +37,22 @@ type Worker struct {
 	Reserved       v1.Capacity
 	Reservations   int
 	LastCommandSeq uint64
+
+	// LiveLeases counts the accepted leases of the Worker whose reservation is
+	// open: work that a restarted Controller must reconcile before it trusts
+	// the Worker with more (§27.1). ReconcileStartedAt is when its latest round
+	// of reconciliation began; ReconciledEpoch and ReconciledAt are those of its
+	// latest complete round (nil and "" before one).
+	LiveLeases         int
+	ReconcileStartedAt *time.Time
+	ReconciledEpoch    string
+	ReconciledAt       *time.Time
+}
+
+// ReconciledSince says whether the Worker completed a reconciliation of the
+// daemon epoch it heartbeats with at or after since.
+func (w Worker) ReconciledSince(since time.Time) bool {
+	return w.ReconciledAt != nil && !w.ReconciledAt.Before(since) && w.ReconciledEpoch != "" && w.ReconciledEpoch == w.Report.Epoch
 }
 
 // WorkerReport is what a daemon says about itself on every heartbeat.
@@ -68,7 +84,10 @@ const workerSelect = `SELECT w.id, w.short_n, w.name, w.identity_id, w.state, CO
     COALESCE(w.arch, ''), w.capabilities, w.cpu_max, w.memory_max_mb, w.disk_max_mb, w.max_concurrent_runs,
     w.availability, w.last_heartbeat_at, w.created_at, w.removed_at, h.payload,
     (SELECT COUNT(*) FROM runs r WHERE r.worker_id = w.id AND r.state IN (` + activeRunStates + `)),
-    COALESCE(rv.cpu, 0), COALESCE(rv.memory_mb, 0), COALESCE(rv.disk_mb, 0), COALESCE(rv.n, 0), w.last_command_seq
+    COALESCE(rv.cpu, 0), COALESCE(rv.memory_mb, 0), COALESCE(rv.disk_mb, 0), COALESCE(rv.n, 0), w.last_command_seq,
+    (SELECT COUNT(*) FROM reservations lr JOIN leases ll ON ll.id = lr.lease_id
+      WHERE lr.worker_id = w.id AND lr.released_at IS NULL AND ll.state = 'accepted'),
+    w.reconcile_started_at, COALESCE(w.reconciled_epoch, ''), w.reconciled_at
   FROM workers w LEFT JOIN worker_heartbeats h ON h.worker_id = w.id
   LEFT JOIN (SELECT worker_id, SUM(cpu) AS cpu, SUM(memory_mb) AS memory_mb, SUM(disk_mb) AS disk_mb, COUNT(*) AS n
              FROM reservations WHERE released_at IS NULL GROUP BY worker_id) rv ON rv.worker_id = w.id`
@@ -85,6 +104,8 @@ func scanWorker(row rowScanner) (Worker, error) {
 		id, identity            string
 		capabilities            string
 		heartbeat, removed      sql.NullInt64
+		reconcileStarted        sql.NullInt64
+		reconciledAt            sql.NullInt64
 		created                 int64
 		payload                 sql.NullString
 		state, beforeOff, avail string
@@ -93,7 +114,8 @@ func scanWorker(row rowScanner) (Worker, error) {
 		&w.Report.Epoch, &w.Report.DaemonVersion, &w.Report.Hostname, &w.Report.OS, &w.Report.Arch,
 		&capabilities, &w.Settings.CPUMax, &w.Settings.MemoryMaxMB, &w.Settings.DiskMaxMB, &w.Settings.MaxConcurrentRuns,
 		&avail, &heartbeat, &created, &removed, &payload, &w.ActiveRuns,
-		&w.Reserved.CPU, &w.Reserved.MemoryMB, &w.Reserved.DiskMB, &w.Reservations, &w.LastCommandSeq); err != nil {
+		&w.Reserved.CPU, &w.Reserved.MemoryMB, &w.Reserved.DiskMB, &w.Reservations, &w.LastCommandSeq,
+		&w.LiveLeases, &reconcileStarted, &w.ReconciledEpoch, &reconciledAt); err != nil {
 		return Worker{}, scanErr(err, "worker")
 	}
 	if err := json.Unmarshal([]byte(capabilities), &w.Report.Capabilities); err != nil {
@@ -111,6 +133,7 @@ func scanWorker(row rowScanner) (Worker, error) {
 	w.State, w.BeforeOffline = domain.WorkerState(state), domain.WorkerState(beforeOff)
 	w.Settings.Availability = domain.AvailabilityPolicy(avail)
 	w.LastHeartbeatAt, w.RemovedAt = timePtr(heartbeat), timePtr(removed)
+	w.ReconcileStartedAt, w.ReconciledAt = timePtr(reconcileStarted), timePtr(reconciledAt)
 	w.CreatedAt = time.Unix(0, created).UTC()
 	return w, nil
 }
@@ -265,4 +288,16 @@ func WorkerNameTaken(ctx context.Context, q Querier, name string) (bool, error) 
 // WorkerCandidates feeds domain.Resolve; a removed Worker no longer answers to its name.
 func WorkerCandidates(ctx context.Context, q Querier) ([]domain.Candidate, error) {
 	return candidates(ctx, q, domain.KindWorker, `SELECT id, short_n, name, '', removed_at IS NOT NULL FROM workers`)
+}
+
+// SetReconcileStarted records that a round of reconciliation of the Worker began.
+func (t *Tx) SetReconcileStarted(ctx context.Context, id domain.ID, at time.Time) error {
+	res, err := t.Exec(ctx, `UPDATE workers SET reconcile_started_at = ? WHERE id = ?`, at.UnixNano(), string(id))
+	return changedOne(res, err, "recording a reconciliation")
+}
+
+// SetReconciled records the complete reconciliation of a daemon epoch of the Worker.
+func (t *Tx) SetReconciled(ctx context.Context, id domain.ID, epoch string, at time.Time) error {
+	res, err := t.Exec(ctx, `UPDATE workers SET reconciled_epoch = ?, reconciled_at = ? WHERE id = ?`, epoch, at.UnixNano(), string(id))
+	return changedOne(res, err, "recording a reconciliation")
 }

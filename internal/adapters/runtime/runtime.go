@@ -8,14 +8,18 @@ package runtime
 
 import (
 	"context"
-	"fmt"
+
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-// NameFor is the name of the session of a Run under a lease epoch (§6.4). It is
-// derived, never stored apart: the same Run and epoch name the same session,
-// which is what lets Start adopt a session instead of making a second one.
-func NameFor(runID string, leaseEpoch uint64) string {
-	return fmt.Sprintf("cf-%s-e%d", runID, leaseEpoch)
+// NameFor is the name of the session of a Run under a lease epoch (§6.4); it
+// is domain.SessionName. The same Run and epoch name the same session, which is
+// what lets Start adopt a session instead of making a second one.
+func NameFor(runID string, leaseEpoch uint64) string { return domain.SessionName(runID, leaseEpoch) }
+
+// ParseName reads the Run and lease epoch of a session name NameFor wrote.
+func ParseName(name string) (runID string, leaseEpoch uint64, ok bool) {
+	return domain.ParseSessionName(name)
 }
 
 // Spec describes the session of one Run.
@@ -62,4 +66,7 @@ type Runtime interface {
 	Status(ctx context.Context, h Handle) (Status, error)
 	// HandleFor is the handle Start returns for a Name, without starting anything.
 	HandleFor(name string) Handle
+	// List names the sessions of Runs the Runtime has, whoever started them:
+	// those whose name NameFor could have written.
+	List(ctx context.Context) ([]string, error)
 }

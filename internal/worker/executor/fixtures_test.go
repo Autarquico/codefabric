@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -45,6 +46,26 @@ type fakeController struct {
 	// relayToken, if set, answers RelayToken.
 	relayToken func(run string, epoch uint64) (v1.RelayTokenResponse, error)
 	blocked    chan struct{}
+	// reconcile, if set, answers Reconcile; by default every run goes on and the round is complete.
+	reconcile  func(req v1.ReconcileRequest) (v1.ReconcileResponse, error)
+	reconciles []v1.ReconcileRequest
+	// orphanRef, if set, is the ref OrphanToken answers with.
+	orphanRef string
+}
+
+func (c *fakeController) Reconcile(_ context.Context, req v1.ReconcileRequest) (v1.ReconcileResponse, error) {
+	c.mu.Lock()
+	c.reconciles = append(c.reconciles, req)
+	answer := c.reconcile
+	c.mu.Unlock()
+	if answer != nil {
+		return answer(req)
+	}
+	out := v1.ReconcileResponse{Ack: v1.ReconcileAck{Complete: true}}
+	for _, r := range req.Runs {
+		out.Verdicts = append(out.Verdicts, v1.ReconcileVerdict{RunID: r.RunID, LeaseEpoch: r.LeaseEpoch, Verdict: v1.ReconcileContinue})
+	}
+	return out, nil
 }
 
 func (c *fakeController) Assignments(ctx context.Context, after uint64, _ time.Duration, _ int) (v1.AssignmentsResponse, error) {
@@ -103,6 +124,17 @@ func (c *fakeController) RelayToken(_ context.Context, run string, epoch uint64)
 	return v1.RelayTokenResponse{Token: "token-" + run, Path: "/v1/relay/project_1.git", Write: true}, nil
 }
 
+func (c *fakeController) OrphanToken(_ context.Context, run string, epoch uint64, commit string) (v1.RelayTokenResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tokens = append(c.tokens, fmt.Sprintf("orphan:%s-e%d:%s", run, epoch, commit))
+	ref := domain.OrphanRef(domain.ID(run), epoch)
+	if c.orphanRef != "" {
+		ref = c.orphanRef
+	}
+	return v1.RelayTokenResponse{Token: "orphan-" + run, Path: "/v1/relay/project_1.git", Write: true, Ref: ref}, nil
+}
+
 func (c *fakeController) RelayURL(path string) string { return "https://controller.test" + path }
 
 func (c *fakeController) AckCommands(_ context.Context, upTo uint64) (v1.AckCommandsResponse, error) {
@@ -159,6 +191,19 @@ func (r *fakeRuntime) Status(_ context.Context, h cfruntime.Handle) (cfruntime.S
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return cfruntime.Status{Alive: r.sessions[h.Ref[len("sock/"):]]}, nil
+}
+
+func (r *fakeRuntime) List(context.Context) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for name, alive := range r.sessions {
+		if alive {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func (r *fakeRuntime) startCount() int {
@@ -225,6 +270,8 @@ func (f *fixture) build() *Executor {
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	// The tests that drive the steps by hand stand for a Worker that reconciled.
+	e.reconciledGen.Store(e.reconcileGen.Load())
 	return e
 }
 

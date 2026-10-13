@@ -2,7 +2,7 @@
 codename: codefabric
 title: Git relay y publicación del resultado
 type: task
-status: active
+status: shipped
 priority: P0
 size: L
 issue: 12

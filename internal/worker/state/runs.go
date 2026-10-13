@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 )
 
 // Phase is where the Worker stands with an assignment. It is local: the
@@ -28,10 +30,10 @@ const (
 	PhaseRunning        Phase = "running"
 	PhaseStopping       Phase = "stopping"
 	PhaseStopUnverified Phase = "stop_unverified"
-	PhaseStopped        Phase = "stopped"
-	PhaseAborted        Phase = "aborted"
-	PhaseRejected       Phase = "rejected"
-	PhaseDiscarded      Phase = "discarded"
+	PhaseStopped        Phase = v1.PhaseStopped
+	PhaseAborted        Phase = v1.PhaseAborted
+	PhaseRejected       Phase = v1.PhaseRejected
+	PhaseDiscarded      Phase = v1.PhaseDiscarded
 )
 
 // LivePhases are those in which the assignment still needs the daemon's
@@ -88,11 +90,15 @@ type Run struct {
 	FencedCode   string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	// OrphanedAt is when the Controller said the assignment is not the live one
+	// of its Run; Adopted that the record was rebuilt, not received.
+	OrphanedAt *time.Time
+	Adopted    bool
 }
 
 const runColumns = `run_id, lease_epoch, lease_id, run_short, task_id, project_id, command_seq, accept_by, source_commit,
     cpu, memory_mb, spec, harness, mode, phase, COALESCE(handle, ''), started_at, never_started, COALESCE(fenced_code, ''),
-    created_at, updated_at, branch, repo`
+    created_at, updated_at, branch, repo, orphaned_at, adopted`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -101,13 +107,13 @@ func scanRun(row scanner) (Run, error) {
 		r                          Run
 		spec                       string
 		acceptBy, created, updated int64
-		started                    sql.NullInt64
+		started, orphaned          sql.NullInt64
 		phase                      string
 		never                      bool
 	)
 	if err := row.Scan(&r.RunID, &r.LeaseEpoch, &r.LeaseID, &r.RunShort, &r.TaskID, &r.ProjectID, &r.CommandSeq, &acceptBy,
 		&r.SourceCommit, &r.CPU, &r.MemoryMB, &spec, &r.Harness, &r.Mode, &phase, &r.Handle, &started, &never,
-		&r.FencedCode, &created, &updated, &r.Branch, &r.Repo); err != nil {
+		&r.FencedCode, &created, &updated, &r.Branch, &r.Repo, &orphaned, &r.Adopted); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Run{}, ErrNotFound
 		}
@@ -118,6 +124,10 @@ func scanRun(row scanner) (Run, error) {
 	if started.Valid {
 		at := time.Unix(0, started.Int64).UTC()
 		r.StartedAt = &at
+	}
+	if orphaned.Valid {
+		at := time.Unix(0, orphaned.Int64).UTC()
+		r.OrphanedAt = &at
 	}
 	return r, nil
 }
@@ -228,14 +238,15 @@ func SetStarted(ctx context.Context, tx *Tx, k Key, handle string, at time.Time)
 }
 
 // Fence records the code of a report the Controller refused for good. The
-// first one stays.
-func Fence(ctx context.Context, tx *Tx, k Key, code string) error {
-	_, err := tx.exec(ctx, `UPDATE local_runs SET fenced_code = ? WHERE run_id = ? AND lease_epoch = ? AND fenced_code IS NULL`,
+// first one stays; fenced says whether this call fenced it.
+func Fence(ctx context.Context, tx *Tx, k Key, code string) (fenced bool, err error) {
+	res, err := tx.exec(ctx, `UPDATE local_runs SET fenced_code = ? WHERE run_id = ? AND lease_epoch = ? AND fenced_code IS NULL`,
 		code, k.RunID, k.LeaseEpoch)
 	if err != nil {
-		return fmt.Errorf("state: fencing an assignment: %w", err)
+		return false, fmt.Errorf("state: fencing an assignment: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // Cursor is the last Seq of the Controller's queue that is persisted here.
@@ -267,21 +278,28 @@ func SetCursor(ctx context.Context, tx *Tx, seq uint64) error {
 }
 
 // StopOrder is a stop that was ordered. Source is "controller" or "worker".
+// Payload is the order of the Controller as it came (empty for the Worker's
+// own); WasRunning that the process of the Run was alive when it arrived;
+// ExitFirst that the harness had ended before it (its exit.json was there), so
+// nothing the stop signalled ended it.
 type StopOrder struct {
 	Key
-	Reason    string
-	Source    string
-	CreatedAt time.Time
-	DoneAt    *time.Time
+	Reason     string
+	Source     string
+	CreatedAt  time.Time
+	DoneAt     *time.Time
+	Payload    []byte
+	WasRunning bool
+	ExitFirst  bool
 }
 
 // AddStopOrder persists a stop before anything is signalled. An order that
 // exists is kept, so the first reason stands; created says whether it is new.
 func AddStopOrder(ctx context.Context, tx *Tx, o StopOrder) (created bool, err error) {
 	res, err := tx.exec(ctx,
-		`INSERT INTO stop_orders (run_id, lease_epoch, reason, source, created_at) VALUES (?, ?, ?, ?, ?)
+		`INSERT INTO stop_orders (run_id, lease_epoch, reason, source, created_at, payload, was_running, exit_first) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (run_id, lease_epoch) DO NOTHING`,
-		o.RunID, o.LeaseEpoch, o.Reason, o.Source, o.CreatedAt.UnixNano())
+		o.RunID, o.LeaseEpoch, o.Reason, o.Source, o.CreatedAt.UnixNano(), nullText(string(o.Payload)), o.WasRunning, o.ExitFirst)
 	if err != nil {
 		return false, fmt.Errorf("state: storing a stop order: %w", err)
 	}
@@ -289,20 +307,29 @@ func AddStopOrder(ctx context.Context, tx *Tx, o StopOrder) (created bool, err e
 	return n == 1, err
 }
 
-// StopOrderOf returns ErrNotFound if the assignment has none.
-func StopOrderOf(ctx context.Context, q Querier, k Key) (StopOrder, error) {
+// SetStopWasRunning records that the process of the Run was alive when its stop
+// arrived. It is only ever set, never cleared.
+func SetStopWasRunning(ctx context.Context, tx *Tx, k Key) error {
+	_, err := tx.exec(ctx, `UPDATE stop_orders SET was_running = 1 WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch)
+	if err != nil {
+		return fmt.Errorf("state: recording a running process: %w", err)
+	}
+	return nil
+}
+
+const stopColumns = `run_id, lease_epoch, reason, source, created_at, done_at, COALESCE(payload, ''), was_running, exit_first`
+
+func scanStopOrder(row scanner) (StopOrder, error) {
 	var (
 		o       StopOrder
 		created int64
 		done    sql.NullInt64
+		payload string
 	)
-	err := q.QueryRowContext(ctx, `SELECT run_id, lease_epoch, reason, source, created_at, done_at FROM stop_orders
-		WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch).
-		Scan(&o.RunID, &o.LeaseEpoch, &o.Reason, &o.Source, &created, &done)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return StopOrder{}, ErrNotFound
-	case err != nil:
+	if err := row.Scan(&o.RunID, &o.LeaseEpoch, &o.Reason, &o.Source, &created, &done, &payload, &o.WasRunning, &o.ExitFirst); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return StopOrder{}, ErrNotFound
+		}
 		return StopOrder{}, fmt.Errorf("state: reading a stop order: %w", err)
 	}
 	o.CreatedAt = time.Unix(0, created).UTC()
@@ -310,7 +337,15 @@ func StopOrderOf(ctx context.Context, q Querier, k Key) (StopOrder, error) {
 		at := time.Unix(0, done.Int64).UTC()
 		o.DoneAt = &at
 	}
+	if payload != "" {
+		o.Payload = []byte(payload)
+	}
 	return o, nil
+}
+
+// StopOrderOf returns ErrNotFound if the assignment has none.
+func StopOrderOf(ctx context.Context, q Querier, k Key) (StopOrder, error) {
+	return scanStopOrder(q.QueryRowContext(ctx, `SELECT `+stopColumns+` FROM stop_orders WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch))
 }
 
 // CompleteStopOrder marks the stop of an assignment as done, if it has one.
@@ -321,4 +356,87 @@ func CompleteStopOrder(ctx context.Context, tx *Tx, k Key, at time.Time) error {
 		return fmt.Errorf("state: completing a stop order: %w", err)
 	}
 	return nil
+}
+
+// InsertAdopted rebuilds the record of an assignment the Worker had lost
+// (§10.4 point 8), from the Controller's lease or from a stop order, in the
+// phase the evidence on disk calls for. startedAt says that `started` is known
+// to the Controller already, so that it is never reported twice. An
+// assignment that exists is left as it is; inserted says which happened.
+func InsertAdopted(ctx context.Context, tx *Tx, r Run) (inserted bool, err error) {
+	if !r.Phase.Live() && r.Phase != PhaseAborted && r.Phase != PhaseStopped {
+		return false, fmt.Errorf("state: an adopted assignment cannot be %s", r.Phase)
+	}
+	res, err := tx.exec(ctx,
+		`INSERT INTO local_runs (run_id, lease_epoch, lease_id, run_short, task_id, project_id, command_seq, accept_by,
+		     source_commit, cpu, memory_mb, spec, harness, mode, phase, handle, started_at, never_started, created_at, updated_at,
+		     branch, repo, adopted)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+		 ON CONFLICT DO NOTHING`,
+		r.RunID, r.LeaseEpoch, r.LeaseID, r.RunShort, r.TaskID, r.ProjectID, r.CommandSeq, r.AcceptBy.UnixNano(),
+		r.SourceCommit, r.CPU, r.MemoryMB, string(r.Spec), r.Harness, r.Mode, string(r.Phase), nullText(r.Handle),
+		nanosOrNil(r.StartedAt), r.NeverStarted, r.CreatedAt.UnixNano(), r.CreatedAt.UnixNano(), r.Branch, r.Repo)
+	if err != nil {
+		return false, fmt.Errorf("state: adopting an assignment: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+func nullText(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func nanosOrNil(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return t.UnixNano()
+}
+
+// AllRuns lists every assignment of the Worker, in the order they came.
+func AllRuns(ctx context.Context, q Querier) ([]Run, error) {
+	return collectRuns(ctx, q, `SELECT `+runColumns+` FROM local_runs ORDER BY command_seq, run_id`)
+}
+
+// Unfence lets the reports of an assignment go again, as the reconciliation
+// decided. It is a compare-and-set on the code it was fenced with: a newer
+// fence since the snapshot the reconciliation sent stays.
+func Unfence(ctx context.Context, tx *Tx, k Key, code string) error {
+	res, err := tx.exec(ctx, `UPDATE local_runs SET fenced_code = NULL WHERE run_id = ? AND lease_epoch = ? AND fenced_code = ?`,
+		k.RunID, k.LeaseEpoch, code)
+	return changedOne(res, err, "unfencing an assignment")
+}
+
+// MarkOrphaned records that the assignment is not the live one of its Run.
+// The first time stays; becameOrphan says whether this call made it one.
+func MarkOrphaned(ctx context.Context, tx *Tx, k Key, at time.Time) (becameOrphan bool, err error) {
+	res, err := tx.exec(ctx, `UPDATE local_runs SET orphaned_at = ? WHERE run_id = ? AND lease_epoch = ? AND orphaned_at IS NULL`,
+		at.UnixNano(), k.RunID, k.LeaseEpoch)
+	if err != nil {
+		return false, fmt.Errorf("state: marking an orphan: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// PendingStopOrders lists the stops not done, oldest first.
+func PendingStopOrders(ctx context.Context, q Querier) ([]StopOrder, error) {
+	rows, err := q.QueryContext(ctx, `SELECT `+stopColumns+` FROM stop_orders WHERE done_at IS NULL ORDER BY created_at, run_id`)
+	if err != nil {
+		return nil, fmt.Errorf("state: reading the pending stops: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []StopOrder
+	for rows.Next() {
+		o, err := scanStopOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }

@@ -138,7 +138,7 @@ exit 0`
 
 	// The CLI shows it, and a published Run cannot be published again.
 	code, out, errOut := cf(t, "", "run", "show", runID)
-	if code != 0 || !strings.Contains(out, "Publication  published") || !strings.Contains(out, run.Branch) {
+	if code != 0 || !strings.Contains(out, "Publication  published") || !strings.Contains(out, "Runtime      stopped") || !strings.Contains(out, "Lineage      initial") || !strings.Contains(out, run.Branch) {
 		t.Errorf("run show: exit %d\n%s%s", code, out, errOut)
 	}
 	fails(t, 4, domain.CodeInvalidTransition, "run", "publish", runID)

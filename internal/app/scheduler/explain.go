@@ -72,7 +72,7 @@ func (s *Service) explainQueued(ctx context.Context, q store.Querier, run store.
 	if err != nil {
 		return err
 	}
-	decision, _, err := decide(ctx, q, run, task.ProjectID, placement, now)
+	decision, _, err := decide(ctx, q, run, task.ProjectID, placement, now, s.startedAt)
 	if err != nil {
 		return err
 	}

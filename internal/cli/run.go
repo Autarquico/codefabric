@@ -69,8 +69,12 @@ func newRunShowCmd() *cobra.Command {
 				if len(r.Spec) > 0 {
 					spec, _ = json.MarshalIndent(r.Spec, "  ", "  ")
 				}
-				_, err := fmt.Fprintf(w, "ID           %s (%s)\nTask         %s\nAttempt      %d\nState        %s\nCommit       %s\nBranch       %s\nResult       %s\nPublication  %s\nSpec digest  %s\nCreated      %s\nSpec         %s\n",
-					r.ID, r.Short, r.TaskID, r.Attempt, r.State, r.SourceCommit, dash(r.Branch), dash(r.ResultCommit), r.Publication, r.SpecDigest, local(r.CreatedAt), spec)
+				lineage := string(r.Lineage)
+				if r.LineageParent != "" {
+					lineage += " of " + r.LineageParent
+				}
+				_, err := fmt.Fprintf(w, "ID           %s (%s)\nTask         %s\nAttempt      %d\nLineage      %s\nState        %s\nRuntime      %s\nCommit       %s\nBranch       %s\nResult       %s\nPublication  %s\nSpec digest  %s\nCreated      %s\nSpec         %s\n",
+					r.ID, r.Short, r.TaskID, r.Attempt, lineage, r.State, r.Runtime, r.SourceCommit, dash(r.Branch), dash(r.ResultCommit), r.Publication, r.SpecDigest, local(r.CreatedAt), spec)
 				return err
 			})
 		},

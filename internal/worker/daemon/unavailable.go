@@ -25,3 +25,5 @@ func (unavailable) Status(context.Context, cfruntime.Handle) (cfruntime.Status, 
 func (unavailable) HandleFor(name string) cfruntime.Handle {
 	return cfruntime.Handle{Runtime: "none", Ref: name}
 }
+
+func (unavailable) List(context.Context) ([]string, error) { return nil, nil }

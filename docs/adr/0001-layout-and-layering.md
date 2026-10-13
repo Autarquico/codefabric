@@ -14,6 +14,7 @@ Follow §32, adding only what the implementation plan needs:
 | Package | Purpose |
 |---------|---------|
 | `internal/api/v1` | Wire types and error envelope shared by the API server and the client SDK, so the SDK never imports the Controller |
+| `internal/app/reconciliation` | How the Controller and its Workers agree again after a restart or a silence (§27): the start of the Controller and the gate of the scheduler, `POST /v1/worker/reconcile`, and the Runs that are lost (§27.2) |
 | `internal/worker/state` | The Worker's durable local state (`state.db`, §6.4) |
 | `internal/worker/executor`, `journal`, `execwrap`, `procident` | What the Worker does with a Run: assignments, supervision and stop (§6.4, §10.7); the journal of reports it sends (§20.4); the process wrapper `cf worker exec` and its marker files; telling a process from a reused pid |
 | `internal/adapters/runtime`, `internal/adapters/harness` | Ports of the process sessions (§6.1) and of the harnesses (§7.2), with their implementations in subpackages (`runtime/tmux`, `harness/command`) |

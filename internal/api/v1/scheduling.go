@@ -75,6 +75,21 @@ type PublishCommand struct {
 	Epoch   uint64 `json:"epoch"`
 }
 
+// StopCommand orders the Worker to end the processes of a Run under one lease
+// epoch (§10.7), which need not be the live one: an orphan is stopped under
+// the epoch it runs with. It carries what a Worker that lost its record of the
+// Run needs to rebuild one and stop it the normal way.
+type StopCommand struct {
+	RunID     string            `json:"run_id"`
+	LeaseID   string            `json:"lease_id"`
+	Epoch     uint64            `json:"epoch"`
+	Reason    domain.StopReason `json:"reason"`
+	RunShort  string            `json:"run_short_id"`
+	TaskID    string            `json:"task_id"`
+	ProjectID string            `json:"project_id"`
+	Branch    string            `json:"branch"`
+}
+
 // WorkerCommand is one order of the Controller→Worker queue. Seq is per
 // Worker and only grows. Exactly the field of its Type is set.
 type WorkerCommand struct {
@@ -83,6 +98,7 @@ type WorkerCommand struct {
 	CreatedAt time.Time                `json:"created_at"`
 	Assign    *AssignCommand           `json:"assign,omitempty"`
 	Publish   *PublishCommand          `json:"publish,omitempty"`
+	Stop      *StopCommand             `json:"stop,omitempty"`
 }
 
 // AssignmentsResponse is GET /v1/worker/assignments: the orders the Worker has

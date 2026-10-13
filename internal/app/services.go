@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/projects"
+	"github.com/Autarquico/codefabric/internal/app/reconciliation"
 	"github.com/Autarquico/codefabric/internal/app/refs"
 	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/scheduler"
@@ -25,24 +27,44 @@ type Services struct {
 	Workers   *workers.Service
 	Leases    *leases.Service
 	Scheduler *scheduler.Service
+	// Reconciliation is the start of the Controller, the reconciliation of the
+	// Workers and the Runs they lose (§27).
+	Reconciliation *reconciliation.Service
 
 	db *store.DB
 }
 
-// New wires the use cases. Runs re-derive their Task through tasks.Rederive,
+// Config tunes the use cases. The zero value takes the defaults of Appendix A
+// and does not know when the Controller started.
+type Config struct {
+	// Workers is the Worker use cases'; its StartedAt is that of the Controller.
+	Workers workers.Config
+	// RunLostTimeout is run_lost_timeout (§27.2).
+	RunLostTimeout time.Duration
+	// ReconciliationHooks let tests step into the reconciliation.
+	ReconciliationHooks reconciliation.Hooks
+}
+
+// New wires the use cases. Runs re-derive their Task through tasks.NewRederive,
 // handed over as a function because tasks imports runs. The options are those
 // of the Run use cases (the git relay).
-func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, workersCfg workers.Config, opts ...runs.Option) *Services {
-	runService := runs.New(db, clk, ids, tasks.Rederive, opts...)
-	leaseService := leases.New(db, clk, ids, tasks.Rederive)
+func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opts ...runs.Option) *Services {
+	workersCfg := cfg.Workers
+	rederive := tasks.NewRederive(ids)
+	runService := runs.New(db, clk, ids, runs.Rederive(rederive), opts...)
+	leaseService := leases.New(db, clk, ids, leases.Rederive(rederive))
 	return &Services{
 		Projects:  projects.New(db, clk, ids),
 		Tasks:     tasks.New(db, clk, ids, runService),
 		Runs:      runService,
 		Workers:   workers.New(db, clk, workersCfg),
 		Leases:    leaseService,
-		Scheduler: scheduler.New(db, clk, leaseService),
-		db:        db,
+		Scheduler: scheduler.New(db, clk, leaseService, workersCfg.StartedAt),
+		Reconciliation: reconciliation.New(db, clk, reconciliation.Rederive(rederive), reconciliation.Config{
+			StartedAt: workersCfg.StartedAt, LostTimeout: cfg.RunLostTimeout, OfflineTTL: workersCfg.OfflineTTL,
+			Hooks: cfg.ReconciliationHooks,
+		}),
+		db: db,
 	}
 }
 

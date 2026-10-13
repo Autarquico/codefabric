@@ -88,6 +88,11 @@ type Run struct {
 	// RuntimeHandle is what the Worker gave with `started`, opaque to us.
 	ExitCode      *int
 	RuntimeHandle string
+	// LineageParent is the Run a retry repeats ("" for the others). HarnessRan
+	// is whether the harness was launched: nil while nobody knows, false after a
+	// prepare_failed, true after an exit.
+	LineageParent domain.ID
+	HarnessRan    *bool
 
 	// LeaseID and WorkerID name the live lease and its Worker, or the accepted
 	// one a Run keeps after it ended (§10.4.5); both are "" for a Run that has
@@ -401,7 +406,8 @@ const runColumns = `id, short_n, task_id, attempt, lineage_kind, spec, spec_dige
     COALESCE(end_reason, ''), COALESCE(queued_reason, ''), publication, evaluation, runtime, promoted,
     COALESCE(worker_id, ''), created_at, started_at, finished_at,
     COALESCE(lease_id, ''), COALESCE(lease_epoch, 0), COALESCE((SELECT l.state FROM leases l WHERE l.id = runs.lease_id), ''),
-    exit_code, COALESCE(runtime_handle, ''), COALESCE(branch, ''), COALESCE(result_commit, ''), COALESCE(result_excluded, '')`
+    exit_code, COALESCE(runtime_handle, ''), COALESCE(branch, ''), COALESCE(result_commit, ''), COALESCE(result_excluded, ''),
+    COALESCE(lineage_parent_id, ''), harness_ran`
 
 func scanRun(row rowScanner) (Run, error) {
 	var (
@@ -413,11 +419,13 @@ func scanRun(row rowScanner) (Run, error) {
 		started, finished sql.NullInt64
 		exitCode          sql.NullInt64
 		excluded          string
+		parent            string
+		harnessRan        sql.NullBool
 	)
 	if err := row.Scan(&id, &r.Short, &task, &r.Attempt, &r.Lineage, &spec, &r.SpecDigest, &r.SourceCommit, &r.State,
 		&r.EndReason, &r.QueuedReason, &r.Publication, &r.Evaluation, &r.Runtime, &r.Promoted,
 		&worker, &created, &started, &finished, &lease, &r.LeaseEpoch, &leaseState, &exitCode, &r.RuntimeHandle,
-		&r.Branch, &r.ResultCommit, &excluded); err != nil {
+		&r.Branch, &r.ResultCommit, &excluded, &parent, &harnessRan); err != nil {
 		return Run{}, scanErr(err, "run")
 	}
 	if excluded != "" {
@@ -434,6 +442,10 @@ func scanRun(row rowScanner) (Run, error) {
 		code := int(exitCode.Int64)
 		r.ExitCode = &code
 	}
+	if harnessRan.Valid {
+		r.HarnessRan = &harnessRan.Bool
+	}
+	r.LineageParent = domain.ID(parent)
 	return r, nil
 }
 
@@ -441,12 +453,13 @@ func scanRun(row rowScanner) (Run, error) {
 func (t *Tx) InsertRun(ctx context.Context, r Run) error {
 	_, err := t.Exec(ctx,
 		`INSERT INTO runs (id, short_n, task_id, attempt, lineage_kind, spec, spec_digest, source_commit, state,
-		     end_reason, queued_reason, publication, evaluation, runtime, promoted, worker_id, created_at, started_at, finished_at, branch)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     end_reason, queued_reason, publication, evaluation, runtime, promoted, worker_id, created_at, started_at, finished_at, branch,
+		     lineage_parent_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(r.ID), r.Short, string(r.TaskID), r.Attempt, string(r.Lineage), string(r.Spec), r.SpecDigest, r.SourceCommit,
 		string(r.State), nullable(string(r.EndReason)), nullable(r.QueuedReason),
 		string(r.Publication), string(r.Evaluation), string(r.Runtime), r.Promoted, nullable(string(r.WorkerID)),
-		r.CreatedAt.UnixNano(), nanosOrNil(r.StartedAt), nanosOrNil(r.FinishedAt), nullable(r.Branch))
+		r.CreatedAt.UnixNano(), nanosOrNil(r.StartedAt), nanosOrNil(r.FinishedAt), nullable(r.Branch), nullable(string(r.LineageParent)))
 	if err != nil {
 		return fmt.Errorf("store: inserting run: %w", err)
 	}
@@ -545,6 +558,15 @@ func Runs(ctx context.Context, q Querier, f RunFilter) ([]Run, error) {
 		where, args = append(where, "task_id IN (SELECT id FROM tasks WHERE project_id = ?)"), append(args, string(f.ProjectID))
 	}
 	return collect(ctx, q, scanRun, `SELECT `+runColumns+` FROM runs WHERE `+strings.Join(where, " AND ")+` ORDER BY short_n`, args...) //nolint:gosec // constants only
+}
+
+// LiveAcceptedRuns lists the Runs that run under an accepted lease and have not
+// ended (preparing, running, waiting_input, checkpointing), oldest first: the
+// ones a silent Worker can lose (§27.2).
+func LiveAcceptedRuns(ctx context.Context, q Querier) ([]Run, error) {
+	return collect(ctx, q, scanRun,
+		`SELECT `+runColumns+` FROM runs WHERE state IN (?, ?, ?, ?) AND worker_id IS NOT NULL ORDER BY short_n`,
+		string(domain.RunPreparing), string(domain.RunRunning), string(domain.RunWaitingInput), string(domain.RunCheckpointing))
 }
 
 // RunCandidates feeds domain.Resolve.

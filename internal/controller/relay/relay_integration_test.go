@@ -344,6 +344,29 @@ func assertGone(t *testing.T, pgids string) {
 	}
 }
 
+// A backend that is forking when the client goes leaves children that the
+// kill of its group may miss (macOS does); the relay sweeps them too.
+func TestRelay_KillsTheChildrenABackendIsForkingWhenTheClientGoes(t *testing.T) {
+	script, pgids := recordingGit(t, "printf 'Status: 200 OK\\r\\nContent-Type: text/plain\\r\\n\\r\\nhello\\n'; i=0; while [ $i -lt 300 ]; do sleep 300 & i=$((i+1)); done; wait")
+	g := newRig(t, func(c *Config) { c.GitPath = script })
+	g.pgids = pgids
+	g.setGrant(func(Endpoint) Grant { return Grant{Project: g.project, Worker: "worker_1"} })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, g.url()+"/info/refs?service=git-upload-pack", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(resp.Body, buf); err != nil || string(buf) != "hello" {
+		t.Fatalf("body = %q (%v)", buf, err)
+	}
+	cancel()
+	_ = resp.Body.Close()
+	assertGone(t, g.pgids)
+}
+
 func TestRelay_KillsTheWholeGroupWhenTheClientGoes(t *testing.T) {
 	script, dump, pgids := slowGit(t)
 	g := newRig(t, func(c *Config) { c.GitPath = script })

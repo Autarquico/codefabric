@@ -347,3 +347,23 @@ while :; do sleep 1; done`
 		t.Errorf("exited %+v, stopped %+v", reports[1], reports[2])
 	}
 }
+
+func TestScenario_StopCancelLostReconcile_Cancel_RealStop(t *testing.T) {
+	f := newRealFixture(t, time.Second)
+	k := f.assign(specJSON("touch ready; while :; do sleep 1; done", "command", "headless"))
+	defer f.runLoops()()
+	f.waitPhase(k, state.PhaseRunning)
+	waitFor(t, "the harness to be ready", func() bool {
+		_, err := os.Stat(filepath.Join(f.paths.WorkerWorktreeDir(k.RunID, k.LeaseEpoch), "ready"))
+		return err == nil
+	})
+	f.stopOrder(k, "cancel")
+	f.waitPhase(k, state.PhaseStopped)
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportExited, v1.ReportStopped}) || reports[1].Cause != "stop" {
+		t.Fatalf("reports = %+v", reports)
+	}
+	if sessions, _ := f.rt.List(t.Context()); len(sessions) != 0 {
+		t.Errorf("sessions left: %v", sessions)
+	}
+}

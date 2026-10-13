@@ -48,6 +48,9 @@ type Sender struct {
 	// as the Controller shows it and the seqs of the reports it settled, in the transaction that deletes the confirmed reports.
 	// An error rolls that transaction back and the reports are sent again.
 	OnView func(ctx context.Context, tx *state.Tx, k state.Key, confirmed []uint64, run v1.Run) error
+	// OnFence, if set, is called once a Run is fenced, after the fence is
+	// committed: the reconciliation is what decides what its reports are worth.
+	OnFence func(k state.Key)
 }
 
 // Run sends until ctx ends.
@@ -191,6 +194,14 @@ func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow
 		case v1.ReportApplied, v1.ReportDuplicate:
 			done = append(done, o.WorkerSeq)
 		case v1.ReportRejected:
+			if v1.RunReportKind(batch[i].Kind) == v1.ReportOrphanPreserved {
+				// The one report of an orphan is not behind a fence: refused, it is
+				// final and goes, or it would be sent again for ever.
+				s.Log.WarnContext(ctx, "the Controller refused the preservation of an orphan; it is not sent again",
+					"run", k.RunID, "lease_epoch", k.LeaseEpoch, "code", o.Code, "message", o.Message)
+				done = append(done, o.WorkerSeq)
+				continue
+			}
 			refusal = &resp.Outcomes[i]
 		case v1.ReportNotApplied:
 		default:
@@ -218,10 +229,18 @@ func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow
 // reports are kept, not sent.
 func (s *Sender) fence(ctx context.Context, k state.Key, code domain.Code, confirmed []uint64, message string) error {
 	s.Log.WarnContext(ctx, "the Controller refused a report for good: its reports are kept", "run", k.RunID, "lease_epoch", k.LeaseEpoch, "code", code, "message", message)
-	return s.DB.WithTx(ctx, func(tx *state.Tx) error {
+	var fenced bool
+	err := s.DB.WithTx(ctx, func(tx *state.Tx) error {
 		if err := state.DeleteJournal(ctx, tx, confirmed); err != nil {
 			return err
 		}
-		return state.Fence(ctx, tx, k, string(code))
+		var err error
+		fenced, err = state.Fence(ctx, tx, k, string(code))
+		return err
 	})
+	// Only a new fence asks for a reconciliation: one already there has asked.
+	if err == nil && fenced && s.OnFence != nil {
+		s.OnFence(k)
+	}
+	return err
 }

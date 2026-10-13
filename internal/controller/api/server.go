@@ -135,6 +135,9 @@ func New(c Config) (*Server, error) {
 		s.registerRelayRoutes()
 		s.handle("GET /v1/runs/{ref}/explain", clientsOnly, s.explainRun)
 	}
+	if s.work.Reconciliation != nil {
+		s.registerReconcileRoutes()
+	}
 	return s, nil
 }
 

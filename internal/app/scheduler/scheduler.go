@@ -31,14 +31,18 @@ var systemActor = domain.ActorRef{Kind: domain.ActorSystem, ID: "controller"}
 
 // Service is the scheduler: it turns queued Runs into leases.
 type Service struct {
-	db     *store.DB
-	clock  clock.Clock
-	leases *leases.Service
+	db        *store.DB
+	clock     clock.Clock
+	leases    *leases.Service
+	startedAt time.Time
 }
 
 // New builds the service. The clock is the one the store was opened with.
-func New(db *store.DB, clk clock.Clock, ls *leases.Service) *Service {
-	return &Service{db: db, clock: clk, leases: ls}
+// startedAt is when the Controller started: a Worker with live work that has
+// not reconciled since then is not given more (filter reconcile, §27.1). The
+// zero value leaves the filter out.
+func New(db *store.DB, clk clock.Clock, ls *leases.Service, startedAt time.Time) *Service {
+	return &Service{db: db, clock: clk, leases: ls, startedAt: startedAt}
 }
 
 // Result is what a pass did. More says that it stopped at the bound of
@@ -135,7 +139,7 @@ func (s *Service) plan(ctx context.Context) (candidates, waiting []store.Run, pr
 			waiting = append(waiting, run)
 			continue
 		}
-		if Decide(placement, snapshot(workers, misses, run.ID, nil), now).Chosen != nil {
+		if Decide(placement, snapshot(workers, misses, run.ID, nil, s.startedAt), now).Chosen != nil {
 			candidates = append(candidates, run)
 		} else {
 			waiting = append(waiting, run)
@@ -155,7 +159,7 @@ const (
 // decide ranks the Workers for the Run as q shows them: the Workers with their
 // reservations, who missed the Run lately and who already worked for its Project.
 // It returns the Workers it read, so that the chosen one is among them.
-func decide(ctx context.Context, q store.Querier, run store.Run, project domain.ID, placement domain.Placement, now time.Time) (Decision, []store.Worker, error) {
+func decide(ctx context.Context, q store.Querier, run store.Run, project domain.ID, placement domain.Placement, now, startedAt time.Time) (Decision, []store.Worker, error) {
 	workers, err := store.Workers(ctx, q, false)
 	if err != nil {
 		return Decision{}, nil, err
@@ -168,7 +172,7 @@ func decide(ctx context.Context, q store.Querier, run store.Run, project domain.
 	if err != nil {
 		return Decision{}, nil, err
 	}
-	return Decide(placement, snapshot(workers, misses, run.ID, known), now), workers, nil
+	return Decide(placement, snapshot(workers, misses, run.ID, known, startedAt), now), workers, nil
 }
 
 // assign decides and, if a Worker is chosen, creates the lease, in one
@@ -194,7 +198,7 @@ func (s *Service) assign(ctx context.Context, queued store.Run) (outcome, error)
 		if err != nil {
 			return err
 		}
-		decision, workers, err := decide(ctx, tx, run, task.ProjectID, placement, now)
+		decision, workers, err := decide(ctx, tx, run, task.ProjectID, placement, now, s.startedAt)
 		if err != nil {
 			return err
 		}
@@ -231,6 +235,19 @@ func (s *Service) explainWaiting(ctx context.Context, waiting []store.Run) error
 		return nil
 	}
 	return s.db.WithTx(ctx, func(tx *store.Tx) error { return tx.SetQueuedReasons(ctx, changed, reason) })
+}
+
+// RunAfter waits for ready to close, the end of the reconciliation that follows
+// a start of the Controller (§27.1 point 6), and then runs the loop. Nothing is
+// assigned and no lease expires before it.
+func (s *Service) RunAfter(ctx context.Context, ready <-chan struct{}, tick time.Duration, log *slog.Logger) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-ready:
+	}
+	log.InfoContext(ctx, "the reconciliation is over: the scheduler starts")
+	s.Run(ctx, tick, log)
 }
 
 // Run passes until ctx ends: at once, then whenever an event is committed and
@@ -279,13 +296,14 @@ func (s *Service) Run(ctx context.Context, tick time.Duration, log *slog.Logger)
 // are those of any Run; only the ones of this Run count. known is the set of
 // Workers that already accepted a Run of the Run's Project, nil when it is
 // not needed.
-func snapshot(workers []store.Worker, misses []store.Miss, run domain.ID, known map[domain.ID]bool) []Worker {
+func snapshot(workers []store.Worker, misses []store.Miss, run domain.ID, known map[domain.ID]bool, startedAt time.Time) []Worker {
 	out := make([]Worker, 0, len(workers))
 	for _, w := range workers {
 		c := Worker{
 			ID: w.ID, Name: w.Name, State: w.State, Availability: w.Settings.Availability, Capabilities: w.Report.Capabilities,
 			Allocatable: capacityOf(w.Resources.Allocatable), Reserved: capacityOf(w.Reserved), Reservations: w.Reservations,
 			MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, KnowsProject: known[w.ID],
+			Unreconciled: !startedAt.IsZero() && w.LiveLeases > 0 && !w.ReconciledSince(startedAt),
 		}
 		for _, m := range misses {
 			if m.RunID == run && m.WorkerID == w.ID {

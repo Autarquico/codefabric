@@ -66,8 +66,17 @@ var (
 // built from nothing and the configuration travels in it, so that the token is
 // in neither argv nor any file; redirects are not followed.
 func (g *Git) Push(ctx context.Context, project, commit, branch string, a PushAuth) error {
+	if !domain.ValidBranch(branch) {
+		return &PushError{Class: PushLocal, Message: "the project, commit or branch is not valid"}
+	}
+	return g.PushRef(ctx, project, commit, "refs/heads/"+branch, a)
+}
+
+// PushRef is Push to a full ref: a branch of CodeFabric, or the ref of an orphan.
+func (g *Git) PushRef(ctx context.Context, project, commit, ref string, a PushAuth) error {
+	branch, isBranch := strings.CutPrefix(ref, "refs/heads/")
 	switch {
-	case !isProject(project) || !domain.ValidCommitID(commit) || !domain.ValidBranch(branch):
+	case !isProject(project) || !domain.ValidCommitID(commit) || (isBranch && !domain.ValidBranch(branch)) || (!isBranch && !domain.ValidOrphanRef(ref)):
 		return &PushError{Class: PushLocal, Message: "the project, commit or branch is not valid"}
 	case a.URL == "" || a.Token == "" || a.Cert == "" || a.Key == "" || a.CA == "":
 		return &PushError{Class: PushLocal, Message: "the credentials for the relay are incomplete"}
@@ -98,7 +107,7 @@ func (g *Git) Push(ctx context.Context, project, commit, branch string, a PushAu
 	}
 	res, err := g.run(ctx, cmd{
 		dir: bare, env: env, timeout: g.pushTimeout(), secrets: []string{a.Token},
-		args: []string{"push", "--porcelain", "--no-verify", "--no-progress", "--end-of-options", a.URL, commit + ":refs/heads/" + branch},
+		args: []string{"push", "--porcelain", "--no-verify", "--no-progress", "--end-of-options", a.URL, commit + ":" + ref},
 	})
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {

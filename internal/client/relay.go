@@ -18,6 +18,15 @@ func (c *Client) RelayToken(ctx context.Context, run string, leaseEpoch uint64) 
 	return out, err
 }
 
+// OrphanToken asks for a token that may only create the ref of an orphan the
+// Worker holds, at the commit it sealed. Like RelayToken, it is for git's HTTP
+// header alone.
+func (c *Client) OrphanToken(ctx context.Context, run string, leaseEpoch uint64, commit string) (v1.RelayTokenResponse, error) {
+	var out v1.RelayTokenResponse
+	err := c.do(ctx, http.MethodPost, refPath("worker/runs", run, "orphan-token"), v1.OrphanTokenRequest{LeaseEpoch: leaseEpoch, ResultCommit: commit}, &out)
+	return out, err
+}
+
 // PublishRun asks for another try at publishing the result of a Run whose
 // publication failed (`cf run publish`).
 func (c *Client) PublishRun(ctx context.Context, ref string) (v1.Run, error) {

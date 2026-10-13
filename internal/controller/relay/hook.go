@@ -42,8 +42,14 @@ func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 	if allowed == "" || expected == "" {
 		return deny("this request is not authorised to push")
 	}
-	branch, ok := strings.CutPrefix(allowed, "refs/heads/")
-	if !ok || !domain.ValidBranch(branch) || !domain.ValidCommitID(expected) {
+	// A branch of a Run moves by fast-forwards; any other ref it may write (the
+	// ref of an orphan) is only ever created.
+	branch, isBranch := strings.CutPrefix(allowed, "refs/heads/")
+	createOnly := !isBranch
+	switch {
+	case !domain.ValidCommitID(expected),
+		isBranch && !domain.ValidBranch(branch),
+		!isBranch && !domain.ValidOrphanRef(allowed):
 		return deny("this request is not authorised to push")
 	}
 	var updates [][3]string
@@ -59,21 +65,24 @@ func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 		return deny("malformed update")
 	}
 	if len(updates) != 1 {
-		return deny("a push updates exactly one ref: " + branch)
+		return deny("a push updates exactly one ref: " + allowed)
 	}
 	oldOID, newOID, ref := updates[0][0], updates[0][1], updates[0][2]
 	switch {
 	case ref != allowed:
-		return deny("this push may only update " + branch)
+		return deny("this push may only update " + allowed)
 	case !domain.ValidCommitID(oldOID) || !domain.ValidCommitID(newOID):
 		return deny("malformed update")
 	case zeroOID.MatchString(newOID):
-		return deny("deleting " + branch + " is not allowed")
+		return deny("deleting " + allowed + " is not allowed")
 	case newOID != expected:
-		return deny("only the commit sealed for this Run may be pushed to " + branch)
+		return deny("only the commit sealed for this Run may be pushed to " + allowed)
 	}
 	if typ, err := git.ObjectType(newOID); err != nil || typ != "commit" {
-		return deny(branch + " must point to a commit")
+		return deny(allowed + " must point to a commit")
+	}
+	if createOnly && !zeroOID.MatchString(oldOID) {
+		return deny(allowed + " exists: it is never moved")
 	}
 	if !zeroOID.MatchString(oldOID) {
 		ff, err := git.IsAncestor(oldOID, newOID)
@@ -81,7 +90,7 @@ func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 			return fmt.Errorf("relay hook: checking the history: %w", err)
 		}
 		if !ff {
-			return deny("updating " + branch + " would not be a fast-forward")
+			return deny("updating " + allowed + " would not be a fast-forward")
 		}
 	}
 	return nil

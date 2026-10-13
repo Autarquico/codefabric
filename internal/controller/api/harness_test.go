@@ -100,7 +100,7 @@ func buildController(t *testing.T, start time.Time, routes func(*api.Server), gi
 	cfg := api.Config{
 		Authority: tc.authority, CA: tc.ca, ServerCert: serverCert,
 		Work: app.New(tc.db, tc.clock, domain.NewIDGenerator(tc.clock.Now, rand.Reader),
-			workers.Config{ControllerVersion: controllerVersion}, runOpts...),
+			app.Config{Workers: workers.Config{ControllerVersion: controllerVersion}}, runOpts...),
 		Relay: gitRelay,
 		Store: tc.db, Clock: tc.clock, StartedAt: tc.clock.Now(), Build: buildinfo.Info{Version: "test", Commit: "abc123"},
 		Logger: slog.New(slog.NewTextHandler(tc.logs, nil)),

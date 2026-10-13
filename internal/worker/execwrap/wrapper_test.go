@@ -442,8 +442,9 @@ func TestTheHarnessDoesNotInheritTheTmuxVariables(t *testing.T) {
 }
 
 func TestWhatDoesNotEndWithTheGraceIsKilledWithTheGroupAfterTheExitIsWritten(t *testing.T) {
-	// The harness ends at once and leaves a process that ignores SIGTERM.
-	s := launch(t, execwrap.Launch{Argv: shell(`(trap '' TERM; sleep 300) & echo $! > rebel.pid; exit 0`), Grace: 300 * time.Millisecond}, true)
+	// The harness ends once it leaves a process that ignores SIGTERM: it waits for
+	// the trap to be in place, so the stop cannot reach the rebel before it.
+	s := launch(t, execwrap.Launch{Argv: shell(`(trap '' TERM; : > rebel.ready; sleep 300) & echo $! > rebel.pid; while [ ! -f rebel.ready ]; do sleep 0.01; done; exit 0`), Grace: 300 * time.Millisecond}, true)
 	rebel := s.pidFile("rebel.pid")
 	exit := s.waitExit()
 	if exit.ExitCode == nil || *exit.ExitCode != 0 || !exit.GroupKilled || exit.RemnantsKilled < 1 {
@@ -501,5 +502,31 @@ func waitGroupEmpty(t *testing.T, pgid int) {
 			t.Fatalf("the group never emptied (%v)", err)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The stop goes to the group: the harness can die of it and be reaped before
+// the wrapper has taken its own copy of the signal. That is still a stop. The
+// order is forced: the harness gets the signal, dies, and only then the wrapper.
+func TestAHarnessKilledByTheStopBeforeTheWrapperTakesItEndedByTheStop(t *testing.T) {
+	s := launch(t, execwrap.Launch{Argv: shell("touch ready; exec sleep 300"), Grace: time.Minute}, true)
+	s.waitFor("ready")
+	s.waitFor(execwrap.StartedFile) // the harness can be ready before the wrapper writes it
+	var (
+		w       execwrap.Wrapper
+		started execwrap.Started
+	)
+	if ok, err := execwrap.Read(s.dir, execwrap.WrapperFile, &w); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if ok, err := execwrap.Read(s.dir, execwrap.StartedFile, &started); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	_ = syscall.Kill(started.PID, syscall.SIGTERM) // the test signals a pid: the code under test never does
+	waitDead(t, started.PID)
+	_ = syscall.Kill(w.PID, syscall.SIGTERM)
+	exit := s.waitExit()
+	if exit.Cause != execwrap.CauseStop || exit.Signal != "SIGTERM" {
+		t.Fatalf("exit.json = %+v", exit)
 	}
 }

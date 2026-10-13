@@ -33,17 +33,3 @@ func bootOf() (string, error) {
 	}
 	return fmt.Sprintf("%d.%06d", t.Sec, t.Usec), nil
 }
-
-func groupMembers(pgid int) ([]int, error) {
-	procs, err := unix.SysctlKinfoProcSlice("kern.proc.pgrp", pgid)
-	if err != nil {
-		return nil, err
-	}
-	var out []int
-	for _, p := range procs {
-		if int(p.Eproc.Pgid) == pgid && p.Proc.P_stat != zombie {
-			out = append(out, int(p.Proc.P_pid))
-		}
-	}
-	return out, nil
-}

@@ -167,12 +167,15 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 		e.later(ctx, p, "the Run could not be read")
 		return false
 	}
+	if local.OrphanedAt != nil {
+		return e.preserveOrphan(ctx, p, local)
+	}
 	tok, err := e.o.Controller.RelayToken(ctx, p.RunID, p.LeaseEpoch)
 	if err != nil {
 		if ctx.Err() != nil {
 			return false
 		}
-		return e.tokenFailed(ctx, p, err)
+		return e.tokenFailed(ctx, p, err, false)
 	}
 	if !tok.Write {
 		// The Controller does not have the sealing yet (its report is on its way) or no
@@ -200,6 +203,13 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 			}
 			return state.MarkPushed(ctx, tx, p, seq, now)
 		})
+		if errors.Is(txErr, errOrphaned) {
+			// It became an orphan while it pushed: the push is not recorded, and the
+			// next turn keeps its result by the orphan's ref.
+			e.log.InfoContext(ctx, "the Run became an orphan during its push: its result goes to the orphan's ref", "run", p.RunID)
+			e.kickPublisher()
+			return true
+		}
 		return e.settled(ctx, p, txErr, "recording a push")
 	}
 	var pe *gitops.PushError
@@ -210,14 +220,66 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 	return e.pushFailed(ctx, p, pe.Counts(), pe.Message)
 }
 
+// preserveOrphan keeps the sealed result of an orphan in the relay, at the ref
+// only it may create (§10.4 point 5), and tells the Controller with the one
+// report it takes under an epoch that is not the live one.
+func (e *Executor) preserveOrphan(ctx context.Context, p state.Publication, local state.Run) bool {
+	tok, err := e.o.Controller.OrphanToken(ctx, p.RunID, p.LeaseEpoch, p.ResultCommit)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false
+		}
+		return e.tokenFailed(ctx, p, err, true)
+	}
+	ref := domain.OrphanRef(domain.ID(p.RunID), p.LeaseEpoch)
+	if tok.Ref != ref {
+		// The token is for another ref than the one of this orphan: it is not used.
+		return e.tokenFailed(ctx, p, domain.NewError(domain.CodePolicyDenied, "the token is for another ref than the orphan's", nil), true)
+	}
+	pushErr := e.o.Git.PushRef(ctx, local.ProjectID, p.ResultCommit, ref, gitops.PushAuth{
+		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
+		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
+	})
+	if ctx.Err() != nil {
+		return false
+	}
+	if pushErr != nil {
+		var pe *gitops.PushError
+		if !errors.As(pushErr, &pe) {
+			pe = &gitops.PushError{Class: gitops.PushLocal, Message: briefErr(pushErr)}
+		}
+		e.log.WarnContext(ctx, "preserving the result of an orphan failed", "run", p.RunID, "class", pe.Class, "err", pe.Message)
+		return e.pushFailed(ctx, p, pe.Counts(), pe.Message)
+	}
+	e.forgetBackoff(p.Key)
+	now := e.clock.Now()
+	e.log.InfoContext(ctx, "the result of an orphan is kept in the relay", "run", p.RunID, "epoch", p.LeaseEpoch, "ref", ref)
+	txErr := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		if err := e.report(ctx, tx, p.Key, v1.ReportOrphanPreserved, now, func(en *v1.RunReportEntry) { en.ResultCommit = p.ResultCommit }); err != nil {
+			return err
+		}
+		return state.MarkPreserved(ctx, tx, p, now)
+	})
+	return e.settled(ctx, p, txErr, "recording an orphan preserved")
+}
+
 // tokenFailed handles a token the Controller would not give. What says the Run is
 // not ours any more (stale lease, unknown Run) ends the publication; what could
 // pass (the Controller down, an internal error) does not count.
-func (e *Executor) tokenFailed(ctx context.Context, p state.Publication, err error) bool {
+func (e *Executor) tokenFailed(ctx context.Context, p state.Publication, err error, orphan bool) bool {
 	var coded *domain.Error
 	if errors.As(err, &coded) {
 		switch coded.Code {
-		case domain.CodeStaleLease, domain.CodeNotFound, domain.CodePolicyDenied:
+		case domain.CodeStaleLease:
+			if !orphan {
+				// The lease is not the live one: the reconciliation makes the Run an
+				// orphan, and the result, which is sealed, is kept by the orphan's ref.
+				// Nothing is given up meanwhile.
+				e.later(ctx, p, "the lease is not the live one: waiting for the reconciliation")
+				return false
+			}
+			return e.giveUp(ctx, p, "the Controller no longer gives this Worker a token for the Run: "+coded.Message)
+		case domain.CodeNotFound, domain.CodePolicyDenied:
 			return e.giveUp(ctx, p, "the Controller no longer gives this Worker a token for the Run: "+coded.Message)
 		case domain.CodeUnauthenticated:
 			return e.pushFailed(ctx, p, true, "the Controller does not accept the credentials of this Worker")

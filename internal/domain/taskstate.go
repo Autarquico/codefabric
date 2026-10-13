@@ -159,3 +159,11 @@ func (f taskFacts) lastRunRetryAction() RetryAction {
 func (f taskFacts) canReschedule() bool {
 	return f.lastRunRetryAction() == RetryReschedule && f.Retry.AttemptsLeft > 0
 }
+
+// RetryDue says whether the Task derives queued only because its last Run
+// failed or was lost and the retry policy reschedules it (§11.7 row 12): the
+// state holds only once the Run of the retry exists.
+func RetryDue(v TaskView) bool {
+	_, _, row, err := deriveTaskRow(v)
+	return err == nil && row == 12
+}

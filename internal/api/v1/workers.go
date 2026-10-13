@@ -66,6 +66,10 @@ type HeartbeatResponse struct {
 	// (§10.5).
 	MaxConcurrentRuns int      `json:"max_concurrent_runs"`
 	Allocatable       Capacity `json:"allocatable"`
+	// ReconcileRequired says that the Controller has no complete reconciliation
+	// of this daemon epoch since it started (§27.3): the Worker reconciles, and
+	// takes no lease until it has.
+	ReconcileRequired bool `json:"reconcile_required,omitempty"`
 }
 
 // Worker is §3.5 as the API shows it. Compatible is the verdict of the upgrade

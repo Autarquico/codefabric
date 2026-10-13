@@ -87,10 +87,18 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 	}
 	now := e.clock.Now()
 	published := false
+	var stops []v1.StopCommand
 	defer func() {
 		if published && err == nil {
 			e.kickPublisher() // after the transaction that stores the order has committed
 			e.o.Journal.Notify()
+		}
+		if err == nil {
+			for _, s := range stops {
+				if stopErr := e.stopOrdered(ctx, s); stopErr != nil && ctx.Err() == nil {
+					e.log.ErrorContext(ctx, "carrying out a stop; recovery resumes it", "run", s.RunID, "epoch", s.Epoch, "err", stopErr)
+				}
+			}
 		}
 	}()
 	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
@@ -100,6 +108,20 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 					return err
 				}
 				published = true
+				continue
+			}
+			if c.Type == domain.CommandStop && c.Stop != nil {
+				if kind, _, err := domain.ParseID(c.Stop.RunID); err != nil || kind != domain.KindRun || c.Stop.Epoch == 0 {
+					e.log.ErrorContext(ctx, "a stop order does not name a Run; it is ignored", "seq", c.Seq)
+					if err := state.SetCursor(ctx, tx, c.Seq); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := e.persistStop(ctx, tx, c); err != nil {
+					return err
+				}
+				stops = append(stops, *c.Stop)
 				continue
 			}
 			if c.Type != domain.CommandAssign || c.Assign == nil {

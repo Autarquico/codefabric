@@ -41,6 +41,13 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	return newEnvWith(t, nil)
+}
+
+// newEnvWith is newEnv with the configuration of the use cases adjusted; the
+// clock is already the fake one when configure runs.
+func newEnvWith(t *testing.T, configure func(*app.Config, *clock.Fake)) *env {
+	t.Helper()
 	clk := clock.NewFake(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC))
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "controller.db"), store.Options{Clock: clk})
 	must(t, err)
@@ -55,7 +62,11 @@ func newEnv(t *testing.T) *env {
 		}),
 		relay: &fakeRelay{},
 	}
-	e.app = app.New(db, clk, ids, workers.Config{}, runs.WithRelay(e.relay))
+	var cfg app.Config
+	if configure != nil {
+		configure(&cfg, clk)
+	}
+	e.app = app.New(db, clk, ids, cfg, runs.WithRelay(e.relay))
 	e.owner = e.newClient("owner")
 	return e
 }

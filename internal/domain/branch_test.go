@@ -65,3 +65,37 @@ func TestValidCommitIDAndPrintable(t *testing.T) {
 		t.Error("Printable")
 	}
 }
+
+func TestOrphanRef_OneFormOnly(t *testing.T) {
+	run := ID("run_01J00000000000000000000000")
+	ref := OrphanRef(run, 3)
+	if ref != "refs/cf/orphans/run_01J00000000000000000000000-e3" || !ValidOrphanRef(ref) {
+		t.Fatalf("OrphanRef = %q", ref)
+	}
+	for _, bad := range []string{
+		"refs/cf/orphans/run_01J00000000000000000000000-e0", "refs/cf/orphans/run_01J00000000000000000000000-e03",
+		"refs/cf/orphans/run_01J00000000000000000000000-e", "refs/cf/orphans/task_01J00000000000000000000000-e1",
+		"refs/cf/orphans/run_01J00000000000000000000000-e1x", "refs/heads/cf/x/run-1", "refs/cf/orphans/../x-e1",
+	} {
+		if ValidOrphanRef(bad) {
+			t.Errorf("%q is taken for an orphan ref", bad)
+		}
+	}
+}
+
+func TestRunEpochAndSessionName_OneFormOnly(t *testing.T) {
+	if got := SessionName("run_x", 4); got != "cf-run_x-e4" {
+		t.Fatalf("SessionName = %q", got)
+	}
+	if run, epoch, ok := ParseSessionName("cf-run_x-e4"); !ok || run != "run_x" || epoch != 4 {
+		t.Errorf("ParseSessionName = %q %d %v", run, epoch, ok)
+	}
+	for _, bad := range []string{"cf--e1", "-e1", "cf-run-e0", "cf-run-e04", "cf-run-e", "run-e1x", "xx-run-e1"} {
+		if _, _, ok := ParseSessionName(bad); ok {
+			t.Errorf("%q parsed as a session", bad)
+		}
+	}
+	if _, _, ok := ParseRunEpoch("-e1"); ok {
+		t.Error("an empty run parsed")
+	}
+}

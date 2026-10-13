@@ -8,6 +8,14 @@ type RelayTokenRequest struct {
 	LeaseEpoch uint64 `json:"lease_epoch"`
 }
 
+// OrphanTokenRequest is POST /v1/worker/runs/{run}/orphan-token: a token that
+// may only create refs/cf/orphans/<run>-e<epoch> at the sealed commit of an
+// orphan the Controller detected under that epoch (§10.4 point 5).
+type OrphanTokenRequest struct {
+	LeaseEpoch   uint64 `json:"lease_epoch"`
+	ResultCommit string `json:"result_commit"`
+}
+
 // RelayTokenResponse carries a token for the git relay (§16.8). The token goes
 // to git in an HTTP header and nowhere else: not in argv, not in a repository's
 // configuration, not in a file. Path is where the relay serves the Project
@@ -19,6 +27,8 @@ type RelayTokenResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	Path      string    `json:"path"`
 	Write     bool      `json:"write"`
+	// Ref is the one ref an orphan token may create; empty for the token of a lease.
+	Ref string `json:"ref,omitempty"`
 }
 
 // RelayPathPrefix is where the Controller serves the git relay.
