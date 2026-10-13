@@ -17,7 +17,9 @@
 package outputship
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -47,6 +49,9 @@ const (
 	backoffMax  = 30 * time.Second
 
 	noteReplaced = "output.log was replaced or truncated"
+
+	// fingerprintBytes is how much of the start of the log is fingerprinted.
+	fingerprintBytes = 4 << 10
 )
 
 // Uploader is the Controller as the shipper uses it.
@@ -112,7 +117,10 @@ type item struct {
 	entries []v1.OutputEntry
 	// reaches is the offset the cursor moves to when the data entry is acknowledged.
 	reaches uint64
-	closing bool // the last entry closes the output
+	// prefixLen and prefixSum are the fingerprint to keep when the entries are acknowledged.
+	prefixLen int
+	prefixSum []byte
+	closing   bool // the last entry closes the output
 }
 
 // Once is one pass: it looks at the output of every assignment that may have
@@ -232,6 +240,15 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 		closeAt(cur.Sent, noteReplaced)
 		return it, nil
 	}
+	// The inode of a file that is removed and made again is reused at once (Linux),
+	// and a log can also be rewritten in place: same device, same inode, other
+	// bytes. What was sent is the start of this file or the file is not the same.
+	if cur.PrefixLen > 0 {
+		if sum, err := fingerprint(f, cur.PrefixLen); err != nil || !bytes.Equal(sum, cur.PrefixSum) {
+			closeAt(cur.Sent, noteReplaced)
+			return it, nil
+		}
+	}
 	if !cur.HasFile {
 		it.cursor.HasFile, it.cursor.Dev, it.cursor.Ino = true, dev, ino
 	}
@@ -254,6 +271,13 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 		room -= n
 		it.reaches = pos
 	}
+	// The fingerprint grows with what is sent, up to fingerprintBytes. The bytes it
+	// covers are the ones read, which an append-only file does not change.
+	if n := int(min(pos, fingerprintBytes)); n > cur.PrefixLen {
+		if sum, err := fingerprint(f, n); err == nil {
+			it.prefixLen, it.prefixSum = n, sum
+		}
+	}
 	if isFinal(r) && pos == size {
 		if s.stable(r.Key, size) {
 			closeAt(size, "")
@@ -263,7 +287,11 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 	}
 	if len(it.entries) == 0 {
 		// Nothing to send, but the identity of the file was learnt: keep it.
-		if !cur.HasFile {
+		learnt := it.prefixLen > cur.PrefixLen
+		if learnt {
+			it.cursor.PrefixLen, it.cursor.PrefixSum = it.prefixLen, it.prefixSum
+		}
+		if !cur.HasFile || learnt {
 			return nil, s.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.SaveOutputCursor(ctx, tx, it.cursor) })
 		}
 		return nil, nil
@@ -286,6 +314,9 @@ func (s *Shipper) stable(k state.Key, size uint64) bool {
 // settle applies the acknowledgements of one assignment's entries.
 func (s *Shipper) settle(ctx context.Context, it *item, acks []v1.OutputAck) error {
 	cur := it.cursor
+	if it.prefixLen > cur.PrefixLen {
+		cur.PrefixLen, cur.PrefixSum = it.prefixLen, it.prefixSum
+	}
 	for i, ack := range acks {
 		e := it.entries[i]
 		switch ack.Code {
@@ -312,6 +343,17 @@ func (s *Shipper) settle(ctx context.Context, it *item, acks []v1.OutputAck) err
 		}
 	}
 	return s.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.SaveOutputCursor(ctx, tx, cur) })
+}
+
+// fingerprint is the sha256 of the first n bytes of the file, read from the
+// descriptor that was checked. A file shorter than n has none.
+func fingerprint(f *os.File, n int) ([]byte, error) {
+	buf := make([]byte, n)
+	if _, err := f.ReadAt(buf, 0); err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(buf)
+	return sum[:], nil
 }
 
 // openLog opens output.log for reading, safely: a symlink is refused, a FIFO or

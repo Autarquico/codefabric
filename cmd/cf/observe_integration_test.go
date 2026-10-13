@@ -548,7 +548,7 @@ func TestScenario_ObserveAttachEvents_Latencia(t *testing.T) {
 	script := `touch ready
 while [ ! -e go ]; do sleep 0.02; done`
 
-	var follow, worker []time.Duration // the share of the Controller to the follow, and of everything before it
+	var follow, worker, exited, reported []time.Duration // the share of the Controller to the follow, and of everything before it
 
 	// batch makes n Runs that wait at the barrier, releases them, and measures each.
 	batch := func(n int) []time.Duration {
@@ -576,6 +576,8 @@ while [ ! -e go ]; do sleep 0.02; done`
 			if e, ok := stamps.received(id, domain.EventRunCompleted); ok {
 				follow = append(follow, at.Sub(e.ReceivedAt))
 				worker = append(worker, e.ReceivedAt.Sub(started[id]))
+				exited = append(exited, e.Timestamp.Sub(started[id]))
+				reported = append(reported, e.ReceivedAt.Sub(e.Timestamp))
 			}
 		}
 		return samples
@@ -593,6 +595,10 @@ while [ ! -e go ]; do sleep 0.02; done`
 	slices.Sort(worker)
 	t.Logf("from the commit of the event to the line: median %s, max %s; from the local action to the commit: median %s, max %s",
 		follow[len(follow)/2], follow[len(follow)-1], worker[len(worker)/2], worker[len(worker)-1])
+	slices.Sort(exited)
+	slices.Sort(reported)
+	t.Logf("harness released → exit marker written: median %s, max %s; exit marker → committed at the Controller: median %s, max %s",
+		exited[len(exited)/2], exited[len(exited)-1], reported[len(reported)/2], reported[len(reported)-1])
 	t.Logf("%d samples: min %s, median %s, p95 %s, max %s", len(samples), samples[0], samples[len(samples)/2], p95, samples[len(samples)-1])
 	if p95 >= 2*time.Second {
 		t.Errorf("p95 = %s, want under 2s", p95)

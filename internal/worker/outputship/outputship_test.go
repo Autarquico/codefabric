@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -276,6 +277,12 @@ func TestShip_AReplacedOrTruncatedLogIsNotReadAgainAndTheOutputIsClosedWithANote
 			_ = os.WriteFile(path, []byte("a completely different and longer log\n"), 0o600)
 		},
 		"truncated": func(path string) { _ = os.Truncate(path, 2) },
+		// The inode of a file removed and made again is reused at once on Linux; here
+		// the same thing is made certain: other bytes, longer than what was sent, in
+		// the very same file (same device, same inode).
+		"rewritten in place": func(path string) {
+			_ = os.WriteFile(path, []byte("a completely different and longer log\n"), 0o600)
+		},
 	} {
 		f := newFixture(t)
 		k := f.run("run_a", state.PhaseRunning)
@@ -507,5 +514,47 @@ func TestShip_ABatchNeverHasMoreEntriesThanTheControllerTakes(t *testing.T) {
 	}
 	if h := f.ctl.outputs[last]; h == nil || len(h.data) != 2*v1.OutputChunkBytes || !h.closed || !f.cursor(last).Done {
 		t.Fatalf("the last Run was not sent whole and closed: %+v", h)
+	}
+}
+
+// A log that was removed and made again, whatever its inode, is not the log that
+// was being sent: the start of what was sent says so.
+func TestShip_TheFingerprintOfWhatWasSentTellsAnotherLogWithTheSameInode(t *testing.T) {
+	f := newFixture(t)
+	k := f.run("run_a", state.PhaseRunning)
+	first := strings.Repeat("A", 6000) // more than the fingerprint covers
+	f.write(k, first)
+	f.once()
+	c := f.cursor(k)
+	if c.Sent != 6000 || c.PrefixLen != 4096 || len(c.PrefixSum) != 32 {
+		t.Fatalf("cursor = %+v", c)
+	}
+	// Same size, other bytes, same inode: only the start of the file can tell.
+	if err := os.WriteFile(f.logPath(k), []byte(strings.Repeat("B", 7000)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.once()
+	last := f.ctl.batches[len(f.ctl.batches)-1]
+	e := last[len(last)-1]
+	if !e.EOF || e.Note == "" || *e.FinalOffset != 6000 || f.sent(k) != first || !f.cursor(k).Done {
+		t.Fatalf("last = %+v, sent %d bytes, cursor %+v", last, len(f.sent(k)), f.cursor(k))
+	}
+}
+
+func TestShip_AGrowingLogKeepsItsFingerprintAndIsNotMistaken(t *testing.T) {
+	f := newFixture(t)
+	k := f.run("run_a", state.PhaseRunning)
+	for _, text := range []string{"ab", strings.Repeat("c", 3000), strings.Repeat("d", 3000), "e"} {
+		f.write(k, text)
+		f.once()
+		if c := f.cursor(k); c.Done {
+			t.Fatalf("an appended log was taken for another: %+v", c)
+		}
+	}
+	if c := f.cursor(k); c.PrefixLen != 4096 || c.Sent != 6003 {
+		t.Fatalf("cursor = %+v", c)
+	}
+	if want := "ab" + strings.Repeat("c", 3000) + strings.Repeat("d", 3000) + "e"; f.sent(k) != want {
+		t.Fatal("what was sent is not the log")
 	}
 }

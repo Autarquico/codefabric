@@ -17,6 +17,10 @@ type OutputCursor struct {
 	HasFile bool
 	Dev     uint64
 	Ino     uint64
+	// PrefixLen bytes from the start of the log, already sent, have the sha256
+	// PrefixSum; 0 when no fingerprint was taken yet.
+	PrefixLen int
+	PrefixSum []byte
 }
 
 // OutputCursorOf returns the cursor of the assignment, a fresh one if it has none.
@@ -24,8 +28,8 @@ func OutputCursorOf(ctx context.Context, q Querier, k Key) (OutputCursor, error)
 	c := OutputCursor{Key: k}
 	var dev, ino sql.NullInt64
 	err := q.QueryRowContext(ctx,
-		`SELECT sent, done, eof_sent, dev, ino FROM output_cursors WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch).
-		Scan(&c.Sent, &c.Done, &c.EOFSent, &dev, &ino)
+		`SELECT sent, done, eof_sent, dev, ino, prefix_len, prefix_sum FROM output_cursors WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch).
+		Scan(&c.Sent, &c.Done, &c.EOFSent, &dev, &ino, &c.PrefixLen, &c.PrefixSum)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return c, nil
@@ -45,10 +49,11 @@ func SaveOutputCursor(ctx context.Context, tx *Tx, c OutputCursor) error {
 		dev, ino = int64(c.Dev), int64(c.Ino) //nolint:gosec // round-trips through the same conversion
 	}
 	_, err := tx.exec(ctx,
-		`INSERT INTO output_cursors (run_id, lease_epoch, sent, done, dev, ino, eof_sent) VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO output_cursors (run_id, lease_epoch, sent, done, dev, ino, eof_sent, prefix_len, prefix_sum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (run_id, lease_epoch) DO UPDATE SET sent = excluded.sent, done = excluded.done,
-		     dev = excluded.dev, ino = excluded.ino, eof_sent = excluded.eof_sent`,
-		c.RunID, c.LeaseEpoch, c.Sent, c.Done, dev, ino, c.EOFSent)
+		     dev = excluded.dev, ino = excluded.ino, eof_sent = excluded.eof_sent,
+		     prefix_len = excluded.prefix_len, prefix_sum = excluded.prefix_sum`,
+		c.RunID, c.LeaseEpoch, c.Sent, c.Done, dev, ino, c.EOFSent, c.PrefixLen, c.PrefixSum)
 	if err != nil {
 		return fmt.Errorf("state: saving an output cursor: %w", err)
 	}

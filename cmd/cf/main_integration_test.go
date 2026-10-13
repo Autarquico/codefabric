@@ -15,6 +15,14 @@ import (
 const asCF = "CF_TEST_AS_CF"
 
 func TestMain(m *testing.M) {
+	// A binary built with -race sleeps a second before it exits, to let its
+	// reports out. The wrapper of every Run is this binary, so under -race a Run
+	// would end a second after its exit marker: a cost of the test build, not of
+	// cf. The children inherit it.
+	if os.Getenv("GORACE") == "" {
+		_ = os.Setenv("GORACE", "atexit_sleep_ms=0")
+	}
+
 	// A Controller in a process of its own runs the hook of the relay as itself,
 	// with an environment built from nothing: the arguments say it is cf.
 	hook := len(os.Args) > 3 && os.Args[1] == "relay" && os.Args[2] == "hook" && os.Args[3] == "pre-receive"
