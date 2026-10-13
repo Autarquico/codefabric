@@ -111,6 +111,14 @@ func (t SSHTarget) Destination() string {
 	return t.User + "@" + host
 }
 
+// String is the text ParseSSHTarget reads back into this target.
+func (t SSHTarget) String() string {
+	if t.Port == 0 {
+		return t.Destination()
+	}
+	return t.Destination() + ":" + strconv.Itoa(t.Port)
+}
+
 // ValidSSHTarget reports whether s is an SSH target.
 func ValidSSHTarget(s string) bool {
 	_, err := ParseSSHTarget(s)

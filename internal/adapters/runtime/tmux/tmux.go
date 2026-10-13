@@ -12,9 +12,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/envutil"
 )
 
@@ -38,9 +40,15 @@ type Options struct {
 type Runtime struct {
 	socket string
 	binary string
+
+	attachMu sync.Mutex
+	attach   string // the absolute path of binary, once Check resolved it
 }
 
-var _ cfruntime.Runtime = (*Runtime)(nil)
+var (
+	_ cfruntime.Runtime              = (*Runtime)(nil)
+	_ cfruntime.AttachBinaryProvider = (*Runtime)(nil)
+)
 
 // New builds the Runtime. It does not check that tmux works: Check does.
 func New(o Options) (*Runtime, error) {
@@ -68,7 +76,38 @@ func (r *Runtime) Check(ctx context.Context) error {
 	if major < minMajor {
 		return fmt.Errorf("tmux: version %d.%d is too old: 3.0 or later is needed", major, minor)
 	}
+	r.resolveBinary()
 	return nil
+}
+
+// resolveBinary finds the absolute path a client attaches with. Anything that
+// is not a plain, executable, regular file at a path the Controller will accept
+// leaves it empty: the Worker then announces no binary and its Runs are not attachable.
+func (r *Runtime) resolveBinary() {
+	path, err := exec.LookPath(r.binary)
+	if err == nil {
+		path, err = filepath.Abs(path)
+	}
+	if err != nil || !domain.ValidAttachBinary(path) {
+		return
+	}
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return
+	}
+	r.attachMu.Lock()
+	r.attach = path
+	r.attachMu.Unlock()
+}
+
+// AttachBinary is the program that attaches to the sessions of this Runtime, as
+// an absolute path, once Check found it.
+func (r *Runtime) AttachBinary() (runtime, path string) {
+	r.attachMu.Lock()
+	defer r.attachMu.Unlock()
+	if r.attach == "" {
+		return "", ""
+	}
+	return Name, r.attach
 }
 
 // HandleFor is the handle of the session with a name.
