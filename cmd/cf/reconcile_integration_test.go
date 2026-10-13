@@ -211,43 +211,51 @@ func (b *reconcileBox) running(prompt string) v1.CreateTaskResponse {
 }
 
 // readyStall is how long the way of a Run to a ready harness may show no sign
-// of progress, and readyCap how long it may take in all. The way is long: the
-// assignment, the accept, a fetch from the relay, a worktree, a tmux session and
-// two execs of this binary, all under -race and, on CI, beside the whole
-// integration suite. A stall is a hang; a slow way is not.
+// of progress, and readyCap how long it may take in all, the requests to the
+// Controller included. The way is long: the assignment, the accept, a fetch
+// from the relay, a worktree, a tmux session and two execs of this binary, all
+// under -race and, on CI, beside the whole integration suite. A stall is a
+// hang; a slow way is not.
 const (
 	readyStall = 30 * time.Second
 	readyCap   = 2 * time.Minute
 )
 
-// waitRunning waits for the harness of run to be ready, then for the
-// Controller to have the Run running. A wait that fails says where the Run
-// stood and what the daemons said.
+// waitRunning waits for the harness of run to be ready and for the Controller
+// to have the Run running. A wait that fails says where the Run stood and what
+// the daemons said.
 func (b *reconcileBox) waitRunning(run string) {
 	b.t.Helper()
+	ctx, cancel := context.WithTimeout(b.t.Context(), readyCap)
+	defer cancel()
 	ready := filepath.Join(b.box.WorkerWorktreeDir(run, 1), "ready")
-	stage, start, since := "", time.Now(), time.Now()
-	for !fileExists(ready) {
-		if now := b.stage(run); now != stage {
+	start := time.Now()
+	stage, since := "", start
+	for {
+		r, err := b.admin.Run(ctx, run)
+		isReady := fileExists(ready)
+		if isReady && err == nil && r.State == domain.RunRunning && r.Runtime == domain.RuntimeActive {
+			return
+		}
+		if now := b.stage(run, r, err, isReady); now != stage {
 			stage, since = now, time.Now()
 		}
-		if time.Since(since) > readyStall || time.Since(start) > readyCap {
-			b.t.Fatalf("timed out waiting for the harness to be ready, after %v; the Run stood at %s\n%s",
+		if time.Since(since) > readyStall || ctx.Err() != nil {
+			b.t.Fatalf("timed out waiting for the Run to be running with its harness ready, after %v; it stood at %s\n%s",
 				time.Since(start).Round(time.Millisecond), stage, b.logs())
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
-	eventually(b.t, "the Run to be running", func() bool {
-		r, err := b.admin.Run(b.t.Context(), run)
-		return err == nil && r.State == domain.RunRunning && r.Runtime == domain.RuntimeActive
-	})
 }
 
 // stage is what can be seen of the way of run to its harness: the Run as the
 // Controller has it, and what the Worker has made of it on disk.
-func (b *reconcileBox) stage(run string) string {
+func (b *reconcileBox) stage(run string, r v1.Run, err error, ready bool) string {
 	var at strings.Builder
-	if r, err := b.admin.Run(b.t.Context(), run); err != nil {
+	if err != nil {
 		fmt.Fprintf(&at, "run: %v", err)
 	} else {
 		fmt.Fprintf(&at, "state=%s runtime=%s queued_reason=%q worker=%q", r.State, r.Runtime, r.QueuedReason, r.WorkerID)
@@ -260,7 +268,7 @@ func (b *reconcileBox) stage(run string) string {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	fmt.Fprintf(&at, " run_dir=%v worktree=%t", names, fileExists(b.box.WorkerWorktreeDir(run, 1)))
+	fmt.Fprintf(&at, " run_dir=%v worktree=%t ready=%t", names, fileExists(b.box.WorkerWorktreeDir(run, 1)), ready)
 	return at.String()
 }
 
@@ -307,6 +315,19 @@ func (b *reconcileBox) waitNoReservations() {
 		w, err := b.admin.Worker(b.t.Context(), "alpha")
 		return err == nil && w.Reservations == 0
 	})
+}
+
+// smallProject creates the Project backend with Runs that ask for little. Each
+// Run asks for the defaults otherwise (2 CPUs, 4096 MB), and a CI runner
+// (macos-latest: 3 cores, about 7 GB) has room for one such Run only, so a
+// second waits as CF_NO_ELIGIBLE_WORKER; two Runs of 1 CPU and 256 MB fit.
+func smallProject(t *testing.T) {
+	t.Helper()
+	ok[v1.Project](t, "project", "create", "backend")
+	p := ok[v1.Project](t, "project", "set", "backend", "--cpu", "1", "--memory-mb", "256")
+	if r := p.Defaults.Resources; r == nil || r.CPU != 1 || r.MemoryMB != 256 {
+		t.Fatalf("the Project asks for %+v", r)
+	}
 }
 
 // relayTip is where the branch of the Run stands in the relay of host.
@@ -373,7 +394,7 @@ func TestScenario_StopCancelLostReconcile_Cancel_E2E(t *testing.T) {
 	b := newReconcileBox(t, host)
 	b.start()
 	newOrigin(t).clone(t)
-	ok[v1.Project](t, "project", "create", "backend")
+	smallProject(t)
 	created := b.running(waitScript)
 	run := created.Run.ID
 	pid := harnessPID(t, b.box, run)
@@ -411,7 +432,7 @@ func TestScenario_StopCancelLostReconcile_ReinicioDelController(t *testing.T) {
 	b.controller = ctrl
 	b.start()
 	newOrigin(t).clone(t)
-	ok[v1.Project](t, "project", "create", "backend")
+	smallProject(t)
 	first, second := b.running(waitScript), b.running(waitScript)
 	// A third waits for room, from before the restart.
 	use(t, host)
@@ -476,7 +497,7 @@ func TestScenario_StopCancelLostReconcile_LostYHuerfano_E2E(t *testing.T) {
 	b := newReconcileBox(t, host)
 	first := b.start()
 	newOrigin(t).clone(t)
-	ok[v1.Project](t, "project", "create", "backend")
+	smallProject(t)
 	created := b.running(waitScript)
 	run := created.Run.ID
 	pid := harnessPID(t, b.box, run)
@@ -522,7 +543,7 @@ func TestScenario_StopCancelLostReconcile_CaidaDelControllerNoCuenta_E2E(t *test
 	b.controller = ctrl
 	first := b.start()
 	newOrigin(t).clone(t)
-	ok[v1.Project](t, "project", "create", "backend")
+	smallProject(t)
 	created := b.running(waitScript)
 	run := created.Run.ID
 	pid := harnessPID(t, b.box, run)
@@ -603,7 +624,7 @@ func TestScenario_StopCancelLostReconcile_AsignacionSinRegistroLocal_E2E(t *test
 			b := newReconcileBox(t, host)
 			first := b.start()
 			newOrigin(t).clone(t)
-			ok[v1.Project](t, "project", "create", "backend")
+			smallProject(t)
 			created := b.running(waitScript)
 			run := created.Run.ID
 			use(t, host)

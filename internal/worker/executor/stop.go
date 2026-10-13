@@ -42,7 +42,7 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 		return err
 	}
 	now := e.clock.Now()
-	order := state.StopOrder{Key: k, Reason: reason, Source: source, CreatedAt: now}
+	order := e.stopOrder(k, reason, source, now)
 	if !r.Phase.Live() {
 		// Nothing of it runs: an order that reached it is done.
 		err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.CompleteStopOrder(ctx, tx, k, now) })

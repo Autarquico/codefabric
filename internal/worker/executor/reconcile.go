@@ -508,7 +508,7 @@ func (e *Executor) applyStops(ctx context.Context, stops []v1.StopCommand, liste
 		}
 		if _, err := state.RunBy(ctx, e.o.DB.Reader(), k); err == nil {
 			if err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
-				_, err := state.AddStopOrder(ctx, tx, state.StopOrder{Key: k, Reason: string(s.Reason), Source: SourceController, CreatedAt: e.clock.Now()})
+				_, err := state.AddStopOrder(ctx, tx, e.stopOrder(k, string(s.Reason), SourceController, e.clock.Now()))
 				return err
 			}); err != nil {
 				e.log.ErrorContext(ctx, "recording a stop of the reconciliation", "run", s.RunID, "err", err)

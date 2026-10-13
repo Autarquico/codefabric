@@ -20,7 +20,9 @@ type facts struct {
 	started *execwrap.Started // nil if the harness never spawned
 	lost    bool              // the wrapper died and left no exit
 	ordered bool              // a stop was ordered
-	message string
+	// exitFirst: the harness had ended before the stop was ordered.
+	exitFirst bool
+	message   string
 }
 
 // verdictOf says what the process with the wrapper's pid is now. The wrapper
@@ -220,6 +222,7 @@ func (e *Executor) markUnverified(ctx context.Context, r state.Run, why string) 
 func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done bool) {
 	order, orderErr := state.StopOrderOf(ctx, e.o.DB.Reader(), r.Key)
 	f.ordered = orderErr == nil && order.Reason != ""
+	f.exitFirst = orderErr == nil && order.ExitFirst
 	spawned := f.started != nil
 	reportedStart := r.StartedAt != nil || spawned
 	// A Run whose harness ran is to be sealed (§22.6). The intent, which is all that sealing depends
@@ -299,9 +302,9 @@ func fillExit(en *v1.RunReportEntry, f facts) {
 		en.Cause, en.Message = v1.ExitCauseWrapperLost, f.message
 	case f.exit != nil:
 		en.ExitCode, en.Signal, en.Cause, en.Message = f.exit.ExitCode, f.exit.Signal, f.exit.Cause, cmp.Or(f.exit.Error, f.message)
-		if f.ordered && f.exit.Signal != "" && f.exit.Cause == v1.ExitCauseExit {
-			// A harness that a signal killed while a stop was ordered ended by the stop,
-			// whatever the wrapper made of it.
+		if f.ordered && !f.exitFirst && f.exit.Signal != "" && f.exit.Cause == v1.ExitCauseExit {
+			// A harness that a signal killed after a stop was ordered ended by the
+			// stop, whatever the wrapper made of it; one that had ended before keeps its cause.
 			en.Cause = v1.ExitCauseStop
 		}
 	default:

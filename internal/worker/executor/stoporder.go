@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 
@@ -14,6 +15,14 @@ import (
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
+
+// stopOrder is a stop of the Run that arrives now. It notes whether the
+// harness had ended before it: an exit already written is not the stop's, even
+// if a signal ended it.
+func (e *Executor) stopOrder(k state.Key, reason, source string, now time.Time) state.StopOrder {
+	_, err := os.Stat(filepath.Join(e.runDir(k), execwrap.ExitFile))
+	return state.StopOrder{Key: k, Reason: reason, Source: source, CreatedAt: now, ExitFirst: err == nil}
+}
 
 // persistStop stores a stop of the Controller, whole, in the transaction of the
 // cursor. One for an assignment the Worker has no record of is rebuilt after the
@@ -27,9 +36,9 @@ func (e *Executor) persistStop(ctx context.Context, tx *state.Tx, c v1.WorkerCom
 	}
 	// The order goes in whole, record or not: a daemon that dies before it
 	// rebuilds a missing record finds it pending at its next start.
-	if _, err := state.AddStopOrder(ctx, tx, state.StopOrder{
-		Key: k, Reason: string(s.Reason), Source: SourceController, CreatedAt: e.clock.Now(), Payload: payload,
-	}); err != nil {
+	order := e.stopOrder(k, string(s.Reason), SourceController, e.clock.Now())
+	order.Payload = payload
+	if _, err := state.AddStopOrder(ctx, tx, order); err != nil {
 		return err
 	}
 	return state.SetCursor(ctx, tx, c.Seq)
@@ -78,7 +87,7 @@ func (e *Executor) rebuildForStop(ctx context.Context, s v1.StopCommand) (adopte
 		// The Controller may know of its start already: `started` is never reported for a rebuilt record.
 		StartedAt: &now, Handle: mustJSON(*e.runtimeHandle(k)),
 	}
-	order := state.StopOrder{Key: k, Reason: string(s.Reason), Source: SourceController, CreatedAt: now}
+	order := e.stopOrder(k, string(s.Reason), SourceController, now)
 	if !alive && dirErr != nil {
 		r.Phase, r.NeverStarted, r.StartedAt, r.Handle = state.PhaseAborted, true, nil, ""
 		existing := false

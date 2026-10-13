@@ -279,7 +279,9 @@ func SetCursor(ctx context.Context, tx *Tx, seq uint64) error {
 
 // StopOrder is a stop that was ordered. Source is "controller" or "worker".
 // Payload is the order of the Controller as it came (empty for the Worker's
-// own); WasRunning that the process of the Run was alive when it arrived.
+// own); WasRunning that the process of the Run was alive when it arrived;
+// ExitFirst that the harness had ended before it (its exit.json was there), so
+// nothing the stop signalled ended it.
 type StopOrder struct {
 	Key
 	Reason     string
@@ -288,15 +290,16 @@ type StopOrder struct {
 	DoneAt     *time.Time
 	Payload    []byte
 	WasRunning bool
+	ExitFirst  bool
 }
 
 // AddStopOrder persists a stop before anything is signalled. An order that
 // exists is kept, so the first reason stands; created says whether it is new.
 func AddStopOrder(ctx context.Context, tx *Tx, o StopOrder) (created bool, err error) {
 	res, err := tx.exec(ctx,
-		`INSERT INTO stop_orders (run_id, lease_epoch, reason, source, created_at, payload, was_running) VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO stop_orders (run_id, lease_epoch, reason, source, created_at, payload, was_running, exit_first) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (run_id, lease_epoch) DO NOTHING`,
-		o.RunID, o.LeaseEpoch, o.Reason, o.Source, o.CreatedAt.UnixNano(), nullText(string(o.Payload)), o.WasRunning)
+		o.RunID, o.LeaseEpoch, o.Reason, o.Source, o.CreatedAt.UnixNano(), nullText(string(o.Payload)), o.WasRunning, o.ExitFirst)
 	if err != nil {
 		return false, fmt.Errorf("state: storing a stop order: %w", err)
 	}
@@ -314,7 +317,7 @@ func SetStopWasRunning(ctx context.Context, tx *Tx, k Key) error {
 	return nil
 }
 
-const stopColumns = `run_id, lease_epoch, reason, source, created_at, done_at, COALESCE(payload, ''), was_running`
+const stopColumns = `run_id, lease_epoch, reason, source, created_at, done_at, COALESCE(payload, ''), was_running, exit_first`
 
 func scanStopOrder(row scanner) (StopOrder, error) {
 	var (
@@ -323,7 +326,7 @@ func scanStopOrder(row scanner) (StopOrder, error) {
 		done    sql.NullInt64
 		payload string
 	)
-	if err := row.Scan(&o.RunID, &o.LeaseEpoch, &o.Reason, &o.Source, &created, &done, &payload, &o.WasRunning); err != nil {
+	if err := row.Scan(&o.RunID, &o.LeaseEpoch, &o.Reason, &o.Source, &created, &done, &payload, &o.WasRunning, &o.ExitFirst); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return StopOrder{}, ErrNotFound
 		}

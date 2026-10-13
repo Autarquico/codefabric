@@ -187,6 +187,32 @@ func must(t *testing.T, err error) {
 
 // A harness that a signal killed while a stop was ordered ended by the stop,
 // whatever cause its wrapper wrote.
+// A harness that a signal of someone else killed before the stop arrived keeps
+// its cause: the stop that came later ended nothing.
+func TestAHarnessKilledBySignalBeforeTheStopKeepsItsCause(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	w := newWrapperProcess(t, "exit 0")
+	<-w.ended
+	f.writeWrapper(k, w.w)
+	f.writeStarted(k, w.w, t0)
+	f.writeExit(k, execwrap.Exit{Signal: "SIGTERM", ExitedAt: t0.Add(time.Second), Cause: execwrap.CauseExit})
+	must(t, f.e.Stop(t.Context(), k.RunID, k.LeaseEpoch, "cancel", SourceController))
+	waitFor(t, "the Run to be settled", func() bool { return f.e.step(t.Context(), k) })
+	exited := 0
+	for _, r := range f.reports(k) {
+		if r.Kind == v1.ReportExited {
+			exited++
+			if r.Cause != v1.ExitCauseExit || r.Signal != "SIGTERM" {
+				t.Errorf("exited = %+v", r)
+			}
+		}
+	}
+	if exited != 1 {
+		t.Errorf("%d exited reports", exited)
+	}
+}
+
 func TestAHarnessKilledBySignalUnderAStopEndedByTheStop(t *testing.T) {
 	f := newFixture(t)
 	k := f.started("echo hi")

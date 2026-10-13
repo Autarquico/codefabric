@@ -8,6 +8,8 @@ import (
 	"errors"
 	"strings"
 	"syscall"
+
+	"github.com/Autarquico/codefabric/internal/support/procgroup"
 )
 
 // Verdict is what comparing a recorded identity with the process that has the
@@ -87,7 +89,7 @@ func Verify(pid int, token string) Verdict {
 
 // GroupMembers lists the live processes of a process group, leaving out those
 // that already exited and wait for their parent.
-func GroupMembers(pgid int) ([]int, error) { return groupMembers(pgid) }
+func GroupMembers(pgid int) ([]int, error) { return procgroup.Members(pgid) }
 
 // GroupEmpty says whether the group has no process left. kill(-pgid, 0)
 // reports ESRCH for an empty group; a group that holds only zombies is empty
@@ -100,7 +102,7 @@ func GroupEmpty(pgid int) (bool, error) {
 	if err != nil && !errors.Is(err, syscall.EPERM) {
 		return false, err
 	}
-	members, err := groupMembers(pgid)
+	members, err := procgroup.Members(pgid)
 	if err != nil {
 		return false, err
 	}

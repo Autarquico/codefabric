@@ -20,3 +20,6 @@ CREATE INDEX stop_orders_pending ON stop_orders (created_at) WHERE done_at IS NU
 -- which the Worker tells the Controller with RunStopped (an orphan of a lost Run).
 ALTER TABLE stop_orders ADD COLUMN payload TEXT;
 ALTER TABLE stop_orders ADD COLUMN was_running INTEGER NOT NULL DEFAULT 0 CHECK (was_running IN (0, 1));
+-- exit_first: the harness had ended (its exit.json was there) when the stop
+-- arrived, so a signal that killed it was not the stop's.
+ALTER TABLE stop_orders ADD COLUMN exit_first INTEGER NOT NULL DEFAULT 0 CHECK (exit_first IN (0, 1));

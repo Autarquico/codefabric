@@ -14,10 +14,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/procgroup"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 )
 
@@ -76,12 +76,8 @@ const DefaultIdleRead = 60 * time.Second
 // flight, whatever they are.
 const maxRequestsPerWorker = 2
 
-// killDelay is how long the pipes of a killed child are waited for, and how
-// long what is left of its group is swept.
+// killDelay is how long the pipes of a child are waited for once it ended.
 const killDelay = 3 * time.Second
-
-// sweepInterval is the pause between two kills of the sweep of a group.
-const sweepInterval = 10 * time.Millisecond
 
 var (
 	protocolHeader = regexp.MustCompile(`^version=[012]$`)
@@ -137,10 +133,9 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 
 	ctx, cancel := context.WithDeadline(req.Context(), deadline)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, r.git, "http-backend") //nolint:gosec // git is the located executable
+	// The group of the child is ended by procgroup alone, never after its leader is reaped.
+	cmd := exec.Command(r.git, "http-backend") //nolint:gosec,noctx // git is the located executable; ctx goes to procgroup
 	cmd.Dir, cmd.Env = r.cfg.Dir, env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = killDelay
 	if body != nil {
 		cmd.Stdin = body
@@ -151,18 +146,18 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 	if err != nil {
 		return fmt.Errorf("relay: pipe of http-backend: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	child, err := procgroup.Start(ctx, cmd)
+	if err != nil {
 		return fmt.Errorf("relay: starting http-backend: %w", err)
 	}
 	waited := false
 	wait := func() error {
 		waited = true
-		return cmd.Wait()
+		return child.Wait()
 	}
 	abort := func() {
 		cancel()
 		_ = wait()
-		sweepGroup(cmd.Process.Pid)
 	}
 	defer func() {
 		if !waited {
@@ -199,21 +194,6 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 	waitErr := wait()
 	r.logChild(ep, g, stderr.String(), waitErr)
 	return nil
-}
-
-// sweepGroup kills what is left of the group of a child that was killed and
-// reaped. One kill of a group is not enough: a member that is forking when it
-// lands may give birth to a child the signal missed (macOS does), and that
-// child lives on in the group, with its pipes. While anyone is in the group its
-// ID is not given to another process, so the sweep only reaches what the child
-// left behind; it stops at the first sign that no live member is left
-// (ESRCH, or EPERM when only zombies remain) and gives up after killDelay.
-func sweepGroup(pgid int) {
-	for deadline := time.Now().Add(killDelay); time.Now().Before(deadline); time.Sleep(sweepInterval) {
-		if syscall.Kill(-pgid, syscall.SIGKILL) != nil {
-			return
-		}
-	}
 }
 
 // acquire takes the slots a request needs: one of the relay's, one of the

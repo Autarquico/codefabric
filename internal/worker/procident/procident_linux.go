@@ -12,7 +12,6 @@ import (
 // stat is the fields of /proc/<pid>/stat that matter, counted as proc(5) does.
 type stat struct {
 	state     byte
-	pgrp      int
 	startTime string
 }
 
@@ -32,15 +31,11 @@ func readStat(pid int) (stat, error) {
 		return stat{}, fmt.Errorf("procident: unexpected /proc/%d/stat", pid)
 	}
 	fields := strings.Fields(text[end+1:])
-	// fields[0] is field 3 (state); field 5 is pgrp and field 22 is starttime.
+	// fields[0] is field 3 (state); fields[19] is field 22 (starttime).
 	if len(fields) < 20 {
 		return stat{}, fmt.Errorf("procident: short /proc/%d/stat", pid)
 	}
-	pgrp, err := strconv.Atoi(fields[2])
-	if err != nil {
-		return stat{}, fmt.Errorf("procident: bad pgrp in /proc/%d/stat", pid)
-	}
-	return stat{state: fields[0][0], pgrp: pgrp, startTime: fields[19]}, nil
+	return stat{state: fields[0][0], startTime: fields[19]}, nil
 }
 
 func bootID() (string, error) {
@@ -60,25 +55,3 @@ func startOf(pid int) (string, error) {
 }
 
 func bootOf() (string, error) { return bootID() }
-
-func groupMembers(pgid int) ([]int, error) {
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return nil, err
-	}
-	var out []int
-	for _, e := range entries {
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil {
-			continue
-		}
-		s, err := readStat(pid)
-		if err != nil {
-			continue // it exited meanwhile
-		}
-		if s.pgrp == pgid && s.state != 'Z' && s.state != 'X' {
-			out = append(out, pid)
-		}
-	}
-	return out, nil
-}

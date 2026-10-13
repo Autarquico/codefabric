@@ -18,12 +18,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/gitbin"
+	"github.com/Autarquico/codefabric/internal/support/procgroup"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 )
 
@@ -159,17 +159,19 @@ type result struct {
 func (g *Git) run(ctx context.Context, c cmd) (result, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	p := exec.CommandContext(ctx, g.git, c.args...) //nolint:gosec // git is the located executable; arguments are built by this package
+	// The group of the child is ended by procgroup alone, never after its leader is reaped.
+	p := exec.Command(g.git, c.args...) //nolint:gosec,noctx // git is the located executable; arguments are built by this package; ctx goes to procgroup
 	p.Dir, p.Env = c.dir, c.env
-	p.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	p.Cancel = func() error { return syscall.Kill(-p.Process.Pid, syscall.SIGKILL) }
 	p.WaitDelay = killDelay
 	var out, errOut bytes.Buffer
 	p.Stdout, p.Stderr = &out, &boundedBuffer{buf: &errOut, max: stderrBytes}
 	if c.stdin != "" {
 		p.Stdin = strings.NewReader(c.stdin)
 	}
-	err := p.Run()
+	child, err := procgroup.Start(ctx, p)
+	if err == nil {
+		err = child.Wait()
+	}
 	res := result{stdout: out.String(), stderr: errOut.String()}
 	var exit *exec.ExitError
 	switch {
