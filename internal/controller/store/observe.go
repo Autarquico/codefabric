@@ -16,6 +16,8 @@ type TaskRef struct {
 	ID    domain.ID
 	Short uint64
 	Name  string
+	// Project is the Project the Task belongs to.
+	Project domain.ID
 }
 
 // PsRuns lists the Runs that `cf ps` shows: those that have not ended and
@@ -29,15 +31,15 @@ func PsRuns(ctx context.Context, q Querier) ([]Run, map[domain.ID]TaskRef, error
 	}
 	tasks, err := collect(ctx, q, func(row rowScanner) (TaskRef, error) {
 		var (
-			t  TaskRef
-			id string
+			t       TaskRef
+			id, prj string
 		)
-		if err := row.Scan(&id, &t.Short, &t.Name); err != nil {
+		if err := row.Scan(&id, &t.Short, &t.Name, &prj); err != nil {
 			return t, scanErr(err, "task")
 		}
-		t.ID = domain.ID(id)
+		t.ID, t.Project = domain.ID(id), domain.ID(prj)
 		return t, nil
-	}, `SELECT id, short_n, name FROM tasks WHERE id IN (SELECT task_id FROM runs WHERE `+live+`)`)
+	}, `SELECT id, short_n, name, project_id FROM tasks WHERE id IN (SELECT task_id FROM runs WHERE `+live+`)`)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -97,6 +97,7 @@ func (s *Service) view(w store.Worker) v1.Worker {
 		MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, ActiveRuns: w.ActiveRuns, Reservations: w.Reservations, Contribution: w.Settings,
 		Resources: w.Resources, Health: w.Health,
 		LastHeartbeatAt: w.LastHeartbeatAt, CreatedAt: w.CreatedAt, RemovedAt: w.RemovedAt,
+		SSHTarget: w.Report.SSHTarget, AttachBinaries: w.Report.AttachBinaries,
 	}
 }
 

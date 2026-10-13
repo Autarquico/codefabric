@@ -170,6 +170,7 @@ func New(c Config) (*Server, error) {
 		s.registerEventRoutes()
 	}
 	s.registerOutputRoutes()
+	s.registerObserveRoutes()
 	return s, nil
 }
 
