@@ -18,10 +18,13 @@ func members(pgid int) ([]int, error) {
 	return out, nil
 }
 
-func running(pid int) (bool, error) {
+func stateOf(pid int) leaderState {
 	info, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
-	if err != nil {
-		return false, err
+	switch {
+	case err != nil || info.Proc.P_pid != int32(pid): //nolint:gosec // a pid fits in an int32
+		return unknown
+	case info.Proc.P_stat == zombie:
+		return ended
 	}
-	return info.Proc.P_pid == int32(pid) && info.Proc.P_stat != zombie, nil //nolint:gosec // a pid fits in an int32
+	return running
 }

@@ -76,7 +76,8 @@ const DefaultIdleRead = 60 * time.Second
 // flight, whatever they are.
 const maxRequestsPerWorker = 2
 
-// killDelay is how long the pipes of a child are waited for once it ended.
+// killDelay is how long the pipes of a child may stay open once it ended,
+// before what holds them is killed with its group.
 const killDelay = 3 * time.Second
 
 var (
@@ -136,20 +137,17 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 	// The group of the child is ended by procgroup alone, never after its leader is reaped.
 	cmd := exec.Command(r.git, "http-backend") //nolint:gosec,noctx // git is the located executable; ctx goes to procgroup
 	cmd.Dir, cmd.Env = r.cfg.Dir, env
-	cmd.WaitDelay = killDelay
 	if body != nil {
 		cmd.Stdin = body
 	}
 	var stderr bytes.Buffer
-	cmd.Stderr = &boundedWriter{w: &stderr, max: stderrBytes}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("relay: pipe of http-backend: %w", err)
-	}
-	child, err := procgroup.Start(ctx, cmd)
+	child, err := procgroup.Start(ctx, cmd, procgroup.Options{
+		Stderr: &boundedWriter{w: &stderr, max: stderrBytes}, ReadStdout: true, Drain: killDelay,
+	})
 	if err != nil {
 		return fmt.Errorf("relay: starting http-backend: %w", err)
 	}
+	stdout := child.Stdout()
 	waited := false
 	wait := func() error {
 		waited = true

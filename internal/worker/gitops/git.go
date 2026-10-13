@@ -162,13 +162,13 @@ func (g *Git) run(ctx context.Context, c cmd) (result, error) {
 	// The group of the child is ended by procgroup alone, never after its leader is reaped.
 	p := exec.Command(g.git, c.args...) //nolint:gosec,noctx // git is the located executable; arguments are built by this package; ctx goes to procgroup
 	p.Dir, p.Env = c.dir, c.env
-	p.WaitDelay = killDelay
 	var out, errOut bytes.Buffer
-	p.Stdout, p.Stderr = &out, &boundedBuffer{buf: &errOut, max: stderrBytes}
 	if c.stdin != "" {
 		p.Stdin = strings.NewReader(c.stdin)
 	}
-	child, err := procgroup.Start(ctx, p)
+	child, err := procgroup.Start(ctx, p, procgroup.Options{
+		Stdout: &out, Stderr: &boundedBuffer{buf: &errOut, max: stderrBytes}, Drain: killDelay,
+	})
 	if err == nil {
 		err = child.Wait()
 	}

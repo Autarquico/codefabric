@@ -53,10 +53,13 @@ func members(pgid int) ([]int, error) {
 	return out, nil
 }
 
-func running(pid int) (bool, error) {
+func stateOf(pid int) leaderState {
 	state, _, err := stat(pid)
-	if err != nil {
-		return false, err
+	switch {
+	case err != nil:
+		return unknown
+	case live(state):
+		return running
 	}
-	return live(state), nil
+	return ended
 }
