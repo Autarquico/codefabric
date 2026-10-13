@@ -59,6 +59,7 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 			report := store.WorkerReport{
 				Epoch: req.Epoch, DaemonVersion: req.DaemonVersion, Hostname: req.Hostname,
 				OS: req.OS, Arch: req.Arch, Capabilities: req.Capabilities,
+				SSHTarget: req.SSHTarget, AttachBinaries: req.AttachBinaries,
 			}
 			// Free is not the Worker's to say, nor kept: it is read as Allocatable less the reservations.
 			resources := v1.WorkerResources{Total: req.Total, Allocatable: allocatable(req.Total, w.Settings)}
@@ -177,6 +178,13 @@ func validateHeartbeat(req v1.HeartbeatRequest) error {
 	}
 	if req.Health.Status != v1.HealthOK && req.Health.Status != v1.HealthDegraded {
 		checks = append(checks, input.Invalid("health.status must be ok or degraded"))
+	}
+	// Both end up in a command line of a client: nothing else than the grammar is kept.
+	if req.SSHTarget != "" && !domain.ValidSSHTarget(req.SSHTarget) {
+		checks = append(checks, input.Invalid("ssh_target must be [user@]host[:port], with an IPv6 address between brackets"))
+	}
+	if !domain.ValidAttachBinaries(req.AttachBinaries) {
+		checks = append(checks, input.Invalid("attach_binaries maps at most 4 runtime names to absolute paths without spaces or '..'"))
 	}
 	if len(req.Capabilities) > maxCapabilities {
 		checks = append(checks, input.Invalid("at most %d capabilities", maxCapabilities))

@@ -6,10 +6,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/pressly/goose/v3"
@@ -31,6 +33,9 @@ type Options struct {
 	Clock       clock.Clock         // defaults to clock.Real
 	IDs         *domain.IDGenerator // defaults to a generator on Clock and crypto/rand
 	ReaderConns int                 // defaults to 4
+	// Logger gets the debug line of a transaction that held the writer for
+	// long (see WithTx); it defaults to slog.Default().
+	Logger *slog.Logger
 
 	goMigrations []*goose.Migration // tests only: Go migrations to run after the embedded SQL
 }
@@ -42,8 +47,13 @@ type DB struct {
 	writer   *sql.DB
 	reader   *sql.DB
 	clock    clock.Clock
+	log      *slog.Logger
 	ids      *domain.IDGenerator
 	notifier *eventbus.Notifier
+	// output wakes the readers that follow the output of a Run. It carries a
+	// counter of this process: output has no sequence of its own.
+	output    *eventbus.Notifier
+	outputSeq atomic.Uint64
 
 	controllerID string
 }
@@ -60,9 +70,12 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 		return nil, fmt.Errorf("store: creating directory: %w", err)
 	}
 
-	db := &DB{path: abs, clock: opts.Clock, ids: opts.IDs, notifier: eventbus.NewNotifier()}
+	db := &DB{path: abs, log: opts.Logger, clock: opts.Clock, ids: opts.IDs, notifier: eventbus.NewNotifier(), output: eventbus.NewNotifier()}
 	if db.clock == nil {
 		db.clock = clock.Real{}
+	}
+	if db.log == nil {
+		db.log = slog.Default()
 	}
 	if db.ids == nil {
 		db.ids = domain.NewIDGenerator(db.clock.Now, rand.Reader)
@@ -175,6 +188,10 @@ func (db *DB) Reader() *sql.DB { return db.reader }
 
 // Notifier announces the highest committed event sequence.
 func (db *DB) Notifier() *eventbus.Notifier { return db.notifier }
+
+// OutputNotifier announces that the output of some Run changed: its mark is a
+// counter of this process, meaningful only to compare with itself.
+func (db *DB) OutputNotifier() *eventbus.Notifier { return db.output }
 
 // ControllerID is the identifier generated when the database was first created.
 func (db *DB) ControllerID() string { return db.controllerID }

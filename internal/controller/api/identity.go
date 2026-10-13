@@ -28,7 +28,12 @@ func (s *Server) registerRoutes() {
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	return decodeBodyUpTo(w, r, dst, maxBodyBytes)
+}
+
+// decodeBodyUpTo is decodeBody for an endpoint whose body is bigger than the common limit.
+func decodeBodyUpTo(w http.ResponseWriter, r *http.Request, dst any, limit int64) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return domain.NewError(domain.CodeInvalidRequest, "request body is not valid JSON for this endpoint", nil)

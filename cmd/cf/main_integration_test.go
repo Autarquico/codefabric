@@ -5,11 +5,6 @@ package main
 import (
 	"os"
 	"testing"
-
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/controller/daemon"
-	"github.com/Autarquico/codefabric/internal/controller/relay"
-	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
 )
 
 // asCF makes the test binary behave as `cf`: tests that need a daemon in a
@@ -20,6 +15,14 @@ import (
 const asCF = "CF_TEST_AS_CF"
 
 func TestMain(m *testing.M) {
+	// A binary built with -race sleeps a second before it exits, to let its
+	// reports out. The wrapper of every Run is this binary, so under -race a Run
+	// would end a second after its exit marker: a cost of the test build, not of
+	// cf. The children inherit it.
+	if os.Getenv("GORACE") == "" {
+		_ = os.Setenv("GORACE", "atexit_sleep_ms=0")
+	}
+
 	// A Controller in a process of its own runs the hook of the relay as itself,
 	// with an environment built from nothing: the arguments say it is cf.
 	hook := len(os.Args) > 3 && os.Args[1] == "relay" && os.Args[2] == "hook" && os.Args[3] == "pre-receive"
@@ -27,7 +30,7 @@ func TestMain(m *testing.M) {
 		if len(os.Args) > 2 && os.Args[1] == "worker" && os.Args[2] == "exec" {
 			_ = os.Unsetenv(asCF)
 		}
-		os.Exit(cli.Execute(daemon.Command(), workerdaemon.Command(), relay.Command()))
+		os.Exit(run())
 	}
 	os.Exit(m.Run())
 }

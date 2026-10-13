@@ -70,3 +70,13 @@ type Runtime interface {
 	// those whose name NameFor could have written.
 	List(ctx context.Context) ([]string, error)
 }
+
+// AttachBinaryProvider is implemented by a Runtime that sessions can be
+// attached to from another machine: it says which program attaches, as an
+// absolute path, because a non-interactive login on the machine has a PATH of
+// its own. runtime is the name that handles of this Runtime carry. Both are
+// empty when the Runtime cannot say (it was not checked, or the program is not
+// where an absolute, plain path can name it).
+type AttachBinaryProvider interface {
+	AttachBinary() (runtime, path string)
+}

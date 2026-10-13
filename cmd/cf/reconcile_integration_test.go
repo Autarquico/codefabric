@@ -171,14 +171,17 @@ func killRuns(t *testing.T, box config.Paths) {
 }
 
 // start runs the daemon of the machine with a short heartbeat, and waits for it to be online.
-func (b *reconcileBox) start() *daemonProcess {
+func (b *reconcileBox) start() *daemonProcess { return b.startWith() }
+
+// startWith is start with more arguments for `cf worker run`.
+func (b *reconcileBox) startWith(extra ...string) *daemonProcess {
 	b.t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		b.t.Fatal(err)
 	}
 	d := &daemonProcess{t: b.t, out: &syncBuffer{}, done: make(chan struct{})}
-	d.cmd = exec.CommandContext(context.WithoutCancel(b.t.Context()), exe, "worker", "run", "--heartbeat-interval", heartbeatEvery) //nolint:gosec // this very test binary
+	d.cmd = exec.CommandContext(context.WithoutCancel(b.t.Context()), exe, append([]string{"worker", "run", "--heartbeat-interval", heartbeatEvery}, extra...)...) //nolint:gosec // this very test binary
 	d.cmd.Env = append(os.Environ(), asCF+"=1", "CF_CONFIG_DIR="+b.box.ConfigDir, "CF_DATA_DIR="+b.box.DataDir)
 	d.cmd.Stdout, d.cmd.Stderr = d.out, d.out
 	if err := d.cmd.Start(); err != nil {

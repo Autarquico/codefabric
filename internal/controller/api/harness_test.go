@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,6 +51,7 @@ type testController struct {
 	logs      *logBuffer
 	owner     *client.Client
 	ownerDir  string
+	stop      func() // shuts the server down and waits for it; the cleanup does it too
 }
 
 // newController starts a Controller whose Authority clock begins at start.
@@ -116,12 +118,16 @@ func buildController(t *testing.T, start time.Time, routes func(*api.Server), gi
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(ctx, ln) }()
-	t.Cleanup(func() {
-		cancel()
-		if err := <-done; err != nil {
-			t.Errorf("Serve: %v", err)
-		}
-	})
+	var stopOnce sync.Once
+	tc.stop = func() {
+		stopOnce.Do(func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Errorf("Serve: %v", err)
+			}
+		})
+	}
+	t.Cleanup(tc.stop)
 
 	tc.ownerDir = filepath.Join(dir, "owner", "credentials")
 	tc.owner = tc.bootstrap(tc.ownerDir)

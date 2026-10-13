@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // EventType lists the minimum events of §20.1.
 type EventType string
@@ -112,4 +115,34 @@ type Event struct {
 	WorkflowID    ID
 	Message       string
 	Data          map[string]any
+}
+
+// Event levels, from the least to the most severe (§20.2).
+const (
+	LevelDebug = "debug"
+	LevelInfo  = "info"
+	LevelWarn  = "warn"
+	LevelError = "error"
+)
+
+var levels = []string{LevelDebug, LevelInfo, LevelWarn, LevelError}
+
+// ValidLevel reports whether level is one of the four event levels.
+func ValidLevel(level string) bool { return slices.Contains(levels, level) }
+
+// LevelAtLeast reports whether level is as severe as floorLevel or more. A level
+// that is not one of the four is never at least anything.
+func LevelAtLeast(level, floorLevel string) bool {
+	rank, floor := slices.Index(levels, level), slices.Index(levels, floorLevel)
+	return rank >= 0 && floor >= 0 && rank >= floor
+}
+
+// LevelsFrom lists the levels that are as severe as floorLevel or more, least
+// severe first; none if floorLevel is not a level.
+func LevelsFrom(floorLevel string) []string {
+	i := slices.Index(levels, floorLevel)
+	if i < 0 {
+		return nil
+	}
+	return slices.Clone(levels[i:])
 }

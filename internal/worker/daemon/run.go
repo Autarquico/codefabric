@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"os/user"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -24,6 +25,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/journal"
+	"github.com/Autarquico/codefabric/internal/worker/outputship"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
@@ -52,7 +54,16 @@ type Options struct {
 	StopGrace time.Duration
 	// GitPath replaces the git found on the PATH, for tests.
 	GitPath string
+	// SSHTarget is how clients reach this machine to attach to a session
+	// ([user@]host[:port]). Empty announces <user>@<hostname> when that is a
+	// valid target; "none" announces nothing, and the Runs cannot be attached.
+	SSHTarget string
+	// OutputInterval replaces the second between the passes that send output, for tests.
+	OutputInterval time.Duration
 }
+
+// NoSSHTarget is the value of Options.SSHTarget that announces none.
+const NoSSHTarget = "none"
 
 // Run sends a heartbeat now and then every Interval until ctx ends, and returns
 // nil when it does. Each Run is a new instance of the daemon: it has an epoch
@@ -104,6 +115,15 @@ func Run(ctx context.Context, o Options) error {
 	if d.log == nil {
 		d.log = slog.Default()
 	}
+	switch o.SSHTarget {
+	case "", NoSSHTarget:
+		d.sshTarget, d.defaultSSH = "", o.SSHTarget == ""
+	default:
+		if !domain.ValidSSHTarget(o.SSHTarget) {
+			return domain.NewError(domain.CodeInvalidRequest, "--ssh-target must be [user@]host[:port], or none", nil)
+		}
+		d.sshTarget = o.SSHTarget
+	}
 
 	db, err := state.Open(ctx, o.Paths.WorkerStateFile())
 	if err != nil {
@@ -131,6 +151,11 @@ func Run(ctx context.Context, o Options) error {
 	for _, l := range launchers {
 		d.capabilities = append(d.capabilities, "harness:"+l.ID())
 	}
+	if p, ok := eo.Runtime.(cfruntime.AttachBinaryProvider); ok {
+		if name, path := p.AttachBinary(); name != "" {
+			d.attachBinaries = map[string]string{name: path}
+		}
+	}
 	d.onResponse = func(r v1.HeartbeatResponse) {
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
 		if r.ReconcileRequired && ex.Reconciled() {
@@ -149,6 +174,10 @@ func Run(ctx context.Context, o Options) error {
 	g.Go(func() error { return d.loop(gctx) })
 	g.Go(func() error { return ex.Run(gctx) })
 	g.Go(func() error { return sender.Run(gctx) })
+	shipper := outputship.New(outputship.Options{
+		DB: db, Uploader: c, Paths: o.Paths, Clock: d.clock, Log: d.log, Interval: o.OutputInterval,
+	})
+	g.Go(func() error { return shipper.Run(gctx) })
 	return g.Wait()
 }
 
@@ -190,6 +219,9 @@ type daemon struct {
 	clock    clock.Clock
 
 	capabilities   []string
+	sshTarget      string            // what clients attach through; "" announces none
+	defaultSSH     bool              // announce <user>@<hostname>
+	attachBinaries map[string]string // runtime name to the absolute path that attaches
 	onResponse     func(v1.HeartbeatResponse)
 	executorHealth func() v1.Health
 
@@ -244,7 +276,27 @@ func (d *daemon) beat(ctx context.Context) (v1.HeartbeatResponse, error) {
 		Capabilities: d.capabilities,
 		Total:        v1.Capacity{CPU: info.CPU, MemoryMB: info.MemoryMB, DiskMB: info.DiskMB},
 		Health:       health,
+		SSHTarget:    d.announcedSSHTarget(info.Hostname), AttachBinaries: d.attachBinaries,
 	})
+}
+
+// announcedSSHTarget is the target the heartbeat carries. The default is the
+// user of the daemon at the hostname the machine reports, which is a guess that
+// other machines may not resolve: `cf worker show` lets a person see it, and a
+// client can override it. It is only announced if it is a valid target.
+func (d *daemon) announcedSSHTarget(hostname string) string {
+	if !d.defaultSSH {
+		return d.sshTarget
+	}
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	guess := u.Username + "@" + hostname
+	if !domain.ValidSSHTarget(guess) {
+		return ""
+	}
+	return guess
 }
 
 // measureMachine is what the machine has and how healthy the daemon says it is.

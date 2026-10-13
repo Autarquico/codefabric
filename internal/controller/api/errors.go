@@ -28,6 +28,12 @@ var statusByCode = map[domain.Code]int{
 	domain.CodeHarnessUnavailable:  http.StatusConflict,
 	domain.CodeVersionIncompatible: http.StatusConflict,
 	domain.CodeNotImplemented:      http.StatusNotImplemented,
+	domain.CodeRunNotAttachable:    http.StatusConflict,
+	domain.CodeCursorExpired:       http.StatusConflict,
+	domain.CodeInProgress:          http.StatusTooManyRequests,
+	// Only a Controller that is shutting down says it: the stream a client asks
+	// for now would be cut at once.
+	domain.CodeControllerUnreachable: http.StatusServiceUnavailable,
 }
 
 // writeError renders err as the {error:{code,message,details}} envelope. Only

@@ -91,7 +91,10 @@ func newJoinCmd() *cobra.Command {
 }
 
 func newRunCmd() *cobra.Command {
-	var interval time.Duration
+	var (
+		interval  time.Duration
+		sshTarget string
+	)
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run the Worker daemon until interrupted",
@@ -105,12 +108,14 @@ func newRunCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return Run(ctx, Options{
-				Paths: paths, Controller: controller, Interval: interval,
+				Paths: paths, Controller: controller, Interval: interval, SSHTarget: sshTarget,
 				Logger: slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil)),
 			})
 		},
 	}
 	// Tests of a run_lost_timeout of seconds need heartbeats closer than Appendix A's.
+	cmd.Flags().StringVar(&sshTarget, "ssh-target", "",
+		"how clients reach this machine to attach to a Run, [user@]host[:port] (default: <user>@<hostname>; none: attach is not offered)")
 	cmd.Flags().DurationVar(&interval, "heartbeat-interval", 0, "time between heartbeats (default: that of Appendix A)")
 	_ = cmd.Flags().MarkHidden("heartbeat-interval")
 	return cmd

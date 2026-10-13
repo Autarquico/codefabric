@@ -205,13 +205,18 @@ type Run struct {
 	Publication             domain.Publication `json:"publication"`
 	Evaluation              domain.Evaluation  `json:"evaluation"`
 	Runtime                 domain.Runtime     `json:"runtime"`
+	Mode                    domain.Mode        `json:"mode"`
 	Promoted                bool               `json:"promoted"`
 	WorkerID                string             `json:"worker_id,omitempty"`
-	Lease                   *RunLease          `json:"lease,omitempty"`
-	CreatedAt               time.Time          `json:"created_at"`
-	StartedAt               *time.Time         `json:"started_at,omitempty"`
-	FinishedAt              *time.Time         `json:"finished_at,omitempty"`
-	Spec                    json.RawMessage    `json:"spec,omitempty"`
+	// WorkerReachable is derived (§3.4): the Worker is neither offline nor
+	// removed. It is null while the Run has no Worker, and says nothing of
+	// whether ssh would get through.
+	WorkerReachable *bool           `json:"worker_reachable"`
+	Lease           *RunLease       `json:"lease,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	StartedAt       *time.Time      `json:"started_at,omitempty"`
+	FinishedAt      *time.Time      `json:"finished_at,omitempty"`
+	Spec            json.RawMessage `json:"spec,omitempty"`
 }
 
 // ListRunsResponse is GET /v1/runs.

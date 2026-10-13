@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/journal"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -39,6 +41,8 @@ var ErrAborted = errors.New("executor: the Run was aborted before it started")
 // Timings of the executor, all on its clock.
 const (
 	tick            = time.Second
+	exitTick        = 250 * time.Millisecond // how soon a Run that left its exit marker is looked at again
+	exitLooks       = 8                      // how many times: two seconds
 	assignWait      = 20 * time.Second
 	retryInitial    = time.Second
 	retryMax        = 10 * time.Second
@@ -285,8 +289,10 @@ func (e *Executor) Run(ctx context.Context) error {
 
 // supervise watches one Run until it is over.
 func (e *Executor) supervise(ctx context.Context, k state.Key) {
-	ticker := e.clock.NewTicker(tick)
+	ticker, quick := e.clock.NewTicker(tick), e.clock.NewTicker(exitTick)
+	quickC, sightings := quick.C(), 0
 	defer ticker.Stop()
+	defer quick.Stop()
 	defer func() {
 		e.mu.Lock()
 		if m := e.memos[k]; m != nil {
@@ -298,10 +304,27 @@ func (e *Executor) supervise(ctx context.Context, k state.Key) {
 		if e.step(ctx, k) || ctx.Err() != nil {
 			return
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C():
+		// The full look costs a call to the Runtime. The end of a harness is
+		// announced by a file, which a stat finds at a quarter of the price, so
+		// the Controller hears of it a fraction of a tick after it happens. Once
+		// the marker has been seen a few times (the wrapper is still ending on
+		// the first), the ordinary tick takes over: a Run whose marker stays (one
+		// being stopped, one unverified) is not looked at in full four times a second.
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C():
+				break wait
+			case <-quickC:
+				if fileExists(filepath.Join(e.runDir(k), execwrap.ExitFile)) {
+					if sightings++; sightings >= exitLooks {
+						quickC = nil
+					}
+					break wait
+				}
+			}
 		}
 	}
 }
@@ -368,4 +391,10 @@ func reportable(msg string) string {
 		cut--
 	}
 	return msg[:cut]
+}
+
+// fileExists says whether a marker file is there.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

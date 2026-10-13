@@ -212,8 +212,9 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]v1.Run, error) {
 			}
 		}
 		rows, err := store.Runs(ctx, q, filter)
+		reach := reachCache{}
 		for _, r := range rows {
-			v, verr := s.viewOf(ctx, q, r, false)
+			v, verr := s.viewWith(ctx, q, r, false, reach)
 			if verr != nil {
 				return verr
 			}
@@ -247,6 +248,25 @@ func shortID(n uint64) string { return domain.ShortID{Kind: domain.KindRun, N: n
 // viewOf is view with the branch of a Run that has none stored, which are those
 // created before it was: the same rule that froze it for the others.
 func (s *Service) viewOf(ctx context.Context, q store.Querier, r store.Run, withSpec bool) (v1.Run, error) {
+	return s.viewWith(ctx, q, r, withSpec, reachCache{})
+}
+
+// reachCache remembers whether the Workers a listing meets are reachable.
+type reachCache map[domain.ID]bool
+
+func (c reachCache) of(ctx context.Context, q store.Querier, id domain.ID) (bool, error) {
+	if reach, ok := c[id]; ok {
+		return reach, nil
+	}
+	w, err := store.WorkerByID(ctx, q, id)
+	if err != nil {
+		return false, err
+	}
+	c[id] = w.State.Reachable()
+	return c[id], nil
+}
+
+func (s *Service) viewWith(ctx context.Context, q store.Querier, r store.Run, withSpec bool, reach reachCache) (v1.Run, error) {
 	if r.Branch == "" {
 		task, err := store.TaskByID(ctx, q, r.TaskID)
 		if err != nil {
@@ -254,7 +274,26 @@ func (s *Service) viewOf(ctx context.Context, q store.Querier, r store.Run, with
 		}
 		r.Branch = branchOf(task, r)
 	}
-	return view(r, withSpec), nil
+	out := view(r, withSpec)
+	if r.WorkerID != "" {
+		reachable, err := reach.of(ctx, q, r.WorkerID)
+		if err != nil {
+			return v1.Run{}, err
+		}
+		out.WorkerReachable = &reachable
+	}
+	return out, nil
+}
+
+// specMode is the mode a Run froze (§7.4), "" if its spec says none.
+func specMode(spec []byte) domain.Mode {
+	var doc struct {
+		Mode domain.Mode `json:"mode"`
+	}
+	if json.Unmarshal(spec, &doc) != nil {
+		return ""
+	}
+	return doc.Mode
 }
 
 // branchOf is the branch of a Run: the frozen one, or the one the rule gives.
@@ -268,7 +307,7 @@ func view(r store.Run, withSpec bool) v1.Run {
 		State: r.State, EndReason: r.EndReason, ExitCode: r.ExitCode, QueuedReason: r.QueuedReason, Lineage: r.Lineage,
 		LineageParent: string(r.LineageParent),
 		SpecDigest:    r.SpecDigest, SourceCommit: r.SourceCommit, Publication: r.Publication,
-		Evaluation: r.Evaluation, Runtime: r.Runtime, Promoted: r.Promoted, WorkerID: string(r.WorkerID),
+		Evaluation: r.Evaluation, Runtime: r.Runtime, Mode: specMode(r.Spec), Promoted: r.Promoted, WorkerID: string(r.WorkerID),
 		CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
 		Branch: r.Branch, ResultCommit: r.ResultCommit, ResultExcluded: r.ResultExcluded, ResultExcludedTruncated: r.ResultExcludedTruncated,
 	}

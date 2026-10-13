@@ -28,10 +28,23 @@ const (
 	flagDebug      = "debug"
 )
 
+// Options are what the binary composes into the CLI that the CLI cannot reach
+// itself (ADR 0001): only cmd/cf may know the adapters.
+type Options struct {
+	// Terminal opens the session of a Run in this terminal (`cf attach`). Without
+	// one, attach answers CF_NOT_IMPLEMENTED once the Controller has answered.
+	Terminal Terminal
+}
+
 // Execute runs the cf command tree, plus any extra top-level commands the
 // binary composes in (the daemon commands, ADR 0001), and returns the exit code.
-func Execute(extra ...*cobra.Command) int {
-	return Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, extra...)
+func Execute(extra ...*cobra.Command) int { return ExecuteWith(Options{}, extra...) }
+
+// ExecuteWith is Execute with the composition of the binary.
+func ExecuteWith(opts Options, extra ...*cobra.Command) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return RunContextWith(ctx, opts, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, extra...)
 }
 
 // Run is Execute over explicit streams.
@@ -44,7 +57,12 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, extra ...*cob
 // RunContext is Run under a context the caller ends: commands that run until
 // interrupted stop when ctx does, whatever the process gets.
 func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, extra ...*cobra.Command) int {
-	root := newRootCmd()
+	return RunContextWith(ctx, Options{}, args, stdin, stdout, stderr, extra...)
+}
+
+// RunContextWith is RunContext with the composition of the binary.
+func RunContextWith(ctx context.Context, opts Options, args []string, stdin io.Reader, stdout, stderr io.Writer, extra ...*cobra.Command) int {
+	root := newRootCmd(opts)
 	addCommands(root, extra)
 	root.SetArgs(args)
 	root.SetIn(stdin)
@@ -135,7 +153,7 @@ func printable(s string) string {
 	}, s)
 }
 
-func newRootCmd() *cobra.Command {
+func newRootCmd(opts Options) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "cf",
 		Short:         "CodeFabric: run coding agents across a pool of machines",
@@ -147,7 +165,8 @@ func newRootCmd() *cobra.Command {
 	flags.String(flagController, "", "host:port of the Controller for this run, instead of the one stored at connect time")
 	flags.Bool(flagDebug, false, "show the details of an error")
 	root.AddCommand(newVersionCmd(), newStatusCmd(), newConnectCmd(), newClientCmd(), newConfigCmd(),
-		newProjectCmd(), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd())
+		newProjectCmd(), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd(),
+		newAttachCmd(opts.Terminal), newPsCmd(), newEventsCmd(), newLogsCmd())
 	return root
 }
 

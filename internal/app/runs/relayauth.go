@@ -98,16 +98,29 @@ type relayChain struct {
 // Worker's own and accepted, and the Task must not be archived. The Run may be
 // terminal: finishing the publication is what the relay is for (§16.8).
 func resolveChain(ctx context.Context, q store.Querier, by pki.Session, now time.Time, run domain.ID, epoch uint64) (relayChain, error) {
-	if _, err := pki.RequireCaller(ctx, q, by, now); err != nil {
-		return relayChain{}, err
-	}
-	w, err := store.WorkerByIdentity(ctx, q, by.Principal.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		return relayChain{}, domain.NewError(domain.CodeUnauthenticated, "this identity is not a Worker", nil)
-	}
+	w, err := workerOfCaller(ctx, q, by, now)
 	if err != nil {
 		return relayChain{}, err
 	}
+	return resolveLease(ctx, q, w, run, epoch)
+}
+
+// workerOfCaller authorises the caller and finds the Worker its identity stands for.
+func workerOfCaller(ctx context.Context, q store.Querier, by pki.Session, now time.Time) (store.Worker, error) {
+	if _, err := pki.RequireCaller(ctx, q, by, now); err != nil {
+		return store.Worker{}, err
+	}
+	w, err := store.WorkerByIdentity(ctx, q, by.Principal.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Worker{}, domain.NewError(domain.CodeUnauthenticated, "this identity is not a Worker", nil)
+	}
+	return w, err
+}
+
+// resolveLease is the rest of the chain, for a Worker already known: the lease
+// is the exact (run, epoch), the Worker's own and accepted, and the Task is not
+// archived. A caller with many leases to resolve authorises itself once.
+func resolveLease(ctx context.Context, q store.Querier, w store.Worker, run domain.ID, epoch uint64) (relayChain, error) {
 	l, err := store.LeaseByRunEpoch(ctx, q, run, epoch)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && l.WorkerID != w.ID) {
 		return relayChain{}, domain.NewError(domain.CodeNotFound, "lease not found", nil)

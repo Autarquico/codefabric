@@ -6,14 +6,14 @@ status: active
 priority: P0
 size: M
 issue: 14
-prs: []
+prs: [38]
 related_issues: [14]
 sub_issues: []
 depends_on: [worker-executor-tmux]
 supersedes: []
 related_specs: [codefabric-spec, phase-1-workers]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-13
 ---
 
 # Observación: attach, ps, eventos y output
@@ -69,6 +69,10 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+
+## Decisiones de implementación
+
+Las decisiones de este milestone (cursor y techo en un snapshot, ciclo de vida de SSE, output en lotes con anillo de SQLite, attach con override de confianza, matriz de autorización y riesgos residuales) están en el Apéndice B5 de `docs/codefabric-spec.md`, bajo el marcador `#14`.
 
 ## Referencias
 

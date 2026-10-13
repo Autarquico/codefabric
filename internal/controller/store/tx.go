@@ -4,9 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
 )
+
+// holdLogThreshold is how long a transaction may hold the single writer before
+// it is worth a debug line: everything else waits behind it.
+const holdLogThreshold = 100 * time.Millisecond
 
 // Tx is the single write transaction (§27.4): state, events, audit and
 // idempotency keys written through it commit or vanish together.
@@ -14,6 +19,7 @@ type Tx struct {
 	db     *DB
 	tx     *sql.Tx
 	maxSeq uint64 // highest event sequence inserted by this transaction
+	output bool   // the transaction changed the output of a Run
 }
 
 // WithTx runs fn inside BEGIN IMMEDIATE on the writer. It commits when fn
@@ -30,6 +36,7 @@ func (db *DB) WithTx(ctx context.Context, fn func(*Tx) error) error {
 		return fmt.Errorf("store: beginning transaction: %w", err)
 	}
 	tx := &Tx{db: db, tx: sqlTx}
+	acquired := time.Now() // real time: this measures the writer, it decides nothing
 
 	committed := false
 	defer func() {
@@ -45,9 +52,15 @@ func (db *DB) WithTx(ctx context.Context, fn func(*Tx) error) error {
 		return fmt.Errorf("store: committing transaction: %w", err)
 	}
 	committed = true
+	if held := time.Since(acquired); held > holdLogThreshold {
+		db.log.Debug("store: a transaction held the writer", "held", held)
+	}
 
 	if tx.maxSeq > 0 {
 		db.notifier.Notify(tx.maxSeq)
+	}
+	if tx.output {
+		db.output.Notify(db.outputSeq.Add(1))
 	}
 	return nil
 }

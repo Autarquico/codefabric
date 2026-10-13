@@ -169,3 +169,16 @@ func TestWorkerTransitions_InconsistentBeforeOfflineIsInvalid(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerStateReachable(t *testing.T) {
+	for _, s := range []WorkerState{WorkerJoining, WorkerOnline, WorkerDegraded, WorkerDraining, WorkerDrained} {
+		if !s.Reachable() {
+			t.Errorf("%s is not reachable", s)
+		}
+	}
+	for _, s := range []WorkerState{WorkerOffline, WorkerRemoved} {
+		if s.Reachable() {
+			t.Errorf("%s is reachable", s)
+		}
+	}
+}
