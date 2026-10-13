@@ -182,10 +182,15 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 	return o, nil
 }
 
+// mergeBelow is the size under which the last chunk of an output takes what
+// follows it. Filling it up to a whole chunk would rewrite up to 64 KiB for every
+// byte a Worker sends; this way a rewrite is at most 8 KiB, and a lease has about
+// 128 rows at most (1 MiB in chunks of 8 KiB) whatever the size of what is sent.
+const mergeBelow = 8 << 10
+
 // appendChunks adds data at offset, which is the end of the output. A last chunk
-// that is not full is filled first, so that the rows of a lease are about
-// one per 64 KiB whatever the size of what the Worker sends (a Worker that sends
-// a byte at a time must not make a row of each).
+// under mergeBelow is filled first (a Worker that sends a byte at a time must
+// not make a row of each).
 func (t *Tx) appendChunks(ctx context.Context, run domain.ID, epoch, offset uint64, data []byte) error {
 	var (
 		lastOffset uint64
@@ -198,7 +203,7 @@ func (t *Tx) appendChunks(ctx context.Context, run domain.ID, epoch, offset uint
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return fmt.Errorf("store: finding the last chunk: %w", err)
-	case lastLen < v1.OutputChunkBytes && lastOffset+uint64(lastLen) == offset: //nolint:gosec // length() of a chunk is not negative
+	case lastLen < mergeBelow && lastOffset+uint64(lastLen) == offset: //nolint:gosec // length() of a chunk is not negative
 		fill := min(len(data), v1.OutputChunkBytes-lastLen)
 		if _, err := t.Exec(ctx, `UPDATE run_output_chunks SET data = CAST(data || ? AS BLOB) WHERE run_id = ? AND lease_epoch = ? AND chunk_offset = ?`,
 			data[:fill], string(run), epoch, lastOffset); err != nil {

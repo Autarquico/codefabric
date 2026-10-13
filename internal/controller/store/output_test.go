@@ -309,8 +309,8 @@ func TestAppendOutput_ByteAtATimeAppendsFillTheLastChunk(t *testing.T) {
 		t.Fatal(err)
 	}
 	var rows int
-	if err := f.db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM run_output_chunks WHERE run_id = ?`, string(run)).Scan(&rows); err != nil || rows != 2 {
-		t.Fatalf("%d rows for %d one-byte appends: %v", rows, n, err)
+	if err := f.db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM run_output_chunks WHERE run_id = ?`, string(run)).Scan(&rows); err != nil || rows < 8 || rows > 10 {
+		t.Fatalf("%d rows for %d one-byte appends (want about one per 8 KiB): %v", rows, n, err)
 	}
 	if o, data := f.held(run, 1); o.End != n || !bytes.Equal(data, want) {
 		t.Fatalf("held %d bytes, end %d: the content is not what was sent", len(data), o.End)

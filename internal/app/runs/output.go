@@ -45,7 +45,12 @@ func (s *Service) AppendOutput(ctx context.Context, by pki.Session, batch v1.Out
 	}
 	out := v1.OutputBatchResponse{Acks: make([]v1.OutputAck, 0, len(batch.Entries))}
 	entries := batch.Entries
-	for first := true; first || len(entries) > 0; first = false {
+	if len(entries) == 0 {
+		// Nothing to apply, but the caller is still authorised: a transaction that does only that.
+		_, err := s.appendSome(ctx, by, nil)
+		return out, err
+	}
+	for len(entries) > 0 {
 		n, size := 0, 0
 		for n < len(entries) && n < outputTxEntries && (n == 0 || size+len(entries[n].Data) <= outputTxBytes) {
 			size += len(entries[n].Data)
