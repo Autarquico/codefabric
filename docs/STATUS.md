@@ -26,7 +26,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_(nada)_
+- #13 Stop, cancel, lost y reconciliación
 <!-- /pm-sync:in-progress -->
 
 ---
