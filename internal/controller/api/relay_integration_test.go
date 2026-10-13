@@ -234,8 +234,12 @@ func TestOrphanRefIsOnlyCreatedAtTheSealedCommitWithItsOwnToken(t *testing.T) {
 	f := newRelayFixture(t)
 	ctx := t.Context()
 	run := domain.ID(f.run.ID)
-	// The Controller detected an orphan of alpha under the lease's epoch.
+	// The Run moved on to a later epoch, and the Controller detected an orphan of
+	// alpha under the one before: the live lease of a Run is never an orphan's.
 	must(t, f.db.WithTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET lease_epoch = lease_epoch + 1 WHERE id = ?`, string(run)); err != nil {
+			return err
+		}
 		_, err := tx.InsertOrphan(ctx, mustWorker(t, f), run, f.assign.Epoch, time.Now())
 		return err
 	}))
