@@ -76,8 +76,12 @@ const DefaultIdleRead = 60 * time.Second
 // flight, whatever they are.
 const maxRequestsPerWorker = 2
 
-// killDelay is how long the pipes of a killed child are waited for.
+// killDelay is how long the pipes of a killed child are waited for, and how
+// long what is left of its group is swept.
 const killDelay = 3 * time.Second
+
+// sweepInterval is the pause between two kills of the sweep of a group.
+const sweepInterval = 10 * time.Millisecond
 
 var (
 	protocolHeader = regexp.MustCompile(`^version=[012]$`)
@@ -155,25 +159,27 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 		waited = true
 		return cmd.Wait()
 	}
+	abort := func() {
+		cancel()
+		_ = wait()
+		sweepGroup(cmd.Process.Pid)
+	}
 	defer func() {
 		if !waited {
-			cancel()
-			_ = wait()
+			abort()
 		}
 	}()
 
 	br := bufio.NewReaderSize(stdout, 64<<10)
 	header, err := textproto.NewReader(br).ReadMIMEHeader()
 	if err != nil {
-		cancel()
-		_ = wait()
+		abort()
 		r.logChild(ep, g, stderr.String(), err)
 		return fmt.Errorf("relay: reading the answer of http-backend: %w", err)
 	}
 	status, err := cgiStatus(header)
 	if err != nil {
-		cancel()
-		_ = wait()
+		abort()
 		return err
 	}
 	for _, name := range responseHeaders {
@@ -186,14 +192,28 @@ func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g G
 	if copyErr != nil || ctx.Err() != nil {
 		// The peer went away, or the deadline passed: the answer is cut and the
 		// child is gone with its group. The connection must not look complete.
-		cancel()
-		_ = wait()
+		abort()
 		r.logChild(ep, g, stderr.String(), errors.Join(copyErr, ctx.Err()))
 		panic(http.ErrAbortHandler)
 	}
 	waitErr := wait()
 	r.logChild(ep, g, stderr.String(), waitErr)
 	return nil
+}
+
+// sweepGroup kills what is left of the group of a child that was killed and
+// reaped. One kill of a group is not enough: a member that is forking when it
+// lands may give birth to a child the signal missed (macOS does), and that
+// child lives on in the group, with its pipes. While anyone is in the group its
+// ID is not given to another process, so the sweep only reaches what the child
+// left behind; it stops at the first sign that no live member is left
+// (ESRCH, or EPERM when only zombies remain) and gives up after killDelay.
+func sweepGroup(pgid int) {
+	for deadline := time.Now().Add(killDelay); time.Now().Before(deadline); time.Sleep(sweepInterval) {
+		if syscall.Kill(-pgid, syscall.SIGKILL) != nil {
+			return
+		}
+	}
 }
 
 // acquire takes the slots a request needs: one of the relay's, one of the

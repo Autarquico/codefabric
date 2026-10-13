@@ -299,6 +299,11 @@ func fillExit(en *v1.RunReportEntry, f facts) {
 		en.Cause, en.Message = v1.ExitCauseWrapperLost, f.message
 	case f.exit != nil:
 		en.ExitCode, en.Signal, en.Cause, en.Message = f.exit.ExitCode, f.exit.Signal, f.exit.Cause, cmp.Or(f.exit.Error, f.message)
+		if f.ordered && f.exit.Signal != "" && f.exit.Cause == v1.ExitCauseExit {
+			// A harness that a signal killed while a stop was ordered ended by the stop,
+			// whatever the wrapper made of it.
+			en.Cause = v1.ExitCauseStop
+		}
 	default:
 		en.Cause, en.Message = v1.ExitCauseExit, f.message
 	}

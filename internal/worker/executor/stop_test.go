@@ -12,6 +12,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -181,5 +182,25 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A harness that a signal killed while a stop was ordered ended by the stop,
+// whatever cause its wrapper wrote.
+func TestAHarnessKilledBySignalUnderAStopEndedByTheStop(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("echo hi")
+	must(t, f.e.Stop(t.Context(), k.RunID, k.LeaseEpoch, "cancel", SourceController))
+	w := newWrapperProcess(t, "exit 0")
+	<-w.ended
+	f.writeWrapper(k, w.w)
+	f.writeStarted(k, w.w, t0)
+	f.writeExit(k, execwrap.Exit{Signal: "SIGTERM", ExitedAt: t0.Add(time.Second), Cause: execwrap.CauseExit})
+	waitFor(t, "the Run to be settled", func() bool { return f.e.step(t.Context(), k) })
+	reports := f.reports(k)
+	for _, r := range reports {
+		if r.Kind == v1.ReportExited && (r.Cause != v1.ExitCauseStop || r.Signal != "SIGTERM") {
+			t.Errorf("exited = %+v", r)
+		}
 	}
 }

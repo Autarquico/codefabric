@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -133,6 +134,10 @@ type reconcileBox struct {
 	host  config.Paths
 	box   config.Paths
 	admin *client.Client
+	// daemon is the daemon last started, and controller the Controller process
+	// of the test if it has one: what they said is what a failed wait shows.
+	daemon     *daemonProcess
+	controller *controllerProcess
 }
 
 func newReconcileBox(t *testing.T, host config.Paths, joinArgs ...string) *reconcileBox {
@@ -187,6 +192,7 @@ func (b *reconcileBox) start() *daemonProcess {
 		_ = d.cmd.Process.Kill()
 		<-d.done
 	})
+	b.daemon = d
 	eventually(b.t, "the Worker to be online and offer the harness", func() bool {
 		w, err := b.admin.Worker(b.t.Context(), "alpha")
 		return err == nil && w.State == domain.WorkerOnline && len(w.Capabilities) == 1
@@ -204,13 +210,70 @@ func (b *reconcileBox) running(prompt string) v1.CreateTaskResponse {
 	return created
 }
 
+// readyStall is how long the way of a Run to a ready harness may show no sign
+// of progress, and readyCap how long it may take in all. The way is long: the
+// assignment, the accept, a fetch from the relay, a worktree, a tmux session and
+// two execs of this binary, all under -race and, on CI, beside the whole
+// integration suite. A stall is a hang; a slow way is not.
+const (
+	readyStall = 30 * time.Second
+	readyCap   = 2 * time.Minute
+)
+
+// waitRunning waits for the harness of run to be ready, then for the
+// Controller to have the Run running. A wait that fails says where the Run
+// stood and what the daemons said.
 func (b *reconcileBox) waitRunning(run string) {
 	b.t.Helper()
-	eventually(b.t, "the harness to be ready", func() bool { return fileExists(filepath.Join(b.box.WorkerWorktreeDir(run, 1), "ready")) })
+	ready := filepath.Join(b.box.WorkerWorktreeDir(run, 1), "ready")
+	stage, start, since := "", time.Now(), time.Now()
+	for !fileExists(ready) {
+		if now := b.stage(run); now != stage {
+			stage, since = now, time.Now()
+		}
+		if time.Since(since) > readyStall || time.Since(start) > readyCap {
+			b.t.Fatalf("timed out waiting for the harness to be ready, after %v; the Run stood at %s\n%s",
+				time.Since(start).Round(time.Millisecond), stage, b.logs())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	eventually(b.t, "the Run to be running", func() bool {
 		r, err := b.admin.Run(b.t.Context(), run)
 		return err == nil && r.State == domain.RunRunning && r.Runtime == domain.RuntimeActive
 	})
+}
+
+// stage is what can be seen of the way of run to its harness: the Run as the
+// Controller has it, and what the Worker has made of it on disk.
+func (b *reconcileBox) stage(run string) string {
+	var at strings.Builder
+	if r, err := b.admin.Run(b.t.Context(), run); err != nil {
+		fmt.Fprintf(&at, "run: %v", err)
+	} else {
+		fmt.Fprintf(&at, "state=%s runtime=%s queued_reason=%q worker=%q", r.State, r.Runtime, r.QueuedReason, r.WorkerID)
+		if r.Lease != nil {
+			fmt.Fprintf(&at, " lease=%s epoch=%d", r.Lease.State, r.Lease.Epoch)
+		}
+	}
+	entries, _ := os.ReadDir(b.box.WorkerRunDir(run, 1))
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	fmt.Fprintf(&at, " run_dir=%v worktree=%t", names, fileExists(b.box.WorkerWorktreeDir(run, 1)))
+	return at.String()
+}
+
+// logs is what the daemon and the Controller process of the test said.
+func (b *reconcileBox) logs() string {
+	var out strings.Builder
+	if b.daemon != nil {
+		fmt.Fprintf(&out, "--- worker daemon:\n%s\n", b.daemon.out.String())
+	}
+	if b.controller != nil {
+		fmt.Fprintf(&out, "--- controller:\n%s\n", b.controller.out.String())
+	}
+	return out.String()
 }
 
 func (b *reconcileBox) release(run string) {
@@ -345,6 +408,7 @@ func TestScenario_StopCancelLostReconcile_ReinicioDelController(t *testing.T) {
 	host, _, _ := initController(t)
 	ctrl := startController(t, host)
 	b := newReconcileBox(t, host, "--max-concurrent", "2")
+	b.controller = ctrl
 	b.start()
 	newOrigin(t).clone(t)
 	ok[v1.Project](t, "project", "create", "backend")
@@ -365,7 +429,7 @@ func TestScenario_StopCancelLostReconcile_ReinicioDelController(t *testing.T) {
 			t.Fatal("a harness died with the Controller")
 		}
 	}
-	startController(t, host)
+	b.controller = startController(t, host)
 	eventually(t, "the Worker to reconcile with the new Controller", func() bool {
 		seqs := eventSeqs(t, host, "", domain.EventWorkerReconciled)
 		return len(seqs) > 0 && seqs[len(seqs)-1] > mark
@@ -455,6 +519,7 @@ func TestScenario_StopCancelLostReconcile_CaidaDelControllerNoCuenta_E2E(t *test
 	setLostTimeout(t, host, timeout)
 	ctrl := startController(t, host)
 	b := newReconcileBox(t, host)
+	b.controller = ctrl
 	first := b.start()
 	newOrigin(t).clone(t)
 	ok[v1.Project](t, "project", "create", "backend")

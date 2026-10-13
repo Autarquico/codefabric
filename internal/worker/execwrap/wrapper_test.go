@@ -504,3 +504,28 @@ func waitGroupEmpty(t *testing.T, pgid int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// The stop goes to the group: the harness can die of it and be reaped before
+// the wrapper has taken its own copy of the signal. That is still a stop. The
+// order is forced: the harness gets the signal, dies, and only then the wrapper.
+func TestAHarnessKilledByTheStopBeforeTheWrapperTakesItEndedByTheStop(t *testing.T) {
+	s := launch(t, execwrap.Launch{Argv: shell("touch ready; exec sleep 300"), Grace: time.Minute}, true)
+	s.waitFor("ready")
+	var (
+		w       execwrap.Wrapper
+		started execwrap.Started
+	)
+	if ok, err := execwrap.Read(s.dir, execwrap.WrapperFile, &w); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if ok, err := execwrap.Read(s.dir, execwrap.StartedFile, &started); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	_ = syscall.Kill(started.PID, syscall.SIGTERM) // the test signals a pid: the code under test never does
+	waitDead(t, started.PID)
+	_ = syscall.Kill(w.PID, syscall.SIGTERM)
+	exit := s.waitExit()
+	if exit.Cause != execwrap.CauseStop || exit.Signal != "SIGTERM" {
+		t.Fatalf("exit.json = %+v", exit)
+	}
+}

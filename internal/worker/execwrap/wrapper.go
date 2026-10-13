@@ -155,6 +155,13 @@ func (w *wrapper) run() error {
 		return w.endByKillingGroup(log, Exit{Cause: CauseStop, Signal: "SIGKILL", GroupKilled: true, RemnantsKilled: w.count()})
 	}
 	exit.ExitCode, exit.Signal = outcome(cmd.ProcessState)
+	if !w.stopping && w.diedOfAStop(cmd.ProcessState) {
+		// A stop to the group reaches the harness and this process at once: the
+		// harness can be reaped before this process has taken the signal. It is
+		// on its way; it is waited for, briefly, so that the stop is not taken
+		// for an exit of the harness.
+		w.awaitStop()
+	}
 	if w.stopping {
 		exit.Cause = CauseStop
 	}
@@ -251,6 +258,42 @@ func (w *wrapper) supervise(waited <-chan struct{}) bool {
 // the Run. SIGTERM and SIGHUP (the session closing) always stop.
 func (w *wrapper) stops(sig os.Signal) bool {
 	return sig != syscall.SIGINT || w.launch.Mode != ModeInteractive
+}
+
+// diedOfAStop says whether the harness was killed by a signal that asks this
+// process to stop too.
+func (w *wrapper) diedOfAStop(ps *os.ProcessState) bool {
+	status, ok := ps.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		return false
+	}
+	switch sig := status.Signal(); sig {
+	case syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT:
+		return w.stops(sig)
+	}
+	return false
+}
+
+// stopSignalWait bounds how long a stop signal that killed the harness takes to
+// reach this process too; one sent to someone else only is not waited for longer.
+const stopSignalWait = time.Second
+
+// awaitStop takes a stop signal that is on its way, if one comes within
+// stopSignalWait, and begins the stop with it.
+func (w *wrapper) awaitStop() {
+	timer := w.clock.NewTimer(stopSignalWait)
+	defer timer.Stop()
+	for {
+		select {
+		case sig := <-w.signals:
+			if w.stops(sig) {
+				w.beginStop()
+				return
+			}
+		case <-timer.C():
+			return
+		}
+	}
 }
 
 // beginStop asks the group to end and starts the grace.
