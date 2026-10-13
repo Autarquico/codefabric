@@ -92,15 +92,11 @@ func (s *Service) AttachTarget(ctx context.Context, by pki.Session, ref, project
 }
 
 func (s *Service) attachRun(ctx context.Context, q store.Querier, by pki.Session, ref, project string) (store.Run, error) {
+	if readsAsRun(ref) {
+		return s.runOf(ctx, q, by, ref)
+	}
 	if _, err := pki.RequireCaller(ctx, q, by, s.clock.Now()); err != nil {
 		return store.Run{}, err
-	}
-	if readsAsRun(ref) {
-		id, err := refs.Run(ctx, q, ref)
-		if err != nil {
-			return store.Run{}, err
-		}
-		return store.RunByID(ctx, q, id)
 	}
 	scope, err := refs.Scope(ctx, q, project)
 	if err != nil {

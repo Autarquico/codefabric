@@ -146,13 +146,13 @@ func (s *Service) List(ctx context.Context, by pki.Session, q Query) (v1.EventPa
 			page, err = s.tail(ctx, r, by, filter, seen, q.Tail)
 			return err
 		}
-		page, err = s.pageIn(ctx, r, by, filter, q.After, seen, cmpLimit(q.Limit))
+		page, err = s.pageIn(ctx, r, by, filter, q.After, seen, pageLimit(q.Limit))
 		return err
 	})
 	return page, err
 }
 
-func cmpLimit(limit int) int {
+func pageLimit(limit int) int {
 	if limit <= 0 {
 		return v1.EventsDefaultLimit
 	}

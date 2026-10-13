@@ -3,6 +3,7 @@ package tmux
 import (
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
@@ -32,8 +33,10 @@ func AttachArgv(h cfruntime.Handle, binary, run string, epoch uint64, readOnly b
 	if gotRun, gotEpoch, ok := cfruntime.ParseName(session); !ok || gotRun != run || gotEpoch != epoch || session != domain.SessionName(run, epoch) {
 		return nil, fmt.Errorf("%w: the session is not the one of that Run and lease epoch", ErrNotAttachable)
 	}
-	if !domain.ValidAttachBinary(binary) {
-		return nil, fmt.Errorf("%w: the binary is not an absolute plain path", ErrNotAttachable)
+	// The path comes from a Worker and is run on its machine as the user: it must
+	// at least be called tmux, so that the program is not any program of the machine.
+	if !domain.ValidAttachBinary(binary) || path.Base(binary) != "tmux" {
+		return nil, fmt.Errorf("%w: the binary is not an absolute plain path to a program called tmux", ErrNotAttachable)
 	}
 	argv := []string{binary, "-L", socket, "-f", "/dev/null", "attach-session", "-t", "=" + session}
 	if readOnly {

@@ -174,6 +174,7 @@ type OutputEnd struct {
 
 // StreamError is the data of an `error` event: the stream's last words.
 type StreamError struct {
-	Code    domain.Code `json:"code"`
-	Message string      `json:"message"`
+	Code    domain.Code    `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
 }

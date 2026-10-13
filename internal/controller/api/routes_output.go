@@ -119,7 +119,8 @@ func (s *Server) followOutput(w http.ResponseWriter, r *http.Request, c caller, 
 	}
 	defer st.close()
 
-	q := runs.OutputFollow{Ref: p.Ref, Epoch: p.Epoch, Tail: p.Tail, HasTail: p.HasTail, Offset: p.Offset, HasOffset: p.HasOffset}
+	q := p.OutputRead
+	q.Limit = 0
 	if resumed {
 		q.Epoch, q.Offset, q.HasOffset, q.HasTail = epoch, offset, true, false
 	}

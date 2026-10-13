@@ -126,10 +126,14 @@ func showLogs(cmd *cobra.Command, c *client.Client, run string, lines int, follo
 		return encodeJSON(out, page)
 	}
 	san := &sanitizer{raw: raw}
-	if !asJSON {
-		if _, err := out.Write(san.Filter(data)); err != nil {
+	if asJSON {
+		// JSON Lines: the tail is the first chunk, so a consumer sees all of it.
+		chunk := v1.OutputChunk{RunID: page.RunID, LeaseEpoch: page.LeaseEpoch, Offset: page.End - uint64(len(data)), Data: data}
+		if err := encodeJSON(out, chunk); err != nil {
 			return err
 		}
+	} else if _, err := out.Write(san.Filter(data)); err != nil {
+		return err
 	}
 	if page.Truncated && !asJSON {
 		fmt.Fprintln(errOut, "note: older output is no longer held by the Controller")

@@ -55,6 +55,8 @@ func TestAttachArgv_RefusesWhatIsNotTheSessionOfTheRun(t *testing.T) {
 		"binary with a space":                    {good, "/usr/bin/tm ux", runID, 3, ""},
 		"binary with .. ":                        {good, "/usr/../bin/tmux", runID, 3, ""},
 		"binary with a quote":                    {good, "/usr/bin/tmux'", runID, 3, ""},
+		"a binary not called tmux":               {good, "/bin/sh", runID, 3, ""},
+		"a binary that ends like tmux":           {good, "/usr/bin/mytmux", runID, 3, ""},
 		"no binary":                              {good, "", runID, 3, ""},
 	} {
 		if argv, err := AttachArgv(tc.h, tc.bin, tc.run, tc.epoch, false); !errors.Is(err, ErrNotAttachable) || argv != nil {

@@ -136,8 +136,11 @@ func followEvents(cmd *cobra.Command, c *client.Client, q client.EventQuery) err
 		case err == nil, errors.Is(err, context.Canceled):
 			return nil
 		case errors.As(err, &coded) && coded.Code == domain.CodeCursorExpired:
-			purged, _ := coded.Details["purged_through"].(float64)
-			fmt.Fprintf(errOut, "warning: events between %s and %.0f were purged; continuing from now\n", q.After, purged)
+			if purged, found := coded.Details["purged_through"].(float64); found {
+				fmt.Fprintf(errOut, "warning: events between %s and %.0f were purged; continuing from now\n", q.After, purged)
+			} else {
+				fmt.Fprintf(errOut, "warning: events after %s were purged; continuing from now\n", q.After)
+			}
 			now, nerr := c.Events(ctx, client.EventQuery{Tail: 1})
 			if nerr != nil {
 				return nerr

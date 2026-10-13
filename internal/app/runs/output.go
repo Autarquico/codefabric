@@ -238,17 +238,11 @@ func (s *Service) ReadOutput(ctx context.Context, by pki.Session, q OutputRead) 
 	return out, err
 }
 
-// OutputFollow is GET /v1/runs/{ref}/output?follow=true. The epoch is fixed when
-// the follow opens: the one asked for, else the Run's current one. It starts at
-// Offset, else at the last Tail bytes (v1.OutputDefaultTail by default).
-type OutputFollow struct {
-	Ref       string
-	Epoch     uint64
-	Tail      uint64
-	HasTail   bool
-	Offset    uint64
-	HasOffset bool
-}
+// OutputFollow is GET /v1/runs/{ref}/output?follow=true: the same selection as a
+// read (Limit does not apply). The epoch is fixed when the follow opens, the one
+// asked for or else the Run's current one; it starts at Offset, else at the last
+// Tail bytes (v1.OutputDefaultTail by default).
+type OutputFollow = OutputRead
 
 // OutputFollower keeps delivering the output of one (Run, lease epoch).
 type OutputFollower struct {
@@ -275,7 +269,7 @@ type OutputSink struct {
 // anything is sent. A position past what the Controller holds is a cursor that
 // does not belong to this output.
 func (s *Service) OpenOutputFollow(ctx context.Context, by pki.Session, q OutputFollow) (*OutputFollower, v1.OutputBegin, error) {
-	if err := (OutputRead{Ref: q.Ref, Epoch: q.Epoch, Tail: q.Tail, HasTail: q.HasTail, Offset: q.Offset, HasOffset: q.HasOffset}).validate(); err != nil {
+	if err := q.validate(); err != nil {
 		return nil, v1.OutputBegin{}, err
 	}
 	f := &OutputFollower{s: s, by: by}
@@ -348,7 +342,7 @@ func (f *OutputFollower) Run(ctx context.Context, sink OutputSink) error {
 			pacer.Wrote()
 		}
 		switch {
-		case l.last:
+		case l.more:
 			continue
 		case l.eof != nil:
 			return sink.EOF(*l.eof)
@@ -367,7 +361,7 @@ func (f *OutputFollower) Run(ctx context.Context, sink OutputSink) error {
 // outputLook is what one look at the output found.
 type outputLook struct {
 	chunk   *v1.OutputChunk
-	last    bool // the chunk is not the end of what is held: look again at once
+	more    bool // the chunk is not the end of what is held: look again at once
 	eof     *v1.OutputEOF
 	end     *v1.OutputEnd
 	waitFor time.Duration // when the Run is over, how long until the follow may give up
@@ -397,8 +391,8 @@ func (f *OutputFollower) look(ctx context.Context, r store.Querier) (outputLook,
 		}
 		l.chunk = &v1.OutputChunk{RunID: string(f.run), LeaseEpoch: f.epoch, Offset: f.pos, Data: data, Gap: f.gap}
 		f.pos, f.gap = to, false
-		l.last = to < o.End
-		if l.last {
+		l.more = to < o.End
+		if l.more {
 			return l, nil
 		}
 	}

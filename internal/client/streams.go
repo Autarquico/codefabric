@@ -16,7 +16,14 @@ import (
 
 // Timings of the streams. A stream sends a keepalive every 15 s, so three of
 // them without a byte is a stream that is dead.
-const maxSSELine = 1 << 20
+const (
+	maxSSELine  = 1 << 20
+	maxSSEEvent = 2 << 20 // all the data lines of one event
+)
+
+// errEventTooLarge: an event bigger than any the Controller sends. Reopening the
+// stream would bring the same event, so it is not retried.
+var errEventTooLarge = errors.New("client: a stream event is larger than any the Controller sends")
 
 // streamTiming is how long a stream waits for what: the headers, a byte, and
 // the backoff between connections. Tests shorten it.
@@ -39,8 +46,9 @@ func readSSE(r io.Reader, activity func(), fn func(sseEvent) error) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), maxSSELine)
 	var (
-		cur  sseEvent
-		data []string
+		cur   sseEvent
+		data  []string
+		bytes int
 	)
 	for sc.Scan() {
 		activity()
@@ -53,7 +61,7 @@ func readSSE(r io.Reader, activity func(), fn func(sseEvent) error) error {
 					return err
 				}
 			}
-			cur, data = sseEvent{}, nil
+			cur, data, bytes = sseEvent{}, nil, 0
 		case strings.HasPrefix(line, ":"):
 		default:
 			field, value, _ := strings.Cut(line, ":")
@@ -64,6 +72,9 @@ func readSSE(r io.Reader, activity func(), fn func(sseEvent) error) error {
 			case "event":
 				cur.Name = value
 			case "data":
+				if bytes += len(value); bytes > maxSSEEvent {
+					return errEventTooLarge
+				}
 				data = append(data, value)
 			}
 		}
@@ -127,6 +138,9 @@ func (c *Client) follow(ctx context.Context, spec streamSpec) error {
 // retryable: a failure of the stream that opening it again may fix. What the
 // consumer's callback returns is not one: connect marks it.
 func retryable(err error) bool {
+	if errors.Is(err, errEventTooLarge) {
+		return false
+	}
 	var failed callbackError
 	if errors.As(err, &failed) {
 		return false
@@ -211,7 +225,7 @@ func (c *Client) connect(ctx context.Context, spec streamSpec, lastID *string) (
 			if json.Unmarshal([]byte(ev.Data), &body) != nil || body.Code == "" {
 				return domain.NewError(domain.CodeInternal, "the Controller sent an unreadable error", nil)
 			}
-			return domain.NewError(body.Code, body.Message, nil)
+			return domain.NewError(body.Code, body.Message, body.Details)
 		}
 		end, resume, herr := spec.handle(ev)
 		if herr != nil {

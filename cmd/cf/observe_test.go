@@ -440,6 +440,26 @@ func TestObserveAttachEvents_LogsTailThenFollowDeliversEachByteOnceAndEndsAtTheE
 		t.Fatalf("followed %q", got)
 	}
 
+	// --json --follow is JSON Lines: the tail first, then the chunks.
+	jl := cfLive(t, "logs", "--run", r.run.Short, "--follow", "--json", "--tail", "2")
+	if code := <-jl.done; code != 0 {
+		t.Fatalf("json follow: exit %d: %s", code, jl.err.String())
+	}
+	var chunks []v1.OutputChunk
+	sc := bufio.NewScanner(strings.NewReader(jl.out.String()))
+	for sc.Scan() {
+		var ch v1.OutputChunk
+		if err := json.Unmarshal(sc.Bytes(), &ch); err != nil {
+			t.Fatalf("line %q: %v", sc.Text(), err)
+		}
+		chunks = append(chunks, ch)
+	}
+	if len(chunks) == 0 || chunks[0].RunID != r.run.ID || chunks[0].LeaseEpoch != r.assign.Epoch ||
+		!strings.Contains(string(chunks[0].Data), "plain") ||
+		chunks[0].Offset+uint64(len(chunks[0].Data)) != 19+uint64(len("\x1b]0;pwned\x07\x1b[31mred\x1b[0m\r\x00 plain\n")) {
+		t.Fatalf("the first line is not the tail as a chunk: %+v", chunks)
+	}
+
 	raw := cfLive(t, "logs", "--run", r.run.Short, "--raw", "--tail", "1")
 	if code := <-raw.done; code != 0 || !strings.Contains(raw.out.String(), "\x1b[31mred") {
 		t.Fatalf("--raw: exit %d %q", code, raw.out.String())

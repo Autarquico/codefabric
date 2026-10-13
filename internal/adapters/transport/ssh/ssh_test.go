@@ -59,7 +59,7 @@ func TestAttach_BuildsTheArgvWithTheDashDashBeforeTheDestination(t *testing.T) {
 		t.Fatalf("Attach = %d, %v", code, err)
 	}
 	want := []string{
-		"-t", "-o", "ConnectTimeout=15", "-p", "2222", "--", "alex@mini",
+		"-t", "-o", "ConnectTimeout=15", "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-p", "2222", "--", "alex@mini",
 		"'/opt/homebrew/bin/tmux' '-L' 'cf-0123456789ab' 'attach-session' '-t' '=cf-run_x-e1'",
 	}
 	if got := lines(t, log); !slices.Equal(got, want) {
@@ -70,7 +70,7 @@ func TestAttach_BuildsTheArgvWithTheDashDashBeforeTheDestination(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatal(code, err)
 	}
-	if got := lines(t, log); got[3] != "--" || got[4] != "u@[fe80::1]" || slices.Contains(got, "-p") {
+	if got := lines(t, log); got[slices.Index(got, "--")+1] != "u@fe80::1" || slices.Contains(got, "-p") {
 		t.Errorf("IPv6 argv = %q", got)
 	}
 }
@@ -171,5 +171,48 @@ func TestAttach_CancellingTheContextAfterItStartedDoesNotKillSSH(t *testing.T) {
 	code, err := ssh.Attach(ctx, ssh.Options{Binary: bin}, target(t, "box"), tmuxArgv, ssh.Stdio{})
 	if err != nil || code != 3 {
 		t.Fatalf("code %d, err %v: ssh was cut by the context", code, err)
+	}
+}
+
+// ssh itself reads what Argv gives it as the target says (ssh -G prints the
+// configuration it would use, without connecting).
+func TestArgv_SSHReadsTheDestinationAndPortAsIntended(t *testing.T) {
+	sshBin, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("no ssh")
+	}
+	for text, want := range map[string]map[string]string{
+		"alex@mini.lan:2222": {"user": "alex", "hostname": "mini.lan", "port": "2222"},
+		"u@[::1]":            {"user": "u", "hostname": "::1"},
+		"u@[fe80::1]:2200":   {"user": "u", "hostname": "fe80::1", "port": "2200"},
+		"10.0.0.7":           {"hostname": "10.0.0.7"},
+	} {
+		args, err := ssh.Argv(target(t, text), []string{"/usr/bin/tmux"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The command is the last argument; -G needs the options and the destination only.
+		out, err := exec.CommandContext(t.Context(), sshBin, append([]string{"-G"}, args[:len(args)-1]...)...).Output() //nolint:gosec // our own argv
+		if err != nil {
+			t.Fatalf("%s: ssh -G: %v", text, err)
+		}
+		got := map[string]string{}
+		for _, l := range strings.Split(string(out), "\n") {
+			k, v, _ := strings.Cut(l, " ")
+			got[k] = v
+		}
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("%s: ssh reads %s as %q, want %q", text, k, got[k], v)
+			}
+		}
+		for k, v := range map[string]string{"forwardagent": "no", "forwardx11": "no", "permitlocalcommand": "no"} {
+			if got[k] != v {
+				t.Errorf("%s: %s = %q, want %q", text, k, got[k], v)
+			}
+		}
+		if len(got["localforward"])+len(got["remoteforward"])+len(got["dynamicforward"]) != 0 {
+			t.Errorf("%s: forwards survive: %v", text, got)
+		}
 	}
 }

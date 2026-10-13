@@ -59,6 +59,10 @@ func TestReadSSE_ParsesFramesAndDropsACutOne(t *testing.T) {
 	if err := readSSE(strings.NewReader("event: a\ndata: x\n\n"), func() {}, func(sseEvent) error { return boom }); !errors.Is(err, boom) {
 		t.Errorf("fn error = %v", err)
 	}
+	many := strings.Repeat("data: "+strings.Repeat("y", 1<<19)+"\n", 5) + "\n" // 2.5 MiB in lines each under the line limit
+	if err := readSSE(strings.NewReader(many), func() {}, func(sseEvent) error { return nil }); !errors.Is(err, errEventTooLarge) {
+		t.Errorf("an event over the total limit: %v", err)
+	}
 	if err := readSSE(strings.NewReader("data: "+strings.Repeat("x", maxSSELine+10)+"\n\n"), func() {}, func(sseEvent) error { return nil }); err == nil {
 		t.Error("a line over the limit was accepted")
 	}

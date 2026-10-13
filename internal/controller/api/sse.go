@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -102,9 +105,8 @@ type sseStream struct {
 	hub *streamHub
 	id  domain.ID
 
-	mu      sync.Mutex
-	ending  bool
-	started bool
+	mu     sync.Mutex
+	ending bool
 }
 
 // newStream takes a place for the caller and fixes the stream's life: its
@@ -154,7 +156,6 @@ func (st *sseStream) begin() error {
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Accel-Buffering", "no")
-	st.started = true
 	st.w.WriteHeader(http.StatusOK)
 	return st.send([]byte(fmt.Sprintf("retry: %d\n\n", v1.SSERetryMillis)))
 }
@@ -223,11 +224,14 @@ func (s *Server) failStream(st *sseStream, r *http.Request, err error) {
 		s.log.ErrorContext(r.Context(), "stream failed", "request_id", stateOf(r.Context()).id, "path", r.URL.Path, "err", err)
 		de = internalError(r)
 	}
-	_ = st.emit(frame{name: v1.SSEError, data: v1.StreamError{Code: de.Code, Message: de.Message}})
+	_ = st.emit(frame{name: v1.SSEError, data: v1.StreamError{Code: de.Code, Message: de.Message, Details: de.Details}})
 }
 
 // streamEnded says whether err is a stream simply coming to its end: the
-// client left, the stream's life is over or the Server is shutting down.
+// client left (a reset or a broken pipe), the stream's life or a write deadline
+// is over, or the Server is shutting down. None of those is a failure to log.
 func streamEnded(err error) bool {
-	return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errStreamClosed)
+	return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, errStreamClosed) || errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
 }

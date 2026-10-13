@@ -111,6 +111,16 @@ func (t SSHTarget) Destination() string {
 	return t.User + "@" + host
 }
 
+// SSHArg is the destination as ssh reads it: user@host, with an IPv6 address
+// bare. ssh takes the brackets of `user@[::1]` for part of the name, so the text
+// form (Destination, String) is not what it is given.
+func (t SSHTarget) SSHArg() string {
+	if t.User == "" {
+		return t.Host
+	}
+	return t.User + "@" + t.Host
+}
+
 // String is the text ParseSSHTarget reads back into this target.
 func (t SSHTarget) String() string {
 	if t.Port == 0 {

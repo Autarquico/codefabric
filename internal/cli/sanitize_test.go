@@ -156,3 +156,14 @@ func TestSanitizer_RawPassesEverythingThrough(t *testing.T) {
 		t.Fatalf("raw = %q", got)
 	}
 }
+
+func TestSanitizer_DropsBidirectionalOverridesButKeepsJoiners(t *testing.T) {
+	in := "ok \u202eevil\u202c \u2066x\u2069 \u202a\u202b\u202d family: 👨\u200d👩\u200d👧 done"
+	want := "ok evil x  family: 👨\u200d👩\u200d👧 done"
+	if got := filterWhole(in); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := filterBy(in, 1); got != want {
+		t.Fatalf("byte by byte: %q", got)
+	}
+}

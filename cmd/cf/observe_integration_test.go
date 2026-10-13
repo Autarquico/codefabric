@@ -211,7 +211,7 @@ func TestScenario_ObserveAttachEvents_Attach(t *testing.T) {
 	}
 	wantCommand := fmt.Sprintf("'%s' '-L' '%s' '-f' '/dev/null' 'attach-session' '-t' '=%s'", tmuxBin, tmux.SocketName(o.box.WorkerDataDir()), o.session)
 	logged := strings.Split(strings.TrimSpace(readFile(o.sshLog)), "\n")
-	wantArgs := []string{"-t", "-o", "ConnectTimeout=15", "-p", "2222", "--", "tester@fake-worker", wantCommand}
+	wantArgs := []string{"-t", "-o", "ConnectTimeout=15", "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-p", "2222", "--", "tester@fake-worker", wantCommand}
 	if !slices.Equal(logged, wantArgs) {
 		t.Fatalf("ssh was run with\n%q\nwant\n%q", logged, wantArgs)
 	}

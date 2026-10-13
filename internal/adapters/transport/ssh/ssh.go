@@ -75,11 +75,17 @@ func Argv(target domain.SSHTarget, remote []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"-t", "-o", "ConnectTimeout=" + strconv.Itoa(connectTimeoutSeconds)}
+	// -o on the command line wins over every config file: a client config that
+	// forwards the agent or the display, or runs a local command, must not do so
+	// toward a machine whose name came from a Worker.
+	args := []string{
+		"-t", "-o", "ConnectTimeout=" + strconv.Itoa(connectTimeoutSeconds),
+		"-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no",
+	}
 	if target.Port != 0 {
 		args = append(args, "-p", strconv.Itoa(target.Port))
 	}
-	return append(args, "--", target.Destination(), command), nil
+	return append(args, "--", target.SSHArg(), command), nil
 }
 
 // Attach runs the remote argv on the target in a terminal and returns the exit

@@ -93,11 +93,13 @@ func (s *sanitizer) inCharacter(out []byte, b byte) []byte {
 func (s *sanitizer) flushCharacter(out []byte) []byte {
 	r, _ := utf8.DecodeRune(s.pending)
 	s.pending = s.pending[:0]
-	if r == utf8.RuneError || unicode.IsControl(r) {
-		if r == utf8.RuneError {
-			return append(out, string(utf8.RuneError)...)
-		}
-		return out // a C1 control (U+0080 to U+009F)
+	switch {
+	case r == utf8.RuneError:
+		return append(out, string(utf8.RuneError)...)
+	case unicode.IsControl(r): // a C1 control (U+0080 to U+009F)
+		return out
+	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+		return out // bidirectional overrides and isolates, which can make a line read otherwise than it is
 	}
 	return utf8.AppendRune(out, r)
 }
