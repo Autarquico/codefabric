@@ -453,7 +453,7 @@ func TestOutputFollow_KeepsAliveAndEndsWithItsCaller(t *testing.T) {
 			Idle:  func() error { mu.Lock(); idles++; mu.Unlock(); return nil },
 		})
 	}()
-	must(t, e.clock.BlockUntil(t.Context(), 1))
+	must(t, e.blockUntil(1))
 	e.clock.Advance(stream.KeepaliveEvery)
 	waitUntil(t, "a keepalive", func() bool { mu.Lock(); defer mu.Unlock(); return idles == 1 })
 

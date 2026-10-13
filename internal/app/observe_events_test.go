@@ -274,7 +274,7 @@ func TestEventFollow_DeliversInOrderFromTheCursorAndKeepsAlive(t *testing.T) {
 	e.emit(2, nil)
 	waitUntil(t, "live events", func() bool { return slices.Equal(f.delivered(), []uint64{2, 3, 4, 5}) })
 
-	must(t, e.clock.BlockUntil(t.Context(), 1))
+	must(t, e.blockUntil(1))
 	e.clock.Advance(stream.KeepaliveEvery)
 	waitUntil(t, "the keepalive", func() bool { return f.idled() == 1 })
 
@@ -313,4 +313,12 @@ func TestEventFollow_OpenRefusesWhatCannotBeFollowed(t *testing.T) {
 	wantCode(t, err, domain.CodeInvalidRequest)
 	_, err = e.app.Events.Open(t.Context(), e.owner, events.Query{Run: "run-9"}, 0)
 	wantCode(t, err, domain.CodeNotFound)
+}
+
+// blockUntil waits until n timers are armed on the fake clock, for a bounded
+// while in real time: a timer that is never armed fails the test instead of hanging the run.
+func (e *env) blockUntil(n int) error {
+	ctx, cancel := context.WithTimeout(e.t.Context(), 10*time.Second)
+	defer cancel()
+	return e.clock.BlockUntil(ctx, n)
 }

@@ -13,6 +13,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/controller/api"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 // sseFrame is one server-sent event; a comment has only Comment.
@@ -119,6 +120,48 @@ func (tc *testController) mustStream(hc *http.Client, path string, header http.H
 		tc.t.Fatalf("GET %s = %d %+v\n%s", path, status, body, tc.logs.String())
 	}
 	return s
+}
+
+func isKeepalive(f sseFrame) bool { return f.Comment == "keepalive" }
+
+// blockUntil waits until n timers are armed on the fake clock, in real time and
+// for a bounded while: a test that waits for a timer that is never armed fails
+// instead of hanging until the timeout of the whole run.
+func blockUntil(t *testing.T, clk *clock.Fake, n int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := clk.BlockUntil(ctx, n); err != nil {
+		t.Fatalf("no timer was armed on the fake clock: %v", err)
+	}
+}
+
+// advanceUntil moves the fake clock forward by step, again and again, until the
+// stream sends a frame that want accepts, and gives up after ten seconds of real
+// time. Where the stream stands when the test starts to advance the clock (it may not
+// have armed its timer, or read the clock for the first time) does not matter:
+// the clock moves until the frame it is waiting for is due. between runs before each advance.
+func (s *sseStreamOf) advanceUntil(t *testing.T, clk *clock.Fake, step time.Duration, want func(sseFrame) bool, between func()) sseFrame {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case f, ok := <-s.frames:
+			if !ok {
+				t.Fatal("the stream ended")
+			}
+			if want(f) {
+				return f
+			}
+		case <-time.After(30 * time.Millisecond):
+			if between != nil {
+				between()
+			}
+			clk.Advance(step)
+		}
+	}
+	t.Fatal("the frame never came, however far the clock moved")
+	return sseFrame{}
 }
 
 func decodeEvent(t *testing.T, f sseFrame) v1.Event {
@@ -361,11 +404,7 @@ func TestEventStream_KeepsAliveWhileQuietAndAcrossTheServerTimeouts(t *testing.T
 	s := tc.mustStream(hc, "/v1/events/stream", nil)
 	s.next(t) // retry
 	time.Sleep(900 * time.Millisecond)
-	if err := tc.clock.BlockUntil(t.Context(), 1); err != nil {
-		t.Fatal(err)
-	}
-	tc.clock.Advance(15 * time.Second)
-	if f := s.next(t); f.Comment != "keepalive" {
+	if f := s.advanceUntil(t, tc.clock, 15*time.Second, isKeepalive, nil); f.Comment != "keepalive" {
 		t.Fatalf("frame = %+v, want a keepalive", f)
 	}
 	makeTasks(t, tc, "late")
@@ -373,16 +412,12 @@ func TestEventStream_KeepsAliveWhileQuietAndAcrossTheServerTimeouts(t *testing.T
 		t.Fatalf("event = %+v", e)
 	}
 	// Unrelated events do not postpone the keepalive of a filtered stream.
+	// If every wake restarted the count, six seconds at a time would never add up to fifteen.
 	f := tc.mustStream(hc, "/v1/events/stream?type=NoSuchEvent", nil)
 	f.next(t)
-	for range 3 {
-		if err := tc.clock.BlockUntil(t.Context(), 1); err != nil {
-			t.Fatal(err)
-		}
-		tc.clock.Advance(6 * time.Second)
-		makeTasks(t, tc, "n"+strconv.Itoa(int(time.Now().UnixNano()%1e6)))
-	}
-	if fr := f.next(t); fr.Comment != "keepalive" {
+	n := 0
+	wake := func() { n++; makeTasks(t, tc, "n"+strconv.Itoa(n)) }
+	if fr := f.advanceUntil(t, tc.clock, 6*time.Second, isKeepalive, wake); fr.Comment != "keepalive" {
 		t.Fatalf("filtered stream frame = %+v", fr)
 	}
 }
@@ -434,6 +469,9 @@ func TestEventStream_AKeepaliveAuthorisesAgain(t *testing.T) {
 	_, dir := tc.enroll("laptop")
 	s := tc.mustStream(tc.httpClientFor(dir), "/v1/events/stream", nil)
 	s.next(t)
+	// The stream has looked once and waits on its keepalive: only then is the
+	// identity revoked, so that it is the keepalive that finds it out, not the first look.
+	blockUntil(t, tc.clock, 1)
 	clients, err := tc.owner.Clients(t.Context())
 	must(t, err)
 	for _, c := range clients {
@@ -441,10 +479,8 @@ func TestEventStream_AKeepaliveAuthorisesAgain(t *testing.T) {
 			must(t, tc.owner.RemoveClient(t.Context(), c.ID))
 		}
 	}
-	must(t, tc.clock.BlockUntil(t.Context(), 1))
-	tc.clock.Advance(15 * time.Second)
 	var body v1.StreamError
-	if f := s.nextEvent(t); f.Event != v1.SSEError || json.Unmarshal([]byte(f.Data), &body) != nil || body.Code != domain.CodeUnauthenticated {
+	if f := s.advanceUntil(t, tc.clock, 15*time.Second, func(f sseFrame) bool { return f.Event == v1.SSEError }, nil); f.Event != v1.SSEError || json.Unmarshal([]byte(f.Data), &body) != nil || body.Code != domain.CodeUnauthenticated {
 		t.Fatalf("frame = %+v", f)
 	}
 }
