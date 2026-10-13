@@ -42,6 +42,7 @@ var ErrAborted = errors.New("executor: the Run was aborted before it started")
 const (
 	tick            = time.Second
 	exitTick        = 250 * time.Millisecond // how soon a Run that left its exit marker is looked at again
+	exitLooks       = 8                      // how many times: two seconds
 	assignWait      = 20 * time.Second
 	retryInitial    = time.Second
 	retryMax        = 10 * time.Second
@@ -289,7 +290,7 @@ func (e *Executor) Run(ctx context.Context) error {
 // supervise watches one Run until it is over.
 func (e *Executor) supervise(ctx context.Context, k state.Key) {
 	ticker, quick := e.clock.NewTicker(tick), e.clock.NewTicker(exitTick)
-	quickC := quick.C()
+	quickC, sightings := quick.C(), 0
 	defer ticker.Stop()
 	defer quick.Stop()
 	defer func() {
@@ -306,9 +307,9 @@ func (e *Executor) supervise(ctx context.Context, k state.Key) {
 		// The full look costs a call to the Runtime. The end of a harness is
 		// announced by a file, which a stat finds at a quarter of the price, so
 		// the Controller hears of it a fraction of a tick after it happens. Once
-		// the marker has been seen, the ordinary tick takes over: a Run whose
-		// marker stays (one being stopped, one unverified) is not looked at in
-		// full four times a second.
+		// the marker has been seen a few times (the wrapper is still ending on
+		// the first), the ordinary tick takes over: a Run whose marker stays (one
+		// being stopped, one unverified) is not looked at in full four times a second.
 	wait:
 		for {
 			select {
@@ -318,7 +319,9 @@ func (e *Executor) supervise(ctx context.Context, k state.Key) {
 				break wait
 			case <-quickC:
 				if fileExists(filepath.Join(e.runDir(k), execwrap.ExitFile)) {
-					quickC = nil
+					if sightings++; sightings >= exitLooks {
+						quickC = nil
+					}
 					break wait
 				}
 			}
