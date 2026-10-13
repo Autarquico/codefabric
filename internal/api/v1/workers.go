@@ -56,6 +56,12 @@ type HeartbeatRequest struct {
 	Capabilities  []string `json:"capabilities,omitempty"`
 	Total         Capacity `json:"total"`
 	Health        Health   `json:"health"`
+	// SSHTarget is how a client reaches this machine to attach to a session
+	// (user@host[:port]); empty when it offers none. AttachBinaries maps a
+	// runtime to the absolute path of the program that attaches on this machine:
+	// a non-interactive ssh session has a PATH of its own.
+	SSHTarget      string            `json:"ssh_target,omitempty"`
+	AttachBinaries map[string]string `json:"attach_binaries,omitempty"`
 }
 
 // HeartbeatResponse tells the daemon the state the Controller holds it in.
@@ -97,6 +103,9 @@ type Worker struct {
 	LastHeartbeatAt   *time.Time                `json:"last_heartbeat_at,omitempty"`
 	CreatedAt         time.Time                 `json:"created_at"`
 	RemovedAt         *time.Time                `json:"removed_at,omitempty"`
+	// SSHTarget and AttachBinaries are what the Worker announced for `cf attach`.
+	SSHTarget      string            `json:"ssh_target,omitempty"`
+	AttachBinaries map[string]string `json:"attach_binaries,omitempty"`
 }
 
 // ListWorkersResponse is GET /v1/workers.

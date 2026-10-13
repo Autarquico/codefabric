@@ -113,3 +113,27 @@ type Event struct {
 	Message       string
 	Data          map[string]any
 }
+
+// Event levels, from the least to the most severe (§20.2).
+const (
+	LevelDebug = "debug"
+	LevelInfo  = "info"
+	LevelWarn  = "warn"
+	LevelError = "error"
+)
+
+var levelRank = map[string]int{LevelDebug: 0, LevelInfo: 1, LevelWarn: 2, LevelError: 3}
+
+// ValidLevel reports whether level is one of the four event levels.
+func ValidLevel(level string) bool {
+	_, ok := levelRank[level]
+	return ok
+}
+
+// LevelAtLeast reports whether level is as severe as floorLevel or more. A level that
+// is not one of the four is never at least anything.
+func LevelAtLeast(level, floorLevel string) bool {
+	rank, ok := levelRank[level]
+	floor, okFloor := levelRank[floorLevel]
+	return ok && okFloor && rank >= floor
+}

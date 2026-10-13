@@ -14,6 +14,10 @@ const (
 	WorkerRemoved  WorkerState = "removed"
 )
 
+// Reachable says whether the machine of a Worker in this state answers: the
+// ones that are neither offline nor removed. It is derived, never stored (§3.4).
+func (s WorkerState) Reachable() bool { return s != WorkerOffline && s != WorkerRemoved }
+
 // AvailabilityPolicy says when a Worker accepts Runs.
 type AvailabilityPolicy string
 
