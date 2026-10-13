@@ -409,7 +409,13 @@ func (e *Executor) applyVerdict(ctx context.Context, k state.Key, before sent, v
 // report that settled it is this push's own.
 func (e *Executor) confirmFromView(ctx context.Context, k state.Key, view v1.ReconcilePublicationView) error {
 	p, err := state.PublicationOf(ctx, e.o.DB.Reader(), k)
-	if err != nil || p.State != state.PubPushed || p.ResultCommit != view.ResultCommit || p.PublishedSeq == 0 || p.PublishedSeq != view.SettledSeq {
+	if err != nil {
+		return nil
+	}
+	if p.State == state.PubSealing || p.State == state.PubSealed {
+		return e.settleFromView(ctx, p, view)
+	}
+	if p.State != state.PubPushed || p.ResultCommit != view.ResultCommit || p.PublishedSeq == 0 || p.PublishedSeq != view.SettledSeq {
 		return nil
 	}
 	if inJournal, err := state.HasJournalSeq(ctx, e.o.DB.Reader(), p.PublishedSeq); err != nil || inJournal {
@@ -428,6 +434,23 @@ func (e *Executor) confirmFromView(ctx context.Context, k state.Key, view v1.Rec
 		_, err := state.ConfirmPublication(ctx, tx, k, []uint64{p.PublishedSeq}, to, e.clock.Now())
 		return err
 	})
+}
+
+// settleFromView ends a try still sealing or sealed here that the Controller
+// settled for good: a failed publication is failed here too (a publish order
+// starts another), and one published with this very commit is published.
+// Nothing is reported: the Controller has it already.
+func (e *Executor) settleFromView(ctx context.Context, p state.Publication, view v1.ReconcilePublicationView) error {
+	now := e.clock.Now()
+	switch {
+	case view.Publication == domain.PublicationFailed:
+		return e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+			return state.FailPublication(ctx, tx, p, "the Controller settled the publication as failed", now)
+		})
+	case view.Publication == domain.PublicationPublished && p.State == state.PubSealed && p.ResultCommit == view.ResultCommit:
+		return e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.MarkPreserved(ctx, tx, p, now) })
+	}
+	return nil
 }
 
 // applySessionVerdict ends a session the Controller says is not of a lease of

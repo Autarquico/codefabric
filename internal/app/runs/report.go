@@ -173,6 +173,11 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		noEvent bool // the entry says what the Controller knows already: applied, with nothing to tell
 	)
 	switch {
+	case e.Kind == v1.ReportExited && exitedAlready(run, e),
+		e.Kind == v1.ReportPrepareFailed && run.State == domain.RunFailed && run.EndReason == domain.EndEnvironment:
+		// The same end, told again under another seq (a daemon that lost its state
+		// and adopted the Run from its markers): the Controller has it.
+		noEvent, apply = true, func() error { return nil }
 	case ControllerEnded(run) && (e.Kind == v1.ReportStarted || e.Kind == v1.ReportExited || e.Kind == v1.ReportPrepareFailed):
 		if apply, err = s.lateEntry(ctx, tx, act, &ev, run, task, l, e); err != nil {
 			return outcome(""), err
@@ -290,6 +295,22 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		return outcome(""), internalError{err}
 	}
 	return outcome(v1.ReportApplied), nil
+}
+
+// exitedAlready says whether the Run ended by the very exit the entry tells:
+// the same cause and the same exit code.
+func exitedAlready(run store.Run, e v1.RunReportEntry) bool {
+	switch {
+	case run.State != domain.RunCompleted && run.State != domain.RunFailed:
+		return false
+	case e.Cause == v1.ExitCauseWrapperLost:
+		return run.EndReason == domain.EndWrapperLost
+	case run.EndReason != domain.EndExitCode:
+		return false
+	case e.ExitCode == nil || run.ExitCode == nil:
+		return e.ExitCode == nil && run.ExitCode == nil
+	}
+	return *e.ExitCode == *run.ExitCode
 }
 
 // releaseIfAllowed releases the reservation of the lease once the rules of

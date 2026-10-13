@@ -359,3 +359,22 @@ func TestReportsAfterAStopConfirmedByTheReconciliationAreTaken(t *testing.T) {
 		t.Errorf("a second publication_failed = %s", got)
 	}
 }
+
+// Found by the convergence test: a daemon that lost its state adopts a Run from
+// its markers and tells its exit again under another seq. The same exit is taken;
+// another one is not.
+func TestTheSameExitToldAgainIsTakenAnotherIsNot(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	r.mustSend(r.entry(v1.ReportStarted), r.entry(v1.ReportExited, exitCode(0)), r.entry(v1.ReportStopped))
+	r.epoch = "01J00000000000000000000001" // a new daemon
+	if got := results(r.mustSend(r.entry(v1.ReportExited, exitCode(0)), r.entry(v1.ReportStopped))); got != "applied,applied" {
+		t.Errorf("the same end again = %s", got)
+	}
+	if n := len(e.events(domain.EventRunCompleted)); n != 1 {
+		t.Errorf("RunCompleted = %d", n)
+	}
+	if got := results(r.mustSend(r.entry(v1.ReportExited, exitCode(3)))); got != "rejected:CF_INVALID_TRANSITION" {
+		t.Errorf("another exit = %s", got)
+	}
+}

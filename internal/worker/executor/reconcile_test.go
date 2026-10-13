@@ -878,3 +878,25 @@ func TestAPushInFlightWhenTheRunBecomesAnOrphanDoesNotEndThePreservation(t *test
 		t.Errorf("last push to %s", last.Branch)
 	}
 }
+
+// Found by the convergence test: a try still sealed here whose publication the
+// Controller settled as failed (a daemon before lost it) is failed here too,
+// instead of asking for a write token for ever.
+func TestASealedTryTheControllerFailedIsFailedHere(t *testing.T) {
+	f, _ := newGitFixture(t)
+	k := f.sealedRun()
+	f.answers(func(req v1.ReconcileRequest) v1.ReconcileResponse {
+		out := complete(req)
+		for _, r := range req.Runs {
+			out.Verdicts = append(out.Verdicts, v1.ReconcileVerdict{
+				RunID: r.RunID, LeaseEpoch: r.LeaseEpoch, Verdict: v1.ReconcileContinue,
+				Publication: &v1.ReconcilePublicationView{RunID: r.RunID, LeaseEpoch: r.LeaseEpoch, Publication: domain.PublicationFailed},
+			})
+		}
+		return out
+	})
+	must(t, f.e.reconcile(t.Context(), f.e.reconcileGen.Load()))
+	if p := f.publication(k); p.State != state.PubFailed {
+		t.Errorf("publication = %s", p.State)
+	}
+}

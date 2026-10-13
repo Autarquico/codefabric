@@ -287,7 +287,13 @@ func (r *reconciler) run(ctx context.Context, e v1.ReconcileRun) (v1.ReconcileVe
 		done := h.run.Runtime == domain.RuntimeStopped && h.run.Publication != domain.PublicationPending
 		v.Resend, v.Drop = !done, done
 	}
-	if e.Publication != nil && e.Publication.State == "pushed" {
+	// The Controller's view of a publication goes back for a push that waits for
+	// its confirmation, and for a try still sealing or pushing here that the
+	// Controller has settled for good meanwhile (failed or published): the
+	// Worker would otherwise try it for ever.
+	settledHere := e.Publication != nil && (e.Publication.State == "sealing" || e.Publication.State == "sealed") &&
+		(h.run.Publication == domain.PublicationFailed || h.run.Publication == domain.PublicationPublished)
+	if e.Publication != nil && (e.Publication.State == "pushed" || settledHere) {
 		seq, err := store.SettledPublicationSeq(ctx, r.tx, r.w.ID, h.run.ID)
 		if err != nil {
 			return v, err
