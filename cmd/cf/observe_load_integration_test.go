@@ -323,7 +323,8 @@ func TestLoad_OutputOf100RunsDoesNotStarveEvents(t *testing.T) {
 	slices.Sort(samples)
 	slices.Sort(createDur)
 	p95, createP95 := percentile95(samples), percentile95(createDur)
-	held := strings.Count(controllerLog.String(), "a transaction held the writer")
+	logged := controllerLog.String() // one snapshot: heartbeats keep writing to the log
+	held := strings.Count(logged, "a transaction held the writer")
 	t.Logf("%d Runs on %v Workers wrote %.1f MiB in %s; %d Tasks created: CreateTask median %s, p95 %s, max %s; event after the create returns: median %s, p95 %s, max %s; transactions over 100 ms: %d",
 		loadRuns, spread, float64(totalBytes)/(1<<20), elapsed.Round(time.Millisecond), len(makes),
 		createDur[len(createDur)/2], createP95, createDur[len(createDur)-1], samples[len(samples)/2], p95, samples[len(samples)-1], held)
@@ -336,11 +337,11 @@ func TestLoad_OutputOf100RunsDoesNotStarveEvents(t *testing.T) {
 	// A transaction of 32 entries or 256 KiB takes about 100 ms under -race: that is
 	// the bound of the design, not zero. What must not happen is that many are slow.
 	// The denominator is the uploads, each one at least a transaction.
-	slow, recognised, worst := slowHolds(controllerLog.String(), holdLimit)
+	slow, recognised, worst := slowHolds(logged, holdLimit)
 	if recognised != held {
 		t.Errorf("the log has %d held-writer lines and %d were read: the count of slow ones cannot be trusted", held, recognised)
 	}
-	uploads := strings.Count(controllerLog.String(), "path=/v1/worker/output")
+	uploads := strings.Count(logged, "path=/v1/worker/output")
 	t.Logf("uploads: %d; transactions over 100 ms: %d; over %s: %d; the longest hold: %s", uploads, held, holdLimit, slow, worst)
 	if uploads == 0 || slow*100 > uploads {
 		t.Errorf("%d of %d output transactions held the writer for over %s, want at most 1%%", slow, uploads, holdLimit)
