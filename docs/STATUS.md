@@ -27,7 +27,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-_(nada)_
+- #14 Observación: attach, ps, eventos y output
 <!-- /pm-sync:in-progress -->
 
 ---
