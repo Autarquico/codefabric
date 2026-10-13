@@ -56,7 +56,38 @@ type loadWorker struct {
 	log     syncBuffer
 }
 
-var heldRe = regexp.MustCompile(`a transaction held the writer" held=(\\S+)`)
+// heldRe reads the duration out of the debug line the store writes for a
+// transaction that held the writer.
+var heldRe = regexp.MustCompile(`a transaction held the writer" held=(\S+)`)
+
+// slowHolds counts the logged holds longer than limit, and says how many it
+// recognised, so that a line it cannot read is not taken for a fast one.
+func slowHolds(log string, limit time.Duration) (slow, recognised int, worst time.Duration) {
+	for _, m := range heldRe.FindAllStringSubmatch(log, -1) {
+		d, err := time.ParseDuration(m[1])
+		if err != nil {
+			continue
+		}
+		recognised++
+		worst = max(worst, d)
+		if d > limit {
+			slow++
+		}
+	}
+	return slow, recognised, worst
+}
+
+func TestSlowHoldsReadsTheLinesTheStoreWrites(t *testing.T) {
+	log := `time=2026-10-13T20:33:24.391+01:00 level=DEBUG msg="store: a transaction held the writer" held=101.744125ms
+time=2026-10-13T20:33:26.248+01:00 level=DEBUG msg="store: a transaction held the writer" held=600ms
+time=2026-10-13T20:33:27.248+01:00 level=INFO msg=request path=/v1/worker/output
+time=2026-10-13T20:33:28.248+01:00 level=DEBUG msg="store: a transaction held the writer" held=1.2s
+`
+	slow, recognised, worst := slowHolds(log, 500*time.Millisecond)
+	if slow != 2 || recognised != strings.Count(log, "a transaction held the writer") || worst != 1200*time.Millisecond {
+		t.Fatalf("slow %d, recognised %d, worst %s", slow, recognised, worst)
+	}
+}
 
 func TestLoad_OutputOf100RunsDoesNotStarveEvents(t *testing.T) {
 	if os.Getenv("CF_LOAD") != "1" {
@@ -305,15 +336,9 @@ func TestLoad_OutputOf100RunsDoesNotStarveEvents(t *testing.T) {
 	// A transaction of 32 entries or 256 KiB takes about 100 ms under -race: that is
 	// the bound of the design, not zero. What must not happen is that many are slow.
 	// The denominator is the uploads, each one at least a transaction.
-	var slow int
-	var worst time.Duration
-	for _, m := range heldRe.FindAllStringSubmatch(controllerLog.String(), -1) {
-		if d, err := time.ParseDuration(m[1]); err == nil {
-			worst = max(worst, d)
-			if d > holdLimit {
-				slow++
-			}
-		}
+	slow, recognised, worst := slowHolds(controllerLog.String(), holdLimit)
+	if recognised != held {
+		t.Errorf("the log has %d held-writer lines and %d were read: the count of slow ones cannot be trusted", held, recognised)
 	}
 	uploads := strings.Count(controllerLog.String(), "path=/v1/worker/output")
 	t.Logf("uploads: %d; transactions over 100 ms: %d; over %s: %d; the longest hold: %s", uploads, held, holdLimit, slow, worst)

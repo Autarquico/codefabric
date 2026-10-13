@@ -98,7 +98,7 @@ func readTail(ctx context.Context, c *client.Client, run string, lines int) (v1.
 	data, from := first.Data, first.Offset
 	for countLines(data) <= lines && from > first.Start {
 		to := from
-		from = max(first.Start, from-v1.OutputPageBytes)
+		from -= min(from-first.Start, uint64(v1.OutputPageBytes)) // not below Start, and never below zero
 		offset := from
 		page, err := c.RunOutput(ctx, run, client.OutputQuery{Epoch: first.LeaseEpoch, Offset: &offset, Limit: to - from})
 		if err != nil {

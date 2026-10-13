@@ -475,3 +475,37 @@ func soon(t *testing.T, what string, ok func() bool) {
 		}
 	}
 }
+
+// The tail walks back through pages until it has the lines asked for or reaches
+// the start of what the Controller holds: with few lines in many bytes it reaches the start.
+func TestObserveAttachEvents_LogsTailOfFewLinesInManyBytes(t *testing.T) {
+	host, _ := bringUpController(t)
+	r := newWorkerRun(t, host)
+	use(t, host)
+	var want strings.Builder
+	want.WriteString("head\n")
+	r.upload(t, 0, "head\n")
+	offset := uint64(5)
+	for range 2 { // about 100 KiB without a newline
+		chunk := strings.Repeat("x", 50<<10)
+		r.upload(t, offset, chunk)
+		want.WriteString(chunk)
+		offset += uint64(len(chunk))
+	}
+	r.upload(t, offset, "tail\n")
+	want.WriteString("tail\n")
+	offset += 5
+
+	code, out, errOut := cf(t, "", "logs", "--run", r.run.Short, "--tail", "5")
+	if code != 0 || out != want.String() {
+		t.Fatalf("exit %d, %d bytes (want %d): %.80q %s", code, len(out), want.Len(), out, errOut)
+	}
+	live := cfLive(t, "logs", "--run", r.run.Short, "--follow", "--tail", "5")
+	live.waitFor(t, "the whole tail", func(got string) bool { return got == want.String() })
+	r.upload(t, offset, "more\n")
+	live.waitFor(t, "live output", func(got string) bool { return got == want.String()+"more\n" })
+	r.eof(t, offset+5)
+	if code := <-live.done; code != 0 {
+		t.Fatalf("follow: exit %d: %s", code, live.err.String())
+	}
+}

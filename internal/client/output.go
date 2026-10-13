@@ -83,7 +83,13 @@ func (c *Client) FollowOutput(ctx context.Context, ref string, q OutputQuery, h 
 				if err := decodeEvent(ev, &b); err != nil {
 					return false, "", err
 				}
-				return false, strconv.FormatUint(b.LeaseEpoch, 10) + ":" + strconv.FormatUint(b.Offset, 10), h.Begin(b)
+				// A Run with no lease yet begins at epoch 0, which is no place to resume
+				// from: until it has an epoch the follow reconnects with its original selection.
+				resume := ""
+				if b.LeaseEpoch > 0 {
+					resume = strconv.FormatUint(b.LeaseEpoch, 10) + ":" + strconv.FormatUint(b.Offset, 10)
+				}
+				return false, resume, h.Begin(b)
 			case v1.SSEOutput:
 				var chunk v1.OutputChunk
 				if err := decodeEvent(ev, &chunk); err != nil {

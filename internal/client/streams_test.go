@@ -397,3 +397,37 @@ func sameRequest(got, want string) bool {
 	}
 	return true
 }
+
+func TestFollowOutput_ARunWithoutALeaseIsFollowedUntilItHasOne(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		resumes []string
+	)
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		resumes = append(resumes, r.Header.Get("Last-Event-ID"))
+		n := len(resumes)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		if n == 1 { // queued: begins at epoch 0 and the connection drops
+			sseWrite(w, `event: begin`+"\n"+`data: {"run_id":"run_x","lease_epoch":0,"start":0,"end":0,"offset":0}`+"\n\n")
+			return
+		}
+		sseWrite(w, `event: begin`+"\n"+`data: {"run_id":"run_x","lease_epoch":1,"start":0,"end":0,"offset":0}`+"\n\n"+
+			"id: 1:2\nevent: output\ndata: "+`{"run_id":"run_x","lease_epoch":1,"offset":0,"data":"aGk="}`+"\n\n"+
+			"event: eof\ndata: "+`{"run_id":"run_x","lease_epoch":1,"final_offset":2}`+"\n\n")
+	}))
+	var got strings.Builder
+	ending, err := c.FollowOutput(t.Context(), "run-1", OutputQuery{}, OutputHandler{
+		Begin: func(v1.OutputBegin) error { return nil },
+		Chunk: func(ch v1.OutputChunk) error { got.Write(ch.Data); return nil },
+	})
+	if err != nil || ending.EOF == nil || got.String() != "hi" {
+		t.Fatalf("ending %+v, %q, %v", ending, got.String(), err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if fmt.Sprint(resumes) != "[ ]" {
+		t.Fatalf("resumed with %q: epoch 0 is no cursor", resumes)
+	}
+}
