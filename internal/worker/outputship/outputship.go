@@ -41,7 +41,7 @@ import (
 // v1.OutputBatchBytes.
 const (
 	interval    = time.Second
-	batchBytes  = 256 << 10
+	batchBytes  = 1 << 20
 	perRunBytes = 2 * v1.OutputChunkBytes
 	settle      = time.Second // the file must not grow for this long before it is closed
 	backoffMax  = 30 * time.Second
@@ -71,6 +71,7 @@ type Shipper struct {
 	o        Options
 	failures int
 	retryAt  time.Time
+	rotate   int
 	final    map[state.Key]finalLook // the size of a finished Run's log at the last look
 }
 
@@ -126,12 +127,19 @@ func (s *Shipper) Once(ctx context.Context) error {
 		return err
 	}
 	var (
-		items  []*item
-		batch  v1.OutputBatch
-		budget = batchBytes
+		items   []*item
+		batch   v1.OutputBatch
+		budget  = batchBytes
+		visited int
 	)
+	// The pass starts where the last one stopped, so that when a batch cannot
+	// hold everything the Runs at the end of the list are not always the ones left out.
+	if len(runs) > 0 {
+		runs = append(runs[s.rotate%len(runs):], runs[:s.rotate%len(runs)]...)
+	}
+	defer func() { s.rotate += visited }()
 	for _, r := range runs {
-		if budget <= 0 || len(batch.Entries) >= v1.OutputBatchMaxItems-1 {
+		if budget <= 0 || len(batch.Entries) >= v1.OutputBatchMaxItems {
 			break
 		}
 		it, err := s.plan(ctx, r, min(perRunBytes, budget))
@@ -139,8 +147,13 @@ func (s *Shipper) Once(ctx context.Context) error {
 			return err
 		}
 		if it == nil {
+			visited++
 			continue
 		}
+		if len(batch.Entries)+len(it.entries) > v1.OutputBatchMaxItems {
+			break // its entries go whole, in the next pass: the Controller refuses a batch of more
+		}
+		visited++
 		for _, e := range it.entries {
 			budget -= len(e.Data)
 		}

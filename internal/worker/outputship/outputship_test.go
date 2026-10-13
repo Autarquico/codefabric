@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -255,7 +256,7 @@ func TestShip_DoesNotSendWhatTheRingWouldDropAndBoundsABatch(t *testing.T) {
 			t.Fatalf("a chunk of %d bytes", len(e.Data))
 		}
 	}
-	if total > 256<<10 || total < v1.OutputChunkBytes {
+	if total > 1<<20 || total < v1.OutputChunkBytes {
 		t.Fatalf("a batch of %d bytes", total)
 	}
 	// It catches up in passes, one request each.
@@ -474,5 +475,37 @@ func TestShip_RunSendsOnTheClockAndStopsWithItsContext(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestShip_ABatchNeverHasMoreEntriesThanTheControllerTakes(t *testing.T) {
+	f := newFixture(t)
+	var keys []state.Key
+	for i := range v1.OutputBatchMaxItems - 2 { // 62 Runs with one chunk each
+		k := f.run(fmt.Sprintf("run_%03d", i), state.PhaseRunning)
+		f.write(k, "x")
+		keys = append(keys, k)
+	}
+	// The last has two chunks pending and is over: two data entries and the end make three.
+	last := f.run("run_zzz", state.PhaseStopped)
+	f.write(last, string(bytes.Repeat([]byte("y"), 2*v1.OutputChunkBytes)))
+	keys = append(keys, last)
+
+	for range 6 {
+		f.clk.Advance(2 * time.Second)
+		f.once()
+	}
+	for _, b := range f.ctl.batches {
+		if len(b) > v1.OutputBatchMaxItems {
+			t.Fatalf("a batch of %d entries", len(b))
+		}
+	}
+	for _, k := range keys[:len(keys)-1] {
+		if f.sent(k) != "x" {
+			t.Fatalf("%s sent %q", k.RunID, f.sent(k))
+		}
+	}
+	if h := f.ctl.outputs[last]; h == nil || len(h.data) != 2*v1.OutputChunkBytes || !h.closed || !f.cursor(last).Done {
+		t.Fatalf("the last Run was not sent whole and closed: %+v", h)
 	}
 }

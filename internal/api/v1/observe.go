@@ -68,8 +68,8 @@ const (
 	OutputChunkBytes    = 64 << 10
 	OutputPageBytes     = 256 << 10
 	OutputDefaultTail   = 64 << 10
-	OutputBatchBytes    = 512 << 10 // JSON body of POST /v1/worker/output
-	OutputBatchMaxItems = 64
+	OutputBatchBytes    = 2 << 20 // JSON body of POST /v1/worker/output
+	OutputBatchMaxItems = 256
 	// OutputMaxOffset keeps offset arithmetic from overflowing: no offset or
 	// offset plus length is above it.
 	OutputMaxOffset = uint64(1) << 62
