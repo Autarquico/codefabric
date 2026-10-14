@@ -7,12 +7,25 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"testing"
 
 	"github.com/Autarquico/codefabric/internal/support/svcunit"
 )
+
+// Program is an executable file only this user can write, for a service to
+// run: svcunit.Program refuses one that is not there.
+func Program(t testing.TB) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "cf")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // a program, so executable
+		t.Fatal(err)
+	}
+	return path
+}
 
 // recorder keeps the commands a fake was given and the failures it was told to give.
 type recorder struct {

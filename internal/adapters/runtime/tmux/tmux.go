@@ -266,16 +266,26 @@ func (r *Runtime) List(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// Sessions lists the names of the sessions of this server.
+// Sessions lists the names of the sessions of this server: none if there is no
+// server, and an error if tmux could not tell.
 func (r *Runtime) Sessions(ctx context.Context) ([]string, error) {
-	out, _, err := r.exec(ctx, "list-sessions", "-F", "#{session_name}")
-	if isMissing(err) {
+	out, stderr, err := r.exec(ctx, "list-sessions", "-F", "#{session_name}")
+	switch {
+	case err == nil:
+		return strings.Fields(out), nil
+	case isMissing(err) && noServer(stderr):
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return strings.Fields(out), nil
+	return nil, fmt.Errorf("tmux: listing sessions: %w (%s)", err, strings.TrimSpace(stderr))
+}
+
+// noServer says whether tmux failed for want of a server at its socket: there
+// is no socket (`error connecting to <socket> (No such file or directory)`), or
+// nothing listens on it (`no server running on <socket>`), as tmux 3.7 says.
+func noServer(stderr string) bool {
+	s := strings.TrimSpace(stderr)
+	return strings.HasPrefix(s, "no server running on ") ||
+		strings.HasPrefix(s, "error connecting to ") && strings.HasSuffix(s, " (No such file or directory)")
 }
 
 func (r *Runtime) session(h cfruntime.Handle) (string, error) {

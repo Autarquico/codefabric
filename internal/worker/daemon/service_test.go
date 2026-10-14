@@ -32,7 +32,7 @@ func serviceBox(t *testing.T, goos string) (daemon.ServiceOptions, fakeManager) 
 		t.Fatal(err)
 	}
 	o := daemon.ServiceOptions{
-		Paths: paths, Binary: "/opt/cf/bin/cf", PATH: "/opt/cf/bin:/usr/bin:/bin",
+		Paths: paths, Binary: svcunittest.Program(t), PATH: "/opt/cf/bin:/usr/bin:/bin",
 		Manager: svcunit.Env{Home: t.TempDir(), UID: 501, GOOS: goos},
 	}
 	path, _, _, err := daemon.RenderService(o)
@@ -190,6 +190,34 @@ func TestUninstallService_RunsThatCannotBeListedAreUnknownNotNone(t *testing.T) 
 	}
 }
 
+// With the tmux of the PATH, which exits 1 both when there is no server and
+// when it cannot tell: only the first means there are no Runs.
+func TestUninstallService_ATmuxThatCannotListLeavesTheRunsUnknown(t *testing.T) {
+	for stderr, unknown := range map[string]bool{
+		"no server running on /tmp/tmux-501/cf-abc":      false,
+		"directory /tmp/tmux-501 has unsafe permissions": true,
+	} {
+		t.Run(stderr, func(t *testing.T) {
+			o, _ := serviceBox(t, "linux")
+			installService(t, o)
+			bin := t.TempDir()
+			script := "#!/bin/sh\necho '" + stderr + "' >&2\nexit 1\n"
+			if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake tmux
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin)
+			res, err := daemon.UninstallService(t.Context(), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			warned := len(res.Warnings) == 1 && strings.Contains(res.Warnings[0], "could not list the Runs") && strings.Contains(res.Warnings[0], stderr)
+			if len(res.ActiveRuns) != 0 || warned != unknown || !unknown && len(res.Warnings) != 0 {
+				t.Errorf("result = %+v", res)
+			}
+		})
+	}
+}
+
 func TestUninstallService_NothingInstalledIsNotAnError(t *testing.T) {
 	o, fake := serviceBox(t, "darwin")
 	res, err := daemon.UninstallService(t.Context(), o)
@@ -282,7 +310,9 @@ func TestInstallService_WarnsWhenTheTmuxServerMoves(t *testing.T) {
 			installService(t, o)
 			want := move(&o)
 			res := installService(t, o)
-			if !res.Changed || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], want) {
+			// Besides the one of a program in a temporary directory.
+			moved := slices.DeleteFunc(slices.Clone(res.Warnings), func(w string) bool { return !strings.Contains(w, "not adopted") })
+			if !res.Changed || len(moved) != 1 || !strings.Contains(moved[0], want) {
 				t.Errorf("result = %+v", res)
 			}
 		})
@@ -300,7 +330,7 @@ func TestInstallService_TheFileRunsTheWorkerAndKeepsItsRuns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{keeps, "/opt/cf/bin/cf", "--ssh-target", "me@box", "--controller", "ctl:7443", o.Paths.ConfigDir, "data 100"} {
+		for _, want := range []string{keeps, o.Binary, "--ssh-target", "me@box", "--controller", "ctl:7443", o.Paths.ConfigDir, "data 100"} {
 			if !strings.Contains(string(content), want) {
 				t.Errorf("%s: no %q in\n%s", goos, want, content)
 			}

@@ -34,7 +34,7 @@ func Program(binary string) (program, warning string, err error) {
 	if !filepath.IsAbs(program) {
 		return "", "", &InputError{Flag: "--binary", Reason: "must be an absolute path"}
 	}
-	if err := replaceable(program, os.Getuid()); err != nil {
+	if err := replaceable(program, os.Getuid(), trustedGroupOf(runtime.GOOS, os.Getuid())); err != nil {
 		return "", "", err
 	}
 	return program, ExecutableWarning(program), nil
@@ -61,63 +61,76 @@ func ResolvePATH(goos, given, program string, tools ...string) (string, error) {
 	return ServicePATH(goos, dirs...), nil
 }
 
-// replaceable refuses a program that a user other than uid (or root) could
-// swap for one of their own, which the service would then run as uid, again
-// and again: one whose file or any directory above it, through symbolic links
-// or not, is owned by another user, or is writable, without the sticky bit, by
-// others or by a group that is not trusted (see trustedGroup). What
-// does not exist yet is judged by the nearest directory that does.
-func replaceable(program string, uid int) error {
-	return replaceableTrusting(program, uid, trustedGroupOf(runtime.GOOS, uid))
-}
+const (
+	// maxLinks is how many symbolic links a program may be reached through, as on Linux.
+	maxLinks = 40
+	xOK      = 1 // X_OK of access(2), which syscall does not name
+)
 
-func replaceableTrusting(program string, uid int, trusted func(gid int) bool) error {
-	paths := []string{program}
-	if resolved, err := filepath.EvalSymlinks(program); err == nil && resolved != program {
-		paths = append(paths, resolved)
-	} else if target, err := os.Readlink(program); err == nil {
-		// A link to nothing yet: whoever can create its target decides what runs.
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(filepath.Dir(program), target)
-		}
-		paths = append(paths, target)
+// replaceable refuses a program that is not a file uid can run, or that a user
+// other than uid (or root) could swap for one of their own, which the service
+// would then run as uid, again and again. It walks the path as the kernel does,
+// from the root and down every symbolic link, and refuses it at the first entry
+// of another user, or that others or a group that is not trusted (see
+// trustedGroup) can write: a directory with the sticky bit, like /tmp, only
+// lets them replace their own entries, and what a link says is fixed.
+func replaceable(program string, uid int, trusted func(gid int) bool) error {
+	refuse := func(format string, a ...any) error {
+		return &InputError{Flag: "--binary", Reason: fmt.Sprintf(format, a...)}
 	}
-	for _, path := range paths {
-		for {
-			info, err := os.Stat(path)
-			switch {
-			case errors.Is(err, fs.ErrNotExist):
-			case err != nil:
-				return fmt.Errorf("svcunit: %w", err)
-			default:
-				if reason := unsafeTo(info, path, uid, trusted); reason != "" {
-					return &InputError{Flag: "--binary", Reason: fmt.Sprintf("%s runs from %s, which %s: another user could "+
-						"replace what the service runs; install it where only you and root can write", program, path, reason)}
-				}
-			}
-			parent := filepath.Dir(path)
-			if parent == path {
-				break
-			}
-			path = parent
-		}
+	if info, err := os.Stat(program); err != nil {
+		return refuse("%s cannot be run: %v", program, errors.Unwrap(err))
+	} else if !info.Mode().IsRegular() || syscall.Access(program, xOK) != nil {
+		return refuse("%s is not a file you can run", program)
 	}
-	return nil
+	links := 0
+	// resolve follows path from dir, walked already and with no link in it, to the entry it leads to.
+	var resolve func(dir, path string) (string, error)
+	resolve = func(dir, path string) (string, error) {
+		if filepath.IsAbs(path) {
+			dir = "/"
+		}
+		for name := range strings.SplitSeq(path, "/") {
+			entry := filepath.Join(dir, name)
+			info, err := os.Lstat(entry)
+			if err != nil {
+				return "", refuse("%s cannot be run: %v", program, err)
+			}
+			if reason := unsafeTo(info, entry, uid, trusted); reason != "" {
+				return "", refuse("%s runs from %s, which %s: another user could replace what the service runs; "+
+					"install it where only you and root can write", program, entry, reason)
+			}
+			if info.Mode()&fs.ModeSymlink == 0 {
+				dir = entry
+				continue
+			}
+			if links++; links > maxLinks {
+				return "", refuse("%s is reached through more than %d symbolic links", program, maxLinks)
+			}
+			target, err := os.Readlink(entry)
+			if err == nil {
+				dir, err = resolve(dir, target)
+			}
+			if err != nil {
+				return "", err
+			}
+		}
+		return dir, nil
+	}
+	_, err := resolve("/", program)
+	return err
 }
 
 func unsafeTo(info fs.FileInfo, path string, uid int, trusted func(gid int) bool) string {
 	st, ok := info.Sys().(*syscall.Stat_t)
-	if ok && int(st.Uid) != uid && st.Uid != 0 {
+	switch {
+	case ok && int(st.Uid) != uid && st.Uid != 0:
 		return fmt.Sprintf("belongs to another user (uid %d)", st.Uid)
-	}
-	if info.IsDir() && info.Mode()&fs.ModeSticky != 0 {
-		// Like /tmp: whoever can write cannot replace what is someone else's.
+	case info.Mode()&fs.ModeSymlink != 0, info.IsDir() && info.Mode()&fs.ModeSticky != 0:
 		return ""
-	}
-	if info.Mode().Perm()&0o002 != 0 {
+	case info.Mode().Perm()&0o002 != 0:
 		return "anyone can write"
-	}
-	if ok && info.Mode().Perm()&0o020 != 0 && !trusted(int(st.Gid)) {
+	case ok && info.Mode().Perm()&0o020 != 0 && !trusted(int(st.Gid)):
 		return fmt.Sprintf("the members of group %d can write (`chmod g-w %s` stops them)", st.Gid, path)
 	}
 	return ""

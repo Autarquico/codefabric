@@ -18,7 +18,7 @@ import (
 func serviceOptions(t *testing.T) (daemon.ServiceOptions, *svcunittest.Systemd) {
 	t.Helper()
 	o := daemon.ServiceOptions{
-		Paths: newPaths(t), Binary: "/usr/local/bin/cf", PATH: "/usr/bin:/bin",
+		Paths: newPaths(t), Binary: svcunittest.Program(t), PATH: "/usr/bin:/bin",
 		Manager: svcunit.Env{Home: t.TempDir(), UID: 1000, GOOS: "linux"},
 	}
 	path, _, _, err := daemon.RenderService(o)
@@ -56,7 +56,7 @@ func TestInstallService_ControllerUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The Controller hosts no Run (invariant 3): systemd's KillMode takes what it started down with it.
-	if !strings.Contains(string(unit), `ExecStart="/usr/local/bin/cf" "controller" "run"`) || strings.Contains(string(unit), "KillMode") {
+	if !strings.Contains(string(unit), `ExecStart="`+o.Binary+`" "controller" "run"`) || strings.Contains(string(unit), "KillMode") {
 		t.Errorf("unit:\n%s", unit)
 	}
 
