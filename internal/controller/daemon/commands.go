@@ -13,14 +13,15 @@ import (
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/svcunit"
 )
 
 const defaultPort = "7443"
 
-// Command is `cf controller`: init, run and token create.
+// Command is `cf controller`: init, run, token create and its service.
 func Command() *cobra.Command {
 	cmd := &cobra.Command{Use: "controller", Short: "Run and administer the Controller"}
-	cmd.AddCommand(newInitCmd(), newRunCmd(), newTokenCmd())
+	cmd.AddCommand(newInitCmd(), newRunCmd(), newTokenCmd(), newInstallServiceCmd(), newUninstallServiceCmd())
 	return cmd
 }
 
@@ -136,6 +137,95 @@ func newTokenCmd() *cobra.Command {
 	create.Flags().DurationVar(&ttl, "ttl", time.Hour, "how long the invitation stays valid (at most 168h)")
 	token.AddCommand(create)
 	return token
+}
+
+func newInstallServiceCmd() *cobra.Command {
+	var (
+		o      ServiceOptions
+		dryRun bool
+	)
+	cmd := &cobra.Command{
+		Use:   "install-service",
+		Short: "Run the Controller as a systemd --user service of this user (Linux)",
+		Long: "Run `cf controller run` as a systemd --user unit of this user, on Linux. Installing what\n" +
+			"is installed and running changes nothing. Its PATH is calculated now (--path replaces it).",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			paths, err := config.ResolveFromEnv()
+			if err != nil {
+				return err
+			}
+			o.Paths = paths
+			if dryRun {
+				path, content, warnings, err := RenderService(o)
+				if err != nil {
+					return err
+				}
+				return printServiceFile(cmd, path, content, warnings)
+			}
+			res, err := InstallService(cmd.Context(), o)
+			if err != nil {
+				return err
+			}
+			return printService(cmd, res, "Installed the Controller service", "The Controller service is installed and running; nothing changed")
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&o.Binary, "binary", "", "the cf the service runs, as an absolute path (default: this one)")
+	f.StringVar(&o.PATH, "path", "", "the PATH of the service, of absolute directories (default: those of cf and git, then the usual ones)")
+	f.BoolVar(&dryRun, "dry-run", false, "show the file and where it would go, and change nothing")
+	return cmd
+}
+
+func newUninstallServiceCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall-service",
+		Short: "Stop and remove the Controller's service",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := UninstallService(cmd.Context(), ServiceOptions{})
+			if err != nil {
+				return err
+			}
+			return printService(cmd, res, "Uninstalled the Controller service", "No Controller service is installed; nothing changed")
+		},
+	}
+}
+
+func printService(cmd *cobra.Command, res svcunit.Result, changed, unchanged string) error {
+	if jsonOutput(cmd) {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
+	}
+	printWarnings(cmd, res.Warnings)
+	out := cmd.OutOrStdout()
+	if !res.Changed {
+		_, err := fmt.Fprintf(out, "%s (%s, %s).\n", unchanged, res.Unit, res.Path)
+		return err
+	}
+	fmt.Fprintf(out, "%s (%s, %s):\n", changed, res.Unit, res.Path)
+	for _, a := range res.Actions {
+		fmt.Fprintf(out, "  %s\n", a)
+	}
+	return nil
+}
+
+func printServiceFile(cmd *cobra.Command, path string, content []byte, warnings []string) error {
+	if jsonOutput(cmd) {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
+			Path     string   `json:"path"`
+			Content  string   `json:"content"`
+			Warnings []string `json:"warnings"`
+		}{path, string(content), warnings})
+	}
+	printWarnings(cmd, warnings)
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "# %s\n%s", path, content)
+	return err
+}
+
+func printWarnings(cmd *cobra.Command, warnings []string) {
+	for _, w := range warnings {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
+	}
 }
 
 // jsonOutput reads the root command's persistent --json (internal/cli owns

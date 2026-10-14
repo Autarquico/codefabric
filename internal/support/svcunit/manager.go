@@ -100,8 +100,7 @@ func do(ctx context.Context, env Env, s Spec, f func(manager, *op, Spec) error) 
 	if err != nil {
 		return Result{}, err
 	}
-	o := &op{ctx: ctx, runner: env.Runner}
-	o.res.Path = m.path(s)
+	o := &op{ctx: ctx, runner: env.Runner, res: Result{Path: m.path(s), Actions: []string{}, Warnings: []string{}}}
 	err = f(m, o, s)
 	o.res.Changed = len(o.res.Actions) > 0
 	return o.res, err
