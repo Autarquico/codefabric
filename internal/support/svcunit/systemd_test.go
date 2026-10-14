@@ -157,6 +157,18 @@ func TestSystemd_AUnitLoadedFromElsewhereIsRefused(t *testing.T) {
 	}
 }
 
+// A systemd that does not find the unit where it was written says so, rather
+// than reporting the KillMode of a unit it never loaded.
+func TestSystemd_AUnitTheManagerDoesNotFindIsReportedAsSuch(t *testing.T) {
+	e, fake := newSystemd(t)
+	fake.Elsewhere = true
+	res, err := svcunit.Install(t.Context(), e, workerSpec())
+	if err == nil || !strings.Contains(err.Error(), "does not find") || strings.Contains(err.Error(), "KillMode") {
+		t.Errorf("install: %v", err)
+	}
+	assertActions(t, res, "write "+fake.Path, "systemctl --user daemon-reload")
+}
+
 func TestSystemd_WarnsWithoutLinger(t *testing.T) {
 	for linger, want := range map[string]string{"no": "lingering is off", "": "could not tell"} {
 		e, fake := newSystemd(t)

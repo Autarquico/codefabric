@@ -68,8 +68,10 @@ type Systemd struct {
 	Fragment                              string // FragmentPath; empty until a reload finds Path
 	// DropInKillMode overrides, once reloaded, the KillMode of the file, as a drop-in would.
 	DropInKillMode string
-	killMode       string
-	Linger         string // what loginctl says; "" fails
+	// Elsewhere is a systemd that looks for units in another directory: a reload does not find Path.
+	Elsewhere bool
+	killMode  string
+	Linger    string // what loginctl says; "" fails
 }
 
 // NewSystemd is a systemd that does not know the unit at path yet.
@@ -95,7 +97,7 @@ func (f *Systemd) reload() {
 	f.NeedDaemonReload = false
 	f.LoadState, f.Fragment, f.killMode = "not-found", "", ""
 	file, err := os.ReadFile(f.Path)
-	if err != nil {
+	if err != nil || f.Elsewhere {
 		return
 	}
 	f.LoadState, f.Fragment, f.killMode = "loaded", f.Path, "control-group"

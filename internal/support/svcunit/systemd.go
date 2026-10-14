@@ -85,6 +85,9 @@ func (m systemd) install(o *op, s Spec) error {
 			return err
 		}
 	}
+	if u["LoadState"] == "not-found" || u["FragmentPath"] == "" {
+		return fmt.Errorf("systemd does not find %s at %s: the user's systemd looks for units elsewhere (XDG_CONFIG_HOME?)", unit, path)
+	}
 	if err := m.checkEffective(u, s, path); err != nil {
 		return err
 	}
