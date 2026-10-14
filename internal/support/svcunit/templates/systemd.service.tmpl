@@ -1,0 +1,22 @@
+# Written by `{{.Installer}}`: running it again rewrites this file.
+[Unit]
+Description={{specifiers .Description}}
+
+[Service]
+Type=exec
+ExecStart={{range $i, $arg := .Argv}}{{if $i}} {{end}}{{execArg $arg}}{{end}}
+{{- range .Env}}
+Environment={{envArg .Key .Value}}
+{{- end}}
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+{{- if .KeepProcesses}}
+# What the daemon starts outlives a stop or a restart of the service.
+KillMode=process
+# A child that the OOM killer ends does not stop the service.
+OOMPolicy=continue
+{{- end}}
+
+[Install]
+WantedBy=default.target

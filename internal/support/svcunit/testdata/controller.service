@@ -1,0 +1,15 @@
+# Written by `cf controller install-service`: running it again rewrites this file.
+[Unit]
+Description=CodeFabric Controller
+
+[Service]
+Type=exec
+ExecStart="/usr/local/bin/cf" "controller" "run"
+Environment="CF_DATA_DIR=/srv/cf 50%%"
+Environment="PATH=/usr/bin:/bin"
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=default.target

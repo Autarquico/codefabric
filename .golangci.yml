@@ -127,6 +127,14 @@ linters:
           deny:
             - pkg: github.com/Autarquico/codefabric/internal/worker/executor
               desc: outputship does not know the executor
+        # svcunit installs services; what the daemon they run does is not its business.
+        svcunit:
+          list-mode: strict
+          files: ["**/internal/support/svcunit/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/Autarquico/codefabric/internal/support/svcunit
+            - github.com/Autarquico/codefabric/internal/support/atomicfile
         store:
           list-mode: lax
           files: ["**/internal/controller/store/**"]

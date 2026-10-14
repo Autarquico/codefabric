@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by `cf worker install-service`: running it again rewrites this file. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.codefabric.worker</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/cf dir/bin/cf</string>
+		<string>worker</string>
+		<string>run</string>
+		<string>--ssh-target</string>
+		<string>me@host</string>
+		<string>/Users/a b/100% &#34;cf&#34; $HOME\x &amp;&lt;&gt;</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>CF_CONFIG_DIR</key>
+		<string>/home/me/.config/codefabric</string>
+		<key>CF_DATA_DIR</key>
+		<string>/Users/a b/100% &#34;cf&#34; $HOME\x &amp;&lt;&gt;</string>
+		<key>PATH</key>
+		<string>/opt/cf dir/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>AbandonProcessGroup</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>/home/me/Library/Logs/codefabric/com.codefabric.worker.log</string>
+	<key>StandardErrorPath</key>
+	<string>/home/me/Library/Logs/codefabric/com.codefabric.worker.log</string>
+</dict>
+</plist>
