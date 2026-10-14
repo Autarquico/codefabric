@@ -56,6 +56,47 @@ jobs:
           CF_REQUIRE_TMUX: "1"
           CF_REQUIRE_GIT: "1"
 
+  # The scenarios of service-units against the real systemd --user and launchd
+  # of the runner. Not required, and allowed to fail, until it has passed twice
+  # in a row: a hosted runner may not give the environment (B5).
+  service-units:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y git tmux
+      - if: runner.os == 'macOS'
+        run: brew install tmux
+      - if: runner.os == 'Linux'
+        name: Start the user's systemd
+        run: |
+          uid="$(id -u)"
+          sudo loginctl enable-linger "$USER"
+          sudo systemctl start "user@${uid}.service"
+          echo "XDG_RUNTIME_DIR=/run/user/${uid}" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus" >> "$GITHUB_ENV"
+          for _ in $(seq 1 30); do
+            if XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user show-environment >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          echo "the user's systemd did not answer" >&2
+          exit 1
+      - run: CGO_ENABLED=1 go test -race -tags integration -count=1 -v -run 'TestScenario_ServiceUnits|TestServiceUnits' ./cmd/cf/
+        env:
+          CF_REQUIRE_TMUX: "1"
+          CF_REQUIRE_GIT: "1"
+          CF_REQUIRE_SYSTEMD: ${{ runner.os == 'Linux' && '1' || '' }}
+          CF_REQUIRE_LAUNCHD: ${{ runner.os == 'macOS' && '1' || '' }}
+
   cross-build:
     runs-on: ubuntu-latest
     steps:
