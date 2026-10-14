@@ -4,6 +4,7 @@ package tmux_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -284,5 +285,81 @@ func TestListNamesOnlyTheSessionsOfRuns(t *testing.T) {
 	names, err := r.List(t.Context())
 	if err != nil || len(names) != 1 || names[0] != cfruntime.NameFor("run_c", 2) {
 		t.Errorf("List = %v, %v", names, err)
+	}
+}
+
+func TestTmpDirReachesTheServerOfAnotherEnvironment(t *testing.T) {
+	newRuntime(t) // skips without tmux
+	// A short directory: the socket path must fit in the 104 bytes macOS allows.
+	tmpDir, err := os.MkdirTemp("/tmp", "cft-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+	socket := tmux.SocketName(t.TempDir())
+	elsewhere, err := tmux.New(tmux.Options{Socket: socket, TmpDir: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = elsewhere.KillServer(context.WithoutCancel(t.Context())) })
+	name := cfruntime.NameFor("run_a", 1)
+	if _, err := elsewhere.Start(t.Context(), cfruntime.Spec{Name: name, Dir: t.TempDir(), Command: sh("sleep 60")}); err != nil {
+		t.Fatal(err)
+	}
+
+	here, err := tmux.New(tmux.Options{Socket: socket})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs, err := here.List(t.Context()); err != nil || len(runs) != 0 {
+		t.Errorf("without the TmpDir: %v, %v", runs, err)
+	}
+	if runs, err := elsewhere.List(t.Context()); err != nil || len(runs) != 1 || runs[0] != name {
+		t.Errorf("with the TmpDir: %v, %v", runs, err)
+	}
+	if err := elsewhere.KillServer(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, fmt.Sprintf("tmux-%d", os.Getuid()), socket)); !os.IsNotExist(err) {
+		t.Errorf("the socket is still there: %v", err)
+	}
+}
+
+// With OwnTmpDir and no TmpDir, a TMUX_TMPDIR in this environment does not
+// count: the server is that of tmux's default directory, as for a service
+// whose unit sets none.
+func TestOwnTmpDirIgnoresTheTmpDirOfTheEnvironment(t *testing.T) {
+	newRuntime(t) // skips without tmux
+	conflicting, err := os.MkdirTemp("/tmp", "cft-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(conflicting) })
+	t.Setenv("TMUX_TMPDIR", conflicting)
+	socket := tmux.SocketName(t.TempDir())
+	servers := map[string]tmux.Options{
+		cfruntime.NameFor("run_default", 1):   {Socket: socket, OwnTmpDir: true},
+		cfruntime.NameFor("run_inherited", 1): {Socket: socket},
+	}
+	runtimes := map[string]*tmux.Runtime{}
+	for name, o := range servers {
+		r, err := tmux.New(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = r.KillServer(context.WithoutCancel(t.Context())) })
+		if _, err := r.Start(t.Context(), cfruntime.Spec{Name: name, Dir: t.TempDir(), Command: sh("sleep 60")}); err != nil {
+			t.Fatal(err)
+		}
+		runtimes[name] = r
+	}
+	for name, r := range runtimes {
+		if runs, err := r.List(t.Context()); err != nil || len(runs) != 1 || runs[0] != name {
+			t.Errorf("%s: %v, %v", name, runs, err)
+		}
+	}
+	defaultSocket := filepath.Join("/tmp", fmt.Sprintf("tmux-%d", os.Getuid()), socket)
+	if _, err := os.Stat(defaultSocket); err != nil {
+		t.Errorf("no server in tmux's default directory: %v", err)
 	}
 }

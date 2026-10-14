@@ -18,6 +18,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/svcunit"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 )
 
@@ -25,7 +26,7 @@ import (
 // CLI merges it with the administration commands of the same name.
 func Command() *cobra.Command {
 	cmd := &cobra.Command{Use: "worker"}
-	cmd.AddCommand(newJoinCmd(), newRunCmd(), newExecCmd())
+	cmd.AddCommand(newJoinCmd(), newRunCmd(), newExecCmd(), newInstallServiceCmd(), newUninstallServiceCmd())
 	return cmd
 }
 
@@ -137,6 +138,73 @@ func newExecCmd() *cobra.Command {
 	cmd.Flags().StringVar(&runDir, "run-dir", "", "the directory of the Run, with its launch.json")
 	_ = cmd.MarkFlagRequired("run-dir")
 	return cmd
+}
+
+func newInstallServiceCmd() *cobra.Command {
+	var (
+		o      ServiceOptions
+		dryRun bool
+	)
+	cmd := &cobra.Command{
+		Use:   "install-service",
+		Short: "Run the Worker as a service of this user (systemd --user or launchd)",
+		Long: "Run `cf worker run` as a service of this user: a systemd --user unit on Linux, a launchd\n" +
+			"agent on macOS. The service keeps the Runs alive across its own restarts, and installing\n" +
+			"what is installed and running changes nothing. Its PATH is calculated now (--path replaces\n" +
+			"it); changing it later does not reach the Runs that are going, nor a tmux server already up.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			paths, err := config.ResolveFromEnv()
+			if err != nil {
+				return err
+			}
+			o.Paths, o.TmuxTmpDir = paths, os.Getenv("TMUX_TMPDIR")
+			o.Controller, _ = cmd.Flags().GetString("controller")
+			if dryRun {
+				path, content, warnings, err := RenderService(o)
+				if err != nil {
+					return err
+				}
+				return svcunit.PrintFile(cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput(cmd), path, content, warnings)
+			}
+			res, err := InstallService(cmd.Context(), o)
+			if err != nil {
+				return err
+			}
+			return printService(cmd, res, "Installed the Worker service", "The Worker service is installed and running; nothing changed")
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&o.SSHTarget, "ssh-target", "",
+		"how clients reach this machine to attach to a Run, [user@]host[:port] (default: <user>@<hostname>; none: attach is not offered)")
+	f.StringVar(&o.Binary, "binary", "", "the cf the service runs, as an absolute path (default: this one)")
+	f.StringVar(&o.PATH, "path", "", "the PATH of the service, of absolute directories (default: those of cf, tmux and git, then the usual ones)")
+	f.BoolVar(&dryRun, "dry-run", false, "show the file and where it would go, and change nothing")
+	return cmd
+}
+
+func newUninstallServiceCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall-service",
+		Short: "Stop and remove the Worker's service; its Runs go on",
+		Long: "Stop the Worker's service, disable it and remove its file. The Runs in tmux are not\n" +
+			"stopped: they go on unsupervised until the Worker runs again, and the command lists them.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := UninstallService(cmd.Context(), ServiceOptions{})
+			if err != nil {
+				return err
+			}
+			return printService(cmd, res, "Uninstalled the Worker service", "No Worker service is installed; nothing changed")
+		},
+	}
+}
+
+func printService(cmd *cobra.Command, res ServiceResult, changed, unchanged string) error {
+	if jsonOutput(cmd) {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
+	}
+	return svcunit.PrintResult(cmd.OutOrStdout(), cmd.ErrOrStderr(), res.Result, changed, unchanged)
 }
 
 // jsonOutput reads the root command's persistent --json (internal/cli owns

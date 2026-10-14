@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by `{{xml .Spec.Installer}}`: running it again rewrites this file. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>{{xml .Spec.Label}}</string>
+	<key>ProgramArguments</key>
+	<array>
+{{- range .Spec.Argv}}
+		<string>{{xml .}}</string>
+{{- end}}
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+{{- range .Spec.Env}}
+		<key>{{xml .Key}}</key>
+		<string>{{xml .Value}}</string>
+{{- end}}
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+{{- if .Spec.KeepProcesses}}
+	<key>AbandonProcessGroup</key>
+	<true/>
+{{- end}}
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>{{xml .Log}}</string>
+	<key>StandardErrorPath</key>
+	<string>{{xml .Log}}</string>
+</dict>
+</plist>

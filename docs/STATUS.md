@@ -20,6 +20,7 @@
 - #11 Ejecutor del Worker con tmux, wrapper y journal
 - #12 Git relay y publicación del resultado
 - #13 Stop, cancel, lost y reconciliación
+- #14 Observación: attach, ps, eventos y output
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -27,7 +28,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-- #14 Observación: attach, ps, eventos y output
+- #15 Unidades de servicio systemd y launchd
 <!-- /pm-sync:in-progress -->
 
 ---

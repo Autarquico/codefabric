@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -34,12 +35,22 @@ const (
 type Options struct {
 	Socket string
 	Binary string // defaults to "tmux" on the PATH
+	// TmpDir is where tmux keeps its sockets ($TMUX_TMPDIR); empty is what the
+	// environment of this process says. It lets a process reach the server of a
+	// Worker that runs with another environment, such as a service.
+	TmpDir string
+	// OwnTmpDir makes TmpDir all there is: empty is then tmux's default (/tmp),
+	// not this process's TMUX_TMPDIR, as for a service whose environment has none.
+	OwnTmpDir bool
 }
 
 // Runtime runs sessions in tmux.
 type Runtime struct {
 	socket string
 	binary string
+	tmpDir string
+	// inheritTmpDir is an empty tmpDir that leaves TMUX_TMPDIR to the environment.
+	inheritTmpDir bool
 
 	attachMu sync.Mutex
 	attach   string // the absolute path of binary, once Check resolved it
@@ -59,7 +70,7 @@ func New(o Options) (*Runtime, error) {
 	if bin == "" {
 		bin = "tmux"
 	}
-	return &Runtime{socket: o.Socket, binary: bin}, nil
+	return &Runtime{socket: o.Socket, binary: bin, tmpDir: o.TmpDir, inheritTmpDir: o.TmpDir == "" && !o.OwnTmpDir}, nil
 }
 
 // Check says whether tmux is here and recent enough (3.0, which runs a command
@@ -221,7 +232,7 @@ func (r *Runtime) KillServer(ctx context.Context) error {
 		return err
 	}
 	// tmux can leave the socket file of a server that is gone.
-	if err := os.Remove(socketPath(r.socket)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(r.socketPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("tmux: removing the socket: %w", err)
 	}
 	return nil
@@ -229,12 +240,15 @@ func (r *Runtime) KillServer(ctx context.Context) error {
 
 // socketPath is where tmux puts the socket named by -L: $TMUX_TMPDIR, or /tmp,
 // then tmux-<uid>/<name>.
-func socketPath(name string) string {
-	dir := os.Getenv("TMUX_TMPDIR")
+func (r *Runtime) socketPath() string {
+	dir := r.tmpDir
+	if r.inheritTmpDir {
+		dir = os.Getenv("TMUX_TMPDIR")
+	}
 	if dir == "" {
 		dir = "/tmp"
 	}
-	return filepath.Join(dir, fmt.Sprintf("tmux-%d", os.Getuid()), name)
+	return filepath.Join(dir, fmt.Sprintf("tmux-%d", os.Getuid()), r.socket)
 }
 
 // List names the sessions of Runs of this server.
@@ -252,16 +266,26 @@ func (r *Runtime) List(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// Sessions lists the names of the sessions of this server.
+// Sessions lists the names of the sessions of this server: none if there is no
+// server, and an error if tmux could not tell.
 func (r *Runtime) Sessions(ctx context.Context) ([]string, error) {
-	out, _, err := r.exec(ctx, "list-sessions", "-F", "#{session_name}")
-	if isMissing(err) {
+	out, stderr, err := r.exec(ctx, "list-sessions", "-F", "#{session_name}")
+	switch {
+	case err == nil:
+		return strings.Fields(out), nil
+	case isMissing(err) && noServer(stderr):
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return strings.Fields(out), nil
+	return nil, fmt.Errorf("tmux: listing sessions: %w (%s)", err, strings.TrimSpace(stderr))
+}
+
+// noServer says whether tmux failed for want of a server at its socket: there
+// is no socket (`error connecting to <socket> (No such file or directory)`), or
+// nothing listens on it (`no server running on <socket>`), as tmux 3.7 says.
+func noServer(stderr string) bool {
+	s := strings.TrimSpace(stderr)
+	return strings.HasPrefix(s, "no server running on ") ||
+		strings.HasPrefix(s, "error connecting to ") && strings.HasSuffix(s, " (No such file or directory)")
 }
 
 func (r *Runtime) session(h cfruntime.Handle) (string, error) {
@@ -295,7 +319,7 @@ func (r *Runtime) base() []string { return []string{"-L", r.socket, "-f", "/dev/
 func (r *Runtime) exec(ctx context.Context, args ...string) (stdout, stderr string, err error) {
 	var out, errOut bytes.Buffer
 	cmd := exec.CommandContext(ctx, r.binary, append(r.base(), args...)...) //nolint:gosec // the binary is tmux
-	cmd.Env = environment()
+	cmd.Env = r.environment()
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	cmd.WaitDelay = waitDelay
 	err = cmd.Run()
@@ -311,9 +335,18 @@ func isMissing(err error) bool {
 }
 
 // environment is that of the daemon without the variables of a tmux client, so
-// that a daemon started from inside tmux does not talk to that tmux.
-func environment() []string {
-	return envutil.WithoutTmux(os.Environ())
+// that a daemon started from inside tmux does not talk to that tmux, and with
+// the TMUX_TMPDIR of the Runtime unless it inherits it.
+func (r *Runtime) environment() []string {
+	env := envutil.WithoutTmux(os.Environ())
+	if r.inheritTmpDir {
+		return env
+	}
+	env = slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "TMUX_TMPDIR=") })
+	if r.tmpDir == "" {
+		return env
+	}
+	return append(env, "TMUX_TMPDIR="+r.tmpDir)
 }
 
 // shellQuote quotes s for /bin/sh, which tmux runs a pipe-pane command with.

@@ -1,0 +1,20 @@
+# Written by `cf worker install-service`: running it again rewrites this file.
+[Unit]
+Description=CodeFabric Worker
+
+[Service]
+Type=exec
+ExecStart="/opt/cf dir/bin/cf" "worker" "run" "--ssh-target" "me@host" "/Users/a b/100%% \"cf\" $$HOME\\x &<>"
+Environment="CF_CONFIG_DIR=/home/me/.config/codefabric"
+Environment="CF_DATA_DIR=/Users/a b/100%% \"cf\" $HOME\\x &<>"
+Environment="PATH=/opt/cf dir/bin:/usr/bin:/bin"
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+# What the daemon starts outlives a stop or a restart of the service.
+KillMode=process
+# A child that the OOM killer ends does not stop the service.
+OOMPolicy=continue
+
+[Install]
+WantedBy=default.target
