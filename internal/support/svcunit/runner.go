@@ -29,13 +29,6 @@ func (e *CommandError) Error() string {
 	return msg
 }
 
-// exited says whether err is a tool that ran and said no, as opposed to one
-// that could not run at all.
-func exited(err error) bool {
-	var ce *CommandError
-	return errors.As(err, &ce)
-}
-
 // ExecRunner runs the tools as processes.
 type ExecRunner struct{}
 

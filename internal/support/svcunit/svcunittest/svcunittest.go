@@ -235,12 +235,15 @@ func (f *Launchd) print(argv []string, target string) (string, error) {
 		if f.GUI {
 			return "gui domain\n", nil
 		}
-		return "", Exit(argv, 125, "Domain does not support specified action")
+		return "", Exit(argv, 112, "Could not find domain for user gui")
 	}
 	if target == f.UserDomain() {
 		return "user domain\n", nil
 	}
 	domain, _ := strings.CutSuffix(target, "/"+f.Label)
+	if domain == f.GUIDomain() && !f.GUI {
+		return "", Exit(argv, 112, "Could not find domain for user gui")
+	}
 	loaded := f.Domain != "" && (domain == f.Domain || f.Twin && slices.Contains([]string{f.GUIDomain(), f.UserDomain()}, domain))
 	if !loaded {
 		return "", Exit(argv, 113, fmt.Sprintf("Could not find service %q in domain", f.Label))

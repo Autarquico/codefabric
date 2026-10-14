@@ -1,6 +1,7 @@
 package svcunit
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,6 +51,20 @@ func (j job) running() bool {
 	return state != "not running"
 }
 
+// The codes `launchctl print` exits with when the agent is not there: the
+// domain does not exist (no graphical session) or has no such service.
+const (
+	launchctlNoDomain  = 112
+	launchctlNoService = 113
+)
+
+// notLoaded says whether err is launchctl saying the agent is not loaded, as
+// opposed to failing to tell.
+func notLoaded(err error) bool {
+	var ce *CommandError
+	return errors.As(err, &ce) && (ce.Code == launchctlNoDomain || ce.Code == launchctlNoService)
+}
+
 // find looks for the agent in both domains: it is operated where it is loaded.
 func (m launchd) find(o *op, s Spec) ([]job, error) {
 	var loaded []job
@@ -58,7 +73,7 @@ func (m launchd) find(o *op, s Spec) ([]job, error) {
 		switch {
 		case err == nil:
 			loaded = append(loaded, job{domain: domain, print: out})
-		case !exited(err):
+		case !notLoaded(err):
 			return nil, err
 		}
 	}

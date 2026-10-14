@@ -166,3 +166,19 @@ func TestLaunchd_UninstallPropagatesFailuresAndKeepsTheFile(t *testing.T) {
 		t.Errorf("the plist went: %v", err)
 	}
 }
+
+// Only "no such service" (113) and "no such domain" (112) mean the agent is
+// not loaded: any other failure of `launchctl print` cannot tell, and the plist stays.
+func TestLaunchd_APrintThatCannotTellIsAnError(t *testing.T) {
+	e, fake := newLaunchd(t)
+	install(t, e, workerSpec())
+	denied := svcunittest.Exit([]string{"launchctl", "print"}, 1, "Could not print domain: 1: Operation not permitted")
+	fake.Fail("launchctl print gui/501/", denied)
+	res, err := svcunit.Uninstall(t.Context(), e, workerSpec())
+	if !errors.Is(err, denied) || res.Changed {
+		t.Errorf("uninstall: %+v %v", res, err)
+	}
+	if _, err := os.Stat(fake.Path); err != nil {
+		t.Errorf("the plist went: %v", err)
+	}
+}
