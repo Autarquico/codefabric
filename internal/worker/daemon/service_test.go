@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/svcunit"
@@ -127,10 +128,10 @@ func TestScenario_ServiceUnits_Uninstall(t *testing.T) {
 			o.TmuxTmpDir = "/tmp/elsewhere"
 			installService(t, o)
 			runs := []string{"cf-run_a-e1", "cf-run_b-e2"}
-			var asked []string
+			var asked tmux.Options
 			// Uninstall reads the identity of the installed service, not that of the shell.
-			un := daemon.ServiceOptions{Manager: o.Manager, Sessions: func(_ context.Context, dataDir, tmpDir string) ([]string, error) {
-				asked = []string{dataDir, tmpDir}
+			un := daemon.ServiceOptions{Manager: o.Manager, Sessions: func(_ context.Context, server tmux.Options) ([]string, error) {
+				asked = server
 				return runs, nil
 			}}
 			n := len(fake.Calls())
@@ -139,8 +140,9 @@ func TestScenario_ServiceUnits_Uninstall(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(asked, []string{o.Paths.DataDir, "/tmp/elsewhere"}) {
-				t.Errorf("the Runs were listed for %q", asked)
+			want := tmux.Options{Socket: tmux.SocketName(o.Paths.WorkerDataDir()), TmpDir: "/tmp/elsewhere", OwnTmpDir: true}
+			if asked != want {
+				t.Errorf("the Runs were listed in %+v", asked)
 			}
 			if k := kills(fake.Calls()[n:]); len(k) != 0 {
 				t.Errorf("uninstall ran %q", k)
@@ -156,10 +158,29 @@ func TestScenario_ServiceUnits_Uninstall(t *testing.T) {
 	}
 }
 
+// A unit without TMUX_TMPDIR has its tmux server in tmux's default directory:
+// the Runs are listed there, not where this shell's TMUX_TMPDIR points.
+func TestUninstallService_AUnitWithoutTmuxTmpDirIgnoresTheCallers(t *testing.T) {
+	o, _ := serviceBox(t, "linux")
+	installService(t, o)
+	t.Setenv("TMUX_TMPDIR", "/tmp/the-callers")
+	var asked tmux.Options
+	o.Sessions = func(_ context.Context, server tmux.Options) ([]string, error) {
+		asked = server
+		return nil, nil
+	}
+	if _, err := daemon.UninstallService(t.Context(), o); err != nil {
+		t.Fatal(err)
+	}
+	if want := (tmux.Options{Socket: tmux.SocketName(o.Paths.WorkerDataDir()), OwnTmpDir: true}); asked != want {
+		t.Errorf("the Runs were listed in %+v, want %+v", asked, want)
+	}
+}
+
 func TestUninstallService_RunsThatCannotBeListedAreUnknownNotNone(t *testing.T) {
 	o, _ := serviceBox(t, "linux")
 	installService(t, o)
-	o.Sessions = func(context.Context, string, string) ([]string, error) { return nil, errors.New("no tmux") }
+	o.Sessions = func(context.Context, tmux.Options) ([]string, error) { return nil, errors.New("no tmux") }
 	res, err := daemon.UninstallService(t.Context(), o)
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +204,7 @@ func TestUninstallService_NothingInstalledIsNotAnError(t *testing.T) {
 func TestUninstallService_PropagatesTheFailureAndKeepsTheFile(t *testing.T) {
 	o, fake := serviceBox(t, "linux")
 	res := installService(t, o)
-	o.Sessions = func(context.Context, string, string) ([]string, error) { return nil, nil }
+	o.Sessions = func(context.Context, tmux.Options) ([]string, error) { return nil, nil }
 	boom := errors.New("Failed to connect to bus")
 	fake.Fail("systemctl --user stop", boom)
 	if _, err := daemon.UninstallService(t.Context(), o); !errors.Is(err, boom) {

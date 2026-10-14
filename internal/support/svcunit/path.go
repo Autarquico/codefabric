@@ -6,8 +6,11 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -61,9 +64,14 @@ func ResolvePATH(goos, given, program string, tools ...string) (string, error) {
 // replaceable refuses a program that a user other than uid (or root) could
 // swap for one of their own, which the service would then run as uid, again
 // and again: one whose file or any directory above it, through symbolic links
-// or not, is owned by another user, or is writable by others without the
-// sticky bit. What does not exist yet is judged by the nearest directory that does.
+// or not, is owned by another user, or is writable, without the sticky bit, by
+// others or by a group that is not trusted (see trustedGroup). What
+// does not exist yet is judged by the nearest directory that does.
 func replaceable(program string, uid int) error {
+	return replaceableTrusting(program, uid, trustedGroupOf(runtime.GOOS, uid))
+}
+
+func replaceableTrusting(program string, uid int, trusted func(gid int) bool) error {
 	paths := []string{program}
 	if resolved, err := filepath.EvalSymlinks(program); err == nil && resolved != program {
 		paths = append(paths, resolved)
@@ -82,7 +90,7 @@ func replaceable(program string, uid int) error {
 			case err != nil:
 				return fmt.Errorf("svcunit: %w", err)
 			default:
-				if reason := unsafeTo(info, uid); reason != "" {
+				if reason := unsafeTo(info, path, uid, trusted); reason != "" {
 					return &InputError{Flag: "--binary", Reason: fmt.Sprintf("%s runs from %s, which %s: another user could "+
 						"replace what the service runs; install it where only you and root can write", program, path, reason)}
 				}
@@ -97,14 +105,51 @@ func replaceable(program string, uid int) error {
 	return nil
 }
 
-func unsafeTo(info fs.FileInfo, uid int) string {
-	if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != uid && st.Uid != 0 {
+func unsafeTo(info fs.FileInfo, path string, uid int, trusted func(gid int) bool) string {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if ok && int(st.Uid) != uid && st.Uid != 0 {
 		return fmt.Sprintf("belongs to another user (uid %d)", st.Uid)
 	}
-	if info.Mode().Perm()&0o002 != 0 && (!info.IsDir() || info.Mode()&fs.ModeSticky == 0) {
+	if info.IsDir() && info.Mode()&fs.ModeSticky != 0 {
+		// Like /tmp: whoever can write cannot replace what is someone else's.
+		return ""
+	}
+	if info.Mode().Perm()&0o002 != 0 {
 		return "anyone can write"
 	}
+	if ok && info.Mode().Perm()&0o020 != 0 && !trusted(int(st.Gid)) {
+		return fmt.Sprintf("the members of group %d can write (`chmod g-w %s` stops them)", st.Gid, path)
+	}
 	return ""
+}
+
+// trustedGroupOf says whether a group may write where the services of uid
+// run from (see trustedGroup), looking up its name and that of the user.
+func trustedGroupOf(goos string, uid int) func(gid int) bool {
+	owner, err := user.LookupId(strconv.Itoa(uid))
+	if err != nil {
+		owner = nil
+	}
+	return func(gid int) bool {
+		name := ""
+		if g, err := user.LookupGroupId(strconv.Itoa(gid)); err == nil {
+			name = g.Name
+		}
+		return trustedGroup(goos, gid, name, owner)
+	}
+}
+
+// trustedGroup says whether the members of a group, writing a program a
+// service runs, could do nothing its owner and root could not: a group of
+// root's equals (root, wheel, sudo, and admin on macOS), who can replace any
+// program anyway, or the private group of the user, of the same name and their
+// primary group. An unknown name trusts only root's group.
+func trustedGroup(goos string, gid int, name string, owner *user.User) bool {
+	switch {
+	case gid == 0, name == "wheel", name == "sudo", name == "admin" && goos == "darwin":
+		return true
+	}
+	return owner != nil && name != "" && name == owner.Username && strconv.Itoa(gid) == owner.Gid
 }
 
 // ServicePATH is the explicit PATH of a service, calculated when it is

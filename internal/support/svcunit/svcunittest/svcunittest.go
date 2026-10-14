@@ -32,12 +32,17 @@ func (r *recorder) Calls() []string {
 	return out
 }
 
-// Fail makes every command that starts with prefix fail with err.
+// Fail makes every command that starts with prefix fail with err; a nil err
+// makes them work again.
 func (r *recorder) Fail(prefix string, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.fail == nil {
 		r.fail = map[string]error{}
+	}
+	if err == nil {
+		delete(r.fail, prefix)
+		return
 	}
 	r.fail[prefix] = err
 }

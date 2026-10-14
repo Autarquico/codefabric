@@ -85,20 +85,26 @@ func (m launchd) find(o *op, s Spec) ([]job, error) {
 }
 
 // checkLoaded refuses an agent loaded from a file this package did not write,
-// or one that would kill what the daemon started when it stops.
-func (m launchd) checkLoaded(o *op, j job, s Spec) error {
+// or one that would kill what the daemon started when it stops. Before
+// stopping it, not knowing whether it would is a refusal too.
+func (m launchd) checkLoaded(o *op, j job, s Spec, stopping bool) error {
+	unit := j.domain + "/" + s.Label
 	if from, _ := j.field("path"); !sameFile(from, m.path(s)) {
-		return fmt.Errorf("%s/%s is loaded from %s, not from %s: leaving it alone", j.domain, s.Label, from, m.path(s))
+		return fmt.Errorf("%s is loaded from %s, not from %s: leaving it alone", unit, from, m.path(s))
 	}
 	if !s.KeepProcesses {
 		return nil
 	}
 	properties, ok := j.field("properties")
 	switch {
+	case !ok && stopping:
+		return fmt.Errorf("`launchctl print %s` does not list the properties of the agent, so there is no telling whether it "+
+			"abandons its process group, and stopping it could kill what it started: if its properties include "+
+			"\"abandon process group\", stop it by hand with `launchctl bootout %s` and try again", unit, unit)
 	case !ok:
-		o.warn("could not read whether %s/%s abandons its process group: if it does not, stopping it kills what it started", j.domain, s.Label)
+		o.warn("could not read whether %s abandons its process group: if it does not, stopping it kills what it started", unit)
 	case !strings.Contains(properties, "abandon process group"):
-		return fmt.Errorf("%s/%s does not abandon its process group: stopping it would kill what it started", j.domain, s.Label)
+		return fmt.Errorf("%s does not abandon its process group: stopping it would kill what it started", unit)
 	}
 	return nil
 }
@@ -126,7 +132,6 @@ func (m launchd) freshDomain(o *op) string {
 }
 
 func (m launchd) install(o *op, s Spec) error {
-	path := m.path(s)
 	o.res.Manager = "launchd"
 	content, err := m.render(s)
 	if err != nil {
@@ -135,10 +140,16 @@ func (m launchd) install(o *op, s Spec) error {
 	if err := os.MkdirAll(filepath.Dir(m.log(s)), 0o700); err != nil {
 		return fmt.Errorf("svcunit: %w", err)
 	}
-	changed, err := o.write(path, content)
+	undo, err := o.write(m.path(s), content)
 	if err != nil {
 		return err
 	}
+	return o.rollback(m.apply(o, s, undo != nil), undo)
+}
+
+// apply makes launchd run the plist as it is: changed says it was just written.
+func (m launchd) apply(o *op, s Spec, changed bool) error {
+	path := m.path(s)
 	loaded, err := m.find(o, s)
 	if err != nil {
 		return err
@@ -152,7 +163,7 @@ func (m launchd) install(o *op, s Spec) error {
 	o.res.Unit = domain + "/" + s.Label
 	// Refused before anything is enabled: a refused install changes nothing.
 	if len(loaded) == 1 {
-		if err := m.checkLoaded(o, loaded[0], s); err != nil {
+		if err := m.checkLoaded(o, loaded[0], s, changed); err != nil {
 			return err
 		}
 	}
@@ -187,7 +198,7 @@ func (m launchd) uninstall(o *op, s Spec) error {
 	}
 	if len(loaded) == 1 {
 		o.res.Unit = loaded[0].domain + "/" + s.Label
-		if err := m.checkLoaded(o, loaded[0], s); err != nil {
+		if err := m.checkLoaded(o, loaded[0], s, true); err != nil {
 			return err
 		}
 		if err := o.act("launchctl", "bootout", o.res.Unit); err != nil {

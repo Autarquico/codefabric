@@ -1,8 +1,10 @@
 package svcunit_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -119,11 +121,85 @@ func TestLaunchd_AnAgentThatWouldKillItsChildrenIsRefused(t *testing.T) {
 	if _, err := os.Stat(fake.Path); err != nil {
 		t.Errorf("the refused uninstall removed the file: %v", err)
 	}
+}
+
+// Not knowing whether the agent abandons its process group is a warning while
+// nothing stops it, and a refusal before bootout, on update and on uninstall.
+func TestLaunchd_UnknownPropertiesRefuseABootout(t *testing.T) {
+	e, fake := newLaunchd(t)
+	install(t, e, workerSpec())
+	before, err := os.ReadFile(fake.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fake.Abandon = "unknown"
 	res := install(t, e, workerSpec())
 	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "could not read") {
 		t.Errorf("warnings = %q", res.Warnings)
 	}
+
+	changed := workerSpec()
+	changed.Argv = append(changed.Argv, "--controller", "other:7443")
+	n := len(fake.Calls())
+	if _, err := svcunit.Install(t.Context(), e, changed); err == nil || !strings.Contains(err.Error(), "launchctl print gui/501/"+label) {
+		t.Errorf("update: %v", err)
+	}
+	if _, err := svcunit.Uninstall(t.Context(), e, workerSpec()); err == nil || !strings.Contains(err.Error(), "abandon process group") {
+		t.Errorf("uninstall: %v", err)
+	}
+	if !queriesOnly(fake.Calls()[n:]) || fake.Domain == "" {
+		t.Errorf("ran %q", fake.Calls()[n:])
+	}
+	if after, err := os.ReadFile(fake.Path); err != nil || !bytes.Equal(after, before) {
+		t.Errorf("the plist changed: %v", err)
+	}
+}
+
+// A change that launchd did not apply is undone, so that installing again
+// applies it rather than finding the file already there.
+func TestLaunchd_AFailedChangeIsUndoneAndAppliedOnRetry(t *testing.T) {
+	changed := workerSpec()
+	changed.Argv = append(changed.Argv, "--controller", "other:7443")
+	for failing, retry := range map[string][]string{
+		"launchctl bootout":   {"launchctl bootout gui/501/" + label, "launchctl bootstrap gui/501 "},
+		"launchctl bootstrap": {"launchctl bootstrap gui/501 "}, // the bootout went through
+	} {
+		t.Run(failing, func(t *testing.T) {
+			e, fake := newLaunchd(t)
+			install(t, e, workerSpec())
+			before, err := os.ReadFile(fake.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			boom := svcunittest.Exit([]string{"launchctl"}, 5, "Input/output error")
+			fake.Fail(failing, boom)
+			res, err := svcunit.Install(t.Context(), e, changed)
+			if !errors.Is(err, boom) || !slices.Contains(res.Actions, "restore "+fake.Path) {
+				t.Fatalf("install: %q %v", res.Actions, err)
+			}
+			if after, _ := os.ReadFile(fake.Path); !bytes.Equal(after, before) {
+				t.Errorf("the plist was left changed:\n%s", after)
+			}
+
+			fake.Fail(failing, nil)
+			want := append([]string{"write " + fake.Path}, retry...)
+			want[len(want)-1] += fake.Path
+			assertActions(t, install(t, e, changed), want...)
+		})
+	}
+}
+
+func TestLaunchd_AFailedFreshInstallLeavesNoFile(t *testing.T) {
+	e, fake := newLaunchd(t)
+	boom := svcunittest.Exit([]string{"launchctl"}, 5, "Input/output error")
+	fake.Fail("launchctl bootstrap", boom)
+	res, err := svcunit.Install(t.Context(), e, workerSpec())
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v", err)
+	}
+	assertActions(t, res, "write "+fake.Path, "remove "+fake.Path)
+	fake.Fail("launchctl bootstrap", nil)
+	assertActions(t, install(t, e, workerSpec()), "write "+fake.Path, "launchctl bootstrap gui/501 "+fake.Path)
 }
 
 func TestLaunchd_AnAgentLoadedFromElsewhereIsLeftAlone(t *testing.T) {

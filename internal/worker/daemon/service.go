@@ -28,9 +28,8 @@ type ServiceOptions struct {
 	Controller string // as for `cf worker run`
 	// Manager is the service manager; zero (no GOOS) is that of this user.
 	Manager svcunit.Env
-	// Sessions lists the sessions of Runs in the tmux server of the Worker with
-	// a data directory; nil asks tmux.
-	Sessions func(ctx context.Context, dataDir, tmuxTmpDir string) ([]string, error)
+	// Sessions lists the sessions of Runs in the tmux server o names; nil asks tmux.
+	Sessions func(ctx context.Context, o tmux.Options) ([]string, error)
 
 	// For tests: a suffix of the unit and of the label, and more environment
 	// and more arguments for `cf worker run`.
@@ -131,7 +130,13 @@ func UninstallService(ctx context.Context, o ServiceOptions) (ServiceResult, err
 		if sessions == nil {
 			sessions = tmuxSessions
 		}
-		runs, listErr = sessions(ctx, installed["CF_DATA_DIR"], installed["TMUX_TMPDIR"])
+		// The server of the service: a unit without TMUX_TMPDIR runs tmux
+		// with none, whatever the environment of this command says.
+		runs, listErr = sessions(ctx, tmux.Options{
+			Socket:    tmux.SocketName(config.Paths{DataDir: installed["CF_DATA_DIR"]}.WorkerDataDir()),
+			TmpDir:    installed["TMUX_TMPDIR"],
+			OwnTmpDir: true,
+		})
 	}
 	res, err := svcunit.Uninstall(ctx, env, spec)
 	out := ServiceResult{Result: res}
@@ -218,11 +223,9 @@ func serviceError(err error) error {
 	return err
 }
 
-// tmuxSessions lists the Runs in the tmux server of the Worker of dataDir.
-func tmuxSessions(ctx context.Context, dataDir, tmuxTmpDir string) ([]string, error) {
-	rt, err := tmux.New(tmux.Options{
-		Socket: tmux.SocketName(config.Paths{DataDir: dataDir}.WorkerDataDir()), TmpDir: tmuxTmpDir,
-	})
+// tmuxSessions lists the Runs in the tmux server o names.
+func tmuxSessions(ctx context.Context, o tmux.Options) ([]string, error) {
+	rt, err := tmux.New(o)
 	if err != nil {
 		return nil, err
 	}

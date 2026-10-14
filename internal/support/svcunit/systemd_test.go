@@ -1,6 +1,7 @@
 package svcunit_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"slices"
@@ -166,7 +167,8 @@ func TestSystemd_AUnitTheManagerDoesNotFindIsReportedAsSuch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not find") || strings.Contains(err.Error(), "KillMode") {
 		t.Errorf("install: %v", err)
 	}
-	assertActions(t, res, "write "+fake.Path, "systemctl --user daemon-reload")
+	// The refused file goes: what is left is what was there.
+	assertActions(t, res, "write "+fake.Path, "systemctl --user daemon-reload", "remove "+fake.Path, "systemctl --user daemon-reload")
 }
 
 func TestSystemd_WarnsWithoutLinger(t *testing.T) {
@@ -227,4 +229,55 @@ func TestSystemd_UninstallPropagatesFailuresAndKeepsTheFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A change that systemd did not apply is undone, so that installing again
+// applies it rather than finding the file already there.
+func TestSystemd_AFailedChangeIsUndoneAndAppliedOnRetry(t *testing.T) {
+	changed := workerSpec()
+	changed.Argv = append(changed.Argv, "--controller", "other:7443")
+	for _, failing := range []string{"systemctl --user daemon-reload", "systemctl --user restart"} {
+		t.Run(failing, func(t *testing.T) {
+			e, fake := newSystemd(t)
+			install(t, e, workerSpec())
+			before, err := os.ReadFile(fake.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			boom := errors.New("Failed to connect to bus")
+			fake.Fail(failing, boom)
+			res, err := svcunit.Install(t.Context(), e, changed)
+			if !errors.Is(err, boom) {
+				t.Fatalf("err = %v", err)
+			}
+			if after, _ := os.ReadFile(fake.Path); !bytes.Equal(after, before) {
+				t.Errorf("the unit file was left changed:\n%s", after)
+			}
+			if failing == "systemctl --user restart" && !slices.Contains(res.Actions, "restore "+fake.Path) {
+				t.Errorf("actions = %q", res.Actions)
+			}
+
+			fake.Fail(failing, nil)
+			assertActions(t, install(t, e, changed),
+				"write "+fake.Path, "systemctl --user daemon-reload", "systemctl --user restart cf-worker.service")
+		})
+	}
+}
+
+// A fresh install that fails leaves no file behind, and the error says when
+// putting things back failed too.
+func TestSystemd_AFailedFreshInstallLeavesNoFile(t *testing.T) {
+	e, fake := newSystemd(t)
+	boom := errors.New("Failed to connect to bus")
+	fake.Fail("systemctl --user daemon-reload", boom)
+	_, err := svcunit.Install(t.Context(), e, workerSpec())
+	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "putting back the previous file failed too") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := os.Stat(fake.Path); !os.IsNotExist(err) {
+		t.Errorf("the unit file is there: %v", err)
+	}
+	fake.Fail("systemctl --user daemon-reload", nil)
+	assertActions(t, install(t, e, workerSpec()), "write "+fake.Path, "systemctl --user daemon-reload",
+		"systemctl --user enable --no-reload cf-worker.service", "systemctl --user start cf-worker.service")
 }

@@ -63,16 +63,21 @@ func (m systemd) checkEffective(u unitState, s Spec, path string) error {
 }
 
 func (m systemd) install(o *op, s Spec) error {
-	unit, path := s.Name+".service", m.path(s)
-	o.res.Manager, o.res.Unit = "systemd", unit
+	o.res.Manager, o.res.Unit = "systemd", s.Name+".service"
 	content, err := m.render(s)
 	if err != nil {
 		return err
 	}
-	changed, err := o.write(path, content)
+	undo, err := o.write(m.path(s), content)
 	if err != nil {
 		return err
 	}
+	return o.rollback(m.apply(o, s, undo != nil), undo, "systemctl", "--user", "daemon-reload")
+}
+
+// apply makes systemd run the unit file as it is: changed says it was just written.
+func (m systemd) apply(o *op, s Spec, changed bool) error {
+	unit, path := s.Name+".service", m.path(s)
 	u, err := m.show(o, unit)
 	if err != nil {
 		return err

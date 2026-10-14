@@ -39,6 +39,9 @@ type Options struct {
 	// environment of this process says. It lets a process reach the server of a
 	// Worker that runs with another environment, such as a service.
 	TmpDir string
+	// OwnTmpDir makes TmpDir all there is: empty is then tmux's default (/tmp),
+	// not this process's TMUX_TMPDIR, as for a service whose environment has none.
+	OwnTmpDir bool
 }
 
 // Runtime runs sessions in tmux.
@@ -46,6 +49,8 @@ type Runtime struct {
 	socket string
 	binary string
 	tmpDir string
+	// inheritTmpDir is an empty tmpDir that leaves TMUX_TMPDIR to the environment.
+	inheritTmpDir bool
 
 	attachMu sync.Mutex
 	attach   string // the absolute path of binary, once Check resolved it
@@ -65,7 +70,7 @@ func New(o Options) (*Runtime, error) {
 	if bin == "" {
 		bin = "tmux"
 	}
-	return &Runtime{socket: o.Socket, binary: bin, tmpDir: o.TmpDir}, nil
+	return &Runtime{socket: o.Socket, binary: bin, tmpDir: o.TmpDir, inheritTmpDir: o.TmpDir == "" && !o.OwnTmpDir}, nil
 }
 
 // Check says whether tmux is here and recent enough (3.0, which runs a command
@@ -237,7 +242,7 @@ func (r *Runtime) KillServer(ctx context.Context) error {
 // then tmux-<uid>/<name>.
 func (r *Runtime) socketPath() string {
 	dir := r.tmpDir
-	if dir == "" {
+	if r.inheritTmpDir {
 		dir = os.Getenv("TMUX_TMPDIR")
 	}
 	if dir == "" {
@@ -304,7 +309,7 @@ func (r *Runtime) base() []string { return []string{"-L", r.socket, "-f", "/dev/
 func (r *Runtime) exec(ctx context.Context, args ...string) (stdout, stderr string, err error) {
 	var out, errOut bytes.Buffer
 	cmd := exec.CommandContext(ctx, r.binary, append(r.base(), args...)...) //nolint:gosec // the binary is tmux
-	cmd.Env = environment(r.tmpDir)
+	cmd.Env = r.environment()
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	cmd.WaitDelay = waitDelay
 	err = cmd.Run()
@@ -321,14 +326,17 @@ func isMissing(err error) bool {
 
 // environment is that of the daemon without the variables of a tmux client, so
 // that a daemon started from inside tmux does not talk to that tmux, and with
-// tmpDir as TMUX_TMPDIR if it is set.
-func environment(tmpDir string) []string {
+// the TMUX_TMPDIR of the Runtime unless it inherits it.
+func (r *Runtime) environment() []string {
 	env := envutil.WithoutTmux(os.Environ())
-	if tmpDir == "" {
+	if r.inheritTmpDir {
 		return env
 	}
 	env = slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "TMUX_TMPDIR=") })
-	return append(env, "TMUX_TMPDIR="+tmpDir)
+	if r.tmpDir == "" {
+		return env
+	}
+	return append(env, "TMUX_TMPDIR="+r.tmpDir)
 }
 
 // shellQuote quotes s for /bin/sh, which tmux runs a pipe-pane command with.

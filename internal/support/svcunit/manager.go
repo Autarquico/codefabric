@@ -147,24 +147,54 @@ func (o *op) warn(format string, args ...any) {
 	o.res.Warnings = append(o.res.Warnings, fmt.Sprintf(format, args...))
 }
 
-// write puts content at path unless it is there already, and says whether it wrote.
-func (o *op) write(path string, content []byte) (bool, error) {
+// write puts content at path unless it is there already. If it writes, undo
+// puts back what was there before: the previous content, or no file.
+func (o *op) write(path string, content []byte) (undo func() error, err error) {
 	old, err := os.ReadFile(path) //nolint:gosec // the file of the service, at a path this package builds
-	if err == nil && bytes.Equal(old, content) {
-		return false, nil
+	existed := err == nil
+	if existed && bytes.Equal(old, content) {
+		return nil, nil
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("svcunit: %w", err)
+		return nil, fmt.Errorf("svcunit: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return false, fmt.Errorf("svcunit: %w", err)
+		return nil, fmt.Errorf("svcunit: %w", err)
 	}
 	// A service manager refuses a file that others can write.
 	if err := atomicfile.Write(path, content, 0o644); err != nil {
-		return false, err
+		return nil, err
 	}
 	o.res.Actions = append(o.res.Actions, "write "+path)
-	return true, nil
+	return func() error {
+		if !existed {
+			_, err := o.remove(path)
+			return err
+		}
+		if err := atomicfile.Write(path, old, 0o644); err != nil {
+			return err
+		}
+		o.res.Actions = append(o.res.Actions, "restore "+path)
+		return nil
+	}, nil
+}
+
+// rollback undoes a write after err, a failure to apply it, so that the file
+// says what the manager runs and a retry finds the change still to apply; then
+// it runs reload, if any, for the manager to see the file put back. It returns
+// err, joined by whatever failed on the way back.
+func (o *op) rollback(err error, undo func() error, reload ...string) error {
+	if err == nil || undo == nil {
+		return err
+	}
+	back := undo()
+	if back == nil && len(reload) > 0 {
+		back = o.act(reload...)
+	}
+	if back != nil {
+		return fmt.Errorf("%w (putting back the previous file failed too: %w)", err, back)
+	}
+	return err
 }
 
 // remove deletes the file at path, if there is one.
