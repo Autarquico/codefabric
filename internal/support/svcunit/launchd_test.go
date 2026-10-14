@@ -182,3 +182,17 @@ func TestLaunchd_APrintThatCannotTellIsAnError(t *testing.T) {
 		t.Errorf("the plist went: %v", err)
 	}
 }
+
+func TestLaunchd_ARefusedInstallEnablesNothing(t *testing.T) {
+	e, fake := newLaunchd(t)
+	install(t, e, workerSpec())
+	fake.Abandon = "runatload | inferred program"
+	fake.Disabled["gui/501"] = true
+	res, err := svcunit.Install(t.Context(), e, workerSpec())
+	if err == nil || !strings.Contains(err.Error(), "abandon") || res.Changed {
+		t.Errorf("install: %+v %v", res, err)
+	}
+	if !fake.Disabled["gui/501"] {
+		t.Error("the refused install enabled the agent")
+	}
+}

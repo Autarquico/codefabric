@@ -150,6 +150,12 @@ func (m launchd) install(o *op, s Spec) error {
 		domain = m.freshDomain(o)
 	}
 	o.res.Unit = domain + "/" + s.Label
+	// Refused before anything is enabled: a refused install changes nothing.
+	if len(loaded) == 1 {
+		if err := m.checkLoaded(o, loaded[0], s); err != nil {
+			return err
+		}
+	}
 	if off, err := m.disabled(o, domain, s); err != nil {
 		return err
 	} else if off {
@@ -159,9 +165,6 @@ func (m launchd) install(o *op, s Spec) error {
 	}
 	if len(loaded) == 0 {
 		return o.act("launchctl", "bootstrap", domain, path)
-	}
-	if err := m.checkLoaded(o, loaded[0], s); err != nil {
-		return err
 	}
 	switch {
 	case changed:
