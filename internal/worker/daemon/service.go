@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -59,7 +57,7 @@ func InstallService(ctx context.Context, o ServiceOptions) (ServiceResult, error
 	}
 	spec, warnings, err := workerSpec(o, env.GOOS)
 	if err != nil {
-		return ServiceResult{}, err
+		return ServiceResult{}, serviceError(err)
 	}
 	if exists, err := client.CredentialsExist(o.Paths.WorkerCredentialsDir()); err != nil {
 		return ServiceResult{}, err
@@ -67,13 +65,29 @@ func InstallService(ctx context.Context, o ServiceOptions) (ServiceResult, error
 		// The service would only fail and be restarted, over and over.
 		return ServiceResult{}, domain.NewError(domain.CodeUnauthenticated, "this machine has not joined as a Worker; run `cf worker join <invitation>` first", nil)
 	}
-	if installed, found, err := svcunit.InstalledEnv(env, spec); err == nil && found && installed["CF_DATA_DIR"] != o.Paths.DataDir {
-		warnings = append(warnings, fmt.Sprintf("the service used the data directory %s and now uses %s: "+
-			"the Runs left in the server of the old one are not adopted", installed["CF_DATA_DIR"], o.Paths.DataDir))
+	if installed, found, err := svcunit.InstalledEnv(env, spec); err == nil && found {
+		warnings = append(warnings, tmuxServerMoved(installed, o)...)
 	}
 	res, err := svcunit.Install(ctx, env, spec)
 	res.Warnings = append(warnings, res.Warnings...)
 	return ServiceResult{Result: res}, serviceError(err)
+}
+
+// tmuxServerMoved warns of what decides the tmux server of the Runs, the data
+// directory and TMUX_TMPDIR, changing from the installed service to this one:
+// the new Worker does not see the Runs of the old server.
+func tmuxServerMoved(installed map[string]string, o ServiceOptions) []string {
+	var warnings []string
+	for _, v := range []struct{ what, was, is string }{
+		{"the data directory", installed["CF_DATA_DIR"], o.Paths.DataDir},
+		{"TMUX_TMPDIR", installed["TMUX_TMPDIR"], o.TmuxTmpDir},
+	} {
+		if v.was != v.is {
+			warnings = append(warnings, fmt.Sprintf("the service used %s %q and now uses %q: "+
+				"the Runs left in the tmux server of the old one are not adopted", v.what, v.was, v.is))
+		}
+	}
+	return warnings
 }
 
 // RenderService is the file InstallService would write, where, and what is
@@ -85,7 +99,7 @@ func RenderService(o ServiceOptions) (path string, content []byte, warnings []st
 	}
 	spec, warnings, err := workerSpec(o, env.GOOS)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, serviceError(err)
 	}
 	path, content, err = svcunit.Render(env, spec)
 	return path, content, warnings, serviceError(err)
@@ -147,28 +161,24 @@ func serviceNames(suffix string) svcunit.Spec {
 
 func workerSpec(o ServiceOptions, goos string) (svcunit.Spec, []string, error) {
 	var warnings []string
-	binary := o.Binary
-	if binary == "" {
-		exe, err := os.Executable()
-		if err != nil {
-			return svcunit.Spec{}, nil, fmt.Errorf("locating this executable: %w", err)
-		}
-		binary = exe
+	binary, warning, err := svcunit.Program(o.Binary)
+	if err != nil {
+		return svcunit.Spec{}, nil, err
 	}
-	if !filepath.IsAbs(binary) {
-		return svcunit.Spec{}, nil, domain.NewError(domain.CodeInvalidRequest, "--binary must be an absolute path", nil)
-	}
-	if w := svcunit.ExecutableWarning(binary); w != "" {
-		warnings = append(warnings, w)
+	if warning != "" {
+		warnings = append(warnings, warning)
 	}
 	if o.SSHTarget != "" && o.SSHTarget != NoSSHTarget && !domain.ValidSSHTarget(o.SSHTarget) {
 		return svcunit.Spec{}, nil, domain.NewError(domain.CodeInvalidRequest, "--ssh-target must be [user@]host[:port], or none", nil)
 	}
-	path := o.PATH
-	if path == "" {
-		path = svcunit.ServicePATH(goos, toolDirs(binary, "tmux", "git")...)
-	} else if err := svcunit.ValidatePATH(path); err != nil {
-		return svcunit.Spec{}, nil, domain.NewError(domain.CodeInvalidRequest, "--path: "+err.Error(), nil)
+	// Relative, the socket would be found from where the service starts, not from here.
+	if o.TmuxTmpDir != "" && !filepath.IsAbs(o.TmuxTmpDir) {
+		return svcunit.Spec{}, nil, domain.NewError(domain.CodeInvalidRequest,
+			fmt.Sprintf("TMUX_TMPDIR must be an absolute path to go into the service, and %q is not one", o.TmuxTmpDir), nil)
+	}
+	path, err := svcunit.ResolvePATH(goos, o.PATH, binary, "tmux", "git")
+	if err != nil {
+		return svcunit.Spec{}, nil, err
 	}
 
 	argv := []string{binary, "worker", "run"}
@@ -188,19 +198,6 @@ func workerSpec(o ServiceOptions, goos string) (svcunit.Spec, []string, error) {
 	return spec, warnings, nil
 }
 
-// toolDirs are the directories of binary and of the tools found on this PATH.
-func toolDirs(binary string, tools ...string) []string {
-	dirs := []string{filepath.Dir(binary)}
-	for _, tool := range tools {
-		if path, err := exec.LookPath(tool); err == nil {
-			if abs, err := filepath.Abs(path); err == nil {
-				dirs = append(dirs, filepath.Dir(abs))
-			}
-		}
-	}
-	return dirs
-}
-
 func managerEnv(env svcunit.Env) (svcunit.Env, error) {
 	if env.GOOS != "" {
 		return env, nil
@@ -208,10 +205,15 @@ func managerEnv(env svcunit.Env) (svcunit.Env, error) {
 	return svcunit.HostEnv()
 }
 
-// serviceError makes an operating system with no manager an error of its own.
+// serviceError makes an operating system with no manager, and what the caller
+// must fix, errors of their own.
 func serviceError(err error) error {
-	if errors.Is(err, svcunit.ErrUnsupported) {
+	var input *svcunit.InputError
+	switch {
+	case errors.Is(err, svcunit.ErrUnsupported):
 		return domain.NewError(domain.CodeNotImplemented, "installing the Worker as a service needs systemd (Linux) or launchd (macOS)", nil)
+	case errors.As(err, &input):
+		return domain.NewError(domain.CodeInvalidRequest, input.Error(), nil)
 	}
 	return err
 }

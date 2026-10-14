@@ -161,7 +161,7 @@ func newInstallServiceCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return printServiceFile(cmd, path, content, warnings)
+				return svcunit.PrintFile(cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput(cmd), path, content, warnings)
 			}
 			res, err := InstallService(cmd.Context(), o)
 			if err != nil {
@@ -196,36 +196,7 @@ func printService(cmd *cobra.Command, res svcunit.Result, changed, unchanged str
 	if jsonOutput(cmd) {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
 	}
-	printWarnings(cmd, res.Warnings)
-	out := cmd.OutOrStdout()
-	if !res.Changed {
-		_, err := fmt.Fprintf(out, "%s (%s, %s).\n", unchanged, res.Unit, res.Path)
-		return err
-	}
-	fmt.Fprintf(out, "%s (%s, %s):\n", changed, res.Unit, res.Path)
-	for _, a := range res.Actions {
-		fmt.Fprintf(out, "  %s\n", a)
-	}
-	return nil
-}
-
-func printServiceFile(cmd *cobra.Command, path string, content []byte, warnings []string) error {
-	if jsonOutput(cmd) {
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
-			Path     string   `json:"path"`
-			Content  string   `json:"content"`
-			Warnings []string `json:"warnings"`
-		}{path, string(content), warnings})
-	}
-	printWarnings(cmd, warnings)
-	_, err := fmt.Fprintf(cmd.OutOrStdout(), "# %s\n%s", path, content)
-	return err
-}
-
-func printWarnings(cmd *cobra.Command, warnings []string) {
-	for _, w := range warnings {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
-	}
+	return svcunit.PrintResult(cmd.OutOrStdout(), cmd.ErrOrStderr(), res, changed, unchanged)
 }
 
 // jsonOutput reads the root command's persistent --json (internal/cli owns

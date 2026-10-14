@@ -210,10 +210,21 @@ func TestInstallService_NeedsAJoinedMachine(t *testing.T) {
 
 func TestInstallService_RefusesWhatTheServiceCouldNotUse(t *testing.T) {
 	for name, mutate := range map[string]func(*daemon.ServiceOptions){
-		"relative binary":    func(o *daemon.ServiceOptions) { o.Binary = "cf" },
-		"relative PATH":      func(o *daemon.ServiceOptions) { o.PATH = "bin:/usr/bin" },
-		"empty PATH entry":   func(o *daemon.ServiceOptions) { o.PATH = "/usr/bin::/bin" },
-		"invalid ssh target": func(o *daemon.ServiceOptions) { o.SSHTarget = "a b" },
+		"relative binary":      func(o *daemon.ServiceOptions) { o.Binary = "cf" },
+		"relative PATH":        func(o *daemon.ServiceOptions) { o.PATH = "bin:/usr/bin" },
+		"empty PATH entry":     func(o *daemon.ServiceOptions) { o.PATH = "/usr/bin::/bin" },
+		"invalid ssh target":   func(o *daemon.ServiceOptions) { o.SSHTarget = "a b" },
+		"relative TMUX_TMPDIR": func(o *daemon.ServiceOptions) { o.TmuxTmpDir = "tmux" },
+		"binary others can replace": func(o *daemon.ServiceOptions) {
+			dir := filepath.Join(t.TempDir(), "open")
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // the unsafe directory the test is about
+				t.Fatal(err)
+			}
+			o.Binary = filepath.Join(dir, "cf")
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			o, _ := serviceBox(t, "linux")
@@ -233,14 +244,27 @@ func TestInstallService_UnsupportedOS(t *testing.T) {
 	}
 }
 
-func TestInstallService_WarnsWhenTheDataDirectoryMoves(t *testing.T) {
-	o, _ := serviceBox(t, "linux")
-	installService(t, o)
-	old := o.Paths.DataDir
-	o.Paths.DataDir = filepath.Join(t.TempDir(), "new")
-	res := installService(t, o)
-	if !res.Changed || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], old) {
-		t.Errorf("result = %+v", res)
+func TestInstallService_WarnsWhenTheTmuxServerMoves(t *testing.T) {
+	for name, move := range map[string]func(*daemon.ServiceOptions) string{
+		"data directory": func(o *daemon.ServiceOptions) string {
+			old := o.Paths.DataDir
+			o.Paths.DataDir = filepath.Join(t.TempDir(), "new")
+			return old
+		},
+		"TMUX_TMPDIR": func(o *daemon.ServiceOptions) string {
+			o.TmuxTmpDir = filepath.Join(t.TempDir(), "elsewhere")
+			return "TMUX_TMPDIR"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o, _ := serviceBox(t, "linux")
+			installService(t, o)
+			want := move(&o)
+			res := installService(t, o)
+			if !res.Changed || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], want) {
+				t.Errorf("result = %+v", res)
+			}
+		})
 	}
 }
 

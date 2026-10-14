@@ -2,10 +2,7 @@ package daemon
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"errors"
 
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -71,31 +68,18 @@ func controllerService(o ServiceOptions) (svcunit.Env, svcunit.Spec, []string, e
 	if err != nil {
 		return svcunit.Env{}, svcunit.Spec{}, nil, err
 	}
+	binary, warning, err := svcunit.Program(o.Binary)
+	if err != nil {
+		return svcunit.Env{}, svcunit.Spec{}, nil, inputError(err)
+	}
 	var warnings []string
-	binary := o.Binary
-	if binary == "" {
-		if binary, err = os.Executable(); err != nil {
-			return svcunit.Env{}, svcunit.Spec{}, nil, fmt.Errorf("locating this executable: %w", err)
-		}
+	if warning != "" {
+		warnings = append(warnings, warning)
 	}
-	if !filepath.IsAbs(binary) {
-		return svcunit.Env{}, svcunit.Spec{}, nil, domain.NewError(domain.CodeInvalidRequest, "--binary must be an absolute path", nil)
-	}
-	if w := svcunit.ExecutableWarning(binary); w != "" {
-		warnings = append(warnings, w)
-	}
-	path := o.PATH
-	if path == "" {
-		dirs := []string{filepath.Dir(binary)}
-		// The relay runs git http-backend.
-		if git, err := exec.LookPath("git"); err == nil {
-			if abs, err := filepath.Abs(git); err == nil {
-				dirs = append(dirs, filepath.Dir(abs))
-			}
-		}
-		path = svcunit.ServicePATH(env.GOOS, dirs...)
-	} else if err := svcunit.ValidatePATH(path); err != nil {
-		return svcunit.Env{}, svcunit.Spec{}, nil, domain.NewError(domain.CodeInvalidRequest, "--path: "+err.Error(), nil)
+	// The relay runs git http-backend.
+	path, err := svcunit.ResolvePATH(env.GOOS, o.PATH, binary, "git")
+	if err != nil {
+		return svcunit.Env{}, svcunit.Spec{}, nil, inputError(err)
 	}
 	spec := serviceSpec()
 	spec.Description, spec.Installer = "CodeFabric Controller", "cf controller install-service"
@@ -118,4 +102,13 @@ func controllerManager(env svcunit.Env) (svcunit.Env, error) {
 			"the Controller installs as a systemd --user service, on Linux only; elsewhere run `cf controller run` under a supervisor of your own", nil)
 	}
 	return env, nil
+}
+
+// inputError makes what the caller must fix an invalid request.
+func inputError(err error) error {
+	var input *svcunit.InputError
+	if errors.As(err, &input) {
+		return domain.NewError(domain.CodeInvalidRequest, input.Error(), nil)
+	}
+	return err
 }

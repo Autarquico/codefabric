@@ -3,6 +3,7 @@ package daemon_test
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -85,11 +86,37 @@ func TestInstallService_ControllerOnlyOnLinux(t *testing.T) {
 	}
 }
 
-func TestInstallService_ControllerRefusesARelativePATH(t *testing.T) {
-	o, _ := serviceOptions(t)
-	initController(t, o.Paths)
-	o.PATH = "bin"
-	if _, err := daemon.InstallService(t.Context(), o); !errors.Is(err, &domain.Error{Code: domain.CodeInvalidRequest}) {
-		t.Errorf("err = %v", err)
+func TestInstallService_ControllerRefusesWhatTheServiceCouldNotUse(t *testing.T) {
+	for name, mutate := range map[string]func(*daemon.ServiceOptions){
+		"relative PATH":   func(o *daemon.ServiceOptions) { o.PATH = "bin" },
+		"relative binary": func(o *daemon.ServiceOptions) { o.Binary = "cf" },
+		"binary others can replace": func(o *daemon.ServiceOptions) {
+			o.Binary = filepath.Join(worldWritableDir(t), "cf")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o, fake := serviceOptions(t)
+			initController(t, o.Paths)
+			mutate(&o)
+			if _, err := daemon.InstallService(t.Context(), o); !errors.Is(err, &domain.Error{Code: domain.CodeInvalidRequest}) {
+				t.Errorf("err = %v", err)
+			}
+			if len(fake.Calls()) != 0 {
+				t.Errorf("ran %q", fake.Calls())
+			}
+		})
 	}
+}
+
+// worldWritableDir is a directory anyone can write, without the sticky bit.
+func worldWritableDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "open")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // the unsafe directory the test is about
+		t.Fatal(err)
+	}
+	return dir
 }
