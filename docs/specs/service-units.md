@@ -6,14 +6,14 @@ status: active
 priority: P0
 size: S
 issue: 15
-prs: [39]
+prs: [39, 40]
 related_issues: [15]
 sub_issues: []
 depends_on: [worker-registry-heartbeat]
 supersedes: []
 related_specs: [codefabric-spec, phase-1-workers]
 created: 2026-10-10
-updated: 2026-10-14
+updated: 2026-10-15
 ---
 
 # Unidades de servicio systemd y launchd
