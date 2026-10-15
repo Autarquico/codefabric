@@ -166,10 +166,11 @@ func (s runSpec) encode() (raw []byte, digest string, err error) {
 	return raw, "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// PlacementOf reads the placement out of a Run's stored spec. A spec without
-// requirements asks for nothing.
+// PlacementOf reads the placement out of a Run's stored spec: its requirements
+// and the mode the harness must run in. A spec without requirements asks for nothing.
 func PlacementOf(spec []byte) (domain.Placement, error) {
 	var stored struct {
+		Mode         domain.Mode      `json:"mode"`
 		Requirements specRequirements `json:"requirements"`
 	}
 	if err := json.Unmarshal(spec, &stored); err != nil {
@@ -177,7 +178,7 @@ func PlacementOf(spec []byte) (domain.Placement, error) {
 	}
 	r := stored.Requirements
 	return domain.Placement{
-		Harness: r.Harness, Capabilities: r.Capabilities,
+		Harness: r.Harness, Mode: stored.Mode, Capabilities: r.Capabilities,
 		Resources: domain.Capacity{CPU: r.Resources.CPU, MemoryMB: r.Resources.MemoryMB},
 		Prefer:    r.Workers.Prefer, Avoid: r.Workers.Avoid, Require: r.Workers.Require,
 	}, nil
