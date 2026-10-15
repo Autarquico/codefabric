@@ -57,15 +57,13 @@ jobs:
           CF_REQUIRE_GIT: "1"
 
   # The scenarios of service-units against the real systemd --user and launchd
-  # of the runner. Not required, and allowed to fail, until it has passed twice
-  # in a row: a hosted runner may not give the environment (B5).
+  # of the runner. A required check since the end of Phase 1 (B5).
   service-units:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
