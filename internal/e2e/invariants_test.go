@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 )
 
 // The checker is judged on a cluster it never ran: a sound history, built by
@@ -118,9 +120,9 @@ func newWorld() *world {
 		},
 		WorkerIDs: map[string]string{"w1": "wk1", "w2": "wk2"},
 		Instances: []Instance{
-			{Execution: Execution{Run: w.a1, Epoch: 1, Worker: "w1"}, Token: "t1", PID: 101, Ended: true, Verified: true},
-			{Execution: Execution{Run: w.b1, Epoch: 1, Worker: "w1"}, Token: "t2", PID: 102, Ended: true, Verified: true},
-			{Execution: Execution{Run: w.b2, Epoch: 1, Worker: "w2"}, Token: "t2", PID: 201, Ended: true, Verified: true},
+			{Execution: Execution{Run: w.a1, Epoch: 1, Worker: "w1"}, Token: "t1", PID: 101, Ended: true, Verified: true, StartedPID: 101},
+			{Execution: Execution{Run: w.b1, Epoch: 1, Worker: "w1"}, Token: "t2", PID: 102, Ended: true, Verified: true, StartedPID: 102},
+			{Execution: Execution{Run: w.b2, Epoch: 1, Worker: "w2"}, Token: "t2", PID: 201, Ended: true, Verified: true, StartedPID: 201},
 		},
 		RelayRefs: map[string]string{"refs/heads/cf/a1": "c1", "refs/heads/cf/b1": "c2", "refs/heads/cf/b2": "c3"},
 		Results:   map[string]string{"c1": "t1\n", "c2": "t2\n", "c3": "t2\n"},
@@ -151,7 +153,7 @@ func TestInvariants_SoundHistories(t *testing.T) {
 			w.run(w.c1).Publication, w.run(w.c1).Branch, w.run(w.c1).ResultCommit = domain.PublicationPublished, "cf/c1", "c4"
 			w.obs.RelayRefs["refs/heads/cf/c1"] = "c4"
 			w.obs.Snapshot.Leases = append(w.obs.Snapshot.Leases, LeaseRow{RunID: w.c1, WorkerID: "wk2", Epoch: 1, State: string(domain.LeaseAccepted)})
-			w.obs.Instances = append(w.obs.Instances, Instance{Execution: Execution{Run: w.c1, Epoch: 1, Worker: "w2"}, Token: "t3", PID: 202})
+			w.obs.Instances = append(w.obs.Instances, Instance{Execution: Execution{Run: w.c1, Epoch: 1, Worker: "w2"}, Token: "t3", PID: 202, Verified: true, StartedPID: 202})
 			w.event(EventRow{Type: domain.EventRunStarted, RunID: w.c1, WorkerID: "wk2", WorkerEpoch: "f1", WorkerSeq: seq(3), ReportDigest: "g3"})
 		},
 		"a lost Run with no attempts left fails its Task": func(w *world) {
@@ -290,6 +292,13 @@ func TestInvariants_Violations(t *testing.T) {
 			w.obs.Snapshot.OpenReservations = []ReservationRow{{LeaseID: "l-b1", RunID: w.b1, WorkerID: "wk1"}}
 		}, "[6 reservations] the reservation of Run"},
 
+		{"a harness its wrapper does not name", func(w *world) {
+			w.obs.Instances[0].Verified, w.obs.Instances[0].StartedPID = false, 999
+		}, "whose started.json names pid 999"},
+		{"a harness with no started.json", func(w *world) {
+			w.obs.Instances[0].Verified, w.obs.Instances[0].StartedPID = false, 0
+		}, "whose wrapper wrote no started.json"},
+
 		// 7: nothing left
 		{"a harness alive when quiet", func(w *world) { w.obs.Live = []Instance{w.obs.Instances[1]} }, "is alive once the cluster is quiet"},
 
@@ -390,6 +399,84 @@ func TestLedger_ReleaseExecution(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Errorf("%d instances, want 2", len(got))
+	}
+}
+
+// TestLedger_ConcurrentReaders: the sampler and the test read the ledger at
+// once while started.json appears; under -race neither sees the state of an
+// instance the other is writing. The pid started.json names is told apart
+// from the harness's.
+func TestLedger_ConcurrentReaders(t *testing.T) {
+	box := &Box{Paths: config.Paths{DataDir: t.TempDir()}}
+	l := newLedger(t, t.TempDir(), []*Worker{{Name: "w1", Box: box}})
+	token := l.Token()
+	run := string(ids.New(domain.KindRun))
+	const harness, other = 4242, 4343
+	var lines string
+	for epoch, pid := range map[uint64]int{1: harness, 2: harness + 1} {
+		lines += fmt.Sprintf("start %d %s %d\n", pid, l.workers[0].resolved.WorkerWorktreeDir(run, epoch), time.Now().Unix())
+	}
+	if err := os.WriteFile(filepath.Join(l.dir, token+".log"), []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := make(chan struct{})
+	errs := make(chan error, 8)
+	read := func(f func() ([]Instance, error)) {
+		for {
+			select {
+			case <-stop:
+				errs <- nil
+				return
+			default:
+			}
+			ins, err := f()
+			if err != nil {
+				errs <- err
+				return
+			}
+			for _, in := range ins {
+				_ = l.Live(in)
+			}
+		}
+	}
+	for range 2 {
+		go read(l.all)
+		go read(func() ([]Instance, error) { return l.instances(token) })
+	}
+	time.Sleep(50 * time.Millisecond)
+	for epoch, pid := range map[uint64]int{1: harness, 2: other} {
+		dir := box.Paths.WorkerRunDir(run, epoch)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := execwrap.Write(dir, execwrap.StartedFile, execwrap.Started{PID: pid}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(stop)
+	for range 4 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := l.Instances(token)
+	if len(got) != 2 {
+		t.Fatalf("%d instances, want 2", len(got))
+	}
+	for _, in := range got {
+		switch in.Epoch {
+		case 1:
+			if !in.Verified || in.StartedPID != harness {
+				t.Errorf("epoch 1: verified %v, started.json names %d; want true, %d", in.Verified, in.StartedPID, harness)
+			}
+		case 2:
+			if in.Verified || in.StartedPID != other {
+				t.Errorf("epoch 2: verified %v, started.json names %d; want false, %d", in.Verified, in.StartedPID, other)
+			}
+		}
 	}
 }
 

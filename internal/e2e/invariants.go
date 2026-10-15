@@ -574,8 +574,9 @@ func checkRetries(m model, v *violations) {
 }
 
 // checkHarnesses: each harness is of a known execution (Run, lease epoch,
-// Worker) under an accepted lease of that Worker and is the Task's; a Run
-// had at most one, and none lives on.
+// Worker), is the process the started.json of its wrapper names, ran under an
+// accepted lease of that Worker and is the Task's; a Run had at most one, and
+// none lives on.
 func checkHarnesses(m model, v *violations) {
 	tokenTask := map[string]string{}
 	for _, t := range m.exp.Tasks {
@@ -587,6 +588,12 @@ func checkHarnesses(m model, v *violations) {
 		if in.Worker == "" {
 			v.add("[3 one harness] a harness of %s (pid %d) ran in %s, the worktree of no Worker", in.Token, in.PID, in.Dir)
 			continue
+		}
+		switch {
+		case in.StartedPID == 0:
+			v.add("[3 one harness] the harness of %s (pid %d) ran %v, whose wrapper wrote no started.json", in.Token, in.PID, in.Execution)
+		case !in.Verified:
+			v.add("[3 one harness] the harness of %s (pid %d) ran %v, whose started.json names pid %d", in.Token, in.PID, in.Execution, in.StartedPID)
 		}
 		if task, ok := tokenTask[in.Token]; !ok || m.runs[in.Run].TaskID != task {
 			v.add("[3 one harness] the harness of %s ran %v, a Run of another Task", in.Token, in.Execution)

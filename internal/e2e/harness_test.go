@@ -209,6 +209,7 @@ func TestHarness_Reap(t *testing.T) {
 	wrap := alien(t, "sh", "-c", "sleep 300 & wait")
 	writeWrapper(t, filepath.Join(w.Paths.WorkerDataDir(), "runs", "r1"), wrap.pid, identity(t, wrap.pid))
 	server := tmuxServer(t, w.TmuxDir(), "cf-abandoned")
+	realWrap := startWrapper(t, h, server, filepath.Join(w.Paths.WorkerDataDir(), "runs", "r4"))
 
 	// What is not its own.
 	reused := alien(t, "sleep", "300")
@@ -256,6 +257,7 @@ func TestHarness_Reap(t *testing.T) {
 	})
 	eventually(ctx, t, "the group of the wrapper to be reaped", wrap.gone)
 	eventually(ctx, t, "the tmux server of the abandoned root to be reaped", func() bool { return !server.alive() })
+	eventually(ctx, t, "the group of the wrapper in tmux to be reaped", realWrap.gone)
 	if _, err := os.Stat(dead.dir); err == nil {
 		t.Errorf("the abandoned root %s is left", dead.dir)
 	}
@@ -277,6 +279,119 @@ func TestHarness_Reap(t *testing.T) {
 	if _, err := os.Stat(live.dir); err != nil {
 		t.Errorf("the root of a live invocation was touched: %v", err)
 	}
+}
+
+// TestHarness_ReapEndsTheGroupOfADeadLeader: a process crashes and leaves a
+// child in its group, and the invocation dies before its teardown. The
+// manifest says the process ended; the next invocation still ends its group,
+// as a teardown would, and only then removes the root.
+func TestHarness_ReapEndsTheGroupOfADeadLeader(t *testing.T) {
+	h := New(t)
+	parent := filepath.Join(h.Dir(), "p")
+	dead, ownerProc := dyingInvocation(t, parent)
+	w := newHarness(t, dead).Box("w")
+	daemon := w.Start(RoleDaemon, "d", "sh", "-c", `sleep 300 & echo $! > child; wait`)
+	t.Cleanup(func() { _ = daemon.KillGroup(context.Background()) })
+	child := readPID(t, h, filepath.Join(w.Dir, "child"))
+	childStart := identity(t, child)
+
+	daemon.Kill9()
+	if procident.Verify(child, childStart) != procident.Same {
+		t.Fatal("the child died with its leader: nothing is left for the reaper")
+	}
+	_ = syscall.Kill(ownerProc.pid, syscall.SIGKILL)
+	<-ownerProc.waited
+
+	reaped, err := reapAbandoned(h.Context(), parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reaped) != 1 || reaped[0] != dead.dir {
+		t.Fatalf("reaped %v, want %s", reaped, dead.dir)
+	}
+	eventually(h.Context(), t, "the child of the dead leader to be reaped", func() bool {
+		return procident.Verify(child, childStart) != procident.Same
+	})
+	if _, err := os.Stat(dead.dir); err == nil {
+		t.Errorf("the reaped root %s is left", dead.dir)
+	}
+}
+
+// TestHarness_ReapKeepsARootItCannotEmpty: a process of the manifest that
+// lives and does not lead its group cannot be ended by its group. It is left
+// alone, and so is the root, with the reason in the error.
+func TestHarness_ReapKeepsARootItCannotEmpty(t *testing.T) {
+	h := New(t)
+	parent := filepath.Join(h.Dir(), "p")
+	dead, ownerProc := dyingInvocation(t, parent)
+	pidFile := filepath.Join(h.Dir(), "led")
+	leader := alien(t, "sh", "-c", `sleep 300 & echo $! > `+pidFile+`; wait`)
+	led := readPID(t, h, pidFile)
+	if err := dead.record(entry{Kind: entryStarted, ID: "t1/w/led.1", Role: RoleDaemon, PID: led, Start: identity(t, led)}); err != nil {
+		t.Fatal(err)
+	}
+	_ = syscall.Kill(ownerProc.pid, syscall.SIGKILL)
+	<-ownerProc.waited
+
+	reaped, err := reapAbandoned(h.Context(), parent)
+	if err == nil || !strings.Contains(err.Error(), "t1/w/led.1") {
+		t.Errorf("reaping: %v; want the group of t1/w/led.1 named", err)
+	}
+	if len(reaped) != 0 {
+		t.Errorf("reaped %v, want none", reaped)
+	}
+	if _, err := os.Stat(dead.dir); err != nil {
+		t.Errorf("the root was removed: %v", err)
+	}
+	if leader.gone() {
+		t.Error("the group of another leader was killed")
+	}
+}
+
+// TestHarness_FinishKeepsARootItCannotReap: when the last reaping of an
+// invocation fails, the invocation fails, its root is kept and its logs are
+// copied out, though every test passed.
+func TestHarness_FinishKeepsARootItCannotReap(t *testing.T) {
+	h := New(t)
+	artifacts := filepath.Join(h.Dir(), "artifacts")
+	t.Setenv(envArtifacts, artifacts)
+	me, err := self(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := openInvocation(filepath.Join(h.Dir(), "p"), me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pidFile := filepath.Join(h.Dir(), "led")
+	alien(t, "sh", "-c", `sleep 300 & echo $! > `+pidFile+`; wait`)
+	led := readPID(t, h, pidFile)
+	if err := root.record(entry{Kind: entryStarted, ID: "t1/w/led.1", Role: RoleDaemon, PID: led, Start: identity(t, led)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if finish(root, 0) {
+		t.Error("finish reaped a root whose group is not empty")
+	}
+	if _, err := os.Stat(root.dir); err != nil {
+		t.Errorf("the root was removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(artifacts, filepath.Base(root.dir), manifestFile)); err != nil {
+		t.Errorf("the manifest was not copied out: %v", err)
+	}
+}
+
+// dyingInvocation is a root in parent whose owner is a process the test kills
+// to make it abandoned.
+func dyingInvocation(t *testing.T, parent string) (*invocation, alienProc) {
+	t.Helper()
+	ownerProc := alien(t, "sleep", "300")
+	dead, err := openInvocation(parent, owner{PID: ownerProc.pid, Start: identity(t, ownerProc.pid)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = dead.close() })
+	return dead, ownerProc
 }
 
 // TestHarness_KillGroupLeavesAReusedPid: a teardown kills no group of a past
@@ -649,6 +764,37 @@ func tmuxServer(t *testing.T, tmpDir, name string) tmuxServerProc {
 	}
 	s.start = identity(t, s.pid)
 	return s
+}
+
+// startWrapper starts the wrapper of cf, `cf worker exec`, in a session of the
+// tmux server, as a Worker does, with a harness that leaves a child, and
+// returns its group once started.json says the harness runs.
+func startWrapper(t *testing.T, h *Harness, server tmuxServerProc, runDir string) group {
+	t.Helper()
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	launch := execwrap.Launch{Argv: []string{"sh", "-c", "sleep 300 & wait"}, Dir: runDir, Mode: execwrap.ModeHeadless, Grace: time.Second}
+	if err := execwrap.Write(runDir, execwrap.LaunchFile, launch); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("tmux", "-S", server.socket, "new-session", "-d", "-s", "wrap", //nolint:gosec,noctx // tmux returns at once
+		binary+" worker exec --run-dir "+runDir)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "TERM=xterm-256color", "LC_ALL=C"}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("tmux new-session: %v\n%s", err, out)
+	}
+	var w execwrap.Wrapper
+	eventually(h.Context(), t, "the wrapper in tmux to start its harness", func() bool {
+		found, err := execwrap.Read(runDir, execwrap.StartedFile, &execwrap.Started{})
+		return err == nil && found
+	})
+	if found, err := execwrap.Read(runDir, execwrap.WrapperFile, &w); err != nil || !found {
+		t.Fatalf("wrapper.json: %v, found %v", err, found)
+	}
+	g := group{pgid: w.PGID, leader: w.PID, start: w.Start}
+	t.Cleanup(func() { g.killRemains() })
+	return g
 }
 
 func readPID(t *testing.T, h *Harness, path string) int {

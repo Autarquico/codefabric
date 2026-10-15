@@ -64,8 +64,10 @@ type Instance struct {
 	Ended    bool // it wrote result.txt and its end
 	TimedOut bool // nobody released it within the cap
 	// Verified: started.json of the execution, written by its wrapper, names
-	// this pid. It is looked at when the ledger first sees the instance.
-	Verified bool
+	// this pid. It is looked at until it does. StartedPID is the pid it names,
+	// 0 while there is none.
+	Verified   bool
+	StartedPID int
 }
 
 // Ledger reads the lines of the script and tells whether an instance lives.
@@ -76,7 +78,7 @@ type Ledger struct {
 
 	mu     sync.Mutex
 	tokens int
-	seen   map[instanceKey]*instanceState
+	seen   map[instanceKey]instanceState
 }
 
 type ledgerWorker struct {
@@ -91,12 +93,14 @@ type instanceKey struct {
 	dir   string
 }
 
-// instanceState is what was learnt of an instance the first time it was seen:
-// whether its wrapper names it and the procident token of its process, empty
-// if it was not running the script by then.
+// instanceState is what was learnt of an instance: whether its wrapper names
+// it, and the pid its wrapper names; and, the first time it was seen, the
+// procident token of its process, empty if it was not running the script by
+// then. It is a value, read and written under the mutex of the ledger alone.
 type instanceState struct {
-	verified bool
-	ident    string
+	verified   bool
+	startedPID int
+	ident      string
 }
 
 func newLedger(t *testing.T, dir string, workers []*Worker) *Ledger {
@@ -104,7 +108,7 @@ func newLedger(t *testing.T, dir string, workers []*Worker) *Ledger {
 	if err := os.MkdirAll(filepath.Join(dir, "go"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	l := &Ledger{t: t, dir: dir, seen: map[instanceKey]*instanceState{}}
+	l := &Ledger{t: t, dir: dir, seen: map[instanceKey]instanceState{}}
 	for _, w := range workers {
 		data, err := filepath.EvalSymlinks(w.Box.Paths.DataDir)
 		if err != nil {
@@ -258,7 +262,8 @@ func (l *Ledger) parse(token, text string) ([]Instance, error) {
 		}
 	}
 	for i := range out {
-		out[i].Verified = l.state(out[i]).verified
+		st := l.state(out[i])
+		out[i].Verified, out[i].StartedPID = st.verified, st.startedPID
 	}
 	return out, sc.Err()
 }
@@ -280,16 +285,14 @@ func (l *Ledger) execution(dir string) Execution {
 
 // state is what is known of an instance: whether the wrapper's started.json
 // names its pid and, taken the first time it is seen, the procident token of
-// its process if that is still the script of the execution.
-func (l *Ledger) state(in Instance) *instanceState {
+// its process if that is still the script of the execution. It returns a copy:
+// the sampler and the test look at the same instances at once.
+func (l *Ledger) state(in Instance) instanceState {
 	key := instanceKey{token: in.Token, pid: in.PID, dir: in.Dir}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	st, seen := l.seen[key]
-	if !seen {
-		st = &instanceState{}
-		l.seen[key] = st
-	}
+	defer func() { l.seen[key] = st }()
 	var w *ledgerWorker
 	for i := range l.workers {
 		if l.workers[i].name == in.Worker {
@@ -307,8 +310,10 @@ func (l *Ledger) state(in Instance) *instanceState {
 	// write its start first, so a look that finds none is made again.
 	if !st.verified {
 		var started execwrap.Started
-		found, err := execwrap.Read(runDir, execwrap.StartedFile, &started)
-		st.verified = err == nil && found && started.PID == in.PID
+		if found, err := execwrap.Read(runDir, execwrap.StartedFile, &started); err == nil && found {
+			st.startedPID = started.PID
+		}
+		st.verified = st.startedPID == in.PID
 	}
 	return st
 }

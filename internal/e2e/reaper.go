@@ -33,7 +33,7 @@ const (
 const (
 	entryIntent  = "intent"  // about to be started: written before the fork
 	entryStarted = "started" // it exists: pid and identity
-	entryEnded   = "ended"   // waited for: nothing of it to reap
+	entryEnded   = "ended"   // waited for: its group may outlive it
 )
 
 // owner is the process an invocation belongs to: the test binary. Its root is
@@ -232,7 +232,7 @@ func reapAbandoned(ctx context.Context, parent string) ([]string, error) {
 			continue
 		}
 		if err := reapRoot(ctx, root); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", root, err))
+			errs = append(errs, fmt.Errorf("%s, kept: %w", root, err))
 			continue
 		}
 		reaped = append(reaped, root)
@@ -246,21 +246,19 @@ func reapAbandoned(ctx context.Context, parent string) ([]string, error) {
 // reapRoot ends what the manifest of a root and the files beneath it prove to
 // be its own, in the order a cluster is torn down: clients and daemons, so
 // that nothing starts another Run; the tmux servers; the groups of the
-// wrappers; the Controllers; anything else.
+// wrappers; the Controllers; anything else. A process of the manifest that
+// ended may have left its group behind: that is ended as a teardown does
+// (killRemains). It fails while a group of the manifest is not empty, so that
+// the root is kept.
 func reapRoot(ctx context.Context, root string) error {
-	started, err := liveEntries(root)
+	started, err := startedEntries(root)
 	if err != nil {
 		return err
 	}
 	var groups []group
 	killEntries := func(roles ...Role) {
 		for _, e := range started {
-			if !hasRole(e.Role, roles) {
-				continue
-			}
-			// The process leads its own group (Setpgid): its pid is the group.
-			g := group{pgid: e.PID, leader: e.PID, start: e.Start}
-			if g.kill() {
+			if g := e.group(); hasRole(e.Role, roles) && g.killRemains() {
 				groups = append(groups, g)
 			}
 		}
@@ -270,8 +268,21 @@ func reapRoot(ctx context.Context, root string) error {
 	groups = append(groups, killWrappers(root)...)
 	killEntries(RoleController, RoleOther)
 	errs = append(errs, waitGone(ctx, groups))
+	var left []string
+	for _, e := range started {
+		if e.group().remains() {
+			left = append(left, fmt.Sprintf("%s (group %d)", e.ID, e.PID))
+		}
+	}
+	if len(left) > 0 {
+		errs = append(errs, fmt.Errorf("e2e: groups of the manifest not empty: %s", strings.Join(left, ", ")))
+	}
 	return errors.Join(errs...)
 }
+
+// group is the process group of a started entry: the process leads its own
+// (Setpgid), so its pid is the group.
+func (e entry) group() group { return group{pgid: e.PID, leader: e.PID, start: e.Start} }
 
 func hasRole(r Role, roles []Role) bool {
 	for _, want := range roles {
@@ -282,8 +293,10 @@ func hasRole(r Role, roles []Role) bool {
 	return false
 }
 
-// liveEntries are the started entries of a root's manifest that never ended.
-func liveEntries(root string) ([]entry, error) {
+// startedEntries are the started entries of a root's manifest, in order,
+// whether they ended or not: a leader that was waited for may have left
+// members in its group.
+func startedEntries(root string) ([]entry, error) {
 	f, err := os.Open(filepath.Join(root, manifestFile)) //nolint:gosec // a root of this suite
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -292,8 +305,7 @@ func liveEntries(root string) ([]entry, error) {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	var order []string
-	started := map[string]entry{}
+	var out []entry
 	scan := bufio.NewScanner(f)
 	scan.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for scan.Scan() {
@@ -301,17 +313,7 @@ func liveEntries(root string) ([]entry, error) {
 		if json.Unmarshal(scan.Bytes(), &e) != nil {
 			continue // a line torn by the crash
 		}
-		switch e.Kind {
-		case entryStarted:
-			order = append(order, e.ID)
-			started[e.ID] = e
-		case entryEnded:
-			delete(started, e.ID)
-		}
-	}
-	var out []entry
-	for _, id := range order {
-		if e, ok := started[id]; ok {
+		if e.Kind == entryStarted && e.PID > 0 {
 			out = append(out, e)
 		}
 	}
@@ -349,6 +351,22 @@ func (g group) killRemains() bool {
 		return g.kill()
 	case procident.Gone:
 		return syscall.Kill(-g.pgid, syscall.SIGKILL) == nil
+	}
+	return false
+}
+
+// remains says whether something of the group is still there to be ended:
+// its leader, while it is the process recorded, or, once the leader is gone,
+// any member. A group whose leader's pid another process has now, or whose
+// leader has no identity of this boot, is not looked at, as killRemains does
+// not; a group whose members cannot be listed counts as left.
+func (g group) remains() bool {
+	switch procident.Verify(g.leader, g.start) {
+	case procident.Same:
+		return true
+	case procident.Gone:
+		empty, err := procident.GroupEmpty(g.pgid)
+		return err != nil || !empty
 	}
 	return false
 }

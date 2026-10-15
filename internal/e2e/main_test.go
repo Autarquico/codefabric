@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -20,10 +21,11 @@ const reapTimeout = time.Minute
 
 // TestMain reaps what earlier invocations that died left, opens the root of
 // this one, gets cf, runs the tests and reaps the root again: a test that
-// panicked may have run no cleanup.
+// panicked may have run no cleanup. A root that cannot be reaped fails the
+// invocation.
 func TestMain(m *testing.M) { os.Exit(runMain(m)) }
 
-func runMain(m *testing.M) int {
+func runMain(m *testing.M) (code int) {
 	parent, err := rootParent()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -48,8 +50,12 @@ func runMain(m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "e2e: the root of this invocation: %v\n", err)
 		return 1
 	}
-	code := 1
-	defer func() { finish(inv, code) }()
+	code = 1
+	defer func() {
+		if !finish(inv, code) {
+			code = cmp.Or(code, 1)
+		}
+	}()
 
 	bin := filepath.Join(inv.dir, "bin")
 	if err := os.Mkdir(bin, 0o700); err != nil {
@@ -65,26 +71,30 @@ func runMain(m *testing.M) int {
 }
 
 // finish reaps the root of the invocation, copies its logs out if it failed and
-// CF_E2E_ARTIFACTS says where, and removes it unless CF_E2E_KEEP=1.
-func finish(inv *invocation, code int) {
+// CF_E2E_ARTIFACTS says where, and removes it unless CF_E2E_KEEP=1. A root it
+// could not reap is a failure: its logs are copied and it is kept, as the
+// evidence and for the reaper of the next invocation. It says whether it reaped.
+func finish(inv *invocation, code int) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), reapTimeout)
 	defer cancel()
-	if err := reapRoot(ctx, inv.dir); err != nil {
-		fmt.Fprintf(os.Stderr, "e2e: reaping %s: %v\n", inv.dir, err)
+	reapErr := reapRoot(ctx, inv.dir)
+	if reapErr != nil {
+		fmt.Fprintf(os.Stderr, "e2e: reaping %s: %v\n", inv.dir, reapErr)
 	}
 	_ = inv.close()
-	if dest := os.Getenv(envArtifacts); dest != "" && code != 0 {
+	if dest := os.Getenv(envArtifacts); dest != "" && (code != 0 || reapErr != nil) {
 		if err := copyLogs(inv.dir, filepath.Join(dest, filepath.Base(inv.dir))); err != nil {
 			fmt.Fprintf(os.Stderr, "e2e: copying the logs: %v\n", err)
 		}
 	}
-	if inv.keep {
+	if inv.keep || reapErr != nil {
 		fmt.Fprintf(os.Stderr, "e2e: kept %s\n", inv.dir)
-		return
+		return reapErr == nil
 	}
 	if err := os.RemoveAll(inv.dir); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: removing %s: %v\n", inv.dir, err)
 	}
+	return true
 }
 
 // copyLogs copies the manifest, the owner and every logs/ directory of root
