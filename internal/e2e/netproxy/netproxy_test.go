@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -243,6 +244,31 @@ func TestDropRepliesHidesUpstreamClose(t *testing.T) {
 	if _, err := io.WriteString(c, "x"); err != nil {
 		t.Fatal(err)
 	}
+	p.Heal()
+	requireReset(t, c)
+}
+
+// Writing on after the upstream is gone makes the forward fail; the client
+// must still hear nothing until the reset that ends DropReplies.
+func TestDropRepliesHidesAFailedForward(t *testing.T) {
+	up := startEcho(t, "")
+	p := listen(t, fixed(up.addr()))
+
+	c := dial(t, p)
+	roundTrip(t, c, "ping")
+	p.SetMode(DropReplies)
+	up.close()
+	for range 20 {
+		if _, err := io.WriteString(c, "x"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	if _, err := c.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("read err = %v during DropReplies; want silence", err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(patience))
 	p.Heal()
 	requireReset(t, c)
 }

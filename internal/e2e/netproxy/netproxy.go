@@ -101,6 +101,7 @@ func (p *Proxy) SetMode(m Mode) {
 	p.mu.Unlock()
 	for _, l := range doomed {
 		p.reset(l.client, l.server)
+		l.resetOnce.Do(func() { close(l.wasReset) })
 	}
 }
 
@@ -171,7 +172,7 @@ func (p *Proxy) serve(client net.Conn) {
 		_ = client.Close()
 		return
 	}
-	l := &link{client: client, server: server}
+	l := &link{client: client, server: server, wasReset: make(chan struct{})}
 	if !p.track(l) {
 		p.reset(client, server)
 		return
@@ -187,6 +188,14 @@ func (p *Proxy) serve(client net.Conn) {
 	p.reply(l)
 	<-forwarded
 
+	// A link that ended while its replies were dropped keeps its end hidden:
+	// the client hears the reset that comes when DropReplies ends, not a close.
+	if p.Mode() == DropReplies {
+		select {
+		case <-l.wasReset:
+		case <-p.ctx.Done():
+		}
+	}
 	p.untrack(l)
 	l.close()
 }
@@ -194,7 +203,9 @@ func (p *Proxy) serve(client net.Conn) {
 // forward copies client to server, in every mode the link lives through.
 func (p *Proxy) forward(l *link) {
 	if _, err := io.Copy(l.server, l.client); err != nil {
-		l.close()
+		if p.Mode() != DropReplies {
+			l.close()
+		}
 		return
 	}
 	closeWrite(l.server)
@@ -252,6 +263,8 @@ func (p *Proxy) reset(conns ...net.Conn) {
 
 type link struct {
 	client, server net.Conn
+	resetOnce      sync.Once
+	wasReset       chan struct{} // closed when SetMode resets the link
 }
 
 func (l *link) close() {
