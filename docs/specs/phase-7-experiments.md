@@ -35,6 +35,7 @@ Fase 7 del roadmap de `docs/codefabric-spec.md` (§43). Release objetivo: **v0.5
 | `fork-compare` | Fork y compare | M | `checkpoint-capture`, `evaluators` |
 | `promote` | Promote | M | `fork-compare` |
 | `analytics-history` | Analytics e historial | S | `evaluators`, `usage-attribution` |
+| `run-insights` | Insights de Runs y visor de conversación | M | `analytics-history`, `usage-attribution`, `checkpoint-capture`, `models-tui` |
 
 **No entra:** lo asignado a otras fases en §43.
 
