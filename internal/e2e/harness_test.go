@@ -677,3 +677,11 @@ func eventually(ctx context.Context, t *testing.T, what string, ok func() bool) 
 		}
 	}
 }
+
+func TestHarness_FailureOutputHidesInvites(t *testing.T) {
+	invite := "cf://127.0.0.1:7443/join?token=abc#sha256:def"
+	res := Result{Args: []string{"worker", "join", invite}, Stdout: invite + "\n"}
+	if got := res.String(); strings.Contains(got, invite) || !strings.Contains(got, redacted) {
+		t.Errorf("the invite shows:\n%s", got)
+	}
+}

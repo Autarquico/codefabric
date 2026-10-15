@@ -29,8 +29,14 @@ type Result struct {
 }
 
 func (r Result) String() string {
-	return fmt.Sprintf("cf %s: exit %d\nstdout: %s\nstderr: %s", strings.Join(r.Args, " "), r.Code, r.Stdout, r.Stderr)
+	return hideInvites(fmt.Sprintf("cf %s: exit %d\nstdout: %s\nstderr: %s", strings.Join(r.Args, " "), r.Code, r.Stdout, r.Stderr))
 }
+
+// inviteURL is an invite as cf prints and takes it.
+var inviteURL = regexp.MustCompile(`cf://\S+`)
+
+// hideInvites keeps the invites out of what the test prints, which ends in the CI log.
+func hideInvites(s string) string { return inviteURL.ReplaceAllString(s, redacted) }
 
 // CF runs the real cf in box b, the owner's commands in the owner's clone, and
 // returns how it ended. A command that does not end in time fails the test.
@@ -44,7 +50,7 @@ func (c *Cluster) CF(b *Box, args ...string) Result {
 		killCtx, cancelKill := context.WithTimeout(context.Background(), teardownTimeout)
 		_ = p.KillGroup(killCtx)
 		cancelKill()
-		c.t.Fatalf("e2e: cf %s did not end: %v\n%s", strings.Join(args, " "), err, c.Logs())
+		c.t.Fatalf("e2e: cf %s did not end: %v\n%s", hideInvites(strings.Join(args, " ")), err, c.Logs())
 	}
 	res := Result{Args: args, Stdout: p.Log(), Stderr: p.Stderr()}
 	var exit *exec.ExitError
@@ -52,7 +58,7 @@ func (c *Cluster) CF(b *Box, args ...string) Result {
 	case errors.As(err, &exit):
 		res.Code = exit.ExitCode()
 	case err != nil:
-		c.t.Fatalf("e2e: cf %s: %v", strings.Join(args, " "), err)
+		c.t.Fatalf("e2e: cf %s: %v", hideInvites(strings.Join(args, " ")), err)
 	}
 	return res
 }

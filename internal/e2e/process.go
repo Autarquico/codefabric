@@ -378,13 +378,21 @@ func (p *Proc) KillGroup(ctx context.Context) error {
 	p.mu.Lock()
 	groups := slices.Clone(p.groups)
 	p.mu.Unlock()
+	if p.Running() {
+		// Not waited for yet, so the pid is still the leader's: no identity needed.
+		_ = syscall.Kill(-p.PID(), syscall.SIGKILL)
+	}
 	var killed []group
 	for _, g := range groups {
 		if g.killRemains() {
 			killed = append(killed, g)
 		}
 	}
-	<-p.Done()
+	select {
+	case <-p.Done():
+	case <-ctx.Done():
+		return fmt.Errorf("pid %d did not end: %w", p.PID(), ctx.Err())
+	}
 	return waitGone(ctx, killed)
 }
 

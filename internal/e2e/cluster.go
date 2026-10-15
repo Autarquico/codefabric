@@ -403,7 +403,7 @@ func (c *Cluster) Logs() string {
 			fmt.Fprintf(&out, "--- stderr:\n%s\n", tail(p.Stderr()))
 		}
 	}
-	return out.String()
+	return hideInvites(out.String())
 }
 
 func tail(s string) string {
