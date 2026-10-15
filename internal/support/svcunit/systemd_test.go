@@ -56,7 +56,8 @@ func TestSystemd_FirstInstallWritesReloadsEnablesAndStarts(t *testing.T) {
 	e, fake := newSystemd(t)
 	res := install(t, e, workerSpec())
 	assertActions(t, res, "write "+fake.Path, "systemctl --user daemon-reload",
-		"systemctl --user enable --no-reload cf-worker.service", "systemctl --user start cf-worker.service")
+		"systemctl --user enable --no-reload cf-worker.service", "systemctl --user daemon-reload",
+		"systemctl --user start cf-worker.service")
 	if res.Manager != "systemd" || res.Unit != "cf-worker.service" || res.Path != fake.Path || len(res.Warnings) != 0 {
 		t.Errorf("result = %+v", res)
 	}
@@ -65,6 +66,8 @@ func TestSystemd_FirstInstallWritesReloadsEnablesAndStarts(t *testing.T) {
 	}
 }
 
+// Enabling leaves systemd 255 saying every unit needs a reload, so a second
+// install finds nothing to do only if the first one reloaded after enabling.
 func TestSystemd_SecondInstallOnlyReads(t *testing.T) {
 	e, fake := newSystemd(t)
 	install(t, e, workerSpec())
@@ -93,7 +96,7 @@ func TestSystemd_InstallRepairsWhatIsMissing(t *testing.T) {
 		want            []string
 	}{
 		{"enabled but inactive", true, false, false, []string{"systemctl --user start cf-worker.service"}},
-		{"disabled but active", false, true, false, []string{"systemctl --user enable --no-reload cf-worker.service"}},
+		{"disabled but active", false, true, false, []string{"systemctl --user enable --no-reload cf-worker.service", "systemctl --user daemon-reload"}},
 		{"identical but needs a reload", true, true, true, []string{"systemctl --user daemon-reload"}},
 	}
 	for _, c := range cases {
@@ -279,5 +282,24 @@ func TestSystemd_AFailedFreshInstallLeavesNoFile(t *testing.T) {
 	}
 	fake.Fail("systemctl --user daemon-reload", nil)
 	assertActions(t, install(t, e, workerSpec()), "write "+fake.Path, "systemctl --user daemon-reload",
-		"systemctl --user enable --no-reload cf-worker.service", "systemctl --user start cf-worker.service")
+		"systemctl --user enable --no-reload cf-worker.service", "systemctl --user daemon-reload",
+		"systemctl --user start cf-worker.service")
+}
+
+// A reload that fails after enabling removes the new unit file like any other
+// failure. The enabling stays (systemd keeps its link to the unit), so the retry
+// writes, reloads and starts.
+func TestSystemd_AFailedReloadAfterEnablingIsUndone(t *testing.T) {
+	e, fake := newSystemd(t)
+	boom := errors.New("Failed to connect to bus")
+	fake.FailAfter("systemctl --user daemon-reload", 1, boom)
+	if _, err := svcunit.Install(t.Context(), e, workerSpec()); !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(fake.Path); !os.IsNotExist(err) {
+		t.Errorf("the unit file is there: %v", err)
+	}
+	fake.Fail("systemctl --user daemon-reload", nil)
+	assertActions(t, install(t, e, workerSpec()), "write "+fake.Path, "systemctl --user daemon-reload",
+		"systemctl --user start cf-worker.service")
 }

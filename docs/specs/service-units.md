@@ -6,7 +6,7 @@ status: shipped
 priority: P0
 size: S
 issue: 15
-prs: [39]
+prs: [39, 40]
 related_issues: [15]
 sub_issues: []
 depends_on: [worker-registry-heartbeat]

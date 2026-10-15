@@ -97,7 +97,7 @@ func (m systemd) apply(o *op, s Spec, changed bool) error {
 		return err
 	}
 	if !u.enabled() {
-		if err := o.act("systemctl", "--user", "enable", "--no-reload", unit); err != nil {
+		if err := m.enable(o, unit); err != nil {
 			return err
 		}
 	}
@@ -112,6 +112,17 @@ func (m systemd) apply(o *op, s Spec, changed bool) error {
 	}
 	m.warnLinger(o)
 	return nil
+}
+
+// enable enables unit and reloads: since systemd 255, a change to the unit
+// files through the manager (enable, disable) makes every unit report
+// NeedDaemonReload=yes until the next daemon-reload, and the next install
+// would take that for a reload still to do.
+func (systemd) enable(o *op, unit string) error {
+	if err := o.act("systemctl", "--user", "enable", "--no-reload", unit); err != nil {
+		return err
+	}
+	return o.act("systemctl", "--user", "daemon-reload")
 }
 
 // warnLinger warns that, without lingering, systemd ends the user's services
