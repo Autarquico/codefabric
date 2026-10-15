@@ -139,6 +139,22 @@ func requireReset(t *testing.T, c net.Conn) {
 	}
 }
 
+// requireDialReset dials a proxy that resets what it accepts: the reset may
+// reach the client while it connects (Linux) or on its first read.
+func requireDialReset(t *testing.T, p *Proxy) {
+	t.Helper()
+	d := net.Dialer{Timeout: patience}
+	c, err := d.DialContext(context.Background(), "tcp", p.Addr())
+	if err == nil {
+		_ = c.SetDeadline(time.Now().Add(patience))
+		defer func() { _ = c.Close() }()
+		_, err = c.Read(make([]byte, 1))
+	}
+	if !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("err = %v; want connection reset", err)
+	}
+}
+
 func requireEOF(t *testing.T, c net.Conn) {
 	t.Helper()
 	_, err := c.Read(make([]byte, 1))
@@ -185,11 +201,11 @@ func TestRejectResetsLiveAndNewConnections(t *testing.T) {
 	p.SetMode(Reject)
 	requireReset(t, live)
 
-	fresh := dial(t, p)
-	requireReset(t, fresh)
-	if s := p.Stats(); s.Active != 0 || s.Resets != 2 {
-		t.Fatalf("stats = %+v", s)
-	}
+	requireDialReset(t, p)
+	eventually(t, "both connections reset", func() bool {
+		s := p.Stats()
+		return s.Active == 0 && s.Resets == 2
+	})
 }
 
 func TestDropRepliesForwardsRequestsAndLosesReplies(t *testing.T) {
