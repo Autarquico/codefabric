@@ -21,6 +21,7 @@
 - #12 Git relay y publicación del resultado
 - #13 Stop, cancel, lost y reconciliación
 - #14 Observación: attach, ps, eventos y output
+- #15 Unidades de servicio systemd y launchd
 <!-- /pm-sync:done-this-week -->
 
 ---
@@ -28,7 +29,7 @@
 ## En curso
 
 <!-- pm-sync:in-progress -->
-- #15 Unidades de servicio systemd y launchd
+_(nada)_
 <!-- /pm-sync:in-progress -->
 
 ---
