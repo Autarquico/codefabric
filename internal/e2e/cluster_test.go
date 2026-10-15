@@ -118,10 +118,12 @@ func TestHarness_ClusterUp(t *testing.T) {
 		if types[domain.EventRunStarted] != 1 || types[domain.EventRunPublished] != 1 {
 			t.Errorf("events of the Run: %v", types)
 		}
-		logs := c.CF(c.Observer, "logs", "--run", run)
-		if logs.Code != 0 || !strings.Contains(logs.Stdout, "e2e: started "+token) || !strings.Contains(logs.Stdout, "e2e: finished "+token) {
-			t.Errorf("%s", logs)
-		}
+		// The output goes up every second, apart from publication.
+		c.Eventually("the whole output to reach the observer", func() (bool, string) {
+			logs := c.CF(c.Observer, "logs", "--run", run)
+			return logs.Code == 0 && strings.Contains(logs.Stdout, "e2e: started "+token) &&
+				strings.Contains(logs.Stdout, "e2e: finished "+token), logs.String()
+		})
 		if ws := c.ListWorkers(c.Observer); len(ws) != 1 || ws[0].Name != w.Name {
 			t.Errorf("workers = %+v", ws)
 		}

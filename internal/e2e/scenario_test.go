@@ -104,10 +104,12 @@ func TestScenario_E2eV01_DoneDeFase1(t *testing.T) {
 			t.Errorf("result.txt of %s = %q, want %q", r.ID, got, tokens[i])
 		}
 	}
-	// What the dead follow missed is all there for whoever asks later.
-	if out := c.mustCF(c.Observer, "logs", "--run", run).Stdout; !strings.Contains(out, "e2e: finished "+tokens[0]) {
-		t.Errorf("the observer's logs of %s lack the end:\n%s", run, out)
-	}
+	// What the dead follow missed is all there for whoever asks later, once the
+	// Worker has shipped it: output goes up every second, apart from publication.
+	c.Eventually("the end of the output to reach the observer", func() (bool, string) {
+		out := c.mustCF(c.Observer, "logs", "--run", run).Stdout
+		return strings.Contains(out, "e2e: finished "+tokens[0]), out
+	})
 
 	Check(t, c, Expect{Tasks: expectedTasks(created, tokens), Sampler: sampler})
 }
