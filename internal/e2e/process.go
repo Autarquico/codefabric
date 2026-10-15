@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -197,7 +198,12 @@ func (b *Box) CF(role Role, name string, args ...string) *Proc {
 // Start starts argv in the box, as a process of the harness named name.
 func (b *Box) Start(role Role, name string, argv ...string) *Proc {
 	b.h.t.Helper()
-	p := &Proc{box: b, role: role, name: name, argv: argv}
+	return b.add(&Proc{box: b, role: role, name: name, argv: argv})
+}
+
+// add starts p and makes it a process of the harness.
+func (b *Box) add(p *Proc) *Proc {
+	b.h.t.Helper()
 	p.start()
 	b.h.mu.Lock()
 	b.h.procs = append(b.h.procs, p)
@@ -213,6 +219,10 @@ type Proc struct {
 	role Role
 	name string
 	argv []string
+	// dir is the working directory, the box's if empty. With splitStderr the
+	// stderr of a start goes to <name>.<n>.stderr.log, not to its log.
+	dir         string
+	splitStderr bool
 
 	mu     sync.Mutex
 	n      int
@@ -246,12 +256,20 @@ func (p *Proc) start() {
 	// Not CommandContext: a process of the cluster ends when the test says,
 	// never because a context did.
 	cmd := exec.Command(p.argv[0], p.argv[1:]...) //nolint:gosec,noctx // the commands of the test
-	cmd.Dir = p.box.Dir
+	errFile := logFile
+	if p.splitStderr {
+		if errFile, err = os.OpenFile(p.stderrPath(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err != nil {
+			_ = logFile.Close()
+			t.Fatal(err)
+		}
+	}
+	cmd.Dir = cmp.Or(p.dir, p.box.Dir)
 	cmd.Env = p.box.Env()
-	cmd.Stdout, cmd.Stderr = logFile, logFile
+	cmd.Stdout, cmd.Stderr = logFile, errFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
+		_ = errFile.Close()
 		t.Fatalf("e2e: starting %s: %v", p.id(), err)
 	}
 	p.pid = cmd.Process.Pid
@@ -266,6 +284,7 @@ func (p *Proc) start() {
 	go func() {
 		err := cmd.Wait()
 		_ = logFile.Close()
+		_ = errFile.Close()
 		_ = inv.record(entry{Kind: entryEnded, ID: id})
 		p.mu.Lock()
 		if p.done == done {
@@ -287,6 +306,18 @@ func (p *Proc) Starts() int { p.mu.Lock(); defer p.mu.Unlock(); return p.n }
 
 // LogPath is the log of the last start.
 func (p *Proc) LogPath() string { p.mu.Lock(); defer p.mu.Unlock(); return p.log }
+
+// stderrPath is where the stderr of the last start goes, with splitStderr.
+func (p *Proc) stderrPath() string { return strings.TrimSuffix(p.log, ".log") + ".stderr.log" }
+
+// Stderr is what the last start has written to stderr so far, with splitStderr.
+func (p *Proc) Stderr() string {
+	p.mu.Lock()
+	path := p.stderrPath()
+	p.mu.Unlock()
+	raw, _ := os.ReadFile(path) //nolint:gosec // a log of this harness
+	return string(raw)
+}
 
 // Log is what the last start has written so far.
 func (p *Proc) Log() string {
