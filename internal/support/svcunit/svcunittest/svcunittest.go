@@ -151,9 +151,10 @@ func (f *Systemd) Run(_ context.Context, argv ...string) (string, error) {
 	case "daemon-reload":
 		f.reload()
 	case "enable":
-		f.UnitFileState = "enabled"
+		// systemd 255 says every unit needs a reload after a change to the unit files.
+		f.UnitFileState, f.NeedDaemonReload = "enabled", true
 	case "disable":
-		f.UnitFileState = "disabled"
+		f.UnitFileState, f.NeedDaemonReload = "disabled", true
 	case "start", "restart":
 		if f.LoadState != "loaded" {
 			return "", Exit(argv, 5, "Unit not found.")

@@ -56,7 +56,8 @@ func TestSystemd_FirstInstallWritesReloadsEnablesAndStarts(t *testing.T) {
 	e, fake := newSystemd(t)
 	res := install(t, e, workerSpec())
 	assertActions(t, res, "write "+fake.Path, "systemctl --user daemon-reload",
-		"systemctl --user enable --no-reload cf-worker.service", "systemctl --user start cf-worker.service")
+		"systemctl --user enable --no-reload cf-worker.service", "systemctl --user daemon-reload",
+		"systemctl --user start cf-worker.service")
 	if res.Manager != "systemd" || res.Unit != "cf-worker.service" || res.Path != fake.Path || len(res.Warnings) != 0 {
 		t.Errorf("result = %+v", res)
 	}
@@ -85,6 +86,23 @@ func TestSystemd_SecondInstallOnlyReads(t *testing.T) {
 	}
 }
 
+// The scenario of a real systemd: install, then the manager restarts the
+// daemon, then install again. Enabling left systemd 255 saying every unit
+// needs a reload; installing again found nothing to do only if the first
+// install reloaded after enabling.
+func TestSystemd_InstallAfterARestartOnlyReads(t *testing.T) {
+	e, fake := newSystemd(t)
+	install(t, e, workerSpec())
+	if _, err := fake.Run(t.Context(), "systemctl", "--user", "restart", "cf-worker.service"); err != nil {
+		t.Fatal(err)
+	}
+	n := len(fake.Calls())
+	assertActions(t, install(t, e, workerSpec()))
+	if calls := fake.Calls()[n:]; !queriesOnly(calls) {
+		t.Errorf("the second install ran %q", calls)
+	}
+}
+
 func TestSystemd_InstallRepairsWhatIsMissing(t *testing.T) {
 	cases := []struct {
 		name            string
@@ -93,7 +111,7 @@ func TestSystemd_InstallRepairsWhatIsMissing(t *testing.T) {
 		want            []string
 	}{
 		{"enabled but inactive", true, false, false, []string{"systemctl --user start cf-worker.service"}},
-		{"disabled but active", false, true, false, []string{"systemctl --user enable --no-reload cf-worker.service"}},
+		{"disabled but active", false, true, false, []string{"systemctl --user enable --no-reload cf-worker.service", "systemctl --user daemon-reload"}},
 		{"identical but needs a reload", true, true, true, []string{"systemctl --user daemon-reload"}},
 	}
 	for _, c := range cases {
@@ -279,5 +297,6 @@ func TestSystemd_AFailedFreshInstallLeavesNoFile(t *testing.T) {
 	}
 	fake.Fail("systemctl --user daemon-reload", nil)
 	assertActions(t, install(t, e, workerSpec()), "write "+fake.Path, "systemctl --user daemon-reload",
-		"systemctl --user enable --no-reload cf-worker.service", "systemctl --user start cf-worker.service")
+		"systemctl --user enable --no-reload cf-worker.service", "systemctl --user daemon-reload",
+		"systemctl --user start cf-worker.service")
 }
