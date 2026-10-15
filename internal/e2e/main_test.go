@@ -32,13 +32,13 @@ func runMain(m *testing.M) (code int) {
 		return 1
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), reapTimeout)
-	reaped, err := reapAbandoned(ctx, parent)
+	reaped, reapErr := reapAbandoned(ctx, parent)
 	cancel()
 	for _, root := range reaped {
 		fmt.Fprintf(os.Stderr, "e2e: reaped the abandoned root %s\n", root)
 	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "e2e: reaping abandoned roots: %v\n", err)
+	if reapErr != nil {
+		fmt.Fprintf(os.Stderr, "e2e: reaping abandoned roots: %v\n", reapErr)
 	}
 
 	own, err := self(os.Getenv(envKeep) == "1")
@@ -67,6 +67,10 @@ func runMain(m *testing.M) (code int) {
 		return code
 	}
 	code = m.Run()
+	if reapErr != nil {
+		// An abandoned root left as it was fails the run, make e2e-reap above all.
+		code = cmp.Or(code, 1)
+	}
 	return code
 }
 
