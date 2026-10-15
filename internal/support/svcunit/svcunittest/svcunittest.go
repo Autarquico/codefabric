@@ -32,6 +32,7 @@ type recorder struct {
 	mu    sync.Mutex
 	calls [][]string
 	fail  map[string]error
+	spare map[string]int
 }
 
 // Calls are the commands given so far, each joined with spaces.
@@ -47,9 +48,16 @@ func (r *recorder) Calls() []string {
 
 // Fail makes every command that starts with prefix fail with err; a nil err
 // makes them work again.
-func (r *recorder) Fail(prefix string, err error) {
+func (r *recorder) Fail(prefix string, err error) { r.FailAfter(prefix, 0, err) }
+
+// FailAfter is Fail sparing the next n commands that start with prefix.
+func (r *recorder) FailAfter(prefix string, n int, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.spare == nil {
+		r.spare = map[string]int{}
+	}
+	r.spare[prefix] = n
 	if r.fail == nil {
 		r.fail = map[string]error{}
 	}
@@ -64,9 +72,14 @@ func (r *recorder) record(argv []string) error {
 	r.calls = append(r.calls, argv)
 	line := strings.Join(argv, " ")
 	for prefix, err := range r.fail {
-		if strings.HasPrefix(line, prefix) {
-			return err
+		if !strings.HasPrefix(line, prefix) {
+			continue
 		}
+		if r.spare[prefix] > 0 {
+			r.spare[prefix]--
+			continue
+		}
+		return err
 	}
 	return nil
 }
@@ -127,6 +140,14 @@ func (f *Systemd) reload() {
 	}
 }
 
+// setUnitFileState enables or disables the unit as systemd 255 does: a change
+// to the unit files leaves every unit saying it needs a reload, a no-op does not.
+func (f *Systemd) setUnitFileState(state string) {
+	if f.UnitFileState != state {
+		f.UnitFileState, f.NeedDaemonReload = state, true
+	}
+}
+
 // Run is systemctl --user and loginctl.
 func (f *Systemd) Run(_ context.Context, argv ...string) (string, error) {
 	f.mu.Lock()
@@ -151,10 +172,9 @@ func (f *Systemd) Run(_ context.Context, argv ...string) (string, error) {
 	case "daemon-reload":
 		f.reload()
 	case "enable":
-		// systemd 255 says every unit needs a reload after a change to the unit files.
-		f.UnitFileState, f.NeedDaemonReload = "enabled", true
+		f.setUnitFileState("enabled")
 	case "disable":
-		f.UnitFileState, f.NeedDaemonReload = "disabled", true
+		f.setUnitFileState("disabled")
 	case "start", "restart":
 		if f.LoadState != "loaded" {
 			return "", Exit(argv, 5, "Unit not found.")

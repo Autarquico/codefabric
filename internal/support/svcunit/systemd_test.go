@@ -66,6 +66,8 @@ func TestSystemd_FirstInstallWritesReloadsEnablesAndStarts(t *testing.T) {
 	}
 }
 
+// Enabling leaves systemd 255 saying every unit needs a reload, so a second
+// install finds nothing to do only if the first one reloaded after enabling.
 func TestSystemd_SecondInstallOnlyReads(t *testing.T) {
 	e, fake := newSystemd(t)
 	install(t, e, workerSpec())
@@ -83,23 +85,6 @@ func TestSystemd_SecondInstallOnlyReads(t *testing.T) {
 	after, err := os.Stat(fake.Path)
 	if err != nil || !os.SameFile(before, after) || !after.ModTime().Equal(before.ModTime()) {
 		t.Errorf("the unit file was rewritten")
-	}
-}
-
-// The scenario of a real systemd: install, then the manager restarts the
-// daemon, then install again. Enabling left systemd 255 saying every unit
-// needs a reload; installing again found nothing to do only if the first
-// install reloaded after enabling.
-func TestSystemd_InstallAfterARestartOnlyReads(t *testing.T) {
-	e, fake := newSystemd(t)
-	install(t, e, workerSpec())
-	if _, err := fake.Run(t.Context(), "systemctl", "--user", "restart", "cf-worker.service"); err != nil {
-		t.Fatal(err)
-	}
-	n := len(fake.Calls())
-	assertActions(t, install(t, e, workerSpec()))
-	if calls := fake.Calls()[n:]; !queriesOnly(calls) {
-		t.Errorf("the second install ran %q", calls)
 	}
 }
 
@@ -298,5 +283,23 @@ func TestSystemd_AFailedFreshInstallLeavesNoFile(t *testing.T) {
 	fake.Fail("systemctl --user daemon-reload", nil)
 	assertActions(t, install(t, e, workerSpec()), "write "+fake.Path, "systemctl --user daemon-reload",
 		"systemctl --user enable --no-reload cf-worker.service", "systemctl --user daemon-reload",
+		"systemctl --user start cf-worker.service")
+}
+
+// A reload that fails after enabling removes the new unit file like any other
+// failure. The enabling stays (systemd keeps its link to the unit), so the retry
+// writes, reloads and starts.
+func TestSystemd_AFailedReloadAfterEnablingIsUndone(t *testing.T) {
+	e, fake := newSystemd(t)
+	boom := errors.New("Failed to connect to bus")
+	fake.FailAfter("systemctl --user daemon-reload", 1, boom)
+	if _, err := svcunit.Install(t.Context(), e, workerSpec()); !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(fake.Path); !os.IsNotExist(err) {
+		t.Errorf("the unit file is there: %v", err)
+	}
+	fake.Fail("systemctl --user daemon-reload", nil)
+	assertActions(t, install(t, e, workerSpec()), "write "+fake.Path, "systemctl --user daemon-reload",
 		"systemctl --user start cf-worker.service")
 }
