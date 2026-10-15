@@ -46,7 +46,8 @@ func TestInstallService_ControllerUnit(t *testing.T) {
 	}
 	want := []string{
 		"write " + fake.Path, "systemctl --user daemon-reload",
-		"systemctl --user enable --no-reload cf-controller.service", "systemctl --user start cf-controller.service",
+		"systemctl --user enable --no-reload cf-controller.service", "systemctl --user daemon-reload",
+		"systemctl --user start cf-controller.service",
 	}
 	if !slices.Equal(res.Actions, want) {
 		t.Errorf("actions = %q", res.Actions)
