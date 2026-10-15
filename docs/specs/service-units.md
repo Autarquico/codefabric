@@ -2,7 +2,7 @@
 codename: codefabric
 title: Unidades de servicio systemd y launchd
 type: task
-status: active
+status: shipped
 priority: P0
 size: S
 issue: 15

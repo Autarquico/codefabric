@@ -1,0 +1,51 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Random seeds of the property test after the corpus, and the whole suite
+  # with every cf of the cluster built with -race.
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, leg: random, target: test-e2e-property, seeds: "10", scale: "1" }
+          - { os: macos-latest, leg: random, target: test-e2e-property, seeds: "4", scale: "1.5" }
+          - { os: ubuntu-latest, leg: race, target: test-e2e-race, seeds: "0", scale: "2" }
+    name: e2e (${{ matrix.os }}, ${{ matrix.leg }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CF_REQUIRE_TMUX: "1"
+      CF_REQUIRE_GIT: "1"
+      CF_E2E_ARTIFACTS: ${{ github.workspace }}/e2e-artifacts
+      CF_E2E_SCALE: ${{ matrix.scale }}
+      E2E_SEEDS: ${{ matrix.seeds }}
+      E2E_TIMEOUT: 40m
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y git tmux
+      - if: runner.os == 'macOS'
+        run: brew install tmux
+      - run: git --version && tmux -V
+      - run: make ${{ matrix.target }}
+      - if: always()
+        run: make e2e-reap
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-logs-${{ matrix.os }}-${{ matrix.leg }}
+          path: ${{ env.CF_E2E_ARTIFACTS }}
+          if-no-files-found: ignore
