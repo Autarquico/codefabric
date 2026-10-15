@@ -28,6 +28,7 @@ type EventRow struct {
 	WorkerEpoch  string
 	WorkerSeq    *int64
 	ReportDigest string // data.report_digest, of an event a report caused
+	LeaseEpoch   uint64 // data.lease_epoch, 0 if the event has none
 }
 
 // ReceiptRow is a report entry the Controller applied, by its triple.
@@ -79,10 +80,12 @@ type LocalRunRow struct {
 // WorkerSnapshot is what a Worker's state.db holds at one instant.
 // JournalSeq is the high-water mark of the journal (its sqlite_sequence): the
 // last worker_seq ever issued, though the row is gone once confirmed.
+// JournalEpochs are the daemon epochs of the rows not yet confirmed.
 type WorkerSnapshot struct {
-	JournalSeq  int64
-	Unconfirmed int
-	LocalRuns   []LocalRunRow
+	JournalSeq    int64
+	Unconfirmed   int
+	JournalEpochs []string
+	LocalRuns     []LocalRunRow
 }
 
 // ControllerSnapshot reads the Controller's database.
@@ -109,11 +112,11 @@ func readController(ctx context.Context, path string) (snap ControllerSnapshot, 
 	err = readOnly(ctx, path, func(tx *sql.Tx) error {
 		return errors.Join(
 			scanAll(ctx, tx, `SELECT sequence, type, COALESCE(run_id, ''), COALESCE(worker_id, ''), COALESCE(worker_epoch, ''), worker_seq,
-				COALESCE(json_extract(data, '$.report_digest'), '') FROM events ORDER BY sequence`,
+				COALESCE(json_extract(data, '$.report_digest'), ''), COALESCE(json_extract(data, '$.lease_epoch'), 0) FROM events ORDER BY sequence`,
 				func(rows *sql.Rows) error {
 					var e EventRow
 					var seq sql.NullInt64
-					if err := rows.Scan(&e.Sequence, &e.Type, &e.RunID, &e.WorkerID, &e.WorkerEpoch, &seq, &e.ReportDigest); err != nil {
+					if err := rows.Scan(&e.Sequence, &e.Type, &e.RunID, &e.WorkerID, &e.WorkerEpoch, &seq, &e.ReportDigest, &e.LeaseEpoch); err != nil {
 						return err
 					}
 					if seq.Valid {
@@ -163,6 +166,13 @@ func readWorker(ctx context.Context, path string) (snap WorkerSnapshot, err erro
 		}
 		return errors.Join(err,
 			tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM journal`).Scan(&snap.Unconfirmed),
+			scanAll(ctx, tx, `SELECT DISTINCT epoch FROM journal ORDER BY epoch`,
+				func(rows *sql.Rows) error {
+					var epoch string
+					err := rows.Scan(&epoch)
+					snap.JournalEpochs = append(snap.JournalEpochs, epoch)
+					return err
+				}),
 			scanAll(ctx, tx, `SELECT run_id, lease_epoch, phase, adopted, orphaned_at IS NOT NULL FROM local_runs ORDER BY run_id, lease_epoch`,
 				func(rows *sql.Rows) error {
 					var r LocalRunRow

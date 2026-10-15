@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,24 +125,25 @@ func (l *Ledger) Token() string {
 
 // Script is the prompt of a Task whose harness records itself under token,
 // waits to be released, writes token to result.txt and records its end. It
-// says on its output when it starts and when it ends.
+// says on its output when it starts and when it ends. It is released by its
+// token or by its own execution, the file of its worktree under go/x.
 func (l *Ledger) Script(token string) string {
 	polls := int(Scaled(ledgerHold) / ledgerPoll)
-	return fmt.Sprintf(`L='%s'; T='%s'
-printf 'start %%s %%s %%s\n' "$$" "$(pwd -P)" "$(date +%%s)" >> "$L/$T.log"
+	return fmt.Sprintf(`L='%s'; T='%s'; D="$(pwd -P)"
+printf 'start %%s %%s %%s\n' "$$" "$D" "$(date +%%s)" >> "$L/$T.log"
 echo "e2e: started $T"
 n=0
-while [ ! -e "$L/go/$T" ]; do
+while [ ! -e "$L/go/$T" ] && [ ! -e "$L/go/x$D" ]; do
   n=$((n+1))
   if [ "$n" -gt %d ]; then
-    printf 'timeout %%s %%s %%s\n' "$$" "$(pwd -P)" "$(date +%%s)" >> "$L/$T.log"
+    printf 'timeout %%s %%s %%s\n' "$$" "$D" "$(date +%%s)" >> "$L/$T.log"
     exit 99
   fi
   sleep %s
 done
 printf '%%s\n' "$T" > result.txt
 echo "e2e: finished $T"
-printf 'end %%s %%s %%s\n' "$$" "$(pwd -P)" "$(date +%%s)" >> "$L/$T.log"
+printf 'end %%s %%s %%s\n' "$$" "$D" "$(date +%%s)" >> "$L/$T.log"
 exit 0`, l.dir, token, polls, strconv.FormatFloat(ledgerPoll.Seconds(), 'f', -1, 64))
 }
 
@@ -149,6 +151,23 @@ exit 0`, l.dir, token, polls, strconv.FormatFloat(ledgerPoll.Seconds(), 'f', -1,
 func (l *Ledger) Release(token string) {
 	l.t.Helper()
 	if err := os.WriteFile(filepath.Join(l.dir, "go", token), nil, 0o600); err != nil {
+		l.t.Fatal(err)
+	}
+}
+
+// ReleaseExecution lets the harness of one execution write its result and
+// end, and no other harness of its Task: an orphan stays while its retry ends.
+func (l *Ledger) ReleaseExecution(e Execution) {
+	l.t.Helper()
+	i := slices.IndexFunc(l.workers, func(w ledgerWorker) bool { return w.name == e.Worker })
+	if i < 0 {
+		l.t.Fatalf("e2e: release %v: no Worker %q", e, e.Worker)
+	}
+	file := filepath.Join(l.dir, "go", "x", l.workers[i].resolved.WorkerWorktreeDir(e.Run, e.Epoch))
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		l.t.Fatal(err)
+	}
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		l.t.Fatal(err)
 	}
 }
