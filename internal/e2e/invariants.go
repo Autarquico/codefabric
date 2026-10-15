@@ -240,7 +240,7 @@ type Sampler struct {
 func (c *Cluster) StartSampler() *Sampler {
 	s := &Sampler{stop: make(chan struct{}), done: make(chan struct{}), reported: map[string]bool{}}
 	go func() {
-		defer close(s.done) // the ledger fails the test with Fatal, which ends this goroutine
+		defer close(s.done)
 		tick := time.NewTicker(sampleEvery)
 		defer tick.Stop()
 		for {
@@ -256,21 +256,35 @@ func (c *Cluster) StartSampler() *Sampler {
 	return s
 }
 
+// sample runs off the test's goroutine: what it cannot read is a finding,
+// reported once, never a Fatal.
 func (s *Sampler) sample(l *Ledger) {
+	all, err := l.all()
+	if err != nil {
+		s.note("[3 one harness] reading the ledger: "+err.Error(), err.Error())
+		return
+	}
 	live := map[string][]string{}
-	for _, in := range l.All() {
+	for _, in := range all {
 		if l.Live(in) {
 			live[in.Run] = append(live[in.Run], fmt.Sprintf("%v pid %d", in.Execution, in.PID))
 		}
 	}
+	for run, ins := range live {
+		if len(ins) > 1 {
+			s.note(fmt.Sprintf("[3 one harness] at %s Run %s had %d harnesses alive: %s",
+				time.Now().Format("15:04:05.000"), run, len(ins), strings.Join(ins, "; ")), run)
+		}
+	}
+}
+
+// note records a finding, once per key.
+func (s *Sampler) note(finding, key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for run, ins := range live {
-		if len(ins) > 1 && !s.reported[run] {
-			s.reported[run] = true
-			s.found = append(s.found, fmt.Sprintf("[3 one harness] at %s Run %s had %d harnesses alive: %s",
-				time.Now().Format("15:04:05.000"), run, len(ins), strings.Join(ins, "; ")))
-		}
+	if !s.reported[key] {
+		s.reported[key] = true
+		s.found = append(s.found, finding)
 	}
 }
 
@@ -730,21 +744,31 @@ func checkRestart(m model, v *violations, kill DaemonKill) {
 		v.add("[5c journal] the killed daemon of %s is of no Worker", kill.Worker)
 		return
 	}
-	fresh := 0
-	for _, k := range journalOf(m.Snapshot, wid) {
-		if slices.Contains(kill.Epochs, k.epoch) {
-			continue // written before the kill, replayed or not
-		}
-		if k.seq <= kill.HighWater {
-			v.add("[5c journal] %s reported seq %d in the new epoch %s, not above the high-water mark %d of its kill",
-				kill.Worker, k.seq, k.epoch, kill.HighWater)
-		} else {
-			fresh++
-		}
+	fresh, reused := newEpochReports(m.Snapshot, wid, kill)
+	for _, k := range reused {
+		v.add("[5c journal] %s reported seq %d in the new epoch %s, not above the high-water mark %d of its kill",
+			kill.Worker, k.seq, k.epoch, kill.HighWater)
 	}
-	if fresh == 0 {
+	if len(fresh) == 0 {
 		v.add("[5c journal] %s reported nothing in a new epoch after its kill at high-water mark %d", kill.Worker, kill.HighWater)
 	}
+}
+
+// newEpochReports are the reports of the Worker the Controller holds from an
+// epoch the kill did not see: fresh above its high-water mark, written after
+// it, and reused at or under it. Reports of the epochs the kill saw were
+// written before it, replayed or not, and are in neither.
+func newEpochReports(snap ControllerSnapshot, workerID string, kill DaemonKill) (fresh, reused []triple) {
+	for _, k := range journalOf(snap, workerID) {
+		switch {
+		case slices.Contains(kill.Epochs, k.epoch):
+		case k.seq > kill.HighWater:
+			fresh = append(fresh, k)
+		default:
+			reused = append(reused, k)
+		}
+	}
+	return fresh, reused
 }
 
 // checkReservations: no reservation is held once the cluster is quiet; a lost

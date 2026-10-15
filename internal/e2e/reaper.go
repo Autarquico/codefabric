@@ -69,17 +69,55 @@ type invocation struct {
 	harness  int // harnesses made, to name their directories
 }
 
-// rootParent is where the roots of invocations are made: CF_E2E_ROOT, or /tmp.
-// Not os.TempDir: on macOS it is some fifty bytes long, and a tmux socket
-// beneath it would not fit the 104 bytes of a socket path.
-func rootParent() string {
+// rootParent is where the roots of invocations are made: CF_E2E_ROOT, or a
+// directory of this user's alone in /tmp, cfe2e-<uid>. Not os.TempDir: on
+// macOS it is some fifty bytes long, and a tmux socket beneath it would not
+// fit the 104 bytes of a socket path. Not /tmp itself: every user shares it,
+// and a root another user planted there must never come into the reaper's view.
+func rootParent() (string, error) {
 	if dir := os.Getenv(envRoot); dir != "" {
-		return dir
+		return dir, nil
 	}
+	base := os.TempDir()
 	if info, err := os.Stat("/tmp"); err == nil && info.IsDir() {
-		return "/tmp"
+		base = "/tmp"
 	}
-	return os.TempDir()
+	return userDir(base)
+}
+
+// userDir is cfe2e-<uid> in base, made if it is not there, and only if it is
+// this user's alone: a directory, not a link, giving nothing to others.
+func userDir(base string) (string, error) {
+	dir := filepath.Join(base, fmt.Sprintf("%s-%d", rootPrefix, os.Getuid()))
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return "", err
+	}
+	if err := private(dir, os.Getuid(), true); err != nil {
+		return "", fmt.Errorf("e2e: %w: remove it or set %s", err, envRoot)
+	}
+	return dir, nil
+}
+
+// private says why path is not uid's alone, or nil if it is: not a link, of
+// the kind asked for (a directory or a regular file), owned by uid and
+// giving nothing to its group or others.
+func private(path string, uid int, dir bool) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	switch {
+	case info.Mode()&fs.ModeSymlink != 0:
+		return fmt.Errorf("%s is a symlink", path)
+	case dir != info.IsDir() || !dir && !info.Mode().IsRegular():
+		return fmt.Errorf("%s is a %v", path, info.Mode().Type())
+	case !ok || int(st.Uid) != uid:
+		return fmt.Errorf("%s is not of uid %d", path, uid)
+	case info.Mode().Perm()&0o077 != 0:
+		return fmt.Errorf("%s is open to others (%v)", path, info.Mode().Perm())
+	}
+	return nil
 }
 
 // self is the owner that the running test binary is.
@@ -149,9 +187,13 @@ func readOwner(root string) (own owner, ok bool) {
 	return own, true
 }
 
-// abandoned says whether the owner of a root is proven gone. A root whose
-// owner cannot be read or verified is not abandoned: it is not provably ours.
+// abandoned says whether a root is this user's and its owner is proven gone.
+// A root that another user could have written, or whose owner cannot be read
+// or verified, is not abandoned: it is not provably ours.
 func abandoned(root string) (owner, bool) {
+	if !trusted(root) {
+		return owner{}, false
+	}
 	own, ok := readOwner(root)
 	if !ok {
 		return owner{}, false
@@ -161,6 +203,17 @@ func abandoned(root string) (owner, bool) {
 		return own, true
 	}
 	return owner{}, false
+}
+
+// trusted says whether the root, its owner and its manifest are this user's
+// alone. What is beneath a root that is cannot have been written by others.
+func trusted(root string) bool {
+	uid := os.Getuid()
+	if private(root, uid, true) != nil || private(filepath.Join(root, ownerFile), uid, false) != nil {
+		return false
+	}
+	err := private(filepath.Join(root, manifestFile), uid, false)
+	return err == nil || errors.Is(err, fs.ErrNotExist)
 }
 
 // reapAbandoned reaps the roots in parent whose invocation died without
@@ -265,20 +318,39 @@ func liveEntries(root string) ([]entry, error) {
 	return out, scan.Err()
 }
 
-// group is a process group whose leader was verified to be ours when it was killed.
+// group is a process group and the leader it was recorded with.
 type group struct {
 	pgid   int
 	leader int
 	start  string
 }
 
-// kill sends SIGKILL to the group if its leader is the process recorded, and
-// says whether it did. A pid that another process has now is left alone.
+// kill sends SIGKILL to the group if its leader is the process recorded and
+// is in it, and says whether it did. A pid that another process has now, or a
+// group the leader does not belong to, is left alone.
 func (g group) kill() bool {
 	if procident.Verify(g.leader, g.start) != procident.Same {
 		return false
 	}
+	if pgid, err := syscall.Getpgid(g.leader); err != nil || pgid != g.pgid {
+		return false
+	}
 	return syscall.Kill(-g.pgid, syscall.SIGKILL) == nil
+}
+
+// killRemains is what a teardown does to the group its own process led: kill
+// it while the leader is the one recorded; once the leader is gone, kill what
+// is left of it, since no pid is given out while a group holds it; and leave
+// it alone when another process has the pid, or nothing can be told. It says
+// whether it sent the signal.
+func (g group) killRemains() bool {
+	switch procident.Verify(g.leader, g.start) {
+	case procident.Same:
+		return g.kill()
+	case procident.Gone:
+		return syscall.Kill(-g.pgid, syscall.SIGKILL) == nil
+	}
+	return false
 }
 
 // gone says whether the leader and every member of the group are gone.

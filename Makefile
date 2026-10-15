@@ -48,7 +48,8 @@ test-e2e-property: build
 test-e2e-race:
 	CF_E2E_BIN= CF_E2E_RACE=1 CGO_ENABLED=1 $(E2E_SEEDING) $(E2E_TEST) -race ./internal/e2e/
 
-# Runs no test: TestMain alone reaps the cfe2e roots whose owner is proven dead
+# Runs no test: TestMain alone reaps the cfe2e roots of /tmp/cfe2e-<uid> (or
+# CF_E2E_ROOT) that are this user's alone and whose owner is proven dead
 # (killing what their manifests started) and leaves live invocations alone.
 e2e-reap: build
 	CF_E2E_BIN=$(CURDIR)/bin/cf go test -tags e2e -count=1 -v -run '^$$' ./internal/e2e/

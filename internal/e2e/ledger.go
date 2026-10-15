@@ -175,45 +175,68 @@ func (l *Ledger) ReleaseExecution(e Execution) {
 // Instances are the harness processes of token, in the order they started.
 func (l *Ledger) Instances(token string) []Instance {
 	l.t.Helper()
-	raw, err := os.ReadFile(filepath.Join(l.dir, token+".log")) //nolint:gosec // a file of the ledger
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
+	out, err := l.instances(token)
 	if err != nil {
 		l.t.Fatal(err)
 	}
-	return l.parse(token, string(raw))
+	return out
 }
 
 // All are the harness processes of every token.
 func (l *Ledger) All() []Instance {
 	l.t.Helper()
-	matches, err := filepath.Glob(filepath.Join(l.dir, "*.log"))
+	out, err := l.all()
 	if err != nil {
 		l.t.Fatal(err)
-	}
-	var out []Instance
-	for _, m := range matches {
-		out = append(out, l.Instances(strings.TrimSuffix(filepath.Base(m), ".log"))...)
 	}
 	return out
 }
 
+// instances is Instances that returns what it cannot read, for a goroutine
+// that is not the test's.
+func (l *Ledger) instances(token string) ([]Instance, error) {
+	raw, err := os.ReadFile(filepath.Join(l.dir, token+".log")) //nolint:gosec // a file of the ledger
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return l.parse(token, string(raw))
+}
+
+// all is All that returns what it cannot read.
+func (l *Ledger) all() ([]Instance, error) {
+	matches, err := filepath.Glob(filepath.Join(l.dir, "*.log"))
+	if err != nil {
+		return nil, err
+	}
+	var out []Instance
+	for _, m := range matches {
+		ins, err := l.instances(strings.TrimSuffix(filepath.Base(m), ".log"))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ins...)
+	}
+	return out, nil
+}
+
 // parse reads the lines of a token. A line the script is still writing has
 // no newline yet and waits for the next read.
-func (l *Ledger) parse(token, text string) []Instance {
+func (l *Ledger) parse(token, text string) ([]Instance, error) {
 	var out []Instance
 	index := map[instanceKey]int{}
 	sc := bufio.NewScanner(strings.NewReader(text[:strings.LastIndexByte(text, '\n')+1]))
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
 		if len(f) != 4 {
-			l.t.Fatalf("e2e: ledger %s: a line that is not <kind> <pid> <dir> <time>: %q", token, sc.Text())
+			return nil, fmt.Errorf("e2e: ledger %s: a line that is not <kind> <pid> <dir> <time>: %q", token, sc.Text())
 		}
 		pid, err1 := strconv.Atoi(f[1])
 		at, err2 := strconv.ParseInt(f[3], 10, 64)
 		if err := errors.Join(err1, err2); err != nil {
-			l.t.Fatalf("e2e: ledger %s: %q: %v", token, sc.Text(), err)
+			return nil, fmt.Errorf("e2e: ledger %s: %q: %w", token, sc.Text(), err)
 		}
 		key := instanceKey{token: token, pid: pid, dir: f[2]}
 		if f[0] == "start" {
@@ -223,7 +246,7 @@ func (l *Ledger) parse(token, text string) []Instance {
 		}
 		i, ok := index[key]
 		if !ok {
-			l.t.Fatalf("e2e: ledger %s: %q has no start", token, sc.Text())
+			return nil, fmt.Errorf("e2e: ledger %s: %q has no start", token, sc.Text())
 		}
 		switch f[0] {
 		case "end":
@@ -231,13 +254,13 @@ func (l *Ledger) parse(token, text string) []Instance {
 		case "timeout":
 			out[i].TimedOut = true
 		default:
-			l.t.Fatalf("e2e: ledger %s: unknown line %q", token, sc.Text())
+			return nil, fmt.Errorf("e2e: ledger %s: unknown line %q", token, sc.Text())
 		}
 	}
 	for i := range out {
 		out[i].Verified = l.state(out[i]).verified
 	}
-	return out
+	return out, sc.Err()
 }
 
 // execution is the execution whose worktree dir is, by the layout of the Worker.

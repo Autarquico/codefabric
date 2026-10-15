@@ -120,6 +120,13 @@ func (h *Harness) Context() context.Context { return h.ctx }
 // Dir is the directory of the harness.
 func (h *Harness) Dir() string { return h.dir }
 
+// Procs are the processes of the harness, in the order they were added.
+func (h *Harness) Procs() []*Proc {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.procs)
+}
+
 // OnTeardown runs f after every process of the harness is gone, before the
 // final checks; the last registered runs first. Proxies close here.
 func (h *Harness) OnTeardown(f func()) {
@@ -227,7 +234,6 @@ type Proc struct {
 	mu     sync.Mutex
 	n      int
 	pid    int
-	ident  string
 	log    string
 	done   chan struct{}
 	err    error
@@ -274,9 +280,9 @@ func (p *Proc) start() {
 	}
 	p.pid = cmd.Process.Pid
 	// A process that already exited has no identity; there is nothing to reap.
-	p.ident, _ = procident.StartOf(p.pid)
-	p.groups = append(p.groups, group{pgid: p.pid, leader: p.pid, start: p.ident})
-	if err := inv.record(entry{Kind: entryStarted, ID: p.id(), Role: p.role, PID: p.pid, Start: p.ident}); err != nil {
+	ident, _ := procident.StartOf(p.pid)
+	p.groups = append(p.groups, group{pgid: p.pid, leader: p.pid, start: ident})
+	if err := inv.record(entry{Kind: entryStarted, ID: p.id(), Role: p.role, PID: p.pid, Start: ident}); err != nil {
 		t.Error(err) // the process exists: it is torn down with the rest
 	}
 	done, id := make(chan struct{}), p.id()
@@ -297,9 +303,6 @@ func (p *Proc) start() {
 
 // PID is the pid of the last start.
 func (p *Proc) PID() int { p.mu.Lock(); defer p.mu.Unlock(); return p.pid }
-
-// Identity is the procident token of the last start.
-func (p *Proc) Identity() string { p.mu.Lock(); defer p.mu.Unlock(); return p.ident }
 
 // Starts is how many times the process was started.
 func (p *Proc) Starts() int { p.mu.Lock(); defer p.mu.Unlock(); return p.n }
@@ -367,17 +370,22 @@ func (p *Proc) Restart() {
 	p.start()
 }
 
-// KillGroup kills the groups of every start of the process and waits for
-// them: what a teardown does, never what a test simulates.
+// KillGroup kills what is left of the groups of every start of the process
+// and waits for them: what a teardown does, never what a test simulates. A
+// group whose leader's pid another process has now is not of the harness, and
+// is neither killed nor waited for.
 func (p *Proc) KillGroup(ctx context.Context) error {
 	p.mu.Lock()
 	groups := slices.Clone(p.groups)
 	p.mu.Unlock()
+	var killed []group
 	for _, g := range groups {
-		_ = syscall.Kill(-g.pgid, syscall.SIGKILL)
+		if g.killRemains() {
+			killed = append(killed, g)
+		}
 	}
 	<-p.Done()
-	return waitGone(ctx, groups)
+	return waitGone(ctx, killed)
 }
 
 // tearDown ends the harness in order: clients, daemons, the tmux servers of the

@@ -35,7 +35,7 @@ type EventRow struct {
 type ReceiptRow struct {
 	WorkerID, WorkerEpoch string
 	WorkerSeq             int64
-	RunID, Kind, Digest   string
+	RunID, Digest         string
 }
 
 // LeaseRow is a lease of a Run.
@@ -83,7 +83,6 @@ type LocalRunRow struct {
 // JournalEpochs are the daemon epochs of the rows not yet confirmed.
 type WorkerSnapshot struct {
 	JournalSeq    int64
-	Unconfirmed   int
 	JournalEpochs []string
 	LocalRuns     []LocalRunRow
 }
@@ -125,10 +124,10 @@ func readController(ctx context.Context, path string) (snap ControllerSnapshot, 
 					snap.Events = append(snap.Events, e)
 					return nil
 				}),
-			scanAll(ctx, tx, `SELECT worker_id, worker_epoch, worker_seq, run_id, kind, digest FROM report_receipts ORDER BY worker_id, worker_seq`,
+			scanAll(ctx, tx, `SELECT worker_id, worker_epoch, worker_seq, run_id, digest FROM report_receipts ORDER BY worker_id, worker_seq`,
 				func(rows *sql.Rows) error {
 					var r ReceiptRow
-					err := rows.Scan(&r.WorkerID, &r.WorkerEpoch, &r.WorkerSeq, &r.RunID, &r.Kind, &r.Digest)
+					err := rows.Scan(&r.WorkerID, &r.WorkerEpoch, &r.WorkerSeq, &r.RunID, &r.Digest)
 					snap.Receipts = append(snap.Receipts, r)
 					return err
 				}),
@@ -165,7 +164,6 @@ func readWorker(ctx context.Context, path string) (snap WorkerSnapshot, err erro
 			err = nil // nothing was ever journalled
 		}
 		return errors.Join(err,
-			tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM journal`).Scan(&snap.Unconfirmed),
 			scanAll(ctx, tx, `SELECT DISTINCT epoch FROM journal ORDER BY epoch`,
 				func(rows *sql.Rows) error {
 					var epoch string

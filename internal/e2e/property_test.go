@@ -270,23 +270,6 @@ func (w *trial) pause(upTo time.Duration) {
 	time.Sleep(d)
 }
 
-func (w *trial) worker(name string) *Worker {
-	for _, wk := range w.c.Workers {
-		if wk.Name == name {
-			return wk
-		}
-	}
-	w.t.Fatalf("e2e: no Worker %q", name)
-	return nil
-}
-
-func (w *trial) otherThan(wk *Worker) *Worker {
-	if w.c.Workers[0] == wk {
-		return w.c.Workers[1]
-	}
-	return w.c.Workers[0]
-}
-
 // createTask creates a Task whose harness is a ledger script, with a policy
 // that retries a lost Run.
 func (w *trial) createTask() {
@@ -399,10 +382,10 @@ func (w *trial) force(tr transition) {
 }
 
 // restartDaemon kills -9 the daemon of a Worker whose harness runs, and starts
-// it again within a time short of offline and lost alike.
+// it again within 0-4 s: the Worker may go offline, never near run_lost_timeout.
 func (w *trial) restartDaemon() {
 	in := w.pickLive("a daemon restart")
-	wk := w.worker(in.Worker)
+	wk := workerNamed(w.c, in.Worker)
 	down := w.between(0, 4*time.Second)
 	kill := w.c.KillDaemon(wk)
 	w.kills = append(w.kills, kill)
@@ -419,8 +402,8 @@ func (w *trial) restartDaemon() {
 // harness to be stopped.
 func (w *trial) partitionLong() {
 	origin := w.pickLive("a long partition")
-	wk := w.worker(origin.Worker)
-	other := w.otherThan(wk)
+	wk := workerNamed(w.c, origin.Worker)
+	other := otherWorker(w.c, wk)
 	runs, err := w.runs()
 	if err != nil {
 		w.t.Fatal(err)
@@ -491,7 +474,7 @@ func (w *trial) loseReply() {
 		}
 		// A connection that held no spare one is busy with something else.
 		want = min(max(want, int(held)+1), maxReplyConns)
-		in = w.pickLiveOn(w.worker(in.Worker))
+		in = w.pickLiveOn(workerNamed(w.c, in.Worker))
 	}
 }
 
@@ -536,11 +519,11 @@ const (
 // Worker holds want connections or spareWait is over. It says whether the
 // reply was lost, and how many connections the Worker held.
 func (w *trial) tryLoseReply(attempt int, in Instance, want int) (bool, int64) {
-	wk := w.worker(in.Worker)
+	wk := workerNamed(w.c, in.Worker)
 	for limit := time.Now().Add(Scaled(spareWait)); wk.Proxy.Stats().Active < int64(want) && time.Now().Before(limit); {
 		time.Sleep(pollEvery)
 	}
-	before := lastSeq(w.c.ControllerSnapshot(), wk.ID)
+	before := lastWorkerSeq(w.c.ControllerSnapshot(), wk.ID)
 	stats := wk.Proxy.Stats()
 	wk.Proxy.SetMode(netproxy.DropReplies)
 	w.note("attempt %d: drop the replies to %s, which holds %d connections (last seq applied %d)", attempt, wk.Name, stats.Active, before)
@@ -624,8 +607,8 @@ func (w *trial) journalSeqs(wk *Worker) []int64 {
 	return seqs
 }
 
-// lastSeq is the highest seq of worker the Controller applied.
-func lastSeq(snap ControllerSnapshot, worker string) int64 {
+// lastWorkerSeq is the highest seq of worker the Controller applied.
+func lastWorkerSeq(snap ControllerSnapshot, worker string) int64 {
 	var last int64
 	for _, k := range journalOf(snap, worker) {
 		last = max(last, k.seq)
@@ -740,13 +723,7 @@ func (w *trial) checkCoverage() {
 	case r.HighWater == 0:
 		miss(daemonRestart, "the journal of %s was empty when its daemon died", r.Worker)
 	default:
-		fresh := 0
-		for _, k := range journalOf(snap, w.worker(r.Worker).ID) {
-			if !slices.Contains(r.Epochs, k.epoch) && k.seq > r.HighWater {
-				fresh++
-			}
-		}
-		if fresh == 0 {
+		if fresh, _ := newEpochReports(snap, workerNamed(w.c, r.Worker).ID, *r); len(fresh) == 0 {
 			miss(daemonRestart, "%s reported nothing from its new epoch", r.Worker)
 		}
 	}

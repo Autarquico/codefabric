@@ -36,7 +36,7 @@ A Controller, two Workers behind an L4 proxy (`internal/e2e/netproxy`) and a thi
 | `make test-e2e` | the whole suite: harness, scenarios and the property test over the seed corpus |
 | `make test-e2e-property` | `TestProperty_E2eV01_Intercalados` only |
 | `make test-e2e-race` | the whole suite with every `cf` of the cluster built with `-race` |
-| `make e2e-reap` | runs no test; reaps `cfe2e*` roots whose owner process is provably dead |
+| `make e2e-reap` | runs no test; reaps the `cfe2e*` roots of the root parent that are yours alone (no link, your uid, mode `0700`/`0600`) and whose owner process is provably dead |
 
 Make variables: `E2E_SEEDS` (random seeds after the corpus, default 0), `E2E_SEED` (exactly that seed), `E2E_TIMEOUT` (default `25m`).
 
@@ -48,9 +48,9 @@ Make variables: `E2E_SEEDS` (random seeds after the corpus, default 0), `E2E_SEE
 | `CF_E2E_SEED` | run exactly this seed (`0x…` or decimal) instead of the corpus |
 | `CF_E2E_SEEDS` | random seeds added after the corpus of `internal/e2e/testdata/seeds.txt` |
 | `CF_E2E_REPEAT` | run each seed this many times |
-| `CF_E2E_ROOT` | parent directory of the invocation's root (default `/tmp`, short enough for the tmux socket on macOS) |
+| `CF_E2E_ROOT` | parent directory of the invocation's root (default `/tmp/cfe2e-<uid>`, made `0700` and refused if it is a link, of another user or open to others; short enough for the tmux socket on macOS) |
 | `CF_E2E_KEEP=1` | keep the files of the invocation (processes are always killed) |
-| `CF_E2E_ARTIFACTS` | directory where the manifest and logs of a failed invocation are copied |
+| `CF_E2E_ARTIFACTS` | directory where the manifest and logs of a failed invocation are copied, with every invite (the argument after `join`/`connect`) redacted |
 
 To reproduce a seed, copy the line each `seed=0x…` subtest logs at its start (and again, with the trace, when it fails):
 

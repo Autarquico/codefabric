@@ -3,13 +3,14 @@
 package e2e
 
 import (
+	"bufio"
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,7 +24,11 @@ const reapTimeout = time.Minute
 func TestMain(m *testing.M) { os.Exit(runMain(m)) }
 
 func runMain(m *testing.M) int {
-	parent := rootParent()
+	parent, err := rootParent()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), reapTimeout)
 	reaped, err := reapAbandoned(ctx, parent)
 	cancel()
@@ -82,8 +87,11 @@ func finish(inv *invocation, code int) {
 	}
 }
 
-// copyLogs copies the manifest, the owner and every logs/ directory of root into dest.
+// copyLogs copies the manifest, the owner and every logs/ directory of root
+// into dest, with every invite of the cluster redacted: artifacts may be
+// public, and an invite is a credential, even of a Controller that is gone.
 func copyLogs(root, dest string) error {
+	secrets := invites(root)
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil //nolint:nilerr // what went meanwhile is not copied
@@ -93,24 +101,52 @@ func copyLogs(root, dest string) error {
 		if d.IsDir() || !d.Type().IsRegular() || !wanted {
 			return nil
 		}
-		return copyFile(path, filepath.Join(dest, rel))
+		return copyRedacted(path, filepath.Join(dest, rel), secrets)
 	})
 }
 
-func copyFile(from, to string) (err error) {
+// invites are the arguments that follow join or connect in the argv of the
+// manifest of root: what `cf controller token create` printed.
+func invites(root string) []string {
+	f, err := os.Open(filepath.Join(root, manifestFile)) //nolint:gosec // a root of this suite
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+	var out []string
+	scan := bufio.NewScanner(f)
+	scan.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	for scan.Scan() {
+		var e entry
+		if json.Unmarshal(scan.Bytes(), &e) != nil {
+			continue
+		}
+		for i, arg := range e.Argv[:max(len(e.Argv)-1, 0)] {
+			if arg == "join" || arg == "connect" {
+				out = append(out, e.Argv[i+1])
+			}
+		}
+	}
+	return out
+}
+
+// copyRedacted copies from to to, with every secret in it replaced.
+func copyRedacted(from, to string, secrets []string) error {
+	raw, err := os.ReadFile(from) //nolint:gosec // a file of this suite
+	if err != nil {
+		return err
+	}
+	text := string(raw)
+	for _, s := range secrets {
+		if s != "" {
+			text = strings.ReplaceAll(text, s, redacted)
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(to), 0o750); err != nil { //nolint:gosec // beneath CF_E2E_ARTIFACTS
 		return err
 	}
-	in, err := os.Open(from) //nolint:gosec // a file of this suite
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.Create(to) //nolint:gosec // beneath CF_E2E_ARTIFACTS
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, out.Close()) }()
-	_, err = io.Copy(out, in)
-	return err
+	return os.WriteFile(to, []byte(text), 0o600) //nolint:gosec // beneath CF_E2E_ARTIFACTS
 }
+
+// redacted stands for an invite in the artifacts.
+const redacted = "<redacted invite>"

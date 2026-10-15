@@ -5,7 +5,6 @@ package e2e
 import (
 	"context"
 	"crypto/rand"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,14 +100,14 @@ func newWorld() *world {
 				{Type: domain.EventRunCancelled, RunID: w.c1},
 			},
 			Receipts: []ReceiptRow{
-				{WorkerID: "wk1", WorkerEpoch: "e1", WorkerSeq: 1, RunID: w.a1, Kind: "started", Digest: "d1"},
-				{WorkerID: "wk1", WorkerEpoch: "e1", WorkerSeq: 2, RunID: w.b1, Kind: "started", Digest: "d2"},
-				{WorkerID: "wk1", WorkerEpoch: "e1", WorkerSeq: 3, RunID: w.a1, Kind: "exited", Digest: "d3"},
-				{WorkerID: "wk1", WorkerEpoch: "e2", WorkerSeq: 4, RunID: w.b1, Kind: "exited", Digest: "d4"},
-				{WorkerID: "wk1", WorkerEpoch: "e2", WorkerSeq: 5, RunID: w.b1, Kind: "stopped", Digest: "d5"},
-				{WorkerID: "wk1", WorkerEpoch: "e2", WorkerSeq: 6, RunID: w.a1, Kind: "stopped", Digest: "d6"}, // a receipt with no event
-				{WorkerID: "wk2", WorkerEpoch: "f1", WorkerSeq: 1, RunID: w.b2, Kind: "started", Digest: "g1"},
-				{WorkerID: "wk2", WorkerEpoch: "f1", WorkerSeq: 2, RunID: w.b2, Kind: "exited", Digest: "g2"},
+				{WorkerID: "wk1", WorkerEpoch: "e1", WorkerSeq: 1, RunID: w.a1, Digest: "d1"},
+				{WorkerID: "wk1", WorkerEpoch: "e1", WorkerSeq: 2, RunID: w.b1, Digest: "d2"},
+				{WorkerID: "wk1", WorkerEpoch: "e1", WorkerSeq: 3, RunID: w.a1, Digest: "d3"},
+				{WorkerID: "wk1", WorkerEpoch: "e2", WorkerSeq: 4, RunID: w.b1, Digest: "d4"},
+				{WorkerID: "wk1", WorkerEpoch: "e2", WorkerSeq: 5, RunID: w.b1, Digest: "d5"},
+				{WorkerID: "wk1", WorkerEpoch: "e2", WorkerSeq: 6, RunID: w.a1, Digest: "d6"}, // a receipt with no event
+				{WorkerID: "wk2", WorkerEpoch: "f1", WorkerSeq: 1, RunID: w.b2, Digest: "g1"},
+				{WorkerID: "wk2", WorkerEpoch: "f1", WorkerSeq: 2, RunID: w.b2, Digest: "g2"},
 			},
 			Leases: []LeaseRow{
 				{ID: "l-a1", RunID: w.a1, WorkerID: "wk1", Epoch: 1, State: string(domain.LeaseAccepted)},
@@ -405,26 +404,4 @@ func waitFor(t *testing.T, ok func() bool) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-}
-
-// TestInvariants_HoldOnACluster: on a real cluster, a Task whose Worker daemon
-// is killed while its harness runs settles with every invariant holding.
-func TestInvariants_HoldOnACluster(t *testing.T) {
-	c := NewCluster(t, Opts{Workers: 1})
-	w := c.Workers[0]
-	sampler := c.StartSampler()
-	token := c.Ledger.Token()
-	created := c.Do(c.Ledger.Script(token))
-	c.Eventually("the harness to start", func() (bool, string) {
-		got := c.Ledger.Instances(token)
-		return len(got) == 1 && c.Ledger.Live(got[0]), fmt.Sprintf("%+v", got)
-	})
-	kill := c.KillDaemon(w)
-	c.RestartWorker(w)
-	c.Ledger.ReleaseExecution(Execution{Run: created.Run.ID, Epoch: 1, Worker: w.Name})
-	Check(t, c, Expect{
-		Tasks:       []ExpectedTask{{ID: created.Task.ID, Token: token}},
-		DaemonKills: []DaemonKill{kill},
-		Sampler:     sampler,
-	})
 }

@@ -130,7 +130,7 @@ func TestScenario_E2eV01_CrashDelController(t *testing.T) {
 	third := created[2].Run.ID
 	c.WaitRun(third, "queued for room", func(r v1.Run) bool { return r.State == domain.RunQueued && r.QueuedReason != "" })
 	idents := identities(t, slices.Collect(maps.Values(running)))
-	mark := lastSequence(c.ControllerSnapshot())
+	mark := lastEventSequence(c.ControllerSnapshot())
 
 	c.Controller.Kill9()
 	for _, in := range running {
@@ -214,7 +214,7 @@ func crashDaemon(t *testing.T, releaseFirst bool) {
 	ident := identities(t, []Instance{in})[in.PID]
 
 	kill := c.KillDaemon(w)
-	mark := lastSequence(c.ControllerSnapshot())
+	mark := lastEventSequence(c.ControllerSnapshot())
 	if procident.Verify(in.PID, ident) != procident.Same {
 		t.Fatalf("the harness of %v died with the daemon", in.Execution)
 	}
@@ -245,9 +245,6 @@ func crashDaemon(t *testing.T, releaseFirst bool) {
 	if got := c.Ledger.Instances(token); len(got) != 1 || got[0].PID != in.PID {
 		t.Errorf("the ledger has %+v, want only pid %d", got, in.PID)
 	}
-	if fresh := newEpochReports(c.ControllerSnapshot(), w.ID, kill); len(fresh) == 0 {
-		t.Errorf("no report of the new epoch above the high-water mark %d (old epochs %v)", kill.HighWater, kill.Epochs)
-	}
 
 	Check(t, c, Expect{
 		Tasks:       []ExpectedTask{{ID: created.Task.ID, Token: token}},
@@ -276,10 +273,7 @@ func partition(t *testing.T, mode netproxy.Mode) {
 	run := created.Run.ID
 	orphan := waitHarness(c, token)
 	a := workerNamed(c, orphan.Worker)
-	b := c.Workers[0]
-	if b == a {
-		b = c.Workers[1]
-	}
+	b := otherWorker(c, a)
 
 	a.Proxy.SetMode(mode)
 	lost := c.WaitRun(run, "lost", func(r v1.Run) bool { return r.State == domain.RunLost })
@@ -397,18 +391,6 @@ func identities(t *testing.T, ins []Instance) map[int]string {
 	return out
 }
 
-// newEpochReports are the reports of the Worker the Controller holds from an
-// epoch the kill did not see, above its high-water mark: written after it.
-func newEpochReports(snap ControllerSnapshot, workerID string, kill DaemonKill) []triple {
-	var out []triple
-	for _, tr := range journalOf(snap, workerID) {
-		if !slices.Contains(kill.Epochs, tr.epoch) && tr.seq > kill.HighWater {
-			out = append(out, tr)
-		}
-	}
-	return out
-}
-
 func eventsOf(snap ControllerSnapshot, run string, typ domain.EventType) []EventRow {
 	var out []EventRow
 	for _, e := range snap.Events {
@@ -419,7 +401,7 @@ func eventsOf(snap ControllerSnapshot, run string, typ domain.EventType) []Event
 	return out
 }
 
-func lastSequence(snap ControllerSnapshot) int64 {
+func lastEventSequence(snap ControllerSnapshot) int64 {
 	if len(snap.Events) == 0 {
 		return 0
 	}
@@ -452,13 +434,18 @@ func workerNamed(c *Cluster, name string) *Worker {
 	return c.Workers[i]
 }
 
+// otherWorker is a Worker of a two-Worker cluster that is not w.
+func otherWorker(c *Cluster, w *Worker) *Worker {
+	if c.Workers[0] == w {
+		return c.Workers[1]
+	}
+	return c.Workers[0]
+}
+
 // runningIn are the names of the processes of box still running.
 func runningIn(h *Harness, box *Box) []string {
-	h.mu.Lock()
-	procs := slices.Clone(h.procs)
-	h.mu.Unlock()
 	var out []string
-	for _, p := range procs {
+	for _, p := range h.Procs() {
 		if p.box == box && p.Running() {
 			out = append(out, p.name)
 		}

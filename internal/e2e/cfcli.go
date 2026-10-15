@@ -41,7 +41,9 @@ func (c *Cluster) CF(b *Box, args ...string) Result {
 	defer cancel()
 	err := p.Wait(ctx)
 	if ctx.Err() != nil {
-		_ = p.KillGroup(context.Background())
+		killCtx, cancelKill := context.WithTimeout(context.Background(), teardownTimeout)
+		_ = p.KillGroup(killCtx)
+		cancelKill()
 		c.t.Fatalf("e2e: cf %s did not end: %v\n%s", strings.Join(args, " "), err, c.Logs())
 	}
 	res := Result{Args: args, Stdout: p.Log(), Stderr: p.Stderr()}
@@ -152,16 +154,6 @@ func (c *Cluster) Run(b *Box, ref string) v1.Run {
 func (c *Cluster) RunShow(b *Box, ref string) string {
 	c.t.Helper()
 	return c.mustCF(b, "run", "show", ref).Stdout
-}
-
-// Runs is `cf run list` in b, of a Task or, with task "", of all.
-func (c *Cluster) Runs(b *Box, task string) []v1.Run {
-	c.t.Helper()
-	args := []string{"run", "list"}
-	if task != "" {
-		args = append(args, "--task", task)
-	}
-	return JSON[v1.ListRunsResponse](c, b, args...).Runs
 }
 
 // Ps is `cf ps` in b.

@@ -384,11 +384,8 @@ const logTail = 16 << 10
 // Logs is the tail of the log of every process of the harness but the cf
 // commands that ended well: what a failure shows.
 func (c *Cluster) Logs() string {
-	c.H.mu.Lock()
-	procs := append([]*Proc(nil), c.H.procs...)
-	c.H.mu.Unlock()
 	var out strings.Builder
-	for _, p := range procs {
+	for _, p := range c.H.Procs() {
 		running := p.Running()
 		var err error
 		if !running {
