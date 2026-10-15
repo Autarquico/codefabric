@@ -1,0 +1,8 @@
+# Corpus of TestProperty_E2eV01_Intercalados: one seed per line, its first
+# field as CF_E2E_SEED takes it; what follows a # is a comment. Every seed goes
+# through the four transitions of the template; the order is what tells them
+# apart. CI on macOS runs only the first one.
+0x825251f7b3c67c1b # daemon-restart, long-partition, controller-kill, lost-reply
+0xd096210b72037115 # long-partition, controller-kill, lost-reply, daemon-restart
+0x66b5e85f98583fe4 # lost-reply, controller-kill, long-partition, daemon-restart
+0x5a8e7dec63386fff # controller-kill, lost-reply, long-partition, daemon-restart; 4 Tasks
