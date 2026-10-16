@@ -33,6 +33,8 @@ const (
 	// delivered to its run directory, as the Worker does; set to "broken",
 	// secrets that cannot be loaded.
 	withDelivery = "CF_TEST_WITH_DELIVERY"
+	// withGateTimeout is the Options.GateTimeout of the wrapper, a duration.
+	withGateTimeout = "CF_TEST_GATE_TIMEOUT"
 )
 
 // The tests run the wrapper as a process of its own: it signals its group, and
@@ -55,6 +57,8 @@ func TestMain(m *testing.M) {
 		_ = os.Unsetenv(asWrapper)
 		o := execwrap.Options{RunDir: dir, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
 		o.Secrets, o.Retention = deliveredTo(dir, delivery)
+		o.GateTimeout, _ = time.ParseDuration(os.Getenv(withGateTimeout))
+		_ = os.Unsetenv(withGateTimeout)
 		if err := execwrap.Run(o); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

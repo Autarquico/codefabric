@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -121,9 +122,16 @@ func TestScenario_SecretsLocal_RedactionUnderTmux(t *testing.T) {
 }
 
 func TestScenario_SecretsLocal_AFilterThatCannotLoadKeepsTheHarnessFromRunning(t *testing.T) {
+	const gate = time.Second
 	r := newTmux(t)
 	dir := delivered(t, redact.Needle{Ref: apiRef, Value: []byte(apiValue)})
 	spec := session("run_nofilter", dir, execwrap.ModeInteractive, "broken")
+	// The wrapper waits at the gate for a short while, and only from the moment
+	// Start has answered: a wrapper that gave up first would end the session,
+	// and Start would find nothing to wire rather than the refusal.
+	answered := filepath.Join(t.TempDir(), "start-answered")
+	wrapper := slices.Concat(spec.Command[:1], []string{withGateTimeout + "=" + gate.String()}, spec.Command[1:])
+	spec.Command = slices.Concat([]string{"/bin/sh", "-c", `while [ ! -e "$0" ]; do sleep 0.02; done; exec "$@"`, answered}, wrapper)
 	l := mustNotRun(execwrap.ModeInteractive)
 	l.Dir, l.Gate = dir, spec.Ready
 	if err := execwrap.Write(dir, execwrap.LaunchFile, l); err != nil {
@@ -132,15 +140,25 @@ func TestScenario_SecretsLocal_AFilterThatCannotLoadKeepsTheHarnessFromRunning(t
 	if _, err := r.Start(t.Context(), spec); !errors.Is(err, cfruntime.ErrCaptureRefused) {
 		t.Fatalf("Start = %v, want the refusal of the filter", err)
 	}
+	if err := os.WriteFile(answered, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(spec.Ready); err == nil {
 		t.Fatal("the gate is open")
 	}
-	log, _ := os.ReadFile(spec.Capture)
-	if !strings.Contains(string(log), strings.TrimSpace(execwrap.CaptureDisabledNote)) {
+	// The filter acknowledges its refusal before it writes the note.
+	note := strings.TrimSpace(execwrap.CaptureDisabledNote)
+	var log []byte
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if log, _ = os.ReadFile(spec.Capture); strings.Contains(string(log), note) {
+			break
+		}
+	}
+	if !strings.Contains(string(log), note) {
 		t.Errorf("the log is %q, want the note", log)
 	}
 	// The wrapper gives up at the closed gate, having run nothing.
-	exit := waitExitIn(t, dir, execwrap.GateTimeout+15*time.Second)
+	exit := waitExitIn(t, dir, gate+15*time.Second)
 	if exit.ExitCode != nil || !strings.Contains(exit.Error, "not ready") {
 		t.Errorf("exit.json = %+v", exit)
 	}

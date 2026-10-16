@@ -43,6 +43,10 @@ type Options struct {
 	// Retention is what the output of a launch with SecretEnv is redacted of
 	// (secretjit.Load). Without it such a launch fails before the harness starts.
 	Retention LoadSecrets
+	// GateTimeout is how long the wrapper waits at the gate for the Runtime to
+	// wire the terminal, which it does once the capture filter acknowledged.
+	// Zero is GateTimeout.
+	GateTimeout time.Duration
 }
 
 // ResolveSecret is the value of the secret ref names.
@@ -293,7 +297,11 @@ func (w *wrapper) waitForGate() (stopped bool, err error) {
 	}
 	ticker := w.clock.NewTicker(poll)
 	defer ticker.Stop()
-	timeout := w.clock.NewTimer(GateTimeout)
+	limit := w.o.GateTimeout
+	if limit <= 0 {
+		limit = GateTimeout
+	}
+	timeout := w.clock.NewTimer(limit)
 	defer timeout.Stop()
 	for {
 		if _, err := os.Stat(w.launch.Gate); err == nil {
@@ -305,7 +313,7 @@ func (w *wrapper) waitForGate() (stopped bool, err error) {
 				return true, nil
 			}
 		case <-timeout.C():
-			return false, fmt.Errorf("the terminal was not ready after %s", GateTimeout)
+			return false, fmt.Errorf("the terminal was not ready after %s", limit)
 		case <-ticker.C():
 		}
 	}
