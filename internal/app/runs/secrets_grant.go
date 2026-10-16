@@ -13,7 +13,6 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-
 // maxWorkerEpochLen bounds the epoch a grant names: a ULID, with room to spare.
 const maxWorkerEpochLen = 64
 
