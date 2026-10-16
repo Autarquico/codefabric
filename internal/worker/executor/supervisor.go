@@ -139,7 +139,7 @@ func (e *Executor) materialize(ctx context.Context, r state.Run, adapter harness
 	if err != nil {
 		return "", fmt.Errorf("the configuration of the harness %q: %w", adapter.ID(), err)
 	}
-	m, err := e.o.Materializer.Materialize(ctx, adapter, dir, snap)
+	m, err := e.materializer.Materialize(ctx, adapter, dir, snap)
 	if errors.Is(err, harness.ErrSecretUnavailable) {
 		return "", fmt.Errorf("%s: %w", domain.CodeSecretUnavailable, err)
 	}

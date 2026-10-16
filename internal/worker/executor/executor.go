@@ -77,9 +77,6 @@ type Options struct {
 	// ConfigSource is the configuration a Run of an adapter with
 	// ConfigIsolation is materialised from; nil gives every Run an empty one.
 	ConfigSource ConfigSource
-	// Materializer writes that configuration into the directory of the Run;
-	// nil is one on Host.
-	Materializer *host.Materializer
 	Paths        config.Paths
 	Clock        clock.Clock
 	Log          *slog.Logger
@@ -122,10 +119,13 @@ type Limits struct {
 type Executor struct {
 	o         Options
 	harnesses *harness.Registry
-	clock     clock.Clock
-	log       *slog.Logger
-	wrapper   []string
-	grace     time.Duration
+	// materializer writes the configuration of a Run into its directory, on
+	// Host; nil without one.
+	materializer *host.Materializer
+	clock        clock.Clock
+	log          *slog.Logger
+	wrapper      []string
+	grace        time.Duration
 
 	limitsMu sync.Mutex
 	limits   Limits
@@ -220,8 +220,8 @@ func New(o Options) (*Executor, error) {
 	if e.o.ConfigSource == nil {
 		e.o.ConfigSource = e.emptyConfig
 	}
-	if e.o.Materializer == nil && e.o.Host != nil {
-		e.o.Materializer = host.NewMaterializer(e.o.Host)
+	if e.o.Host != nil {
+		e.materializer = host.NewMaterializer(e.o.Host)
 	}
 	return e, nil
 }

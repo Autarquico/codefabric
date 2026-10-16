@@ -60,7 +60,7 @@ func newFakeFixture(t *testing.T, grace time.Duration, source ConfigSource) *fak
 	fake := fakeharness.Adapter{Binary: self, Env: []string{fakeharness.AsFakeharnessEnv + "=1"}, Caps: harness.Capabilities{
 		Modes: []domain.Mode{domain.ModeHeadless, domain.ModeInteractive}, ConfigIsolation: true,
 	}}
-	f.opts.Harnesses, f.opts.Host, f.opts.ConfigSource, f.opts.Materializer = registry(t, fake), h, source, nil
+	f.opts.Harnesses, f.opts.Host, f.opts.ConfigSource = registry(t, fake), h, source
 	f.e = f.build()
 	f.e.SetLimits(Limits{MaxConcurrentRuns: 4, CPU: 16, MemoryMB: 65536})
 	return &fakeFixture{realFixture: f, home: home}
