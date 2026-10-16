@@ -189,14 +189,14 @@ func (p *process) wait(bound time.Duration) (error, bool) { //nolint:revive // t
 
 func (p *process) signal(sig syscall.Signal) { _ = syscall.Kill(-p.cmd.Process.Pid, sig) }
 
-// smokeRun is a headless spec prepared by the fixture, with its
+// smokeRun is a spec in mode m prepared by the fixture, with its
 // configuration materialised under ConfigIsolation.
-func (e *env) smokeRun(t *testing.T, hold bool) harness.RunSpec {
+func (e *env) smokeRun(t *testing.T, m domain.Mode, hold bool) harness.RunSpec {
 	t.Helper()
-	if !e.caps.Supports(domain.ModeHeadless) {
-		t.Skip("headless is not among the declared Modes")
+	if !e.caps.Supports(m) {
+		t.Skipf("%s is not among the declared Modes", m)
 	}
-	run := e.runSpec(t, domain.ModeHeadless)
+	run := e.runSpec(t, m)
 	if e.caps.ConfigIsolation {
 		s, _ := e.snapshot(t)
 		run.ConfigDir, _ = e.applyRun(t, s)
@@ -207,7 +207,7 @@ func (e *env) smokeRun(t *testing.T, hold bool) harness.RunSpec {
 
 func checkRun(t *testing.T, f Fixture) {
 	e := newEnv(t, f)
-	run := e.smokeRun(t, false)
+	run := e.smokeRun(t, domain.ModeHeadless, false)
 	l := e.launch(t, "Start", run, func() (harness.Launch, error) { return e.a.Start(t.Context(), e.host, run) })
 	err, ended := e.spawn(t, l, run).wait(runBound)
 	if !ended {
@@ -228,11 +228,11 @@ func checkRun(t *testing.T, f Fixture) {
 	}
 }
 
-// holdRun starts a Run that runs until it is stopped, and waits for it to
-// say something.
+// holdRun starts a Run, in the mode the checks launch in, that runs until it
+// is stopped, and waits for it to say something.
 func (e *env) holdRun(t *testing.T) (harness.RunSpec, *process) {
 	t.Helper()
-	run := e.smokeRun(t, true)
+	run := e.smokeRun(t, e.mode(), true)
 	l, err := e.a.Start(t.Context(), e.host, run)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -280,41 +280,61 @@ func checkStop(t *testing.T, f Fixture) {
 	}
 }
 
-// resumeFrom is the checkpoint Resume is checked with.
-func (e *env) resumeFrom(t *testing.T) harness.Checkpoint {
+// resumeFrom are the checkpoints Resume is checked with: that of Recorded
+// under NativeCheckpoint, then those of the fixture. With Resume there are
+// two at least, all different, so that a Launch that ignores them shows.
+func (e *env) resumeFrom(t *testing.T) []harness.Checkpoint {
 	t.Helper()
+	var cps []harness.Checkpoint
 	if e.caps.NativeCheckpoint {
 		cp, err := e.a.Checkpoint(t.Context(), e.host, e.recorded(t))
 		if err != nil {
 			t.Fatalf("Checkpoint: %v", err)
 		}
-		return cp
+		cps = append(cps, cp)
 	}
-	if e.f.ResumeFrom != nil {
-		return *e.f.ResumeFrom
+	cps = append(cps, e.f.ResumeFrom...)
+	for i := range cps {
+		for _, other := range cps[i+1:] {
+			if reflect.DeepEqual(cps[i], other) {
+				t.Fatalf("the checkpoints to resume from repeat %+v", other)
+			}
+		}
 	}
-	if e.caps.Resume {
-		t.Fatal("Resume is declared without NativeCheckpoint: the fixture needs ResumeFrom")
+	switch {
+	case e.caps.Resume && len(cps) < 2:
+		t.Fatalf("Resume is declared with %d checkpoint to resume from: the fixture needs ResumeFrom to make two", len(cps))
+	case len(cps) == 0:
+		cps = append(cps, harness.Checkpoint{Harness: e.a.ID(), Format: "harnesstest", Data: []byte("harnesstest")})
 	}
-	return harness.Checkpoint{Harness: e.a.ID(), Format: "harnesstest", Data: []byte("harnesstest")}
+	return cps
 }
 
 func checkResume(t *testing.T, f Fixture) {
 	e := newEnv(t, f)
-	cp := e.resumeFrom(t)
+	cps := e.resumeFrom(t)
 	run := e.runSpec(t, e.mode())
 	if !e.caps.Resume {
 		var l harness.Launch
 		var err error
 		unchanged(t, "an unsupported Resume", run.RunDir, func() {
-			e.homeUnchanged(t, "an unsupported Resume", func() { l, err = e.a.Resume(t.Context(), e.host, run, cp) })
+			e.homeUnchanged(t, "an unsupported Resume", func() { l, err = e.a.Resume(t.Context(), e.host, run, cps[0]) })
 		})
 		isUnsupported(t, "Resume", l, err)
 		return
 	}
-	l := e.launch(t, "Resume", run, func() (harness.Launch, error) { return e.a.Resume(t.Context(), e.host, run, cp) })
 	start, err := e.a.Start(t.Context(), e.host, run)
-	if err == nil && reflect.DeepEqual(l, start) {
-		t.Errorf("Resume is declared but launches what Start does, resuming nothing: %s", describe(l))
+	var launches []harness.Launch
+	for _, cp := range cps {
+		l := e.launch(t, "Resume", run, func() (harness.Launch, error) { return e.a.Resume(t.Context(), e.host, run, cp) })
+		if err == nil && reflect.DeepEqual(l, start) {
+			t.Errorf("Resume is declared but launches what Start does, resuming nothing: %s", describe(l))
+		}
+		for _, other := range launches {
+			if reflect.DeepEqual(l, other) {
+				t.Errorf("Resume launches the same from two checkpoints, so it uses neither: %s", describe(l))
+			}
+		}
+		launches = append(launches, l)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/harnesstest"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
 )
 
@@ -37,6 +38,15 @@ var broken = []struct {
 	}},
 	{"declares Resume it does not support", "resume", func() harnesstest.Fixture {
 		return wrap(everyCap, func(a fakeharness.Adapter) harness.Adapter { return noResume{a} })
+	}},
+	{"resumes ignoring the checkpoint", "resume", func() harnesstest.Fixture {
+		return wrap(everyCap, func(a fakeharness.Adapter) harness.Adapter { return constantResume{a} })
+	}},
+	{"declares GracefulStop it does not support, interactive only", "stop", func() harnesstest.Fixture {
+		caps := noCap
+		caps.Modes = []domain.Mode{domain.ModeInteractive}
+		caps.GracefulStop = true
+		return fakeFixture(caps)
 	}},
 	{"reads unknown usage as zero", "usage", func() harnesstest.Fixture {
 		return wrap(everyCap, func(a fakeharness.Adapter) harness.Adapter { return zeroUsage{a} })
@@ -67,6 +77,15 @@ type noResume struct{ fakeharness.Adapter }
 
 func (noResume) Resume(context.Context, harness.Host, harness.RunSpec, harness.Checkpoint) (harness.Launch, error) {
 	return harness.Launch{}, harness.NewUnsupportedError("resume")
+}
+
+// constantResume resumes with a fixed argument instead of the checkpoint.
+type constantResume struct{ fakeharness.Adapter }
+
+func (a constantResume) Resume(ctx context.Context, host harness.Host, run harness.RunSpec, _ harness.Checkpoint) (harness.Launch, error) {
+	l, err := a.Start(ctx, host, run)
+	l.Argv = append(l.Argv, "--resume", "last")
+	return l, err
 }
 
 type zeroUsage struct{ fakeharness.Adapter }

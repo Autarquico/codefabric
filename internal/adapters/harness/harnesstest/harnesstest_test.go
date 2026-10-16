@@ -131,6 +131,7 @@ func fakeFixture(caps harness.Capabilities) harnesstest.Fixture {
 		},
 		ExpectEvents: expect,
 		ExpectUsage:  []harness.UsageEvent{usage},
+		ResumeFrom:   []harness.Checkpoint{{Harness: fakeharness.DefaultID, Format: fakeharness.CheckpointFormat, Data: []byte("another-session")}},
 	}
 }
 

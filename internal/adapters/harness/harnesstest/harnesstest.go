@@ -45,8 +45,10 @@ type Fixture struct {
 	// Mutate edits one component of the configuration under home and returns
 	// its name.
 	Mutate func(t *testing.T, home string) string
-	// PrepareRun completes a headless spec for a smoke Run: one that ends
-	// with ExpectExit, or with hold one that runs until it is stopped.
+	// PrepareRun completes a spec, in its Mode, for a smoke Run: one that
+	// ends with ExpectExit, or with hold one that runs until it is stopped.
+	// The smoke Run that ends is headless; one held is in the first declared
+	// mode when headless is not declared.
 	PrepareRun func(t *testing.T, run *harness.RunSpec, hold bool)
 	// ExpectExit is the exit code of the smoke Run.
 	ExpectExit int
@@ -62,9 +64,10 @@ type Fixture struct {
 	// ExpectUsage is the usage of Recorded. Under UsageEvents it has at least
 	// one unknown (nil) field, one known zero and one known non-zero.
 	ExpectUsage []harness.UsageEvent
-	// ResumeFrom is the checkpoint Resume is checked with when the adapter
-	// has Resume without NativeCheckpoint.
-	ResumeFrom *harness.Checkpoint
+	// ResumeFrom are checkpoints of the harness Resume is checked with,
+	// besides that of Recorded under NativeCheckpoint. With Resume there
+	// must be two different ones in all, and each must give its own Launch.
+	ResumeFrom []harness.Checkpoint
 }
 
 // Run runs the contract against the adapter of f.
