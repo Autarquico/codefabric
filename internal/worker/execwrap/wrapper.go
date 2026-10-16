@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -190,12 +191,19 @@ func (w *wrapper) run() error {
 	return Write(w.o.RunDir, ExitFile, exit)
 }
 
+// envName is the name of an environment variable a secret may take: no '=',
+// nothing a shell would not take as a name.
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // resolveSecrets is the environment of the SecretEnv of the launch, resolved
 // now, just before the harness starts, so their values live only in its
 // environment. Without SecretEnv it is nothing.
 func (w *wrapper) resolveSecrets() ([]string, error) {
 	var env []string
 	for _, s := range w.launch.SecretEnv {
+		if !envName.MatchString(s.Name) {
+			return nil, fmt.Errorf("%s: the secret %q goes to %q, which is not the name of a variable", domain.CodeSecretUnavailable, s.Ref, s.Name)
+		}
 		if w.o.Secrets == nil {
 			return nil, fmt.Errorf("%s: the secret %q of %s cannot be resolved: this Worker has no secret store", domain.CodeSecretUnavailable, s.Ref, s.Name)
 		}

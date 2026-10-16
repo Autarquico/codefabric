@@ -583,6 +583,23 @@ func TestASecretWithNoResolverFailsBeforeTheHarnessStarts(t *testing.T) {
 	}
 }
 
+func TestASecretWithAMalformedNameFailsBeforeTheHarnessStarts(t *testing.T) {
+	for _, name := range []string{"", "A=B", "1KEY", "KEY-1", "KEY X"} {
+		t.Run(name, func(t *testing.T) {
+			s := launch(t, execwrap.Launch{
+				Argv: shell("touch must-not-run"), SecretEnv: []execwrap.SecretEnv{{Name: name, Ref: "team/api-key"}}, Grace: time.Second,
+			}, true, withSecrets+`={"team/api-key":"x"}`)
+			exit := s.waitExit()
+			if !strings.HasPrefix(exit.Error, "CF_SECRET_UNAVAILABLE: ") || !strings.Contains(exit.Error, "not the name of a variable") {
+				t.Errorf("exit.json = %+v", exit)
+			}
+			if _, err := os.Stat(filepath.Join(s.dir, "must-not-run")); err == nil {
+				t.Error("must-not-run exists: the harness ran")
+			}
+		})
+	}
+}
+
 func TestASecretThatDoesNotResolveFailsBeforeTheHarnessStarts(t *testing.T) {
 	s := launch(t, execwrap.Launch{
 		Argv: shell("touch must-not-run"), SecretEnv: []execwrap.SecretEnv{{Name: "API_KEY", Ref: "missing"}}, Grace: time.Second,
