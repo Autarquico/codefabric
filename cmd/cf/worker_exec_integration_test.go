@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -135,7 +136,7 @@ func TestScenario_WorkerExecutorTmux_DaemonMuerto(t *testing.T) {
 	first := startDaemon(t, box)
 	eventually(t, "the Worker to offer the harness", func() bool {
 		w, err := admin.Worker(t.Context(), "alpha")
-		return err == nil && w.State == domain.WorkerOnline && len(w.Capabilities) == 1
+		return err == nil && w.State == domain.WorkerOnline && slices.Contains(w.Capabilities, "harness:command")
 	})
 
 	use(t, host)

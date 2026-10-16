@@ -5,18 +5,23 @@ package daemon_test
 import (
 	"context"
 	"log/slog"
+	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+
+	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/client"
 	controllerdaemon "github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
 	"github.com/Autarquico/codefabric/internal/worker/daemon"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -169,8 +174,40 @@ func TestRun_OffersTheCommandHarnessWhenItHasARuntime(t *testing.T) {
 	w := c.eventually("box", "the harness to be offered", func(w v1.Worker) bool {
 		return w.State == domain.WorkerOnline && len(w.Capabilities) > 0
 	})
-	if len(w.Capabilities) != 1 || w.Capabilities[0] != "harness:command" || w.Health.Status != v1.HealthOK {
-		t.Errorf("worker = %+v", w)
+	want := []string{"harness-modes:v1", "harness:command", "harness:command:mode:headless", "harness:command:mode:interactive"}
+	if !slices.Equal(slices.Sorted(slices.Values(w.Capabilities)), want) || w.Health.Status != v1.HealthOK {
+		t.Errorf("worker = %+v, want the capabilities %q", w, want)
+	}
+}
+
+func TestRun_OffersTheInjectedHarnessesThatAreInstalledWithTheirModes(t *testing.T) {
+	c := newController(t)
+	paths := machine(t)
+	c.join("box", paths)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headless := harness.Capabilities{Modes: []domain.Mode{domain.ModeHeadless}, ConfigIsolation: true}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = daemon.Run(ctx, daemon.Options{
+			Paths: paths, Interval: interval, Logger: slog.New(slog.DiscardHandler), Runtime: &recordingRuntime{},
+			Harnesses: []harness.Adapter{
+				fakeharness.Adapter{Binary: self, Caps: headless},
+				fakeharness.Adapter{Name: "absent", Binary: "/nonexistent/fakeharness", Caps: headless},
+			},
+		})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	w := c.eventually("box", "the harness to be offered", func(w v1.Worker) bool {
+		return w.State == domain.WorkerOnline && len(w.Capabilities) > 0
+	})
+	want := []string{"harness-modes:v1", "harness:fake", "harness:fake:config-isolation", "harness:fake:mode:headless"}
+	if !slices.Equal(slices.Sorted(slices.Values(w.Capabilities)), want) {
+		t.Errorf("capabilities = %q, want %q", w.Capabilities, want)
 	}
 }
 

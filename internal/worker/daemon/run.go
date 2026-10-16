@@ -15,6 +15,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
@@ -22,8 +23,10 @@ import (
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/support/envutil"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
+	"github.com/Autarquico/codefabric/internal/worker/host"
 	"github.com/Autarquico/codefabric/internal/worker/journal"
 	"github.com/Autarquico/codefabric/internal/worker/outputship"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
@@ -60,7 +63,14 @@ type Options struct {
 	SSHTarget string
 	// OutputInterval replaces the second between the passes that send output, for tests.
 	OutputInterval time.Duration
+	// Harnesses replace the adapters this Worker offers, for tests; nil is
+	// the default set, which is `command`.
+	Harnesses []harness.Adapter
 }
+
+// runtimeModes are the modes the Runtime runs a harness in: tmux gives an
+// interactive one a terminal and a headless one a log.
+var runtimeModes = []domain.Mode{domain.ModeHeadless, domain.ModeInteractive}
 
 // NoSSHTarget is the value of Options.SSHTarget that announces none.
 const NoSSHTarget = "none"
@@ -131,25 +141,33 @@ func Run(ctx context.Context, o Options) error {
 	}
 	defer func() { _ = db.Close() }()
 	jrn := journal.New(d.epoch, d.clock)
-	rt, launchers := d.runtimeAndHarnesses(ctx, o)
+	rt, adapters := d.runtimeAndHarnesses(ctx, o)
 	eo := executor.Options{
-		DB: db, Controller: c, Runtime: rt, Journal: jrn, Harnesses: launchers, Paths: o.Paths, Clock: d.clock, Log: d.log,
+		DB: db, Controller: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
 		WrapperArgv: o.WrapperArgv, StopGrace: o.StopGrace,
 	}
 	// Publishing the result of a Run needs git: without it this Worker offers no harness.
 	if git, gitErr := gitops.New(ctx, gitops.Options{Paths: o.Paths, Clock: d.clock, Log: d.log, GitPath: o.GitPath}); gitErr != nil {
 		d.log.WarnContext(ctx, "git is not usable: this Worker offers no harness and will reject the Runs it is given", "err", gitErr)
-		eo.Runtime, eo.Harnesses, launchers = unavailable{}, nil, nil
+		eo.Runtime, adapters = unavailable{}, nil
 	} else {
 		files := c.TLSFiles()
 		eo.Git, eo.RelayTLS = git, executor.RelayTLS{Cert: files.Cert, Key: files.Key, CA: files.CA}
 	}
+	if len(adapters) > 0 {
+		if eo.Host, err = d.host(); err != nil {
+			d.log.WarnContext(ctx, "the host of the harnesses cannot be built: this Worker offers no harness and will reject the Runs it is given", "err", err)
+			eo.Runtime, adapters = unavailable{}, nil
+		}
+	}
+	if len(adapters) > 0 {
+		if eo.Harnesses, eo.Withheld, d.capabilities, err = d.announce(ctx, eo.Host, adapters); err != nil {
+			return err
+		}
+	}
 	ex, err := executor.New(eo)
 	if err != nil {
 		return err
-	}
-	for _, l := range launchers {
-		d.capabilities = append(d.capabilities, "harness:"+l.ID())
 	}
 	if p, ok := eo.Runtime.(cfruntime.AttachBinaryProvider); ok {
 		if name, path := p.AttachBinary(); name != "" {
@@ -185,9 +203,10 @@ func Run(ctx context.Context, o Options) error {
 // identify itself; tests replace it.
 var selfIdentity = procident.StartOf
 
-// runtimeAndHarnesses are what this Worker can run Runs with. The harness
-// `command` needs a Runtime; without one the Worker offers none.
-func (d *daemon) runtimeAndHarnesses(ctx context.Context, o Options) (cfruntime.Runtime, []harness.Launcher) {
+// runtimeAndHarnesses are what this Worker can run Runs with: the Runtime and
+// the adapters it may offer. A harness needs a Runtime; without one the
+// Worker offers none.
+func (d *daemon) runtimeAndHarnesses(ctx context.Context, o Options) (cfruntime.Runtime, []harness.Adapter) {
 	if _, err := selfIdentity(os.Getpid()); err != nil {
 		// The wrapper has to identify itself, or it starts nothing: no harness is offered.
 		d.log.WarnContext(ctx, "this process cannot be identified: this Worker offers no harness and will reject the Runs it is given", "err", err)
@@ -205,7 +224,47 @@ func (d *daemon) runtimeAndHarnesses(ctx context.Context, o Options) (cfruntime.
 		}
 		rt = t
 	}
-	return rt, []harness.Launcher{command.Launcher{}}
+	if o.Harnesses != nil {
+		return rt, o.Harnesses
+	}
+	return rt, []harness.Adapter{command.Adapter{}}
+}
+
+// host is the machine the harnesses run on: this one, with the home and the
+// environment of the daemon, without the tmux it may run in, as the harness
+// itself has it.
+func (d *daemon) host() (harness.Host, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	return localhost.New(localhost.Options{Home: home, Env: envutil.WithoutTmux(os.Environ()), Clock: d.clock})
+}
+
+// announce detects the adapters and says which this Worker offers. The
+// executor gets all of them, so that a Run it accepted before a restart runs
+// with its adapter even if detecting it failed now; it withholds the rest
+// from new assignments. The capabilities announce the offered ones with their
+// modes.
+func (d *daemon) announce(ctx context.Context, h harness.Host, adapters []harness.Adapter) (reg *harness.Registry, withheld, capabilities []string, err error) {
+	if reg, err = harness.NewRegistry(adapters...); err != nil {
+		return nil, nil, nil, err
+	}
+	ann := host.Announce(ctx, h, reg, runtimeModes)
+	for _, found := range ann.Harnesses {
+		attrs := []any{"harness", found.ID, "status", found.Status, "modes", found.Modes}
+		switch found.Status {
+		case host.Offered:
+			d.log.InfoContext(ctx, "harness offered", append(attrs, "path", found.Path)...)
+			continue
+		case host.DetectFailed:
+			d.log.WarnContext(ctx, "harness not offered: detecting it failed", append(attrs, "err", found.Err)...)
+		default:
+			d.log.InfoContext(ctx, "harness not offered", attrs...)
+		}
+		withheld = append(withheld, found.ID)
+	}
+	return reg, withheld, ann.Capabilities, nil
 }
 
 type daemon struct {

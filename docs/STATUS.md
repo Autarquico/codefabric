@@ -22,6 +22,7 @@
 - #13 Stop, cancel, lost y reconciliación
 - #14 Observación: attach, ps, eventos y output
 - #15 Unidades de servicio systemd y launchd
+- #16 E2E v0.1
 <!-- /pm-sync:done-this-week -->
 
 ---

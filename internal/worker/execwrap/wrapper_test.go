@@ -4,6 +4,8 @@ package execwrap_test
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,14 +22,24 @@ import (
 	"github.com/Autarquico/codefabric/internal/worker/procident"
 )
 
-const asWrapper = "CF_TEST_AS_WRAPPER"
+const (
+	asWrapper = "CF_TEST_AS_WRAPPER"
+	// withSecrets gives the wrapper a resolver of the secrets of this JSON map
+	// of ref to value; a ref outside it fails to resolve.
+	withSecrets = "CF_TEST_WRAPPER_SECRETS" //nolint:gosec // the name of a variable of the test
+)
 
 // The tests run the wrapper as a process of its own: it signals its group, and
 // a group of the test binary would be the test.
 func TestMain(m *testing.M) {
 	if dir := os.Getenv(asWrapper); dir != "" {
 		_ = os.Unsetenv(asWrapper)
-		if err := execwrap.Run(execwrap.Options{RunDir: dir, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}); err != nil {
+		o := execwrap.Options{RunDir: dir, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
+		if raw, ok := os.LookupEnv(withSecrets); ok {
+			_ = os.Unsetenv(withSecrets)
+			o.Secrets = secretsOf(raw)
+		}
+		if err := execwrap.Run(o); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -61,9 +73,23 @@ type spawned struct {
 	exited chan struct{}
 }
 
+func secretsOf(raw string) execwrap.ResolveSecret {
+	var values map[string]string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		panic(err)
+	}
+	return func(ref string) (string, error) {
+		v, ok := values[ref]
+		if !ok {
+			return "", errors.New("no such secret")
+		}
+		return v, nil
+	}
+}
+
 // launch writes launch.json and starts the wrapper in a session of its own
 // (as the pane of tmux gives it), unless alone is false.
-func launch(t *testing.T, l execwrap.Launch, newSession bool) *spawned {
+func launch(t *testing.T, l execwrap.Launch, newSession bool, env ...string) *spawned {
 	t.Helper()
 	dir := t.TempDir()
 	if l.Dir == "" {
@@ -77,7 +103,7 @@ func launch(t *testing.T, l execwrap.Launch, newSession bool) *spawned {
 	}
 	s := &spawned{t: t, dir: dir, pane: &syncBuffer{}, exited: make(chan struct{})}
 	s.cmd = exec.CommandContext(t.Context(), os.Args[0]) //nolint:gosec // the test binary itself
-	s.cmd.Env = append(os.Environ(), asWrapper+"="+dir, "TMUX=/tmp/tmux-0/default,1,0", "TMUX_PANE=%1")
+	s.cmd.Env = append(append(os.Environ(), asWrapper+"="+dir, "TMUX=/tmp/tmux-0/default,1,0", "TMUX_PANE=%1"), env...)
 	s.cmd.Stdout, s.cmd.Stderr = s.pane, s.pane
 	if newSession {
 		s.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -528,5 +554,88 @@ func TestAHarnessKilledByTheStopBeforeTheWrapperTakesItEndedByTheStop(t *testing
 	exit := s.waitExit()
 	if exit.Cause != execwrap.CauseStop || exit.Signal != "SIGTERM" {
 		t.Fatalf("exit.json = %+v", exit)
+	}
+}
+
+func TestALaunchWithoutSecretsIsWrittenAsInPhaseOne(t *testing.T) {
+	dir := t.TempDir()
+	if err := execwrap.Write(dir, execwrap.LaunchFile, execwrap.Launch{Argv: []string{"/bin/true"}, Dir: dir, Mode: execwrap.ModeHeadless}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, execwrap.LaunchFile)) //nolint:gosec // a file of the test
+	if strings.Contains(string(raw), "secret") {
+		t.Errorf("launch.json = %s", raw)
+	}
+}
+
+func TestASecretWithNoResolverFailsBeforeTheHarnessStarts(t *testing.T) {
+	s := launch(t, execwrap.Launch{
+		Argv: shell("touch must-not-run"), SecretEnv: []execwrap.SecretEnv{{Name: "API_KEY", Ref: "team/api-key"}}, Grace: time.Second,
+	}, true)
+	exit := s.waitExit()
+	if !strings.HasPrefix(exit.Error, "CF_SECRET_UNAVAILABLE: ") || !strings.Contains(exit.Error, `"team/api-key"`) || exit.ExitCode != nil {
+		t.Errorf("exit.json = %+v", exit)
+	}
+	for _, name := range []string{execwrap.StartedFile, "must-not-run"} {
+		if _, err := os.Stat(filepath.Join(s.dir, name)); err == nil {
+			t.Errorf("%s exists: the harness ran", name)
+		}
+	}
+}
+
+func TestASecretWithAMalformedNameFailsBeforeTheHarnessStarts(t *testing.T) {
+	for _, name := range []string{"", "A=B", "1KEY", "KEY-1", "KEY X"} {
+		t.Run(name, func(t *testing.T) {
+			s := launch(t, execwrap.Launch{
+				Argv: shell("touch must-not-run"), SecretEnv: []execwrap.SecretEnv{{Name: name, Ref: "team/api-key"}}, Grace: time.Second,
+			}, true, withSecrets+`={"team/api-key":"x"}`)
+			exit := s.waitExit()
+			if !strings.HasPrefix(exit.Error, "CF_SECRET_UNAVAILABLE: ") || !strings.Contains(exit.Error, "not the name of a variable") {
+				t.Errorf("exit.json = %+v", exit)
+			}
+			if _, err := os.Stat(filepath.Join(s.dir, "must-not-run")); err == nil {
+				t.Error("must-not-run exists: the harness ran")
+			}
+		})
+	}
+}
+
+func TestASecretThatDoesNotResolveFailsBeforeTheHarnessStarts(t *testing.T) {
+	s := launch(t, execwrap.Launch{
+		Argv: shell("touch must-not-run"), SecretEnv: []execwrap.SecretEnv{{Name: "API_KEY", Ref: "missing"}}, Grace: time.Second,
+	}, true, withSecrets+`={"other":"x"}`)
+	exit := s.waitExit()
+	if !strings.HasPrefix(exit.Error, "CF_SECRET_UNAVAILABLE: ") || !strings.Contains(exit.Error, "no such secret") {
+		t.Errorf("exit.json = %+v", exit)
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, execwrap.StartedFile)); err == nil {
+		t.Error("started.json exists: the harness ran")
+	}
+}
+
+func TestAResolvedSecretIsOnlyInTheEnvironmentOfTheHarness(t *testing.T) {
+	const value = "s3cr3t-sentinel"
+	work := t.TempDir()
+	s := launch(t, execwrap.Launch{
+		Argv: shell(`printf '%s' "$API_KEY" > key; [ "$PLAIN" = plain ]`), Dir: work, Env: []string{"PLAIN=plain"},
+		SecretEnv: []execwrap.SecretEnv{{Name: "API_KEY", Ref: "team/api-key"}}, Grace: time.Second,
+	}, true, withSecrets+`={"team/api-key":"`+value+`"}`)
+	exit := s.waitExit()
+	if exit.ExitCode == nil || *exit.ExitCode != 0 || exit.Error != "" {
+		t.Fatalf("exit.json = %+v", exit)
+	}
+	if got, _ := os.ReadFile(filepath.Join(work, "key")); string(got) != value { //nolint:gosec // a file of the test
+		t.Errorf("the harness saw API_KEY=%q", got)
+	}
+	entries, _ := os.ReadDir(s.dir)
+	for _, e := range entries {
+		raw, _ := os.ReadFile(filepath.Join(s.dir, e.Name())) //nolint:gosec // a file of the test
+		if strings.Contains(string(raw), value) {
+			t.Errorf("%s holds the value of the secret: %s", e.Name(), raw)
+		}
+	}
+	var l execwrap.Launch
+	if ok, err := execwrap.Read(s.dir, execwrap.LaunchFile, &l); !ok || err != nil || len(l.SecretEnv) != 1 || l.SecretEnv[0].Ref != "team/api-key" {
+		t.Errorf("launch.json = %+v (%v)", l, err)
 	}
 }

@@ -174,7 +174,7 @@ func TestPlacementOf_ReadsWhatTheSpecFroze(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := domain.Placement{
-		Harness: "claude", Capabilities: []string{"docker", "gpu"}, Resources: domain.Capacity{CPU: 6, MemoryMB: 8192},
+		Harness: "claude", Mode: domain.ModeHeadless, Capabilities: []string{"docker", "gpu"}, Resources: domain.Capacity{CPU: 6, MemoryMB: 8192},
 		Prefer: []string{"b", "a"}, Avoid: []string{"c"}, Require: []string{"a", "b"},
 	}
 	if jsonOf(got) != jsonOf(want) {

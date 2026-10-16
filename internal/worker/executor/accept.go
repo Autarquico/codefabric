@@ -184,13 +184,13 @@ func (e *Executor) evaluate(r state.Run, lim Limits, load state.Load) verdict {
 	if spec.Schema != specSchema {
 		return verdict{domain.CodeVersionIncompatible, fmt.Sprintf("the spec has schema %d: this Worker reads schema %d", spec.Schema, specSchema)}
 	}
-	launcher, ok := e.harnesses[spec.Requirements.Harness]
+	adapter, ok := e.harnesses.Get(spec.Requirements.Harness)
 	switch {
 	case spec.Requirements.Harness == "":
 		return verdict{domain.CodeHarnessUnavailable, "the Run names no harness: this Worker runs only `command`, and only when it is asked for"}
-	case !ok:
+	case !ok || e.withheld[spec.Requirements.Harness]:
 		return verdict{domain.CodeHarnessUnavailable, fmt.Sprintf("this Worker has no harness %q", spec.Requirements.Harness)}
-	case !slices.Contains(launcher.Modes(), domain.Mode(spec.Mode)):
+	case !adapter.Capabilities().Supports(domain.Mode(spec.Mode)):
 		return verdict{domain.CodeHarnessUnavailable, fmt.Sprintf("the harness %q does not support the mode %q", spec.Requirements.Harness, spec.Mode)}
 	}
 	switch {

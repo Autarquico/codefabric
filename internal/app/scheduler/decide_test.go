@@ -288,11 +288,56 @@ func TestFilters_Boundaries(t *testing.T) {
 			t.Errorf("rejected: %+v", d.Verdicts[0].Failed)
 		}
 	})
-	t.Run("a harness is the capability harness:<id>", func(t *testing.T) {
-		w := worker("w", func(w *scheduler.Worker) { w.Capabilities = []string{scheduler.HarnessCapability("claude")} })
-		d := scheduler.Decide(request(func(r *domain.Placement) { r.Harness = "claude" }), []scheduler.Worker{w}, now)
-		if d.Chosen == nil {
-			t.Errorf("rejected: %+v", d.Verdicts[0].Failed)
-		}
-	})
+}
+
+// The harness filter asks for harness:<id> and, from a Worker that announces
+// harness-modes:v1, for harness:<id>:mode:<mode>. A Worker that predates the
+// marker runs command in both modes and no other harness.
+func TestFilters_Harness(t *testing.T) {
+	marked := func(caps ...string) []string { return append([]string{domain.HarnessModesMarker}, caps...) }
+	headless := func(h string) string { return domain.HarnessModeCapability(h, domain.ModeHeadless) }
+	interactive := func(h string) string { return domain.HarnessModeCapability(h, domain.ModeInteractive) }
+	for _, c := range []struct {
+		name         string
+		harness      string
+		mode         domain.Mode
+		capabilities []string
+		pass         bool
+		modes        []domain.Mode
+	}{
+		{"a Run without a harness passes anywhere", "", domain.ModeInteractive, nil, true, nil},
+		{"no harness at all", "fake", domain.ModeHeadless, marked(), false, []domain.Mode{}},
+		{"modes without the harness: an empty intersection", "fake", domain.ModeHeadless, marked(headless("fake")), false, []domain.Mode{}},
+		{"a partial announcement: the mode it has", "fake", domain.ModeHeadless, marked(domain.HarnessCapability("fake"), headless("fake")), true, nil},
+		{
+			"a partial announcement: the mode it lacks", "fake", domain.ModeInteractive,
+			marked(domain.HarnessCapability("fake"), headless("fake")), false,
+			[]domain.Mode{domain.ModeHeadless},
+		},
+		{"N in both modes", "fake", domain.ModeInteractive, marked(domain.HarnessCapability("fake"), headless("fake"), interactive("fake")), true, nil},
+		{"N with command announces its modes", "command", domain.ModeInteractive, marked(domain.HarnessCapability("command"), headless("command")), false, []domain.Mode{domain.ModeHeadless}},
+		{"N-1 with command, headless", "command", domain.ModeHeadless, []string{domain.HarnessCapability("command")}, true, nil},
+		{"N-1 with command, interactive", "command", domain.ModeInteractive, []string{domain.HarnessCapability("command")}, true, nil},
+		{"N-1 with another harness", "claude", domain.ModeHeadless, []string{domain.HarnessCapability("claude"), headless("claude")}, false, []domain.Mode{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := worker("w", func(w *scheduler.Worker) { w.Capabilities = c.capabilities })
+			d := scheduler.Decide(request(func(r *domain.Placement) { r.Harness, r.Mode = c.harness, c.mode }), []scheduler.Worker{w}, now)
+			if c.pass {
+				if d.Chosen == nil {
+					t.Errorf("rejected: %+v", d.Verdicts[0].Failed)
+				}
+				return
+			}
+			failed := d.Verdicts[0].Failed
+			if d.Chosen != nil || len(failed) != 1 {
+				t.Fatalf("failures = %+v", failed)
+			}
+			f := failed[0]
+			if f.Filter != scheduler.FilterHarness || f.Code != domain.CodeHarnessUnavailable || f.Message == "" ||
+				f.Details["harness"] != c.harness || f.Details["mode"] != c.mode || !slices.Equal(f.Details["modes"].([]domain.Mode), c.modes) {
+				t.Errorf("failure = %+v", f)
+			}
+		})
+	}
 }

@@ -12,6 +12,7 @@ type Capacity struct {
 // may go and what it reserves there. Disk is 0 until Tasks can ask for it.
 type Placement struct {
 	Harness      string
+	Mode         Mode // the harness must run in it on the Worker
 	Capabilities []string
 	Resources    Capacity
 	Prefer       []string // Worker names, in order of preference

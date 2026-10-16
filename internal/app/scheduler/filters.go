@@ -146,20 +146,27 @@ func checkCapabilities(req domain.Placement, w Worker, _ time.Time) *Failure {
 	}
 }
 
-// checkHarness looks for the capability harness:<id> until Workers report
-// their installed harnesses (§10.1). A Run that names no harness passes.
+// checkHarness asks the Worker to run the Run's harness in the Run's mode, as
+// its capabilities say (§10.1, domain.HarnessModes). A Run that names no
+// harness passes. A mode the harness lacks fails here, in eligibility, never
+// on the Worker at runtime (§7.4).
 func checkHarness(req domain.Placement, w Worker, _ time.Time) *Failure {
-	if req.Harness == "" || slices.Contains(w.Capabilities, HarnessCapability(req.Harness)) {
+	if req.Harness == "" {
 		return nil
 	}
+	modes := domain.HarnessModes(w.Capabilities, req.Harness)
+	if slices.Contains(modes, req.Mode) {
+		return nil
+	}
+	message := fmt.Sprintf("harness %q is not available on the Worker", req.Harness)
+	if len(modes) > 0 {
+		message = fmt.Sprintf("harness %q does not run in %s mode on the Worker", req.Harness, req.Mode)
+	}
 	return &Failure{
-		Code: domain.CodeHarnessUnavailable, Message: fmt.Sprintf("harness %q is not available on the Worker", req.Harness),
-		Details: map[string]any{"harness": req.Harness},
+		Code: domain.CodeHarnessUnavailable, Message: message,
+		Details: map[string]any{"harness": req.Harness, "mode": req.Mode, "modes": modes},
 	}
 }
-
-// HarnessCapability is the capability that says a Worker has the harness.
-func HarnessCapability(harness string) string { return "harness:" + harness }
 
 // checkResources fails a Worker that could never take the Run, however empty.
 func checkResources(req domain.Placement, w Worker, _ time.Time) *Failure {
