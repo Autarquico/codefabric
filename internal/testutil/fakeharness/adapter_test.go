@@ -145,7 +145,7 @@ func TestAdapter_StartBuildsTheLaunchWithoutWritingAndIsIdempotent(t *testing.T)
 		}
 	}
 
-	plain := fakeharness.Adapter{Caps: harness.Capabilities{Modes: []domain.Mode{domain.ModeHeadless}}}
+	plain := fakeharness.Adapter{Binary: "/bin/fake", Caps: harness.Capabilities{Modes: []domain.Mode{domain.ModeHeadless}}}
 	l, err := plain.Start(t.Context(), host, run)
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +159,24 @@ func TestAdapter_StartBuildsTheLaunchWithoutWritingAndIsIdempotent(t *testing.T)
 	run.Mode = domain.ModeInteractive
 	if _, err := plain.Start(t.Context(), host, run); !errors.Is(err, harness.ErrUnsupportedMode) {
 		t.Errorf("Start in an unsupported mode: %v, want ErrUnsupportedMode", err)
+	}
+}
+
+func TestAdapter_StartWithoutABinaryLaunchesTheFakeharnessOfThePath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	run := harness.RunSpec{Mode: domain.ModeHeadless, Prompt: "hi", RunDir: t.TempDir()}
+	a := fakeharness.Adapter{Caps: allCaps}
+	if _, err := a.Start(t.Context(), newHost(t), run); err == nil {
+		t.Error("Start without fakeharness in the PATH did not fail")
+	}
+	bin := filepath.Join(dir, "fakeharness")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // an executable of the test
+		t.Fatal(err)
+	}
+	l, err := a.Start(t.Context(), newHost(t), run)
+	if err != nil || len(l.Argv) == 0 || l.Argv[0] != bin {
+		t.Errorf("Start = %v, %v; want argv[0] %s", l.Argv, err, bin)
 	}
 }
 

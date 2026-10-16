@@ -136,7 +136,11 @@ func (a Adapter) launch(host harness.Host, run harness.RunSpec, session string) 
 	}
 	bin := a.Binary
 	if bin == "" {
-		bin = "fakeharness"
+		path, err := host.LookPath("fakeharness")
+		if err != nil {
+			return harness.Launch{}, fmt.Errorf("fakeharness: start: %w", err)
+		}
+		bin = path
 	}
 	argv := []string{bin, "--mode", string(run.Mode), "--prompt", run.Prompt}
 	if a.Script != "" {
