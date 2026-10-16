@@ -165,6 +165,9 @@ func (f *fixture) assertDone(digest string) {
 	if got, err := treedigest.Dir(f.path("config"), treedigest.Options{ApprovedLinks: []string{"credentials.json"}}); err != nil || got != digest {
 		f.t.Errorf("config digests to %s, %v; want %s", got, err, digest)
 	}
+	if info, err := os.Lstat(filepath.Join(f.path("config"), "credentials.json")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		f.t.Errorf("the auth link is not there: %v", err)
+	}
 }
 
 // assertNotDone fails if the run directory holds a config.json: nothing left
@@ -233,6 +236,11 @@ func TestMaterialize_StateOnDisk(t *testing.T) {
 		{name: "config edited since", applies: 1, before: func(f *fixture) {
 			writeFile(t, filepath.Join(f.path("config"), "settings.json"), `{"theme":"edited"}`, 0o600)
 		}},
+		{name: "an auth link removed", applies: 1, before: func(f *fixture) {
+			if err := os.Remove(filepath.Join(f.path("config"), "credentials.json")); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{name: "both coherent", applies: 0},
 		{name: "both coherent with a stray staging", applies: 0, before: func(f *fixture) {
 			if err := os.Mkdir(f.path("config.staging"), 0o700); err != nil {
@@ -267,8 +275,8 @@ func TestMaterialize_StateOnDisk(t *testing.T) {
 }
 
 // TestMaterialize_FailsAtEachBoundaryAndRecovers injects a failure at every
-// step that makes a materialisation durable: none leaves a config.json, and
-// the next Materialize finishes the job.
+// step that makes a materialisation durable: only one after config.json is in
+// place leaves it, and the next Materialize finishes the job.
 func TestMaterialize_FailsAtEachBoundaryAndRecovers(t *testing.T) {
 	boom := errors.New("boom")
 	cases := []struct {
@@ -276,6 +284,9 @@ func TestMaterialize_FailsAtEachBoundaryAndRecovers(t *testing.T) {
 		inject func(f *fixture)
 		// leavesConfig: the failure comes after config/ is published.
 		leavesConfig bool
+		// leavesRecord: the failure comes after config.json is published, so
+		// the next Materialize finds both coherent and reuses them.
+		leavesRecord bool
 	}{
 		{name: "apply config", inject: func(f *fixture) { f.a.applyErr = boom }},
 		{name: "fsync of staging", inject: func(f *fixture) {
@@ -300,6 +311,15 @@ func TestMaterialize_FailsAtEachBoundaryAndRecovers(t *testing.T) {
 		{name: "write config.json", leavesConfig: true, inject: func(f *fixture) {
 			f.m.fs.writeRecord = func(string, []byte) error { return boom }
 		}},
+		{name: "fsync of the parent after config.json", leavesConfig: true, leavesRecord: true, inject: func(f *fixture) {
+			// config.json is renamed into place; syncing the run directory fails.
+			f.m.fs.writeRecord = func(path string, data []byte) error {
+				if err := os.WriteFile(path, data, 0o600); err != nil {
+					return err
+				}
+				return boom
+			}
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -309,7 +329,9 @@ func TestMaterialize_FailsAtEachBoundaryAndRecovers(t *testing.T) {
 			if _, err := f.materialize(snapshot("A")); !errors.Is(err, boom) {
 				t.Fatalf("err = %v, want boom", err)
 			}
-			f.assertNotDone()
+			if got := exists(t, f.path("config.json")); got != c.leavesRecord {
+				t.Errorf("config.json exists: %v, want %v", got, c.leavesRecord)
+			}
 			if exists(t, f.path("config.staging")) {
 				t.Error("config.staging left behind")
 			}
@@ -320,8 +342,12 @@ func TestMaterialize_FailsAtEachBoundaryAndRecovers(t *testing.T) {
 			f.a.applyErr, f.m.fs = nil, fs
 			f.a.applies.Store(0)
 			mat := f.must(snapshot("A"))
-			if f.a.applies.Load() != 1 {
-				t.Error("recovery did not rebuild the configuration")
+			want := int32(1)
+			if c.leavesRecord {
+				want = 0
+			}
+			if f.a.applies.Load() != want {
+				t.Errorf("recovery applied the configuration %d times, want %d", f.a.applies.Load(), want)
 			}
 			f.assertDone(mat.Digest)
 			if want := snapshotDigest(t, snapshot("A")); mat.Digest != want {

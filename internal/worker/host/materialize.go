@@ -149,11 +149,26 @@ func (m *Materializer) reusable(runDir string, src source) (Materialization, boo
 	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
 		return Materialization{}, false
 	}
+	if !linksPresent(dir, rec.AuthLinks) {
+		return Materialization{}, false
+	}
 	if got, err := treedigest.Dir(dir, treedigest.Options{ApprovedLinks: rec.AuthLinks}); err != nil || got != rec.Digest {
 		return Materialization{}, false
 	}
 	rec.ConfigDir = dir
 	return rec, true
+}
+
+// linksPresent says whether every auth link of a materialisation is still a
+// symlink in dir: the digest leaves them out, so it cannot tell one is gone.
+func linksPresent(dir string, links []string) bool {
+	for _, link := range links {
+		info, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(link)))
+		if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // reset removes every trace of a materialisation of runDir, its record first:
