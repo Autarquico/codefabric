@@ -15,7 +15,7 @@ import (
 
 func newProjectCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "project", Short: "Manage Projects"}
-	cmd.AddCommand(newProjectCreateCmd(), newProjectListCmd(), newProjectShowCmd(), newProjectSetCmd())
+	cmd.AddCommand(newProjectCreateCmd(), newProjectListCmd(), newProjectShowCmd(), newProjectSetCmd(), newProjectSecretsCmd())
 	return cmd
 }
 

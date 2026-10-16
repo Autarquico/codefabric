@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -34,6 +35,7 @@ func newCreateTaskCmd(use, short string) *cobra.Command {
 		req         v1.CreateTaskRequest
 		interactive bool
 		completion  string
+		secretEnv   []string
 	)
 	cmd := &cobra.Command{
 		Use:   use + ` "<prompt>"`,
@@ -42,6 +44,11 @@ func newCreateTaskCmd(use, short string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Prompt = args[0]
 			req.Completion = domain.Completion(completion)
+			env, err := parseSecretEnv(secretEnv)
+			if err != nil {
+				return err
+			}
+			req.Requirements.SecretEnv = env
 			if interactive {
 				req.Mode = domain.ModeInteractive
 			}
@@ -69,8 +76,23 @@ func newCreateTaskCmd(use, short string) *cobra.Command {
 	f.StringVar(&completion, "completion", "", "completion policy: first_success, promote or manual")
 	f.StringVar(&req.Requirements.Harness, "harness", "", "harness to run it with; the only one Workers offer so far is `command`, which runs the prompt as a POSIX shell script (a Run with no harness is rejected by every Worker)")
 	f.StringVar(&req.Requirements.Model, "model", "", "model to run it with")
+	f.StringArrayVar(&secretEnv, "secret-env", nil, "NAME=ref: the harness gets the secret ref, held by the Worker, in variable NAME; repeatable (see cf project secrets)")
 	f.StringVar(&req.RequestID, flagRequestID, "", "idempotency key: repeating the command with it creates nothing twice")
 	return cmd
+}
+
+// parseSecretEnv reads the NAME=ref of --secret-env; the Controller checks
+// the names and refs.
+func parseSecretEnv(flags []string) ([]v1.SecretEnv, error) {
+	env := make([]v1.SecretEnv, 0, len(flags))
+	for _, flag := range flags {
+		name, ref, ok := strings.Cut(flag, "=")
+		if !ok || name == "" || ref == "" {
+			return nil, domain.NewError(domain.CodeInvalidRequest, "--secret-env takes NAME=ref, such as GITHUB_TOKEN=github/token", nil)
+		}
+		env = append(env, v1.SecretEnv{Name: name, Ref: ref})
+	}
+	return env, nil
 }
 
 func printCreated(w io.Writer, out v1.CreateTaskResponse) error {
