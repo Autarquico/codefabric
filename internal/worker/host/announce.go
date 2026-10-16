@@ -14,7 +14,8 @@ import (
 // DetectTimeout bounds the Detect of one adapter, on the clock of the host.
 const DetectTimeout = 5 * time.Second
 
-// errDetectTimeout is the cause of a Detect cut short by DetectTimeout.
+// errDetectTimeout is what detect returns when it gives up on a Detect after
+// DetectTimeout.
 var errDetectTimeout = errors.New("detection timed out")
 
 // Status is why a harness is, or is not, offered.
