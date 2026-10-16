@@ -175,3 +175,31 @@ func TestAnnounce_DetectIsCutShortOnTheClockOfTheHost(t *testing.T) {
 		t.Errorf("slow = %+v, want a detection that timed out", s)
 	}
 }
+
+func TestAnnounce_DoesNotWaitForADetectThatIgnoresItsContext(t *testing.T) {
+	h, fake := testHost(t)
+	hung := make(chan struct{})
+	t.Cleanup(func() { close(hung) })
+	deaf := adapter("deaf", bothModes, false, func(context.Context) (harness.Detection, error) {
+		<-hung
+		return harness.Detection{Installed: true}, nil
+	})
+	reg, err := harness.NewRegistry(deaf, adapter("good", bothModes, false, installed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() {
+		if fake.BlockUntil(ctx, 1) == nil {
+			fake.Advance(DetectTimeout)
+		}
+	}()
+	got := Announce(ctx, h, reg, bothModes)
+	if s := got.Harnesses[0]; s.Status != DetectFailed || !errors.Is(s.Err, errDetectTimeout) {
+		t.Errorf("deaf = %+v, want a detection that timed out", s)
+	}
+	if s := got.Harnesses[1]; s.Status != Offered {
+		t.Errorf("good = %+v, want offered", s)
+	}
+}

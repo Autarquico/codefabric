@@ -62,7 +62,8 @@ type Announcement struct {
 // it offers with its modes.
 //
 // It runs once, at start: a harness installed or removed later is seen at the
-// next start. Each Detect is bounded by DetectTimeout.
+// next start. It waits for each Detect at most DetectTimeout, whether or not
+// the adapter honours its ctx.
 func Announce(ctx context.Context, host harness.Host, reg *harness.Registry, runtimeModes []domain.Mode) Announcement {
 	out := Announcement{Capabilities: []string{domain.HarnessModesMarker}}
 	for _, id := range reg.IDs() {
@@ -111,27 +112,29 @@ func assess(ctx context.Context, host harness.Host, a harness.Adapter, runtimeMo
 	return h
 }
 
-// detect is a.Detect, cut short after DetectTimeout on the clock of host.
+// detect is a.Detect, given up on after DetectTimeout on the clock of host:
+// its ctx is cancelled then, and an adapter that does not honour it is left
+// to finish on its own, its answer unread.
 func detect(ctx context.Context, host harness.Host, a harness.Adapter) (harness.Detection, error) {
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	timer := host.Clock().NewTimer(DetectTimeout)
 	defer timer.Stop()
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-timer.C():
-			cancel(errDetectTimeout)
-		case <-done:
-		}
-	}()
-	d, err := a.Detect(ctx, host)
-	if err != nil {
-		if cause := context.Cause(ctx); errors.Is(cause, errDetectTimeout) {
-			err = fmt.Errorf("%w after %v: %w", cause, DetectTimeout, err)
-		}
-		return harness.Detection{}, err
+	type result struct {
+		d   harness.Detection
+		err error
 	}
-	return d, nil
+	done := make(chan result, 1)
+	go func() {
+		d, err := a.Detect(ctx, host)
+		done <- result{d, err}
+	}()
+	select {
+	case r := <-done:
+		return r.d, r.err
+	case <-timer.C():
+		return harness.Detection{}, fmt.Errorf("%w after %v", errDetectTimeout, DetectTimeout)
+	case <-ctx.Done():
+		return harness.Detection{}, ctx.Err()
+	}
 }
