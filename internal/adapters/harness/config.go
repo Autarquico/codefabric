@@ -8,7 +8,8 @@ type NativeSnapshot struct {
 	// Harness is the ID of the adapter that took it.
 	Harness string
 	// SchemaVersion is the version of the layout of Components, owned by the
-	// adapter.
+	// adapter. A snapshot with no Components has no layout: every adapter
+	// takes it, whatever its SchemaVersion (0 included), as "nothing to apply".
 	SchemaVersion int
 	Components    []Component
 }

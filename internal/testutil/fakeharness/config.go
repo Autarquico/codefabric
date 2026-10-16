@@ -202,7 +202,7 @@ func (a Adapter) ApplyConfig(_ context.Context, host harness.Host, snap harness.
 }
 
 func (a Adapter) checkSnapshot(snap harness.NativeSnapshot) error {
-	if snap.Harness != a.ID() || snap.SchemaVersion != SchemaVersion {
+	if snap.Harness != a.ID() || (len(snap.Components) > 0 && snap.SchemaVersion != SchemaVersion) {
 		return fmt.Errorf("fakeharness: snapshot of %s schema %d, wants %s schema %d", snap.Harness, snap.SchemaVersion, a.ID(), SchemaVersion)
 	}
 	seen := map[string]bool{}

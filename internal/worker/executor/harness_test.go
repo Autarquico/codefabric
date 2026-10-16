@@ -199,9 +199,16 @@ func TestByDefaultARunOfAnIsolatedHarnessGetsAnEmptyConfiguration(t *testing.T) 
 	if err := os.MkdirAll(global, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(global, fakeharness.SettingsFile), []byte(`{"theme":"host"}`), 0o600); err != nil {
+	// The native configuration of the host is never read for an empty one:
+	// one nobody can read changes nothing.
+	settings := filepath.Join(global, fakeharness.SettingsFile)
+	if err := os.WriteFile(settings, []byte(`{"theme":"host"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(settings, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(settings, 0o600) })
 	f := newFixture(t, func(o *Options) {
 		o.Harnesses, o.Host = registry(t, isolated), h
 	})

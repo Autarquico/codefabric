@@ -101,20 +101,14 @@ type Options struct {
 type ConfigSource func(ctx context.Context, r state.Run, harnessID string) (harness.NativeSnapshot, error)
 
 // emptyConfig is the ConfigSource of a Worker that has no Workflows yet:
-// every Run gets a configuration of its own, and it is empty. Empty is still a
-// snapshot of that harness, in the layout version its adapter owns; the port
-// says that version only through a snapshot, so the one of the host is taken
-// and nothing of it but its identity is kept.
-func (e *Executor) emptyConfig(ctx context.Context, _ state.Run, harnessID string) (harness.NativeSnapshot, error) {
-	a, ok := e.harnesses.Get(harnessID)
-	if !ok {
+// every Run gets a configuration of its own, and it is empty. An empty
+// snapshot needs no layout version (see [harness.NativeSnapshot]), so the
+// native configuration of the host is never read for it.
+func (e *Executor) emptyConfig(_ context.Context, _ state.Run, harnessID string) (harness.NativeSnapshot, error) {
+	if _, ok := e.harnesses.Get(harnessID); !ok {
 		return harness.NativeSnapshot{}, fmt.Errorf("no harness %q", harnessID)
 	}
-	snap, err := a.SnapshotConfig(ctx, e.o.Host, harness.SnapshotOptions{})
-	if err != nil {
-		return harness.NativeSnapshot{}, err
-	}
-	return harness.NativeSnapshot{Harness: a.ID(), SchemaVersion: snap.SchemaVersion}, nil
+	return harness.NativeSnapshot{Harness: harnessID}, nil
 }
 
 // Limits are what the Controller says the Worker may take on (§10.5).
