@@ -127,6 +127,58 @@ linters:
           deny:
             - pkg: github.com/Autarquico/codefabric/internal/worker/executor
               desc: outputship does not know the executor
+        # Test support is for tests: production code never links it.
+        testsupport:
+          list-mode: lax
+          files: ["$all", "!$test", "!**/internal/testutil/**"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/testutil
+              desc: test doubles are for tests only
+            - pkg: github.com/Autarquico/codefabric/internal/adapters/harness/harnesstest
+              desc: the harness contract suite is for tests only
+        # The contract suite checks an adapter on its own: no Worker, no
+        # Controller, no fakes of its own.
+        harnesstest:
+          list-mode: lax
+          files: ["**/internal/adapters/harness/harnesstest/**", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/worker
+              desc: the contract suite does not know the Worker
+            - pkg: github.com/Autarquico/codefabric/internal/app
+              desc: the contract suite does not know the use cases
+            - pkg: github.com/Autarquico/codefabric/internal/controller
+              desc: the contract suite does not know the Controller
+            - pkg: github.com/Autarquico/codefabric/internal/testutil
+              desc: the contract suite takes its adapter from the test that runs it
+        # The harness port does not know its implementations.
+        harnessport:
+          list-mode: lax
+          files: ["**/internal/adapters/harness/*.go", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/adapters/harness/localhost
+              desc: the port does not know its implementations
+            - pkg: github.com/Autarquico/codefabric/internal/adapters/harness/command
+              desc: the port does not know its implementations
+            - pkg: github.com/Autarquico/codefabric/internal/adapters/harness/harnesstest
+              desc: the port does not know its contract suite
+        # worker/host materialises and announces harnesses; the executor that
+        # runs them, the Worker's state and the SDK are not its business.
+        workerhost:
+          list-mode: lax
+          files: ["**/internal/worker/host/**", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/worker/executor
+              desc: worker/host does not know the executor
+            - pkg: github.com/Autarquico/codefabric/internal/worker/state
+              desc: worker/host does not know the Worker's state
+            - pkg: github.com/Autarquico/codefabric/internal/client
+              desc: worker/host does not know the SDK
+        # treedigest/v1 is a format: the standard library is all it needs.
+        treedigest:
+          list-mode: strict
+          files: ["**/internal/support/treedigest/**", "!$test"]
+          allow:
+            - $gostd
         # svcunit installs services; what the daemon they run does is not its business.
         svcunit:
           list-mode: strict
