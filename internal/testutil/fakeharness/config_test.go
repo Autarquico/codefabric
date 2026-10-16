@@ -283,7 +283,7 @@ func TestApplyConfig_RefusesASnapshotItCannotWriteSafely(t *testing.T) {
 	}
 	for name, snap := range map[string]harness.NativeSnapshot{
 		"another harness":     {Harness: "claude", SchemaVersion: fakeharness.SchemaVersion},
-		"another schema":      {Harness: "fake", SchemaVersion: 99},
+		"another schema":      {Harness: "fake", SchemaVersion: 99, Components: snapshot(settings("settings.json", "{}")).Components},
 		"unknown component":   snapshot(component("hooks", harness.KindFile, harness.Managed, map[string]string{"hooks": "x"})),
 		"wrong kind":          snapshot(component("settings", harness.KindFile, harness.Managed, map[string]string{"settings.json": "{}"})),
 		"wrong file":          snapshot(settings("other.json", "{}")),
