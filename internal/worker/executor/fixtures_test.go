@@ -320,6 +320,8 @@ func (f *fixture) build() *Executor {
 	}
 	// The tests that drive the steps by hand stand for a Worker that reconciled.
 	e.reconciledGen.Store(e.reconcileGen.Load())
+	// And for a daemon whose heartbeat the Controller took.
+	e.heartbeatTaken.Store(true)
 	return e
 }
 

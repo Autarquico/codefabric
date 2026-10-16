@@ -81,9 +81,13 @@ func (e *Executor) rebuildForStop(ctx context.Context, s v1.StopCommand) (adopte
 	_, dirErr := os.Stat(dir)
 	_, wrapperErr := os.Stat(filepath.Join(dir, execwrap.WrapperFile))
 	now := e.clock.Now()
+	spec := []byte(unknownSpec)
+	if len(s.Spec) > 0 {
+		spec = s.Spec
+	}
 	r := state.Run{
 		Key: k, LeaseID: s.LeaseID, RunShort: s.RunShort, TaskID: s.TaskID, ProjectID: s.ProjectID, AcceptBy: now,
-		Spec: []byte(`{}`), Branch: s.Branch, CreatedAt: now,
+		Spec: spec, Branch: s.Branch, CreatedAt: now,
 		// The Controller may know of its start already: `started` is never reported for a rebuilt record.
 		StartedAt: &now, Handle: mustJSON(*e.runtimeHandle(k)),
 	}

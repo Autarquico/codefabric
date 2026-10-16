@@ -2,6 +2,7 @@ package runs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -18,7 +19,7 @@ import (
 func OrderStopIn(ctx context.Context, tx *store.Tx, act mutation.Act, run store.Run, task store.Task, l store.Lease, reason domain.StopReason) (bool, error) {
 	payload, err := orderJSON(v1.StopCommand{
 		RunID: string(run.ID), LeaseID: string(l.ID), Epoch: l.Epoch, Reason: reason, RunShort: shortID(run.Short),
-		TaskID: string(task.ID), ProjectID: string(task.ProjectID), Branch: branchOf(task, run),
+		TaskID: string(task.ID), ProjectID: string(task.ProjectID), Branch: branchOf(task, run), Spec: json.RawMessage(run.Spec),
 	})
 	if err != nil {
 		return false, err

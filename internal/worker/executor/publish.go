@@ -280,20 +280,26 @@ func (e *Executor) preserveOrphan(ctx context.Context, p state.Publication, loca
 
 // forbidden is what the publication of the Run local is checked against
 // (gitops.Forbidden): the values it keeps for that until the publication is
-// final. A Run that declared secrets and holds none any more, because they were
-// released when an earlier publication ended, cannot be checked: it is not
-// published, and the error, a *gitops.BlockedError, says why with no value.
+// final. Only a Run known to declare no secrets is published unchecked. One
+// that declared secrets and holds none any more (they were released when an
+// earlier publication ended, or by the janitor once its state.db was lost),
+// and one whose record was rebuilt without its spec, so that whether it
+// declared any is not known, cannot be checked: it is not published, and the
+// error, a *gitops.BlockedError, says why with no value.
 func (e *Executor) forbidden(local state.Run) (gitops.Forbidden, error) {
 	values, err := secretjit.Load(e.runDir(local.Key))
 	if errors.Is(err, secretjit.ErrNotDelivered) {
 		err = nil
 	}
+	spec := parseSpec(local.Spec)
 	switch {
 	case err != nil:
 		return gitops.Forbidden{}, &gitops.BlockedError{Reason: "the values of the secrets of the Run cannot be read, so its result cannot be checked: " + err.Error()}
 	case len(values) > 0:
 		return gitops.Forbidden{Since: local.SourceCommit, Values: values}, nil
-	case len(parseSpec(local.Spec).refs()) > 0:
+	case !spec.known():
+		return gitops.Forbidden{}, &gitops.BlockedError{Reason: "this Worker rebuilt the record of the Run without its spec and cannot tell whether it declared secrets, so its result cannot be checked"}
+	case len(spec.refs()) > 0:
 		return gitops.Forbidden{}, &gitops.BlockedError{Reason: "the values of the secrets of the Run are no longer on this Worker, so its result cannot be checked"}
 	}
 	return gitops.Forbidden{}, nil

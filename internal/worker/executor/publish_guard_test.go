@@ -6,12 +6,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -235,5 +238,69 @@ func TestARunWithoutSecretsIsPublishedWithNothingToCheck(t *testing.T) {
 	}
 	if len(g.forbidden) != 2 {
 		t.Errorf("%d checks, want the sealing and the push", len(g.forbidden))
+	}
+}
+
+// rebuiltForStop is a Run of which this Worker lost its record and kept its
+// markers and its worktree, ended, and a stop of the Controller that names it,
+// carrying spec (none from a Controller before #23): the record is rebuilt to
+// stop it, and its result is to be sealed and published.
+func (f *fixture) rebuiltForStop(n uint64, spec []byte) state.Key {
+	f.t.Helper()
+	k := state.Key{RunID: runID(n), LeaseEpoch: 1}
+	w := newWrapperProcess(f.t, "exit 0")
+	<-w.ended
+	must(f.t, os.MkdirAll(f.runDir(k), 0o700))
+	must(f.t, os.MkdirAll(f.e.worktree(k), 0o700))
+	f.writeWrapper(k, w.w)
+	f.writeStarted(k, w.w, t0)
+	f.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: t0.Add(time.Second), Cause: execwrap.CauseExit})
+	f.e.spawn = func(state.Key) {}
+	blocked, err := f.e.persist(f.t.Context(), []v1.WorkerCommand{{Seq: 1, Type: domain.CommandStop, Stop: &v1.StopCommand{
+		RunID: k.RunID, LeaseID: "lease_" + k.RunID, Epoch: k.LeaseEpoch, Reason: domain.StopCancel, RunShort: "run-1",
+		TaskID: "task_1", ProjectID: "project_1", Branch: "cf/t/run-1", Spec: spec,
+	}}})
+	if err != nil || blocked {
+		f.t.Fatalf("persist: blocked=%v err=%v", blocked, err)
+	}
+	if r := f.run(k); !r.Adopted {
+		f.t.Fatalf("the record was not rebuilt: %+v", r)
+	}
+	waitFor(f.t, "the Run to be settled", func() bool { return f.e.step(f.t.Context(), k) })
+	for f.turn() {
+	}
+	return k
+}
+
+// A Run whose record was rebuilt for a stop, its state.db lost, is published
+// unchecked only when the stop says it declared no secrets: without its spec
+// the Worker cannot tell, and with secrets it no longer holds (the janitor
+// released them with the record gone) nothing can be checked. Neither is sent.
+func TestARunRebuiltForAStopIsPublishedUncheckedOnlyIfItDeclaredNoSecrets(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		spec    []byte
+		blocked string
+	}{
+		{"without its spec", nil, "cannot tell whether it declared secrets"},
+		{"with secrets released", secretSpec("echo hi", "headless", map[string]string{"GH": "github.personal"}), "no longer on this Worker"},
+		{"without secrets", specJSON("echo hi", "command", "headless"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, g := newGitFixture(t)
+			k := f.rebuiltForStop(120, tc.spec)
+			if tc.blocked == "" {
+				if p := f.publication(k); p.State != state.PubPushed || g.pushCount() != 1 {
+					t.Fatalf("publication = %s, %d pushes", p.State, g.pushCount())
+				}
+				return
+			}
+			if p := f.publication(k); p.State != state.PubFailed || g.sealCount() != 0 || g.pushCount() != 0 {
+				t.Fatalf("publication = %s, %d seals, %d pushes", p.State, g.sealCount(), g.pushCount())
+			}
+			if failed := lastFailure(t, f, k); !strings.Contains(failed.Message, tc.blocked) {
+				t.Errorf("failure = %+v", failed)
+			}
+		})
 	}
 }

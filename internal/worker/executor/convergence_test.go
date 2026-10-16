@@ -238,6 +238,7 @@ func (w *world) restart(loseState ...bool) {
 	w.beat = ulid.Make().String()
 	w.f.restart(w.beat)
 	w.f.e.reconciledGen.Store(0)
+	w.f.e.heartbeatTaken.Store(false) // until its first heartbeat is taken
 	w.f.e.spawn = func(state.Key) {}
 	w.sender = &journal.Sender{
 		DB: w.f.db, Reporter: w.ctrl, Journal: w.f.j, Clock: w.f.clock, Log: slog.New(slog.DiscardHandler),
@@ -252,6 +253,7 @@ func (w *world) heartbeat() {
 		Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 1000}, Health: v1.Health{Status: v1.HealthOK},
 	})
 	must(w.t, err)
+	w.f.e.HeartbeatTaken()
 }
 
 func (w *world) longPoll(lose bool) {

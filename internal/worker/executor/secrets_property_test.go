@@ -150,8 +150,6 @@ type secretWorld struct {
 	corrupt   map[state.Key]bool   // Runs whose manifest the test broke
 	forgotten map[state.Key]bool   // Runs a state.db that was lost knew
 	guarded   int                  // sealings and pushes checked against the values
-	unguarded int                  // and those of the known gap
-	stuck     int                  // drains that needed a reconciliation nothing asked for
 	keys      map[state.Key]bool
 	calm      bool // nothing is lost and nothing crashes: the drain
 }
@@ -268,6 +266,7 @@ func (s *secretWorld) heartbeat() {
 		Secrets: &v1.SecretsReport{Seq: s.seq, Refs: metas},
 	})
 	must(s.t, err)
+	s.f.e.HeartbeatTaken()
 }
 
 // onGet is W1: a value is read only in the attempt of a grant whose answer
@@ -411,15 +410,7 @@ func (s *secretWorld) closeCapture() {
 // times it finds one, and the publication is blocked.
 func (s *secretWorld) guard(f gitops.Forbidden) error {
 	if len(f.Values) == 0 {
-		// Known gap (Open Questions of T18): a Run adopted after its state.db was
-		// lost has an empty spec here, so forbidden() takes it for a Run without
-		// secrets once the janitor released them, and its result goes unchecked.
-		if !s.unknownSpecAdopted() || os.Getenv("CF_SECRETS_STRICT") != "" {
-			s.t.Fatalf("guard: a result of a Run with secrets was sealed or pushed unchecked")
-		}
-		s.unguarded++
-		s.log = append(s.log, "guard:unchecked-adopted")
-		return nil
+		s.t.Fatalf("guard: a result of a Run with secrets was sealed or pushed unchecked")
 	}
 	for _, v := range f.Values {
 		if !s.values[string(v.Value)] {
@@ -432,26 +423,6 @@ func (s *secretWorld) guard(f gitops.Forbidden) error {
 		return &gitops.BlockedError{Reason: "a secret was found"}
 	}
 	return nil
-}
-
-// fencedWithReports says whether a Run that is over holds reports behind a fence.
-func (s *secretWorld) fencedWithReports() bool {
-	all, err := state.AllRuns(s.t.Context(), s.f.db.Reader())
-	must(s.t, err)
-	var n int
-	must(s.t, s.f.db.Reader().QueryRowContext(s.t.Context(),
-		`SELECT COUNT(*) FROM journal j JOIN local_runs r ON r.run_id = j.run_id AND r.lease_epoch = j.lease_epoch WHERE r.fenced_code IS NOT NULL`).Scan(&n))
-	return n > 0 && slices.ContainsFunc(all, func(r state.Run) bool { return r.FencedCode != "" && !r.Phase.Live() })
-}
-
-// unknownSpecAdopted says whether the Worker holds a Run it adopted without
-// knowing its spec, after its state.db was lost.
-func (s *secretWorld) unknownSpecAdopted() bool {
-	all, err := state.AllRuns(s.t.Context(), s.f.db.Reader())
-	must(s.t, err)
-	return slices.ContainsFunc(all, func(r state.Run) bool {
-		return r.Adopted && len(parseSpec(r.Spec).refs()) == 0 && s.forgotten[r.Key]
-	})
 }
 
 // corruptManifest breaks the manifest of a delivery.
@@ -667,15 +638,7 @@ func (s *secretWorld) drain() {
 		delete(s.holds, k)
 	}
 	settled := false
-	for round := range 60 {
-		if round == 20 && os.Getenv("CF_SECRETS_STRICT") == "" && s.fencedWithReports() {
-			// Known gap (Open Questions of T18): a Run fenced by a refused grant
-			// and stopped by the reconciliation keeps its report behind the fence,
-			// and nothing asks for the reconciliation that would let it go.
-			s.stuck++
-			s.log = append(s.log, "reconcile:fenced-stop")
-			s.f.e.RequestReconcile()
-		}
+	for range 60 {
 		s.heartbeat()
 		s.longPoll(false)
 		if !s.f.e.Reconciled() {
@@ -785,7 +748,7 @@ func TestProperty_SecretsWorker(t *testing.T) {
 			if n := s.audits(); n != s.requested {
 				t.Fatalf("W5: %d secret.grant audit entries for %d refs asked for", n, s.requested)
 			}
-			t.Logf("%d refs asked for, %d values read, %d sealings and pushes guarded, %d unchecked (known gap), %d fenced stops (known gap)", s.requested, s.reads, s.guarded, s.unguarded, s.stuck)
+			t.Logf("%d refs asked for, %d values read, %d sealings and pushes guarded", s.requested, s.reads, s.guarded)
 		})
 	}
 }

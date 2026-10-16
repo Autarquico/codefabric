@@ -169,6 +169,10 @@ func (p *secretPrepare) grant(ctx context.Context, refs []string) error {
 	if len(refs) == 0 {
 		return nil
 	}
+	if !p.e.heartbeatTaken.Load() {
+		// The Controller would refuse it as a daemon it has retired, and fence the Run.
+		return fmt.Errorf("%w: the Controller has not taken a heartbeat of this daemon yet", errPrepareLater)
+	}
 	if err := p.current(ctx); err != nil {
 		return err
 	}

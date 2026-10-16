@@ -183,6 +183,8 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	d.onResponse = func(r v1.HeartbeatResponse) {
+		// A heartbeat taken is this daemon held as the current one: it may ask for grants.
+		ex.HeartbeatTaken()
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
 		if r.ReconcileRequired && ex.Reconciled() {
 			// The Controller restarted, or lost what it knew of this epoch: reconcile again.

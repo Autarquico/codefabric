@@ -160,6 +160,10 @@ type Executor struct {
 	reconciledGen atomic.Uint64
 	reconcileWake chan struct{}
 
+	// The Controller grants secrets only to the daemon whose heartbeat it took
+	// last: until it has taken one of this daemon, no grant is asked for.
+	heartbeatTaken atomic.Bool
+
 	wake    chan struct{} // the decider has something new
 	pubWake chan struct{} // the publisher has something new
 
@@ -422,19 +426,27 @@ func (e *Executor) report(ctx context.Context, tx *state.Tx, k state.Key, kind v
 // For an orphan it writes nothing and says errOrphaned, so that no row is left
 // that can never be sent, and no caller takes a seq that does not exist.
 func (e *Executor) reportSeq(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) (uint64, error) {
-	if kind != v1.ReportOrphanPreserved {
-		if r, err := state.RunBy(ctx, tx, k); err == nil && r.OrphanedAt != nil {
+	fenced := false
+	if r, err := state.RunBy(ctx, tx, k); err == nil {
+		if r.OrphanedAt != nil && kind != v1.ReportOrphanPreserved {
 			return 0, errOrphaned
-		} else if err != nil && !errors.Is(err, state.ErrNotFound) {
-			return 0, err
 		}
+		fenced = r.FencedCode != "" && r.OrphanedAt == nil
+	} else if !errors.Is(err, state.ErrNotFound) {
+		return 0, err
 	}
 	entry := v1.RunReportEntry{Kind: kind, At: at}
 	if fill != nil {
 		fill(&entry)
 	}
 	entry.Message = reportable(entry.Message)
-	return e.o.Journal.AppendTx(ctx, tx, k, entry)
+	seq, err := e.o.Journal.AppendTx(ctx, tx, k, entry)
+	if err == nil && fenced {
+		// The fence holds it until a reconciliation says whether it is sent or
+		// dropped; one that decided before it was written would hold it for ever.
+		e.RequestReconcile()
+	}
+	return seq, err
 }
 
 func (e *Executor) runtimeHandle(k state.Key) *v1.RuntimeHandle {

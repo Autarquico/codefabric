@@ -107,6 +107,20 @@ func (e *Executor) postponePrepare(k state.Key) {
 	m.prepareAt = e.clock.Now().Add(m.prepareWait)
 }
 
+// HeartbeatTaken says that the Controller took a heartbeat of this daemon: it
+// holds this daemon as the Worker's current one, and grants it secrets. A
+// prepare put off until then is due at once.
+func (e *Executor) HeartbeatTaken() {
+	if e.heartbeatTaken.Swap(true) {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, m := range e.memos {
+		m.prepareAt, m.prepareWait = time.Time{}, 0
+	}
+}
+
 // preparedNow forgets the retries of a prepare that finished.
 func (e *Executor) preparedNow(k state.Key) {
 	e.mu.Lock()

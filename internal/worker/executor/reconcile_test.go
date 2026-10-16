@@ -936,3 +936,27 @@ func TestAViewIsNotAppliedToATryNewerThanTheOneSent(t *testing.T) {
 		t.Errorf("publication = %s gen %d: the old view closed the new try", after.State, after.Generation)
 	}
 }
+
+// A report written for a fenced Run waits behind the fence for a
+// reconciliation to say whether it is sent or dropped: it asks for one, or a
+// round that decided before it was written would leave it there for ever.
+func TestAReportWrittenBehindAFenceAsksForAReconciliation(t *testing.T) {
+	f := newFixture(t)
+	k := f.accepted("echo hi")
+	must(t, f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+		_, err := state.Fence(t.Context(), tx, k, string(domain.CodeStaleLease))
+		return err
+	}))
+	if !f.e.Reconciled() {
+		t.Fatal("the fixture is not reconciled")
+	}
+	f.stopOrder(k, domain.StopCancel)
+	counts, err := state.JournalCounts(t.Context(), f.db.Reader())
+	must(t, err)
+	if r := f.run(k); r.Phase.Live() || counts[k] == 0 {
+		t.Fatalf("phase %s, %d reports held", r.Phase, counts[k])
+	}
+	if f.e.Reconciled() {
+		t.Fatal("the stopped of a fenced Run asked for no reconciliation")
+	}
+}

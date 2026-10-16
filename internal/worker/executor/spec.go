@@ -32,6 +32,15 @@ type specSecrets struct {
 	Refs []string `json:"refs"`
 }
 
+// unknownSpec is the spec of a record rebuilt from an order that did not
+// carry it (a stop of a Controller before #23): what the Run declared is not
+// known, secrets included.
+const unknownSpec = `{}`
+
+// known says whether the spec is one the Worker can tell the Run by: one it
+// cannot read, or none, has schema 0.
+func (s specView) known() bool { return s.Schema != 0 }
+
 // refs are the refs the Run declared; none for one without secrets.
 func (s specView) refs() []string {
 	if s.Secrets == nil {
