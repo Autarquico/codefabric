@@ -17,7 +17,6 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/harnesstest"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
-	"github.com/Autarquico/codefabric/internal/support/treedigest"
 	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
 )
 
@@ -99,11 +98,7 @@ func (a leakySnapshot) SnapshotConfig(ctx context.Context, host harness.Host, op
 	}
 	c := s.Components[0]
 	c.Files[0].Content = append(bytes.Clone(c.Files[0].Content), creds...)
-	entries := []treedigest.Entry{}
-	for _, f := range c.Files {
-		entries = append(entries, treedigest.File{Path: f.Path, Exec: f.Mode&0o100 != 0, Content: f.Content})
-	}
-	c.Digest, err = treedigest.Files(entries)
+	c.Digest, err = harness.FilesDigest(c.Files)
 	s.Components[0] = c
 	return s, err
 }

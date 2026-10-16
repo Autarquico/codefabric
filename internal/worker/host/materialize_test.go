@@ -110,13 +110,11 @@ func TestScenario_HarnessAdapterFramework_Aislamiento(t *testing.T) {
 
 func snapshotDigest(t *testing.T, snap harness.NativeSnapshot) string {
 	t.Helper()
-	var entries []treedigest.Entry
+	var files []harness.File
 	for _, c := range snap.Components {
-		for _, f := range c.Files {
-			entries = append(entries, treedigest.File{Path: f.Path, Exec: f.Mode&0o100 != 0, Content: f.Content})
-		}
+		files = append(files, c.Files...)
 	}
-	d, err := treedigest.Files(entries)
+	d, err := harness.FilesDigest(files)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,6 +334,8 @@ func TestMaterialize_FailsAtEachBoundaryAndRecovers(t *testing.T) {
 func TestMaterialize_RefusesWithoutTouchingTheRunDir(t *testing.T) {
 	withSecret := snapshot("A")
 	withSecret.Components[0].Files[0].Content = []byte(`{"token":"` + harness.SecretMarker("github/token") + `"}`)
+	malformedMarker := snapshot("A")
+	malformedMarker.Components[0].Files[0].Content = []byte(`{"token":"{{cf-secret:../github/token}}"}`)
 	declaredSecret := snapshot("A")
 	declaredSecret.Components[0].Files[0].SecretRefs = []string{"github/token"}
 	otherHarness := snapshot("A")
@@ -351,6 +351,7 @@ func TestMaterialize_RefusesWithoutTouchingTheRunDir(t *testing.T) {
 		is   error
 	}{
 		{"secret marker in content", withSecret, harness.ErrSecretUnavailable},
+		{"secret marker that is not valid", malformedMarker, harness.ErrSecretUnavailable},
 		{"secret refs declared", declaredSecret, harness.ErrSecretUnavailable},
 		{"snapshot of another harness", otherHarness, nil},
 		{"component digest that is not its files'", badDigest, nil},

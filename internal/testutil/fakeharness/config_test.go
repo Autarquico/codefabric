@@ -85,14 +85,12 @@ func TestSnapshotConfig_ReadsEveryComponentAndNeverTheAuth(t *testing.T) {
 		if c.Ownership != harness.Managed {
 			t.Errorf("%s: ownership %s, want managed", c.Name, c.Ownership)
 		}
-		var entries []treedigest.Entry
 		for _, f := range c.Files {
-			entries = append(entries, treedigest.File{Path: f.Path, Content: f.Content})
 			if f.Path == fakeharness.AuthFile {
 				t.Errorf("%s carries the auth", c.Name)
 			}
 		}
-		if want, _ := treedigest.Files(entries); c.Digest != want {
+		if want, _ := harness.FilesDigest(c.Files); c.Digest != want {
 			t.Errorf("%s: digest %s, want %s", c.Name, c.Digest, want)
 		}
 	}
@@ -238,7 +236,7 @@ func TestApplyConfig_TargetGlobalDryRunChangesNothing(t *testing.T) {
 	}
 }
 
-func TestDiffConfig_TellsAddedModifiedDriftAndRemoved(t *testing.T) {
+func TestDiffConfig_TellsAddedModifiedAndRemoved(t *testing.T) {
 	host := newHost(t)
 	a := fakeharness.Adapter{}
 	writeHost(t, host, map[string]string{"settings.json": `{"theme":"light","editor":"vim"}`})
@@ -267,7 +265,7 @@ func TestDiffConfig_TellsAddedModifiedDriftAndRemoved(t *testing.T) {
 	}
 	want := map[string]harness.ChangeKind{
 		"settings": harness.Modified, // a foreign field changed, not the managed one
-		"skills/a": harness.Drift,
+		"skills/a": harness.Modified, // edited on the host: drift is apply-drift-lock's
 		"skills/b": harness.Removed,
 		"skills/c": harness.Added,
 	}

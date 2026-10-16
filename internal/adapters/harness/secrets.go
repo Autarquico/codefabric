@@ -1,7 +1,9 @@
 package harness
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 )
@@ -17,13 +19,15 @@ type SecretEnv struct {
 // (CF_SECRET_UNAVAILABLE). Until secrets-local, every ref is.
 var ErrSecretUnavailable = errors.New("harness: secret unavailable")
 
+const markerPrefix = "{{cf-secret:"
+
 var secretMarker = regexp.MustCompile(`\{\{cf-secret:([A-Za-z0-9][A-Za-z0-9._/-]{0,127})\}\}`)
 
 // SecretMarker is how ref appears in the content of a File:
 // {{cf-secret:<ref>}}. A ref starts with a letter or a digit and goes on
 // with letters, digits, '.', '_', '/' and '-', up to 128 in all.
 func SecretMarker(ref string) string {
-	return "{{cf-secret:" + ref + "}}"
+	return markerPrefix + ref + "}}"
 }
 
 // SecretRefs are the refs of the markers in content, in order of first
@@ -36,4 +40,18 @@ func SecretRefs(content []byte) []string {
 		}
 	}
 	return refs
+}
+
+// CheckSecrets is an error, wrapping ErrSecretUnavailable, when the secrets of
+// f are not what they seem: a {{cf-secret: that opens no valid marker, which
+// would otherwise be written as it is, or SecretRefs that are not
+// SecretRefs(Content).
+func (f File) CheckSecrets() error {
+	if bytes.Count(f.Content, []byte(markerPrefix)) != len(secretMarker.FindAllIndex(f.Content, -1)) {
+		return fmt.Errorf("%w: %s has a %s that is not a valid marker", ErrSecretUnavailable, f.Path, markerPrefix)
+	}
+	if want := SecretRefs(f.Content); !slices.Equal(f.SecretRefs, want) {
+		return fmt.Errorf("%w: %s says its secret refs are %q, but its content has %q", ErrSecretUnavailable, f.Path, f.SecretRefs, want)
+	}
+	return nil
 }

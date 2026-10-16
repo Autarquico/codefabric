@@ -1,6 +1,10 @@
 package harness
 
-import "io/fs"
+import (
+	"io/fs"
+
+	"github.com/Autarquico/codefabric/internal/support/treedigest"
+)
 
 // NativeSnapshot is the native configuration of a harness, as components
 // (§8). It never carries a secret value: see [File].
@@ -22,8 +26,18 @@ type Component struct {
 	Ownership Ownership
 	// Files are its files, with paths relative to the configuration root.
 	Files []File
-	// Digest is the treedigest/v1 of Files, over their unrendered content.
+	// Digest is FilesDigest(Files), over their unrendered content.
 	Digest string
+}
+
+// FilesDigest is the treedigest/v1 of files: a file is executable when its
+// owner may execute it.
+func FilesDigest(files []File) (string, error) {
+	entries := make([]treedigest.Entry, 0, len(files))
+	for _, f := range files {
+		entries = append(entries, treedigest.File{Path: f.Path, Exec: f.Mode&0o100 != 0, Content: f.Content})
+	}
+	return treedigest.Files(entries)
 }
 
 // ComponentKind is how a component maps onto the configuration directory.
@@ -60,7 +74,7 @@ type File struct {
 	// {{cf-secret:<ref>}}, never as its value.
 	Content []byte
 	// SecretRefs are the refs of the markers in Content, in order of first
-	// appearance; what SecretRefs(Content) returns.
+	// appearance; what SecretRefs(Content) returns. CheckSecrets says so.
 	SecretRefs []string
 }
 

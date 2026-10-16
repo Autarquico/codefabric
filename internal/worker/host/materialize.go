@@ -106,8 +106,9 @@ func NewMaterializer(host harness.Host) *Materializer {
 // error. Staging is synced, file by file and directory by directory, before
 // it is renamed into place; config.json is written atomically last.
 //
-// A snapshot with secret refs is refused with harness.ErrSecretUnavailable
-// (CF_SECRET_UNAVAILABLE) before anything is written: where secrets are
+// A snapshot with secret refs, or with a file that fails CheckSecrets, is
+// refused with harness.ErrSecretUnavailable (CF_SECRET_UNAVAILABLE) before
+// anything is written: where secrets are
 // rendered, and how they are cleaned, is secrets-local's.
 func (m *Materializer) Materialize(ctx context.Context, a harness.Adapter, runDir string, snap harness.NativeSnapshot) (Materialization, error) {
 	if !a.Capabilities().ConfigIsolation {
@@ -298,14 +299,15 @@ func sourceOf(id string, snap harness.NativeSnapshot) (source, error) {
 }
 
 func componentDigest(c harness.Component) (string, error) {
-	entries := make([]treedigest.Entry, 0, len(c.Files))
 	for _, f := range c.Files {
-		if len(f.SecretRefs) > 0 || len(harness.SecretRefs(f.Content)) > 0 {
+		if err := f.CheckSecrets(); err != nil {
+			return "", fmt.Errorf("component %q: %w", c.Name, err)
+		}
+		if len(f.SecretRefs) > 0 {
 			return "", fmt.Errorf("%w: component %q has secret refs in %q, and secrets are not rendered yet", harness.ErrSecretUnavailable, c.Name, f.Path)
 		}
-		entries = append(entries, treedigest.File{Path: f.Path, Exec: f.Mode&0o100 != 0, Content: f.Content})
 	}
-	digest, err := treedigest.Files(entries)
+	digest, err := harness.FilesDigest(c.Files)
 	if err != nil {
 		return "", fmt.Errorf("component %q: %w", c.Name, err)
 	}

@@ -99,8 +99,8 @@ func checkSnapshot(t *testing.T, f Fixture) {
 					t.Errorf("component %s file %s carries the credential file %s", c.Name, file.Path, rel)
 				}
 			}
-			if want := harness.SecretRefs(file.Content); !slices.Equal(file.SecretRefs, want) {
-				t.Errorf("component %s file %s: SecretRefs %q, want those of its content %q", c.Name, file.Path, file.SecretRefs, want)
+			if err := file.CheckSecrets(); err != nil {
+				t.Errorf("component %s: %v", c.Name, err)
 			}
 			refs += len(file.SecretRefs)
 		}
@@ -142,11 +142,7 @@ func (e *env) credentialContents(t *testing.T) map[string][]byte {
 
 func filesDigest(t *testing.T, files []harness.File) string {
 	t.Helper()
-	entries := make([]treedigest.Entry, 0, len(files))
-	for _, f := range files {
-		entries = append(entries, treedigest.File{Path: f.Path, Exec: f.Mode&0o100 != 0, Content: f.Content})
-	}
-	d, err := treedigest.Files(entries)
+	d, err := harness.FilesDigest(files)
 	if err != nil {
 		t.Errorf("the files of a component are not a tree: %v", err)
 	}
