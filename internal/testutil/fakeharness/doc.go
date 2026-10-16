@@ -20,6 +20,8 @@
 //
 //   - emit writes one [Line] of JSONL to stdout: the events the Adapter
 //     parses.
+//   - emit_env writes the value of a variable to stdout, optionally in two
+//     writes with a pause between them.
 //   - record writes a [Record] of the argv, the filtered environment, the
 //     working directory and the treedigest of the configuration directory.
 //   - wait_file waits for a file to exist, for at most its timeout.

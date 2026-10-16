@@ -120,7 +120,8 @@ func TestAdapter_StartBuildsTheLaunchWithoutWritingAndIsIdempotent(t *testing.T)
 		RunID: "r1", Mode: domain.ModeHeadless, Prompt: "do it", Model: "m1",
 		RunDir: t.TempDir(), ConfigDir: t.TempDir(), Worktree: t.TempDir(),
 	}
-	a := fakeharness.Adapter{Caps: allCaps, Binary: "/bin/fake", Env: []string{"EXTRA=1"}, Script: "/s.json"}
+	secretEnv := []harness.SecretEnv{{Name: "FAKE_API_KEY", Ref: "fake/api-key"}}
+	a := fakeharness.Adapter{Caps: allCaps, Binary: "/bin/fake", Env: []string{"EXTRA=1"}, Script: "/s.json", SecretEnv: secretEnv}
 	first, err := a.Start(t.Context(), host, run)
 	if err != nil {
 		t.Fatal(err)
@@ -131,6 +132,9 @@ func TestAdapter_StartBuildsTheLaunchWithoutWritingAndIsIdempotent(t *testing.T)
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Errorf("Start is not idempotent: %#v then %#v", first, second)
+	}
+	if !reflect.DeepEqual(first.SecretEnv, secretEnv) {
+		t.Errorf("secret env = %+v, want %+v", first.SecretEnv, secretEnv)
 	}
 	wantArgv := []string{"/bin/fake", "--mode", "headless", "--prompt", "do it", "--script", "/s.json", "--model", "m1"}
 	if !slices.Equal(first.Argv, wantArgv) {

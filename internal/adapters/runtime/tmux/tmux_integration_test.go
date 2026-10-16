@@ -4,6 +4,7 @@ package tmux_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -361,5 +362,79 @@ func TestOwnTmpDirIgnoresTheTmpDirOfTheEnvironment(t *testing.T) {
 	defaultSocket := filepath.Join("/tmp", fmt.Sprintf("tmux-%d", os.Getuid()), socket)
 	if _, err := os.Stat(defaultSocket); err != nil {
 		t.Errorf("no server in tmux's default directory: %v", err)
+	}
+}
+
+// filterSpec is a session that waits for the gate and prints, captured through
+// a filter script that is handed the acknowledgement file as $1.
+func filterSpec(t *testing.T, name, filter string) (spec cfruntime.Spec, ranFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	gate, ran := filepath.Join(dir, "ready"), filepath.Join(dir, "ran")
+	script := `while [ ! -e ` + gate + ` ]; do sleep 0.05; done; touch ` + ran + `; echo secret-line`
+	return cfruntime.Spec{
+		Name: cfruntime.NameFor(name, 1), Dir: dir, Command: sh(script),
+		Capture: filepath.Join(dir, "output.log"), CaptureAck: filepath.Join(dir, "capture.ack"), Ready: gate,
+		CaptureFilter: []string{"/bin/sh", "-c", filter, "filter", filepath.Join(dir, "capture.ack")},
+	}, ran
+}
+
+func TestACaptureFilterThatAcknowledgesFiltersAllTheOutput(t *testing.T) {
+	r := newRuntime(t)
+	spec, ran := filterSpec(t, "run_fa", `printf ready > "$1.tmp" && mv "$1.tmp" "$1" && exec sed -u 's/secret/[gone]/'`)
+	if _, err := r.Start(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the filtered output", func() bool {
+		raw, _ := readFile(spec.Capture)
+		return strings.Contains(string(raw), "[gone]-line")
+	})
+	if raw, _ := readFile(spec.Capture); strings.Contains(string(raw), "secret") {
+		t.Errorf("captured %q", raw)
+	}
+	if _, err := os.Stat(ran); err != nil {
+		t.Errorf("the command did not run: %v", err)
+	}
+	// Wiring again finds the filter at work: it is not started twice.
+	if err := r.Wire(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestACaptureFilterThatRefusesKeepsTheGateClosed(t *testing.T) {
+	r := newRuntime(t)
+	spec, ran := filterSpec(t, "run_fr", `printf 'refused: no values' > "$1.tmp" && mv "$1.tmp" "$1"; exec cat > /dev/null`)
+	_, err := r.Start(t.Context(), spec)
+	if !errors.Is(err, cfruntime.ErrCaptureRefused) || !strings.Contains(err.Error(), "no values") {
+		t.Fatalf("Start = %v, want the refusal", err)
+	}
+	if _, err := os.Stat(spec.Ready); err == nil {
+		t.Error("the gate is open")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(ran); err == nil {
+		t.Error("the command ran")
+	}
+}
+
+func TestACaptureFilterThatNeverAcknowledgesKeepsTheGateClosed(t *testing.T) {
+	r := newRuntime(t)
+	spec, ran := filterSpec(t, "run_fn", `exec cat`)
+	// A stale acknowledgement of a filter that is gone is not this one's.
+	if err := cfruntime.AckCapture(spec.CaptureAck, nil); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := r.Start(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "did not acknowledge") {
+		t.Fatalf("Start = %v, want no acknowledgement", err)
+	}
+	if waited := time.Since(start); waited < tmux.AckTimeout {
+		t.Errorf("gave up after %s", waited)
+	}
+	if _, err := os.Stat(spec.Ready); err == nil {
+		t.Error("the gate is open")
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Error("the command ran")
 	}
 }

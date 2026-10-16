@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 // SecretEnv is an environment variable whose value is a secret: Launch
@@ -16,16 +18,17 @@ type SecretEnv struct {
 }
 
 // ErrSecretUnavailable is a secret ref with nothing to resolve it
-// (CF_SECRET_UNAVAILABLE). Until secrets-local, every ref is.
+// (CF_SECRET_UNAVAILABLE).
 var ErrSecretUnavailable = errors.New("harness: secret unavailable")
 
 const markerPrefix = "{{cf-secret:"
 
-var secretMarker = regexp.MustCompile(`\{\{cf-secret:([A-Za-z0-9][A-Za-z0-9._/-]{0,127})\}\}`)
+// marker is anything shaped like a marker; only those whose ref is
+// domain.ValidSecretRef are markers.
+var marker = regexp.MustCompile(`\{\{cf-secret:([^{}]*)\}\}`)
 
 // SecretMarker is how ref appears in the content of a File:
-// {{cf-secret:<ref>}}. A ref starts with a letter or a digit and goes on
-// with letters, digits, '.', '_', '/' and '-', up to 128 in all.
+// {{cf-secret:<ref>}}, with ref as domain.ValidSecretRef has it.
 func SecretMarker(ref string) string {
 	return markerPrefix + ref + "}}"
 }
@@ -33,13 +36,24 @@ func SecretMarker(ref string) string {
 // SecretRefs are the refs of the markers in content, in order of first
 // appearance and without repeats.
 func SecretRefs(content []byte) []string {
-	var refs []string
-	for _, m := range secretMarker.FindAllSubmatch(content, -1) {
-		if ref := string(m[1]); !slices.Contains(refs, ref) {
+	refs, _ := markers(content)
+	return refs
+}
+
+// markers are the refs of the markers in content, in order of first
+// appearance and without repeats, and how many there are, repeats included.
+func markers(content []byte) (refs []string, count int) {
+	for _, m := range marker.FindAllSubmatch(content, -1) {
+		ref := string(m[1])
+		if !domain.ValidSecretRef(ref) {
+			continue
+		}
+		count++
+		if !slices.Contains(refs, ref) {
 			refs = append(refs, ref)
 		}
 	}
-	return refs
+	return refs, count
 }
 
 // CheckSecrets is an error, wrapping ErrSecretUnavailable, when the secrets of
@@ -47,11 +61,12 @@ func SecretRefs(content []byte) []string {
 // would otherwise be written as it is, or SecretRefs that are not
 // SecretRefs(Content).
 func (f File) CheckSecrets() error {
-	if bytes.Count(f.Content, []byte(markerPrefix)) != len(secretMarker.FindAllIndex(f.Content, -1)) {
+	refs, count := markers(f.Content)
+	if bytes.Count(f.Content, []byte(markerPrefix)) != count {
 		return fmt.Errorf("%w: %s has a %s that is not a valid marker", ErrSecretUnavailable, f.Path, markerPrefix)
 	}
-	if want := SecretRefs(f.Content); !slices.Equal(f.SecretRefs, want) {
-		return fmt.Errorf("%w: %s says its secret refs are %q, but its content has %q", ErrSecretUnavailable, f.Path, f.SecretRefs, want)
+	if !slices.Equal(f.SecretRefs, refs) {
+		return fmt.Errorf("%w: %s says its secret refs are %q, but its content has %q", ErrSecretUnavailable, f.Path, f.SecretRefs, refs)
 	}
 	return nil
 }

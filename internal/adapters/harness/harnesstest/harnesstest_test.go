@@ -35,6 +35,16 @@ const (
 	releaseFile        = "release"
 )
 
+// The secret the Launch of the fakeharness names; the smoke Run prints its
+// value, so it fails unless it got it.
+//
+//nolint:gosec // sentinels, not credentials
+const (
+	secretRef   = "fake/run-key"
+	secretValue = "fake-secret-value-91c2"
+	secretName  = "FAKE_RUN_KEY"
+)
+
 func ptr(v int64) *int64 { return &v }
 
 // The lines the fakeharness emits, in the smoke Run and in the recording.
@@ -50,6 +60,7 @@ var usage = harness.UsageEvent{Provider: "fake", Model: model, InputTokens: ptr(
 func script(t *testing.T) []byte {
 	t.Helper()
 	var s fakeharness.Script
+	s.Steps = append(s.Steps, fakeharness.Step{EmitEnv: &fakeharness.EmitEnv{Name: secretName}})
 	for i := range lines {
 		s.Steps = append(s.Steps, fakeharness.Step{Emit: &lines[i]})
 	}
@@ -89,7 +100,10 @@ func fakeFixture(caps harness.Capabilities) harnesstest.Fixture {
 	expect = append(expect, harness.Event{Kind: harness.EventResult, Result: &harness.Result{Summary: "done"}})
 	return harnesstest.Fixture{
 		New: func(binDir string) harness.Adapter {
-			return fakeharness.Adapter{Caps: caps, Binary: filepath.Join(binDir, "fakeharness")}
+			return fakeharness.Adapter{
+				Caps: caps, Binary: filepath.Join(binDir, "fakeharness"),
+				SecretEnv: []harness.SecretEnv{{Name: secretName, Ref: secretRef}},
+			}
 		},
 		Install: func(t *testing.T, binDir string) {
 			self, err := filepath.Abs(os.Args[0])
@@ -108,6 +122,7 @@ func fakeFixture(caps harness.Capabilities) harnesstest.Fixture {
 			write(t, filepath.Join(dir, fakeharness.AuthFile), []byte(`{"token":"`+credentialSentinel+`"}`), 0o600)
 		},
 		Secrets:         []string{credentialSentinel},
+		SecretValues:    map[string]string{secretRef: secretValue},
 		CredentialFiles: []string{filepath.Join(fakeharness.ConfigDirName, fakeharness.AuthFile)},
 		Mutate: func(t *testing.T, home string) string {
 			write(t, filepath.Join(home, fakeharness.ConfigDirName, "skills", "review", "SKILL.md"), []byte("# Review, edited\n"), 0o644)

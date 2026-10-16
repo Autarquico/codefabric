@@ -22,6 +22,7 @@ type Script struct {
 // Step is one thing the program does. Exactly one field is set.
 type Step struct {
 	Emit          *Line     `json:"emit,omitempty"`
+	EmitEnv       *EmitEnv  `json:"emit_env,omitempty"`
 	Record        *Recorder `json:"record,omitempty"`
 	WaitFile      *WaitFile `json:"wait_file,omitempty"`
 	ReadLine      *ReadLine `json:"read_line,omitempty"`
@@ -62,6 +63,17 @@ type Usage struct {
 type Result struct {
 	Failed  bool   `json:"failed,omitempty"`
 	Summary string `json:"summary,omitempty"`
+}
+
+// EmitEnv is an emit_env step: it writes the value of the variable Name to
+// stdout, and then a newline. With SplitAt it writes the first SplitAt bytes
+// (or all, if the value is shorter), waits PauseMS and writes the rest, so that
+// a reader gets the value in two pieces: what a secret printed in two goes
+// looks like to the redaction of the output.
+type EmitEnv struct {
+	Name    string `json:"name"`
+	SplitAt int    `json:"split_at,omitempty"`
+	PauseMS int64  `json:"pause_ms,omitempty"`
 }
 
 // Recorder is a record step: where to write the [Record] and which
@@ -135,7 +147,7 @@ func ParseScript(b []byte) (Script, error) {
 
 func (s Step) check() error {
 	set := 0
-	for _, isSet := range []bool{s.Emit != nil, s.Record != nil, s.WaitFile != nil, s.ReadLine != nil, s.IgnoreSignals, s.Exit != nil} {
+	for _, isSet := range []bool{s.Emit != nil, s.EmitEnv != nil, s.Record != nil, s.WaitFile != nil, s.ReadLine != nil, s.IgnoreSignals, s.Exit != nil} {
 		if isSet {
 			set++
 		}
@@ -146,6 +158,8 @@ func (s Step) check() error {
 	switch {
 	case s.Emit != nil:
 		return s.Emit.check()
+	case s.EmitEnv != nil:
+		return s.EmitEnv.check()
 	case s.Record != nil:
 		if s.Record.Path == "" {
 			return errors.New("record: no path")
@@ -161,6 +175,18 @@ func (s Step) check() error {
 		if *s.Exit < 0 || *s.Exit > 255 {
 			return fmt.Errorf("exit: code %d is not 0 to 255", *s.Exit)
 		}
+	}
+	return nil
+}
+
+func (e EmitEnv) check() error {
+	switch {
+	case e.Name == "":
+		return errors.New("emit_env: no name")
+	case e.SplitAt < 0:
+		return fmt.Errorf("emit_env: split_at %d is negative", e.SplitAt)
+	case e.PauseMS < 0 || time.Duration(e.PauseMS)*time.Millisecond > MaxWait:
+		return fmt.Errorf("emit_env: pause_ms %d is not in [0, %d]", e.PauseMS, MaxWait.Milliseconds())
 	}
 	return nil
 }
