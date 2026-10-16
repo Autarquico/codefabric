@@ -179,6 +179,44 @@ linters:
           files: ["**/internal/support/treedigest/**", "!$test"]
           allow:
             - $gostd
+        # secretjit delivers and releases the secrets of a run directory; the
+        # executor that calls it, the Worker's state, the SDK and the wrapper
+        # that reads the delivery are not its business.
+        secretjit:
+          list-mode: lax
+          files: ["**/internal/worker/secretjit/**", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/worker/executor
+              desc: secretjit does not know the executor
+            - pkg: github.com/Autarquico/codefabric/internal/worker/state
+              desc: secretjit does not know the Worker's state
+            - pkg: github.com/Autarquico/codefabric/internal/client
+              desc: secretjit does not know the SDK
+            - pkg: github.com/Autarquico/codefabric/internal/worker/execwrap
+              desc: secretjit does not know the wrapper that resolves its refs
+        # The secrets port does not know its implementations.
+        secretsport:
+          list-mode: lax
+          files: ["**/internal/adapters/secrets/*.go", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/adapters/secrets/file
+              desc: the port does not know its implementations
+        # Values of secrets live on the Worker only: no package of the
+        # Controller, tests included, can read or deliver one.
+        controllersecrets:
+          list-mode: lax
+          files: ["**/internal/controller/**", "**/internal/app/**"]
+          deny:
+            - pkg: github.com/Autarquico/codefabric/internal/adapters/secrets
+              desc: the Controller holds metadata of secrets, never their values
+            - pkg: github.com/Autarquico/codefabric/internal/worker/secretjit
+              desc: the Controller holds metadata of secrets, never their values
+        # redact matches bytes: the standard library is all it needs.
+        redact:
+          list-mode: strict
+          files: ["**/internal/support/redact/**", "!$test"]
+          allow:
+            - $gostd
         # svcunit installs services; what the daemon they run does is not its business.
         svcunit:
           list-mode: strict

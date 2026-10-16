@@ -72,6 +72,12 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+- Decisiones y desviaciones tomadas al implementar: Apéndice B5 de `docs/codefabric-spec.md`, entradas «#23».
+- Contención (riesgo principal): con tmux, el harness tiene el uid del daemon y puede leer todos los valores del Worker. El allowlist y el grant son política y audit, no aislamiento; la contención real es un usuario dedicado o docker.
+- La redacción es best-effort: no ve valores transformados (base64, escapes, ANSI intercalado) ni el scrollback de tmux; rechaza valores de menos de 8 B y líneas cortas de valores multilínea (claves PEM: entrega como fichero, followup).
+- Limitaciones aceptadas del guard de publicación: republicar tras liberar los secretos falla cerrado; un Run reconstruido sin spec conocida no publica; los objetos ya presentes en origin no se revisan; un valor que contenga `[REDACTE` no se puede publicar.
+- El orden entre un daemon N−1 y uno N tras un downgrade usa el epoch ULID, que depende del reloj del Worker.
+- Upgrade: el Controller primero (el heartbeat se decodifica con `DisallowUnknownFields`).
 
 ## Referencias
 
