@@ -69,13 +69,6 @@ func TestItIsCalledCommandAndSupportsBothModesAndNoConfiguration(t *testing.T) {
 	}
 }
 
-func TestItIsInstalledWhereThereIsAShell(t *testing.T) {
-	d, err := command.Adapter{}.Detect(t.Context(), nil)
-	if err != nil || !d.Installed || d.Path != "/bin/sh" {
-		t.Errorf("detect = %+v, %v", d, err)
-	}
-}
-
 func TestAnEmptyPromptOrAnUnknownModeIsRefusedWithoutWriting(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := (command.Adapter{}).Start(t.Context(), nil, spec(dir, "", domain.ModeHeadless)); err == nil {

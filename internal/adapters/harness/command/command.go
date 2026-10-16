@@ -8,8 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
@@ -45,18 +43,15 @@ func (Adapter) Capabilities() harness.Capabilities {
 	return harness.Capabilities{Modes: []domain.Mode{domain.ModeHeadless, domain.ModeInteractive}}
 }
 
-// Detect finds the shell: command is installed wherever Shell is executable.
-func (Adapter) Detect(context.Context, harness.Host) (harness.Detection, error) {
-	info, err := os.Stat(Shell)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return harness.Detection{}, nil
-	case err != nil:
-		return harness.Detection{}, fmt.Errorf("command: looking for %s: %w", Shell, err)
-	case info.IsDir() || info.Mode().Perm()&0o111 == 0:
-		return harness.Detection{}, nil
+// Detect finds a POSIX shell, sh, on the PATH of the host: command is
+// installed wherever there is one. Its Runs are started with Shell all the
+// same, the path every POSIX system has.
+func (Adapter) Detect(_ context.Context, host harness.Host) (harness.Detection, error) {
+	path, err := host.LookPath("sh")
+	if err != nil {
+		return harness.Detection{}, nil //nolint:nilerr // no shell is not installed, not a failure to detect
 	}
-	return harness.Detection{Installed: true, Path: Shell}, nil
+	return harness.Detection{Installed: true, Path: path}, nil
 }
 
 // Start writes the prompt as an executable script in the directory of the Run
