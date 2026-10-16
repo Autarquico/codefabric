@@ -50,6 +50,9 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 	}
 	switch r.Phase {
 	case state.PhaseAssigned, state.PhaseAccepted:
+		// A prepare in progress is cut short; whatever it would still deliver is
+		// fenced by the phase this closes. The release of the secrets waits for it.
+		e.cancelPrepare(k)
 		err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 			if _, err := state.AddStopOrder(ctx, tx, order); err != nil {
 				return err

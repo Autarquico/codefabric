@@ -312,11 +312,9 @@ func TestScenario_HarnessAdapterFramework_Aislamiento(t *testing.T) {
 	}
 }
 
-// A Launch with a secret and nothing to resolve it fails in the wrapper,
-// before the harness is executed, and launch.json holds the ref, never a value.
-// The session did start, so it is reported as a wrapper that failed: started,
-// prepare_failed, stopped.
-func TestARunWithASecretAndNoResolverFailsBeforeTheHarnessRuns(t *testing.T) {
+// A secret the adapter asks for goes through the grant and the catalog like
+// any other: a Worker that keeps none fails the prepare before anything runs.
+func TestARunWithASecretTheWorkerDoesNotHoldFailsBeforeTheHarnessRuns(t *testing.T) {
 	f := newRealFixture(t, 2*time.Second)
 	self, err := os.Executable()
 	if err != nil {
@@ -338,22 +336,14 @@ func TestARunWithASecretAndNoResolverFailsBeforeTheHarnessRuns(t *testing.T) {
 
 	f.waitPhase(k, state.PhaseStopped)
 	reports := f.reports(k)
-	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportStarted, v1.ReportPrepareFailed, v1.ReportStopped}) ||
-		!strings.HasPrefix(reports[1].Message, string(domain.CodeSecretUnavailable)+":") {
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportPrepareFailed, v1.ReportStopped}) ||
+		!strings.Contains(reports[0].Message, string(domain.CodeSecretUnavailable)+":") {
 		t.Fatalf("reports = %+v", reports)
 	}
 	if _, err := os.Stat(filepath.Join(f.paths.WorkerWorktreeDir(k.RunID, k.LeaseEpoch), recordFile)); err == nil {
 		t.Error("the harness ran")
 	}
-	launch, err := os.ReadFile(filepath.Join(f.runDir(k), execwrap.LaunchFile)) //nolint:gosec // a file of the test
-	if err != nil {
-		t.Fatal(err)
-	}
-	var l execwrap.Launch
-	if err := json.Unmarshal(launch, &l); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(l.SecretEnv, []execwrap.SecretEnv{{Name: "API_KEY", Ref: "team/api-key"}}) || strings.Contains(string(launch), "API_KEY=") {
-		t.Errorf("launch.json = %s", launch)
+	if _, err := os.Stat(filepath.Join(f.runDir(k), execwrap.LaunchFile)); err == nil {
+		t.Error("launch.json was written for a Run whose secrets could not be delivered")
 	}
 }

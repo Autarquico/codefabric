@@ -23,4 +23,7 @@ type Controller interface {
 	OrphanToken(ctx context.Context, run string, leaseEpoch uint64, commit string) (v1.RelayTokenResponse, error)
 	// Reconcile sends one request of a reconciliation (§27.3).
 	Reconcile(ctx context.Context, req v1.ReconcileRequest) (v1.ReconcileResponse, error)
+	// GrantSecrets asks, before a single value is read, to resolve refs for
+	// a Run this Worker holds. Every call is decided and audited anew.
+	GrantSecrets(ctx context.Context, run string, req v1.GrantSecretsRequest) (v1.GrantSecretsResponse, error)
 }

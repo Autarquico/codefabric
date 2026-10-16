@@ -55,6 +55,8 @@ type Options struct {
 	Runtime cfruntime.Runtime
 	// WrapperArgv replaces `<this binary> worker exec`, for tests.
 	WrapperArgv []string
+	// RedactPipeArgv replaces `<this binary> worker redact-pipe`, for tests.
+	RedactPipeArgv []string
 	// StopGrace replaces stop.grace (Appendix A), for tests.
 	StopGrace time.Duration
 	// GitPath replaces the git found on the PATH, for tests.
@@ -150,7 +152,7 @@ func Run(ctx context.Context, o Options) error {
 	rt, adapters := d.runtimeAndHarnesses(ctx, o)
 	eo := executor.Options{
 		DB: db, Controller: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
-		WrapperArgv: o.WrapperArgv, StopGrace: o.StopGrace,
+		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
 	}
 	// Publishing the result of a Run needs git: without it this Worker offers no harness.
 	if git, gitErr := gitops.New(ctx, gitops.Options{Paths: o.Paths, Clock: d.clock, Log: d.log, GitPath: o.GitPath}); gitErr != nil {

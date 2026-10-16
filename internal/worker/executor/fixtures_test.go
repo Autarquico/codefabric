@@ -53,6 +53,26 @@ type fakeController struct {
 	reconciles []v1.ReconcileRequest
 	// orphanRef, if set, is the ref OrphanToken answers with.
 	orphanRef string
+	// grant, if set, answers GrantSecrets; by default every ref is granted.
+	grant  func(run string, req v1.GrantSecretsRequest) (v1.GrantSecretsResponse, error)
+	grants []v1.GrantSecretsRequest
+}
+
+func (c *fakeController) GrantSecrets(_ context.Context, run string, req v1.GrantSecretsRequest) (v1.GrantSecretsResponse, error) {
+	c.mu.Lock()
+	c.grants = append(c.grants, req)
+	answer := c.grant
+	c.mu.Unlock()
+	if answer != nil {
+		return answer(run, req)
+	}
+	return v1.GrantSecretsResponse{Granted: append([]string{}, req.Refs...)}, nil
+}
+
+func (c *fakeController) grantRequests() []v1.GrantSecretsRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]v1.GrantSecretsRequest{}, c.grants...)
 }
 
 func (c *fakeController) Reconcile(_ context.Context, req v1.ReconcileRequest) (v1.ReconcileResponse, error) {

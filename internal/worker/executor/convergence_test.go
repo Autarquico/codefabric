@@ -117,6 +117,10 @@ func (c *appController) OrphanToken(ctx context.Context, run string, epoch uint6
 	return c.app.Runs.MintOrphanToken(ctx, c.w, run, v1.OrphanTokenRequest{LeaseEpoch: epoch, ResultCommit: commit})
 }
 
+func (c *appController) GrantSecrets(ctx context.Context, run string, req v1.GrantSecretsRequest) (v1.GrantSecretsResponse, error) {
+	return c.app.Runs.GrantSecrets(ctx, c.w, run, req)
+}
+
 func (c *appController) Reconcile(ctx context.Context, req v1.ReconcileRequest) (v1.ReconcileResponse, error) {
 	out, err := c.app.Reconciliation.Reconcile(ctx, c.w, req)
 	if err == nil && c.losing("reconcile") {

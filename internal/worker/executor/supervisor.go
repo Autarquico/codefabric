@@ -38,10 +38,26 @@ func (e *Executor) step(ctx context.Context, k state.Key) (done bool) {
 	}
 	var prepErr error
 	if r.Phase == state.PhaseAccepted {
+		if r.FencedCode != "" || !e.prepareDue(k) {
+			// A fenced Run waits for the reconciliation; one whose prepare could not
+			// finish waits for its retry.
+			return false
+		}
 		// Preparing may take long (it will clone), so it is outside the lock; the
-		// phase is checked again inside it.
-		if prepErr = e.prepare(ctx, r); prepErr != nil {
+		// phase is checked again inside it, and before every effect on secrets.
+		if prepErr = e.preparing(ctx, r); prepErr != nil {
 			e.log.ErrorContext(ctx, "preparing a Run", "run", k.RunID, "err", prepErr)
+		}
+		switch {
+		case errors.Is(prepErr, errPrepareFenced):
+			e.fenceForGrant(ctx, k)
+			e.postponePrepare(k)
+			return false
+		case errors.Is(prepErr, errPrepareLater):
+			e.postponePrepare(k)
+			return false
+		case prepErr == nil:
+			e.preparedNow(k)
 		}
 	}
 	unlock := e.lock(k)
@@ -94,11 +110,36 @@ func (e *Executor) retryDue(k state.Key) bool {
 // the prompt, and launch.json for the wrapper. It runs only while the Run is
 // accepted: once it is starting, the harness may be writing to its
 // configuration, and nothing here is done again.
+//
+// A Run with secrets asks the Controller for them first, under a new prepare
+// attempt, before anything is cloned; the values are read and delivered last,
+// once the environment of the harness is known, just before launch.json.
 func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	spec := parseSpec(r.Spec)
 	adapter, ok := e.harnesses.Get(spec.Requirements.Harness)
 	if !ok {
 		return fmt.Errorf("this Worker has no harness %q", spec.Requirements.Harness)
+	}
+	if err := checkSpecSecrets(spec); err != nil {
+		return fmt.Errorf("%s: the secrets of the Run: %w", domain.CodeInvalidRequest, err)
+	}
+	var sp *secretPrepare
+	attempt := func() (*secretPrepare, error) {
+		if sp == nil {
+			var err error
+			sp, err = e.beginSecrets(ctx, r)
+			return sp, err
+		}
+		return sp, nil
+	}
+	if refs := spec.refs(); len(refs) > 0 {
+		p, err := attempt()
+		if err != nil {
+			return err
+		}
+		if err := p.grant(ctx, refs); err != nil {
+			return err
+		}
 	}
 	dir, worktree := e.runDir(r.Key), e.o.Paths.WorkerWorktreeDir(r.RunID, r.LeaseEpoch)
 	if err := mkdir(dir); err != nil {
@@ -119,8 +160,24 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 		return err
 	}
 	l := execwrap.Launch{Argv: launch.Argv, Env: launch.Env, Dir: worktree, Mode: spec.Mode, Grace: e.grace}
-	for _, s := range launch.SecretEnv {
-		l.SecretEnv = append(l.SecretEnv, execwrap.SecretEnv{Name: s.Name, Ref: s.Ref})
+	env, extra, err := launchSecretEnv(spec, launch.SecretEnv)
+	if err != nil {
+		return err
+	}
+	l.SecretEnv = env
+	if len(spec.refs())+len(extra) > 0 {
+		p, err := attempt()
+		if err != nil {
+			return err
+		}
+		// What the adapter asks for and the spec does not declare is the
+		// Controller's to deny: it is asked like the rest.
+		if err := p.grant(ctx, extra); err != nil {
+			return err
+		}
+		if err := p.deliver(ctx, dir); err != nil {
+			return err
+		}
 	}
 	if spec.Mode == execwrap.ModeInteractive {
 		l.Gate = filepath.Join(dir, paneReady)
@@ -210,8 +267,15 @@ func (e *Executor) sessionSpec(r state.Run) cfruntime.Spec {
 		Name: e.sessionName(r.Key), Dir: dir,
 		Command: append(append([]string{}, e.wrapper...), "--run-dir", dir),
 	}
-	if parseSpec(r.Spec).Mode == execwrap.ModeInteractive {
+	run := parseSpec(r.Spec)
+	if run.Mode == execwrap.ModeInteractive {
 		spec.Capture, spec.Ready = filepath.Join(dir, execwrap.OutputLog), filepath.Join(dir, paneReady)
+		if len(run.refs()) > 0 {
+			// The terminal of a Run with secrets is captured through a filter that
+			// redacts them, and the gate stays shut until it says it does.
+			spec.CaptureFilter = append(append([]string{}, e.redactPipe...), "--run-dir", dir)
+			spec.CaptureAck = filepath.Join(dir, execwrap.CaptureAckFile)
+		}
 	}
 	return spec
 }
@@ -228,6 +292,9 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 	m := e.markers(r.Key)
 	if h := e.o.Hooks.AfterMarkers; h != nil {
 		h(r)
+	}
+	if m.started != nil {
+		e.revokeOnce(ctx, r)
 	}
 	if r.Phase == state.PhaseStopping && m.exit == nil && e.firstLook(r.Key) {
 		// A stop the previous daemon began: the signal may not have been sent.

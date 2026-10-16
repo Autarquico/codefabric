@@ -18,15 +18,17 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/support/svcunit"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 )
 
 // Command is the part of `cf worker` that is the daemon's: join and run. The
 // CLI merges it with the administration commands of the same name.
 func Command() *cobra.Command {
 	cmd := &cobra.Command{Use: "worker"}
-	cmd.AddCommand(newJoinCmd(), newRunCmd(), newExecCmd(), newInstallServiceCmd(), newUninstallServiceCmd(), newSecretsCmd())
+	cmd.AddCommand(newJoinCmd(), newRunCmd(), newExecCmd(), newRedactPipeCmd(), newInstallServiceCmd(), newUninstallServiceCmd(), newSecretsCmd())
 	return cmd
 }
 
@@ -132,12 +134,38 @@ func newExecCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			return execwrap.Run(execwrap.Options{RunDir: runDir, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+			return execwrap.Run(execwrap.Options{
+				RunDir: runDir, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
+				Secrets: secretjit.Resolver(runDir), Retention: retention(runDir),
+			})
 		},
 	}
 	cmd.Flags().StringVar(&runDir, "run-dir", "", "the directory of the Run, with its launch.json")
 	_ = cmd.MarkFlagRequired("run-dir")
 	return cmd
+}
+
+// newRedactPipeCmd is the capture filter of the terminal of an interactive
+// Run with secrets: the Runtime starts it, not a person.
+func newRedactPipeCmd() *cobra.Command {
+	var runDir string
+	cmd := &cobra.Command{
+		Use:    "redact-pipe",
+		Short:  "Copy the terminal of a Run to its log with its secrets redacted (started by the Worker, not by hand)",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return execwrap.RedactPipe(execwrap.PipeOptions{RunDir: runDir, Retention: retention(runDir), In: os.Stdin, Out: os.Stdout})
+		},
+	}
+	cmd.Flags().StringVar(&runDir, "run-dir", "", "the directory of the Run, with its secrets")
+	_ = cmd.MarkFlagRequired("run-dir")
+	return cmd
+}
+
+// retention is what the output of the Run in runDir is redacted of.
+func retention(runDir string) execwrap.LoadSecrets {
+	return func() ([]redact.Needle, error) { return secretjit.Load(runDir) }
 }
 
 func newInstallServiceCmd() *cobra.Command {

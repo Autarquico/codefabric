@@ -94,11 +94,14 @@ type Run struct {
 	// of its Run; Adopted that the record was rebuilt, not received.
 	OrphanedAt *time.Time
 	Adopted    bool
+	// PrepareAttempt is the last prepare attempt taken (NextPrepareAttempt);
+	// 0 before the first.
+	PrepareAttempt uint64
 }
 
 const runColumns = `run_id, lease_epoch, lease_id, run_short, task_id, project_id, command_seq, accept_by, source_commit,
     cpu, memory_mb, spec, harness, mode, phase, COALESCE(handle, ''), started_at, never_started, COALESCE(fenced_code, ''),
-    created_at, updated_at, branch, repo, orphaned_at, adopted`
+    created_at, updated_at, branch, repo, orphaned_at, adopted, prepare_attempt`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -113,7 +116,7 @@ func scanRun(row scanner) (Run, error) {
 	)
 	if err := row.Scan(&r.RunID, &r.LeaseEpoch, &r.LeaseID, &r.RunShort, &r.TaskID, &r.ProjectID, &r.CommandSeq, &acceptBy,
 		&r.SourceCommit, &r.CPU, &r.MemoryMB, &spec, &r.Harness, &r.Mode, &phase, &r.Handle, &started, &never,
-		&r.FencedCode, &created, &updated, &r.Branch, &r.Repo, &orphaned, &r.Adopted); err != nil {
+		&r.FencedCode, &created, &updated, &r.Branch, &r.Repo, &orphaned, &r.Adopted, &r.PrepareAttempt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Run{}, ErrNotFound
 		}
@@ -215,6 +218,22 @@ func Close(ctx context.Context, tx *Tx, k Key, from []Phase, to Phase, neverStar
 	res, err := tx.exec(ctx, `UPDATE local_runs SET phase = ?, never_started = ?, updated_at = ?
 		WHERE run_id = ? AND lease_epoch = ? AND phase IN `+marks, args...) //nolint:gosec // only placeholders are concatenated
 	return changedOne(res, err, "closing an assignment")
+}
+
+// NextPrepareAttempt takes the next prepare attempt of an assignment that is
+// accepted, and returns it: ErrChanged if it is not accepted. It is stored
+// before it is returned, so no two attempts of one assignment share a number.
+func NextPrepareAttempt(ctx context.Context, tx *Tx, k Key) (uint64, error) {
+	res, err := tx.exec(ctx, `UPDATE local_runs SET prepare_attempt = prepare_attempt + 1 WHERE run_id = ? AND lease_epoch = ? AND phase = ?`,
+		k.RunID, k.LeaseEpoch, string(PhaseAccepted))
+	if err := changedOne(res, err, "taking a prepare attempt"); err != nil {
+		return 0, err
+	}
+	var attempt uint64
+	if err := tx.QueryRowContext(ctx, `SELECT prepare_attempt FROM local_runs WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch).Scan(&attempt); err != nil {
+		return 0, fmt.Errorf("state: reading the prepare attempt: %w", err)
+	}
+	return attempt, nil
 }
 
 // SetRunning records the handle of the session and that `started` is in the
