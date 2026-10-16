@@ -644,9 +644,7 @@ func (w *secretsWorld) grant(c grantCall, lost bool) {
 		exps []grantExpectation
 	)
 	call := func() { out, err = w.e.app.Runs.GrantSecrets(w.t.Context(), c.caller.s, string(c.run), c.req) }
-	if w.rng.IntN(4) == 0 {
-		ch := w.randomChange()
-		ch.project = project
+	if ch, ok := w.allowlistAround(c, project); ok {
 		w.trace.add("grant %s e%d %v by %s/%s while %+v", c.run, c.req.LeaseEpoch, c.req.Refs, c.caller.name, c.req.WorkerEpoch, ch)
 		// Either order is a linearization: the expectation of each, before the call.
 		before := maps.Clone(w.model.allow[project])
@@ -681,6 +679,30 @@ func (w *secretsWorld) grant(c grantCall, lost bool) {
 	if !lost {
 		w.toRead = append(w.toRead, pendingRead{call: c, epoch: c.caller.epoch})
 	}
+}
+
+// allowlistAround changes the allowlist of project around the grant c: at
+// times one of the refs c asks for is denied just before it, and at times a
+// ref, mostly one c asks for, is allowed or denied while it is decided, which
+// it returns. The lease of c was made with every ref allowlisted: only a change
+// of those refs between the lease and the grant, or during it, tells a grant
+// that checks the allowlist from one that does not.
+func (w *secretsWorld) allowlistAround(c grantCall, project string) (allowlistChange, bool) {
+	asked := allowlistChange{project: project, ref: c.req.Refs[w.rng.IntN(len(c.req.Refs))], allow: w.rng.IntN(2) == 0}
+	switch w.rng.IntN(6) {
+	case 0:
+		asked.allow = false
+		w.trace.add("allowlist %+v before the grant", asked)
+		must(w.t, w.apply(asked))
+		w.model.allow[project][asked.ref] = false
+	case 1:
+		return asked, true
+	case 2:
+		ch := w.randomChange()
+		ch.project = project
+		return ch, true
+	}
+	return allowlistChange{}, false
 }
 
 // outcomeOf is a grant answer as "granted" or the first reason it was denied for.
@@ -817,6 +839,12 @@ func (w *secretsWorld) step() {
 		}
 	case 10, 11:
 		w.pass()
+		// A daemon answers an offer within seconds; one left unanswered expires.
+		for _, r := range runs() {
+			if r.LeaseState == domain.LeasePending && !r.State.IsTerminal() && w.rng.IntN(2) == 0 {
+				w.answerLease(r)
+			}
+		}
 	case 12, 20:
 		if r, ok := w.pick(runs(), func(r store.Run) bool { return r.LeaseState == domain.LeasePending }); ok {
 			w.answerLease(r)
@@ -824,6 +852,13 @@ func (w *secretsWorld) step() {
 	case 13:
 		w.e.clock.Advance(domain.Defaults().LeaseAcceptBy + time.Second)
 		w.trace.add("expire")
+		// A daemon beats every few seconds: most stay online across the wait.
+		for _, d := range w.daemons {
+			if w.rng.IntN(4) != 0 {
+				w.trace.add("beat %s g%d seq %d", d.name, d.gen, d.seq+1)
+				_ = w.beat(d, d.heartbeat())
+			}
+		}
 		_, err := w.e.app.Leases.SweepExpired(ctx)
 		must(w.t, err)
 	case 14, 15, 21:
@@ -867,7 +902,7 @@ func (w *secretsWorld) step() {
 		}
 	}
 	switch action {
-	case 2, 3, 5, 7: // what a heartbeat moves
+	case 2, 3, 5, 7, 13: // what a heartbeat moves
 		w.checkView(fmt.Sprintf("after action %d", len(*w.trace)))
 	}
 }

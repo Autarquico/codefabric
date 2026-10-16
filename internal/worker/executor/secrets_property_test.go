@@ -47,6 +47,9 @@ import (
 // step that was running unwinds, and the world restarts the daemon.
 type crash struct{ at string }
 
+// maxTasksOfWorld bounds the Tasks a seed creates.
+const maxTasksOfWorld = 8
+
 // secretRefsOfWorld are the refs the catalog of the Worker may hold.
 var secretRefsOfWorld = []string{"gh/token", "api/key", "npm/token"}
 
@@ -146,7 +149,7 @@ type secretWorld struct {
 	reads     int
 
 	holds     map[state.Key]func() // captures that are draining
-	delivered map[state.Key]bool   // Runs whose delivery was seen
+	seen      map[state.Key]bool   // Runs whose delivery was seen
 	corrupt   map[state.Key]bool   // Runs whose manifest the test broke
 	forgotten map[state.Key]bool   // Runs a state.db that was lost knew
 	guarded   int                  // sealings and pushes checked against the values
@@ -159,7 +162,7 @@ func newSecretWorld(t *testing.T, seed uint64) *secretWorld {
 	w := newWorld(t, seed)
 	s := &secretWorld{
 		world: w, allow: map[string]bool{}, values: map[string]bool{},
-		holds: map[state.Key]func(){}, delivered: map[state.Key]bool{}, corrupt: map[state.Key]bool{}, keys: map[state.Key]bool{},
+		holds: map[state.Key]func(){}, seen: map[state.Key]bool{}, corrupt: map[state.Key]bool{}, keys: map[state.Key]bool{},
 		forgotten: map[state.Key]bool{},
 	}
 	s.store = newFakeStore(nil)
@@ -216,7 +219,12 @@ func (s *secretWorld) restart(loseState bool) {
 		}
 	}
 	// The recovery prepares Runs too, so the daemon may die again in it.
-	for s.recovered(func() { s.world.restart(loseState) }) {
+	for {
+		var crashed bool
+		s.releasing("in the recovery", func() { crashed = s.recovered(func() { s.world.restart(loseState) }) })
+		if !crashed {
+			break
+		}
 		s.log = append(s.log, "crash in the recovery")
 		loseState = false
 	}
@@ -455,7 +463,7 @@ func (s *secretWorld) release() {
 		s.rt.onList = func() { panic(crash{at: "in the release"}) }
 		defer func() { s.rt.onList = nil }()
 	}
-	s.crashable(func() { s.f.e.releaseQueued(s.t.Context()) })
+	s.releasing("in the release", func() { s.crashable(func() { s.f.e.releaseQueued(s.t.Context()) }) })
 }
 
 func (s *secretWorld) janitor() {
@@ -463,7 +471,7 @@ func (s *secretWorld) janitor() {
 		s.rt.onList = func() { panic(crash{at: "in the janitor"}) }
 		defer func() { s.rt.onList = nil }()
 	}
-	s.crashable(func() { _ = s.f.e.sweepSecrets(s.t.Context()) })
+	s.releasing("in the janitor", func() { s.crashable(func() { _ = s.f.e.sweepSecrets(s.t.Context()) }) })
 }
 
 func (s *secretWorld) knownKeys() []state.Key {
@@ -480,30 +488,66 @@ func (s *secretWorld) knownKeys() []state.Key {
 	})
 }
 
+// needs says why the Run k still needs its values to sanitise: its capture
+// is draining, or its publication is not final; "" if it does not. A Run
+// whose manifest the test broke, or that a lost state.db knew, is left out.
+func (s *secretWorld) needs(k state.Key) string {
+	if s.corrupt[k] || s.forgotten[k] {
+		return ""
+	}
+	if s.holds[k] != nil {
+		return "its capture is held"
+	}
+	p, err := state.PublicationOf(s.t.Context(), s.f.db.Reader(), k)
+	if err == nil && p.State != state.PubPublished && p.State != state.PubFailed {
+		return fmt.Sprintf("its publication is %q", p.State)
+	}
+	return ""
+}
+
+// delivered says whether the values of the Run k are in its directory.
+func (s *secretWorld) delivered(k state.Key) bool {
+	_, err := secretjit.Load(s.f.runDir(k))
+	return err == nil
+}
+
+// releasing runs fn, which may release secrets, and checks W2 where the
+// release decides rather than after a whole step, in which a publication may
+// fail closed for want of its values and so look final: every delivery a Run
+// needed when fn began, and still needs when it ends, is still there. A pass of
+// the release changes nothing a Run needs its values for, so a delivery gone
+// across it was released while it was needed.
+func (s *secretWorld) releasing(what string, fn func()) {
+	s.t.Helper()
+	var needed []state.Key
+	for _, k := range s.knownKeys() {
+		if s.needs(k) != "" && s.delivered(k) {
+			needed = append(needed, k)
+		}
+	}
+	fn()
+	for _, k := range needed {
+		if why := s.needs(k); why != "" && !s.delivered(k) {
+			s.t.Fatalf("W2 %s: the values of %s e%d were released while %s", what, k.RunID, k.LeaseEpoch, why)
+		}
+	}
+}
+
 // check is what holds after every step. W2: the values of a Run stay while
-// it needs them to sanitise, its capture draining or its publication open,
-// whoever releases. W4: no file of the Worker but a delivery holds a value.
+// it needs them to sanitise, whoever releases (and releasing checks it as
+// each release decides). W4: no file of the Worker but a delivery holds a
+// value.
 func (s *secretWorld) check(what string) {
 	s.t.Helper()
-	ctx := s.t.Context()
 	for _, k := range s.knownKeys() {
-		if _, err := secretjit.Load(s.f.runDir(k)); err == nil {
-			s.delivered[k] = true
+		if s.delivered(k) {
+			s.seen[k] = true
 		}
-		if !s.delivered[k] || s.corrupt[k] || s.forgotten[k] {
+		if !s.seen[k] {
 			continue
 		}
-		open := s.holds[k] != nil
-		p, err := state.PublicationOf(ctx, s.f.db.Reader(), k)
-		if err == nil && p.State != state.PubPublished && p.State != state.PubFailed {
-			open = true
-		}
-		if !open {
-			continue
-		}
-		if _, err := secretjit.Load(s.f.runDir(k)); err != nil {
-			s.t.Fatalf("W2 %s: the values of %s e%d are gone while it needs them (capture held %v, publication %q): %v",
-				what, k.RunID, k.LeaseEpoch, s.holds[k] != nil, p.State, err)
+		if why := s.needs(k); why != "" && !s.delivered(k) {
+			s.t.Fatalf("W2 %s: the values of %s e%d are gone while %s", what, k.RunID, k.LeaseEpoch, why)
 		}
 	}
 	s.noValueOutside(what, true)
@@ -584,6 +628,12 @@ func (s *secretWorld) step(i int) {
 			s.restart(s.rng.IntN(4) == 0)
 		}
 	case 10:
+		// Work keeps coming: a seed whose Tasks all ended early (an offer that
+		// expired, a cancel) would otherwise have nothing left to prepare.
+		if !slices.ContainsFunc(s.runs(), func(r store.Run) bool { return !r.State.IsTerminal() }) && len(s.tasks) < maxTasksOfWorld {
+			s.createTask()
+			s.log = append(s.log, "task")
+		}
 		_, err := s.ctrl.app.Scheduler.Pass(ctx)
 		must(s.t, err)
 	case 11:
@@ -620,7 +670,8 @@ func (s *secretWorld) step(i int) {
 }
 
 // drain lets everything finish: the catalog and the allowlist hold every ref
-// again, every capture closes, no answer is lost, and every harness ends.
+// again, every capture closes, no answer is lost, one more Task comes, and
+// every harness ends.
 // Then W3: no delivery is left in any run directory, and no value anywhere.
 func (s *secretWorld) drain() {
 	ctx := s.t.Context()
@@ -637,6 +688,9 @@ func (s *secretWorld) drain() {
 		release()
 		delete(s.holds, k)
 	}
+	// One Task more, so that every seed takes at least one Run with secrets
+	// through its whole life: grant, delivery, harness, sealing, push, release.
+	s.createTask()
 	settled := false
 	for range 60 {
 		s.heartbeat()
@@ -660,7 +714,7 @@ func (s *secretWorld) drain() {
 		s.flush(false)
 		_, err = s.ctrl.app.Scheduler.Pass(ctx)
 		must(s.t, err)
-		s.f.e.releaseQueued(ctx)
+		s.releasing("in the drain", func() { s.f.e.releaseQueued(ctx) })
 		if s.quiet() {
 			s.reconcile(false)
 			s.publish(false)
@@ -676,8 +730,10 @@ func (s *secretWorld) drain() {
 		s.dump()
 		s.t.Fatalf("no convergence after the drain; actions %v", s.log)
 	}
-	s.f.e.releaseQueued(ctx)
-	must(s.t, s.f.e.sweepSecrets(ctx))
+	s.releasing("after the drain", func() {
+		s.f.e.releaseQueued(ctx)
+		must(s.t, s.f.e.sweepSecrets(ctx))
+	})
 	runs := filepath.Join(s.f.paths.WorkerDataDir(), "runs")
 	entries, _ := os.ReadDir(runs)
 	for _, e := range entries {
