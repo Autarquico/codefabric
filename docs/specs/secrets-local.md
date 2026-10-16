@@ -32,7 +32,7 @@ Owner previsto en el bucle Develop: backend-eng.
 **Entra** (alcance recortado por decisión del usuario el 2026-10-16: núcleo mínimo):
 - Secrets como variables de entorno del harness (`Launch.SecretEnv` de #18), backend `internal/adapters/secrets/file`
 - Metadata (refs, nunca valores) al Controller por heartbeat, con fencing de la generación del daemon
-- Allowlist por Project y política mínima del Worker; grant del Controller con audit de cada ref (también las denegaciones); migración `0203_secrets.sql`
+- Allowlist por Project y política mínima del Worker; grant del Controller con audit de cada ref (también las denegaciones); migración `0201_secrets.sql`
 - Entrega just-in-time en `runs/<run>-e<epoch>/secrets/` (`0600`), con liberación recuperable tras crash
 - `internal/support/redact`: redacción en streaming tolerante a cortes entre chunks, en headless e interactive
 - Guard obligatorio en la publicación: ningún valor llega al relay

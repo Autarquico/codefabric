@@ -28,7 +28,7 @@ Owner previsto en el bucle Develop: backend-eng y frontend-eng.
 
 **Entra:**
 - `internal/app/workflows`: versiones con CAS sobre parent, refs `@N|@latest|@sha256`
-- Migración `0201_workflows.sql`; manifest con `schema_version`, componentes con digest y ownership
+- Migración `0202_workflows.sql`; manifest con `schema_version`, componentes con digest y ownership
 - `internal/client/workflowadopt` (en el cliente): snapshot, escáner de secretos, subida de blobs, commit
 - Endpoints de workflows y blobs
 - CLI: `cf workflow list|show|adopt|commit [--rebase]|history`, con checklist interactivo y flags equivalentes

@@ -31,7 +31,7 @@ Owner previsto en el bucle Develop: backend-eng.
 
 **Entra:**
 - `internal/app/workflows`: apply como operación durable, drift, explain, `configlock`
-- Migración `0202`: `worker_workflow_state`, `config_locks(worker, harness, config_key, holders, apply_pending)`
+- Migración `0203_workflow_state.sql`: `worker_workflow_state`, `config_locks(worker, harness, config_key, holders, apply_pending)`
 - Worker: mutex por harness; `ApplyConfig` respeta ownership (`managed` se sobrescribe, `local` nunca)
 - CLI: `cf workflow status|diff|apply|rollback|explain|sync` (sync solo a Workers online)
 
