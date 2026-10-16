@@ -23,6 +23,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/support/envutil"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/host"
@@ -230,13 +231,14 @@ func (d *daemon) runtimeAndHarnesses(ctx context.Context, o Options) (cfruntime.
 }
 
 // host is the machine the harnesses run on: this one, with the home and the
-// environment of the daemon.
+// environment of the daemon, without the tmux it may run in, as the harness
+// itself has it.
 func (d *daemon) host() (harness.Host, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	return localhost.New(localhost.Options{Home: home, Env: os.Environ(), Clock: d.clock})
+	return localhost.New(localhost.Options{Home: home, Env: envutil.WithoutTmux(os.Environ()), Clock: d.clock})
 }
 
 // announce detects the adapters and says which this Worker offers: the
