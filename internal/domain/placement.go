@@ -18,4 +18,5 @@ type Placement struct {
 	Prefer       []string // Worker names, in order of preference
 	Avoid        []string
 	Require      []string
+	Secrets      []string // refs the Run uses, sorted: the Worker must hold every one
 }

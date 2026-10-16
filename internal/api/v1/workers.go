@@ -47,8 +47,15 @@ type Health struct {
 // HeartbeatRequest is POST /v1/worker/heartbeat (§5.3). It carries no Worker
 // ID: the Controller knows the Worker from the certificate. Epoch is the ULID
 // of this run of the daemon.
+//
+// Generation orders the runs of the daemon of this Worker: each sends a higher
+// one than the run before it, and the Controller refuses a heartbeat with a
+// Generation lower than the last it took, so a late heartbeat of a daemon that
+// was replaced cannot undo what its successor said. 0 is a daemon that
+// predates it, and is not fenced.
 type HeartbeatRequest struct {
 	Epoch         string   `json:"epoch"`
+	Generation    uint64   `json:"generation,omitempty"`
 	DaemonVersion string   `json:"daemon_version"`
 	Hostname      string   `json:"hostname"`
 	OS            string   `json:"os"`
@@ -62,6 +69,10 @@ type HeartbeatRequest struct {
 	// a non-interactive ssh session has a PATH of its own.
 	SSHTarget      string            `json:"ssh_target,omitempty"`
 	AttachBinaries map[string]string `json:"attach_binaries,omitempty"`
+	// Secrets is every secret the daemon holds, as metadata. A daemon that
+	// knows of secrets always sends it; nil is one that predates them and
+	// holds none.
+	Secrets *SecretsReport `json:"secrets,omitempty"`
 }
 
 // HeartbeatResponse tells the daemon the state the Controller holds it in.
@@ -106,6 +117,8 @@ type Worker struct {
 	// SSHTarget and AttachBinaries are what the Worker announced for `cf attach`.
 	SSHTarget      string            `json:"ssh_target,omitempty"`
 	AttachBinaries map[string]string `json:"attach_binaries,omitempty"`
+	// Secrets are the secrets the Worker last said it holds, sorted by ref.
+	Secrets []SecretMeta `json:"secrets,omitempty"`
 }
 
 // ListWorkersResponse is GET /v1/workers.

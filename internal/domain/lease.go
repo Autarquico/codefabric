@@ -27,9 +27,11 @@ const (
 const LeaseMissBackoff = 10 * time.Second
 
 // ValidLeaseRejectCode reports whether a Worker may reject a lease with code.
+// A Worker rejects with CF_SECRET_UNAVAILABLE a Run that uses a secret it does
+// not hold, and with CF_POLICY_DENIED one whose Project it does not hold it for.
 func ValidLeaseRejectCode(code Code) bool {
 	switch code {
-	case CodeWorkerCapacity, CodeHarnessUnavailable, CodeVersionIncompatible:
+	case CodeWorkerCapacity, CodeHarnessUnavailable, CodeVersionIncompatible, CodeSecretUnavailable, CodePolicyDenied:
 		return true
 	}
 	return false

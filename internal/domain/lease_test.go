@@ -5,6 +5,7 @@ import "testing"
 func TestValidLeaseRejectCode(t *testing.T) {
 	for code, want := range map[Code]bool{
 		CodeWorkerCapacity: true, CodeHarnessUnavailable: true, CodeVersionIncompatible: true,
+		CodeSecretUnavailable: true, CodePolicyDenied: true,
 		CodeStaleLease: false, CodeInternal: false, "": false,
 	} {
 		if got := ValidLeaseRejectCode(code); got != want {
