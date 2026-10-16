@@ -232,3 +232,27 @@ func TestByDefaultARunOfAnIsolatedHarnessGetsAnEmptyConfiguration(t *testing.T) 
 		t.Errorf("config.json = %s (%v)", raw, err)
 	}
 }
+
+func TestARunAcceptedBeforeARestartRunsWithAHarnessThatIsNoLongerOffered(t *testing.T) {
+	f := newFixture(t, func(o *Options) { o.Harnesses = registry(t, command.Adapter{}, isolated) })
+	k := f.acceptedSpec(fakeSpec("do it", ""))
+	// The daemon died; when it came back, detecting the harness failed.
+	f.opts.Withheld = []string{fakeharness.DefaultID}
+	f.restart("01J0000000000000000000000E2")
+	if f.e.step(t.Context(), k) {
+		t.Fatalf("the Run ended: %+v", f.reports(k))
+	}
+	if got := f.run(k).Phase; got != state.PhaseRunning || f.rt.startCount() != 1 {
+		t.Errorf("phase = %s, %d starts", got, f.rt.startCount())
+	}
+	// A new Run of that harness is not taken.
+	n := f.assign(fakeSpec("again", ""))
+	f.e.decideOnce(t.Context())
+	if len(f.ctrl.rejected) != 1 || f.ctrl.rejected[0].Code != domain.CodeHarnessUnavailable ||
+		f.ctrl.rejected[0].Message != `this Worker has no harness "fake"` {
+		t.Errorf("rejected = %+v", f.ctrl.rejected)
+	}
+	if got := f.run(n).Phase; got != state.PhaseRejected {
+		t.Errorf("the new Run is %s", got)
+	}
+}

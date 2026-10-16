@@ -161,7 +161,7 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	if len(adapters) > 0 {
-		if eo.Harnesses, d.capabilities, err = d.announce(ctx, eo.Host, adapters); err != nil {
+		if eo.Harnesses, eo.Withheld, d.capabilities, err = d.announce(ctx, eo.Host, adapters); err != nil {
 			return err
 		}
 	}
@@ -241,34 +241,30 @@ func (d *daemon) host() (harness.Host, error) {
 	return localhost.New(localhost.Options{Home: home, Env: envutil.WithoutTmux(os.Environ()), Clock: d.clock})
 }
 
-// announce detects the adapters and says which this Worker offers: the
-// registry of the executor has only those, and the capabilities announce
-// them with their modes.
-func (d *daemon) announce(ctx context.Context, h harness.Host, adapters []harness.Adapter) (*harness.Registry, []string, error) {
-	all, err := harness.NewRegistry(adapters...)
-	if err != nil {
-		return nil, nil, err
+// announce detects the adapters and says which this Worker offers. The
+// executor gets all of them, so that a Run it accepted before a restart runs
+// with its adapter even if detecting it failed now; it withholds the rest
+// from new assignments. The capabilities announce the offered ones with their
+// modes.
+func (d *daemon) announce(ctx context.Context, h harness.Host, adapters []harness.Adapter) (reg *harness.Registry, withheld, capabilities []string, err error) {
+	if reg, err = harness.NewRegistry(adapters...); err != nil {
+		return nil, nil, nil, err
 	}
-	ann := host.Announce(ctx, h, all, runtimeModes)
-	var offered []harness.Adapter
+	ann := host.Announce(ctx, h, reg, runtimeModes)
 	for _, found := range ann.Harnesses {
 		attrs := []any{"harness", found.ID, "status", found.Status, "modes", found.Modes}
 		switch found.Status {
 		case host.Offered:
-			a, _ := all.Get(found.ID)
-			offered = append(offered, a)
 			d.log.InfoContext(ctx, "harness offered", append(attrs, "path", found.Path)...)
+			continue
 		case host.DetectFailed:
 			d.log.WarnContext(ctx, "harness not offered: detecting it failed", append(attrs, "err", found.Err)...)
 		default:
 			d.log.InfoContext(ctx, "harness not offered", attrs...)
 		}
+		withheld = append(withheld, found.ID)
 	}
-	reg, err := harness.NewRegistry(offered...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return reg, ann.Capabilities, nil
+	return reg, withheld, ann.Capabilities, nil
 }
 
 type daemon struct {

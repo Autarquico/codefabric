@@ -69,8 +69,12 @@ type Options struct {
 	Controller Controller
 	Runtime    cfruntime.Runtime
 	Journal    *journal.Journal
-	// Harnesses are the adapters this Worker runs Runs with; nil is none.
+	// Harnesses are the adapters this Worker runs Runs with; nil is none. A
+	// Run it accepted runs with its adapter whether or not it is offered now.
 	Harnesses *harness.Registry
+	// Withheld are the IDs of Harnesses this Worker does not offer: it rejects
+	// new assignments for them and still runs the Runs it already accepted.
+	Withheld []string
 	// Host is the machine the adapters prepare Runs on. It is required when
 	// Harnesses has any.
 	Host harness.Host
@@ -119,6 +123,7 @@ type Limits struct {
 type Executor struct {
 	o         Options
 	harnesses *harness.Registry
+	withheld  map[string]bool
 	// materializer writes the configuration of a Run into its directory, on
 	// Host; nil without one.
 	materializer *host.Materializer
@@ -213,6 +218,10 @@ func New(o Options) (*Executor, error) {
 	}
 	if e.harnesses == nil {
 		e.harnesses, _ = harness.NewRegistry()
+	}
+	e.withheld = make(map[string]bool, len(o.Withheld))
+	for _, id := range o.Withheld {
+		e.withheld[id] = true
 	}
 	if len(e.harnesses.IDs()) > 0 && e.o.Host == nil {
 		return nil, errors.New("executor: a Host is required to run harnesses")
