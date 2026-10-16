@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"time"
 
@@ -114,13 +115,18 @@ func (s *Service) Pass(ctx context.Context) (Result, error) {
 // A Run whose spec cannot be read is one that none could take, and a problem.
 func (s *Service) plan(ctx context.Context) (candidates, waiting []store.Run, problems []error, err error) {
 	var (
-		queue   []store.Run
+		queue   []queuedRun
 		workers []store.Worker
 		misses  []store.Miss
+		held    map[domain.ID][]v1.SecretMeta
 	)
 	now := s.clock.Now()
 	err = s.db.Read(ctx, func(q store.Querier) (err error) {
-		if queue, err = store.QueuedRuns(ctx, q); err != nil {
+		runs, err := store.QueuedRuns(ctx, q)
+		if err != nil {
+			return err
+		}
+		if queue, held, err = readRequests(ctx, q, runs); err != nil {
 			return err
 		}
 		if workers, err = store.Workers(ctx, q, false); err != nil {
@@ -132,20 +138,66 @@ func (s *Service) plan(ctx context.Context) (candidates, waiting []store.Run, pr
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	for _, run := range queue {
-		placement, err := placementOf(run)
-		if err != nil {
-			problems = append(problems, err)
-			waiting = append(waiting, run)
+	for _, queued := range queue {
+		if queued.err != nil {
+			problems = append(problems, queued.err)
+			waiting = append(waiting, queued.run)
 			continue
 		}
-		if Decide(placement, snapshot(workers, misses, run.ID, nil, s.startedAt), now).Chosen != nil {
-			candidates = append(candidates, run)
+		if Decide(queued.req, snapshot(workers, misses, queued.run.ID, nil, held, s.startedAt), now).Chosen != nil {
+			candidates = append(candidates, queued.run)
 		} else {
-			waiting = append(waiting, run)
+			waiting = append(waiting, queued.run)
 		}
 	}
 	return candidates, waiting, problems, nil
+}
+
+// queuedRun is a Run of the queue with what it asks for, or why its spec
+// cannot be read.
+type queuedRun struct {
+	run store.Run
+	req Request
+	err error
+}
+
+// readRequests reads what each queued Run asks for. Only for the Runs that use
+// secrets does it read their Project, its allowlist and, once, what the
+// Workers announced (held); a queue without secrets reads none of it.
+func readRequests(ctx context.Context, q store.Querier, queue []store.Run) ([]queuedRun, map[domain.ID][]v1.SecretMeta, error) {
+	out := make([]queuedRun, len(queue))
+	projectOf := map[domain.ID]domain.ID{} // task → Project, for the Runs with secrets
+	for i, run := range queue {
+		placement, err := placementOf(run)
+		out[i] = queuedRun{run: run, req: Request{Placement: placement}, err: err}
+		if err != nil || len(placement.Secrets) == 0 {
+			continue
+		}
+		if _, ok := projectOf[run.TaskID]; !ok {
+			task, err := store.TaskByID(ctx, q, run.TaskID)
+			if err != nil {
+				return nil, nil, err
+			}
+			projectOf[run.TaskID] = task.ProjectID
+		}
+	}
+	if len(projectOf) == 0 {
+		return out, nil, nil
+	}
+	allowlists, err := store.AllowlistsFor(ctx, q, slices.Compact(slices.Sorted(maps.Values(projectOf))))
+	if err != nil {
+		return nil, nil, err
+	}
+	held, err := store.WorkerSecrets(ctx, q)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range out {
+		if project, ok := projectOf[out[i].run.TaskID]; ok && out[i].err == nil {
+			out[i].req = NewRequest(out[i].req.Placement, project, allowlists[project])
+		}
+	}
+	return out, held, nil
 }
 
 type outcome int
@@ -157,7 +209,8 @@ const (
 )
 
 // decide ranks the Workers for the Run as q shows them: the Workers with their
-// reservations, who missed the Run lately and who already worked for its Project.
+// reservations and secrets, who missed the Run lately and who already worked
+// for its Project, and the Project's allowlist.
 // It returns the Workers it read, so that the chosen one is among them.
 func decide(ctx context.Context, q store.Querier, run store.Run, project domain.ID, placement domain.Placement, now, startedAt time.Time) (Decision, []store.Worker, error) {
 	workers, err := store.Workers(ctx, q, false)
@@ -172,7 +225,29 @@ func decide(ctx context.Context, q store.Querier, run store.Run, project domain.
 	if err != nil {
 		return Decision{}, nil, err
 	}
-	return Decide(placement, snapshot(workers, misses, run.ID, known, startedAt), now), workers, nil
+	req, held, err := requestOf(ctx, q, project, placement)
+	if err != nil {
+		return Decision{}, nil, err
+	}
+	return Decide(req, snapshot(workers, misses, run.ID, known, held, startedAt), now), workers, nil
+}
+
+// requestOf is what the Run asks for. For a Run with secrets it reads the
+// allowlist of its Project and what the Workers announced (held); a Run
+// without secrets reads neither.
+func requestOf(ctx context.Context, q store.Querier, project domain.ID, placement domain.Placement) (Request, map[domain.ID][]v1.SecretMeta, error) {
+	if len(placement.Secrets) == 0 {
+		return Request{Placement: placement}, nil, nil
+	}
+	allowlist, err := store.ProjectAllowlist(ctx, q, project)
+	if err != nil {
+		return Request{}, nil, err
+	}
+	held, err := store.WorkerSecrets(ctx, q)
+	if err != nil {
+		return Request{}, nil, err
+	}
+	return NewRequest(placement, project, allowlist), held, nil
 }
 
 // assign decides and, if a Worker is chosen, creates the lease, in one
@@ -294,9 +369,9 @@ func (s *Service) Run(ctx context.Context, tick time.Duration, log *slog.Logger)
 
 // snapshot is the Workers as the filters and the score read them. misses
 // are those of any Run; only the ones of this Run count. known is the set of
-// Workers that already accepted a Run of the Run's Project, nil when it is
-// not needed.
-func snapshot(workers []store.Worker, misses []store.Miss, run domain.ID, known map[domain.ID]bool, startedAt time.Time) []Worker {
+// Workers that already accepted a Run of the Run's Project, and held the
+// secrets each Worker announced, each nil when it is not needed.
+func snapshot(workers []store.Worker, misses []store.Miss, run domain.ID, known map[domain.ID]bool, held map[domain.ID][]v1.SecretMeta, startedAt time.Time) []Worker {
 	out := make([]Worker, 0, len(workers))
 	for _, w := range workers {
 		c := Worker{
@@ -304,6 +379,7 @@ func snapshot(workers []store.Worker, misses []store.Miss, run domain.ID, known 
 			Allocatable: capacityOf(w.Resources.Allocatable), Reserved: capacityOf(w.Reserved), Reservations: w.Reservations,
 			MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, KnowsProject: known[w.ID],
 			Unreconciled: !startedAt.IsZero() && w.LiveLeases > 0 && !w.ReconciledSince(startedAt),
+			Secrets:      secretsOf(held[w.ID]),
 		}
 		for _, m := range misses {
 			if m.RunID == run && m.WorkerID == w.ID {
@@ -312,6 +388,18 @@ func snapshot(workers []store.Worker, misses []store.Miss, run domain.ID, known 
 			}
 		}
 		out = append(out, c)
+	}
+	return out
+}
+
+// secretsOf maps each ref a Worker announced to the Projects it holds it for.
+func secretsOf(metas []v1.SecretMeta) map[string][]string {
+	if len(metas) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(metas))
+	for _, m := range metas {
+		out[m.Ref] = m.Projects
 	}
 	return out
 }
