@@ -92,7 +92,12 @@ func (g *Git) hardened(args ...string) []string {
 //   - If the captured tree is the parent's, the result is the parent itself.
 //   - Otherwise the commit has the parent, a fixed message and author, and the
 //     date of the intent: it is the same commit every time.
-func (g *Git) Seal(ctx context.Context, worktree string, in Intent) (Sealed, error) {
+//
+// Before any ref points at the result, the guard reads all it brings that the
+// source of the Run did not have (forbidden): if a value of a secret of the Run
+// is in it, or it cannot be read whole, nothing is recorded and the error is a
+// BlockedError. The worktree stays as it is.
+func (g *Git) Seal(ctx context.Context, worktree string, in Intent, forbidden Forbidden) (Sealed, error) {
 	if !domain.ValidCommitID(in.ParentOID) {
 		return Sealed{}, errors.New("gitops: there is no repository to seal: the worktree has no commit")
 	}
@@ -122,6 +127,9 @@ func (g *Git) Seal(ctx context.Context, worktree string, in Intent) (Sealed, err
 	}); err == nil && res.exit == 0 {
 		existing := strings.TrimSpace(res.stdout)
 		if existing == in.ParentOID || g.firstParent(ctx, worktree, existing) == in.ParentOID {
+			if err := g.guard(ctx, in.Project, existing, forbidden); err != nil {
+				return Sealed{}, err
+			}
 			out.Commit = existing
 			return out, g.record(ctx, worktree, in, "", out.Commit)
 		}
@@ -162,6 +170,9 @@ func (g *Git) Seal(ctx context.Context, worktree string, in Intent) (Sealed, err
 		if out.Commit, err = git(cmd{env: commitEnv, args: g.hardened("commit-tree", tree, "-p", in.ParentOID, "-m", "cf: uncommitted changes at exit")}); err != nil {
 			return Sealed{}, err
 		}
+	}
+	if err := g.guard(ctx, in.Project, out.Commit, forbidden); err != nil {
+		return Sealed{}, err
 	}
 	return out, g.record(ctx, worktree, in, ref, out.Commit)
 }

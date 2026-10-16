@@ -49,6 +49,8 @@ type Options struct {
 	GitPath string
 	// PushTimeout replaces the deadline of a push (30 min), for tests.
 	PushTimeout time.Duration
+	// GuardTimeout replaces the deadline of the guard of a publication (10 min), for tests.
+	GuardTimeout time.Duration
 }
 
 // Git runs the git operations of the Worker.

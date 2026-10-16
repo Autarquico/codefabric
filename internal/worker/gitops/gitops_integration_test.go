@@ -215,7 +215,7 @@ func TestSeal_CapturesTheWorktreeAndLeavesItAlone(t *testing.T) {
 	indexBefore := gittest.Run(t, r.worktree, "ls-files", "--stage")
 
 	in := r.intent(parent)
-	got, err := r.g.Seal(t.Context(), r.worktree, in)
+	got, err := r.g.Seal(t.Context(), r.worktree, in, gitops.Forbidden{})
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
@@ -260,12 +260,12 @@ func TestSeal_CapturesTheWorktreeAndLeavesItAlone(t *testing.T) {
 	}
 
 	// Sealing again is the same commit: from the private ref, and without it (the date is the intent's).
-	again, err := r.g.Seal(t.Context(), r.worktree, in)
+	again, err := r.g.Seal(t.Context(), r.worktree, in, gitops.Forbidden{})
 	if err != nil || again.Commit != got.Commit {
 		t.Errorf("second seal = %s (%v), want %s", again.Commit, err, got.Commit)
 	}
 	gittest.Run(t, r.bare(), "update-ref", "-d", gitops.PrivateRef(run, 1))
-	rebuilt, err := r.g.Seal(t.Context(), r.worktree, in)
+	rebuilt, err := r.g.Seal(t.Context(), r.worktree, in, gitops.Forbidden{})
 	if err != nil || rebuilt.Commit != got.Commit {
 		t.Errorf("rebuilt seal = %s (%v), want %s", rebuilt.Commit, err, got.Commit)
 	}
@@ -284,7 +284,7 @@ func TestSeal_NothingToCaptureIsTheParent(t *testing.T) {
 	r := newRig(t)
 	r.prepare()
 	r.write("secret.pem", "x") // matches an exclusion, untracked: nothing captured
-	got, err := r.g.Seal(t.Context(), r.worktree, r.intent(r.source))
+	got, err := r.g.Seal(t.Context(), r.worktree, r.intent(r.source), gitops.Forbidden{})
 	if err != nil || got.Commit != r.source {
 		t.Fatalf("seal = %+v (%v), want the parent %s", got, err, r.source)
 	}
@@ -305,7 +305,7 @@ func TestSeal_ATrackedFileThatMatchesAnExclusionKeepsItsVersionInHEAD(t *testing
 	parent := gittest.Run(t, r.worktree, "rev-parse", "HEAD")
 	r.write("cert.pem", "v2 changed by the agent\n")
 	r.write("code.txt", "real work\n")
-	got, err := r.g.Seal(t.Context(), r.worktree, r.intent(parent))
+	got, err := r.g.Seal(t.Context(), r.worktree, r.intent(parent), gitops.Forbidden{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestSeal_AHeadThatLeftTheBranchIsSealedOnItsOwnParent(t *testing.T) {
 	gittest.Run(t, r.worktree, "commit", "--quiet", "-m", "detached work")
 	parent := gittest.Run(t, r.worktree, "rev-parse", "HEAD")
 	r.write("more.txt", "m\n")
-	got, err := r.g.Seal(t.Context(), r.worktree, r.intent(parent))
+	got, err := r.g.Seal(t.Context(), r.worktree, r.intent(parent), gitops.Forbidden{})
 	if err != nil || gittest.Run(t, r.bare(), "rev-parse", got.Commit+"^") != parent {
 		t.Fatalf("seal = %+v (%v)", got, err)
 	}
@@ -365,7 +365,7 @@ func TestScenario_GitRelayPublication_SelladoFallido_Git(t *testing.T) {
 			_ = os.Chmod(d, 0o700) //nolint:gosec // so the temporary directory can be removed
 		}
 	})
-	_, err := r.g.Seal(t.Context(), r.worktree, r.intent(r.source))
+	_, err := r.g.Seal(t.Context(), r.worktree, r.intent(r.source), gitops.Forbidden{})
 	if err == nil {
 		t.Fatal("sealing succeeded on a repository that takes no objects")
 	}
@@ -391,7 +391,7 @@ func TestSeal_NoRepositoryIsAnError(t *testing.T) {
 	if _, err := r.g.Head(t.Context(), r.worktree); err == nil {
 		t.Error("an empty directory has a HEAD")
 	}
-	if _, err := r.g.Seal(t.Context(), r.worktree, r.intent("")); err == nil {
+	if _, err := r.g.Seal(t.Context(), r.worktree, r.intent(""), gitops.Forbidden{}); err == nil {
 		t.Error("an empty directory was sealed")
 	}
 }
@@ -477,7 +477,7 @@ func TestPush_ClassifiesWhatTheRelayDoesAndNeverLeaksTheToken(t *testing.T) {
 		stub := newStub(t, tc.status)
 		err := r.g.Push(t.Context(), project, r.source, branch, gitops.PushAuth{
 			URL: stub.srv.URL + "/v1/relay/" + project + ".git", Token: token, Cert: stub.cert, Key: stub.key, CA: stub.ca,
-		})
+		}, gitops.Forbidden{})
 		pe, ok := err.(*gitops.PushError) //nolint:errorlint // the concrete type is what is under test
 		if !ok || pe.Class != tc.want {
 			t.Errorf("%s: %v, want class %d", name, err, tc.want)
@@ -521,7 +521,7 @@ func TestPush_ClassifiesWhatTheRelayDoesAndNeverLeaksTheToken(t *testing.T) {
 	_ = cfgFile.Close()
 	err = r.g.Push(t.Context(), project, r.source, branch, gitops.PushAuth{
 		URL: untrusted.srv.URL + "/p.git", Token: token, Cert: untrusted.cert, Key: untrusted.key, CA: untrusted.cert,
-	})
+	}, gitops.Forbidden{})
 	if pe, ok := err.(*gitops.PushError); !ok || pe.Class != gitops.PushPermanent { //nolint:errorlint // the concrete type is under test
 		t.Errorf("verification was turned off by the repository: %v", err)
 	}
@@ -536,7 +536,7 @@ func TestPush_ClassifiesWhatTheRelayDoesAndNeverLeaksTheToken(t *testing.T) {
 	trusted := newStub(t, http.StatusUnauthorized)
 	_ = r.g.Push(t.Context(), project, r.source, branch, gitops.PushAuth{
 		URL: trusted.srv.URL + "/p.git", Token: token, Cert: trusted.cert, Key: trusted.key, CA: trusted.ca,
-	})
+	}, gitops.Forbidden{})
 	if _, err := os.Stat(helperRan); err == nil {
 		t.Error("a credential helper of the repository ran")
 	}
@@ -552,12 +552,12 @@ func TestPush_ClassifiesWhatTheRelayDoesAndNeverLeaksTheToken(t *testing.T) {
 	other := stub // a CA that did not sign the certificate of the server
 	err = r.g.Push(t.Context(), project, r.source, branch, gitops.PushAuth{
 		URL: stub.srv.URL + "/p.git", Token: token, Cert: stub.cert, Key: stub.key, CA: other.cert,
-	})
+	}, gitops.Forbidden{})
 	if pe, ok := err.(*gitops.PushError); !ok || pe.Class != gitops.PushPermanent { //nolint:errorlint // the concrete type is under test
 		t.Errorf("an untrusted certificate: %v", err)
 	}
 	// Invalid input never reaches git.
-	if err := r.g.Push(t.Context(), project, "--force", branch, gitops.PushAuth{URL: "https://x", Token: token, Cert: "c", Key: "k", CA: "a"}); err == nil {
+	if err := r.g.Push(t.Context(), project, "--force", branch, gitops.PushAuth{URL: "https://x", Token: token, Cert: "c", Key: "k", CA: "a"}, gitops.Forbidden{}); err == nil {
 		t.Error("a bad commit was pushed")
 	}
 }
@@ -570,7 +570,7 @@ func TestSeal_APrivateRefOfAnotherIntentIsNotTheResult(t *testing.T) {
 	stray := gittest.Run(t, r.origin, "commit-tree", "-m", "stray", gittest.Run(t, r.origin, "rev-parse", "HEAD^{tree}"))
 	gittest.Run(t, r.bare(), "fetch", "--quiet", r.origin, stray)
 	gittest.Run(t, r.bare(), "update-ref", gitops.PrivateRef(run, 1), stray)
-	got, err := r.g.Seal(t.Context(), r.worktree, r.intent(r.source))
+	got, err := r.g.Seal(t.Context(), r.worktree, r.intent(r.source), gitops.Forbidden{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -607,7 +607,7 @@ func TestSeal_HonoursTheGlobalIgnoreFileOfTheUserAndNeverSigns(t *testing.T) {
 	r.prepare()
 	r.write("notes.scratch", "ignored only globally\n")
 	r.write("real.txt", "real\n")
-	got, err := g.Seal(t.Context(), r.worktree, r.intent(r.source))
+	got, err := g.Seal(t.Context(), r.worktree, r.intent(r.source), gitops.Forbidden{})
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
@@ -644,7 +644,7 @@ func TestPush_ADeadlineIsUnreachableSpendsNoAttemptAndKillsTheGroup(t *testing.T
 	start := time.Now()
 	err = g.Push(t.Context(), project, strings.Repeat("a", 40), branch, gitops.PushAuth{
 		URL: stub.srv.URL + "/p.git", Token: "tok-0123456789abcdef", Cert: stub.cert, Key: stub.key, CA: stub.ca,
-	})
+	}, gitops.Forbidden{})
 	pe, ok := err.(*gitops.PushError) //nolint:errorlint // the concrete type is under test
 	if !ok || pe.Class != gitops.PushUnreachable || pe.Counts() {
 		t.Fatalf("a push that hit its deadline: %v", err)

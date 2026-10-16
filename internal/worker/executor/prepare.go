@@ -21,10 +21,12 @@ import (
 type Git interface {
 	Prepare(ctx context.Context, s gitops.PrepareSpec, worktree string) error
 	Head(ctx context.Context, worktree string) (string, error)
-	Seal(ctx context.Context, worktree string, in gitops.Intent) (gitops.Sealed, error)
-	Push(ctx context.Context, project, commit, branch string, a gitops.PushAuth) error
+	// Seal, Push and PushRef take the values the result must not carry
+	// (gitops.Forbidden), in memory, apart from what is stored.
+	Seal(ctx context.Context, worktree string, in gitops.Intent, forbidden gitops.Forbidden) (gitops.Sealed, error)
+	Push(ctx context.Context, project, commit, branch string, a gitops.PushAuth, forbidden gitops.Forbidden) error
 	// PushRef pushes to a full ref; the ref of an orphan is only ever created.
-	PushRef(ctx context.Context, project, commit, ref string, a gitops.PushAuth) error
+	PushRef(ctx context.Context, project, commit, ref string, a gitops.PushAuth, forbidden gitops.Forbidden) error
 }
 
 // RelayTLS are the PEM files git presents and trusts when it pushes: the
