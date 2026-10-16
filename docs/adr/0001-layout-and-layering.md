@@ -42,6 +42,10 @@ Layering is enforced with depguard in `.golangci.yml`:
 - `cli` (tests excepted): only `client`, `api/v1`, `domain`, `config`, `buildinfo` and `cobra`/`x/sys` among the packages of the module and its dependencies. The terminal of `cf attach` comes from `cmd/cf` through `cli.Options`.
 - `worker/outputship` (tests excepted): no `executor`; it reaches the Controller through an interface the SDK satisfies.
 - `controller/relay` (tests excepted): no `app`, `controller/api` or `controller/store`; the use cases reach it through a port (`runs.Relay`). `worker/gitops` (tests excepted): no `executor`, `state` or `client`; the executor reaches it through a port (`executor.Git`).
+- `testutil` and `adapters/harness/harnesstest` are for tests: no production code imports them. `harnesstest` (tests excepted) imports no `worker`, `app`, `controller` or `testutil`.
+- `adapters/harness`, the port itself (tests excepted): none of its implementations (`localhost`, `command`, `harnesstest`).
+- `worker/host` (tests excepted): no `executor`, `state` or `client`; the executor calls it, never the other way round.
+- `support/treedigest` (tests excepted): the standard library only; `treedigest/v1` is a format.
 
 The daemon commands (`cf controller run`, `cf worker run`) need the Controller and Worker packages. They are wired in `cmd/cf`, which composes the client command tree from `internal/cli` with daemon commands exposed by `internal/controller` and `internal/worker`. `internal/cli` stays a pure client.
 
