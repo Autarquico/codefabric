@@ -422,8 +422,23 @@ func validateNew(req v1.CreateTaskRequest) error {
 	return input.First(
 		name, ref, resolved, validatePrompt(req.Prompt), input.Mode(req.Mode), input.Completion(req.Completion),
 		input.Label("workflow", req.Workflow), input.Label("environment", req.Environment),
-		input.Requirements(req.Requirements), input.Retry(req.Retry), validateStart(req),
+		input.Requirements(req.Requirements), validateSecretEnv(req.Requirements.SecretEnv),
+		input.Retry(req.Retry), validateStart(req),
 	)
+}
+
+// validateSecretEnv: the variables that carry a secret are names the Worker
+// and the shell do not own, each once, with an exact ref. Whether the Project
+// allows a ref is the scheduler's and the grant's to say, at the time they act.
+func validateSecretEnv(env []v1.SecretEnv) error {
+	vars := make([]domain.SecretEnv, 0, len(env))
+	for _, e := range env {
+		vars = append(vars, domain.SecretEnv(e))
+	}
+	if err := domain.CheckSecretEnv(vars); err != nil {
+		return input.Invalid("requirements.secret_env: %s", strings.TrimPrefix(err.Error(), domain.ErrInvalidSecret.Error()+": "))
+	}
+	return nil
 }
 
 func validatePrompt(prompt string) error {

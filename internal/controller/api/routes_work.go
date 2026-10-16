@@ -22,6 +22,9 @@ func (s *Server) registerWorkRoutes() {
 	s.handle("GET /v1/projects", clientsOnly, s.listProjects)
 	s.handle("GET /v1/projects/{ref}", clientsOnly, s.getProject)
 	s.handle("PATCH /v1/projects/{ref}", clientsOnly, s.setProject)
+	s.handle("GET /v1/projects/{ref}/secrets", clientsOnly, s.projectSecrets)
+	s.handle("POST /v1/projects/{ref}/secrets/allow", clientsOnly, editProjectSecrets(s.work.Projects.AllowSecrets))
+	s.handle("POST /v1/projects/{ref}/secrets/deny", clientsOnly, editProjectSecrets(s.work.Projects.DenySecrets))
 
 	s.handle("POST /v1/tasks", clientsOnly, s.createTask)
 	s.handle("GET /v1/tasks", clientsOnly, s.listTasks)
@@ -84,6 +87,33 @@ func (s *Server) setProject(w http.ResponseWriter, r *http.Request, c caller) er
 	}
 	writeJSON(w, http.StatusOK, p)
 	return nil
+}
+
+func (s *Server) projectSecrets(w http.ResponseWriter, r *http.Request, _ caller) error {
+	out, err := s.work.Projects.Secrets(r.Context(), r.PathValue("ref"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+type projectSecretsFunc = func(ctx context.Context, by pki.Session, ref string, req v1.ProjectSecretsRequest) (v1.ProjectSecrets, error)
+
+// editProjectSecrets serves a change to the allowlist of a Project.
+func editProjectSecrets(edit projectSecretsFunc) handlerFunc {
+	return func(w http.ResponseWriter, r *http.Request, c caller) error {
+		var req v1.ProjectSecretsRequest
+		if err := decodeBody(w, r, &req); err != nil {
+			return err
+		}
+		out, err := edit(r.Context(), c.Session, r.PathValue("ref"), req)
+		if err != nil {
+			return err
+		}
+		writeJSON(w, http.StatusOK, out)
+		return nil
+	}
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request, c caller) error {
