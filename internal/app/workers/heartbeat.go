@@ -40,6 +40,10 @@ const (
 // means the daemon restarted (WorkerRestarted, at most one per
 // WorkerHeartbeatInterval, so a daemon cannot flood the event store). A
 // draining Worker with no Runs left becomes drained.
+//
+// The generation of the daemon fences all of it (see fence): a heartbeat of a
+// daemon that was replaced is refused whole, so it can neither bring back its
+// epoch nor its secrets. The secrets it reports replace those the Worker had.
 func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.HeartbeatRequest) (v1.HeartbeatResponse, error) {
 	if err := validateHeartbeat(req); err != nil {
 		return v1.HeartbeatResponse{}, err
@@ -53,7 +57,22 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 			if err != nil {
 				return v1.HeartbeatResponse{}, err
 			}
+			current, fenced, err := store.WorkerSecretsFence(ctx, tx, w.ID)
+			if err != nil {
+				return v1.HeartbeatResponse{}, err
+			}
+			// Before anything is applied: a retired daemon changes nothing, not even the epoch.
+			verdict, err := fence(current, fenced, req)
+			if err != nil {
+				return v1.HeartbeatResponse{}, err
+			}
+			if verdict == fenceDowngraded {
+				req.Health = downgradedHealth(current.Generation)
+			}
 			if err := s.applyHeartbeat(ctx, tx, act, &w, req); err != nil {
+				return v1.HeartbeatResponse{}, err
+			}
+			if err := syncSecrets(ctx, tx, act, w, req, verdict); err != nil {
 				return v1.HeartbeatResponse{}, err
 			}
 			report := store.WorkerReport{
@@ -195,6 +214,7 @@ func validateHeartbeat(req v1.HeartbeatRequest) error {
 			checks = append(checks, input.Invalid("capabilities cannot be empty"))
 		}
 	}
+	checks = append(checks, validateSecrets(req))
 	return input.First(checks...)
 }
 

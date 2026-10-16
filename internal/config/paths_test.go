@@ -86,6 +86,16 @@ func TestWorkerCredentialsAreApartFromTheClients(t *testing.T) {
 	}
 }
 
+func TestWorkerSecretsLiveInTheWorkersPrivateConfigNextToItsCredentials(t *testing.T) {
+	p := Paths{ConfigDir: "/cfg", DataDir: "/data"}
+	if got, want := p.WorkerSecretsFile(), "/cfg/worker/secrets.json"; got != want {
+		t.Errorf("WorkerSecretsFile = %q, want %q", got, want)
+	}
+	if filepath.Dir(p.WorkerSecretsFile()) != filepath.Dir(p.WorkerCredentialsDir()) {
+		t.Error("the catalog is not in the private directory of the Worker")
+	}
+}
+
 func TestControllerConfigWorkerOfflineTTL(t *testing.T) {
 	p := Paths{ConfigDir: t.TempDir(), DataDir: t.TempDir()}
 	want := Controller{Listen: "0.0.0.0:7443", Advertise: "ctl:7443", WorkerOfflineTTL: Duration(90 * time.Second)}

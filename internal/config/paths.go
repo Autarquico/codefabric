@@ -28,6 +28,13 @@ func (p Paths) WorkerCredentialsDir() string {
 	return filepath.Join(p.ConfigDir, "worker", "credentials")
 }
 
+// WorkerSecretsFile is the catalog of the secrets this machine holds as a
+// Worker (§16.7). It lives with the Worker's credentials, in its private
+// configuration, not with the data a backup or a cleanup of runs touches.
+func (p Paths) WorkerSecretsFile() string {
+	return filepath.Join(p.ConfigDir, "worker", "secrets.json")
+}
+
 // WorkerDataDir is where the Worker daemon keeps its own files. It is a
 // directory of its own under DataDir, not DataDir itself (§22.5): one machine
 // can be the Controller and a Worker with the same data directory.
