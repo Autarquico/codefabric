@@ -344,6 +344,30 @@ func checkOwnership(t *testing.T, f Fixture) {
 			t.Errorf("applying %s as local overwrote it:\n%s\nwant\n%s", m, describe(got.Files), describe(want.Files))
 		}
 	})
+	t.Run("managed then local is never removed", func(t *testing.T) {
+		e := newEnv(t, f)
+		s, ok := e.snapshot(t)
+		if !ok || !e.applyGlobal(t, s) {
+			return
+		}
+		m := f.Mutate(t, e.home)
+		mutated, _ := e.snapshot(t)
+		want, _ := component(mutated, m)
+		local := s
+		local.Components = slices.Clone(s.Components)
+		i := slices.IndexFunc(local.Components, func(c harness.Component) bool { return c.Name == m })
+		if i < 0 {
+			t.Fatalf("Mutate edited %q, which is not a component of the snapshot", m)
+		}
+		local.Components[i].Ownership = harness.Local
+		if !e.applyGlobal(t, local) || !e.applyGlobal(t, harness.NativeSnapshot{Harness: s.Harness}) {
+			return
+		}
+		after, _ := e.snapshot(t)
+		if got, found := component(after, m); !found || !reflect.DeepEqual(got.Files, want.Files) {
+			t.Errorf("%s, applied as managed and then ceded as local, did not survive an empty snapshot:\n%s\nwant\n%s", m, describe(got.Files), describe(want.Files))
+		}
+	})
 	t.Run("json-subset keeps foreign fields", func(t *testing.T) {
 		e := newEnv(t, f)
 		s, ok := e.snapshot(t)

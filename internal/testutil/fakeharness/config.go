@@ -336,6 +336,7 @@ func applyGlobal(root string, snap harness.NativeSnapshot, dryRun bool) (harness
 	}
 	for _, c := range snap.Components {
 		if c.Ownership != harness.Managed {
+			delete(rec, c.Name) // ceded to the person: never removed again
 			continue
 		}
 		if err := writeComponent(r, c); err != nil {

@@ -221,6 +221,27 @@ func TestApplyConfig_TargetGlobalKeepsWhatIsNotManaged(t *testing.T) {
 	}
 }
 
+func TestApplyConfig_AComponentCededToThePersonIsNeverRemoved(t *testing.T) {
+	host := newHost(t)
+	a := fakeharness.Adapter{}
+	for _, owner := range []harness.Ownership{harness.Managed, harness.Local} {
+		snap := snapshot(component("skills/a", harness.KindDir, owner, map[string]string{"skills/a/SKILL.md": "a"}))
+		if _, err := a.ApplyConfig(t.Context(), host, snap, harness.ApplyOptions{Target: harness.TargetGlobal{}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := a.ApplyConfig(t.Context(), host, snapshot(), harness.ApplyOptions{Target: harness.TargetGlobal{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Changes) > 0 {
+		t.Errorf("changes = %v", changes(res.Changes))
+	}
+	if got := readHost(t, host, "skills/a/SKILL.md"); got != "a" {
+		t.Errorf("skills/a/SKILL.md = %q", got)
+	}
+}
+
 func TestApplyConfig_TargetGlobalDryRunChangesNothing(t *testing.T) {
 	host := newHost(t)
 	snap := snapshot(component("skills/a", harness.KindDir, harness.Managed, map[string]string{"skills/a/SKILL.md": "a"}))
