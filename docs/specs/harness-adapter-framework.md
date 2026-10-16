@@ -6,14 +6,14 @@ status: active
 priority: P0
 size: M
 issue: 18
-prs: []
+prs: [42]
 related_issues: [18]
 sub_issues: []
 depends_on: [worker-executor-tmux, git-relay-publication]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-16
 ---
 
 # Framework de adapters de harness
