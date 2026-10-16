@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -67,7 +68,7 @@ func TestScenario_GitRelayPublication_ControllerCaido(t *testing.T) {
 	worker := startDaemon(t, box)
 	eventually(t, "the Worker to offer the harness", func() bool {
 		w, err := admin.Worker(t.Context(), "alpha")
-		return err == nil && w.State == domain.WorkerOnline && len(w.Capabilities) == 1
+		return err == nil && w.State == domain.WorkerOnline && slices.Contains(w.Capabilities, "harness:command")
 	})
 
 	use(t, host)

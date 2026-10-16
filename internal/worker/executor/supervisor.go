@@ -89,11 +89,14 @@ func (e *Executor) retryDue(k state.Key) bool {
 	return !e.clock.Now().Before(e.memo(k).retryAt)
 }
 
-// prepare gives the Run what it runs with: its directory, its worktree, the
-// script the harness makes of its prompt, and launch.json for the wrapper.
+// prepare gives the Run what it runs with: its directory, its worktree, its
+// configuration when the harness reads one per Run, what the harness makes of
+// the prompt, and launch.json for the wrapper. It runs only while the Run is
+// accepted: once it is starting, the harness may be writing to its
+// configuration, and nothing here is done again.
 func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	spec := parseSpec(r.Spec)
-	launcher, ok := e.harnesses[spec.Requirements.Harness]
+	adapter, ok := e.harnesses.Get(spec.Requirements.Harness)
 	if !ok {
 		return fmt.Errorf("this Worker has no harness %q", spec.Requirements.Harness)
 	}
@@ -104,15 +107,46 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err := e.makeWorktree(ctx, r, spec, worktree); err != nil {
 		return err
 	}
-	launch, err := launcher.Launch(harness.LaunchSpec{RunDir: dir, Worktree: worktree, Prompt: spec.Prompt, Mode: domain.Mode(spec.Mode)})
+	configDir, err := e.materialize(ctx, r, adapter, dir)
+	if err != nil {
+		return err
+	}
+	launch, err := adapter.Start(ctx, e.o.Host, harness.RunSpec{
+		RunID: domain.ID(r.RunID), LeaseEpoch: r.LeaseEpoch, Mode: domain.Mode(spec.Mode), Prompt: spec.Prompt, Model: spec.Requirements.Model,
+		RunDir: dir, ConfigDir: configDir, Worktree: worktree, OutputPath: filepath.Join(dir, execwrap.OutputLog),
+	})
 	if err != nil {
 		return err
 	}
 	l := execwrap.Launch{Argv: launch.Argv, Env: launch.Env, Dir: worktree, Mode: spec.Mode, Grace: e.grace}
+	for _, s := range launch.SecretEnv {
+		l.SecretEnv = append(l.SecretEnv, execwrap.SecretEnv{Name: s.Name, Ref: s.Ref})
+	}
 	if spec.Mode == execwrap.ModeInteractive {
 		l.Gate = filepath.Join(dir, paneReady)
 	}
 	return execwrap.Write(dir, execwrap.LaunchFile, l)
+}
+
+// materialize writes the configuration of the Run into its directory (§8.12)
+// and says where, when the harness reads one per Run; otherwise it does
+// nothing and says nothing.
+func (e *Executor) materialize(ctx context.Context, r state.Run, adapter harness.Adapter, dir string) (string, error) {
+	if !adapter.Capabilities().ConfigIsolation {
+		return "", nil
+	}
+	snap, err := e.o.ConfigSource(ctx, r, adapter.ID())
+	if err != nil {
+		return "", fmt.Errorf("the configuration of the harness %q: %w", adapter.ID(), err)
+	}
+	m, err := e.o.Materializer.Materialize(ctx, adapter, dir, snap)
+	if errors.Is(err, harness.ErrSecretUnavailable) {
+		return "", fmt.Errorf("%s: %w", domain.CodeSecretUnavailable, err)
+	}
+	if err != nil {
+		return "", err
+	}
+	return m.ConfigDir, nil
 }
 
 // begin takes a Run from accepted to running: the intention first (phase

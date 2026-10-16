@@ -15,6 +15,7 @@ type specView struct {
 	} `json:"source"`
 	Requirements struct {
 		Harness string `json:"harness"`
+		Model   string `json:"model"`
 	} `json:"requirements"`
 }
 

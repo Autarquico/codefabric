@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -198,7 +199,7 @@ func (b *reconcileBox) startWith(extra ...string) *daemonProcess {
 	b.daemon = d
 	eventually(b.t, "the Worker to be online and offer the harness", func() bool {
 		w, err := b.admin.Worker(b.t.Context(), "alpha")
-		return err == nil && w.State == domain.WorkerOnline && len(w.Capabilities) == 1
+		return err == nil && w.State == domain.WorkerOnline && slices.Contains(w.Capabilities, "harness:command")
 	})
 	return d
 }

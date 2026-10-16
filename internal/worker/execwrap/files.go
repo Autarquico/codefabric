@@ -42,14 +42,23 @@ const (
 // Launch is what the wrapper runs. Grace is how long after the harness is
 // asked to stop it gets before it is killed (stop.grace). Gate, if set, is a
 // file the Runtime creates once it has wired the terminal, and the wrapper
-// waits for it before it starts anything.
+// waits for it before it starts anything. SecretEnv names the refs of the
+// variables whose values the wrapper resolves just before it starts the
+// harness: their values are never in this file.
 type Launch struct {
-	Argv  []string      `json:"argv"`
-	Env   []string      `json:"env,omitempty"`
-	Dir   string        `json:"dir"`
-	Mode  string        `json:"mode"`
-	Grace time.Duration `json:"grace_ns"`
-	Gate  string        `json:"gate,omitempty"`
+	Argv      []string      `json:"argv"`
+	Env       []string      `json:"env,omitempty"`
+	SecretEnv []SecretEnv   `json:"secret_env,omitempty"`
+	Dir       string        `json:"dir"`
+	Mode      string        `json:"mode"`
+	Grace     time.Duration `json:"grace_ns"`
+	Gate      string        `json:"gate,omitempty"`
+}
+
+// SecretEnv is a variable of the harness whose value is the secret Ref names.
+type SecretEnv struct {
+	Name string `json:"name"`
+	Ref  string `json:"ref"`
 }
 
 // Wrapper says that the wrapper exists. Because the wrapper leads its group,

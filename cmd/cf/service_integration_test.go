@@ -178,7 +178,7 @@ func waitOnline(t *testing.T, b *reconcileBox, not string) string {
 	eventually(t, "the Worker of the service to be online", func() bool {
 		w, err := b.admin.Worker(t.Context(), "alpha")
 		epoch = w.Epoch
-		return err == nil && w.State == domain.WorkerOnline && len(w.Capabilities) == 1 && w.Epoch != not
+		return err == nil && w.State == domain.WorkerOnline && slices.Contains(w.Capabilities, "harness:command") && w.Epoch != not
 	})
 	return epoch
 }

@@ -19,7 +19,9 @@ import (
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -252,16 +254,38 @@ func newFixture(t *testing.T, mutate ...func(*Options)) *fixture {
 	f.db = db
 	f.j = journal.New(testEpoch, f.clock)
 	f.opts = Options{
-		DB: db, Controller: f.ctrl, Runtime: f.rt, Journal: f.j, Harnesses: nil, Paths: f.paths, Clock: f.clock,
-		Log: slog.New(slog.DiscardHandler), WrapperArgv: []string{"/wrapper", "worker", "exec"}, StopGrace: 2 * time.Second,
+		DB: db, Controller: f.ctrl, Runtime: f.rt, Journal: f.j, Harnesses: registry(t, command.Adapter{}), Host: testHost(t, root),
+		Paths: f.paths, Clock: f.clock, Log: slog.New(slog.DiscardHandler), WrapperArgv: []string{"/wrapper", "worker", "exec"}, StopGrace: 2 * time.Second,
 	}
-	f.opts.Harnesses = append(f.opts.Harnesses, command.Launcher{})
 	for _, m := range mutate {
 		m(&f.opts)
 	}
 	f.e = f.build()
 	f.e.SetLimits(Limits{MaxConcurrentRuns: 4, CPU: 16, MemoryMB: 65536})
 	return f
+}
+
+func registry(t *testing.T, adapters ...harness.Adapter) *harness.Registry {
+	t.Helper()
+	reg, err := harness.NewRegistry(adapters...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
+// testHost is a Host whose home is a directory of the test.
+func testHost(t *testing.T, root string) harness.Host {
+	t.Helper()
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h, err := localhost.New(localhost.Options{Home: home, Env: []string{"PATH=/usr/bin:/bin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
 }
 
 func (f *fixture) build() *Executor {

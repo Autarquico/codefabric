@@ -31,6 +31,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/host"
 	"github.com/Autarquico/codefabric/internal/worker/journal"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -68,10 +69,20 @@ type Options struct {
 	Controller Controller
 	Runtime    cfruntime.Runtime
 	Journal    *journal.Journal
-	Harnesses  []harness.Launcher
-	Paths      config.Paths
-	Clock      clock.Clock
-	Log        *slog.Logger
+	// Harnesses are the adapters this Worker runs Runs with; nil is none.
+	Harnesses *harness.Registry
+	// Host is the machine the adapters prepare Runs on. It is required when
+	// Harnesses has any.
+	Host harness.Host
+	// ConfigSource is the configuration a Run of an adapter with
+	// ConfigIsolation is materialised from; nil gives every Run an empty one.
+	ConfigSource ConfigSource
+	// Materializer writes that configuration into the directory of the Run;
+	// nil is one on Host.
+	Materializer *host.Materializer
+	Paths        config.Paths
+	Clock        clock.Clock
+	Log          *slog.Logger
 	// WrapperArgv is the command that wraps a harness, to which --run-dir <dir>
 	// is added. It defaults to this binary with `worker exec`.
 	WrapperArgv []string
@@ -86,6 +97,15 @@ type Options struct {
 	Hooks    Hooks
 }
 
+// ConfigSource is the configuration of the harness a Run is to be run with.
+type ConfigSource func(ctx context.Context, r state.Run, harnessID string) (harness.NativeSnapshot, error)
+
+// emptyConfig is the ConfigSource of a Worker that has no Workflows yet:
+// every Run gets a configuration of its own, and it is empty.
+func emptyConfig(context.Context, state.Run, string) (harness.NativeSnapshot, error) {
+	return harness.NativeSnapshot{}, nil
+}
+
 // Limits are what the Controller says the Worker may take on (§10.5).
 type Limits struct {
 	MaxConcurrentRuns int
@@ -96,7 +116,7 @@ type Limits struct {
 // Executor runs the Runs of one Worker.
 type Executor struct {
 	o         Options
-	harnesses map[string]harness.Launcher
+	harnesses *harness.Registry
 	clock     clock.Clock
 	log       *slog.Logger
 	wrapper   []string
@@ -166,7 +186,7 @@ func New(o Options) (*Executor, error) {
 		return nil, errors.New("executor: DB, Controller, Runtime and Journal are required")
 	}
 	e := &Executor{
-		o: o, harnesses: map[string]harness.Launcher{}, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, grace: o.StopGrace,
+		o: o, harnesses: o.Harnesses, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, grace: o.StopGrace,
 		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), reconcileWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
 	}
 	e.reconcileGen.Store(1) // the start asks for a reconciliation
@@ -186,8 +206,17 @@ func New(o Options) (*Executor, error) {
 		}
 		e.wrapper = []string{self, "worker", "exec"}
 	}
-	for _, h := range o.Harnesses {
-		e.harnesses[h.ID()] = h
+	if e.harnesses == nil {
+		e.harnesses, _ = harness.NewRegistry()
+	}
+	if len(e.harnesses.IDs()) > 0 && e.o.Host == nil {
+		return nil, errors.New("executor: a Host is required to run harnesses")
+	}
+	if e.o.ConfigSource == nil {
+		e.o.ConfigSource = emptyConfig
+	}
+	if e.o.Materializer == nil && e.o.Host != nil {
+		e.o.Materializer = host.NewMaterializer(e.o.Host)
 	}
 	return e, nil
 }

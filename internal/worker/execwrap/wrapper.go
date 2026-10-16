@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/envutil"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
@@ -31,7 +32,13 @@ type Options struct {
 	Stdin  *os.File
 	Stdout *os.File
 	Stderr *os.File
+	// Secrets resolves the SecretEnv of the launch. Nil resolves nothing: a
+	// launch with any SecretEnv then fails before the harness starts.
+	Secrets ResolveSecret
 }
+
+// ResolveSecret is the value of the secret ref names.
+type ResolveSecret func(ref string) (string, error)
 
 // Run is the wrapper (§6.4). It must lead its own process group, which it does
 // in a tmux pane, where the process of the pane leads its session: the harness
@@ -114,6 +121,10 @@ func (w *wrapper) run() error {
 		return Write(w.o.RunDir, ExitFile, Exit{ExitedAt: w.clock.Now(), Cause: CauseStop, Error: "stopped before the harness started"})
 	}
 
+	secrets, err := w.resolveSecrets()
+	if err != nil {
+		return w.fail("%v", err)
+	}
 	log, err := os.OpenFile(filepath.Join(w.o.RunDir, OutputLog), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return w.fail("opening the output log: %v", err)
@@ -122,7 +133,7 @@ func (w *wrapper) run() error {
 
 	cmd := exec.Command(w.launch.Argv[0], w.launch.Argv[1:]...) //nolint:gosec,noctx // the argv is what the Run asked for; nothing ends the harness but the wrapper
 	cmd.Dir = w.launch.Dir
-	cmd.Env = append(envutil.WithoutTmux(os.Environ()), w.launch.Env...)
+	cmd.Env = append(append(envutil.WithoutTmux(os.Environ()), w.launch.Env...), secrets...)
 	copied, parentEnds, err := w.wire(cmd, log)
 	if err != nil {
 		return w.fail("wiring the output: %v", err)
@@ -177,6 +188,24 @@ func (w *wrapper) run() error {
 	}
 	exit.ExitedAt = w.clock.Now()
 	return Write(w.o.RunDir, ExitFile, exit)
+}
+
+// resolveSecrets is the environment of the SecretEnv of the launch, resolved
+// now, just before the harness starts, so their values live only in its
+// environment. Without SecretEnv it is nothing.
+func (w *wrapper) resolveSecrets() ([]string, error) {
+	var env []string
+	for _, s := range w.launch.SecretEnv {
+		if w.o.Secrets == nil {
+			return nil, fmt.Errorf("%s: the secret %q of %s cannot be resolved: this Worker has no secret store", domain.CodeSecretUnavailable, s.Ref, s.Name)
+		}
+		value, err := w.o.Secrets(s.Ref)
+		if err != nil {
+			return nil, fmt.Errorf("%s: the secret %q of %s cannot be resolved: %w", domain.CodeSecretUnavailable, s.Ref, s.Name, err)
+		}
+		env = append(env, s.Name+"="+value)
+	}
+	return env, nil
 }
 
 // wire connects the harness to the terminal and the log. In interactive mode
