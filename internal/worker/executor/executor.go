@@ -101,9 +101,20 @@ type Options struct {
 type ConfigSource func(ctx context.Context, r state.Run, harnessID string) (harness.NativeSnapshot, error)
 
 // emptyConfig is the ConfigSource of a Worker that has no Workflows yet:
-// every Run gets a configuration of its own, and it is empty.
-func emptyConfig(context.Context, state.Run, string) (harness.NativeSnapshot, error) {
-	return harness.NativeSnapshot{}, nil
+// every Run gets a configuration of its own, and it is empty. Empty is still a
+// snapshot of that harness, in the layout version its adapter owns; the port
+// says that version only through a snapshot, so the one of the host is taken
+// and nothing of it but its identity is kept.
+func (e *Executor) emptyConfig(ctx context.Context, _ state.Run, harnessID string) (harness.NativeSnapshot, error) {
+	a, ok := e.harnesses.Get(harnessID)
+	if !ok {
+		return harness.NativeSnapshot{}, fmt.Errorf("no harness %q", harnessID)
+	}
+	snap, err := a.SnapshotConfig(ctx, e.o.Host, harness.SnapshotOptions{})
+	if err != nil {
+		return harness.NativeSnapshot{}, err
+	}
+	return harness.NativeSnapshot{Harness: a.ID(), SchemaVersion: snap.SchemaVersion}, nil
 }
 
 // Limits are what the Controller says the Worker may take on (§10.5).
@@ -213,7 +224,7 @@ func New(o Options) (*Executor, error) {
 		return nil, errors.New("executor: a Host is required to run harnesses")
 	}
 	if e.o.ConfigSource == nil {
-		e.o.ConfigSource = emptyConfig
+		e.o.ConfigSource = e.emptyConfig
 	}
 	if e.o.Materializer == nil && e.o.Host != nil {
 		e.o.Materializer = host.NewMaterializer(e.o.Host)

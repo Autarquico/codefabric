@@ -189,3 +189,39 @@ func TestANewExecutorWithHarnessesNeedsAHost(t *testing.T) {
 		t.Errorf("an executor with no harnesses: %v", err)
 	}
 }
+
+// With no Workflows a Run of an isolated harness gets a configuration of its
+// own that is empty: valid for its adapter, and with nothing of the host's.
+func TestByDefaultARunOfAnIsolatedHarnessGetsAnEmptyConfiguration(t *testing.T) {
+	root := t.TempDir()
+	h := testHost(t, root)
+	global := filepath.Join(h.Home(), fakeharness.ConfigDirName)
+	if err := os.MkdirAll(global, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(global, fakeharness.SettingsFile), []byte(`{"theme":"host"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t, func(o *Options) {
+		o.Harnesses, o.Host = registry(t, isolated), h
+	})
+	k := f.acceptedSpec(fakeSpec("do it", ""))
+	if f.e.step(t.Context(), k) {
+		t.Fatalf("the Run ended: %+v", f.reports(k))
+	}
+	if got := f.run(k).Phase; got != state.PhaseRunning {
+		t.Fatalf("phase = %s", got)
+	}
+	dir := f.runDir(k)
+	entries, err := os.ReadDir(filepath.Join(dir, "config"))
+	if err != nil || len(entries) != 0 {
+		t.Errorf("config/ = %v (%v), want it empty", entries, err)
+	}
+	var record struct {
+		Harness string `json:"harness"`
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json")) //nolint:gosec // a file of the test
+	if err != nil || json.Unmarshal(raw, &record) != nil || record.Harness != fakeharness.DefaultID {
+		t.Errorf("config.json = %s (%v)", raw, err)
+	}
+}
