@@ -17,7 +17,8 @@ type Host interface {
 	// Environ is the environment of the host, as os.Environ.
 	Environ() []string
 	Getenv(key string) string
-	// LookPath finds a binary in the PATH of the host, as exec.LookPath.
+	// LookPath finds a binary in the PATH of the host, as exec.LookPath; a file
+	// with a slash must be an absolute path.
 	LookPath(file string) (string, error)
 	// Run runs a command to completion. It is bounded: by ctx, and by
 	// MaxCmdOutput on each of stdout and stderr. A command that exits with a

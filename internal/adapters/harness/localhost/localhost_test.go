@@ -115,6 +115,21 @@ func TestLookPath_SearchesOnlyThePathOfTheHost(t *testing.T) {
 	}
 }
 
+func TestLookPath_RefusesARelativePath(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.Mkdir(filepath.Join(cwd, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeExec(t, filepath.Join(cwd, "bin"), "tool", "exit 0")
+	t.Chdir(cwd)
+	h := newHost(t, localhost.Options{Home: t.TempDir(), Path: "/usr/bin:/bin"})
+	for _, name := range []string{"./bin/tool", "bin/tool"} {
+		if got, err := h.LookPath(name); !errors.Is(err, exec.ErrNotFound) {
+			t.Errorf("LookPath(%s) = %q, %v; want ErrNotFound", name, got, err)
+		}
+	}
+}
+
 func TestRun_UsesTheEnvironmentHomeAndStdinOfTheHost(t *testing.T) {
 	home, bin := t.TempDir(), t.TempDir()
 	writeExec(t, bin, "probe", `echo "home=$HOME a=$A b=$B pwd=$(pwd -P)"; read -r line; echo "$line"; echo oops >&2; exit 3`)

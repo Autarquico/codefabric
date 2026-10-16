@@ -79,9 +79,14 @@ func (h *Host) Getenv(key string) string { return lookup(h.env, key) }
 func (h *Host) Clock() clock.Clock { return h.clock }
 
 // LookPath finds file as exec.LookPath does, but in the Path of the host and
-// never in a relative directory of it. A file with a slash is taken as is.
+// never in a relative directory of it. A file with a slash is taken as is,
+// and must be absolute: a relative one would be checked against the directory
+// of this process and run from that of the command.
 func (h *Host) LookPath(file string) (string, error) {
 	if strings.Contains(file, "/") {
+		if !filepath.IsAbs(file) {
+			return "", &exec.Error{Name: file, Err: exec.ErrNotFound}
+		}
 		if err := executable(file); err != nil {
 			return "", &exec.Error{Name: file, Err: err}
 		}
