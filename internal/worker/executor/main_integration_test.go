@@ -25,7 +25,10 @@ func TestMain(m *testing.M) {
 	if os.Getenv(asWrapper) == "1" && len(os.Args) == 5 && os.Args[1] == "worker" && os.Args[3] == "--run-dir" {
 		dir := os.Args[4]
 		retention := func() ([]redact.Needle, error) { return secretjit.Load(dir) }
-		var err error
+		release, err := HoldCapture(dir)
+		if err != nil {
+			os.Exit(1)
+		}
 		switch os.Args[2] {
 		case "exec":
 			_ = os.Unsetenv(asWrapper) // the harness is not a wrapper
@@ -38,6 +41,7 @@ func TestMain(m *testing.M) {
 		default:
 			os.Exit(2)
 		}
+		release()
 		if err != nil {
 			os.Exit(1)
 		}

@@ -174,6 +174,7 @@ type fakeRuntime struct {
 	wired    []cfruntime.Spec
 	stops    []string
 	startErr error
+	listErr  error
 }
 
 func newFakeRuntime() *fakeRuntime { return &fakeRuntime{sessions: map[string]bool{}} }
@@ -218,6 +219,9 @@ func (r *fakeRuntime) Status(_ context.Context, h cfruntime.Handle) (cfruntime.S
 func (r *fakeRuntime) List(context.Context) ([]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
 	var out []string
 	for name, alive := range r.sessions {
 		if alive {

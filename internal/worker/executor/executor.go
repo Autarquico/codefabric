@@ -143,6 +143,8 @@ type Executor struct {
 	grace        time.Duration
 	// jit delivers the secrets of a Run to its directory and takes them back.
 	jit *secretjit.Manager
+	// releases are the Runs whose secrets are being released.
+	releases releases
 
 	limitsMu sync.Mutex
 	limits   Limits
@@ -346,6 +348,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	if err := e.recoverRuns(ctx); err != nil {
 		return err
 	}
+	wg.Go(func() { e.releaseLoop(ctx) })
 	wg.Go(func() { e.reconcileLoop(ctx) })
 	wg.Go(func() { e.decideLoop(ctx) })
 	if e.o.Git != nil {

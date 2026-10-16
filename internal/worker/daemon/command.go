@@ -20,6 +20,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/support/svcunit"
+	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 )
@@ -134,6 +135,11 @@ func newExecCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
+			release, err := executor.HoldCapture(runDir)
+			if err != nil {
+				return err
+			}
+			defer release()
 			return execwrap.Run(execwrap.Options{
 				RunDir: runDir, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 				Secrets: secretjit.Resolver(runDir), Retention: retention(runDir),
@@ -155,6 +161,11 @@ func newRedactPipeCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
+			release, err := executor.HoldCapture(runDir)
+			if err != nil {
+				return err
+			}
+			defer release()
 			return execwrap.RedactPipe(execwrap.PipeOptions{RunDir: runDir, Retention: retention(runDir), In: os.Stdin, Out: os.Stdout})
 		},
 	}

@@ -44,16 +44,36 @@ func leaks(text string) bool {
 	return false
 }
 
-// recorded is a request the Worker sent through the capture proxy.
+// recorded is a request the Worker sent through the capture proxy, and the
+// status the Controller answered it with.
 type recorded struct {
-	path string
-	body []byte
+	path   string
+	body   []byte
+	status int
+}
+
+// statusWriter keeps the status of the answer it forwards.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // captureProxy stands between a Worker and its Controller, and records every
 // request the Worker sends. It terminates TLS with the Controller's own server
 // certificate and dials on with the Worker's credentials, so both ends see
-// what they would see without it.
+// what they would see without it. A request is recorded once the Controller
+// has answered it, so what the proxy shows the Controller has already done.
 type captureProxy struct {
 	addr string
 	mu   sync.Mutex
@@ -104,11 +124,12 @@ func newCaptureProxy(t *testing.T, host, worker config.Paths) *captureProxy {
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{server}, ClientAuth: tls.RequireAnyClientCert},
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(r.Body)
-			p.mu.Lock()
-			p.seen = append(p.seen, recorded{path: r.URL.Path, body: body})
-			p.mu.Unlock()
 			r.Body = io.NopCloser(bytes.NewReader(body))
-			forward.ServeHTTP(w, r)
+			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+			forward.ServeHTTP(sw, r)
+			p.mu.Lock()
+			p.seen = append(p.seen, recorded{path: r.URL.Path, body: body, status: sw.status})
+			p.mu.Unlock()
 		}),
 	}
 	go func() { _ = srv.ServeTLS(ln, "", "") }()
@@ -122,13 +143,14 @@ func (p *captureProxy) requests() []recorded {
 	return slices.Clone(p.seen)
 }
 
-// heartbeatWith waits for a heartbeat that reports exactly refs.
+// heartbeatWith waits for a heartbeat that reports exactly refs and that the
+// Controller took: from then on, the Controller holds them.
 func (p *captureProxy) heartbeatWith(t *testing.T, refs ...string) v1.HeartbeatRequest {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		for _, r := range p.requests() {
 			var hb v1.HeartbeatRequest
-			if r.path != "/v1/worker/heartbeat" || json.Unmarshal(r.body, &hb) != nil || hb.Secrets == nil {
+			if r.path != "/v1/worker/heartbeat" || r.status != http.StatusOK || json.Unmarshal(r.body, &hb) != nil || hb.Secrets == nil {
 				continue
 			}
 			var got []string

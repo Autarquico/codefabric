@@ -52,12 +52,12 @@ func (u *recordingUploader) sent(run string) ([]byte, bool) {
 	return bytes.Clone(u.data[run]), u.eof[run]
 }
 
-// TestScenario_SecretsLocal_Redaccion (the part of T14a): a harness under
-// real tmux and the real wrapper gets a secret in its environment and prints
-// it in two goes. output.log, what is shipped to the Controller and the
-// reports hold [REDACTED:<ref>] and never the value; launch.json holds the
-// ref only. That secrets/ is gone once the Run is stopped and its result
-// sealed is T14b's (the release), and is checked there.
+// TestScenario_SecretsLocal_Redaccion: a harness under real tmux and the
+// real wrapper gets a secret in its environment and prints it in two goes.
+// output.log, what is shipped to the Controller and the reports hold
+// [REDACTED:<ref>] and never the value; launch.json holds the ref only. The
+// delivery is kept while the result is sealed and published, and is gone
+// once the publication is final.
 func TestScenario_SecretsLocal_Redaccion(t *testing.T) {
 	for _, mode := range []domain.Mode{domain.ModeHeadless, domain.ModeInteractive} {
 		t.Run(string(mode), func(t *testing.T) {
@@ -65,6 +65,7 @@ func TestScenario_SecretsLocal_Redaccion(t *testing.T) {
 				fakeharness.Step{EmitEnv: &fakeharness.EmitEnv{Name: "GH", SplitAt: 9, PauseMS: 300}},
 			)))
 			f.opts.Secrets = newFakeStore(map[string]string{"github.personal": ghValue})
+			f.opts.Git = &fakeGit{head: headOID}
 			f.e = f.build()
 			f.e.SetLimits(Limits{MaxConcurrentRuns: 4, CPU: 16, MemoryMB: 65536})
 			up := &recordingUploader{data: map[string][]byte{}, eof: map[string]bool{}}
@@ -123,6 +124,16 @@ func TestScenario_SecretsLocal_Redaccion(t *testing.T) {
 					t.Errorf("the capture filter acknowledged %q (%v)", ack, err)
 				}
 			}
+
+			if _, err := os.Stat(filepath.Join(dir, CaptureLockFile)); err != nil {
+				t.Errorf("the capture did not hold its lock: %v", err)
+			}
+			waitFor(t, "the push of the result", func() bool { return f.publication(k).State == state.PubPushed })
+			if !f.delivered(k) {
+				t.Fatal("the secrets went before the publication was final")
+			}
+			f.confirm(k, viewOf(k, domain.PublicationPublished))
+			waitFor(t, "the release of the secrets", func() bool { return !f.delivered(k) })
 		})
 	}
 }
