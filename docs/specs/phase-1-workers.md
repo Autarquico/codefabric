@@ -2,7 +2,7 @@
 codename: codefabric
 title: Fase 1 — Workers y ejecución básica
 type: epic
-status: active
+status: shipped
 priority: P0
 size: XL
 issue: 7
@@ -13,7 +13,7 @@ depends_on: [phase-0-skeleton]
 supersedes: []
 related_specs: [codefabric-spec]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-16
 ---
 
 # Fase 1 — Workers y ejecución básica
