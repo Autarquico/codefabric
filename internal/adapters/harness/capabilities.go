@@ -27,6 +27,11 @@ type Capabilities struct {
 	// ConfigIsolation reads the configuration from a directory per Run
 	// (§8.12): ApplyConfig to a TargetRun and RunSpec.ConfigDir.
 	ConfigIsolation bool
+	// Install is Install, with DryRun planning without changing the host.
+	Install bool
+	// GracefulStop is Stop: a courteous stop the harness honours. Without
+	// it the signal to the process group is the only stop.
+	GracefulStop bool
 }
 
 // Supports tells whether m is one of Modes.
