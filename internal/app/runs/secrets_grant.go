@@ -13,17 +13,6 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-// Reasons a grant is denied besides those of v1, in details.denied and in the
-// audit of each ref. The first five deny the whole grant before any ref is
-// looked at: they say the caller may not prepare the Run at all.
-const (
-	GrantUnauthenticated  = "unauthenticated"    // the identity of the caller is no longer good
-	GrantNotLeaseHolder   = "not_lease_holder"   // the lease is another Worker's
-	GrantStaleLease       = "stale_lease"        // the lease is not the accepted, live one of the Run
-	GrantRunNotPreparable = "run_not_preparable" // the Run is terminal, or its Task archived
-	GrantDaemonRetired    = "daemon_retired"     // the caller is not the daemon the Controller holds as current
-	SecretNotAnnounced    = "not_announced"      // the Worker does not say it holds the ref
-)
 
 // maxWorkerEpochLen bounds the epoch a grant names: a ULID, with room to spare.
 const maxWorkerEpochLen = 64
@@ -167,22 +156,22 @@ func authorizeGrant(ctx context.Context, q store.Querier, by pki.Session, now ti
 	if _, err := pki.RequireCaller(ctx, q, by, now); err != nil {
 		var coded *domain.Error
 		if errors.As(err, &coded) && coded.Code == domain.CodeUnauthenticated {
-			return GrantUnauthenticated, domain.CodeUnauthenticated, nil
+			return v1.GrantUnauthenticated, domain.CodeUnauthenticated, nil
 		}
 		return "", "", err
 	}
 	if l.WorkerID != w.ID {
-		return GrantNotLeaseHolder, domain.CodePolicyDenied, nil
+		return v1.GrantNotLeaseHolder, domain.CodeStaleLease, nil
 	}
 	if l.State != domain.LeaseAccepted || r.LeaseEpoch != l.Epoch {
-		return GrantStaleLease, domain.CodeStaleLease, nil
+		return v1.GrantStaleLease, domain.CodeStaleLease, nil
 	}
 	if r.State.IsTerminal() || t.ArchivedAt != nil {
-		return GrantRunNotPreparable, domain.CodeStaleLease, nil
+		return v1.GrantRunNotPreparable, domain.CodeStaleLease, nil
 	}
 	current, err := currentDaemon(ctx, q, w, workerEpoch)
 	if err != nil || !current {
-		return GrantDaemonRetired, domain.CodeStaleLease, err
+		return v1.GrantDaemonRetired, domain.CodeStaleLease, err
 	}
 	return "", "", nil
 }
@@ -230,7 +219,7 @@ func refPolicy(ctx context.Context, q store.Querier, w store.Worker, r store.Run
 		case !slices.Contains(allowed, ref):
 			return v1.SecretNotAllowlisted
 		case !holds:
-			return SecretNotAnnounced
+			return v1.SecretNotAnnounced
 		case len(scope) > 0 && !slices.Contains(scope, string(project)):
 			return v1.SecretOutOfScope
 		}

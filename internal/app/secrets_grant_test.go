@@ -11,7 +11,6 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -162,13 +161,13 @@ func TestSecretGrant_AuthorizationTable(t *testing.T) {
 		{"the Run is terminal", func(_ *env, r *reporter) (*reporter, v1.GrantSecretsRequest) {
 			r.mustSend(r.entry(v1.ReportStarted), r.entry(v1.ReportExited, exitCode(0)), r.entry(v1.ReportStopped))
 			return r, r.grantRequest("gh/token")
-		}, domain.CodeStaleLease, runs.GrantRunNotPreparable},
+		}, domain.CodeStaleLease, v1.GrantRunNotPreparable},
 		{"the lease is pending", func(e *env, _ *reporter) (*reporter, v1.GrantSecretsRequest) {
 			run := e.queuedRun("other", withSecretEnv(v1.SecretEnv{Name: "GH_TOKEN", Ref: "gh/token"}))
 			w := e.sessionOf("alpha")
 			p := &reporter{e: e, w: w, run: run, lease: e.offer(run.ID, w)}
 			return p, p.grantRequest("gh/token")
-		}, domain.CodeStaleLease, runs.GrantStaleLease},
+		}, domain.CodeStaleLease, v1.GrantStaleLease},
 		{"the lease expired", func(e *env, _ *reporter) (*reporter, v1.GrantSecretsRequest) {
 			run := e.queuedRun("other", withSecretEnv(v1.SecretEnv{Name: "GH_TOKEN", Ref: "gh/token"}))
 			w := e.sessionOf("alpha")
@@ -177,7 +176,7 @@ func TestSecretGrant_AuthorizationTable(t *testing.T) {
 			_, err := e.app.Leases.SweepExpired(e.t.Context())
 			must(e.t, err)
 			return p, p.grantRequest("gh/token")
-		}, domain.CodeStaleLease, runs.GrantStaleLease},
+		}, domain.CodeStaleLease, v1.GrantStaleLease},
 		{"the lease epoch is stale", func(e *env, _ *reporter) (*reporter, v1.GrantSecretsRequest) {
 			run := e.queuedRun("other", withSecretEnv(v1.SecretEnv{Name: "GH_TOKEN", Ref: "gh/token"}))
 			w := e.sessionOf("alpha")
@@ -188,26 +187,26 @@ func TestSecretGrant_AuthorizationTable(t *testing.T) {
 			_, err = e.accept(w, e.offer(run.ID, w)) // epoch 2 is the live one
 			must(e.t, err)
 			return old, old.grantRequest("gh/token")
-		}, domain.CodeStaleLease, runs.GrantStaleLease},
+		}, domain.CodeStaleLease, v1.GrantStaleLease},
 		{"the lease is another Worker's", func(e *env, r *reporter) (*reporter, v1.GrantSecretsRequest) {
 			beta := e.joinWorker("beta")
 			e.announces(beta, map[string][]string{"gh/token": nil})
 			req := r.grantRequest("gh/token")
 			req.WorkerEpoch = e.epochOf(beta)
 			return &reporter{e: e, w: beta, run: r.run, lease: r.lease}, req
-		}, domain.CodePolicyDenied, runs.GrantNotLeaseHolder},
+		}, domain.CodeStaleLease, v1.GrantNotLeaseHolder},
 		{"the identity is revoked", func(e *env, r *reporter) (*reporter, v1.GrantSecretsRequest) {
 			must(e.t, e.db.WithTx(e.t.Context(), func(tx *store.Tx) error {
 				return tx.Revoke(e.t.Context(), r.w.Principal.ID, domain.KindWorker, e.clock.Now())
 			}))
 			return r, r.grantRequest("gh/token")
-		}, domain.CodeUnauthenticated, runs.GrantUnauthenticated},
+		}, domain.CodeUnauthenticated, v1.GrantUnauthenticated},
 		{"a later heartbeat replaced the daemon", func(e *env, r *reporter) (*reporter, v1.GrantSecretsRequest) {
 			req := r.grantRequest("gh/token")
 			e.epochs[r.w.Principal.ID] = ulid.Make().String()
 			e.beat(r.w)
 			return r, req
-		}, domain.CodeStaleLease, runs.GrantDaemonRetired},
+		}, domain.CodeStaleLease, v1.GrantDaemonRetired},
 		{"a later generation fenced the daemon", func(e *env, r *reporter) (*reporter, v1.GrantSecretsRequest) {
 			must(e.t, e.db.WithTx(e.t.Context(), func(tx *store.Tx) error {
 				_, err := tx.ReplaceWorkerSecrets(e.t.Context(), r.w.Principal.ID,
@@ -215,7 +214,7 @@ func TestSecretGrant_AuthorizationTable(t *testing.T) {
 				return err
 			}))
 			return r, r.grantRequest("gh/token")
-		}, domain.CodeStaleLease, runs.GrantDaemonRetired},
+		}, domain.CodeStaleLease, v1.GrantDaemonRetired},
 		{"the ref is not declared", func(e *env, r *reporter) (*reporter, v1.GrantSecretsRequest) {
 			_, err := e.app.Projects.AllowSecrets(e.t.Context(), e.owner, "backend", v1.ProjectSecretsRequest{Refs: []string{"pg/url"}})
 			must(e.t, err)
@@ -230,7 +229,7 @@ func TestSecretGrant_AuthorizationTable(t *testing.T) {
 		{"the Worker does not announce the ref", func(e *env, r *reporter) (*reporter, v1.GrantSecretsRequest) {
 			e.announces(r.w, map[string][]string{"npm/token": nil})
 			return r, r.grantRequest("gh/token")
-		}, domain.CodePolicyDenied, runs.SecretNotAnnounced},
+		}, domain.CodePolicyDenied, v1.SecretNotAnnounced},
 		{"the Worker holds the ref for other Projects", func(e *env, r *reporter) (*reporter, v1.GrantSecretsRequest) {
 			e.announces(r.w, map[string][]string{"gh/token": {"project_01J00000000000000000000000"}, "npm/token": nil})
 			return r, r.grantRequest("gh/token")

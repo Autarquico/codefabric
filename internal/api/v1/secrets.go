@@ -58,8 +58,22 @@ type GrantSecretsResponse struct {
 	Granted []string `json:"granted"`
 }
 
-// Reasons a ref is denied, in details.denied of a grant and in its audit.
+// Reasons a whole grant is denied before any ref is looked at, in the audit
+// of each ref: the caller may not prepare the Run at all. All answer
+// CF_STALE_LEASE but GrantUnauthenticated (CF_UNAUTHENTICATED): for the Worker,
+// its lease is not the live one.
 const (
+	GrantUnauthenticated  = "unauthenticated"    // the identity of the caller is no longer good
+	GrantNotLeaseHolder   = "not_lease_holder"   // the lease is another Worker's
+	GrantStaleLease       = "stale_lease"        // the lease is not the accepted, live one of the Run
+	GrantRunNotPreparable = "run_not_preparable" // the Run is terminal, or its Task archived
+	GrantDaemonRetired    = "daemon_retired"     // the caller is not the daemon the Controller holds as current
+)
+
+// Reasons a ref is denied, in details.denied of a grant and in its audit; a
+// grant with any answers CF_POLICY_DENIED.
+const (
+	SecretNotAnnounced   = "not_announced"   // the Worker does not say it holds the ref
 	SecretNotDeclared    = "not_declared"    // the frozen spec of the Run does not use it
 	SecretNotAllowlisted = "not_allowlisted" // the allowlist of the Project does not hold it
 	SecretOutOfScope     = "out_of_scope"    // the Worker holds it only for other Projects
