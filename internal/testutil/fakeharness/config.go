@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/support/treedigest"
 )
 
 // ConfigDirName is the native configuration directory, under Host.Home.
@@ -40,7 +39,7 @@ const SettingsFile = "settings.json"
 
 // appliedFile is what a TargetGlobal apply wrote, in the configuration
 // directory: how it tells a managed component from a local one it never
-// wrote, and a managed one edited since (drift).
+// wrote. It does not tell drift from modified: that is apply-drift-lock's.
 const appliedFile = ".cf-applied.json"
 
 func globalDir(host harness.Host) string { return filepath.Join(host.Home(), ConfigDirName) }
@@ -89,7 +88,7 @@ func (a Adapter) SnapshotConfig(_ context.Context, host harness.Host, opts harne
 		if err != nil {
 			return harness.NativeSnapshot{}, err
 		}
-		d, err := filesDigest(files)
+		d, err := harness.FilesDigest(files)
 		if err != nil {
 			return harness.NativeSnapshot{}, err
 		}
@@ -170,14 +169,6 @@ func readComponent(root string, l layout) ([]harness.File, bool, error) {
 		return nil, false, fmt.Errorf("fakeharness: reading %s: %w", l.path, err)
 	}
 	return files, true, nil
-}
-
-func filesDigest(files []harness.File) (string, error) {
-	entries := make([]treedigest.Entry, 0, len(files))
-	for _, f := range files {
-		entries = append(entries, treedigest.File{Path: f.Path, Exec: f.Mode&0o100 != 0, Content: f.Content})
-	}
-	return treedigest.Files(entries)
 }
 
 // ApplyConfig writes snap to opts.Target with the ownership rules of the
@@ -290,8 +281,6 @@ func applyRun(host harness.Host, snap harness.NativeSnapshot, dir string, opts h
 type applied map[string]appliedComponent
 
 type appliedComponent struct {
-	// Fingerprint is the state it left, as fingerprint computes it.
-	Fingerprint string `json:"fingerprint"`
 	// Keys are the fields of a json-subset.
 	Keys []string `json:"keys,omitempty"`
 }
@@ -320,9 +309,6 @@ func applyGlobal(root string, snap harness.NativeSnapshot, dryRun bool) (harness
 	for _, ch := range d.changes {
 		if d.local[ch.Name] {
 			continue
-		}
-		if ch.Kind == harness.Drift {
-			ch.Kind = harness.Modified
 		}
 		res.Changes = append(res.Changes, ch)
 	}
@@ -355,17 +341,7 @@ func applyGlobal(root string, snap harness.NativeSnapshot, dryRun bool) (harness
 		if err := writeComponent(r, c); err != nil {
 			return harness.ApplyResult{}, err
 		}
-		l, _ := layoutOf(c.Name)
-		files, _, err := readComponent(root, l)
-		if err != nil {
-			return harness.ApplyResult{}, err
-		}
-		keys := subsetKeys(c)
-		fp, err := fingerprint(l.kind, files, keys)
-		if err != nil {
-			return harness.ApplyResult{}, err
-		}
-		rec[c.Name] = appliedComponent{Fingerprint: fp, Keys: keys}
+		rec[c.Name] = appliedComponent{Keys: subsetKeys(c)}
 	}
 	b, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -489,7 +465,7 @@ func subsetKeys(c harness.Component) []string {
 // for a json-subset the digest of the canonical values of keys.
 func fingerprint(kind harness.ComponentKind, files []harness.File, keys []string) (string, error) {
 	if kind != harness.KindJSONSubset {
-		return filesDigest(files)
+		return harness.FilesDigest(files)
 	}
 	subset := map[string]any{}
 	if len(files) == 1 {
@@ -518,9 +494,8 @@ func fingerprint(kind harness.ComponentKind, files []harness.File, keys []string
 }
 
 // DiffConfig compares snap with ~/.fakeharness: a component missing there is
-// added, one that differs is modified, or drift when it is managed and was
-// edited since it was applied; a managed one snap lacks is removed. Local
-// components are compared like the rest.
+// added, one that differs is modified, and a managed one snap lacks is
+// removed. Local components are compared like the rest. It never says drift.
 func (a Adapter) DiffConfig(_ context.Context, host harness.Host, snap harness.NativeSnapshot) (harness.ConfigDiff, error) {
 	if err := a.checkSnapshot(snap); err != nil {
 		return harness.ConfigDiff{}, err
@@ -550,7 +525,7 @@ func diff(root string, snap harness.NativeSnapshot) (configDiff, error) {
 	inSnap, local := map[string]bool{}, map[string]bool{}
 	for _, c := range sorted(snap.Components) {
 		inSnap[c.Name] = true
-		kind, err := compare(root, c, rec)
+		kind, err := compare(root, c)
 		if err != nil {
 			return configDiff{}, err
 		}
@@ -578,7 +553,7 @@ func diff(root string, snap harness.NativeSnapshot) (configDiff, error) {
 	return configDiff{changes: changes, local: local, applied: rec}, nil
 }
 
-func compare(root string, c harness.Component, rec applied) (harness.ChangeKind, error) {
+func compare(root string, c harness.Component) (harness.ChangeKind, error) {
 	l, _ := layoutOf(c.Name)
 	files, present, err := readComponent(root, l)
 	if err != nil || !present {
@@ -592,15 +567,6 @@ func compare(root string, c harness.Component, rec applied) (harness.ChangeKind,
 	got, err := fingerprint(l.kind, files, keys)
 	if err != nil || got == want {
 		return "", err
-	}
-	if r, ok := rec[c.Name]; ok {
-		now, err := fingerprint(l.kind, files, r.Keys)
-		if err != nil {
-			return "", err
-		}
-		if now != r.Fingerprint {
-			return harness.Drift, nil
-		}
 	}
 	return harness.Modified, nil
 }
