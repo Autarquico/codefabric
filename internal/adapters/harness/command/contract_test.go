@@ -17,7 +17,9 @@ const sentinel = "harnesstest-sentinel-credential"
 
 func TestScenario_HarnessAdapterFramework_Contrato_Command(t *testing.T) {
 	harnesstest.Run(t, harnesstest.Fixture{
-		New:     func(string) harness.Adapter { return command.Adapter{} },
+		New: func(binDir string) harness.Adapter {
+			return command.Adapter{Shell: filepath.Join(binDir, "sh")}
+		},
 		Install: installShell,
 		SeedHome: func(t *testing.T, home string) {
 			write(t, filepath.Join(home, ".shrc"), "export TOKEN="+harness.SecretMarker("shell/token")+"\n")
@@ -43,8 +45,8 @@ func TestScenario_HarnessAdapterFramework_Contrato_Command(t *testing.T) {
 	})
 }
 
-// installShell puts the shell, and the sleep a held Run waits with, in
-// binDir: the PATH of the host of a check has nothing else.
+// installShell puts the shell the adapter runs with, and the sleep a held Run
+// waits with, in binDir: the PATH of the host of a check has nothing else.
 func installShell(t *testing.T, binDir string) {
 	t.Helper()
 	for _, name := range []string{"sh", "sleep"} {

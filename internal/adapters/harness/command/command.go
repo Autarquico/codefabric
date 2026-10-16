@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
@@ -23,13 +24,17 @@ const ID = "command"
 // length limit, and a file has neither.
 const ScriptFile = "command.sh"
 
-// Shell runs the script.
-const Shell = "/bin/sh"
+// DefaultShell runs the script when the Adapter names no other shell: the path
+// every POSIX system has.
+const DefaultShell = "/bin/sh"
 
 // Adapter is the harness `command`. Of §7.2 it supports Detect and Start;
 // everything else is unsupported.
 type Adapter struct {
 	harness.Unsupported
+	// Shell is the absolute path of the shell that runs the script; empty is
+	// DefaultShell.
+	Shell string
 }
 
 var _ harness.Adapter = Adapter{}
@@ -43,19 +48,32 @@ func (Adapter) Capabilities() harness.Capabilities {
 	return harness.Capabilities{Modes: []domain.Mode{domain.ModeHeadless, domain.ModeInteractive}}
 }
 
-// Detect finds a POSIX shell, sh, on the PATH of the host: command is
-// installed wherever there is one. Its Runs are started with Shell all the
-// same, the path every POSIX system has.
-func (Adapter) Detect(_ context.Context, host harness.Host) (harness.Detection, error) {
-	path, err := host.LookPath("sh")
+// Detect says command is installed when the shell its Runs are started with
+// is an executable file.
+func (a Adapter) Detect(context.Context, harness.Host) (harness.Detection, error) {
+	path := a.shell()
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return harness.Detection{}, nil
+	}
 	if err != nil {
-		return harness.Detection{}, nil //nolint:nilerr // no shell is not installed, not a failure to detect
+		return harness.Detection{}, fmt.Errorf("command: detecting %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return harness.Detection{}, nil
 	}
 	return harness.Detection{Installed: true, Path: path}, nil
 }
 
+func (a Adapter) shell() string {
+	if a.Shell == "" {
+		return DefaultShell
+	}
+	return a.Shell
+}
+
 // Start writes the prompt as an executable script in the directory of the Run
-// and runs it with Shell. The script is written atomically, so a Start again
+// and runs it with the shell. The script is written atomically, so a Start again
 // leaves the same file and gives the same Launch.
 func (a Adapter) Start(_ context.Context, _ harness.Host, run harness.RunSpec) (harness.Launch, error) {
 	if err := a.Capabilities().CheckMode(run.Mode); err != nil {
@@ -68,5 +86,5 @@ func (a Adapter) Start(_ context.Context, _ harness.Host, run harness.RunSpec) (
 	if err := atomicfile.Write(path, []byte(run.Prompt+"\n"), 0o700); err != nil {
 		return harness.Launch{}, fmt.Errorf("command: writing the script: %w", err)
 	}
-	return harness.Launch{Argv: []string{Shell, path}}, nil
+	return harness.Launch{Argv: []string{a.shell(), path}}, nil
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -96,6 +97,41 @@ func TestWhatItDoesNotDoIsUnsupported(t *testing.T) {
 	} {
 		if !errors.Is(err, harness.ErrUnsupported) {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Detect looks at the shell Start runs with, not at the PATH of the host: a
+// host with an sh on its PATH and no /bin/sh would otherwise be announced and
+// fail at exec.
+func TestDetectFindsTheShellItsRunsAreStartedWith(t *testing.T) {
+	noPath, err := localhost.New(localhost.Options{Home: t.TempDir(), Env: []string{"PATH="}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := command.Adapter{}.Detect(t.Context(), noPath)
+	if err != nil || !d.Installed || d.Path != command.DefaultShell {
+		t.Errorf("Detect on a host with no PATH = %+v, %v; want %s", d, err, command.DefaultShell)
+	}
+	dir := t.TempDir()
+	launch, err := command.Adapter{}.Start(t.Context(), nil, spec(dir, "true", domain.ModeHeadless))
+	if err != nil || launch.Argv[0] != d.Path {
+		t.Errorf("Start runs %v (%v), Detect found %s", launch.Argv, err, d.Path)
+	}
+}
+
+func TestAShellThatIsMissingOrNotExecutableIsNotInstalled(t *testing.T) {
+	dir := t.TempDir()
+	notExecutable := filepath.Join(dir, "sh")
+	if err := os.WriteFile(notExecutable, []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, shell := range map[string]string{
+		"missing": filepath.Join(dir, "absent"), "not executable": notExecutable, "a directory": dir,
+	} {
+		d, err := command.Adapter{Shell: shell}.Detect(t.Context(), nil)
+		if err != nil || d.Installed || d.Path != "" {
+			t.Errorf("%s: Detect = %+v, %v; want not installed and no error", name, d, err)
 		}
 	}
 }

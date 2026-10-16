@@ -6,9 +6,9 @@ for `requirements.harness: command`. This file documents it as §7.3 of
 `docs/codefabric-spec.md` asks every adapter to.
 
 1. **Installation.** There is nothing to install. `Detect` says it is
-   installed when the host has an `sh` on its PATH, and reports that path.
-   Its Runs are started with `/bin/sh` all the same. `Install` is
-   unsupported and not declared.
+   installed when the shell its Runs are started with, `/bin/sh`, is an
+   executable file, and reports that path. `Install` is unsupported and not
+   declared.
 
 2. **Configuration paths detected.** None. It reads no configuration, so
    `SnapshotConfig`, `ApplyConfig`, `DiffConfig` and `ValidateConfig` are
