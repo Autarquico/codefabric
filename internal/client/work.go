@@ -59,6 +59,28 @@ func (c *Client) UpdateProject(ctx context.Context, ref string, req v1.UpdatePro
 	return out, err
 }
 
+// ProjectSecrets shows the allowlist of a Project and which Workers hold each
+// ref in it for the Project.
+func (c *Client) ProjectSecrets(ctx context.Context, ref string) (v1.ProjectSecrets, error) {
+	var out v1.ProjectSecrets
+	err := c.do(ctx, http.MethodGet, refPath("projects", ref, "secrets"), nil, &out)
+	return out, err
+}
+
+// AllowProjectSecrets adds refs to the allowlist of a Project.
+func (c *Client) AllowProjectSecrets(ctx context.Context, ref string, req v1.ProjectSecretsRequest) (v1.ProjectSecrets, error) {
+	var out v1.ProjectSecrets
+	err := c.do(ctx, http.MethodPost, refPath("projects", ref, "secrets", "allow"), req, &out)
+	return out, err
+}
+
+// DenyProjectSecrets takes refs out of the allowlist of a Project.
+func (c *Client) DenyProjectSecrets(ctx context.Context, ref string, req v1.ProjectSecretsRequest) (v1.ProjectSecrets, error) {
+	var out v1.ProjectSecrets
+	err := c.do(ctx, http.MethodPost, refPath("projects", ref, "secrets", "deny"), req, &out)
+	return out, err
+}
+
 // CreateTask creates a Task exactly as req says. Unless req.NoStart it must
 // carry the commit that the Run freezes; NewTask finds it from the git context.
 func (c *Client) CreateTask(ctx context.Context, req v1.CreateTaskRequest) (v1.CreateTaskResponse, error) {

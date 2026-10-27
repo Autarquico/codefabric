@@ -2,6 +2,7 @@ package runs
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -21,7 +22,7 @@ func digestOf(t *testing.T, task store.Task, project store.Project, commit strin
 }
 
 // The layout of the spec and its digest are a contract: a Run keeps its
-// spec_digest for ever, so this fixture only changes together with specSchema.
+// spec_digest for ever, so this fixture only changes together with domain.RunSpecSchema.
 func TestSpecDigest_Fixture(t *testing.T) {
 	project := store.Project{DefaultBranch: "main"}
 	raw, digest := digestOf(t, store.Task{Prompt: "fix the flaky test"}, project, commit)
@@ -120,6 +121,9 @@ func TestSpecDigest_EveryFrozenFieldCounts(t *testing.T) {
 		"the retry": func() (store.Task, store.Project, string) {
 			return store.Task{Retry: &v1.Retry{OnFailed: domain.RetryAsk, OnLost: domain.RetryAsk, MaxAttempts: 1}}, project, commit
 		},
+		"the secrets": func() (store.Task, store.Project, string) {
+			return store.Task{Requirements: v1.Requirements{SecretEnv: []v1.SecretEnv{{Name: "TOKEN", Ref: "gh/token"}}}}, project, commit
+		},
 		"the resources of the Project": func() (store.Task, store.Project, string) {
 			return store.Task{}, store.Project{DefaultBranch: "main", Defaults: v1.ProjectDefaults{Resources: &v1.Resources{CPU: 4, MemoryMB: 4096}}}, commit
 		},
@@ -185,6 +189,80 @@ func TestPlacementOf_ReadsWhatTheSpecFroze(t *testing.T) {
 	}
 	if p, err := PlacementOf([]byte(`{}`)); err != nil || p.Resources != (domain.Capacity{}) {
 		t.Errorf("an empty spec = %+v (%v)", p, err)
+	}
+}
+
+func withSecrets(env ...v1.SecretEnv) store.Task {
+	return store.Task{Prompt: "fix the flaky test", Requirements: v1.Requirements{SecretEnv: env}}
+}
+
+// A Run that uses no secret is frozen as before secrets, byte for byte, even
+// when its Task spells out an empty list: Runs and Workers of before keep
+// their digests and read their specs.
+func TestSpecDigest_NoSecretsIsSchema2ByteForByte(t *testing.T) {
+	project := store.Project{DefaultBranch: "main"}
+	without, d1 := digestOf(t, store.Task{Prompt: "fix the flaky test"}, project, commit)
+	empty, d2 := digestOf(t, withSecrets(), project, commit)
+	if without != empty || d1 != d2 {
+		t.Errorf("an empty secret_env changed the spec:\n%s\n%s", without, empty)
+	}
+	if strings.Contains(without, "secrets") || !strings.HasPrefix(without, `{"schema":2,`) {
+		t.Errorf("spec = %s", without)
+	}
+}
+
+// The layout of a spec with secrets is a contract too: env sorted by name and
+// the set of refs, at the end, under schema 3.
+func TestSpecDigest_SecretsFixture(t *testing.T) {
+	project := store.Project{DefaultBranch: "main"}
+	raw, digest := digestOf(t, withSecrets(
+		v1.SecretEnv{Name: "NPM_TOKEN", Ref: "npm/token"},
+		v1.SecretEnv{Name: "GH_TOKEN", Ref: "gh/token"},
+		v1.SecretEnv{Name: "GITHUB_TOKEN", Ref: "gh/token"},
+	), project, commit)
+
+	const wantJSON = `{"schema":3,"prompt":"fix the flaky test","source":{"ref":"main","commit":"0123456789abcdef0123456789abcdef01234567","snapshot":""},` +
+		`"mode":"headless","workflow":"","environment":"",` +
+		`"requirements":{"harness":"","model":"","capabilities":[],"resources":{"cpu":2,"memory_mb":4096},` +
+		`"workers":{"prefer":[],"avoid":[],"require":[]}},` +
+		`"completion":"first_success","retry":{"on_failed":"none","on_lost":"ask","max_attempts":1},` +
+		`"secrets":{"env":[{"name":"GH_TOKEN","ref":"gh/token"},{"name":"GITHUB_TOKEN","ref":"gh/token"},{"name":"NPM_TOKEN","ref":"npm/token"}],` +
+		`"refs":["gh/token","npm/token"]}}`
+	const wantDigest = "sha256:57ce42a7796093f726a425cfceacd42eaddeed71de7e39929926d60ce8645e30"
+	if raw != wantJSON {
+		t.Errorf("spec JSON changed:\n got %s\nwant %s", raw, wantJSON)
+	}
+	if digest != wantDigest {
+		t.Errorf("digest = %s, want %s", digest, wantDigest)
+	}
+}
+
+// The order the variables are given in is no configuration; a name or a ref is.
+func TestSpecDigest_SecretsAreStable(t *testing.T) {
+	project := store.Project{DefaultBranch: "main"}
+	a, b := v1.SecretEnv{Name: "A", Ref: "x"}, v1.SecretEnv{Name: "B", Ref: "y"}
+	_, ab := digestOf(t, withSecrets(a, b), project, commit)
+	_, ba := digestOf(t, withSecrets(b, a), project, commit)
+	if ab != ba {
+		t.Error("the order of secret_env changed the digest")
+	}
+	_, renamed := digestOf(t, withSecrets(a, v1.SecretEnv{Name: "C", Ref: "y"}), project, commit)
+	_, reref := digestOf(t, withSecrets(a, v1.SecretEnv{Name: "B", Ref: "z"}), project, commit)
+	if renamed == ab || reref == ab || renamed == reref {
+		t.Error("a name or a ref does not change the digest")
+	}
+}
+
+func TestPlacementOf_ReadsTheSecrets(t *testing.T) {
+	project := store.Project{DefaultBranch: "main"}
+	raw, _ := digestOf(t, withSecrets(v1.SecretEnv{Name: "B", Ref: "y"}, v1.SecretEnv{Name: "A", Ref: "x"}, v1.SecretEnv{Name: "C", Ref: "x"}), project, commit)
+	got, err := PlacementOf([]byte(raw))
+	if err != nil || jsonOf(got.Secrets) != `["x","y"]` {
+		t.Errorf("secrets = %v (%v)", got.Secrets, err)
+	}
+	raw, _ = digestOf(t, store.Task{}, project, commit)
+	if got, err := PlacementOf([]byte(raw)); err != nil || got.Secrets != nil {
+		t.Errorf("a Run without secrets places %v (%v)", got.Secrets, err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package execwrap
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -12,9 +13,11 @@ import (
 	"syscall"
 	"time"
 
+	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/envutil"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
 )
 
@@ -33,9 +36,17 @@ type Options struct {
 	Stdin  *os.File
 	Stdout *os.File
 	Stderr *os.File
-	// Secrets resolves the SecretEnv of the launch. Nil resolves nothing: a
-	// launch with any SecretEnv then fails before the harness starts.
+	// Secrets resolves the SecretEnv of the launch: the harness's access
+	// (secretjit.Resolver). Nil resolves nothing: a launch with any SecretEnv
+	// then fails before the harness starts.
 	Secrets ResolveSecret
+	// Retention is what the output of a launch with SecretEnv is redacted of
+	// (secretjit.Load). Without it such a launch fails before the harness starts.
+	Retention LoadSecrets
+	// GateTimeout is how long the wrapper waits at the gate for the Runtime to
+	// wire the terminal, which it does once the capture filter acknowledged.
+	// Zero is GateTimeout.
+	GateTimeout time.Duration
 }
 
 // ResolveSecret is the value of the secret ref names.
@@ -122,7 +133,7 @@ func (w *wrapper) run() error {
 		return Write(w.o.RunDir, ExitFile, Exit{ExitedAt: w.clock.Now(), Cause: CauseStop, Error: "stopped before the harness started"})
 	}
 
-	secrets, err := w.resolveSecrets()
+	secrets, set, err := w.secretEnv()
 	if err != nil {
 		return w.fail("%v", err)
 	}
@@ -135,7 +146,7 @@ func (w *wrapper) run() error {
 	cmd := exec.Command(w.launch.Argv[0], w.launch.Argv[1:]...) //nolint:gosec,noctx // the argv is what the Run asked for; nothing ends the harness but the wrapper
 	cmd.Dir = w.launch.Dir
 	cmd.Env = append(append(envutil.WithoutTmux(os.Environ()), w.launch.Env...), secrets...)
-	copied, parentEnds, err := w.wire(cmd, log)
+	copied, parentEnds, err := w.wire(cmd, log, set)
 	if err != nil {
 		return w.fail("wiring the output: %v", err)
 	}
@@ -195,33 +206,58 @@ func (w *wrapper) run() error {
 // nothing a shell would not take as a name.
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// resolveSecrets is the environment of the SecretEnv of the launch, resolved
-// now, just before the harness starts, so their values live only in its
-// environment. Without SecretEnv it is nothing.
-func (w *wrapper) resolveSecrets() ([]string, error) {
-	var env []string
+// secretEnv is the environment of the SecretEnv of the launch, resolved now,
+// just before the harness starts, so that their values live only in its
+// environment, and set, what its output is redacted of. A launch without
+// SecretEnv has neither, and runs as it always did.
+//
+// Nothing runs whose output would not be redacted: in headless mode this
+// process redacts it, and in interactive mode the capture filter of the
+// Runtime must have acknowledged that it does. Nor is a value given to the
+// harness that set would not redact.
+func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
+	if len(w.launch.SecretEnv) == 0 {
+		return nil, nil, nil
+	}
 	for _, s := range w.launch.SecretEnv {
 		if !envName.MatchString(s.Name) {
-			return nil, fmt.Errorf("%s: the secret %q goes to %q, which is not the name of a variable", domain.CodeSecretUnavailable, s.Ref, s.Name)
+			return nil, nil, fmt.Errorf("%s: the secret %q goes to %q, which is not the name of a variable", domain.CodeSecretUnavailable, s.Ref, s.Name)
 		}
+	}
+	if set, err = redaction(w.o.Retention); err != nil {
+		return nil, nil, fmt.Errorf("%s: the output cannot be redacted: %w", domain.CodeSecretUnavailable, err)
+	}
+	if w.launch.Mode == ModeInteractive {
+		if acked, err := cfruntime.CaptureAcked(filepath.Join(w.o.RunDir, CaptureAckFile)); !acked {
+			if err == nil {
+				err = errors.New("its filter never acknowledged")
+			}
+			return nil, nil, fmt.Errorf("%s: the capture of the terminal does not redact the output: %w", domain.CodeSecretUnavailable, err)
+		}
+	}
+	for _, s := range w.launch.SecretEnv {
 		if w.o.Secrets == nil {
-			return nil, fmt.Errorf("%s: the secret %q of %s cannot be resolved: this Worker has no secret store", domain.CodeSecretUnavailable, s.Ref, s.Name)
+			return nil, nil, fmt.Errorf("%s: the secret %q of %s cannot be resolved: this Worker has no secret store", domain.CodeSecretUnavailable, s.Ref, s.Name)
 		}
 		value, err := w.o.Secrets(s.Ref)
 		if err != nil {
-			return nil, fmt.Errorf("%s: the secret %q of %s cannot be resolved: %w", domain.CodeSecretUnavailable, s.Ref, s.Name, err)
+			return nil, nil, fmt.Errorf("%s: the secret %q of %s cannot be resolved: %w", domain.CodeSecretUnavailable, s.Ref, s.Name, err)
+		}
+		if bytes.Contains(redact.Bytes([]byte(value), set), []byte(value)) {
+			return nil, nil, fmt.Errorf("%s: the secret %q of %s would not be redacted from the output", domain.CodeSecretUnavailable, s.Ref, s.Name)
 		}
 		env = append(env, s.Name+"="+value)
 	}
-	return env, nil
+	return env, set, nil
 }
 
 // wire connects the harness to the terminal and the log. In interactive mode
 // it uses the terminal of the pane itself, whose output the Runtime captures; in
-// headless mode it has no input and its output goes to the log and the pane.
-// copied closes when the output has been copied to its end; parentEnds are the
-// files of the pipe that this process must close once the harness has started.
-func (w *wrapper) wire(cmd *exec.Cmd, log *os.File) (copied <-chan struct{}, parentEnds []*os.File, err error) {
+// headless mode it has no input and its output goes to the log and the pane,
+// with set, if any, redacted from both. copied closes when the output has been
+// copied to its end; parentEnds are the files of the pipe that this process
+// must close once the harness has started.
+func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-chan struct{}, parentEnds []*os.File, err error) {
 	done := make(chan struct{})
 	if w.launch.Mode == ModeInteractive {
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = w.o.Stdin, w.o.Stdout, w.o.Stderr
@@ -237,9 +273,17 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File) (copied <-chan struct{}, par
 	if w.o.Stdout != nil {
 		sink = io.MultiWriter(log, w.o.Stdout)
 	}
+	var redactor *redact.Writer
+	if set != nil {
+		redactor = redact.NewWriter(sink, set)
+		sink = redactor
+	}
 	go func() {
 		defer close(done)
 		_, _ = io.Copy(sink, pr)
+		if redactor != nil {
+			_ = redactor.Close() // what it held back, before the log is synced
+		}
 		_ = pr.Close()
 	}()
 	return done, []*os.File{pw}, nil
@@ -253,7 +297,11 @@ func (w *wrapper) waitForGate() (stopped bool, err error) {
 	}
 	ticker := w.clock.NewTicker(poll)
 	defer ticker.Stop()
-	timeout := w.clock.NewTimer(GateTimeout)
+	limit := w.o.GateTimeout
+	if limit <= 0 {
+		limit = GateTimeout
+	}
+	timeout := w.clock.NewTimer(limit)
 	defer timeout.Stop()
 	for {
 		if _, err := os.Stat(w.launch.Gate); err == nil {
@@ -265,7 +313,7 @@ func (w *wrapper) waitForGate() (stopped bool, err error) {
 				return true, nil
 			}
 		case <-timeout.C():
-			return false, fmt.Errorf("the terminal was not ready after %s", GateTimeout)
+			return false, fmt.Errorf("the terminal was not ready after %s", limit)
 		case <-ticker.C():
 		}
 	}

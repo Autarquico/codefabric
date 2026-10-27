@@ -414,3 +414,20 @@ func TestAnEntryAppliedWithNoEventIsADuplicateWhenItComesAgain(t *testing.T) {
 		t.Errorf("the triple reused = %s", got)
 	}
 }
+
+// A stop carries the frozen spec of the Run: a Worker that lost its record
+// rebuilds it knowing whether the Run declared secrets, which decides whether
+// its result may be published unchecked.
+func TestAStopOrderCarriesTheFrozenSpecOfTheRun(t *testing.T) {
+	e := newEnv(t)
+	alpha := e.joinWorker("alpha")
+	r := e.acceptedRun(alpha, "x")
+	e.cancelTask(r.run.TaskID)
+	stops := e.stops(alpha)
+	if len(stops) != 1 {
+		t.Fatalf("stop orders %+v", stops)
+	}
+	if spec := e.storedRun(r.run.ID).Spec; len(spec) == 0 || string(stops[0].Spec) != string(spec) {
+		t.Fatalf("the stop carries the spec %s, the Run has %s", stops[0].Spec, spec)
+	}
+}

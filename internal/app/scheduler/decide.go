@@ -32,6 +32,30 @@ type Worker struct {
 	// Unreconciled: the Worker has live work it has not reconciled since the
 	// Controller started (§27.1); it gets nothing more until it has.
 	Unreconciled bool
+	// Secrets are the refs the Worker last announced, each with the Projects
+	// it holds the ref for (none: any Project). Only refs, never values.
+	Secrets map[string][]string
+}
+
+// Request is what a Run asks of the Worker that takes it: its placement and,
+// when it uses secrets, its Project and the refs of the Run that the
+// Project's allowlist lacks.
+type Request struct {
+	domain.Placement
+	Project    domain.ID
+	NotAllowed []string
+}
+
+// NewRequest judges the Run's secrets against the allowlist of its Project,
+// which is the same for every Worker.
+func NewRequest(placement domain.Placement, project domain.ID, allowlist []string) Request {
+	req := Request{Placement: placement, Project: project}
+	for _, ref := range placement.Secrets {
+		if !slices.Contains(allowlist, ref) {
+			req.NotAllowed = append(req.NotAllowed, ref)
+		}
+	}
+	return req
 }
 
 // Verdict is what the scheduler found of one Worker: the filters it fails, in
@@ -58,13 +82,13 @@ type Decision struct {
 // give the same Decision whatever the order of workers, because the highest
 // score wins and a tie goes to the lowest name (§10.6). Names are unique among
 // live Workers.
-func Decide(req domain.Placement, workers []Worker, now time.Time) Decision {
+func Decide(req Request, workers []Worker, now time.Time) Decision {
 	sorted := slices.SortedFunc(slices.Values(workers), func(a, b Worker) int { return cmp.Compare(a.Name, b.Name) })
 	d := Decision{Verdicts: make([]Verdict, len(sorted))}
 	for i, w := range sorted {
 		v := Verdict{ID: w.ID, Name: w.Name, State: w.State, Failed: failures(req, w, now)}
 		if v.Eligible() {
-			s := score(req, w)
+			s := score(req.Placement, w)
 			v.Score = &s
 		}
 		d.Verdicts[i] = v

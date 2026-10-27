@@ -26,6 +26,7 @@ import (
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -33,6 +34,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/host"
 	"github.com/Autarquico/codefabric/internal/worker/journal"
+	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -87,6 +89,13 @@ type Options struct {
 	// WrapperArgv is the command that wraps a harness, to which --run-dir <dir>
 	// is added. It defaults to this binary with `worker exec`.
 	WrapperArgv []string
+	// RedactPipeArgv is the capture filter of an interactive Run with
+	// secrets, to which --run-dir <dir> is added. It defaults to this binary
+	// with `worker redact-pipe`.
+	RedactPipeArgv []string
+	// Secrets is the catalog of the secrets of this Worker; nil is none, and
+	// a Run that uses any is rejected.
+	Secrets secrets.Store
 	// StopGrace is stop.grace (Appendix A): how long a harness has to end after
 	// it is asked to, before it is killed. It defaults to that of Appendix A.
 	StopGrace time.Duration
@@ -130,7 +139,12 @@ type Executor struct {
 	clock        clock.Clock
 	log          *slog.Logger
 	wrapper      []string
+	redactPipe   []string
 	grace        time.Duration
+	// jit delivers the secrets of a Run to its directory and takes them back.
+	jit *secretjit.Manager
+	// releases are the Runs whose secrets are being released.
+	releases releases
 
 	limitsMu sync.Mutex
 	limits   Limits
@@ -145,6 +159,10 @@ type Executor struct {
 	reconcileGen  atomic.Uint64
 	reconciledGen atomic.Uint64
 	reconcileWake chan struct{}
+
+	// The Controller grants secrets only to the daemon whose heartbeat it took
+	// last: until it has taken one of this daemon, no grant is asked for.
+	heartbeatTaken atomic.Bool
 
 	wake    chan struct{} // the decider has something new
 	pubWake chan struct{} // the publisher has something new
@@ -170,6 +188,14 @@ type runMemo struct {
 	retryAt  time.Time // when an unverified stop is verified again
 
 	unresolved bool // the identity of its wrapper could not be established, and the log said so
+
+	// A prepare in progress, which a stop cancels: cancelPrepare ends it and
+	// prepared closes when it has returned.
+	cancelPrepare context.CancelFunc
+	prepared      chan struct{}
+	prepareAt     time.Time     // when a prepare that could not finish is tried again
+	prepareWait   time.Duration // the backoff of that retry
+	revoked       bool          // the harness's access to the secrets was taken back in this life of the daemon
 }
 
 // runLock serialises the changes to a Run. It exists only while someone holds
@@ -196,7 +222,7 @@ func New(o Options) (*Executor, error) {
 		return nil, errors.New("executor: DB, Controller, Runtime and Journal are required")
 	}
 	e := &Executor{
-		o: o, harnesses: o.Harnesses, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, grace: o.StopGrace,
+		o: o, harnesses: o.Harnesses, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, redactPipe: o.RedactPipeArgv, grace: o.StopGrace, jit: secretjit.New(),
 		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), reconcileWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
 	}
 	e.reconcileGen.Store(1) // the start asks for a reconciliation
@@ -209,12 +235,17 @@ func New(o Options) (*Executor, error) {
 	if e.grace <= 0 {
 		e.grace = domain.Defaults().StopGrace
 	}
-	if len(e.wrapper) == 0 {
+	if len(e.wrapper) == 0 || len(e.redactPipe) == 0 {
 		self, err := os.Executable()
 		if err != nil {
 			return nil, fmt.Errorf("executor: locating this binary: %w", err)
 		}
-		e.wrapper = []string{self, "worker", "exec"}
+		if len(e.wrapper) == 0 {
+			e.wrapper = []string{self, "worker", "exec"}
+		}
+		if len(e.redactPipe) == 0 {
+			e.redactPipe = []string{self, "worker", "redact-pipe"}
+		}
 	}
 	if e.harnesses == nil {
 		e.harnesses, _ = harness.NewRegistry()
@@ -321,6 +352,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	if err := e.recoverRuns(ctx); err != nil {
 		return err
 	}
+	wg.Go(func() { e.releaseLoop(ctx) })
 	wg.Go(func() { e.reconcileLoop(ctx) })
 	wg.Go(func() { e.decideLoop(ctx) })
 	if e.o.Git != nil {
@@ -394,19 +426,27 @@ func (e *Executor) report(ctx context.Context, tx *state.Tx, k state.Key, kind v
 // For an orphan it writes nothing and says errOrphaned, so that no row is left
 // that can never be sent, and no caller takes a seq that does not exist.
 func (e *Executor) reportSeq(ctx context.Context, tx *state.Tx, k state.Key, kind v1.RunReportKind, at time.Time, fill func(*v1.RunReportEntry)) (uint64, error) {
-	if kind != v1.ReportOrphanPreserved {
-		if r, err := state.RunBy(ctx, tx, k); err == nil && r.OrphanedAt != nil {
+	fenced := false
+	if r, err := state.RunBy(ctx, tx, k); err == nil {
+		if r.OrphanedAt != nil && kind != v1.ReportOrphanPreserved {
 			return 0, errOrphaned
-		} else if err != nil && !errors.Is(err, state.ErrNotFound) {
-			return 0, err
 		}
+		fenced = r.FencedCode != "" && r.OrphanedAt == nil
+	} else if !errors.Is(err, state.ErrNotFound) {
+		return 0, err
 	}
 	entry := v1.RunReportEntry{Kind: kind, At: at}
 	if fill != nil {
 		fill(&entry)
 	}
 	entry.Message = reportable(entry.Message)
-	return e.o.Journal.AppendTx(ctx, tx, k, entry)
+	seq, err := e.o.Journal.AppendTx(ctx, tx, k, entry)
+	if err == nil && fenced {
+		// The fence holds it until a reconciliation says whether it is sent or
+		// dropped; one that decided before it was written would hold it for ever.
+		e.RequestReconcile()
+	}
+	return seq, err
 }
 
 func (e *Executor) runtimeHandle(k state.Key) *v1.RuntimeHandle {

@@ -63,6 +63,37 @@ var broken = []struct {
 	{"keeps sending after its ctx ends", "events-cancel", func() harnesstest.Fixture {
 		return wrap(noCap, func(a fakeharness.Adapter) harness.Adapter { return deafEvents{a} })
 	}},
+	{"puts the value of a secret in the Launch", "start", func() harnesstest.Fixture {
+		return wrap(noCap, func(a fakeharness.Adapter) harness.Adapter { return resolvedSecret{a} })
+	}},
+	{"gives a secret to a variable of the Worker", "start", func() harnesstest.Fixture {
+		return wrap(noCap, func(a fakeharness.Adapter) harness.Adapter {
+			a.SecretEnv = []harness.SecretEnv{{Name: "PATH", Ref: secretRef}}
+			return a
+		})
+	}},
+	{"names a secret the Run does not resolve", "run", func() harnesstest.Fixture {
+		return wrap(noCap, func(a fakeharness.Adapter) harness.Adapter {
+			a.SecretEnv = append(a.SecretEnv, harness.SecretEnv{Name: "OTHER_KEY", Ref: "fake/unknown"})
+			return a
+		})
+	}},
+	{"does not pass its secret to the harness", "run", func() harnesstest.Fixture {
+		return wrap(noCap, func(a fakeharness.Adapter) harness.Adapter {
+			a.SecretEnv = nil
+			return a
+		})
+	}},
+}
+
+// resolvedSecret puts the value of its secret in the environment of the
+// Launch, besides naming its ref.
+type resolvedSecret struct{ fakeharness.Adapter }
+
+func (a resolvedSecret) Start(ctx context.Context, host harness.Host, run harness.RunSpec) (harness.Launch, error) {
+	l, err := a.Adapter.Start(ctx, host, run)
+	l.Env = append(l.Env, secretName+"="+secretValue)
+	return l, err
 }
 
 // wrap is the fixture of the fakeharness with caps, its adapter broken by b.

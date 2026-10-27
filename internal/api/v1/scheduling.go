@@ -78,7 +78,9 @@ type PublishCommand struct {
 // StopCommand orders the Worker to end the processes of a Run under one lease
 // epoch (§10.7), which need not be the live one: an orphan is stopped under
 // the epoch it runs with. It carries what a Worker that lost its record of the
-// Run needs to rebuild one and stop it the normal way.
+// Run needs to rebuild one and stop it the normal way. Spec is the Run's
+// frozen configuration, as in AssignCommand: what tells the rebuilt record
+// whether the Run declared secrets (absent from a Controller before #23).
 type StopCommand struct {
 	RunID     string            `json:"run_id"`
 	LeaseID   string            `json:"lease_id"`
@@ -88,6 +90,7 @@ type StopCommand struct {
 	TaskID    string            `json:"task_id"`
 	ProjectID string            `json:"project_id"`
 	Branch    string            `json:"branch"`
+	Spec      json.RawMessage   `json:"spec,omitempty"`
 }
 
 // WorkerCommand is one order of the Controller→Worker queue. Seq is per

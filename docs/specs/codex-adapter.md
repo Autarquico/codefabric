@@ -13,7 +13,7 @@ depends_on: [harness-adapter-framework]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-16
 ---
 
 # Adapter de Codex CLI
@@ -28,6 +28,7 @@ Owner previsto en el bucle Develop: backend-eng.
 
 **Entra:**
 - `CODEX_HOME` por Run; `config.toml` parseado para convertir `env`/headers en refs
+- Render de las refs `{{cf-secret:<ref>}}` de `config.toml` en la config materializada del Run, con escape TOML y limpieza recuperable (sale de secrets-local, decisión del usuario 2026-10-16)
 - Componentes: `AGENTS.md`, `prompts/`, `skills/`; enlace a `auth.json`
 - Arranque `codex exec --json --sandbox workspace-write` con approvals `never`; parser JSONL
 

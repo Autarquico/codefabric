@@ -42,6 +42,11 @@ type Fixture struct {
 	Secrets []string
 	// CredentialFiles are the auth files SeedHome wrote, relative to home.
 	CredentialFiles []string
+	// SecretValues resolve the SecretEnv of a Launch, as the wrapper does just
+	// before exec: the value of each ref. The process of a check gets them in
+	// its environment; a ref without one cannot run (CF_SECRET_UNAVAILABLE),
+	// and no Launch may carry one, not even as it is written to launch.json.
+	SecretValues map[string]string
 	// Mutate edits one component of the configuration under home and returns
 	// its name.
 	Mutate func(t *testing.T, home string) string
@@ -179,9 +184,15 @@ func unchanged(t *testing.T, what, dir string, fn func()) {
 	}
 }
 
-// leaks is the first secret of e in b, if any.
+// leaks is the first secret of e in b, if any: a credential, or the value of
+// a secret ref.
 func (e *env) leaks(b []byte) (string, bool) {
 	for _, s := range e.f.Secrets {
+		if bytes.Contains(b, []byte(s)) {
+			return s, true
+		}
+	}
+	for _, s := range e.f.SecretValues {
 		if bytes.Contains(b, []byte(s)) {
 			return s, true
 		}

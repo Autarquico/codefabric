@@ -34,6 +34,9 @@ type Requirements struct {
 	Capabilities []string          `json:"capabilities,omitempty"`
 	Resources    *Resources        `json:"resources,omitempty"`
 	Workers      WorkerPreferences `json:"workers,omitempty"`
+	// SecretEnv are the environment variables of the harness that carry a
+	// secret: the Run uses their refs, and the Project must allow them.
+	SecretEnv []SecretEnv `json:"secret_env,omitempty"`
 }
 
 // ProjectDefaults are inherited by Tasks and Runs (§3.1, §3.3). Unset fields

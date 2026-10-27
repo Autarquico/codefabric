@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 func TestSecretRefsFindsTheMarkersInOrderOnce(t *testing.T) {
@@ -73,5 +74,32 @@ func TestCheckSecretsRefusesSecretRefsThatAreNotThoseOfTheContent(t *testing.T) 
 	}
 	if err := (harness.File{Content: content, SecretRefs: []string{"a", "b"}}).CheckSecrets(); err != nil {
 		t.Errorf("CheckSecrets of a consistent file = %v", err)
+	}
+}
+
+func TestAMarkerIsExactlyARefTheDomainAccepts(t *testing.T) {
+	for _, ref := range []string{
+		"a", "0", "a/b", "gh.token_2", "x-y", strings.Repeat("a", domain.MaxSecretRefLen),
+		"", "-x", ".x", "/x", "../x", "a b", "a{b", "a}b", "a:b", "ñ", strings.Repeat("a", domain.MaxSecretRefLen+1),
+	} {
+		content := []byte("before " + harness.SecretMarker(ref) + " after")
+		got := harness.SecretRefs(content)
+		if valid := domain.ValidSecretRef(ref); valid != slices.Equal(got, []string{ref}) || !valid && len(got) != 0 {
+			t.Errorf("ref %q (valid %v): SecretRefs = %q", ref, valid, got)
+		}
+		err := harness.File{Path: "f", Content: content, SecretRefs: got}.CheckSecrets()
+		if domain.ValidSecretRef(ref) != (err == nil) {
+			t.Errorf("ref %q: CheckSecrets = %v", ref, err)
+		}
+	}
+}
+
+func TestAMarkerInsideAnotherIsNotTakenForValid(t *testing.T) {
+	content := []byte("{{cf-secret:a" + harness.SecretMarker("b"))
+	if got := harness.SecretRefs(content); !slices.Equal(got, []string{"b"}) {
+		t.Errorf("SecretRefs = %q", got)
+	}
+	if err := (harness.File{Content: content, SecretRefs: []string{"b"}}).CheckSecrets(); !errors.Is(err, harness.ErrSecretUnavailable) {
+		t.Errorf("CheckSecrets = %v, want ErrSecretUnavailable for the open marker", err)
 	}
 }

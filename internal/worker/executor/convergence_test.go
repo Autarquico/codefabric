@@ -117,6 +117,10 @@ func (c *appController) OrphanToken(ctx context.Context, run string, epoch uint6
 	return c.app.Runs.MintOrphanToken(ctx, c.w, run, v1.OrphanTokenRequest{LeaseEpoch: epoch, ResultCommit: commit})
 }
 
+func (c *appController) GrantSecrets(ctx context.Context, run string, req v1.GrantSecretsRequest) (v1.GrantSecretsResponse, error) {
+	return c.app.Runs.GrantSecrets(ctx, c.w, run, req)
+}
+
 func (c *appController) Reconcile(ctx context.Context, req v1.ReconcileRequest) (v1.ReconcileResponse, error) {
 	out, err := c.app.Reconciliation.Reconcile(ctx, c.w, req)
 	if err == nil && c.losing("reconcile") {
@@ -234,6 +238,7 @@ func (w *world) restart(loseState ...bool) {
 	w.beat = ulid.Make().String()
 	w.f.restart(w.beat)
 	w.f.e.reconciledGen.Store(0)
+	w.f.e.heartbeatTaken.Store(false) // until its first heartbeat is taken
 	w.f.e.spawn = func(state.Key) {}
 	w.sender = &journal.Sender{
 		DB: w.f.db, Reporter: w.ctrl, Journal: w.f.j, Clock: w.f.clock, Log: slog.New(slog.DiscardHandler),
@@ -248,6 +253,7 @@ func (w *world) heartbeat() {
 		Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 1000}, Health: v1.Health{Status: v1.HealthOK},
 	})
 	must(w.t, err)
+	w.f.e.HeartbeatTaken()
 }
 
 func (w *world) longPoll(lose bool) {

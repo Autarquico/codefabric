@@ -2,7 +2,7 @@
 codename: codefabric
 title: Framework de adapters de harness
 type: task
-status: active
+status: shipped
 priority: P0
 size: M
 issue: 18

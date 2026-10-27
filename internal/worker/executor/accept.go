@@ -86,7 +86,7 @@ func (e *Executor) decide(ctx context.Context, k state.Key) (retry bool) {
 		e.log.ErrorContext(ctx, "reading the load", "err", err)
 		return true
 	}
-	if v := e.evaluate(r, lim, load); v.reject != "" {
+	if v := e.evaluate(ctx, r, lim, load); v.reject != "" {
 		err := e.reject(ctx, r, v)
 		var coded *domain.Error
 		if errors.As(err, &coded) && coded.Code == domain.CodeInvalidTransition {
@@ -134,7 +134,7 @@ func (e *Executor) accept(ctx context.Context, r state.Run) error {
 }
 
 func (e *Executor) reject(ctx context.Context, r state.Run, v verdict) error {
-	_, err := e.o.Controller.RejectLease(ctx, r.LeaseID, v1.RejectLeaseRequest{Epoch: r.LeaseEpoch, Code: v.reject, Message: v.message})
+	_, err := e.o.Controller.RejectLease(ctx, r.LeaseID, v1.RejectLeaseRequest{Epoch: r.LeaseEpoch, Code: v.reject, Message: reportable(v.message)})
 	return err
 }
 
@@ -179,10 +179,10 @@ func (e *Executor) answer(ctx context.Context, r state.Run, err error, done stat
 // evaluate decides whether this Worker can take the assignment (§10.4 point 2,
 // §10.5). The Controller does not know what the Worker has meanwhile, so the
 // Worker has the last word.
-func (e *Executor) evaluate(r state.Run, lim Limits, load state.Load) verdict {
+func (e *Executor) evaluate(ctx context.Context, r state.Run, lim Limits, load state.Load) verdict {
 	spec := parseSpec(r.Spec)
-	if spec.Schema != specSchema {
-		return verdict{domain.CodeVersionIncompatible, fmt.Sprintf("the spec has schema %d: this Worker reads schema %d", spec.Schema, specSchema)}
+	if !domain.ReadableRunSpecSchema(spec.Schema) {
+		return verdict{domain.CodeVersionIncompatible, fmt.Sprintf("the spec has schema %d: this Worker reads schemas %d and %d", spec.Schema, domain.RunSpecSchema, domain.RunSpecSchemaSecrets)}
 	}
 	adapter, ok := e.harnesses.Get(spec.Requirements.Harness)
 	switch {
@@ -199,5 +199,5 @@ func (e *Executor) evaluate(r state.Run, lim Limits, load state.Load) verdict {
 	case load.CPU+r.CPU > lim.CPU || load.MemoryMB+r.MemoryMB > lim.MemoryMB:
 		return verdict{domain.CodeWorkerCapacity, "the Run does not fit in what this Worker has left"}
 	}
-	return verdict{}
+	return e.secretsVerdict(ctx, r, spec)
 }

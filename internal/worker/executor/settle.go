@@ -289,6 +289,7 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 		e.kickPublisher()
 	}
 	e.forget(r.Key)
+	e.queueRelease(r, nil)
 	return true
 }
 

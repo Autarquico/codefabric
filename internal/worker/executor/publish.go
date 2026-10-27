@@ -9,6 +9,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
+	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -127,16 +128,22 @@ func (e *Executor) seal(ctx context.Context, p state.Publication) bool {
 			p.ParentOID = head
 		}
 	}
-	sealed, err := e.o.Git.Seal(ctx, e.worktree(p.Key), gitops.Intent{
-		Project: local.ProjectID, Run: p.RunID, LeaseEpoch: p.LeaseEpoch, ParentOID: p.ParentOID, At: p.SealedAt,
-	})
+	var sealed gitops.Sealed
+	forbidden, err := e.forbidden(local)
+	if err == nil {
+		sealed, err = e.o.Git.Seal(ctx, e.worktree(p.Key), gitops.Intent{
+			Project: local.ProjectID, Run: p.RunID, LeaseEpoch: p.LeaseEpoch, ParentOID: p.ParentOID, At: p.SealedAt,
+		}, forbidden)
+	}
 	now := e.clock.Now()
 	if err != nil {
 		if ctx.Err() != nil {
 			return false
 		}
-		e.log.WarnContext(ctx, "sealing a Run failed", "run", p.RunID, "err", err)
-		msg := "sealing failed: " + briefErr(err)
+		// gitops redacts what git says; this covers any other text of the error.
+		why := forbidden.Redact(err.Error())
+		e.log.WarnContext(ctx, "sealing a Run failed", "run", p.RunID, "err", why)
+		msg := "sealing failed: " + reportable(why)
 		txErr := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 			if err := state.FailPublication(ctx, tx, p, msg, now); err != nil {
 				return err
@@ -167,8 +174,12 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 		e.later(ctx, p, "the Run could not be read")
 		return false
 	}
+	forbidden, err := e.forbidden(local)
+	if err != nil {
+		return e.blocked(ctx, p, err)
+	}
 	if local.OrphanedAt != nil {
-		return e.preserveOrphan(ctx, p, local)
+		return e.preserveOrphan(ctx, p, local, forbidden)
 	}
 	tok, err := e.o.Controller.RelayToken(ctx, p.RunID, p.LeaseEpoch)
 	if err != nil {
@@ -187,9 +198,12 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 	pushErr := e.o.Git.Push(ctx, local.ProjectID, p.ResultCommit, local.Branch, gitops.PushAuth{
 		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
 		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
-	})
+	}, forbidden)
 	if ctx.Err() != nil {
 		return false
+	}
+	if isBlocked(pushErr) {
+		return e.blocked(ctx, p, pushErr)
 	}
 	now := e.clock.Now()
 	if pushErr == nil {
@@ -223,7 +237,7 @@ func (e *Executor) push(ctx context.Context, p state.Publication) bool {
 // preserveOrphan keeps the sealed result of an orphan in the relay, at the ref
 // only it may create (§10.4 point 5), and tells the Controller with the one
 // report it takes under an epoch that is not the live one.
-func (e *Executor) preserveOrphan(ctx context.Context, p state.Publication, local state.Run) bool {
+func (e *Executor) preserveOrphan(ctx context.Context, p state.Publication, local state.Run, forbidden gitops.Forbidden) bool {
 	tok, err := e.o.Controller.OrphanToken(ctx, p.RunID, p.LeaseEpoch, p.ResultCommit)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -239,9 +253,12 @@ func (e *Executor) preserveOrphan(ctx context.Context, p state.Publication, loca
 	pushErr := e.o.Git.PushRef(ctx, local.ProjectID, p.ResultCommit, ref, gitops.PushAuth{
 		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
 		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
-	})
+	}, forbidden)
 	if ctx.Err() != nil {
 		return false
+	}
+	if isBlocked(pushErr) {
+		return e.blocked(ctx, p, pushErr)
 	}
 	if pushErr != nil {
 		var pe *gitops.PushError
@@ -261,6 +278,45 @@ func (e *Executor) preserveOrphan(ctx context.Context, p state.Publication, loca
 		return state.MarkPreserved(ctx, tx, p, now)
 	})
 	return e.settled(ctx, p, txErr, "recording an orphan preserved")
+}
+
+// forbidden is what the publication of the Run local is checked against
+// (gitops.Forbidden): the values it keeps for that until the publication is
+// final. Only a Run known to declare no secrets is published unchecked. One
+// that declared secrets and holds none any more (they were released when an
+// earlier publication ended, or by the janitor once its state.db was lost),
+// and one whose record was rebuilt without its spec, so that whether it
+// declared any is not known, cannot be checked: it is not published, and the
+// error, a *gitops.BlockedError, says why with no value.
+func (e *Executor) forbidden(local state.Run) (gitops.Forbidden, error) {
+	values, err := secretjit.Load(e.runDir(local.Key))
+	if errors.Is(err, secretjit.ErrNotDelivered) {
+		err = nil
+	}
+	spec := parseSpec(local.Spec)
+	switch {
+	case err != nil:
+		return gitops.Forbidden{}, &gitops.BlockedError{Reason: "the values of the secrets of the Run cannot be read, so its result cannot be checked: " + err.Error()}
+	case len(values) > 0:
+		return gitops.Forbidden{Since: local.SourceCommit, Values: values}, nil
+	case !spec.known():
+		return gitops.Forbidden{}, &gitops.BlockedError{Reason: "this Worker rebuilt the record of the Run without its spec and cannot tell whether it declared secrets, so its result cannot be checked"}
+	case len(spec.refs()) > 0:
+		return gitops.Forbidden{}, &gitops.BlockedError{Reason: "the values of the secrets of the Run are no longer on this Worker, so its result cannot be checked"}
+	}
+	return gitops.Forbidden{}, nil
+}
+
+func isBlocked(err error) bool {
+	var b *gitops.BlockedError
+	return errors.As(err, &b)
+}
+
+// blocked ends a publication the guard did not let through: nothing was sent,
+// and trying again would find the same.
+func (e *Executor) blocked(ctx context.Context, p state.Publication, err error) bool {
+	e.log.WarnContext(ctx, "the publication of a Run is blocked", "run", p.RunID, "err", err)
+	return e.giveUp(ctx, p, briefErr(err))
 }
 
 // tokenFailed handles a token the Controller would not give. What says the Run is

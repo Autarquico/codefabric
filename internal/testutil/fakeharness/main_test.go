@@ -369,6 +369,9 @@ func TestParseScript_RejectsWhatItCannotRunSafely(t *testing.T) {
 		"result without result": `{"steps":[{"emit":{"type":"result"}}]}`,
 		"exit out of range":     `{"steps":[{"exit":256}]}`,
 		"record without path":   `{"steps":[{"record":{}}]}`,
+		"emit_env without name": `{"steps":[{"emit_env":{}}]}`,
+		"emit_env split < 0":    `{"steps":[{"emit_env":{"name":"X","split_at":-1}}]}`,
+		"emit_env pause > max":  `{"steps":[{"emit_env":{"name":"X","pause_ms":300001}}]}`,
 	} {
 		if _, err := fakeharness.ParseScript([]byte(src)); err == nil {
 			t.Errorf("%s: ParseScript(%s) = nil error", name, src)
@@ -376,5 +379,40 @@ func TestParseScript_RejectsWhatItCannotRunSafely(t *testing.T) {
 	}
 	if _, err := fakeharness.ParseScript([]byte(`{"steps":[{"wait_file":{"path":"x","timeout_ms":300000}},{"read_line":{"timeout_ms":1}},{"exit":255}]}`)); err != nil {
 		t.Errorf("a script at its bounds: %v", err)
+	}
+}
+
+// pieces records each write, and when it came.
+type pieces struct {
+	writes []string
+	at     []time.Time
+}
+
+func (p *pieces) Write(b []byte) (int, error) {
+	p.writes, p.at = append(p.writes, string(b)), append(p.at, time.Now())
+	return len(b), nil
+}
+
+func TestMain_EmitEnvWritesTheValueInTwoGoesWithAPause(t *testing.T) {
+	p := writeScript(t, filepath.Join(t.TempDir(), "script.json"), fakeharness.Script{Steps: []fakeharness.Step{
+		{EmitEnv: &fakeharness.EmitEnv{Name: "API_KEY", SplitAt: 4, PauseMS: 100}},
+		{EmitEnv: &fakeharness.EmitEnv{Name: "API_KEY", SplitAt: 99}},
+		{EmitEnv: &fakeharness.EmitEnv{Name: "API_KEY"}},
+	}})
+	var out pieces
+	code := fakeharness.Main([]string{"fakeharness", "--script", p}, []string{"API_KEY=old", "API_KEY=s3cr3t-value"}, strings.NewReader(""), &out, io.Discard)
+	want := []string{"s3cr", "3t-value\n", "s3cr3t-value", "\n", "s3cr3t-value", "\n"}
+	if code != 0 || strings.Join(out.writes, "|") != strings.Join(want, "|") {
+		t.Fatalf("code %d, writes %q, want %q", code, out.writes, want)
+	}
+	if gap := out.at[1].Sub(out.at[0]); gap < 100*time.Millisecond {
+		t.Errorf("the second piece came %s after the first", gap)
+	}
+}
+
+func TestMain_EmitEnvOfAVariableThatIsNotSetFails(t *testing.T) {
+	r := run(t, nil, nil, fakeharness.Step{EmitEnv: &fakeharness.EmitEnv{Name: "MISSING"}})
+	if r.code != fakeharness.ExitScriptError || !strings.Contains(r.stderr, "MISSING is not set") || r.stdout != "" {
+		t.Errorf("%+v", r)
 	}
 }

@@ -13,7 +13,7 @@ depends_on: [phase-1-workers]
 supersedes: []
 related_specs: [codefabric-spec]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-16
 ---
 
 # Fase 2 — Claude/Codex y Workflows
@@ -36,6 +36,8 @@ Fase 2 del roadmap de `docs/codefabric-spec.md` (§43). Release objetivo: **v0.2
 | `codex-adapter` | Adapter de Codex CLI | M | `harness-adapter-framework` |
 | `workflow-apply-drift-lock` | Workflows: apply, drift y lock de configuración | L | `workflow-store-adopt-commit`, `claude-code-adapter`, `scheduler-leases-reservations` |
 | `secrets-local` | Secrets locales al Worker | M | `scheduler-leases-reservations`, `worker-executor-tmux`, `harness-adapter-framework` |
+| `secrets-keyring` | Backend keyring de secrets | M | `secrets-local` |
+| `secrets-origin-askpass` | Credencial de origin vía GIT_ASKPASS | M | `secrets-local` |
 | `repo-config-environment-host` | Config del repo y Environment host | M | `git-relay-publication`, `secrets-local` |
 | `doctor-and-join-wizard` | Doctor y wizard de join | M | `claude-code-adapter`, `codex-adapter`, `workflow-apply-drift-lock`, `secrets-local`, `observe-attach-events` |
 | `e2e-v0-2` | E2E v0.2 | S | `doctor-and-join-wizard`, `repo-config-environment-host` |

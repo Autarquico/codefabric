@@ -54,6 +54,9 @@ type Adapter struct {
 	// Script, when set, is passed as --script, over what the configuration
 	// directory has.
 	Script string
+	// SecretEnv is the secret environment of every Launch: refs only, which
+	// the wrapper resolves.
+	SecretEnv []harness.SecretEnv
 }
 
 var _ harness.Adapter = Adapter{}
@@ -157,7 +160,7 @@ func (a Adapter) launch(host harness.Host, run harness.RunSpec, session string) 
 		configDir = run.ConfigDir
 	}
 	env := append([]string{ConfigDirEnv + "=" + configDir}, a.Env...)
-	return harness.Launch{Argv: argv, Env: env}, nil
+	return harness.Launch{Argv: argv, Env: env, SecretEnv: a.SecretEnv}, nil
 }
 
 // Checkpoint is the last session the Run started, from its events.

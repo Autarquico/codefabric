@@ -14,6 +14,7 @@
 - #4 Controller store: SQLite, transacciones, eventos e idempotencia
 - #5 Identidad del Controller, TLS y tokens de cliente
 - #6 API, Client SDK y `cf status`
+- #7 Fase 1 — Workers y ejecución básica
 - #8 Projects, Tasks y Runs: API y CLI
 - #9 Registro de Workers y heartbeats
 - #10 Scheduler, leases y reservas
@@ -23,6 +24,7 @@
 - #14 Observación: attach, ps, eventos y output
 - #15 Unidades de servicio systemd y launchd
 - #16 E2E v0.1
+- #18 Framework de adapters de harness
 <!-- /pm-sync:done-this-week -->
 
 ---

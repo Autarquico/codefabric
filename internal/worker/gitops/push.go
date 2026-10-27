@@ -61,25 +61,32 @@ var (
 	badCert     = regexp.MustCompile(`(?i)ssl certificate problem|certificate verify failed|unknown ca|bad certificate|certificate (has expired|required)|tlsv1 alert|server (certificate )?verification failed|certificate signer not trusted`)
 )
 
-// Push sends the commit to refs/heads/<branch> of the relay, without force and
-// without any hook, from the bare repository of the Project. The environment is
-// built from nothing and the configuration travels in it, so that the token is
-// in neither argv nor any file; redirects are not followed.
-func (g *Git) Push(ctx context.Context, project, commit, branch string, a PushAuth) error {
+// Push sends the commit to refs/heads/<branch> of the relay, without force,
+// without any hook and without any tag, from the bare repository of the
+// Project. The environment is built from nothing and the configuration travels
+// in it, so that the token is in neither argv nor any file; redirects are not
+// followed.
+//
+// The guard reads what the commit brings first, every time (forbidden): a push
+// it does not let through is a BlockedError, and nothing is sent.
+func (g *Git) Push(ctx context.Context, project, commit, branch string, a PushAuth, forbidden Forbidden) error {
 	if !domain.ValidBranch(branch) {
 		return &PushError{Class: PushLocal, Message: "the project, commit or branch is not valid"}
 	}
-	return g.PushRef(ctx, project, commit, "refs/heads/"+branch, a)
+	return g.PushRef(ctx, project, commit, "refs/heads/"+branch, a, forbidden)
 }
 
 // PushRef is Push to a full ref: a branch of CodeFabric, or the ref of an orphan.
-func (g *Git) PushRef(ctx context.Context, project, commit, ref string, a PushAuth) error {
+func (g *Git) PushRef(ctx context.Context, project, commit, ref string, a PushAuth, forbidden Forbidden) error {
 	branch, isBranch := strings.CutPrefix(ref, "refs/heads/")
 	switch {
 	case !isProject(project) || !domain.ValidCommitID(commit) || (isBranch && !domain.ValidBranch(branch)) || (!isBranch && !domain.ValidOrphanRef(ref)):
 		return &PushError{Class: PushLocal, Message: "the project, commit or branch is not valid"}
 	case a.URL == "" || a.Token == "" || a.Cert == "" || a.Key == "" || a.CA == "":
 		return &PushError{Class: PushLocal, Message: "the credentials for the relay are incomplete"}
+	}
+	if err := g.guard(ctx, project, commit, forbidden); err != nil {
+		return err
 	}
 	bare := g.o.Paths.WorkerRepoDir(project)
 	// The keys of the TLS and of the proxy are those of this URL, which win over any
@@ -107,7 +114,7 @@ func (g *Git) PushRef(ctx context.Context, project, commit, ref string, a PushAu
 	}
 	res, err := g.run(ctx, cmd{
 		dir: bare, env: env, timeout: g.pushTimeout(), secrets: []string{a.Token},
-		args: []string{"push", "--porcelain", "--no-verify", "--no-progress", "--end-of-options", a.URL, commit + ":" + ref},
+		args: []string{"push", "--porcelain", "--no-verify", "--no-progress", "--no-follow-tags", "--end-of-options", a.URL, commit + ":" + ref},
 	})
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {

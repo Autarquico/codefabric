@@ -53,6 +53,26 @@ type fakeController struct {
 	reconciles []v1.ReconcileRequest
 	// orphanRef, if set, is the ref OrphanToken answers with.
 	orphanRef string
+	// grant, if set, answers GrantSecrets; by default every ref is granted.
+	grant  func(run string, req v1.GrantSecretsRequest) (v1.GrantSecretsResponse, error)
+	grants []v1.GrantSecretsRequest
+}
+
+func (c *fakeController) GrantSecrets(_ context.Context, run string, req v1.GrantSecretsRequest) (v1.GrantSecretsResponse, error) {
+	c.mu.Lock()
+	c.grants = append(c.grants, req)
+	answer := c.grant
+	c.mu.Unlock()
+	if answer != nil {
+		return answer(run, req)
+	}
+	return v1.GrantSecretsResponse{Granted: append([]string{}, req.Refs...)}, nil
+}
+
+func (c *fakeController) grantRequests() []v1.GrantSecretsRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]v1.GrantSecretsRequest{}, c.grants...)
 }
 
 func (c *fakeController) Reconcile(_ context.Context, req v1.ReconcileRequest) (v1.ReconcileResponse, error) {
@@ -154,6 +174,7 @@ type fakeRuntime struct {
 	wired    []cfruntime.Spec
 	stops    []string
 	startErr error
+	listErr  error
 }
 
 func newFakeRuntime() *fakeRuntime { return &fakeRuntime{sessions: map[string]bool{}} }
@@ -198,6 +219,9 @@ func (r *fakeRuntime) Status(_ context.Context, h cfruntime.Handle) (cfruntime.S
 func (r *fakeRuntime) List(context.Context) ([]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
 	var out []string
 	for name, alive := range r.sessions {
 		if alive {
@@ -296,6 +320,8 @@ func (f *fixture) build() *Executor {
 	}
 	// The tests that drive the steps by hand stand for a Worker that reconciled.
 	e.reconciledGen.Store(e.reconcileGen.Load())
+	// And for a daemon whose heartbeat the Controller took.
+	e.heartbeatTaken.Store(true)
 	return e
 }
 

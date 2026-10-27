@@ -17,6 +17,8 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
+	"github.com/Autarquico/codefabric/internal/adapters/secrets"
+	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/client"
@@ -53,6 +55,8 @@ type Options struct {
 	Runtime cfruntime.Runtime
 	// WrapperArgv replaces `<this binary> worker exec`, for tests.
 	WrapperArgv []string
+	// RedactPipeArgv replaces `<this binary> worker redact-pipe`, for tests.
+	RedactPipeArgv []string
 	// StopGrace replaces stop.grace (Appendix A), for tests.
 	StopGrace time.Duration
 	// GitPath replaces the git found on the PATH, for tests.
@@ -140,11 +144,15 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+	if d.generation, err = db.StartGeneration(ctx); err != nil {
+		return err
+	}
+	d.stateDB, d.secrets = db, secretsfile.New(o.Paths.WorkerSecretsFile(), d.clock)
 	jrn := journal.New(d.epoch, d.clock)
 	rt, adapters := d.runtimeAndHarnesses(ctx, o)
 	eo := executor.Options{
 		DB: db, Controller: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
-		WrapperArgv: o.WrapperArgv, StopGrace: o.StopGrace,
+		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
 	}
 	// Publishing the result of a Run needs git: without it this Worker offers no harness.
 	if git, gitErr := gitops.New(ctx, gitops.Options{Paths: o.Paths, Clock: d.clock, Log: d.log, GitPath: o.GitPath}); gitErr != nil {
@@ -175,6 +183,8 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	d.onResponse = func(r v1.HeartbeatResponse) {
+		// A heartbeat taken is this daemon held as the current one: it may ask for grants.
+		ex.HeartbeatTaken()
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
 		if r.ReconcileRequired && ex.Reconciled() {
 			// The Controller restarted, or lost what it knew of this epoch: reconcile again.
@@ -277,6 +287,13 @@ type daemon struct {
 	measure  func(dir string) (sysinfo.Info, error)
 	clock    clock.Clock
 
+	// generation orders this run of the daemon among those of the Worker,
+	// and seq its heartbeats (see the fence in app/workers).
+	generation uint64
+	seq        uint64
+	stateDB    *state.DB
+	secrets    secrets.Store
+
 	capabilities   []string
 	sshTarget      string            // what clients attach through; "" announces none
 	defaultSSH     bool              // announce <user>@<hostname>
@@ -293,13 +310,20 @@ func (d *daemon) loop(ctx context.Context) error {
 		failures int
 		state    domain.WorkerState
 	)
-	d.log.InfoContext(ctx, "worker daemon started", "epoch", d.epoch, "version", d.version, "controller", d.client.Controller())
+	d.log.InfoContext(ctx, "worker daemon started", "epoch", d.epoch, "generation", d.generation,
+		"version", d.version, "controller", d.client.Controller())
 	for {
 		wait := d.interval
 		resp, err := d.beat(ctx)
+		var again bool
+		if err != nil && ctx.Err() == nil {
+			again, err = d.answerFence(ctx, err)
+		}
 		switch {
 		case ctx.Err() != nil:
 			return nil
+		case again:
+			wait = d.backoff(1)
 		case err == nil:
 			failures = 0
 			if d.onResponse != nil {
@@ -323,20 +347,36 @@ func (d *daemon) loop(ctx context.Context) error {
 }
 
 func (d *daemon) beat(ctx context.Context) (v1.HeartbeatResponse, error) {
-	info, health, err := d.measureMachine(ctx)
+	req, err := d.heartbeat(ctx)
 	if err != nil {
 		return v1.HeartbeatResponse{}, err
+	}
+	return d.client.Heartbeat(ctx, req)
+}
+
+// heartbeat is the next heartbeat: what the machine has, the health of the
+// daemon, and the metadata of the secrets it holds, under the next seq.
+func (d *daemon) heartbeat(ctx context.Context) (v1.HeartbeatRequest, error) {
+	info, health, err := d.measureMachine(ctx)
+	if err != nil {
+		return v1.HeartbeatRequest{}, err
 	}
 	if d.executorHealth != nil && health.Status == v1.HealthOK {
 		health = d.executorHealth()
 	}
-	return d.client.Heartbeat(ctx, v1.HeartbeatRequest{
-		Epoch: d.epoch, DaemonVersion: d.version, Hostname: info.Hostname, OS: info.OS, Arch: info.Arch,
+	report, problem := d.secretsReport(ctx)
+	if problem != "" && health.Status == v1.HealthOK {
+		health = v1.Health{Status: v1.HealthDegraded, Message: problem}
+	}
+	return v1.HeartbeatRequest{
+		Epoch: d.epoch, Generation: d.generation, DaemonVersion: d.version,
+		Hostname: info.Hostname, OS: info.OS, Arch: info.Arch,
 		Capabilities: d.capabilities,
 		Total:        v1.Capacity{CPU: info.CPU, MemoryMB: info.MemoryMB, DiskMB: info.DiskMB},
 		Health:       health,
 		SSHTarget:    d.announcedSSHTarget(info.Hostname), AttachBinaries: d.attachBinaries,
-	})
+		Secrets: &report,
+	}, nil
 }
 
 // announcedSSHTarget is the target the heartbeat carries. The default is the

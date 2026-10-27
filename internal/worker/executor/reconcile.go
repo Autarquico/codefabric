@@ -357,7 +357,11 @@ func (e *Executor) applyVerdict(ctx context.Context, k state.Key, before sent, v
 			return err
 		}
 		if r.Phase != before.phase || r.FencedCode != before.fenced {
-			return nil // it moved since it was sent
+			if r.FencedCode != "" {
+				// It moved since it was sent: what it is now, fenced, is for another round to settle.
+				e.RequestReconcile()
+			}
+			return nil
 		}
 		if r.Phase == state.PhaseAssigned {
 			return nil // not answered yet: the answer to the lease says what it is worth

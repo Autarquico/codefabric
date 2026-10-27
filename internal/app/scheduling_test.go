@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -841,5 +842,121 @@ func TestPass_TwoPassesCompetingForTheOnlySlotReserveOnce(t *testing.T) {
 		if held != 1 {
 			t.Fatalf("round %d: %d Runs hold a Worker", round, held)
 		}
+	}
+}
+
+func usingSecret(name, ref string) func(*v1.CreateTaskRequest) {
+	return func(r *v1.CreateTaskRequest) {
+		r.Requirements.SecretEnv = append(r.Requirements.SecretEnv, v1.SecretEnv{Name: name, Ref: ref})
+	}
+}
+
+func (e *env) allow(project string, refs ...string) {
+	e.t.Helper()
+	_, err := e.app.Projects.AllowSecrets(e.t.Context(), e.owner, project, v1.ProjectSecretsRequest{Refs: refs})
+	must(e.t, err)
+}
+
+// secretsVerdicts is, for each Worker in explain, its secrets failure as
+// "<code> <details>", or "" if it passes that filter.
+func (e *env) secretsVerdicts(run string) map[string]string {
+	e.t.Helper()
+	got, err := e.app.Scheduler.Explain(e.t.Context(), run)
+	must(e.t, err)
+	out := map[string]string{}
+	for _, w := range got.Workers {
+		out[w.Name] = ""
+		for _, f := range w.Failed {
+			if f.Filter == scheduler.FilterSecrets {
+				out[w.Name] = string(f.Code) + " " + jsonOf(e.t, f.Details)
+			}
+		}
+	}
+	return out
+}
+
+// Only a Worker that announces every secret of the Run, for its Project, is
+// eligible; the allowlist of the Project outranks every Worker; the reason the
+// Run waits stays CF_NO_ELIGIBLE_WORKER and the concrete code is in explain.
+func TestScenario_SecretsLocal_Elegibilidad(t *testing.T) {
+	t.Run("only the Worker that holds the secret is eligible", func(t *testing.T) {
+		e := newEnv(t)
+		e.joinWorker("alpha") // it would win a tie
+		e.holds(e.joinWorker("beta"), 1, map[string][]string{"gh/token": nil})
+		run := e.queuedRun("x", usingSecret("GH_TOKEN", "gh/token"))
+		e.allow("backend", "gh/token")
+
+		want := map[string]string{"alpha": `CF_SECRET_UNAVAILABLE {"missing":["gh/token"]}`, "beta": ""}
+		if got := e.secretsVerdicts(run.ID); !maps.Equal(got, want) {
+			t.Errorf("explain = %v, want %v", got, want)
+		}
+		if res := e.pass(); res.Assigned != 1 {
+			t.Fatalf("pass = %+v", res)
+		}
+		if got := e.workerOfRun(run.ID); got != "beta" {
+			t.Errorf("the Run went to %q", got)
+		}
+	})
+
+	t.Run("a ref outside the allowlist is denied on every Worker", func(t *testing.T) {
+		e := newEnv(t)
+		e.holds(e.joinWorker("alpha"), 1, map[string][]string{"gh/token": nil})
+		e.joinWorker("beta")
+		run := e.queuedRun("x", usingSecret("GH_TOKEN", "gh/token"))
+
+		if res := e.pass(); res.Assigned != 0 {
+			t.Fatalf("pass = %+v", res)
+		}
+		if r := e.storedRun(run.ID); r.State != domain.RunQueued || r.QueuedReason != string(domain.CodeNoEligibleWorker) {
+			t.Errorf("Run = %+v", r)
+		}
+		denied := `CF_POLICY_DENIED {"not_allowed":["gh/token"]}`
+		if got := e.secretsVerdicts(run.ID); !maps.Equal(got, map[string]string{"alpha": denied, "beta": denied}) {
+			t.Errorf("explain = %v", got)
+		}
+
+		// Once allowed, the next pass places it on the Worker that holds it.
+		e.allow("backend", "gh/token")
+		if res := e.pass(); res.Assigned != 1 || e.workerOfRun(run.ID) != "alpha" {
+			t.Fatalf("pass after allow = %+v, Worker %q", res, e.workerOfRun(run.ID))
+		}
+	})
+
+	t.Run("a Run without secrets does not change", func(t *testing.T) {
+		e := newEnv(t)
+		e.joinWorker("alpha")
+		e.holds(e.joinWorker("beta"), 1, map[string][]string{"gh/token": nil})
+		run := e.queuedRun("x")
+
+		if got := e.secretsVerdicts(run.ID); !maps.Equal(got, map[string]string{"alpha": "", "beta": ""}) {
+			t.Errorf("explain = %v", got)
+		}
+		if res := e.pass(); res.Assigned != 1 || e.workerOfRun(run.ID) != "alpha" {
+			t.Errorf("pass = %+v, Worker %q: a tie goes to the lowest name", res, e.workerOfRun(run.ID))
+		}
+	})
+}
+
+// The scope a Worker gives a secret is honoured: held for another Project is
+// not held for this one (§16.7).
+func TestPass_SecretsHonourTheScopeOfTheWorker(t *testing.T) {
+	e := newEnv(t)
+	backend := e.project("backend")
+	other := e.project("frontend")
+	e.holds(e.joinWorker("alpha"), 1, map[string][]string{"gh/token": {other.ID}, "npm/token": nil})
+	e.holds(e.joinWorker("beta"), 1, map[string][]string{"gh/token": {other.ID, backend.ID}})
+	e.allow("backend", "gh/token", "npm/token")
+	run := e.queuedRun("x", usingSecret("GH_TOKEN", "gh/token"), usingSecret("NPM_TOKEN", "npm/token"))
+
+	want := map[string]string{
+		"alpha": `CF_SECRET_UNAVAILABLE {"out_of_scope":["gh/token"]}`,
+		"beta":  `CF_SECRET_UNAVAILABLE {"missing":["npm/token"]}`,
+	}
+	if got := e.secretsVerdicts(run.ID); !maps.Equal(got, want) {
+		t.Errorf("explain = %v, want %v", got, want)
+	}
+	e.holds(e.sessions["beta"], 2, map[string][]string{"gh/token": {backend.ID}, "npm/token": {backend.ID}})
+	if res := e.pass(); res.Assigned != 1 || e.workerOfRun(run.ID) != "beta" {
+		t.Errorf("pass = %+v, Worker %q", res, e.workerOfRun(run.ID))
 	}
 }

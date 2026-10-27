@@ -9,7 +9,11 @@
 //	started.json  the harness was spawned
 //	exit.json     it ended and nothing of its group is left
 //
-// output.log is the output, appended as it comes.
+// output.log is the output, appended as it comes. With secrets it never holds
+// their values: in headless mode the wrapper redacts the output on its way to
+// the log and the pane, and in interactive mode the capture filter of the
+// Runtime (RedactPipe) redacts what the terminal shows on its way to the log.
+// What the terminal itself shows, its scrollback included, is not redacted.
 package execwrap
 
 import (

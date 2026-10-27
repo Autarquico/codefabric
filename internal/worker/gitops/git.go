@@ -49,6 +49,8 @@ type Options struct {
 	GitPath string
 	// PushTimeout replaces the deadline of a push (30 min), for tests.
 	PushTimeout time.Duration
+	// GuardTimeout replaces the deadline of the guard of a publication (10 min), for tests.
+	GuardTimeout time.Duration
 }
 
 // Git runs the git operations of the Worker.
@@ -143,7 +145,8 @@ type cmd struct {
 	env     []string
 	args    []string
 	timeout time.Duration
-	secrets []string // removed from every message
+	secrets []string    // removed from every message
+	values  *redact.Set // the values of secrets: redacted from every message before it is cut
 	stdin   string
 }
 
@@ -162,17 +165,18 @@ func (g *Git) run(ctx context.Context, c cmd) (result, error) {
 	// The group of the child is ended by procgroup alone, never after its leader is reaped.
 	p := exec.Command(g.git, c.args...) //nolint:gosec,noctx // git is the located executable; arguments are built by this package; ctx goes to procgroup
 	p.Dir, p.Env = c.dir, c.env
-	var out, errOut bytes.Buffer
+	var out bytes.Buffer
+	errOut := &boundedBuffer{max: stderrBytes}
 	if c.stdin != "" {
 		p.Stdin = strings.NewReader(c.stdin)
 	}
 	child, err := procgroup.Start(ctx, p, procgroup.Options{
-		Stdout: &out, Stderr: &boundedBuffer{buf: &errOut, max: stderrBytes}, Drain: killDelay,
+		Stdout: &out, Stderr: errOut, Drain: killDelay,
 	})
 	if err == nil {
 		err = child.Wait()
 	}
-	res := result{stdout: out.String(), stderr: errOut.String()}
+	res := result{stdout: out.String(), stderr: errOut.text()}
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
@@ -184,7 +188,7 @@ func (g *Git) run(ctx context.Context, c cmd) (result, error) {
 	default:
 		return res, fmt.Errorf("gitops: starting git %s: %w", c.args[0], err)
 	}
-	res.stderr = clean(res.stderr, c.secrets)
+	res.stderr = clean(redacted(res.stderr, c.values), c.secrets)
 	return res, nil
 }
 
@@ -207,18 +211,41 @@ func clean(s string, secrets []string) string {
 	return redact.Tail(redact.Secrets(strings.TrimSpace(s), secrets...), 2048)
 }
 
+// redacted is s without the values of set, if there is a set.
+func redacted(s string, set *redact.Set) string {
+	if set == nil {
+		return s
+	}
+	return string(redact.Bytes([]byte(s), set))
+}
+
 // boundedBuffer keeps at most max bytes and drops the rest without failing, so
 // that a chatty child is never blocked by its stderr.
 type boundedBuffer struct {
-	buf *bytes.Buffer
+	buf bytes.Buffer
 	max int
+	cut bool
 }
 
 func (b *boundedBuffer) Write(p []byte) (int, error) {
-	if room := b.max - b.buf.Len(); room > 0 {
+	room := b.max - b.buf.Len()
+	if len(p) > room {
+		b.cut = true
+	}
+	if room > 0 {
 		b.buf.Write(p[:min(room, len(p))])
 	}
 	return len(p), nil
+}
+
+// text is what was kept, without the line the cut split: a value of a secret
+// left there in part is one no redaction matches.
+func (b *boundedBuffer) text() string {
+	s := b.buf.String()
+	if b.cut {
+		s = s[:strings.LastIndexByte(s, '\n')+1]
+	}
+	return s
 }
 
 // sleep waits on the clock, or until ctx ends.

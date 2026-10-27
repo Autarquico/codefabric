@@ -170,7 +170,11 @@ func (r *Runtime) Wire(ctx context.Context, spec cfruntime.Spec) error {
 		return err
 	}
 	if spec.Capture != "" {
-		if err := r.capture(ctx, spec); err != nil {
+		err := r.capture(ctx, spec)
+		if err == nil && len(spec.CaptureFilter) > 0 {
+			err = r.awaitAck(ctx, spec)
+		}
+		if err != nil {
 			if alive, checkErr := r.hasSession(ctx, spec.Name); checkErr == nil && !alive {
 				return nil
 			}
@@ -187,7 +191,8 @@ func (r *Runtime) Wire(ctx context.Context, spec cfruntime.Spec) error {
 
 // capture opens the pipe of the terminal unless the pane has one. `pipe-pane -o`
 // would not do: with a pipe open it closes it, so repeating it would turn the
-// capture off.
+// capture off. A filter about to be started has no acknowledgement yet: one
+// left by a filter that is gone does not count.
 func (r *Runtime) capture(ctx context.Context, spec cfruntime.Spec) error {
 	target := "=" + spec.Name + ":"
 	out, stderr, err := r.exec(ctx, "display-message", "-p", "-t", target, "#{pane_pipe}")
@@ -197,10 +202,56 @@ func (r *Runtime) capture(ctx context.Context, spec cfruntime.Spec) error {
 	if strings.TrimSpace(out) == "1" {
 		return nil
 	}
-	if _, stderr, err := r.exec(ctx, "pipe-pane", "-t", target, "cat >> "+shellQuote(spec.Capture)); err != nil {
+	if len(spec.CaptureFilter) > 0 {
+		if err := os.Remove(spec.CaptureAck); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("tmux: clearing the acknowledgement of the capture of %s: %w", spec.Name, err)
+		}
+	}
+	if _, stderr, err := r.exec(ctx, "pipe-pane", "-t", target, pipeCommand(spec)); err != nil {
 		return fmt.Errorf("tmux: capturing the output of %s: %w (%s)", spec.Name, err, strings.TrimSpace(stderr))
 	}
 	return nil
+}
+
+// pipeCommand is the shell command of the pipe of the terminal: the filter of
+// the Spec, or a plain copy, appending to Capture.
+func pipeCommand(spec cfruntime.Spec) string {
+	if len(spec.CaptureFilter) == 0 {
+		return "cat >> " + shellQuote(spec.Capture)
+	}
+	quoted := make([]string, len(spec.CaptureFilter))
+	for i, arg := range spec.CaptureFilter {
+		quoted[i] = shellQuote(arg)
+	}
+	return "exec " + strings.Join(quoted, " ") + " >> " + shellQuote(spec.Capture)
+}
+
+// AckTimeout bounds how long Wire waits for a capture filter to acknowledge.
+const AckTimeout = 10 * time.Second
+
+const ackPoll = 20 * time.Millisecond
+
+// awaitAck waits until the capture filter acknowledges that it is filtering.
+// Until it does the gate stays closed, so a filter that cannot filter, or never
+// says, keeps the command of the session from running anything.
+func (r *Runtime) awaitAck(ctx context.Context, spec cfruntime.Spec) error {
+	deadline := time.Now().Add(AckTimeout)
+	for {
+		acked, err := cfruntime.CaptureAcked(spec.CaptureAck)
+		switch {
+		case err != nil:
+			return fmt.Errorf("tmux: capturing the output of %s: %w", spec.Name, err)
+		case acked:
+			return nil
+		case time.Now().After(deadline):
+			return fmt.Errorf("tmux: the capture filter of %s did not acknowledge within %s", spec.Name, AckTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(ackPoll):
+		}
+	}
 }
 
 // Stop destroys the session.
@@ -353,12 +404,17 @@ func (r *Runtime) environment() []string {
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // checkPaths refuses what tmux would read as a format: it expands '#' in a start
-// directory and in a pipe-pane command, so a path with one would not mean what it says.
+// directory and in a pipe-pane command, so a path or an argument of the filter
+// with one would not mean what it says.
+// A filter must acknowledge somewhere, and has nothing to filter without a capture.
 func checkPaths(spec cfruntime.Spec) error {
-	for _, path := range []string{spec.Dir, spec.Capture, spec.Ready} {
+	for _, path := range append([]string{spec.Dir, spec.Capture, spec.CaptureAck, spec.Ready}, spec.CaptureFilter...) {
 		if strings.Contains(path, "#") {
 			return fmt.Errorf("tmux: the path %q has a '#', which tmux would read as a format: move the data directory", path)
 		}
+	}
+	if len(spec.CaptureFilter) > 0 && (spec.Capture == "" || spec.CaptureAck == "") {
+		return errors.New("tmux: a capture filter needs a capture and an acknowledgement file")
 	}
 	return nil
 }

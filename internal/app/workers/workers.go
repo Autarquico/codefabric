@@ -56,8 +56,12 @@ func (s *Service) List(ctx context.Context, includeRemoved bool) ([]v1.Worker, e
 	var out []v1.Worker
 	err := s.db.Read(ctx, func(q store.Querier) error {
 		rows, err := store.Workers(ctx, q, includeRemoved)
+		if err != nil {
+			return err
+		}
+		held, err := store.WorkerSecrets(ctx, q)
 		for _, w := range rows {
-			out = append(out, s.view(w))
+			out = append(out, s.view(w, held[w.ID]))
 		}
 		return err
 	})
@@ -69,7 +73,10 @@ func (s *Service) Get(ctx context.Context, ref string) (v1.Worker, error) {
 	var out v1.Worker
 	err := s.db.Read(ctx, func(q store.Querier) error {
 		w, err := lookup(ctx, q, ref)
-		out = s.view(w)
+		if err != nil {
+			return err
+		}
+		out, err = s.viewOf(ctx, q, w)
 		return err
 	})
 	return out, err
@@ -87,7 +94,13 @@ func lookup(ctx context.Context, q store.Querier, ref string) (store.Worker, err
 	return store.WorkerByID(ctx, q, id)
 }
 
-func (s *Service) view(w store.Worker) v1.Worker {
+// viewOf is the view of the Worker, with the secrets it last reported.
+func (s *Service) viewOf(ctx context.Context, q store.Querier, w store.Worker) (v1.Worker, error) {
+	held, err := store.SecretsOfWorker(ctx, q, w.ID)
+	return s.view(w, held), err
+}
+
+func (s *Service) view(w store.Worker, secrets []v1.SecretMeta) v1.Worker {
 	return v1.Worker{
 		ID: string(w.ID), Short: domain.ShortID{Kind: domain.KindWorker, N: w.Short}.String(), Name: w.Name,
 		State: w.State, Hostname: w.Report.Hostname, OS: w.Report.OS, Arch: w.Report.Arch,
@@ -97,7 +110,7 @@ func (s *Service) view(w store.Worker) v1.Worker {
 		MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, ActiveRuns: w.ActiveRuns, Reservations: w.Reservations, Contribution: w.Settings,
 		Resources: w.Resources, Health: w.Health,
 		LastHeartbeatAt: w.LastHeartbeatAt, CreatedAt: w.CreatedAt, RemovedAt: w.RemovedAt,
-		SSHTarget: w.Report.SSHTarget, AttachBinaries: w.Report.AttachBinaries,
+		SSHTarget: w.Report.SSHTarget, AttachBinaries: w.Report.AttachBinaries, Secrets: secrets,
 	}
 }
 
@@ -211,6 +224,10 @@ func (s *Service) Remove(ctx context.Context, by pki.Session, ref string, req v1
 		if err := tx.Revoke(ctx, w.IdentityID, domain.KindWorker, act.Now); err != nil {
 			return err
 		}
+		// Its fence stays: no late heartbeat of it brings them back.
+		if err := tx.DeleteWorkerSecrets(ctx, w.ID); err != nil {
+			return err
+		}
 		if err := emit(ctx, tx, act, domain.EventWorkerRemoved, *w, "worker removed", map[string]any{"was": string(before)}); err != nil {
 			return err
 		}
@@ -242,8 +259,10 @@ func (s *Service) change(ctx context.Context, by pki.Session, operation, ref str
 			if err := apply(tx, act, &w); err != nil {
 				return v1.Worker{}, err
 			}
-			w, err = store.WorkerByID(ctx, tx, w.ID)
-			return s.view(w), err
+			if w, err = store.WorkerByID(ctx, tx, w.ID); err != nil {
+				return v1.Worker{}, err
+			}
+			return s.viewOf(ctx, tx, w)
 		})
 }
 

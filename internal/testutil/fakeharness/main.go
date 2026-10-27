@@ -130,13 +130,19 @@ func loadScript(flagPath string, env []string) (Script, error) {
 
 // getenv is the value of key in env, the last one when it repeats.
 func getenv(env []string, key string) string {
-	v := ""
+	v, _ := lookupEnv(env, key)
+	return v
+}
+
+// lookupEnv is the value of key in env, the last one when it repeats, and
+// whether it is there at all.
+func lookupEnv(env []string, key string) (v string, found bool) {
 	for _, kv := range env {
 		if k, val, ok := strings.Cut(kv, "="); ok && k == key {
-			v = val
+			v, found = val, true
 		}
 	}
-	return v
+	return v, found
 }
 
 type runner struct {
@@ -155,6 +161,8 @@ func (r *runner) step(st Step) (code int, done bool) {
 	switch {
 	case st.Emit != nil:
 		err = r.emit(*st.Emit)
+	case st.EmitEnv != nil:
+		err = r.emitEnv(*st.EmitEnv)
 	case st.Record != nil:
 		err = r.record(*st.Record)
 	case st.WaitFile != nil:
@@ -182,6 +190,25 @@ func (r *runner) emit(l Line) error {
 		return err
 	}
 	_, err = r.stdout.Write(append(b, '\n'))
+	return err
+}
+
+func (r *runner) emitEnv(e EmitEnv) error {
+	value, ok := lookupEnv(r.env, e.Name)
+	if !ok {
+		return fmt.Errorf("emit_env: %s is not set", e.Name)
+	}
+	split := min(e.SplitAt, len(value))
+	if e.SplitAt == 0 {
+		split = len(value)
+	}
+	if _, err := io.WriteString(r.stdout, value[:split]); err != nil {
+		return err
+	}
+	if split < len(value) {
+		time.Sleep(time.Duration(e.PauseMS) * time.Millisecond)
+	}
+	_, err := io.WriteString(r.stdout, value[split:]+"\n")
 	return err
 }
 

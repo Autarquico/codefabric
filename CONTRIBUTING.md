@@ -60,6 +60,18 @@ e2e: seed 0x825251f7b3c67c1b; to run it again: CF_E2E_SEED=0x825251f7b3c67c1b CF
 
 The line carries `CF_E2E_SCALE` and `CF_E2E_RACE=1` (with `-race`) when the failing run used them. A seed repeats the program of actions, not the OS interleaving; use `CF_E2E_REPEAT` to run it several times. A seed that fails because of the product goes into `seeds.txt`.
 
+### Property tests of the secrets
+
+`TestProperty_SecretsDecide` (`internal/app/scheduler`), `TestProperty_SecretsController` (`internal/app`), `TestProperty_SecretsWorker` (`internal/worker/executor`) and `TestProperty_SecretsDelivery` (`internal/worker/secretjit`) run in `make test` with few seeds (200, 3, 3 and 20), because CI runs them under `-race`. Each seed is logged with the command that replays it.
+
+| Variable | Effect |
+|----------|--------|
+| `CF_SECRETS_SEED` | run exactly this seed |
+| `CF_SECRETS_SEEDS` | run this many seeds instead of the default |
+| `CF_SECRETS_FROM` | first seed of `CF_SECRETS_SEEDS` (default 1) |
+
+A wider search, for example `CF_SECRETS_SEEDS=300 go test -count=1 -run '^TestProperty_Secrets' ./internal/app/... ./internal/worker/...`, runs without `-race`.
+
 ## Migrations
 
 SQLite migrations are numbered by phase to avoid collisions between parallel milestones: Phase 0 uses `0001–0099`, Phase 1 `0100–0199`, and so on. Each milestone spec reserves its range.

@@ -1,6 +1,8 @@
 package scheduler_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"math/rand/v2"
 	"slices"
 	"testing"
@@ -25,12 +27,12 @@ func worker(name string, mutate ...func(*scheduler.Worker)) scheduler.Worker {
 	return w
 }
 
-func request(mutate ...func(*domain.Placement)) domain.Placement {
+func request(mutate ...func(*domain.Placement)) scheduler.Request {
 	r := domain.Placement{Resources: domain.Capacity{CPU: 2, MemoryMB: 4096}}
 	for _, m := range mutate {
 		m(&r)
 	}
-	return r
+	return scheduler.Request{Placement: r}
 }
 
 func chosen(t *testing.T, d scheduler.Decision) string {
@@ -99,7 +101,7 @@ func TestDecide_DoesNotDependOnTheOrderOfTheWorkersAndDoesNotChangeThem(t *testi
 func TestScore_EachComponentDecides(t *testing.T) {
 	tests := []struct {
 		name string
-		req  domain.Placement
+		req  scheduler.Request
 		a, b scheduler.Worker // a sorts before b: it would win a tie
 		want string
 	}{
@@ -184,7 +186,7 @@ func TestFilters_EachOneRejectsWithItsReason(t *testing.T) {
 	tests := []struct {
 		filter string
 		code   domain.Code
-		req    domain.Placement
+		req    scheduler.Request
 		w      scheduler.Worker
 	}{
 		{scheduler.FilterState, domain.CodeNoEligibleWorker, request(), worker("w", func(w *scheduler.Worker) { w.State = domain.WorkerDraining })},
@@ -204,6 +206,8 @@ func TestFilters_EachOneRejectsWithItsReason(t *testing.T) {
 			worker("w", func(w *scheduler.Worker) { w.Capabilities = []string{"docker"} }),
 		},
 		{scheduler.FilterHarness, domain.CodeHarnessUnavailable, request(func(r *domain.Placement) { r.Harness = "claude" }), worker("w")},
+		{scheduler.FilterSecrets, domain.CodeSecretUnavailable, withSecrets("p", []string{"gh/token"}, "gh/token"), worker("w")},
+		{scheduler.FilterSecrets, domain.CodePolicyDenied, withSecrets("p", nil, "gh/token"), worker("w", holding("gh/token"))},
 		{scheduler.FilterResources, domain.CodeNoEligibleWorker, request(func(r *domain.Placement) { r.Resources.CPU = 9 }), worker("w")},
 		{scheduler.FilterConcurrency, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.Reservations = 4 })},
 		{scheduler.FilterCapacity, domain.CodeWorkerCapacity, request(), worker("w", func(w *scheduler.Worker) { w.Reserved = domain.Capacity{CPU: 7}; w.Reservations = 1 })},
@@ -243,6 +247,7 @@ func TestFilters_EveryFailureIsListedInTheFixedOrder(t *testing.T) {
 		r.Avoid = []string{"w"}
 		r.Capabilities = []string{"gpu"}
 		r.Harness = "claude"
+		r.Secrets = []string{"gh/token"}
 		r.Resources.CPU = 9
 	})
 
@@ -250,7 +255,7 @@ func TestFilters_EveryFailureIsListedInTheFixedOrder(t *testing.T) {
 	for _, f := range scheduler.Decide(req, []scheduler.Worker{w}, now).Verdicts[0].Failed {
 		got = append(got, f.Filter)
 	}
-	want := []string{"state", "availability", "require", "avoid", "capabilities", "harness", "resources", "concurrency", "capacity", "recent_miss"}
+	want := []string{"state", "availability", "require", "avoid", "capabilities", "harness", "secrets", "resources", "concurrency", "capacity", "recent_miss"}
 	if !slices.Equal(got, want) {
 		t.Errorf("failures = %v, want %v", got, want)
 	}
@@ -339,5 +344,154 @@ func TestFilters_Harness(t *testing.T) {
 				t.Errorf("failure = %+v", f)
 			}
 		})
+	}
+}
+
+// withSecrets is a Run of project that uses refs, judged against allowlist.
+func withSecrets(project domain.ID, allowlist []string, refs ...string) scheduler.Request {
+	return scheduler.NewRequest(request(func(r *domain.Placement) { r.Secrets = refs }).Placement, project, allowlist)
+}
+
+// holding makes the Worker announce refs for any Project.
+func holding(refs ...string) func(*scheduler.Worker) {
+	return func(w *scheduler.Worker) {
+		w.Secrets = map[string][]string{}
+		for _, ref := range refs {
+			w.Secrets[ref] = nil
+		}
+	}
+}
+
+// The secrets filter: every ref of the Run must be allowed by its Project and
+// announced by the Worker for that Project. The allowlist outranks the Worker.
+func TestFilters_Secrets(t *testing.T) {
+	both := []string{"gh/token", "npm/token"}
+	for _, c := range []struct {
+		name    string
+		req     scheduler.Request
+		held    map[string][]string
+		code    domain.Code // "" if the Worker passes
+		details string
+	}{
+		{"a Run without secrets passes a Worker without any", withSecrets("p", nil), nil, "", ""},
+		{"a Run without secrets ignores the allowlist", withSecrets("p", nil), map[string][]string{"gh/token": nil}, "", ""},
+		{"every ref held for any Project", withSecrets("p", both, both...), map[string][]string{"gh/token": nil, "npm/token": nil}, "", ""},
+		{"a ref held for this Project", withSecrets("p", both, "gh/token"), map[string][]string{"gh/token": {"q", "p"}}, "", ""},
+		{"a ref the Worker lacks", withSecrets("p", both, both...), map[string][]string{"gh/token": nil}, domain.CodeSecretUnavailable, `{"missing":["npm/token"]}`},
+		{"a Worker that announced nothing", withSecrets("p", both, both...), nil, domain.CodeSecretUnavailable, `{"missing":["gh/token","npm/token"]}`},
+		{"a ref held only for another Project", withSecrets("p", both, "gh/token"), map[string][]string{"gh/token": {"q"}}, domain.CodeSecretUnavailable, `{"out_of_scope":["gh/token"]}`},
+		{
+			"missing and out of scope at once", withSecrets("p", both, both...),
+			map[string][]string{"gh/token": {"q"}},
+			domain.CodeSecretUnavailable, `{"missing":["npm/token"],"out_of_scope":["gh/token"]}`,
+		},
+		{"a ref outside the allowlist, though the Worker holds it", withSecrets("p", []string{"gh/token"}, both...), map[string][]string{"gh/token": nil, "npm/token": nil}, domain.CodePolicyDenied, `{"not_allowed":["npm/token"]}`},
+		{"the allowlist outranks what the Worker lacks", withSecrets("p", nil, both...), nil, domain.CodePolicyDenied, `{"not_allowed":["gh/token","npm/token"]}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := worker("w", func(w *scheduler.Worker) { w.Secrets = c.held })
+			d := scheduler.Decide(c.req, []scheduler.Worker{w}, now)
+			if c.code == "" {
+				if d.Chosen == nil {
+					t.Errorf("rejected: %+v", d.Verdicts[0].Failed)
+				}
+				return
+			}
+			failed := d.Verdicts[0].Failed
+			if d.Chosen != nil || len(failed) != 1 {
+				t.Fatalf("failures = %+v", failed)
+			}
+			f := failed[0]
+			raw, err := json.Marshal(f.Details)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.Filter != scheduler.FilterSecrets || f.Code != c.code || f.Message == "" || string(raw) != c.details {
+				t.Errorf("failure = %+v, details %s, want %s with %s", f, raw, c.code, c.details)
+			}
+		})
+	}
+}
+
+// P0 (plan §7): over random Workers, scopes, allowlists and Runs, Decide never
+// chooses a Worker that lacks a secret of the Run in its Project or a Run the
+// allowlist denies, every Worker it turns down for secrets carries the code an
+// independent oracle expects, and the failures keep the fixed order.
+func TestDecide_SecretsProperties(t *testing.T) {
+	refs := []string{"a", "b", "c", "d"}
+	projects := []string{"p", "q"}
+	order := []string{"state", "availability", "require", "avoid", "capabilities", "harness", "secrets", "resources", "concurrency", "capacity", "recent_miss", "reconcile"}
+	rng := rand.New(rand.NewPCG(23, 8)) //nolint:gosec // a seeded generator, not a secret
+	subset := func(of []string) []string {
+		var out []string
+		for _, x := range of {
+			if rng.IntN(2) == 0 {
+				out = append(out, x)
+			}
+		}
+		return out
+	}
+	for i := range 2000 {
+		project := domain.ID(projects[rng.IntN(len(projects))])
+		allowlist := subset(refs)
+		placement := request(func(r *domain.Placement) {
+			r.Secrets = subset(refs)
+			if rng.IntN(4) == 0 {
+				r.Harness = "claude"
+			}
+		}).Placement
+		req := scheduler.NewRequest(placement, project, allowlist)
+		var workers []scheduler.Worker
+		for n := range 1 + rng.IntN(4) {
+			workers = append(workers, worker(fmt.Sprintf("w%d", n), func(w *scheduler.Worker) {
+				if rng.IntN(5) == 0 {
+					w.State = domain.WorkerDraining
+				}
+				w.Secrets = map[string][]string{}
+				for _, ref := range subset(refs) {
+					w.Secrets[ref] = subset(projects)
+				}
+			}))
+		}
+		denied := slices.ContainsFunc(placement.Secrets, func(ref string) bool { return !slices.Contains(allowlist, ref) })
+		usable := func(w scheduler.Worker) bool {
+			return !slices.ContainsFunc(placement.Secrets, func(ref string) bool {
+				scope, held := w.Secrets[ref]
+				return !held || (len(scope) > 0 && !slices.Contains(scope, string(project)))
+			})
+		}
+		d := scheduler.Decide(req, workers, now)
+		if d.Chosen != nil {
+			w := workers[slices.IndexFunc(workers, func(w scheduler.Worker) bool { return w.ID == d.Chosen.ID })]
+			if denied || !usable(w) {
+				t.Fatalf("case %d chose %s: denied %v, secrets %v for %v in %s", i, w.Name, denied, w.Secrets, placement.Secrets, project)
+			}
+		}
+		for _, v := range d.Verdicts {
+			w := workers[slices.IndexFunc(workers, func(w scheduler.Worker) bool { return w.ID == v.ID })]
+			var want domain.Code
+			switch {
+			case denied:
+				want = domain.CodePolicyDenied
+			case !usable(w):
+				want = domain.CodeSecretUnavailable
+			}
+			var got domain.Code
+			last := -1
+			for _, f := range v.Failed {
+				at := slices.Index(order, f.Filter)
+				if at <= last {
+					t.Fatalf("case %d: failures out of order: %+v", i, v.Failed)
+				}
+				last = at
+				if f.Filter == scheduler.FilterSecrets {
+					got = f.Code
+				}
+			}
+			if got != want {
+				t.Fatalf("case %d, %s: secrets failed with %q, want %q (secrets %v, allowlist %v, held %v, project %s)",
+					i, v.Name, got, want, placement.Secrets, allowlist, w.Secrets, project)
+			}
+		}
 	}
 }

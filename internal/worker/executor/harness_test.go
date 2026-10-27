@@ -159,12 +159,15 @@ func TestAFailingConfigSourceEndsTheRunBeforeAnythingStarts(t *testing.T) {
 }
 
 func TestLaunchJSONNamesTheRefsOfTheSecretsAndNoValue(t *testing.T) {
-	f := newFixture(t, func(o *Options) {
+	// The adapter's ref is not in the spec: the Controller is asked for it like
+	// any other (the fake grants it), and launch.json still holds only refs.
+	f := secretFixture(t, newFakeStore(map[string]string{"team/api-key": apiValue}), func(o *Options) {
 		o.Harnesses = registry(t, withSecrets{fakeharness.Adapter{Binary: "/fake/harness", Caps: harness.Capabilities{Modes: []domain.Mode{domain.ModeHeadless}}}})
 	})
 	k := f.acceptedSpec(fakeSpec("do it", ""))
 	f.e.step(t.Context(), k)
 	dir := f.runDir(k)
+	noValueIn(t, dir)
 	var l execwrap.Launch
 	if ok, err := execwrap.Read(dir, execwrap.LaunchFile, &l); !ok || err != nil {
 		t.Fatalf("launch.json: %v %v", ok, err)

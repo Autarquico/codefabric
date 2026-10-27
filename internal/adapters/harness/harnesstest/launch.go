@@ -1,6 +1,7 @@
 package harnesstest
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -97,9 +98,15 @@ func (e *env) checkLaunch(t *testing.T, op string, l harness.Launch) {
 	if secret, leaked := e.leaks([]byte(strings.Join(slices.Concat(l.Argv, l.Env), "\n"))); leaked {
 		t.Errorf("%s: the Launch carries the secret %q", op, secret)
 	}
+	// What the executor writes to launch.json is the Launch, encoded.
+	if encoded, err := json.Marshal(l); err != nil {
+		t.Errorf("%s: encoding the Launch: %v", op, err)
+	} else if secret, leaked := e.leaks(encoded); leaked {
+		t.Errorf("%s: the Launch, encoded, carries the secret %q", op, secret)
+	}
 	for _, s := range l.SecretEnv {
-		if s.Name == "" || !slices.Equal(harness.SecretRefs([]byte(harness.SecretMarker(s.Ref))), []string{s.Ref}) {
-			t.Errorf("%s: SecretEnv %+v is not a name and a ref", op, s)
+		if !domain.ValidSecretEnvName(s.Name) || !domain.ValidSecretRef(s.Ref) {
+			t.Errorf("%s: SecretEnv %+v is not a name that may carry a secret and a ref", op, s)
 		}
 		if secret, leaked := e.leaks([]byte(s.Ref)); leaked {
 			t.Errorf("%s: SecretEnv %s carries the secret %q as its ref", op, s.Name, secret)
@@ -153,12 +160,17 @@ type process struct {
 	done chan error
 }
 
-// spawn runs l for run. A Launch with secret refs cannot run: there is no
-// resolver yet, so the wrapper would fail it with CF_SECRET_UNAVAILABLE.
+// spawn runs l for run, with its SecretEnv resolved by the fixture as the
+// wrapper resolves it: into the environment of the process, and nowhere else.
 func (e *env) spawn(t *testing.T, l harness.Launch, run harness.RunSpec) *process {
 	t.Helper()
-	if len(l.SecretEnv) > 0 {
-		t.Fatalf("the Launch has secret refs %v, which nothing resolves yet (CF_SECRET_UNAVAILABLE)", l.SecretEnv)
+	secrets := make([]string, 0, len(l.SecretEnv))
+	for _, s := range l.SecretEnv {
+		value, ok := e.f.SecretValues[s.Ref]
+		if !ok {
+			t.Fatalf("the Launch has the secret ref %q, which the fixture does not resolve (CF_SECRET_UNAVAILABLE)", s.Ref)
+		}
+		secrets = append(secrets, s.Name+"="+value)
 	}
 	out, err := os.OpenFile(run.OutputPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // the RunDir of the check
 	if err != nil {
@@ -167,7 +179,7 @@ func (e *env) spawn(t *testing.T, l harness.Launch, run harness.RunSpec) *proces
 	t.Cleanup(func() { _ = out.Close() })
 	cmd := exec.Command(l.Argv[0], l.Argv[1:]...) //nolint:gosec,noctx // the Launch under test; ctx goes to procgroup
 	cmd.Dir = run.Worktree
-	cmd.Env = append(e.host.Environ(), l.Env...)
+	cmd.Env = slices.Concat(e.host.Environ(), l.Env, secrets)
 	g, err := procgroup.Start(t.Context(), cmd, procgroup.Options{Stdout: out, Stderr: out})
 	if err != nil {
 		t.Fatalf("starting the Launch %q: %v", l.Argv, err)
