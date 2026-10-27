@@ -61,10 +61,11 @@ var (
 	badCert     = regexp.MustCompile(`(?i)ssl certificate problem|certificate verify failed|unknown ca|bad certificate|certificate (has expired|required)|tlsv1 alert|server (certificate )?verification failed|certificate signer not trusted`)
 )
 
-// Push sends the commit to refs/heads/<branch> of the relay, without force and
-// without any hook, from the bare repository of the Project. The environment is
-// built from nothing and the configuration travels in it, so that the token is
-// in neither argv nor any file; redirects are not followed.
+// Push sends the commit to refs/heads/<branch> of the relay, without force,
+// without any hook and without any tag, from the bare repository of the
+// Project. The environment is built from nothing and the configuration travels
+// in it, so that the token is in neither argv nor any file; redirects are not
+// followed.
 //
 // The guard reads what the commit brings first, every time (forbidden): a push
 // it does not let through is a BlockedError, and nothing is sent.
@@ -113,7 +114,7 @@ func (g *Git) PushRef(ctx context.Context, project, commit, ref string, a PushAu
 	}
 	res, err := g.run(ctx, cmd{
 		dir: bare, env: env, timeout: g.pushTimeout(), secrets: []string{a.Token},
-		args: []string{"push", "--porcelain", "--no-verify", "--no-progress", "--end-of-options", a.URL, commit + ":" + ref},
+		args: []string{"push", "--porcelain", "--no-verify", "--no-progress", "--no-follow-tags", "--end-of-options", a.URL, commit + ":" + ref},
 	})
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {

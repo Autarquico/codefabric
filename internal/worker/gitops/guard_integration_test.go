@@ -235,6 +235,31 @@ func TestGuard_NothingWithTheValueReachesTheRelay(t *testing.T) {
 	}
 }
 
+// TestGuard_ATagTheRepositoryWouldFollowIsNotSent: a clean commit is pushed
+// from a repository that asks to follow tags, with an annotated tag of that
+// commit holding the value; only the commit reaches the relay.
+func TestGuard_ATagTheRepositoryWouldFollowIsNotSent(t *testing.T) {
+	r := newRig(t)
+	r.prepare()
+	r.write("clean.txt", "nothing to see\n")
+	gittest.Run(t, r.worktree, "add", "clean.txt")
+	gittest.Run(t, r.worktree, "commit", "--quiet", "-m", "harness work")
+	commit := gittest.Run(t, r.worktree, "rev-parse", "HEAD")
+	gittest.Run(t, r.worktree, "tag", "-a", "release", "-m", "release "+secretValue, commit)
+	gittest.Run(t, r.bare(), "config", "push.followTags", "true")
+	rl := newRelay(t)
+
+	if err := r.g.Push(t.Context(), project, commit, branch, rl.auth, r.forbidden(secretValue)); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if rl.holds(t, secretValue) || strings.Contains(rl.refs(t), "refs/tags/") {
+		t.Fatalf("the tag reached the relay: %s", rl.refs(t))
+	}
+	if tip := gittest.Run(t, rl.dir, "rev-parse", "refs/heads/"+branch); tip != commit {
+		t.Fatalf("the branch of the relay is at %s, want %s", tip, commit)
+	}
+}
+
 func TestGuard_WhatCannotBeCheckedIsNotPublished(t *testing.T) {
 	gittest.Require(t)
 	realGit, err := exec.LookPath("git")
