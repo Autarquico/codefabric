@@ -32,6 +32,30 @@ type Forbidden struct {
 
 func (f Forbidden) none() bool { return len(f.Values) == 0 }
 
+// withheld stands for a text about a result whose values cannot be redacted.
+const withheld = "[withheld: it could not be checked for the values of the secrets of the Run]"
+
+// redaction matches the values of f in what git prints of the result, which
+// quotes the paths the harness left: a name can hold a value. It is nil when f
+// has no values.
+func (f Forbidden) redaction() (*redact.Set, error) {
+	if f.none() {
+		return nil, nil //nolint:nilnil // no values, nothing to redact
+	}
+	return redact.NewSet(f.Values)
+}
+
+// Redact is s without the values of f: what of a text about the result may be
+// logged, kept or reported. If the values cannot be redacted, all of it is
+// withheld.
+func (f Forbidden) Redact(s string) string {
+	set, err := f.redaction()
+	if err != nil {
+		return withheld
+	}
+	return redacted(s, set)
+}
+
 // BlockedError is a publication the guard did not let through: a value of a
 // secret is in it, or it could not be read whole. Its reason names refs,
 // never values.
@@ -62,6 +86,10 @@ func (g *Git) guard(ctx context.Context, project, commit string, f Forbidden) er
 	if err != nil {
 		return err
 	}
+	values, err := f.redaction()
+	if err != nil {
+		return blocked("the result cannot be checked for secrets: %v", err)
+	}
 	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, g.guardTimeout())
 	defer cancel()
@@ -76,17 +104,17 @@ func (g *Git) guard(ctx context.Context, project, commit string, f Forbidden) er
 	}
 	defer func() { _ = feed.Close() }()
 
-	var catErr, listErr bytes.Buffer
+	catErr, listErr := &boundedBuffer{max: stderrBytes}, &boundedBuffer{max: stderrBytes}
 	cat := exec.Command(g.git, "cat-file", "--batch") //nolint:gosec,noctx // git is the located executable; ctx goes to procgroup
 	cat.Dir, cat.Env, cat.Stdin = bare, env, oids
-	catGroup, err := procgroup.Start(ctx, cat, procgroup.Options{Stdout: sc, Stderr: &boundedBuffer{buf: &catErr, max: stderrBytes}, Drain: killDelay})
+	catGroup, err := procgroup.Start(ctx, cat, procgroup.Options{Stdout: sc, Stderr: catErr, Drain: killDelay})
 	_ = oids.Close()
 	if err != nil {
 		return blocked("the result cannot be checked for secrets: %v", err)
 	}
 	list := exec.Command(g.git, "rev-list", "--objects", "--no-object-names", commit, "--not", f.Since) //nolint:gosec,noctx // validated commit IDs; ctx goes to procgroup
 	list.Dir, list.Env = bare, env
-	listGroup, err := procgroup.Start(ctx, list, procgroup.Options{Stdout: feed, Stderr: &boundedBuffer{buf: &listErr, max: stderrBytes}, Drain: killDelay})
+	listGroup, err := procgroup.Start(ctx, list, procgroup.Options{Stdout: feed, Stderr: listErr, Drain: killDelay})
 	var listed error
 	if err == nil {
 		listed = listGroup.Wait()
@@ -107,17 +135,17 @@ func (g *Git) guard(ctx context.Context, project, commit string, f Forbidden) er
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return blocked("checking the result for secrets took too long")
 	case listed != nil:
-		return blocked("the result cannot be checked for secrets: listing its objects failed: %s", gitFailure(listed, &listErr))
+		return blocked("the result cannot be checked for secrets: listing its objects failed: %s", gitFailure(listed, listErr, values))
 	case read != nil:
-		return blocked("the result cannot be checked for secrets: reading its objects failed: %s", gitFailure(read, &catErr))
+		return blocked("the result cannot be checked for secrets: reading its objects failed: %s", gitFailure(read, catErr, values))
 	case !sc.done():
 		return blocked("the result cannot be checked for secrets: its objects were not read whole")
 	}
 	return nil
 }
 
-func gitFailure(err error, stderr *bytes.Buffer) string {
-	if msg := clean(stderr.String(), nil); msg != "" {
+func gitFailure(err error, stderr *boundedBuffer, values *redact.Set) string {
+	if msg := clean(redacted(stderr.text(), values), nil); msg != "" {
 		return msg
 	}
 	return err.Error()
@@ -214,7 +242,7 @@ func (s *scanner) Write(p []byte) (int, error) {
 func (s *scanner) begin(header string) {
 	fields := strings.Fields(header)
 	if len(fields) != 3 {
-		s.fail(fmt.Errorf("an object of the result cannot be read: %s", clean(header, nil)))
+		s.fail(errors.New("the output of git cat-file is not what it should be"))
 		return
 	}
 	size, err := strconv.ParseInt(fields[2], 10, 64)

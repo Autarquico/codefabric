@@ -8,7 +8,6 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 	"github.com/Autarquico/codefabric/internal/worker/state"
@@ -136,13 +135,13 @@ func (e *Executor) seal(ctx context.Context, p state.Publication) bool {
 			Project: local.ProjectID, Run: p.RunID, LeaseEpoch: p.LeaseEpoch, ParentOID: p.ParentOID, At: p.SealedAt,
 		}, forbidden)
 	}
-	scrub := scrubber(forbidden)
 	now := e.clock.Now()
 	if err != nil {
 		if ctx.Err() != nil {
 			return false
 		}
-		why := scrub(err.Error())
+		// gitops redacts what git says; this covers any other text of the error.
+		why := forbidden.Redact(err.Error())
 		e.log.WarnContext(ctx, "sealing a Run failed", "run", p.RunID, "err", why)
 		msg := "sealing failed: " + reportable(why)
 		txErr := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
@@ -154,9 +153,6 @@ func (e *Executor) seal(ctx context.Context, p state.Publication) bool {
 			})
 		})
 		return e.settled(ctx, p, txErr, "recording a failed sealing")
-	}
-	for i, path := range sealed.Excluded {
-		sealed.Excluded[i] = scrub(path)
 	}
 	e.log.InfoContext(ctx, "run sealed", "run", p.RunID, "commit", sealed.Commit, "excluded", len(sealed.Excluded))
 	txErr := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
@@ -309,25 +305,6 @@ func (e *Executor) forbidden(local state.Run) (gitops.Forbidden, error) {
 		return gitops.Forbidden{}, &gitops.BlockedError{Reason: "the values of the secrets of the Run are no longer on this Worker, so its result cannot be checked"}
 	}
 	return gitops.Forbidden{}, nil
-}
-
-// withheld stands for a text about a publication that could not be redacted.
-const withheld = "[withheld: it could not be checked for the values of the secrets of the Run]"
-
-// scrubber redacts the values a publication is checked against from a text
-// about it before the text is logged, persisted or reported. The guard checks
-// the objects of the result, not what git says of them: its errors quote the
-// paths the harness left (and so do the excluded paths), and a name can hold
-// a value. If the values cannot be redacted, every text is withheld.
-func scrubber(f gitops.Forbidden) func(string) string {
-	if len(f.Values) == 0 {
-		return func(s string) string { return s }
-	}
-	set, err := redact.NewSet(f.Values)
-	if err != nil {
-		return func(string) string { return withheld }
-	}
-	return func(s string) string { return string(redact.Bytes([]byte(s), set)) }
 }
 
 func isBlocked(err error) bool {

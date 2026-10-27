@@ -12,6 +12,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 )
 
 // Exclusions are the paths a sealing leaves out (§23.1, Appendix A): what is
@@ -103,16 +104,20 @@ func (g *Git) Seal(ctx context.Context, worktree string, in Intent, forbidden Fo
 	}
 	ctx, cancel := context.WithTimeout(ctx, sealTimeout)
 	defer cancel()
+	values, err := forbidden.redaction()
+	if err != nil {
+		return Sealed{}, blocked("the result cannot be checked for secrets: %v", err)
+	}
 	env := isolatedEnv(worktree)
 	git := func(c cmd) (string, error) {
-		c.dir, c.timeout = worktree, sealTimeout
+		c.dir, c.timeout, c.values = worktree, sealTimeout, values
 		if c.env == nil {
 			c.env = env
 		}
 		return g.ok(ctx, c)
 	}
 
-	excluded, truncated, err := g.excludedPaths(ctx, worktree)
+	excluded, truncated, err := g.excludedPaths(ctx, worktree, values)
 	if err != nil {
 		return Sealed{}, err
 	}
@@ -207,13 +212,15 @@ func (g *Git) record(ctx context.Context, worktree string, in Intent, privateRef
 }
 
 // excludedPaths lists the untracked files that match an exclusion and are not
-// ignored: what a sealing would have captured and did not.
-func (g *Git) excludedPaths(ctx context.Context, worktree string) (paths []string, truncated bool, err error) {
+// ignored: what a sealing would have captured and did not. Each path is
+// redacted of values before the list is sorted and bounded, which is what the
+// Controller checks of it.
+func (g *Git) excludedPaths(ctx context.Context, worktree string, values *redact.Set) (paths []string, truncated bool, err error) {
 	args := g.hardened("ls-files", "--others", "--exclude-standard", "-z", "--")
 	for _, pattern := range exclusions {
 		args = append(args, ":(glob)"+pattern)
 	}
-	res, err := g.run(ctx, cmd{dir: worktree, env: isolatedEnv(worktree), timeout: sealTimeout, args: args})
+	res, err := g.run(ctx, cmd{dir: worktree, env: isolatedEnv(worktree), timeout: sealTimeout, args: args, values: values})
 	if err != nil {
 		return nil, false, err
 	}
@@ -222,7 +229,7 @@ func (g *Git) excludedPaths(ctx context.Context, worktree string) (paths []strin
 	}
 	for _, p := range strings.Split(res.stdout, "\x00") {
 		if p != "" {
-			paths = append(paths, p)
+			paths = append(paths, redacted(p, values))
 		}
 	}
 	slices.Sort(paths)

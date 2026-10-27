@@ -8,7 +8,6 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -151,9 +150,8 @@ func TestAPushTheGuardStopsEndsThePublication(t *testing.T) {
 	noValueAnywhere(t, f, g, k, logs)
 }
 
-// What git says of a sealing quotes the paths the harness left, and a name can
-// hold a value: a failure and the excluded paths are redacted before they are
-// logged, kept or reported.
+// A failure of a sealing is redacted before it is logged, kept or reported,
+// whatever part of it gitops did not redact.
 func TestASealingFailureQuotingAValueIsRedacted(t *testing.T) {
 	f, g, logs := guardFixture(t)
 	g.seal = func(gitops.Intent) (gitops.Sealed, error) {
@@ -166,25 +164,6 @@ func TestASealingFailureQuotingAValueIsRedacted(t *testing.T) {
 	}
 	if failed := lastFailure(t, f, k); !strings.Contains(failed.Message, "[REDACTED:github.personal]") {
 		t.Errorf("failure = %+v", failed)
-	}
-	noValueAnywhere(t, f, g, k, logs)
-}
-
-func TestAnExcludedPathHoldingAValueIsRedacted(t *testing.T) {
-	f, g, logs := guardFixture(t)
-	g.seal = func(gitops.Intent) (gitops.Sealed, error) {
-		return gitops.Sealed{Commit: "2222222222222222222222222222222222222222", Excluded: []string{".env." + ghValue, "keys/deploy.pem"}}, nil
-	}
-	k := f.endedSecretRun()
-	f.turn()
-	var excluded []string
-	for _, r := range f.reports(k) {
-		if r.Kind == v1.ReportSealed {
-			excluded = r.Excluded
-		}
-	}
-	if want := []string{".env.[REDACTED:github.personal]", "keys/deploy.pem"}; !slices.Equal(excluded, want) {
-		t.Errorf("excluded = %q, want %q", excluded, want)
 	}
 	noValueAnywhere(t, f, g, k, logs)
 }

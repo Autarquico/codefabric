@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +155,22 @@ func TestGuard_AValueAnywhereInTheResultBlocksTheSealing(t *testing.T) {
 				t.Errorf("the worktree changed: %s", after)
 			}
 		})
+	}
+}
+
+// An excluded path is redacted before the list is sorted and bounded, which is
+// what the Controller checks of a `sealed` report.
+func TestGuard_AnExcludedPathHoldingAValueIsRedactedAndStaysSorted(t *testing.T) {
+	r := newRig(t)
+	r.prepare()
+	r.write(".env.dev", "x\n")
+	r.write(".env."+secretValue, "x\n")
+	got, err := r.g.Seal(t.Context(), r.worktree, r.intent(r.source), r.forbidden(secretValue))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{".env.[REDACTED:" + secretRef + "]", ".env.dev"}; !slices.Equal(got.Excluded, want) || got.Truncated {
+		t.Errorf("excluded = %q (truncated %v), want %q", got.Excluded, got.Truncated, want)
 	}
 }
 
