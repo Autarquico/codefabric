@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: M
 issue: 23
-prs: []
+prs: [43]
 related_issues: [23]
 sub_issues: []
 depends_on:
@@ -16,7 +16,7 @@ depends_on:
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-16
+updated: 2026-10-27
 ---
 
 # Secrets locales al Worker
