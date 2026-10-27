@@ -237,7 +237,7 @@ func TestCLI_WorkerSecretsSetListRm(t *testing.T) {
 	if code, _, errOut := setSecret(t, sentinel+"\n\n", "github/token"); code != 0 {
 		t.Fatalf("set: exit %d: %s", code, errOut)
 	}
-	if v, err := store.Get(t.Context(), "github/token"); err != nil || string(v) != sentinel+"\n" {
+	if v, err := store.Get(t.Context(), "github/token"); err != nil || string(v.Value) != sentinel+"\n" {
 		t.Errorf("stored %q, %v", v, err)
 	}
 	project := "project_01J0000000000000000000000Z"

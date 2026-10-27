@@ -53,6 +53,9 @@ const maxTasksOfWorld = 8
 // secretRefsOfWorld are the refs the catalog of the Worker may hold.
 var secretRefsOfWorld = []string{"gh/token", "api/key", "npm/token"}
 
+// projectElsewhere is a Project no Run of the world is of.
+const projectElsewhere = "project_01JZZZZZZZZZZZZZZZZZZZZZZZ"
+
 // grantCallOf is a grant the executor asked for: what it asked, what the
 // Controller decided, and whether the answer reached it.
 type grantCallOf struct {
@@ -143,6 +146,7 @@ type secretWorld struct {
 	tasks []string
 
 	values    map[string]bool // every value the catalog ever held
+	foreign   map[string]bool // values held only for a Project no Run is of
 	lastGrant *grantCallOf
 	late      []lateGrant
 	requested int // refs asked for, each with its audit entry
@@ -161,7 +165,7 @@ func newSecretWorld(t *testing.T, seed uint64) *secretWorld {
 	t.Helper()
 	w := newWorld(t, seed)
 	s := &secretWorld{
-		world: w, allow: map[string]bool{}, values: map[string]bool{},
+		world: w, allow: map[string]bool{}, values: map[string]bool{}, foreign: map[string]bool{},
 		holds: map[state.Key]func(){}, seen: map[state.Key]bool{}, corrupt: map[state.Key]bool{}, keys: map[state.Key]bool{},
 		forgotten: map[state.Key]bool{},
 	}
@@ -320,10 +324,11 @@ func (s *secretWorld) onGet(ref string) {
 }
 
 // interfere is what may happen in the middle of a prepare: the catalog or the
-// allowlist changes, or the Task is cancelled.
+// allowlist changes, a ref among them taking a value for another Project, or
+// the Task is cancelled.
 func (s *secretWorld) interfere(where string) {
 	ref := secretRefsOfWorld[s.rng.IntN(len(secretRefsOfWorld))]
-	switch s.rng.IntN(3) {
+	switch s.rng.IntN(4) {
 	case 0:
 		s.log = append(s.log, "catalog-rm "+where)
 		must(s.t, s.store.Delete(s.t.Context(), ref))
@@ -333,6 +338,11 @@ func (s *secretWorld) interfere(where string) {
 	case 2:
 		s.log = append(s.log, "cancel "+where)
 		_, _ = s.ctrl.app.Tasks.Cancel(s.t.Context(), s.owner, s.tasks[s.rng.IntN(len(s.tasks))], "", v1.ActionRequest{})
+	case 3:
+		s.log = append(s.log, "catalog-rescope "+where)
+		value := fmt.Sprintf("cfsv-%016x%016x", s.rng.Uint64(), s.rng.Uint64())
+		s.values[value], s.foreign[value] = true, true
+		must(s.t, s.store.Set(s.t.Context(), ref, []byte(value), []string{projectElsewhere}))
 	}
 }
 
@@ -536,12 +546,18 @@ func (s *secretWorld) releasing(what string, fn func()) {
 // check is what holds after every step. W2: the values of a Run stay while
 // it needs them to sanitise, whoever releases (and releasing checks it as
 // each release decides). W4: no file of the Worker but a delivery holds a
-// value.
+// value. W6: no delivery holds a value the catalog held only for another
+// Project.
 func (s *secretWorld) check(what string) {
 	s.t.Helper()
 	for _, k := range s.knownKeys() {
-		if s.delivered(k) {
+		if needles, err := secretjit.Load(s.f.runDir(k)); err == nil {
 			s.seen[k] = true
+			for _, n := range needles {
+				if s.foreign[string(n.Value)] {
+					s.t.Fatalf("W6 %s: %s e%d was given %q, held only for another Project", what, k.RunID, k.LeaseEpoch, n.Ref)
+				}
+			}
 		}
 		if !s.seen[k] {
 			continue
@@ -669,9 +685,9 @@ func (s *secretWorld) step(i int) {
 	s.check(fmt.Sprintf("after step %d (action %d)", i, action))
 }
 
-// drain lets everything finish: the catalog and the allowlist hold every ref
-// again, every capture closes, no answer is lost, one more Task comes, and
-// every harness ends.
+// drain lets everything finish: the catalog, for every Project, and the
+// allowlist hold every ref again, every capture closes, no answer is lost, one
+// more Task comes, and every harness ends.
 // Then W3: no delivery is left in any run directory, and no value anywhere.
 func (s *secretWorld) drain() {
 	ctx := s.t.Context()
@@ -679,7 +695,7 @@ func (s *secretWorld) drain() {
 	held, err := s.store.List(ctx)
 	must(s.t, err)
 	for _, ref := range secretRefsOfWorld {
-		if !slices.ContainsFunc(held, func(m secrets.Metadata) bool { return m.Ref == ref }) {
+		if !slices.ContainsFunc(held, func(m secrets.Metadata) bool { return m.Ref == ref && len(m.Projects) == 0 }) {
 			s.setSecret(ref)
 		}
 		s.setAllowed(ref, true)
@@ -776,8 +792,9 @@ func (s *secretWorld) noValueInTable(table string) {
 // TestProperty_SecretsWorker: W1 (no read without its grant), W2 (the values
 // stay while the capture or the publication needs them), W3 (nothing is left
 // once all is over), W4 (no value outside a delivery), W5 (one audit entry per
-// ref asked for, and no more reads than refs granted), with the daemon
-// crashing at the hooks of the secrets.
+// ref asked for, and no more reads than refs granted), W6 (no value held only
+// for another Project is delivered), with the daemon crashing at the hooks of
+// the secrets.
 func TestProperty_SecretsWorker(t *testing.T) {
 	name := t.Name()
 	for _, seed := range secretSeedsOfWorld(t, 3) {

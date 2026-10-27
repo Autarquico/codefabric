@@ -44,7 +44,7 @@ func storedSecret(t *testing.T, p config.Paths, ref string) string {
 	if err != nil {
 		t.Fatalf("%s: %v", ref, err)
 	}
-	return string(v)
+	return string(v.Value)
 }
 
 // The value of `cf worker secrets set` on a pipe is not in the argv of the

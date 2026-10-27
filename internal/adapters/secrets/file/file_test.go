@@ -70,8 +70,8 @@ func TestStore_SetThenGetAndListGiveTheValueAndOnlyMetadata(t *testing.T) {
 	mustSet(t, s, "a.key", []byte("12345678"))
 
 	got, err := s.Get(ctx, "b/token")
-	if err != nil || !bytes.Equal(got, sentinel) {
-		t.Fatalf("Get = %q, %v", got, err)
+	if err != nil || !bytes.Equal(got.Value, sentinel) {
+		t.Fatalf("Get = %q, %v", got.Value, err)
 	}
 	metas, err := s.List(ctx)
 	if err != nil {
@@ -102,8 +102,8 @@ func TestStore_SetReplacesAValueKeepingWhenItWasCreated(t *testing.T) {
 	mustSet(t, s, "tok", []byte("second-value"))
 
 	got, err := s.Get(context.Background(), "tok")
-	if err != nil || string(got) != "second-value" {
-		t.Fatalf("Get = %q, %v", got, err)
+	if err != nil || string(got.Value) != "second-value" {
+		t.Fatalf("Get = %q, %v", got.Value, err)
 	}
 	metas, _ := s.List(context.Background())
 	if len(metas) != 1 || !metas[0].CreatedAt.Equal(created) || !metas[0].UpdatedAt.Equal(c.Now()) || metas[0].Projects != nil {
@@ -188,8 +188,8 @@ func TestStore_ValuesOfEightBytesUpTo64KiBAreKept(t *testing.T) {
 	for _, n := range []int{domain.MinSecretValueLen, domain.MaxSecretValueLen} {
 		v := bytes.Repeat([]byte{0xff}, n)
 		mustSet(t, s, "tok"+strconv.Itoa(n), v)
-		if got, err := s.Get(context.Background(), "tok"+strconv.Itoa(n)); err != nil || !bytes.Equal(got, v) {
-			t.Fatalf("%d bytes: Get gave %d bytes, %v", n, len(got), err)
+		if got, err := s.Get(context.Background(), "tok"+strconv.Itoa(n)); err != nil || !bytes.Equal(got.Value, v) {
+			t.Fatalf("%d bytes: Get gave %d bytes, %v", n, len(got.Value), err)
 		}
 	}
 }
@@ -209,9 +209,9 @@ func TestStore_GetReturnsACopy(t *testing.T) {
 	s, _, _ := newStore(t)
 	mustSet(t, s, "tok", sentinel)
 	got, _ := s.Get(context.Background(), "tok")
-	got[0] = 'X'
-	if again, _ := s.Get(context.Background(), "tok"); !bytes.Equal(again, sentinel) {
-		t.Fatalf("changing what Get returned changed the secret: %q", again)
+	got.Value[0] = 'X'
+	if again, _ := s.Get(context.Background(), "tok"); !bytes.Equal(again.Value, sentinel) {
+		t.Fatalf("changing what Get returned changed the secret: %q", again.Value)
 	}
 }
 

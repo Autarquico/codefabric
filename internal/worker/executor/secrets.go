@@ -100,6 +100,11 @@ func (e *Executor) localPolicy(ctx context.Context, project string, refs []strin
 		e.log.WarnContext(ctx, "the catalog of secrets cannot be read", "err", err)
 		return domain.CodeSecretUnavailable, "the catalog of secrets of this Worker cannot be read"
 	}
+	return scopeVerdict(project, refs, catalog)
+}
+
+// scopeVerdict checks refs against catalog for a Run of project.
+func scopeVerdict(project string, refs []string, catalog []secrets.Metadata) (domain.Code, string) {
 	byRef := make(map[string]secrets.Metadata, len(catalog))
 	for _, m := range catalog {
 		byRef[m.Ref] = m
@@ -251,20 +256,26 @@ func (p *secretPrepare) deliver(ctx context.Context, dir string) error {
 	if err := domain.CheckSecretRefs(refs, domain.MaxRunSecrets); err != nil {
 		return fmt.Errorf("%s: %w", domain.CodeSecretUnavailable, err)
 	}
-	// The catalog may have changed since the assignment was evaluated.
-	if code, msg := p.e.localPolicy(ctx, p.r.ProjectID, refs); code != "" {
-		return fmt.Errorf("%s: %s", code, msg)
+	if p.e.o.Secrets == nil {
+		return fmt.Errorf("%s: this Worker keeps no secrets: %s", domain.CodeSecretUnavailable, refList(refs))
 	}
+	// The catalog may have changed since the assignment was evaluated: the
+	// scope checked is that of each value read, never of another version.
+	held := make([]secrets.Metadata, 0, len(refs))
 	needles := make([]redact.Needle, 0, len(refs))
 	for _, ref := range refs {
-		value, err := p.e.o.Secrets.Get(ctx, ref)
+		s, err := p.e.o.Secrets.Get(ctx, ref)
 		if errors.Is(err, secrets.ErrNotFound) {
 			return fmt.Errorf("%s: this Worker no longer holds the secret %q", domain.CodeSecretUnavailable, ref)
 		}
 		if err != nil {
 			return fmt.Errorf("%s: the secret %q cannot be read: %w", domain.CodeSecretUnavailable, ref, err)
 		}
-		needles = append(needles, redact.Needle{Ref: ref, Value: value})
+		held = append(held, s.Metadata)
+		needles = append(needles, redact.Needle{Ref: ref, Value: s.Value})
+	}
+	if code, msg := scopeVerdict(p.r.ProjectID, refs, held); code != "" {
+		return fmt.Errorf("%s: %s", code, msg)
 	}
 	if _, err := redact.NewSet(needles); err != nil {
 		return fmt.Errorf("%s: the output could not be redacted of the secrets: %w", domain.CodeSecretUnavailable, err)

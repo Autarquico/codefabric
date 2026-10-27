@@ -117,32 +117,36 @@ func (s *Store) List(ctx context.Context) ([]secrets.Metadata, error) {
 	}
 	metas := make([]secrets.Metadata, 0, len(c.Secrets))
 	for ref, e := range c.Secrets {
-		metas = append(metas, secrets.Metadata{
-			Ref: ref, Backend: e.Backend, Projects: slices.Clone(e.Projects),
-			CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt,
-		})
+		metas = append(metas, e.metadata(ref))
 	}
 	sort.Slice(metas, func(i, j int) bool { return metas[i].Ref < metas[j].Ref })
 	return metas, nil
 }
 
 // Get implements secrets.Store.
-func (s *Store) Get(ctx context.Context, ref string) ([]byte, error) {
+func (s *Store) Get(ctx context.Context, ref string) (secrets.Secret, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return secrets.Secret{}, err
 	}
 	c, err := s.load()
 	if err != nil {
-		return nil, err
+		return secrets.Secret{}, err
 	}
 	e, ok := c.Secrets[ref]
 	switch {
 	case !ok:
-		return nil, fmt.Errorf("%w: %q", secrets.ErrNotFound, ref)
+		return secrets.Secret{}, fmt.Errorf("%w: %q", secrets.ErrNotFound, ref)
 	case e.Backend != secrets.BackendFile:
-		return nil, fmt.Errorf("%w: secret %q is kept in %q", secrets.ErrUnsupportedBackend, ref, e.Backend)
+		return secrets.Secret{}, fmt.Errorf("%w: secret %q is kept in %q", secrets.ErrUnsupportedBackend, ref, e.Backend)
 	}
-	return bytes.Clone(e.Value), nil
+	return secrets.Secret{Metadata: e.metadata(ref), Value: bytes.Clone(e.Value)}, nil
+}
+
+func (e entry) metadata(ref string) secrets.Metadata {
+	return secrets.Metadata{
+		Ref: ref, Backend: e.Backend, Projects: slices.Clone(e.Projects),
+		CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt,
+	}
 }
 
 // Set implements secrets.Store.

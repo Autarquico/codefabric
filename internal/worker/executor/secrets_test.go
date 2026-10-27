@@ -71,7 +71,7 @@ func (s *fakeStore) List(context.Context) ([]secrets.Metadata, error) {
 	return out, nil
 }
 
-func (s *fakeStore) Get(_ context.Context, ref string) ([]byte, error) {
+func (s *fakeStore) Get(_ context.Context, ref string) (secrets.Secret, error) {
 	s.mu.Lock()
 	hook := s.onGet
 	s.mu.Unlock()
@@ -83,9 +83,12 @@ func (s *fakeStore) Get(_ context.Context, ref string) ([]byte, error) {
 	s.gets = append(s.gets, ref)
 	e, ok := s.entries[ref]
 	if !ok {
-		return nil, secrets.ErrNotFound
+		return secrets.Secret{}, secrets.ErrNotFound
 	}
-	return bytes.Clone(e.value), nil
+	return secrets.Secret{
+		Metadata: secrets.Metadata{Ref: ref, Backend: e.backend, Projects: e.projects},
+		Value:    bytes.Clone(e.value),
+	}, nil
 }
 
 func (s *fakeStore) Set(_ context.Context, ref string, value []byte, projects []string) error {
@@ -515,6 +518,11 @@ func TestTheCatalogChangingDuringThePrepareFailsIt(t *testing.T) {
 	}{
 		{"the ref was removed", func(s *fakeStore) { _ = s.Delete(context.Background(), "github.personal") }, domain.CodeSecretUnavailable},
 		{"the ref was scoped to another Project", func(s *fakeStore) { s.scope("github.personal", "project_9") }, domain.CodePolicyDenied},
+		{"a value for another Project replaced it as it was read", func(s *fakeStore) {
+			s.onGet = func(ref string) {
+				_ = s.Set(context.Background(), ref, []byte(ghValue+"-of-project-9"), []string{"project_9"})
+			}
+		}, domain.CodePolicyDenied},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

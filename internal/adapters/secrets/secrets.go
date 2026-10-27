@@ -47,13 +47,20 @@ type Metadata struct {
 	UpdatedAt time.Time
 }
 
+// Secret is a value with the metadata it was stored with, read together: the
+// scope of a value is never that of another version of it.
+type Secret struct {
+	Metadata
+	Value []byte
+}
+
 // Store holds the secrets of a Worker.
 type Store interface {
 	// List is the metadata of every secret, sorted by ref. It never reads a
 	// value, from the catalog or from any other backend.
 	List(ctx context.Context) ([]Metadata, error)
-	// Get is the value of ref, or ErrNotFound.
-	Get(ctx context.Context, ref string) ([]byte, error)
+	// Get is the value of ref with its metadata, or ErrNotFound.
+	Get(ctx context.Context, ref string) (Secret, error)
 	// Set stores value under ref, scoped to projects, replacing what ref held.
 	// A ref, value or project that is not valid is an error wrapping
 	// domain.ErrInvalidSecret.
