@@ -28,22 +28,16 @@ import (
 // jump ahead; a daemon whose state.db moved on under it was replaced by a later
 // run on the same machine, and stops instead.
 //
-// Generation 0 is a daemon from before generations (N−1). It is not fenced
-// while the Worker has never sent another. Once it has, a 0 is either a late
-// heartbeat of a run from before the upgrade or a downgrade; a ULID epoch above
-// that of the last generation tells the downgrade. A downgrade is taken, but
-// the Worker is degraded with the reason, and its secrets are forgotten: an
-// N−1 daemon holds none for the Controller.
-
-// Reasons of a heartbeat refused by the fence, in details.reason.
-const (
-	// FenceGenerationRetired is a generation lower than the Controller's, or
-	// equal to it from another epoch. details.generation is the Controller's.
-	FenceGenerationRetired = "generation_retired"
-	// FenceOutOfOrder is a heartbeat of the current daemon that a later one of
-	// its own overtook.
-	FenceOutOfOrder = "out_of_order"
-)
+// Generation 0 is a daemon from before generations (N−1), which sends no
+// secrets report. It is not fenced while the Worker never sent another. Once
+// the fence holds generation G at epoch E, a 0 from an epoch not below E is a
+// downgrade: it is taken, the Worker is degraded with the reason, its secrets
+// are forgotten (an N−1 daemon holds none for the Controller), and the fence
+// moves to (G, the epoch of the N−1 daemon). A late heartbeat of the replaced
+// generation G then comes from another epoch and is retired, later heartbeats
+// of the N−1 daemon are the same downgrade again, and an upgrade goes on from
+// G+1. A 0 from an epoch below E is a run that one with a generation already
+// replaced: retired.
 
 // downgradedHealth is what a Worker is held at while an N−1 daemon replaces
 // one that had a generation.
@@ -62,57 +56,49 @@ const (
 	fenceDowngraded              // taken, with the Worker degraded and its secrets forgotten
 )
 
-// fence says whether the heartbeat comes from the daemon the Controller holds
-// for current, or from one it replaced.
+// fence is the one order of heartbeats (§11.6 of the plan of #23): it says
+// whether the heartbeat comes from the daemon the Controller holds for
+// current, or from one it replaced. The store only records what it lets
+// through.
 func fence(current store.SecretsFence, fenced bool, req v1.HeartbeatRequest) (fenceVerdict, error) {
-	if !fenced || current.Generation == 0 {
+	if !fenced {
 		return fenceAdmitted, nil
-	}
-	retired := func() error {
-		return domain.NewError(domain.CodeStaleLease,
-			fmt.Sprintf("daemon generation %d is retired: the Controller took generation %d", req.Generation, current.Generation),
-			map[string]any{"reason": FenceGenerationRetired, "generation": current.Generation})
 	}
 	switch {
-	case req.Generation == 0 && req.Epoch > current.Epoch:
+	case req.Generation == 0 && req.Epoch >= current.Epoch:
 		return fenceDowngraded, nil
-	case req.Generation < current.Generation:
-		return 0, retired()
-	case req.Generation > current.Generation:
-		return fenceAdmitted, nil
-	case req.Epoch != current.Epoch:
-		return 0, retired()
-	case req.Secrets.Seq < current.Seq:
+	case req.Generation < current.Generation,
+		req.Generation == current.Generation && req.Epoch != current.Epoch:
+		return 0, domain.NewError(domain.CodeStaleLease,
+			fmt.Sprintf("daemon generation %d is retired: the Controller took generation %d", req.Generation, current.Generation),
+			map[string]any{"reason": v1.FenceGenerationRetired, "generation": current.Generation})
+	case req.Generation == current.Generation && req.Secrets.Seq < current.Seq:
 		return 0, domain.NewError(domain.CodeStaleLease, "a later heartbeat of this daemon was already taken",
-			map[string]any{"reason": FenceOutOfOrder})
+			map[string]any{"reason": v1.FenceOutOfOrder})
 	}
-	// An equal seq is the same heartbeat again: taken, and the report changes nothing.
+	// A higher generation, or the current daemon again; an equal seq is the
+	// same heartbeat again, and its report changes nothing.
 	return fenceAdmitted, nil
 }
 
-// syncSecrets keeps what the heartbeat says of the secrets of the Worker, and
-// audits it when that changes.
-func syncSecrets(ctx context.Context, tx *store.Tx, act mutation.Act, w store.Worker, req v1.HeartbeatRequest, verdict fenceVerdict) error {
-	if req.Generation == 0 && verdict != fenceDowngraded {
+// syncSecrets moves the fence to what the heartbeat it admitted says of the
+// secrets of the Worker, and audits it when that changes.
+func syncSecrets(ctx context.Context, tx *store.Tx, act mutation.Act, w store.Worker, current store.SecretsFence, req v1.HeartbeatRequest, verdict fenceVerdict) error {
+	var report store.SecretsReport
+	switch {
+	case verdict == fenceDowngraded:
+		report = store.SecretsReport{Generation: current.Generation, Epoch: req.Epoch}
+	case req.Generation == 0:
 		return nil // an N−1 daemon of a Worker that never had a generation: it never held any
+	default:
+		report = store.SecretsReport{Generation: req.Generation, Epoch: req.Epoch, Seq: req.Secrets.Seq, Refs: req.Secrets.Refs}
 	}
 	before, err := store.SecretsOfWorker(ctx, tx, w.ID)
 	if err != nil {
 		return err
 	}
-	if verdict == fenceDowngraded {
-		if len(before) == 0 {
-			return nil
-		}
-		if err := tx.DeleteWorkerSecrets(ctx, w.ID); err != nil {
-			return err
-		}
-		return auditSecrets(ctx, tx, act, w, before, nil)
-	}
-	outcome, err := tx.ReplaceWorkerSecrets(ctx, w.ID, store.SecretsReport{
-		Generation: req.Generation, Epoch: req.Epoch, Seq: req.Secrets.Seq, Refs: req.Secrets.Refs,
-	}, act.Now)
-	if err != nil || outcome != store.SecretsChanged {
+	changed, err := tx.ReplaceWorkerSecrets(ctx, w.ID, report, act.Now)
+	if err != nil || !changed {
 		return err
 	}
 	after, err := store.SecretsOfWorker(ctx, tx, w.ID)

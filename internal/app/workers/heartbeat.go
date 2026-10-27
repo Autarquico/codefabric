@@ -72,7 +72,7 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 			if err := s.applyHeartbeat(ctx, tx, act, &w, req); err != nil {
 				return v1.HeartbeatResponse{}, err
 			}
-			if err := syncSecrets(ctx, tx, act, w, req, verdict); err != nil {
+			if err := syncSecrets(ctx, tx, act, w, current, req, verdict); err != nil {
 				return v1.HeartbeatResponse{}, err
 			}
 			report := store.WorkerReport{

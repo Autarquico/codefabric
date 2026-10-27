@@ -142,34 +142,6 @@ func TestAllowlist_AllowAndDenyReportWhatChanged(t *testing.T) {
 	}
 }
 
-func TestSecretsFence_OrdersByGenerationThenSeq(t *testing.T) {
-	fence := SecretsFence{Generation: 2, Epoch: "e2", Seq: 5}
-	legacy := SecretsFence{Generation: 0, Epoch: "e0", Seq: 5}
-	for _, c := range []struct {
-		name  string
-		fence SecretsFence
-		r     SecretsReport
-		want  bool
-	}{
-		{"a later seq of the same daemon", fence, SecretsReport{Generation: 2, Epoch: "e2", Seq: 6}, true},
-		{"the same seq again", fence, SecretsReport{Generation: 2, Epoch: "e2", Seq: 5}, false},
-		{"an earlier seq of the same daemon", fence, SecretsReport{Generation: 2, Epoch: "e2", Seq: 4}, false},
-		{"a new generation starting over", fence, SecretsReport{Generation: 3, Epoch: "e3", Seq: 0}, true},
-		{"a retired generation, however late its seq", fence, SecretsReport{Generation: 1, Epoch: "e1", Seq: 99}, false},
-		{"a daemon without generation after one with it", fence, SecretsReport{Generation: 0, Epoch: "eX", Seq: 99}, false},
-		{"a new epoch, both without generation", legacy, SecretsReport{Generation: 0, Epoch: "e1", Seq: 0}, true},
-		{"an earlier seq, both without generation", legacy, SecretsReport{Generation: 0, Epoch: "e0", Seq: 4}, false},
-		{"the first daemon with a generation", legacy, SecretsReport{Generation: 1, Epoch: "e1", Seq: 0}, true},
-	} {
-		if got := c.fence.Admits(c.r); got != c.want {
-			t.Errorf("%s: Admits = %v, want %v", c.name, got, c.want)
-		}
-	}
-	if !fence.Retired(1) || !fence.Retired(0) || fence.Retired(2) || fence.Retired(3) {
-		t.Error("Retired must be exactly the generations below the fence")
-	}
-}
-
 type secretsFixture struct {
 	*workerFixture
 	w Worker
@@ -181,9 +153,9 @@ func newSecretsFixture(t *testing.T) *secretsFixture {
 	return f
 }
 
-func (f *secretsFixture) report(r SecretsReport) SecretsOutcome {
+func (f *secretsFixture) report(r SecretsReport) (changed bool) {
 	f.t.Helper()
-	var out SecretsOutcome
+	var out bool
 	if err := f.db.WithTx(f.t.Context(), func(tx *Tx) (err error) {
 		out, err = tx.ReplaceWorkerSecrets(f.t.Context(), f.w.ID, r, f.clk.Now())
 		return err
@@ -217,27 +189,25 @@ func meta(ref string, projects ...string) v1.SecretMeta {
 	return v1.SecretMeta{Ref: ref, Backend: v1.SecretBackendFile, Projects: projects, UpdatedAt: epoch0}
 }
 
-// A late report of a daemon that was replaced does not restore what it held,
-// and within one daemon only a later seq replaces the set.
-func TestReplaceWorkerSecrets_FencesByGenerationAndSeq(t *testing.T) {
+// A report moves the fence to it and replaces the set; the metadata is
+// rewritten only when it changed.
+func TestReplaceWorkerSecrets_MovesTheFenceAndReplacesTheSet(t *testing.T) {
 	f := newSecretsFixture(t)
 
 	steps := []struct {
-		name string
-		r    SecretsReport
-		want SecretsOutcome
-		held []string
+		name    string
+		r       SecretsReport
+		changed bool
+		held    []string
 	}{
-		{"first report", SecretsReport{Generation: 1, Epoch: "e1", Seq: 1, Refs: []v1.SecretMeta{meta("b"), meta("a")}}, SecretsChanged, []string{"a", "b"}},
-		{"same set, later seq", SecretsReport{Generation: 1, Epoch: "e1", Seq: 2, Refs: []v1.SecretMeta{meta("a"), meta("b")}}, SecretsUnchanged, []string{"a", "b"}},
-		{"earlier seq arrives late", SecretsReport{Generation: 1, Epoch: "e1", Seq: 1, Refs: nil}, SecretsStale, []string{"a", "b"}},
-		{"new daemon, empty", SecretsReport{Generation: 2, Epoch: "e2", Seq: 0, Refs: nil}, SecretsChanged, []string{}},
-		{"retired daemon arrives late", SecretsReport{Generation: 1, Epoch: "e1", Seq: 9, Refs: []v1.SecretMeta{meta("a")}}, SecretsStale, []string{}},
-		{"new daemon adds one", SecretsReport{Generation: 2, Epoch: "e2", Seq: 1, Refs: []v1.SecretMeta{meta("c", "project_b", "project_a")}}, SecretsChanged, []string{"c"}},
+		{"first report", SecretsReport{Generation: 1, Epoch: "e1", Seq: 1, Refs: []v1.SecretMeta{meta("b"), meta("a")}}, true, []string{"a", "b"}},
+		{"same set, later seq", SecretsReport{Generation: 1, Epoch: "e1", Seq: 2, Refs: []v1.SecretMeta{meta("a"), meta("b")}}, false, []string{"a", "b"}},
+		{"new daemon, empty", SecretsReport{Generation: 2, Epoch: "e2", Seq: 0, Refs: nil}, true, []string{}},
+		{"new daemon adds one", SecretsReport{Generation: 2, Epoch: "e2", Seq: 1, Refs: []v1.SecretMeta{meta("c", "project_b", "project_a")}}, true, []string{"c"}},
 	}
 	for _, s := range steps {
-		if got := f.report(s.r); got != s.want {
-			t.Errorf("%s: outcome %d, want %d", s.name, got, s.want)
+		if got := f.report(s.r); got != s.changed {
+			t.Errorf("%s: changed = %v, want %v", s.name, got, s.changed)
 		}
 		if got := refsOf(f.held()); !slices.Equal(got, s.held) {
 			t.Errorf("%s: held %v, want %v", s.name, got, s.held)
@@ -258,22 +228,35 @@ func TestReplaceWorkerSecrets_FencesByGenerationAndSeq(t *testing.T) {
 	}
 }
 
+// Generation 0 is a daemon from before generations: it has no secrets report,
+// so the fence never holds it.
+func TestReplaceWorkerSecrets_RefusesGenerationZero(t *testing.T) {
+	f := newSecretsFixture(t)
+	err := f.db.WithTx(t.Context(), func(tx *Tx) error {
+		_, err := tx.ReplaceWorkerSecrets(t.Context(), f.w.ID, SecretsReport{Generation: 0, Epoch: "e0"}, f.clk.Now())
+		return err
+	})
+	if err == nil {
+		t.Fatal("a fence at generation 0 was recorded")
+	}
+}
+
 // The digest covers every field of the metadata, not only the refs.
 func TestReplaceWorkerSecrets_RewritesWhenAnyMetadataChanges(t *testing.T) {
 	f := newSecretsFixture(t)
 	seq := uint64(0)
-	next := func(m v1.SecretMeta) SecretsOutcome {
+	next := func(m v1.SecretMeta) bool {
 		seq++
 		return f.report(SecretsReport{Generation: 1, Epoch: "e1", Seq: seq, Refs: []v1.SecretMeta{m}})
 	}
 	base := meta("a", "project_1")
-	if got := next(base); got != SecretsChanged {
-		t.Fatalf("first report: %d", got)
+	if !next(base) {
+		t.Fatal("the first report was not written")
 	}
 	reordered := meta("a", "project_1", "project_1")
 	reordered.UpdatedAt = epoch0.In(time.FixedZone("x", 3600))
-	if got := next(reordered); got != SecretsUnchanged {
-		t.Errorf("the same metadata, written differently, is outcome %d", got)
+	if next(reordered) {
+		t.Error("the same metadata, written differently, was rewritten")
 	}
 	later := base
 	later.UpdatedAt = epoch0.Add(time.Second)
@@ -281,14 +264,14 @@ func TestReplaceWorkerSecrets_RewritesWhenAnyMetadataChanges(t *testing.T) {
 	keyring := base
 	keyring.Backend = "keyring"
 	for name, m := range map[string]v1.SecretMeta{"timestamp": later, "scope": scoped, "backend": keyring} {
-		if got := next(m); got != SecretsChanged {
-			t.Errorf("a new %s is outcome %d, want changed", name, got)
+		if !next(m) {
+			t.Errorf("a new %s was not rewritten", name)
 		}
 	}
 }
 
-// A removed Worker's secrets are gone and no late report brings them back; a
-// Worker that sent none has no fence.
+// A removed Worker's secrets are gone, its fence stays, and the next report is
+// written in full; a Worker that sent none has no fence.
 func TestDeleteWorkerSecrets_KeepsTheFence(t *testing.T) {
 	f := newSecretsFixture(t)
 	other := f.worker(2, "beta", domain.WorkerOnline)
@@ -302,11 +285,18 @@ func TestDeleteWorkerSecrets_KeepsTheFence(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.report(SecretsReport{Generation: 1, Epoch: "e1", Seq: 2, Refs: []v1.SecretMeta{meta("a")}}); got != SecretsStale {
-		t.Errorf("a late report after the delete is outcome %d, want stale", got)
+	var kept SecretsFence
+	if err := f.db.Read(ctx, func(q Querier) (err error) {
+		kept, _, err = WorkerSecretsFence(ctx, q, f.w.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if got := f.report(SecretsReport{Generation: 1, Epoch: "e1", Seq: 4, Refs: []v1.SecretMeta{meta("a")}}); got != SecretsChanged {
-		t.Errorf("the next report, with the set held before the delete, is outcome %d, want it written again", got)
+	if kept.Generation != 1 || kept.Epoch != "e1" || kept.Seq != 3 {
+		t.Errorf("fence after the delete = %+v, want generation 1, epoch e1, seq 3", kept)
+	}
+	if !f.report(SecretsReport{Generation: 1, Epoch: "e1", Seq: 4, Refs: []v1.SecretMeta{meta("a")}}) {
+		t.Error("the next report, with the set held before the delete, was not written again")
 	}
 
 	var all map[domain.ID][]v1.SecretMeta

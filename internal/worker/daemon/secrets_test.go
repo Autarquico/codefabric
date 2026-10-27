@@ -109,7 +109,7 @@ func TestHeartbeat_AnUnreadableCatalogIsReportedEmptyAndDegradesTheWorker(t *tes
 
 func TestAnswerFence(t *testing.T) {
 	retired := func(generation any) error {
-		return domain.NewError(domain.CodeStaleLease, "retired", map[string]any{"reason": fenceGenerationRetired, "generation": generation})
+		return domain.NewError(domain.CodeStaleLease, "retired", map[string]any{"reason": v1.FenceGenerationRetired, "generation": generation})
 	}
 	for _, tc := range []struct {
 		name      string
@@ -122,7 +122,7 @@ func TestAnswerFence(t *testing.T) {
 		{name: "a retired generation takes one above the Controller's", err: retired(float64(7)), again: true, wantGen: 8},
 		{name: "a retired generation superseded on this machine stops", err: retired(float64(7)), laterRun: true, wantError: true},
 		{name: "a retired generation with no number is an error", err: retired("seven"), wantError: true, wantGen: 1},
-		{name: "an overtaken heartbeat sends the next", err: domain.NewError(domain.CodeStaleLease, "late", map[string]any{"reason": fenceOutOfOrder}), again: true, wantGen: 1},
+		{name: "an overtaken heartbeat sends the next", err: domain.NewError(domain.CodeStaleLease, "late", map[string]any{"reason": v1.FenceOutOfOrder}), again: true, wantGen: 1},
 		{name: "a stale lease of anything else is an error", err: domain.NewError(domain.CodeStaleLease, "x", nil), wantError: true, wantGen: 1},
 		{name: "another error is an error", err: domain.NewError(domain.CodeInvalidRequest, "x", nil), wantError: true, wantGen: 1},
 	} {

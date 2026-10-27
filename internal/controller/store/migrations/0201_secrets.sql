@@ -14,15 +14,15 @@ CREATE TABLE project_secret_allowlist (
     PRIMARY KEY (project_id, ref)
 ) STRICT, WITHOUT ROWID;
 
--- The latest secrets report taken from each Worker, which fences the next one:
--- a report is taken only if its (generation, seq) is above this one, so a late
--- heartbeat of a replaced daemon never restores what it said. Generation 0 is
--- a daemon that predates generations: between two of those, a new epoch is a
--- new daemon. metadata_digest is the sha256 of the metadata in worker_secrets
+-- The latest secrets report taken from each Worker, which fences the next
+-- heartbeat (app/workers decides the order), so a late heartbeat of a replaced
+-- daemon never restores what it said. Only a daemon with a generation (from 1)
+-- sends a report; one that predates generations never moves the fence.
+-- metadata_digest is the sha256 of the metadata in worker_secrets
 -- (refs, backends, scopes and timestamps), NULL when it must be rewritten.
 CREATE TABLE worker_secret_reports (
     worker_id       TEXT    PRIMARY KEY REFERENCES workers (id),
-    generation      INTEGER NOT NULL CHECK (generation >= 0),
+    generation      INTEGER NOT NULL CHECK (generation >= 1),
     epoch           TEXT    NOT NULL,
     seq             INTEGER NOT NULL CHECK (seq >= 0),
     metadata_digest TEXT,

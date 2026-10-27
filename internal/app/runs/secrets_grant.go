@@ -187,7 +187,7 @@ func currentDaemon(ctx context.Context, q store.Querier, w store.Worker, epoch s
 	if err != nil {
 		return false, err
 	}
-	return !fenced || fence.Generation == 0 || fence.Epoch == epoch, nil
+	return !fenced || fence.Epoch == epoch, nil
 }
 
 // refPolicy is the reason each ref is denied ("" if it passes) for a caller

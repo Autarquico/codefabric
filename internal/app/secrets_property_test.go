@@ -17,7 +17,6 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -111,21 +110,29 @@ type catalogEntry struct {
 
 // simDaemon is the daemon of a Worker as the Controller sees it: its
 // generation, epoch and seq, its catalog, and the heartbeats it sent that have
-// not arrived yet.
+// not arrived yet. A downgraded one runs an N−1 daemon on the same state, which
+// sends neither a generation nor its catalog.
 type simDaemon struct {
-	name      string
-	s         pki.Session
-	gen       uint64
-	epoch     string
-	old       []string // the epochs of its earlier runs
-	seq       uint64
-	reportSeq uint64
-	catalog   map[string]catalogEntry
-	captured  []v1.HeartbeatRequest
+	name       string
+	s          pki.Session
+	gen        uint64
+	downgraded bool
+	epoch      string
+	old        []string // the epochs of its earlier runs
+	seq        uint64
+	reportSeq  uint64
+	catalog    map[string]catalogEntry
+	captured   []v1.HeartbeatRequest
 }
 
 func (d *simDaemon) heartbeat() v1.HeartbeatRequest {
 	d.seq++
+	if d.downgraded {
+		return v1.HeartbeatRequest{
+			Epoch: d.epoch, Hostname: "box.lan", OS: "linux", Arch: "amd64",
+			Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 500000}, Health: v1.Health{Status: v1.HealthOK},
+		}
+	}
 	metas := []v1.SecretMeta{}
 	for _, ref := range slices.Sorted(maps.Keys(d.catalog)) {
 		c := d.catalog[ref]
@@ -136,6 +143,14 @@ func (d *simDaemon) heartbeat() v1.HeartbeatRequest {
 		Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 500000}, Health: v1.Health{Status: v1.HealthOK},
 		Secrets: &v1.SecretsReport{Seq: d.seq, Refs: metas},
 	}
+}
+
+// seqOf is the seq of the secrets report of a heartbeat, 0 for one of an N−1 daemon.
+func seqOf(req v1.HeartbeatRequest) uint64 {
+	if req.Secrets == nil {
+		return 0
+	}
+	return req.Secrets.Seq
 }
 
 // holds says whether the catalog lets a Run of project read every ref.
@@ -168,9 +183,22 @@ type secretsModel struct {
 // admit is the fence of §11.6 as the model has it: a heartbeat is taken if its
 // generation is above the last one taken, or the same daemon (generation and
 // epoch) and not older (seq); otherwise it is refused, and why. A taken one
-// moves the fence and, if newer, replaces the secrets.
+// moves the fence and, if newer, replaces the secrets. A heartbeat without a
+// generation from a run not before the one the fence holds is a downgrade:
+// taken, with no secrets, and the fence moves to its run, so that no heartbeat
+// of the generation it replaced is taken again.
 func (m *secretsModel) admit(w domain.ID, req v1.HeartbeatRequest) (bool, string) {
 	f := m.fence[w]
+	if req.Generation == 0 {
+		switch {
+		case f == nil:
+			return true, ""
+		case req.Epoch < f.epoch:
+			return false, v1.FenceGenerationRetired
+		}
+		m.fence[w] = &modelFence{gen: f.gen, epoch: req.Epoch, refs: map[string][]string{}}
+		return true, ""
+	}
 	take := func() {
 		refs := map[string][]string{}
 		for _, meta := range req.Secrets.Refs {
@@ -183,9 +211,9 @@ func (m *secretsModel) admit(w domain.ID, req v1.HeartbeatRequest) (bool, string
 		take()
 		return true, ""
 	case req.Generation < f.gen || req.Epoch != f.epoch:
-		return false, workers.FenceGenerationRetired
+		return false, v1.FenceGenerationRetired
 	case req.Secrets.Seq < f.seq:
-		return false, workers.FenceOutOfOrder
+		return false, v1.FenceOutOfOrder
 	case req.Secrets.Seq > f.seq:
 		take()
 	}
@@ -287,9 +315,9 @@ func (w *secretsWorld) beat(d *simDaemon, req v1.HeartbeatRequest) error {
 	_, err := w.e.app.Workers.Heartbeat(w.t.Context(), d.s, req)
 	switch {
 	case take && err != nil:
-		w.t.Fatalf("heartbeat g%d %s seq %d of %s refused: %v; the model takes it", req.Generation, req.Epoch, req.Secrets.Seq, d.name, err)
+		w.t.Fatalf("heartbeat g%d %s seq %d of %s refused: %v; the model takes it", req.Generation, req.Epoch, seqOf(req), d.name, err)
 	case !take && err == nil:
-		w.t.Fatalf("heartbeat g%d %s seq %d of %s taken; the model refuses it (%s)", req.Generation, req.Epoch, req.Secrets.Seq, d.name, reason)
+		w.t.Fatalf("heartbeat g%d %s seq %d of %s taken; the model refuses it (%s)", req.Generation, req.Epoch, seqOf(req), d.name, reason)
 	case !take:
 		var coded *domain.Error
 		if !errors.As(err, &coded) || coded.Code != domain.CodeStaleLease || coded.Details["reason"] != reason {
@@ -307,7 +335,7 @@ func (w *secretsWorld) restart(d *simDaemon, lostState bool) {
 	if d.epoch != "" {
 		d.old = append(d.old, d.epoch)
 	}
-	d.epoch, d.seq = ulid.Make().String(), 0
+	d.epoch, d.seq, d.downgraded = ulid.Make().String(), 0, false
 	if lostState && d.gen > 0 {
 		d.gen = 1 + w.rng.Uint64N(d.gen)
 	} else {
@@ -327,6 +355,16 @@ func (w *secretsWorld) restart(d *simDaemon, lostState bool) {
 		d.gen = g + 1
 	}
 	w.t.Fatalf("daemon %s could not get a generation taken", d.name)
+}
+
+// downgrade is a new run of the daemon as N−1 on the same state: a new epoch
+// and no generation, until the next restart upgrades it again.
+func (w *secretsWorld) downgrade(d *simDaemon) {
+	w.t.Helper()
+	w.trace.add("downgrade %s", d.name)
+	d.old = append(d.old, d.epoch)
+	d.epoch, d.seq, d.downgraded = ulid.Make().String(), 0, true
+	must(w.t, w.beat(d, d.heartbeat()))
 }
 
 func (w *secretsWorld) runs() []store.Run {
@@ -789,7 +827,7 @@ func (w *secretsWorld) step() {
 	ctx := w.t.Context()
 	d := w.daemons[w.rng.IntN(len(w.daemons))]
 	runs := func() []store.Run { return w.runs() }
-	action := w.rng.IntN(22)
+	action := w.rng.IntN(23)
 	switch action {
 	case 0:
 		ref := secretRefs[w.rng.IntN(len(secretRefs))]
@@ -817,7 +855,7 @@ func (w *secretsWorld) step() {
 		if w.rng.IntN(3) != 0 { // otherwise it arrives again later
 			d.captured = slices.Delete(d.captured, i, i+1)
 		}
-		w.trace.add("deliver %s g%d %s seq %d", d.name, req.Generation, req.Epoch, req.Secrets.Seq)
+		w.trace.add("deliver %s g%d %s seq %d", d.name, req.Generation, req.Epoch, seqOf(req))
 		_ = w.beat(d, req)
 	case 6:
 		if len(d.captured) > 0 {
@@ -828,6 +866,8 @@ func (w *secretsWorld) step() {
 		lost := w.rng.IntN(3) == 0
 		w.trace.add("restart %s lost=%v", d.name, lost)
 		w.restart(d, lost)
+	case 22:
+		w.downgrade(d)
 	case 8:
 		c := w.randomChange()
 		w.trace.add("allowlist %+v", c)
@@ -926,6 +966,11 @@ func (w *secretsWorld) drain() {
 		d.captured = nil
 	}
 	for _, d := range w.daemons {
+		if d.downgraded {
+			w.trace.add("upgrade %s", d.name)
+			w.restart(d, false)
+			continue
+		}
 		must(w.t, w.beat(d, d.heartbeat()))
 	}
 	w.checkView("drain")

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -56,8 +55,8 @@ func fenceReason(t *testing.T, err error) string {
 func TestFence(t *testing.T) {
 	const (
 		ok      = ""
-		retired = workers.FenceGenerationRetired
-		late    = workers.FenceOutOfOrder
+		retired = v1.FenceGenerationRetired
+		late    = v1.FenceOutOfOrder
 	)
 	type beat struct {
 		epoch     int // index into epochs, made in order: a higher one is a later run
@@ -152,6 +151,16 @@ func TestFence(t *testing.T) {
 				{epoch: 3, gen: 2, seq: 1, refs: []string{"a"}, wantState: domain.WorkerOnline},
 			},
 			wantEpoch: 3, wantSecrets: []string{"a"}, wantSyncs: 3,
+		},
+		{
+			name: "after a downgrade a late heartbeat of the replaced generation is refused",
+			beats: []beat{
+				{epoch: 1, gen: 1, seq: 1, refs: []string{"a"}},
+				{epoch: 2, wantState: domain.WorkerDegraded},
+				{epoch: 1, gen: 1, seq: 2, refs: []string{"a"}, want: retired, hostname: "ghost"},
+				{epoch: 2, wantState: domain.WorkerDegraded},
+			},
+			wantEpoch: 2, wantSecrets: []string{}, wantSyncs: 2,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

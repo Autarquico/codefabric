@@ -93,9 +93,8 @@ func AllowlistsFor(ctx context.Context, q Querier, projects []domain.ID) (map[do
 }
 
 // SecretsReport is the whole set of secrets a daemon says it holds, with the
-// position of that report among those of the Worker: Generation orders the
-// runs of its daemon (0 for one that predates generations), Seq the reports of
-// one run.
+// position of that report among those of the Worker: Generation (from 1)
+// orders the runs of its daemon, Seq the reports of one run.
 type SecretsReport struct {
 	Generation uint64
 	Epoch      string
@@ -103,48 +102,14 @@ type SecretsReport struct {
 	Refs       []v1.SecretMeta
 }
 
-// SecretsFence is the position of the latest report taken from a Worker.
+// SecretsFence is the position of the latest report taken from a Worker. The
+// order of reports is app/workers' to decide, not the store's.
 type SecretsFence struct {
 	Generation uint64
 	Epoch      string
 	Seq        uint64
 	ReportedAt time.Time
 }
-
-// Retired says whether a daemon of this generation was replaced by the one
-// that sent the fence: its heartbeats must not be taken at all. A generation 0
-// daemon is retired once any daemon with a generation has reported.
-func (f SecretsFence) Retired(generation uint64) bool { return generation < f.Generation }
-
-// Admits says whether a report at r comes after the fence. Between daemons
-// with a generation the order is (Generation, Seq); between two that predate
-// generations, a new epoch is a new daemon and within one epoch Seq orders.
-func (f SecretsFence) Admits(r SecretsReport) bool {
-	switch {
-	case f.Retired(r.Generation):
-		return false
-	case r.Generation > f.Generation:
-		return true
-	case r.Generation == 0 && r.Epoch != f.Epoch:
-		return true
-	default:
-		return r.Seq > f.Seq
-	}
-}
-
-// SecretsOutcome is what ReplaceWorkerSecrets did with a report.
-type SecretsOutcome int
-
-const (
-	// SecretsStale is a report that is not after the fence; nothing changed.
-	SecretsStale SecretsOutcome = iota + 1
-	// SecretsUnchanged is a report the fence moved to, whose metadata is the
-	// one already kept.
-	SecretsUnchanged
-	// SecretsChanged is a report the fence moved to, whose metadata replaced
-	// what was kept.
-	SecretsChanged
-)
 
 // WorkerSecretsFence is the fence of the Worker, and false if it never sent a
 // report.
@@ -171,22 +136,19 @@ func secretsFence(ctx context.Context, q Querier, worker domain.ID) (fence Secre
 	return fence, stored.String, true, nil
 }
 
-// ReplaceWorkerSecrets takes a report as the whole set of secrets of the Worker
-// if it comes after the fence (compare-and-set on (generation, seq)), and
-// rewrites the metadata only when it differs from what is kept. The caller
-// validates the report.
-func (t *Tx) ReplaceWorkerSecrets(ctx context.Context, worker domain.ID, r SecretsReport, at time.Time) (SecretsOutcome, error) {
-	fence, stored, ok, err := secretsFence(ctx, t, worker)
+// ReplaceWorkerSecrets moves the fence of the Worker to r and takes its refs
+// as the whole set of secrets of the Worker, rewriting the metadata only when
+// it differs from what is kept; it says whether it did. The caller decided
+// that r comes after the fence, and validated it.
+func (t *Tx) ReplaceWorkerSecrets(ctx context.Context, worker domain.ID, r SecretsReport, at time.Time) (changed bool, err error) {
+	_, stored, ok, err := secretsFence(ctx, t, worker)
 	if err != nil {
-		return 0, err
-	}
-	if ok && !fence.Admits(r) {
-		return SecretsStale, nil
+		return false, err
 	}
 	metas := canonicalSecrets(r.Refs)
 	digest, err := secretsDigest(metas)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 	if _, err := t.Exec(ctx,
 		`INSERT INTO worker_secret_reports (worker_id, generation, epoch, seq, metadata_digest, reported_at)
@@ -194,15 +156,12 @@ func (t *Tx) ReplaceWorkerSecrets(ctx context.Context, worker domain.ID, r Secre
 		 ON CONFLICT (worker_id) DO UPDATE SET generation = excluded.generation, epoch = excluded.epoch,
 		     seq = excluded.seq, metadata_digest = excluded.metadata_digest, reported_at = excluded.reported_at`,
 		string(worker), r.Generation, r.Epoch, r.Seq, digest, at.UnixNano()); err != nil {
-		return 0, fmt.Errorf("store: recording a secrets report: %w", err)
+		return false, fmt.Errorf("store: recording a secrets report: %w", err)
 	}
 	if ok && stored == digest {
-		return SecretsUnchanged, nil
+		return false, nil
 	}
-	if err := t.writeWorkerSecrets(ctx, worker, metas); err != nil {
-		return 0, err
-	}
-	return SecretsChanged, nil
+	return true, t.writeWorkerSecrets(ctx, worker, metas)
 }
 
 func (t *Tx) writeWorkerSecrets(ctx context.Context, worker domain.ID, metas []v1.SecretMeta) error {

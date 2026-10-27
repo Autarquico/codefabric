@@ -12,12 +12,6 @@ import (
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
-// Reasons the Controller's fence gives in details.reason (app/workers).
-const (
-	fenceGenerationRetired = "generation_retired"
-	fenceOutOfOrder        = "out_of_order"
-)
-
 // Problems of the catalog the heartbeat reports, as the health of the daemon.
 const (
 	catalogUnreadable = "the catalog of secrets cannot be read; see the log of the daemon"
@@ -68,9 +62,9 @@ func (d *daemon) answerFence(ctx context.Context, err error) (bool, error) {
 		return false, err
 	}
 	switch coded.Details["reason"] {
-	case fenceOutOfOrder:
+	case v1.FenceOutOfOrder:
 		return true, nil
-	case fenceGenerationRetired:
+	case v1.FenceGenerationRetired:
 	default:
 		return false, err
 	}

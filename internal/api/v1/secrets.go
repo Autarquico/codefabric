@@ -70,6 +70,18 @@ const (
 	GrantDaemonRetired    = "daemon_retired"     // the caller is not the daemon the Controller holds as current
 )
 
+// Reasons the Controller refuses a heartbeat whose daemon it does not hold as
+// current, in details.reason of its CF_STALE_LEASE; the daemon recovers by
+// them.
+const (
+	// FenceGenerationRetired is a generation lower than the Controller's, or
+	// equal to it from another epoch. details.generation is the Controller's.
+	FenceGenerationRetired = "generation_retired"
+	// FenceOutOfOrder is a heartbeat of the current daemon that a later one of
+	// its own overtook.
+	FenceOutOfOrder = "out_of_order"
+)
+
 // Reasons a ref is denied, in details.denied of a grant and in its audit; a
 // grant with any answers CF_POLICY_DENIED.
 const (
