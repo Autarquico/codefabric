@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -402,4 +403,26 @@ func (e *Executor) offerStrayAuth(runDir string) error {
 		return nil
 	}
 	return e.o.AuthSync.Offer(auth, e.o.Host, left)
+}
+
+// configTree is the configuration directory of a run directory, which the
+// secrets janitor discards when it cannot tell which files carry values.
+var configTree = filepath.Base(host.ConfigDir(""))
+
+// authCopiesOf are the auth copies of the materialisation of runDir, as paths
+// relative to it. The discard of the configuration tree leaves them: they hold
+// the last refresh of the Run until the Broker has reconciled it, and
+// dropMaterialization removes them after.
+func authCopiesOf(runDir string) []string {
+	mat, err := host.ReadMaterialization(runDir)
+	if err != nil {
+		return nil
+	}
+	var rel []string
+	for _, c := range mat.AuthCopyPaths() {
+		if r, err := filepath.Rel(runDir, c); err == nil {
+			rel = append(rel, filepath.ToSlash(r))
+		}
+	}
+	return rel
 }

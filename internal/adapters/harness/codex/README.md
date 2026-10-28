@@ -26,8 +26,12 @@ The adapter of the Codex CLI (OpenAI). A Run gets it when it asks for
    of the OTLP exporters of `otel` and of the MITM hooks of `permissions`. The
    names of variables (`env_vars`, `env_http_headers`, `env_key`,
    `bearer_token_env_var`, the `env` of a credential provider) stay as they
-   are. In a Run the markers are rendered as TOML basic strings once the
-   secrets are granted, and removed at its release. Applied globally,
+   are. Known limits: the `args` of an MCP server and the sandbox settings
+   (`sandbox_workspace_write.*`, `permissions`) are copied as written; a
+   secret in `args` is not marked, and a `writable_roots` of the host reaches
+   every Run, since `--sandbox workspace-write` does not cancel it. In a Run
+   the markers are rendered as TOML basic strings once the secrets are
+   granted, and removed at its release. Applied globally,
    `config.toml` is merged key by key, keeping `projects` and every local key;
    managed components are written and removed, local ones never; a snapshot
    with secrets is refused there (`CF_SECRET_UNAVAILABLE`).
@@ -53,7 +57,8 @@ The adapter of the Codex CLI (OpenAI). A Run gets it when it asks for
    modes add `CODEX_HOME=<ConfigDir>`, run the sandbox `workspace-write`
    without approvals, set the root with `-C <Worktree>`, add `-m <Model>` when
    the Run names one, and pass the prompt after `--` so a prompt that starts
-   with `-` is never a flag.
+   with `-` is never a flag. A model that starts with `-` is refused: it
+   would be read as an option.
    - headless: `codex exec --json --sandbox workspace-write -c
      approval_policy="never" --skip-git-repo-check -C <Worktree> [-m <Model>]
      -- <Prompt>`, with `StructuredStdout`. `codex exec` reads stdin even with

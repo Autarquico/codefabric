@@ -108,9 +108,6 @@ type wrapper struct {
 
 	launch   Launch
 	stopping bool
-	// events is the matcher of events.jsonl when the launch has secrets and
-	// asked for StructuredStdout.
-	events *redact.Set
 	// copyErr is what failed in copying the output and in syncing and closing
 	// events.jsonl, set before wire's channel closes: a capture that failed is
 	// not a complete one. Read it only once that channel is closed.
@@ -265,7 +262,6 @@ func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
 	if set, err = redaction(w.o.Retention); err != nil {
 		return nil, nil, fmt.Errorf("%s: the output cannot be redacted: %w", domain.CodeSecretUnavailable, err)
 	}
-	w.events = set // one matcher for the log, the terminal and the event stream
 	if w.launch.Mode == ModeInteractive {
 		if acked, err := cfruntime.CaptureAcked(filepath.Join(w.o.RunDir, CaptureAckFile)); !acked {
 			if err == nil {
@@ -299,7 +295,7 @@ func (w *wrapper) structured() bool {
 // it uses the terminal of the pane itself, whose output the Runtime captures; in
 // headless mode it has no input and its output goes to the log and the pane,
 // with set, if any, redacted from both. With StructuredStdout, stdout goes
-// instead to events.jsonl (alone, redacted line by line with w.events), and
+// instead to events.jsonl (alone, redacted line by line with set), and
 // only stderr to the log and the pane. copied closes when every stream has been
 // copied to its end and events.jsonl is synced and closed; parentEnds are the files of the pipe that this process
 // must close once the harness has started.
@@ -347,11 +343,11 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 		}
 		var eventsPipe copyPipe
 		eventsPipe, err = startCopy("events.jsonl", events, func(dst io.Writer, src io.Reader) error {
-			if w.events == nil {
+			if set == nil {
 				_, err := io.Copy(dst, src)
 				return err
 			}
-			return copyEvents(dst, src, w.events)
+			return copyEvents(dst, src, set)
 		})
 		if err != nil {
 			_ = logPipe.abort()
@@ -641,6 +637,9 @@ func (w *wrapper) drained(copied <-chan struct{}) error {
 		incomplete = fmt.Errorf("capture incomplete: the group still held open the %s", strings.Join(held, " and the "))
 	}
 	if waitFor(copied, wait) {
+		if len(held) == 0 {
+			return w.copyErr // every stream ended by itself; only the sync was slow
+		}
 		return errors.Join(incomplete, w.copyErr)
 	}
 	errs := []error{incomplete, errors.New("the copy of the output did not end after being cut; events.jsonl may not be synced")}

@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -44,7 +45,10 @@ func removeMaterialization(runDir string) error {
 }
 
 // sweepAuthCopies removes the auth of the host left in the run directories whose
-// Run is over (or state.db does not know). A Run that is live keeps its own.
+// Run is over (or state.db does not know) and whose session is not alive, as
+// the janitor of the secrets does. A Run that is live keeps its own. A
+// directory with no materialisation left, and no refresh pending, is not
+// looked at again.
 func (e *Executor) sweepAuthCopies(ctx context.Context) error {
 	runs := filepath.Join(e.o.Paths.WorkerDataDir(), "runs")
 	entries, err := os.ReadDir(runs)
@@ -54,13 +58,19 @@ func (e *Executor) sweepAuthCopies(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	alive := e.sessionsAlive(ctx)
 	var errs []error
 	for _, d := range entries {
 		run, epoch, ok := domain.ParseRunEpoch(d.Name())
 		if !ok || !d.IsDir() {
 			continue
 		}
-		r, err := state.RunBy(ctx, e.o.DB.Reader(), state.Key{RunID: run, LeaseEpoch: epoch})
+		k := state.Key{RunID: run, LeaseEpoch: epoch}
+		runDir := filepath.Join(runs, d.Name())
+		if !e.hasAuthToSweep(k, runDir) {
+			continue
+		}
+		r, err := state.RunBy(ctx, e.o.DB.Reader(), k)
 		switch {
 		case errors.Is(err, state.ErrNotFound):
 		case err != nil:
@@ -69,10 +79,31 @@ func (e *Executor) sweepAuthCopies(ctx context.Context) error {
 		case r.Phase.Live():
 			continue
 		}
-		k := state.Key{RunID: run, LeaseEpoch: epoch}
-		if err := e.dropMaterialization(k, filepath.Join(runs, d.Name())); err != nil {
+		live, err := alive(e.sessionName(k))
+		if err != nil {
+			errs = append(errs, fmt.Errorf("is the session of the Run alive? %w", err))
+			continue
+		}
+		if live {
+			continue
+		}
+		if err := e.dropMaterialization(k, runDir); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// hasAuthToSweep says whether the run directory still holds a materialisation,
+// or the Broker still owes the Run its last refresh.
+func (e *Executor) hasAuthToSweep(k state.Key, runDir string) bool {
+	for _, d := range []string{host.ConfigDir(runDir), host.StagingDir(runDir)} {
+		if _, err := os.Lstat(d); !errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, pending := e.authPending[k]
+	return pending
 }

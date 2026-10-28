@@ -52,6 +52,14 @@ type Broker struct {
 	runs    map[string]tracked
 	watches map[string][]*watch // by path of the file (host, resolved, or copy) whose replaced inodes are watched, oldest first
 
+	// hostPaths is the resolved path of the host auth, by GlobalAuth, whose
+	// replaced inodes are watched: it is released with the last Run of the group.
+	hostPaths map[string]string
+	// noAccount is the hosts whose lack of an account has been logged.
+	noAccount map[string]bool
+	// futureWarned is the stamp last logged as in the future, by path.
+	futureWarned map[string]time.Time
+
 	// hook, when set by a test, is called at the named stage of replace of path.
 	hook func(stage, path string)
 }
@@ -75,7 +83,10 @@ var (
 
 // New is a Broker with o.
 func New(o Options) *Broker {
-	b := &Broker{clock: o.Clock, log: o.Log, interval: o.Interval, runs: map[string]tracked{}, watches: map[string][]*watch{}}
+	b := &Broker{
+		clock: o.Clock, log: o.Log, interval: o.Interval, runs: map[string]tracked{}, watches: map[string][]*watch{},
+		hostPaths: map[string]string{}, noAccount: map[string]bool{}, futureWarned: map[string]time.Time{},
+	}
 	if b.clock == nil {
 		b.clock = clock.Real{}
 	}
@@ -99,8 +110,14 @@ func (b *Broker) Track(id string, auth harness.AuthSyncer, host harness.Host, co
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.forget(id)
-	b.runs[id] = tracked{auth: auth, global: auth.GlobalAuth(host), copies: copies}
+	// Not forget: the host watch must stay open when the group does not change.
+	old := b.runs[id]
+	b.unwatchCopies(old)
+	global := auth.GlobalAuth(host)
+	b.runs[id] = tracked{auth: auth, global: global, copies: copies}
+	if old.global != "" && old.global != global {
+		b.releaseHost(old.global)
+	}
 }
 
 // Release ends the Run id. Before it forgets the Run it reconciles one last
@@ -143,7 +160,11 @@ func (b *Broker) Offer(auth harness.AuthSyncer, host harness.Host, copies []stri
 	defer b.mu.Unlock()
 	global := auth.GlobalAuth(host)
 	live, ended := b.group(global)
-	return b.sync(auth, global, live, append(ended, copies...))
+	err := b.sync(auth, global, live, append(ended, copies...))
+	if len(live)+len(ended) == 0 {
+		b.releaseHost(global) // nothing registered holds the host watch
+	}
+	return err
 }
 
 // Abandon drops the Run id and closes its descriptors without reconciling it:
@@ -170,13 +191,32 @@ func (b *Broker) group(global string) (live, ended []string) {
 
 // forget drops the Run id and closes the descriptors it holds. Needs b.mu.
 func (b *Broker) forget(id string) {
-	for _, c := range b.runs[id].copies {
+	r, ok := b.runs[id]
+	if !ok {
+		return
+	}
+	b.unwatchCopies(r)
+	delete(b.runs, id)
+	b.releaseHost(r.global)
+}
+
+func (b *Broker) unwatchCopies(r tracked) {
+	for _, c := range r.copies {
 		b.unwatch(c)
 	}
-	delete(b.runs, id)
-	if len(b.runs) == 0 {
-		b.unwatchAll()
+}
+
+// releaseHost closes the host watch of global and forgets what was logged of
+// it, unless a Run of the group is left. Needs b.mu.
+func (b *Broker) releaseHost(global string) {
+	for _, o := range b.runs {
+		if o.global == global {
+			return
+		}
 	}
+	b.unwatch(b.hostPaths[global])
+	delete(b.hostPaths, global)
+	delete(b.noAccount, global)
 }
 
 // unwatchAll closes every descriptor held, whichever file it was of. Needs b.mu.
@@ -184,6 +224,8 @@ func (b *Broker) unwatchAll() {
 	for p := range b.watches {
 		b.unwatch(p)
 	}
+	clear(b.hostPaths)
+	clear(b.futureWarned)
 }
 
 func (b *Broker) unwatch(path string) {
@@ -191,6 +233,7 @@ func (b *Broker) unwatch(path string) {
 		_ = w.file.Close()
 	}
 	delete(b.watches, path)
+	delete(b.futureWarned, path)
 }
 
 // Run polls every interval until ctx ends.
@@ -257,9 +300,18 @@ func (b *Broker) sync(auth harness.AuthSyncer, host string, live, ended []string
 		}
 		return errHostUnavailable
 	}
+	if old, ok := b.hostPaths[host]; ok && old != hostVersion.path {
+		b.unwatch(old) // the link was retargeted: nothing polls the old inodes again
+	}
+	b.hostPaths[host] = hostVersion.path
 	if hostVersion.identity == "" {
+		if !b.noAccount[host] {
+			b.noAccount[host] = true
+			b.log.Warn("the auth of the host has no account; the auth of the Runs is not kept in step", "file", hostVersion.path)
+		}
 		return nil
 	}
+	delete(b.noAccount, host)
 	versions := []version{hostVersion}
 	for _, f := range append(slices.Clone(live), ended...) {
 		if v, ok := b.read(auth, f, false); ok && v.identity == hostVersion.identity {
@@ -337,7 +389,10 @@ func (b *Broker) validate(auth harness.AuthSyncer, path string, content []byte) 
 		return version{}, false
 	}
 	if stamp.After(b.clock.Now().Add(MaxClockSkew)) {
-		b.log.Warn("an auth file is stamped in the future; it is not propagated nor replaced", "file", path)
+		if last, ok := b.futureWarned[path]; !ok || !last.Equal(stamp) {
+			b.futureWarned[path] = stamp
+			b.log.Warn("an auth file is stamped in the future; it is not propagated nor replaced", "file", path)
+		}
 		return version{}, false
 	}
 	return version{path: path, content: content, stamp: stamp, identity: identity}, true

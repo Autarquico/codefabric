@@ -48,10 +48,12 @@ func (m *Manager) release(runDir string, verify func() error) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrPending, err)
 	}
-	// A registry that cannot be read does not stop the delivery from going:
-	// settled keeps saying it is pending.
+	// A registry that cannot be read does not stop the delivery from going,
+	// and the files it named can no longer be told apart: the whole
+	// configuration tree goes (see discardConfig).
 	left, leftErr := renderedLeft(runDir)
-	if delivered || len(left) > 0 {
+	corrupt := errors.Is(leftErr, ErrCorrupt)
+	if delivered || len(left) > 0 || corrupt {
 		if err := verify(); err != nil {
 			return err
 		}
@@ -64,7 +66,12 @@ func (m *Manager) release(runDir string, verify func() error) error {
 			return err
 		}
 	}
-	if len(left) > 0 {
+	if corrupt {
+		if err := m.discardConfig(runDir); err != nil {
+			return err
+		}
+		leftErr = nil
+	} else if len(left) > 0 {
 		if err := m.dropRendered(runDir); err != nil {
 			return err
 		}

@@ -39,7 +39,7 @@ func parseTable(b []byte) (table, error) {
 // renders them with. So each string that has a marker is written by this
 // function as a basic string, and the result is checked against t.
 func renderTable(t table) ([]byte, error) {
-	shield := &markerShield{}
+	shield := &markerShield{prefix: freePrefix(t)}
 	shielded, err := shield.table(t)
 	if err != nil {
 		return nil, err
@@ -68,9 +68,37 @@ func renderTable(t table) ([]byte, error) {
 // a placeholder has a single quote, which makes the encoder write it as a
 // basic string, and is replaced afterwards, quotes included, by the string
 // written as a basic string.
-type markerShield struct{ originals []string }
+type markerShield struct {
+	prefix    string
+	originals []string
+}
 
-const placeholderPrefix = "'cf-marker-"
+// freePrefix is a placeholder prefix that no key or string of t contains, so
+// that a value the person wrote is never taken for a placeholder.
+func freePrefix(t table) string {
+	for n := 0; ; n++ {
+		prefix := "'cf-marker-" + strconv.Itoa(n) + "-"
+		if !mentions(t, prefix) {
+			return prefix
+		}
+	}
+}
+
+func mentions(v any, text string) bool {
+	switch v := v.(type) {
+	case table:
+		for k, el := range v {
+			if strings.Contains(k, text) || mentions(el, text) {
+				return true
+			}
+		}
+	case []any:
+		return slices.ContainsFunc(v, func(el any) bool { return mentions(el, text) })
+	case string:
+		return strings.Contains(v, text)
+	}
+	return false
+}
 
 func (m *markerShield) table(t table) (table, error) {
 	out := make(table, len(t))
@@ -103,14 +131,14 @@ func (m *markerShield) value(v any) (any, error) {
 	case string:
 		if strings.Contains(v, markerOpen) {
 			m.originals = append(m.originals, v)
-			return fmt.Sprintf("%s%d'", placeholderPrefix, len(m.originals)-1), nil
+			return fmt.Sprintf("%s%d'", m.prefix, len(m.originals)-1), nil
 		}
 	}
 	return v, nil
 }
 
 func (m *markerShield) restore(b []byte) ([]byte, error) {
-	if bytes.Count(b, []byte(`"`+placeholderPrefix)) != len(m.originals) {
+	if bytes.Count(b, []byte(`"`+m.prefix)) != len(m.originals) {
 		return nil, errors.New("rendering TOML: a placeholder is not where it was put")
 	}
 	for i, s := range m.originals {
@@ -118,7 +146,7 @@ func (m *markerShield) restore(b []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("rendering TOML: %w", err)
 		}
-		holder := []byte(fmt.Sprintf(`"%s%d'"`, placeholderPrefix, i))
+		holder := []byte(fmt.Sprintf(`"%s%d'"`, m.prefix, i))
 		if bytes.Count(b, holder) != 1 {
 			return nil, errors.New("rendering TOML: a placeholder is not where it was put")
 		}
