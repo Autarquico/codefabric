@@ -803,7 +803,7 @@ Un Worker ejecuta varios Runs a la vez (§10.5); un `apply` o un Workflow distin
   - el Controller mantiene un **lock de configuración** por `(worker, harness)` con un `config_key` y un contador de titulares. Se toma en la misma transacción que crea la lease (§10.4) y cuenta leases pendientes y Runs activos; se suelta al liberar la reserva (§10.5). Sólo se asignan Runs de ese harness con el mismo `config_key` que el lock vigente;
   - en el Worker, aceptación, materialización y apply de un mismo harness se serializan con un mutex local por harness;
   - `workflow apply` sobre ese harness marca el lock como `apply_pending`: desde ese momento no se crean leases nuevas de ese harness en el Worker; el apply se ejecuta cuando el contador llega a 0 (o falla con `CF_WORKER_BUSY` si se pide `--no-wait`).
-- La auth del harness (local, §16.7) se enlaza en el directorio del Run, no se copia.
+- La auth del harness (local, §16.7) se enlaza en el directorio del Run, no se copia; salvo si el harness la reescribe sin lock al refrescar (Codex: truncate+write de `auth.json`). Entonces cada Run recibe una copia privada 0600 y el daemon del Worker la intermedia: propaga la versión más reciente de la misma cuenta al global y a las copias de los Runs activos, siempre por rename atómico. Al terminar el Run la reconcilia con el global y borra la copia con `config/`; si el global no la acepta, reintenta durante un plazo acotado y después la borra igualmente, aunque se pierda el último refresh.
 
 ## 9. Worker lifecycle
 
