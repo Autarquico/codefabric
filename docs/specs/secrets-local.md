@@ -2,7 +2,7 @@
 codename: codefabric
 title: Secrets locales al Worker
 type: task
-status: active
+status: shipped
 priority: P0
 size: M
 issue: 23
@@ -16,7 +16,7 @@ depends_on:
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-27
+updated: 2026-10-28
 ---
 
 # Secrets locales al Worker
