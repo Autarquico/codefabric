@@ -3,6 +3,7 @@ package redact_test
 import (
 	"bytes"
 	"errors"
+	"runtime"
 	"testing"
 
 	"github.com/Autarquico/codefabric/internal/support/redact"
@@ -46,5 +47,20 @@ func TestAnEscapedFormThatOverflowsTheBudgetFailsClosed(t *testing.T) {
 	}
 	if _, err := redact.NewEscapedSet([]redact.Needle{{Ref: "a/b", Value: big}}); !errors.Is(err, redact.ErrTooLarge) {
 		t.Errorf("err = %v, want ErrTooLarge", err)
+	}
+}
+
+func TestAnOversizedValueFailsClosedBeforeDerivingItsForms(t *testing.T) {
+	huge := bytes.Repeat([]byte("\x01"), redact.MaxNeedleBytes+1)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err := redact.NewEscapedSet([]redact.Needle{{Ref: "a/b", Value: huge}})
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, redact.ErrTooLarge) {
+		t.Errorf("err = %v, want ErrTooLarge", err)
+	}
+	// Deriving the forms of this value allocates several times its size.
+	if got := after.TotalAlloc - before.TotalAlloc; got > uint64(len(huge)) {
+		t.Errorf("allocated %d bytes for a value of %d: its forms were derived", got, len(huge))
 	}
 }

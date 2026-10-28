@@ -286,3 +286,19 @@ func TestAnInteractiveRunWithSecretsOnlyInItsConfigurationIsCapturedThroughTheFi
 		t.Errorf("session = %+v", spec)
 	}
 }
+
+func TestARejectionForAMalformedMarkerSaysItOnceInItsMessage(t *testing.T) {
+	f := configFixture(t, newFakeStore(map[string]string{}), func(o *Options) {
+		o.ConfigSource = func(ctx context.Context, r state.Run, id string) (harness.NativeSnapshot, error) {
+			snap, err := configWithSecret("team/token")(ctx, r, id)
+			snap.Components[0].Files[0].Content = []byte("token = \"{{cf-secret:\"\n")
+			return snap, err
+		}
+	})
+	f.assign(fakeSpec("do it", ""))
+	f.e.decideOnce(t.Context())
+	if len(f.ctrl.rejected) != 1 || f.ctrl.rejected[0].Code != domain.CodeSecretUnavailable ||
+		strings.Contains(f.ctrl.rejected[0].Message, string(domain.CodeSecretUnavailable)) {
+		t.Errorf("rejected = %+v", f.ctrl.rejected)
+	}
+}

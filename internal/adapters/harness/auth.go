@@ -19,9 +19,10 @@ type AuthSyncer interface {
 	// (a file half written, for one) is an error and is never propagated. The
 	// zero time is a valid auth that says nothing of its age, and is never
 	// taken as the most recent. The identity is the account the auth belongs
-	// to, opaque to the Worker; empty says the auth has none (an API key), and
-	// such an auth is never propagated nor replaced: only versions of one
-	// account are brought in step, so a Run cannot put another account in the
-	// host or in the other Runs.
+	// to, as the file itself declares it, opaque to the Worker; empty says the
+	// auth has none (an API key), and such an auth is never propagated nor
+	// replaced: only versions of one declared account are brought in step. That
+	// filters a login under another account by accident; it is no guarantee
+	// against a Run that forges its copy, whose file it controls.
 	AuthStamp(content []byte) (stamp time.Time, identity string, err error)
 }

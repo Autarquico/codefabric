@@ -41,21 +41,6 @@ func ConfigDir(runDir string) string { return filepath.Join(runDir, configName) 
 // the host into it, so what a crash leaves there is as sensitive as ConfigDir.
 func StagingDir(runDir string) string { return filepath.Join(runDir, stagingName) }
 
-// ReadMaterialization is the record of the materialisation of the Run whose
-// directory is runDir, with its ConfigDir.
-func ReadMaterialization(runDir string) (Materialization, error) {
-	data, err := os.ReadFile(filepath.Join(runDir, recordName)) //nolint:gosec // the run directory is the Worker's
-	if err != nil {
-		return Materialization{}, fmt.Errorf("materialization: %w", err)
-	}
-	var rec Materialization
-	if err := json.Unmarshal(data, &rec); err != nil {
-		return Materialization{}, fmt.Errorf("materialization: %w", err)
-	}
-	rec.ConfigDir = ConfigDir(runDir)
-	return rec, nil
-}
-
 // AuthCopyPaths are the AuthCopies as paths in ConfigDir.
 func (m Materialization) AuthCopyPaths() []string {
 	paths := make([]string, 0, len(m.AuthCopies))
@@ -95,6 +80,82 @@ type Materialization struct {
 	ConfigDir string `json:"-"`
 }
 
+// ReadMaterialization is the record of the materialisation of the Run whose
+// directory is runDir, with its ConfigDir. It is an error for the record to be
+// of another schema, or to name an auth copy that is not a regular file
+// inside ConfigDir (see confined).
+func ReadMaterialization(runDir string) (Materialization, error) {
+	data, err := os.ReadFile(filepath.Join(runDir, recordName)) //nolint:gosec // the run directory is the Worker's
+	if err != nil {
+		return Materialization{}, fmt.Errorf("materialization: %w", err)
+	}
+	var rec Materialization
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return Materialization{}, fmt.Errorf("materialization: %w", err)
+	}
+	if rec.Schema != recordSchema {
+		return Materialization{}, fmt.Errorf("materialization: schema %d, want %d", rec.Schema, recordSchema)
+	}
+	rec.ConfigDir = ConfigDir(runDir)
+	if err := confined(runDir, rec.AuthCopies); err != nil {
+		return Materialization{}, fmt.Errorf("materialization: %w", err)
+	}
+	return rec, nil
+}
+
+// confined says whether every one of copies, which config.json names and the
+// Run can rewrite, is a single file name directly in the configuration
+// directory of runDir: no separator (so no intermediate directory the Run could
+// swap for a link after this check), no absolute path, no "..". The names are
+// checked first, whether or not the directory exists. Then the directory must
+// be a real one, not a link, and a copy that exists in it must be a regular
+// file; one that does not is let through, for copiesPresent to say.
+//
+// The check is made once, when the Run is tracked, and the Broker afterwards
+// opens the copies by plain path: a Run that can write in runDir can still swap
+// the directory itself for a link after it. That window stays open, and is
+// listed among the limits of the Broker (authsync).
+func confined(runDir string, copies []string) error {
+	for _, c := range copies {
+		if !fs.ValidPath(c) || c == "." || strings.Contains(c, "/") {
+			return fmt.Errorf("auth copy %q is not a file name in the configuration", c)
+		}
+	}
+	if len(copies) == 0 {
+		return nil
+	}
+	run, err := os.OpenRoot(runDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = run.Close() }()
+	info, err := run.Lstat(configName)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case !info.IsDir():
+		return fmt.Errorf("the configuration %s is not a directory", configName)
+	}
+	root, err := run.OpenRoot(configName)
+	if err != nil {
+		return fmt.Errorf("the configuration leaves the run directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	for _, c := range copies {
+		info, err := root.Lstat(c)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+		case err != nil:
+			return fmt.Errorf("auth copy %q leaves the configuration: %w", c, err)
+		case !info.Mode().IsRegular():
+			return fmt.Errorf("auth copy %q is not a regular file", c)
+		}
+	}
+	return nil
+}
+
 // ComponentDigest is the digest of one component of the snapshot.
 type ComponentDigest struct {
 	Name   string `json:"name"`
@@ -110,8 +171,12 @@ type Materializer struct {
 // fsOps are the steps of a materialisation that touch the disk at a
 // boundary of durability; tests replace them to fail there.
 type fsOps struct {
-	sync        func(path string) error
-	rename      func(from, to string) error
+	sync   func(path string) error
+	rename func(from, to string) error
+	// syncIn and renameIn are sync and rename for what is inside a root: they
+	// do not follow a symlink that leads out of it.
+	syncIn      func(root *os.Root, name string) error
+	renameIn    func(root *os.Root, from, to string) error
 	writeRecord func(path string, data []byte) error
 }
 
@@ -120,6 +185,8 @@ func NewMaterializer(host harness.Host) *Materializer {
 	return &Materializer{host: host, fs: fsOps{
 		sync:        syncPath,
 		rename:      os.Rename,
+		syncIn:      syncIn,
+		renameIn:    func(root *os.Root, from, to string) error { return root.Rename(from, to) },
 		writeRecord: func(path string, data []byte) error { return atomicfile.Write(path, data, 0o600) },
 	}}
 }
@@ -184,15 +251,11 @@ func (m *Materializer) Materialize(ctx context.Context, a harness.Adapter, runDi
 // a render left in it) digests to something else, so it is not reused: it is
 // rebuilt, which removes every value it held, and rendered again.
 func (m *Materializer) reusable(runDir string, src source) (Materialization, bool) {
-	data, err := os.ReadFile(filepath.Join(runDir, recordName)) //nolint:gosec // the run directory is the Worker's
-	if err != nil {
+	rec, err := ReadMaterialization(runDir)
+	if err != nil || rec.Harness != src.harness || rec.SourceDigest != src.digest {
 		return Materialization{}, false
 	}
-	var rec Materialization
-	if json.Unmarshal(data, &rec) != nil || rec.Schema != recordSchema || rec.Harness != src.harness || rec.SourceDigest != src.digest {
-		return Materialization{}, false
-	}
-	dir := ConfigDir(runDir)
+	dir := rec.ConfigDir
 	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
 		return Materialization{}, false
 	}
@@ -203,7 +266,6 @@ func (m *Materializer) reusable(runDir string, src source) (Materialization, boo
 		return Materialization{}, false
 	}
 	rec.Rendered = src.rendered
-	rec.ConfigDir = dir
 	return rec, true
 }
 
@@ -322,6 +384,18 @@ func syncPath(p string) error {
 	if err != nil {
 		return err
 	}
+	return syncAndClose(f)
+}
+
+func syncIn(root *os.Root, name string) error {
+	f, err := root.Open(name)
+	if err != nil {
+		return err
+	}
+	return syncAndClose(f)
+}
+
+func syncAndClose(f *os.File) error {
 	syncErr := f.Sync()
 	if err := f.Close(); syncErr == nil {
 		syncErr = err

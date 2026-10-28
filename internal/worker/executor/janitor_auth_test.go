@@ -462,3 +462,45 @@ func TestJanitor_GivesUpWithTheRealBroker(t *testing.T) {
 		t.Errorf("the Run is still registered: %v", err)
 	}
 }
+
+// The janitor of the secrets leaves a Run whose session may be alive alone,
+// and so does this one: its harness is still reading the copy.
+func TestJanitor_KeepsTheAuthCopyOfARunWhoseSessionIsAlive(t *testing.T) {
+	f := newFixture(t)
+	k := state.Key{RunID: "gone", LeaseEpoch: 1}
+	copied := materialised(t, f.runDir(k))
+	f.rt.setAlive(f.e.sessionName(k), true)
+	f.e.sweep(t.Context())
+	if !exists(copied) {
+		t.Fatal("the janitor removed the copy under a live session")
+	}
+	f.rt.setAlive(f.e.sessionName(k), false)
+	f.e.sweep(t.Context())
+	if exists(copied) {
+		t.Error("the copy survived once the session was gone")
+	}
+}
+
+// A directory with nothing left to sweep is not offered to the Broker again.
+func TestJanitor_DoesNotLookAgainAtARunDirectoryWithNothingLeft(t *testing.T) {
+	f := newFixture(t)
+	rec := &authRecorder{tracked: map[string][]string{}}
+	f.e.o.AuthSync = rec
+	k := state.Key{RunID: "gone", LeaseEpoch: 1}
+	copied := materialised(t, f.runDir(k))
+	f.e.sweep(t.Context())
+	if exists(copied) {
+		t.Fatal("the copy survived the first sweep")
+	}
+	if err := os.MkdirAll(f.runDir(k), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.runDir(k), "config.json"), []byte(`{"schema":1,"harness":"codex","auth_copies":["auth.json"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec.releaseErr = errors.New("must not be asked")
+	f.e.sweep(t.Context())
+	if len(f.e.authPending) != 0 {
+		t.Errorf("the directory was visited again: pending = %v", f.e.authPending)
+	}
+}

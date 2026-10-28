@@ -549,3 +549,64 @@ func TestMaterialize_AuthCopyIsOnDiskBeforeItsRecord(t *testing.T) {
 		t.Errorf("StagingDir = %s", got)
 	}
 }
+
+func TestReadMaterializationRefusesWhatIsNotAConfinedRecord(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "auth.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		schema int
+		copies []string
+		setup  func(f *fixture)
+	}{
+		{name: "other schema", schema: 2, copies: []string{"credentials.json"}},
+		{name: "absolute", schema: recordSchema, copies: []string{filepath.Join(outside, "auth.json")}},
+		{name: "dot dot", schema: recordSchema, copies: []string{"../auth.json"}},
+		{name: "symlinked directory", schema: recordSchema, copies: []string{"link/auth.json"}, setup: func(f *fixture) {
+			if err := os.Symlink(outside, filepath.Join(f.path("config"), "link")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "nested", schema: recordSchema, copies: []string{"sub/auth.json"}},
+		{name: "second copy escapes and the configuration is missing", schema: recordSchema, copies: []string{"auth.json", "../../other-run/config/auth.json"}, setup: func(f *fixture) {
+			if err := os.RemoveAll(f.path("config")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "symlinked configuration directory", schema: recordSchema, copies: []string{"auth.json"}, setup: func(f *fixture) {
+			if err := os.RemoveAll(f.path("config")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, f.path("config")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "symlinked file", schema: recordSchema, copies: []string{"leak.json"}, setup: func(f *fixture) {
+			if err := os.Symlink(filepath.Join(outside, "auth.json"), filepath.Join(f.path("config"), "leak.json")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.a.copyAuth = true
+			f.must(snapshot("A"))
+			if c.setup != nil {
+				c.setup(f)
+			}
+			data, err := json.Marshal(Materialization{Schema: c.schema, Harness: "mini", AuthCopies: c.copies})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(f.path("config.json"), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ReadMaterialization(f.runDir); err == nil {
+				t.Error("the record was accepted")
+			}
+		})
+	}
+}

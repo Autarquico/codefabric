@@ -545,3 +545,51 @@ func TestAbandon_ForgetsTheRunWithoutReconciling(t *testing.T) {
 		t.Errorf("Abandon reconciled: host = %q", got)
 	}
 }
+
+// The host watch lasts as long as a Run of its group, not as long as any Run
+// of the Broker; and a Run tracked again does not open the window.
+func TestHostWatch_IsReleasedWithTheLastRunOfItsGroup(t *testing.T) {
+	dir := t.TempDir()
+	h, err := localhost.New(localhost.Options{Home: dir, Env: []string{"PATH=" + dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := New(Options{Clock: clock.NewFake(t0.Add(time.Hour))})
+	group := func(id string) (global, cp string) {
+		global, cp = filepath.Join(dir, id+"-global.json"), filepath.Join(dir, id+"-copy.json")
+		for p, c := range map[string][]byte{global: authAt(time.Minute, "g"), cp: authAt(5*time.Minute, "c")} {
+			if err := os.WriteFile(p, c, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		b.Track(id, stamped{global: global}, h, []string{cp})
+		return global, cp
+	}
+	g1, c1 := group("one")
+	b.Poll()
+	h1 := b.hostPaths[g1] // resolved: the key of the watch
+	if len(b.watches[h1]) == 0 {
+		t.Fatal("the host should be watched after replacing it")
+	}
+
+	// "one" is the only Run of the Broker here.
+	b.Track("one", stamped{global: g1}, h, []string{c1})
+	if len(b.watches[h1]) == 0 {
+		t.Error("tracking the only Run of a group again closed its host watch")
+	}
+
+	g2, _ := group("two")
+	b.Poll()
+	h2 := b.hostPaths[g2]
+	if len(b.watches[h2]) == 0 {
+		t.Fatal("the second host should be watched after replacing it")
+	}
+
+	mustRelease(t, b, "one")
+	if len(b.watches[h1]) != 0 {
+		t.Error("the host watch of a group with no Run left is still open")
+	}
+	if len(b.watches[h2]) == 0 {
+		t.Error("the host watch of another group was closed")
+	}
+}

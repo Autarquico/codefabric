@@ -24,8 +24,8 @@ const Binary = "codex"
 // directory: the ConfigDir of the Run.
 const ConfigHomeEnv = "CODEX_HOME"
 
-// Adapter is the harness `codex`. Of §7.2 it supports Detect, Version and
-// Start; the rest is unsupported until the tasks that add it.
+// Adapter is the harness `codex`: all of §7.2 but Install, which is not
+// declared and stays unsupported.
 type Adapter struct {
 	harness.Unsupported
 }
@@ -80,9 +80,9 @@ func (Adapter) Version(ctx context.Context, host harness.Host) (string, error) {
 
 // Start builds the process of the Run without writing anything: the same spec
 // gives the same Launch. Argv[0] is the path of the binary in the host, so that
-// whoever execs it does not look it up in a PATH of its own. Codex reads its configuration from ConfigDir and runs
-// in the sandbox of the worktree without asking for approvals, since nobody
-// answers them.
+// whoever execs it does not look it up in a PATH of its own. Codex reads its
+// configuration from ConfigDir and runs in the sandbox of the worktree
+// without asking for approvals, since nobody answers them.
 func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec) (harness.Launch, error) {
 	if err := a.Capabilities().CheckMode(run.Mode); err != nil {
 		return harness.Launch{}, fmt.Errorf("codex: %w", err)
@@ -92,6 +92,9 @@ func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec
 	}
 	if run.ConfigDir == "" {
 		return harness.Launch{}, errors.New("codex: the config directory is empty: Codex would read the global one")
+	}
+	if strings.HasPrefix(run.Model, "-") {
+		return harness.Launch{}, fmt.Errorf("codex: the model %q starts with '-': it would be read as an option", run.Model)
 	}
 	binary, err := host.LookPath(Binary)
 	if err != nil {

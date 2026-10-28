@@ -82,7 +82,7 @@ func TestTOMLBasicStringReadsBackWhatWasEscaped(t *testing.T) {
 		`plain`, `with "quotes"`, `back\slash`, `a\"b\\`, "line\nbreak", "tab\tcr\rbell\x07", "\x00\x01\x1f\x7f",
 		"unicode é 中 😀", `A \n not an escape`, `{{cf-secret:team/a}}`, "'single' and # hash", `a = "b"`, "  ",
 	} {
-		out, err := tomlBasicString([]byte(v))
+		out, err := escapeValue(harness.EscapeTOMLBasicString, []byte(v))
 		if err != nil {
 			t.Fatalf("%q: %v", v, err)
 		}
@@ -91,7 +91,7 @@ func TestTOMLBasicStringReadsBackWhatWasEscaped(t *testing.T) {
 			t.Errorf("%q escaped as %q reads back %q (%v)", v, out, parsed.V, err)
 		}
 	}
-	if _, err := tomlBasicString([]byte{0xff, 0xfe}); err == nil {
+	if _, err := escapeValue(harness.EscapeTOMLBasicString, []byte{0xff, 0xfe}); err == nil {
 		t.Error("a value that is not UTF-8 was escaped")
 	}
 }
@@ -195,30 +195,30 @@ func TestRenderCrashedAtEachBoundaryLeavesNoOrphanValue(t *testing.T) {
 		inject func(f *fixture)
 	}{
 		{"temporary synced", func(f *fixture) {
-			sync := f.m.fs.sync
-			f.m.fs.sync = func(p string) error {
+			sync := f.m.fs.syncIn
+			f.m.fs.syncIn = func(r *os.Root, p string) error {
 				if strings.HasSuffix(p, ".more.toml.cf-render") {
 					return boom
 				}
-				return sync(p)
+				return sync(r, p)
 			}
 		}},
 		{"before the rename of the second file", func(f *fixture) {
-			rename := f.m.fs.rename
-			f.m.fs.rename = func(from, to string) error {
+			rename := f.m.fs.renameIn
+			f.m.fs.renameIn = func(r *os.Root, from, to string) error {
 				if strings.HasSuffix(to, "more.toml") {
 					return boom
 				}
-				return rename(from, to)
+				return rename(r, from, to)
 			}
 		}},
 		{"directory synced after a rename", func(f *fixture) {
-			sync := f.m.fs.sync
-			f.m.fs.sync = func(p string) error {
-				if p == f.path("config") {
+			sync := f.m.fs.syncIn
+			f.m.fs.syncIn = func(r *os.Root, p string) error {
+				if p == "config" {
 					return boom
 				}
-				return sync(p)
+				return sync(r, p)
 			}
 		}},
 	}
@@ -315,4 +315,40 @@ func holds(root, s string) bool {
 		return nil
 	})
 	return found
+}
+
+// A directory of the tree swapped for a symlink between the write of the
+// temporary and its rename does not take the rendered file out of the run
+// directory.
+func TestRenderDoesNotFollowASymlinkSwappedInBeforeTheRename(t *testing.T) {
+	f := newEscFixture(t)
+	mat, err := f.materializeEsc(withMarkers())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	sync := f.m.fs.syncIn
+	f.m.fs.syncIn = func(r *os.Root, p string) error {
+		if err := sync(r, p); err != nil || !strings.HasSuffix(p, ".more.toml.cf-render") {
+			return err
+		}
+		data, err := r.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(outside, path.Base(p)), data, 0o600); err != nil { //nolint:gosec // a temporary directory
+			return err
+		}
+		if err := os.Rename(f.path("config"), f.path("config.moved")); err != nil {
+			return err
+		}
+		return os.Symlink(outside, f.path("config"))
+	}
+	var died error
+	if err := f.m.Render(f.runDir, mat, values, crashFence(f.runDir, 1, &died)); err != nil || died == nil {
+		t.Fatalf("render = %v, died = %v", err, died)
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "more.toml")); err == nil {
+		t.Error("the rendered file was moved outside the run directory")
+	}
 }

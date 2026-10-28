@@ -2,6 +2,7 @@ package redact
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -15,31 +16,51 @@ import (
 // equal to the raw value is not repeated; one that overflows the budget is
 // ErrTooLarge, as any needle.
 func NewEscapedSet(secrets []Needle) (*Set, error) {
-	return NewSet(withEscapes(secrets))
+	all, err := withEscapes(secrets)
+	if err != nil {
+		return nil, err
+	}
+	return NewSet(all)
 }
 
-func withEscapes(secrets []Needle) []Needle {
+// withEscapes is secrets and their escaped forms. It stops with ErrTooLarge
+// as soon as the forms pass the budget, before deriving the rest.
+func withEscapes(secrets []Needle) ([]Needle, error) {
 	all := append([]Needle(nil), secrets...)
+	total := 0
 	for _, n := range secrets {
+		total += len(n.Value)
+		if total > MaxNeedleBytes {
+			return nil, fmt.Errorf("%w: at %q", ErrTooLarge, n.Ref)
+		}
 		seen := map[string]bool{string(n.Value): true}
-		add := func(v string) {
-			if !seen[v] {
-				seen[v] = true
-				all = append(all, Needle{Ref: n.Ref, Value: []byte(v)})
+		add := func(v string) error {
+			if seen[v] {
+				return nil
 			}
+			seen[v] = true
+			if total += len(v); total > MaxNeedleBytes {
+				return fmt.Errorf("%w: at %q", ErrTooLarge, n.Ref)
+			}
+			all = append(all, Needle{Ref: n.Ref, Value: []byte(v)})
+			return nil
 		}
 		forms := []string{string(n.Value)}
 		if toml, err := TOMLBasicString(n.Value); err == nil {
-			add(string(toml))
+			if err := add(string(toml)); err != nil {
+				return nil, err
+			}
 			forms = append(forms, string(toml)) // and the JSON of the file's text, in an event that carries it
 		}
 		for _, form := range forms {
 			for flags := 0; flags < 1<<5; flags++ {
-				add(jsonEscape(form, flags))
+				if err := add(jsonEscape(form, flags)); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
-	return all
+	return all, nil
 }
 
 // TOMLBasicString escapes value for the inside of a TOML basic string: the

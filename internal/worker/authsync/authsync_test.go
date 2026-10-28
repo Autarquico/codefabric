@@ -1,10 +1,13 @@
 package authsync_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -335,5 +338,48 @@ func TestPoll_ACopyThatBecomesALinkAfterTheRunChoseIsNotFollowed(t *testing.T) {
 	r.b.Poll()
 	if r.read(r.global) != auth(time.Minute) {
 		t.Error("the Broker read through a link and propagated what it found")
+	}
+}
+
+func loggedRig(t *testing.T, globalContent string) (*rig, *bytes.Buffer) {
+	t.Helper()
+	r := newRig(t, globalContent)
+	var out bytes.Buffer
+	r.b = authsync.New(authsync.Options{Clock: clock.NewFake(now), Log: slog.New(slog.NewTextHandler(&out, nil))})
+	return r, &out
+}
+
+func TestPoll_AHostWithoutAnAccountIsLoggedOnce(t *testing.T) {
+	r, out := loggedRig(t, `{"at":"2026-10-28T09:01:00Z"}`)
+	r.track("a", authOf("", time.Hour))
+	for range 3 {
+		r.b.Poll()
+	}
+	if n := strings.Count(out.String(), "has no account"); n != 1 {
+		t.Errorf("logged %d times, want once:\n%s", n, out)
+	}
+	// Once the host has an account again, losing it is news again.
+	r.write(r.global, auth(time.Minute))
+	r.b.Poll()
+	r.write(r.global, `{"at":"2026-10-28T09:02:00Z"}`)
+	r.b.Poll()
+	if n := strings.Count(out.String(), "has no account"); n != 2 {
+		t.Errorf("logged %d times after the account came back and went, want 2", n)
+	}
+}
+
+func TestPoll_AFutureStampIsLoggedOncePerVersion(t *testing.T) {
+	r, out := loggedRig(t, auth(time.Minute))
+	p := r.track("a", authOf("A", 48*time.Hour))
+	for range 3 {
+		r.b.Poll()
+	}
+	if n := strings.Count(out.String(), "stamped in the future"); n != 1 {
+		t.Errorf("logged %d times, want once:\n%s", n, out)
+	}
+	r.write(p, authOf("A", 72*time.Hour))
+	r.b.Poll()
+	if n := strings.Count(out.String(), "stamped in the future"); n != 2 {
+		t.Errorf("logged %d times after a new future version, want 2", n)
 	}
 }

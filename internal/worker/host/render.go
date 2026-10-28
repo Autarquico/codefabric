@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -45,8 +44,8 @@ func renderedOf(a harness.Adapter, snap harness.NativeSnapshot) ([]RenderFile, e
 			if err != nil {
 				return nil, fmt.Errorf("%w: %q: %w", harness.ErrSecretUnavailable, f.Path, err)
 			}
-			if _, err := escapeValue(esc, []byte("probe")); err != nil {
-				return nil, fmt.Errorf("%w: %q: %w", harness.ErrSecretUnavailable, f.Path, err)
+			if _, ok := escapes[esc]; !ok {
+				return nil, fmt.Errorf("%w: %q: unknown escape %q", harness.ErrSecretUnavailable, f.Path, esc)
 			}
 			out = append(out, RenderFile{Path: f.Path, Escape: esc, Refs: slices.Clone(f.SecretRefs)})
 		}
@@ -94,7 +93,7 @@ func (m *Materializer) Render(runDir string, mat Materialization, values map[str
 		}
 		defer func() { _ = root.Close() }()
 		for i, f := range mat.Rendered {
-			if err := m.renderFile(root, runDir, paths[i], f, values); err != nil {
+			if err := m.renderFile(root, paths[i], f, values); err != nil {
 				return fmt.Errorf("render: %s: %w", f.Path, err)
 			}
 		}
@@ -102,7 +101,7 @@ func (m *Materializer) Render(runDir string, mat Materialization, values map[str
 	})
 }
 
-func (m *Materializer) renderFile(root *os.Root, runDir, name string, f RenderFile, values map[string][]byte) error {
+func (m *Materializer) renderFile(root *os.Root, name string, f RenderFile, values map[string][]byte) error {
 	info, err := root.Lstat(name)
 	if err != nil {
 		return err
@@ -132,13 +131,13 @@ func (m *Materializer) renderFile(root *os.Root, runDir, name string, f RenderFi
 	if err := writeTemp(root, tmp, out, 0o600|info.Mode().Perm()&0o100); err != nil {
 		return err
 	}
-	if err := m.fs.sync(filepath.Join(runDir, filepath.FromSlash(tmp))); err != nil {
+	if err := m.fs.syncIn(root, tmp); err != nil {
 		return err
 	}
-	if err := m.fs.rename(filepath.Join(runDir, filepath.FromSlash(tmp)), filepath.Join(runDir, filepath.FromSlash(name))); err != nil {
+	if err := m.fs.renameIn(root, tmp, name); err != nil {
 		return err
 	}
-	return m.fs.sync(filepath.Join(runDir, filepath.FromSlash(path.Dir(name))))
+	return m.fs.syncIn(root, path.Dir(name))
 }
 
 // writeTemp creates name, which must not exist, with mode whatever the umask.
@@ -157,17 +156,19 @@ func writeTemp(root *os.Root, name string, data []byte, mode fs.FileMode) error 
 	return err
 }
 
-// escapeValue is value as it is written inside a file of the given escape.
-func escapeValue(e harness.Escape, value []byte) ([]byte, error) {
-	switch e {
-	case harness.EscapeRaw:
-		return value, nil
-	case harness.EscapeTOMLBasicString:
-		return tomlBasicString(value)
-	}
-	return nil, fmt.Errorf("unknown escape %q", e)
+// escapes are the escapes a secret value can be written with, by name.
+var escapes = map[harness.Escape]func(value []byte) ([]byte, error){
+	harness.EscapeRaw: func(value []byte) ([]byte, error) { return value, nil },
+	// The escape of the secrets that the redaction derives its forms from is
+	// the one they are rendered with.
+	harness.EscapeTOMLBasicString: redact.TOMLBasicString,
 }
 
-// tomlBasicString is redact.TOMLBasicString: the escape of the secrets that
-// the redaction derives its forms from is the one they are rendered with.
-func tomlBasicString(value []byte) ([]byte, error) { return redact.TOMLBasicString(value) }
+// escapeValue is value as it is written inside a file of the given escape.
+func escapeValue(e harness.Escape, value []byte) ([]byte, error) {
+	escape, ok := escapes[e]
+	if !ok {
+		return nil, fmt.Errorf("unknown escape %q", e)
+	}
+	return escape(value)
+}
