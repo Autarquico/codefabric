@@ -120,11 +120,14 @@ func (r *workerRun) keepOnline(t *testing.T) (quiet func()) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for tick := time.NewTicker(200 * time.Millisecond); ; {
-			_, _ = r.worker.Heartbeat(ctx, onlineHeartbeat())
+		tick := time.NewTicker(200 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			if _, err := r.worker.Heartbeat(ctx, onlineHeartbeat()); err != nil && ctx.Err() == nil {
+				t.Errorf("heartbeat: %v", err)
+			}
 			select {
 			case <-ctx.Done():
-				tick.Stop()
 				return
 			case <-tick.C:
 			}
