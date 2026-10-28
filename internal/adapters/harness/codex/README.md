@@ -3,8 +3,7 @@
 The adapter of the Codex CLI (OpenAI). A Run gets it when it asks for
 `requirements.harness: codex`. This file documents it as §7.3 of
 `docs/codefabric-spec.md` asks every adapter to. Verified against
-`codex-cli 0.160.1`. Points marked *(T2)*, *(T3)* and *(T6)* describe what
-those tasks of the plan leave and are completed when they land.
+`codex-cli 0.160.1`.
 
 1. **Installation.** `Detect` looks for `codex` in the PATH of the host
    (`Host.LookPath`) and reports its path; not finding it is not installed,
@@ -12,22 +11,41 @@ those tasks of the plan leave and are completed when they land.
    `codex-cli X.Y.Z` to `X.Y.Z`. `Install` is unsupported and not declared:
    the user installs Codex.
 
-2. **Configuration paths detected.** *(T2)* `~/.codex/`: `config.toml`,
-   `AGENTS.md`, `prompts/`, `skills/`. `auth.json` is never snapshotted.
-   `config.toml` loses `projects.*` (trust per machine) and its secret values
-   become `{{cf-secret:codex/...}}` markers. Until T2, `SnapshotConfig`,
-   `ApplyConfig`, `DiffConfig` and `ValidateConfig` are unsupported. It declares
-   `ConfigIsolation`: Codex reads the directory of the Run through `CODEX_HOME`.
+2. **Configuration paths detected.** `~/.codex/`: `config.toml`,
+   `AGENTS.md`, `prompts/` and `skills/`. Never `auth.json`, the sessions or
+   the history. It declares `ConfigIsolation`: the configuration of a Run is
+   materialised in its run directory and Codex reads it through `CODEX_HOME`.
 
-3. **Adoptable components.** *(T2)* `config.toml`, `AGENTS.md`, `prompts/`,
-   `skills/`.
+3. **Adoptable components.** `config.toml`, `AGENTS.md`, `prompts/` and
+   `skills/`, those that exist. `config.toml` is read as TOML and written
+   again from what was parsed: the output is deterministic and loses the
+   comments. It loses `projects` (the trust of a machine), and the value of
+   every secret becomes a `{{cf-secret:codex/<path>}}` marker: `env`,
+   `http_headers` and `query_params` of MCP servers and model providers,
+   `experimental_bearer_token`, `shell_environment_policy.set`, the `headers`
+   of the OTLP exporters of `otel` and of the MITM hooks of `permissions`. The
+   names of variables (`env_vars`, `env_http_headers`, `env_key`,
+   `bearer_token_env_var`, the `env` of a credential provider) stay as they
+   are. In a Run the markers are rendered as TOML basic strings once the
+   secrets are granted, and removed at its release. Applied globally,
+   `config.toml` is merged key by key, keeping `projects` and every local key;
+   managed components are written and removed, local ones never; a snapshot
+   with secrets is refused there (`CF_SECRET_UNAVAILABLE`).
 
-4. **Auth.** *(T6)* The login of the user lives in `auth.json`. It is not part
-   of the snapshot. Each Run gets its own copy, mode 0600, in its `CODEX_HOME`,
-   and the daemon propagates the most recent one (decision of the plan: Codex
-   refreshes it by truncate-and-write with no lock, so a shared link can be
-   corrupted by two Runs; see `.claude/loop/codex-adapter/t0.md`). `Launch`
-   carries no `SecretEnv` of its own.
+   Limitation: the `args` of an MCP server or a command can hold a secret, but
+   a list of arguments cannot be told apart into secret and not: they are kept
+   as they are. Put secrets in `env`, `http_headers` or
+   `bearer_token_env_var`, never in `args`.
+
+4. **Auth.** The login of the user lives in `auth.json`, which is never part
+   of a snapshot. Each Run gets its own copy, mode 0600, in its `CODEX_HOME`
+   (`ApplyResult.AuthCopies`), and the daemon (`internal/worker/authsync`)
+   propagates the most recent valid one, by `last_refresh`, to the host and to
+   the copies of the live Runs, always by atomic rename. Codex rewrites
+   `auth.json` in place with truncate and write and no lock
+   (`codex-rs/login/src/auth/storage.rs`, 0.160.1), so a link shared by two
+   Runs that refresh at once could be left half written; this departs from
+   §8.12, which links the auth. `Launch` carries no `SecretEnv` of its own.
 
 5. **Start and resume.** `Start` writes nothing and is idempotent. It refuses
    an empty prompt, an empty `ConfigDir` (Codex would read the global one) and
@@ -39,7 +57,7 @@ those tasks of the plan leave and are completed when they land.
    - headless: `codex exec --json --sandbox workspace-write -c
      approval_policy="never" --skip-git-repo-check -C <Worktree> [-m <Model>]
      -- <Prompt>`, with `StructuredStdout`. `codex exec` reads stdin even with
-     the prompt in argv, so the wrapper must give it a closed stdin (T4).
+     the prompt in argv; the wrapper gives a headless Run `/dev/null`.
    - interactive: `codex --sandbox workspace-write -a never -C <Worktree>
      [-m <Model>] -- <Prompt>`.
    `Resume` is unsupported.
@@ -51,16 +69,25 @@ those tasks of the plan leave and are completed when they land.
    --version` is accepted. `--` rests on the argument parser (clap) and was
    not run against a live model.
 
-6. **Event format.** *(T3)* `codex exec --json` writes JSONL to stdout:
-   `thread.started`, `turn.started`, `item.completed` (`agent_message`, and
-   `error` for non-fatal warnings) and `turn.completed` with usage. Until T3,
-   `Events` is unsupported. `SendInput` is unsupported.
+6. **Event format.** `codex exec --json` writes JSONL to stdout, which the
+   wrapper keeps apart in `events.jsonl` (`StructuredStdout`), redacted line
+   by line. `Events` maps `thread.started` to `session_started` (the thread ID
+   is the session), `turn.completed` to `usage` (when it carries one) and
+   `result` (its summary is the last `agent_message`), `turn.failed` to
+   `error` and a failed `result`, and a top-level `error` to `error`.
+   Warnings (`item.completed` of type `error`), other items, and lines that are
+   not JSON, are cut or of an unknown type are skipped. `SendInput` and the
+   input signal are unsupported.
 
 7. **Model and usage.** `ModelSelection` and `UsageEvents` are declared; the
-   model goes with `-m`. *(T3)* `turn.completed` carries the token usage;
-   no event carries the model, so it stays empty unless the Run names it. A
-   Run without usage reports none, not zero. Until T3, `CollectUsage` is
-   unsupported.
+   model goes with `-m`. No event carries the model, so it stays empty.
+   `CollectUsage` reads `events.jsonl` and gives one usage per
+   `turn.completed`: `InputTokens` is `input_tokens` without
+   `cached_input_tokens` (Codex counts the cache inside the input, §14.4 does
+   not), `CacheReadTokens` is `cached_input_tokens`, `CacheWriteTokens` is
+   `cache_write_input_tokens` and `OutputTokens` is `output_tokens`, which
+   already holds `reasoning_output_tokens`. What Codex does not report stays
+   unknown, never zero; a Run without usage reports none.
 
 8. **Checkpoint and handoff.** `Checkpoint` is unsupported: a handoff carries
    what the Run left in the worktree. `Stop` is unsupported: the only stop is
