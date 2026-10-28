@@ -17,7 +17,7 @@ import (
 const ConfigDirName = ".codex"
 
 // AuthFile is the credential file of Codex, in the configuration directory.
-// No snapshot reads it; a Run gets a link to it.
+// No snapshot reads it; a Run gets a copy of it.
 const AuthFile = "auth.json"
 
 // SchemaVersion is the SchemaVersion of the snapshots of the Adapter.

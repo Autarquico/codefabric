@@ -245,7 +245,7 @@ func New(o Options) (*Executor, error) {
 		return nil, errors.New("executor: DB, Controller, Runtime and Journal are required")
 	}
 	e := &Executor{
-		o: o, harnesses: o.Harnesses, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, redactPipe: o.RedactPipeArgv, grace: o.StopGrace, jit: secretjit.New(),
+		o: o, harnesses: o.Harnesses, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, redactPipe: o.RedactPipeArgv, grace: o.StopGrace, jit: secretjit.New().DiscardingConfig(configTree, authCopiesOf),
 		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), reconcileWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, authPending: map[state.Key]time.Time{}, locks: map[state.Key]*runLock{},
 	}
 	e.reconcileGen.Store(1) // the start asks for a reconciliation

@@ -125,17 +125,72 @@ func TestReleaseOfRenderedFilesAloneAndTheirJanitor(t *testing.T) {
 	}
 }
 
-func TestAnUnreadableRegistryDoesNotKeepTheDeliveryButStaysPending(t *testing.T) {
+func TestAnUnreadableRegistryDoesNotKeepTheDeliveryNorTheConfigurationTree(t *testing.T) {
 	dir := runDir(t)
 	deliver(t, dir, 1, v1)
+	render(t, dir, 1, false)
+	if err := os.WriteFile(filepath.Join(dir, renderedName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := New().DiscardingConfig("config", nil).Release(dir, allow); err != nil {
+		t.Errorf("Release = %v, want it done", err)
+	}
+	if fileExists(filepath.Join(dir, "secrets")) || fileExists(filepath.Join(dir, "config")) {
+		t.Error("the delivery or the configuration tree was kept")
+	}
+	if !HasRendered(dir) {
+		t.Error("the Run forgot that it used secrets")
+	}
+	if err := New().DiscardingConfig("config", nil).Release(dir, allow); err != nil {
+		t.Errorf("second Release = %v", err)
+	}
+}
+
+func TestAnUnreadableRegistryDiscardsTheConfigurationTreeButTheFilesItsOwnerKeeps(t *testing.T) {
+	dir := runDir(t)
+	render(t, dir, 1, false)
+	auth := filepath.Join(dir, "config", "auth.json")
+	if err := os.WriteFile(auth, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, renderedName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	jit := New().DiscardingConfig("config", func(string) []string { return []string{"config/auth.json"} })
+	if err := jit.Release(dir, allow); err != nil {
+		t.Fatalf("Release = %v, want it done", err)
+	}
+	if !fileExists(auth) {
+		t.Error("the file its owner keeps was removed")
+	}
+	if fileExists(filepath.Join(dir, "config", "c.toml")) {
+		t.Error("a rendered file was kept")
+	}
+}
+
+func TestAnUnreadableRegistryIsPendingWhenTheConfigurationTreeIsNotKnown(t *testing.T) {
+	dir := runDir(t)
+	render(t, dir, 1, false)
 	if err := os.WriteFile(filepath.Join(dir, renderedName), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := New().Release(dir, allow); !errors.Is(err, ErrPending) {
-		t.Errorf("Release = %v, want it pending", err)
+		t.Errorf("Release = %v, want ErrPending", err)
 	}
-	if fileExists(filepath.Join(dir, "secrets")) {
-		t.Error("the delivery was kept")
+}
+
+func TestAnUnreadableRegistryIsNotDiscardedWhileTheRunNeedsItsValues(t *testing.T) {
+	dir := runDir(t)
+	render(t, dir, 1, false)
+	if err := os.WriteFile(filepath.Join(dir, renderedName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	held := errors.New("held")
+	if err := New().DiscardingConfig("config", nil).Release(dir, func() error { return held }); !errors.Is(err, held) {
+		t.Errorf("Release = %v, want %v", err, held)
+	}
+	if !fileExists(filepath.Join(dir, "config")) {
+		t.Error("the tree was removed under the fence")
 	}
 }
 

@@ -475,3 +475,22 @@ func TestSnapshot_CredentialProviderEnvNamesStay(t *testing.T) {
 		t.Errorf("refs = %q\n%s", f.SecretRefs, f.Content)
 	}
 }
+
+func TestSnapshot_KeepsMarkersTheUserWrote(t *testing.T) {
+	h := homeWith(t, map[string]string{"config.toml": "[mcp_servers.a.env]\nTOKEN = \"{{cf-secret:team/token}}\"\n"})
+	f := file(t, snapshot(t, h), "config.toml")
+	if !bytes.Contains(f.Content, []byte("{{cf-secret:team/token}}")) {
+		t.Errorf("the marker the user wrote is gone:\n%s", f.Content)
+	}
+	if !slices.Contains(f.SecretRefs, "team/token") {
+		t.Errorf("SecretRefs = %v, want team/token", f.SecretRefs)
+	}
+}
+
+func TestSnapshot_AValueLikeThePlaceholderIsKept(t *testing.T) {
+	cfg := "model = \"'cf-marker-0-0'\"\n\n[mcp_servers.a.env]\nTOKEN = \"x\"\n"
+	f := file(t, snapshot(t, homeWith(t, map[string]string{"config.toml": cfg})), "config.toml")
+	if !bytes.Contains(f.Content, []byte("'cf-marker-0-0'")) || len(f.SecretRefs) != 1 {
+		t.Errorf("refs = %v:\n%s", f.SecretRefs, f.Content)
+	}
+}

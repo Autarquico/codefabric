@@ -102,6 +102,11 @@ func TestStartRefusals(t *testing.T) {
 	if _, err := (codex.Adapter{}).Start(t.Context(), startHost(t), s); err == nil {
 		t.Error("empty config dir accepted")
 	}
+	s = spec(domain.ModeHeadless)
+	s.Model = "--dangerously-bypass-approvals-and-sandbox"
+	if _, err := (codex.Adapter{}).Start(t.Context(), startHost(t), s); err == nil {
+		t.Error("a model that starts with '-' was accepted")
+	}
 	if _, err := (codex.Adapter{}).Start(t.Context(), startHost(t), spec("batch")); !errors.Is(err, harness.ErrUnsupportedMode) {
 		t.Errorf("unknown mode: %v", err)
 	}

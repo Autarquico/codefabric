@@ -66,10 +66,26 @@ func fileName(ref string) string {
 // run directory.
 type Manager struct {
 	fs fsOps
+	// tree and keep say what a registry of rendered files that cannot be read
+	// discards (see DiscardingConfig).
+	tree string
+	keep func(runDir string) []string
 }
 
 // New is a Manager over the real file system.
 func New() *Manager { return &Manager{fs: osOps()} }
+
+// DiscardingConfig sets what Release removes when the registry of the rendered
+// files cannot be read, so that their paths are not known: the directory tree
+// of the run directory (slash-separated, relative to it) that holds them. The
+// owner of the tree names it, and with keep the files of it that are not
+// secrets of this package and that its owner removes itself: keep(runDir) are
+// paths relative to runDir, each directly inside tree. Without a tree, such a
+// registry is left pending. It returns m.
+func (m *Manager) DiscardingConfig(tree string, keep func(runDir string) []string) *Manager {
+	m.tree, m.keep = tree, keep
+	return m
+}
 
 // fsOps are the steps that change the disk; tests replace them to fail, or
 // to crash, at each one.

@@ -187,7 +187,7 @@ func (e *Executor) evaluate(ctx context.Context, r state.Run, lim Limits, load s
 	adapter, ok := e.harnesses.Get(spec.Requirements.Harness)
 	switch {
 	case spec.Requirements.Harness == "":
-		return verdict{domain.CodeHarnessUnavailable, "the Run names no harness: this Worker runs only `command`, and only when it is asked for"}
+		return verdict{domain.CodeHarnessUnavailable, "the Run names no harness"}
 	case !ok || e.withheld[spec.Requirements.Harness]:
 		return verdict{domain.CodeHarnessUnavailable, fmt.Sprintf("this Worker has no harness %q", spec.Requirements.Harness)}
 	case !adapter.Capabilities().Supports(domain.Mode(spec.Mode)):

@@ -239,3 +239,64 @@ func (m *Manager) dropRendered(runDir string) error {
 	r.Files = []string{}
 	return m.writeRendered(runDir, r)
 }
+
+// discardConfig is dropRendered for a registry that cannot be read: with no
+// list of the files, everything in the configuration tree is removed except
+// what its owner keeps (the auth copies, which the Broker has yet to reconcile
+// and the owner removes after it), without following a symlink out of runDir,
+// and the registry is written empty. The Run's materialisation is rebuilt by
+// the next prepare.
+func (m *Manager) discardConfig(runDir string) error {
+	if m.tree == "" {
+		return fmt.Errorf("%w: the configuration tree is not known, so %s cannot be discarded", ErrPending, renderedName)
+	}
+	root, err := os.OpenRoot(runDir)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrPending, err)
+	}
+	defer func() { _ = root.Close() }()
+	var keep []string
+	if m.keep != nil {
+		keep = m.keep(runDir)
+	}
+	if err := removeAllBut(root, m.tree, keep); err != nil {
+		return fmt.Errorf("%w: removing %s: %w", ErrPending, m.tree, err)
+	}
+	if err := m.fs.sync(runDir); err != nil {
+		return fmt.Errorf("%w: syncing %s: %w", ErrPending, runDir, err)
+	}
+	return m.writeRendered(runDir, rendered{Schema: renderedSchema, Files: []string{}})
+}
+
+// removeAllBut removes tree from root, or, if keep names files directly in it,
+// everything in it but those.
+func removeAllBut(root *os.Root, tree string, keep []string) error {
+	if len(keep) == 0 {
+		return root.RemoveAll(tree)
+	}
+	dir, err := root.OpenRoot(tree)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		// A link out of the run directory is unlinked, not followed.
+		return root.RemoveAll(tree)
+	}
+	defer func() { _ = dir.Close() }()
+	f, err := dir.Open(".")
+	if err != nil {
+		return err
+	}
+	names, err := f.Readdirnames(-1)
+	_ = f.Close()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, n := range names {
+		if !slices.Contains(keep, path.Join(tree, n)) {
+			errs = append(errs, dir.RemoveAll(n))
+		}
+	}
+	return errors.Join(errs...)
+}

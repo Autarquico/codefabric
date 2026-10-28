@@ -167,18 +167,29 @@ func snapshotRefs(snap harness.NativeSnapshot) ([]string, error) {
 	return slices.Compact(refs), nil
 }
 
-// configOf is the configuration the Run r is materialised from, and the refs
-// of the secrets its files carry.
-func (e *Executor) configOf(ctx context.Context, r state.Run, adapter harness.Adapter) (harness.NativeSnapshot, []string, error) {
+// configSnapshot is the configuration the Run r is materialised from, and the
+// refs of the secrets its files carry. A file with a secret that cannot be
+// used is harness.ErrSecretUnavailable.
+func (e *Executor) configSnapshot(ctx context.Context, r state.Run, adapter harness.Adapter) (harness.NativeSnapshot, []string, error) {
 	snap, err := e.o.ConfigSource(ctx, r, adapter.ID())
 	if err != nil {
 		return harness.NativeSnapshot{}, nil, fmt.Errorf("the configuration of the harness %q: %w", adapter.ID(), err)
 	}
 	refs, err := snapshotRefs(snap)
 	if err != nil {
-		return harness.NativeSnapshot{}, nil, fmt.Errorf("%s: the configuration of the harness %q: %w", domain.CodeSecretUnavailable, adapter.ID(), err)
+		return harness.NativeSnapshot{}, nil, fmt.Errorf("the configuration of the harness %q: %w", adapter.ID(), err)
 	}
 	return snap, refs, nil
+}
+
+// configOf is configSnapshot for a prepare, whose error carries the code of a
+// secret that cannot be used.
+func (e *Executor) configOf(ctx context.Context, r state.Run, adapter harness.Adapter) (harness.NativeSnapshot, []string, error) {
+	snap, refs, err := e.configSnapshot(ctx, r, adapter)
+	if errors.Is(err, harness.ErrSecretUnavailable) {
+		err = fmt.Errorf("%s: %w", domain.CodeSecretUnavailable, err)
+	}
+	return snap, refs, err
 }
 
 // configSecretsVerdict is secretsVerdict for the secrets of the configuration
@@ -190,7 +201,7 @@ func (e *Executor) configSecretsVerdict(ctx context.Context, r state.Run, adapte
 	if !adapter.Capabilities().ConfigIsolation {
 		return verdict{}
 	}
-	_, refs, err := e.configOf(ctx, r, adapter)
+	_, refs, err := e.configSnapshot(ctx, r, adapter)
 	switch {
 	case errors.Is(err, harness.ErrSecretUnavailable):
 		return verdict{domain.CodeSecretUnavailable, err.Error()}

@@ -141,7 +141,6 @@ func held(t *testing.T, sink eventsSink, set *redact.Set) (w *wrapper, log *os.F
 		o:         Options{RunDir: dir, openEvents: func(string) (eventsSink, error) { return sink, nil }},
 		launch:    Launch{StructuredStdout: true, Mode: ModeHeadless},
 		clock:     clock.Real{},
-		events:    set,
 		drainWait: 100 * time.Millisecond,
 	}
 	log, err := os.OpenFile(filepath.Join(dir, OutputLog), os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // temporary dir
@@ -208,7 +207,6 @@ func TestTheKillPathNeverWritesWhatACutStreamHeld(t *testing.T) {
 		o:         Options{RunDir: dir, Stdout: paneFile, openEvents: func(string) (eventsSink, error) { return sink, nil }},
 		launch:    Launch{StructuredStdout: true, Mode: ModeHeadless},
 		clock:     clock.Real{},
-		events:    set,
 		drainWait: 100 * time.Millisecond,
 	}
 	logPath := filepath.Join(dir, OutputLog)
@@ -270,10 +268,31 @@ func TestTheKillPathNamesTheSyncOfTheEventsWhenBothStreamsEnded(t *testing.T) {
 	for _, f := range ends {
 		_ = f.Close()
 	}
-	go func() { time.Sleep(150 * time.Millisecond); close(release) }()
+	t.Cleanup(func() { close(release) }) // the sync outlasts both waits
 	sealed := w.sealed(log, copied, Exit{Cause: CauseStop, GroupKilled: true})
 	if !strings.Contains(sealed.Error, "events.jsonl was still being synced") {
 		t.Fatalf("the missing sync is not named: %q", sealed.Error)
+	}
+}
+
+// A sync that outlasts the first wait but ends in the second leaves a complete
+// capture, not an incomplete one. Nothing is observable between the two waits,
+// so the release is timed in the middle of the second: the waits are long
+// enough that a loaded runner cannot move it out of that window, and a release
+// that came early would only make the test pass without testing.
+func TestTheKillPathReportsNoIncompleteCaptureWhenTheSyncEndsInTheSecondWait(t *testing.T) {
+	const wait = time.Second
+	release := make(chan struct{})
+	sink := &slowSyncSink{release: release}
+	w, log, copied, ends := held(t, sink, nil)
+	w.drainWait = wait
+	for _, f := range ends {
+		_ = f.Close()
+	}
+	go func() { time.Sleep(wait + wait/2); close(release) }()
+	sealed := w.sealed(log, copied, Exit{Cause: CauseStop, GroupKilled: true})
+	if sealed.Error != "" {
+		t.Fatalf("a complete capture was reported as: %q", sealed.Error)
 	}
 }
 
