@@ -45,8 +45,11 @@ func (Adapter) ApplyConfig(_ context.Context, host harness.Host, snap harness.Na
 	}
 }
 
-// applyRun writes every component of snap into the empty dir, and links the
-// auth of the host when asked.
+// applyRun writes every component of snap into the empty dir, and gives it a
+// private copy of the auth of the host when asked. Codex rewrites auth.json in
+// place, with no lock, when it refreshes the token: a link would let two Runs
+// corrupt the auth of the host, so each Run has its own copy and the Worker
+// keeps them in step (harness.AuthSyncer).
 func applyRun(host harness.Host, snap harness.NativeSnapshot, dir string, opts harness.ApplyOptions) (harness.ApplyResult, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -59,11 +62,11 @@ func applyRun(host harness.Host, snap harness.NativeSnapshot, dir string, opts h
 	for _, c := range snap.Components {
 		res.Changes = append(res.Changes, harness.Change{Name: c.Name, Kind: harness.Added})
 	}
-	auth := filepath.Join(globalDir(host), AuthFile)
+	auth := Adapter{}.GlobalAuth(host)
 	_, err = os.Lstat(auth)
-	linkAuth := opts.LinkAuth && err == nil
-	if linkAuth {
-		res.AuthLinks = []string{AuthFile}
+	copyAuth := opts.LinkAuth && err == nil
+	if copyAuth {
+		res.AuthCopies = []string{AuthFile}
 	}
 	if opts.DryRun {
 		return res, nil
@@ -80,9 +83,13 @@ func applyRun(host harness.Host, snap harness.NativeSnapshot, dir string, opts h
 			}
 		}
 	}
-	if linkAuth {
-		if err := r.Symlink(auth, AuthFile); err != nil {
-			return harness.ApplyResult{}, fmt.Errorf("codex: linking the auth: %w", err)
+	if copyAuth {
+		creds, err := os.ReadFile(auth) //nolint:gosec // the auth of the host, by design
+		if err != nil {
+			return harness.ApplyResult{}, fmt.Errorf("codex: copying the auth: %w", err)
+		}
+		if err := atomicfile.Write(filepath.Join(dir, AuthFile), creds, 0o600); err != nil {
+			return harness.ApplyResult{}, fmt.Errorf("codex: copying the auth: %w", err)
 		}
 	}
 	return res, nil

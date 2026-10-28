@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -449,5 +450,41 @@ func TestMaterialize_RecordsTheComponentsAndTheTime(t *testing.T) {
 	}
 	if len(mat.AuthLinks) != 1 || mat.AuthLinks[0] != "credentials.json" {
 		t.Errorf("auth links = %v", mat.AuthLinks)
+	}
+}
+
+func TestMaterialize_AuthCopyIsLeftOutOfTheDigestAndReused(t *testing.T) {
+	f := newFixture(t)
+	f.a.copyAuth = true
+	mat := f.must(snapshot("A"))
+	if len(mat.AuthCopies) != 1 || mat.AuthCopies[0] != "credentials.json" || len(mat.AuthLinks) != 0 {
+		t.Fatalf("auth copies = %v, links = %v", mat.AuthCopies, mat.AuthLinks)
+	}
+	if want := []string{filepath.Join(f.path("config"), "credentials.json")}; !slices.Equal(mat.AuthCopyPaths(), want) {
+		t.Errorf("AuthCopyPaths = %v, want %v", mat.AuthCopyPaths(), want)
+	}
+	if got, err := treedigest.Dir(f.path("config"), treedigest.Options{ApprovedFiles: mat.AuthCopies}); err != nil || got != mat.Digest {
+		t.Errorf("config digests to %s, %v; want %s", got, err, mat.Digest)
+	}
+	read, err := ReadMaterialization(f.runDir)
+	if err != nil || !slices.Equal(read.AuthCopies, mat.AuthCopies) || read.ConfigDir != mat.ConfigDir {
+		t.Errorf("ReadMaterialization = %+v, %v", read, err)
+	}
+	// The harness rewrites its copy: that is no reason to rebuild.
+	if err := os.WriteFile(filepath.Join(f.path("config"), "credentials.json"), []byte(`{"refreshed":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applies := f.a.applies.Load()
+	again := f.must(snapshot("A"))
+	if f.a.applies.Load() != applies || again.Digest != mat.Digest {
+		t.Error("a rewritten auth copy made the materialisation be rebuilt")
+	}
+	// A copy that is gone is.
+	if err := os.Remove(filepath.Join(f.path("config"), "credentials.json")); err != nil {
+		t.Fatal(err)
+	}
+	f.must(snapshot("A"))
+	if f.a.applies.Load() == applies {
+		t.Error("a missing auth copy was reused")
 	}
 }

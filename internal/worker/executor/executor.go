@@ -105,6 +105,15 @@ type Options struct {
 	// RelayTLS are the files git presents to the relay when it pushes.
 	RelayTLS RelayTLS
 	Hooks    Hooks
+	// AuthSync keeps the auth copies of the Runs in step (harness.AuthSyncer);
+	// nil is none.
+	AuthSync AuthSync
+}
+
+// AuthSync is told which auth copies a live Run has, and when it has none.
+type AuthSync interface {
+	Track(id string, auth harness.AuthSyncer, host harness.Host, copies []string)
+	Untrack(id string)
 }
 
 // ConfigSource is the configuration of the harness a Run is to be run with.

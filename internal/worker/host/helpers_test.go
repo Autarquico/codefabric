@@ -34,6 +34,9 @@ type mini struct {
 	applyErr error
 	// strayLink makes ApplyConfig leave a symlink it does not report.
 	strayLink bool
+	// copyAuth makes ApplyConfig copy the credentials, and report the copy as
+	// an AuthCopy, instead of linking them.
+	copyAuth bool
 	// detect replaces Detect, which otherwise finds it installed.
 	detect func(ctx context.Context) (harness.Detection, error)
 }
@@ -79,7 +82,16 @@ func (m *mini) ApplyConfig(_ context.Context, h harness.Host, snap harness.Nativ
 		}
 	}
 	var res harness.ApplyResult
-	if opts.LinkAuth {
+	if opts.LinkAuth && m.copyAuth {
+		creds, err := os.ReadFile(filepath.Join(h.Home(), ".mini", "credentials.json")) //nolint:gosec // temporary home
+		if err != nil {
+			return harness.ApplyResult{}, err
+		}
+		if err := os.WriteFile(filepath.Join(run.Dir, "credentials.json"), creds, 0o600); err != nil { //nolint:gosec // temporary run directory
+			return harness.ApplyResult{}, err
+		}
+		res.AuthCopies = []string{"credentials.json"}
+	} else if opts.LinkAuth {
 		if err := os.Symlink(filepath.Join(h.Home(), ".mini", "credentials.json"), filepath.Join(run.Dir, "credentials.json")); err != nil {
 			return harness.ApplyResult{}, err
 		}

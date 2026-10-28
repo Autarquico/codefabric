@@ -19,7 +19,8 @@
 //   - Install takes [InstallOptions] and returns the [InstallPlan] it ran, or
 //     would run under DryRun.
 //   - ApplyConfig returns an [ApplyResult], which names the auth links it
-//     made, the only symlinks a configuration digest leaves out.
+//     made, the only symlinks a configuration digest leaves out, and the auth
+//     copies, the only regular files it leaves out (see [AuthSyncer]).
 //   - CollectUsage, Checkpoint and SendInput receive the [Handle] too.
 //   - There is one interface. An adapter embeds [Unsupported] and implements
 //     what it supports; [Capabilities] declares it, and [Capabilities.Modes]

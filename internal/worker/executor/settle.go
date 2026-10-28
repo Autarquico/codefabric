@@ -315,6 +315,9 @@ func fillExit(en *v1.RunReportEntry, f facts) {
 
 // forget drops what the executor kept in memory about a Run that is over.
 func (e *Executor) forget(k state.Key) {
+	if e.o.AuthSync != nil {
+		e.o.AuthSync.Untrack(authID(k))
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.memos, k)

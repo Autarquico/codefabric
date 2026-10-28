@@ -36,6 +36,30 @@ const (
 // runDir: RunSpec.ConfigDir once it is materialised.
 func ConfigDir(runDir string) string { return filepath.Join(runDir, configName) }
 
+// ReadMaterialization is the record of the materialisation of the Run whose
+// directory is runDir, with its ConfigDir.
+func ReadMaterialization(runDir string) (Materialization, error) {
+	data, err := os.ReadFile(filepath.Join(runDir, recordName)) //nolint:gosec // the run directory is the Worker's
+	if err != nil {
+		return Materialization{}, fmt.Errorf("materialization: %w", err)
+	}
+	var rec Materialization
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return Materialization{}, fmt.Errorf("materialization: %w", err)
+	}
+	rec.ConfigDir = ConfigDir(runDir)
+	return rec, nil
+}
+
+// AuthCopyPaths are the AuthCopies as paths in ConfigDir.
+func (m Materialization) AuthCopyPaths() []string {
+	paths := make([]string, 0, len(m.AuthCopies))
+	for _, c := range m.AuthCopies {
+		paths = append(paths, filepath.Join(m.ConfigDir, filepath.FromSlash(c)))
+	}
+	return paths
+}
+
 // Materialization is what a Run's configuration was materialised from and
 // to; it is written down as config.json, beside the configuration directory
 // and outside it.
@@ -43,13 +67,17 @@ type Materialization struct {
 	Schema  int    `json:"schema"`
 	Harness string `json:"harness"`
 	// Digest is the treedigest/v1 of the configuration directory as it was
-	// materialised, without AuthLinks. The harness may write to the directory
+	// materialised, without AuthLinks and AuthCopies. The harness may write to the directory
 	// afterwards: Digest is not what it holds later.
 	Digest string `json:"digest"`
 	// SourceDigest names the snapshot it was materialised from.
 	SourceDigest string            `json:"source_digest"`
 	Components   []ComponentDigest `json:"components"`
 	AuthLinks    []string          `json:"auth_links"`
+	// AuthCopies are the private copies of the auth of the host (see
+	// harness.ApplyResult). The harness rewrites them, so the digest leaves
+	// them out and a copy it rewrote does not invalidate the materialisation.
+	AuthCopies []string `json:"auth_copies,omitempty"`
 	// Rendered are the files that carry secret markers, which Render fills
 	// in. The tree this record digests has them unrendered, with the markers:
 	// once rendered, the tree no longer digests to Digest, and a Materialize
@@ -107,9 +135,10 @@ func NewMaterializer(host harness.Host) *Materializer {
 //     says it is reused, and otherwise both are removed and rebuilt.
 //
 // The configuration is built in config.staging by ApplyConfig, with the auth
-// of the host linked, never copied. Only the links the adapter reports in
-// ApplyResult.AuthLinks are left out of the digest; any other symlink is an
-// error. Staging is synced, file by file and directory by directory, before
+// of the host linked or, if the harness rewrites it in place, copied. Only the
+// links the adapter reports in ApplyResult.AuthLinks and the files it reports
+// in ApplyResult.AuthCopies are left out of the digest; any other symlink is
+// an error. Staging is synced, file by file and directory by directory, before
 // it is renamed into place; config.json is written atomically last.
 //
 // A file that fails CheckSecrets is refused with harness.ErrSecretUnavailable
@@ -162,10 +191,10 @@ func (m *Materializer) reusable(runDir string, src source) (Materialization, boo
 	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
 		return Materialization{}, false
 	}
-	if !linksPresent(dir, rec.AuthLinks) {
+	if !linksPresent(dir, rec.AuthLinks) || !copiesPresent(dir, rec.AuthCopies) {
 		return Materialization{}, false
 	}
-	if got, err := treedigest.Dir(dir, treedigest.Options{ApprovedLinks: rec.AuthLinks}); err != nil || got != rec.Digest {
+	if got, err := treedigest.Dir(dir, treedigest.Options{ApprovedLinks: rec.AuthLinks, ApprovedFiles: rec.AuthCopies}); err != nil || got != rec.Digest {
 		return Materialization{}, false
 	}
 	rec.Rendered = src.rendered
@@ -179,6 +208,18 @@ func linksPresent(dir string, links []string) bool {
 	for _, link := range links {
 		info, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(link)))
 		if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// copiesPresent says whether every auth copy of a materialisation is still a
+// regular file in dir: the digest leaves them out, so it cannot tell one is gone.
+func copiesPresent(dir string, copies []string) bool {
+	for _, c := range copies {
+		info, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(c)))
+		if err != nil || !info.Mode().IsRegular() {
 			return false
 		}
 	}
@@ -219,7 +260,8 @@ func (m *Materializer) build(ctx context.Context, a harness.Adapter, runDir stri
 		return Materialization{}, fmt.Errorf("applying the configuration: %w", err)
 	}
 	links := slices.Sorted(slices.Values(applied.AuthLinks))
-	digest, err := treedigest.Dir(staging, treedigest.Options{ApprovedLinks: links})
+	copies := slices.Sorted(slices.Values(applied.AuthCopies))
+	digest, err := treedigest.Dir(staging, treedigest.Options{ApprovedLinks: links, ApprovedFiles: copies})
 	if err != nil {
 		return Materialization{}, fmt.Errorf("digesting the configuration: %w", err)
 	}
@@ -236,10 +278,13 @@ func (m *Materializer) build(ctx context.Context, a harness.Adapter, runDir stri
 	}
 	rec := Materialization{
 		Schema: recordSchema, Harness: src.harness, Digest: digest, SourceDigest: src.digest,
-		Components: src.components, AuthLinks: links, Rendered: src.rendered, At: m.host.Clock().Now(),
+		Components: src.components, AuthLinks: links, AuthCopies: copies, Rendered: src.rendered, At: m.host.Clock().Now(),
 	}
 	if rec.AuthLinks == nil {
 		rec.AuthLinks = []string{}
+	}
+	if len(copies) == 0 {
+		rec.AuthCopies = nil
 	}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {

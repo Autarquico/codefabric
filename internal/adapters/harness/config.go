@@ -88,7 +88,9 @@ type SnapshotOptions struct {
 type ApplyOptions struct {
 	// Target is a TargetRun or a TargetGlobal.
 	Target Target
-	// LinkAuth links the auth of the host into the target, never copying it.
+	// LinkAuth gives the target the auth of the host: as a symlink, or, for a
+	// harness that rewrites its auth in place, as a private copy (see
+	// ApplyResult.AuthCopies and AuthSyncer). The adapter reports which.
 	LinkAuth bool
 	// DryRun returns what would change without writing.
 	DryRun bool
@@ -119,6 +121,13 @@ type ApplyResult struct {
 	// the target. They are the only symlinks a configuration digest skips;
 	// any other one is an error.
 	AuthLinks []string
+	// AuthCopies are the files it made as private copies of the auth of the
+	// host, relative to the target, 0600. A harness that rewrites its auth
+	// without a lock would corrupt a shared one, so each Run gets its own, and
+	// the Worker keeps them in step (see AuthSyncer). Like AuthLinks, a
+	// configuration digest leaves them out, since the harness rewrites them,
+	// and no snapshot ever carries them.
+	AuthCopies []string
 }
 
 // ConfigDiff is how a snapshot and the configuration of a host differ.

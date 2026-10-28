@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/worker/host"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -55,6 +56,7 @@ func (e *Executor) recoverRuns(ctx context.Context) error {
 		if r.Phase == state.PhaseAssigned {
 			continue
 		}
+		e.retrackAuth(r)
 		if e.step(ctx, r.Key) || ctx.Err() != nil {
 			continue
 		}
@@ -64,4 +66,17 @@ func (e *Executor) recoverRuns(ctx context.Context) error {
 	e.sweep(ctx)
 	e.kickDecider()
 	return nil
+}
+
+// retrackAuth registers again the auth copies of a Run the previous daemon
+// materialised, from its record. A Run with none, or not materialised yet,
+// has nothing to register.
+func (e *Executor) retrackAuth(r state.Run) {
+	adapter, ok := e.harnesses.Get(parseSpec(r.Spec).Requirements.Harness)
+	if !ok {
+		return
+	}
+	if mat, err := host.ReadMaterialization(e.runDir(r.Key)); err == nil {
+		e.trackAuth(r.Key, adapter, mat)
+	}
 }

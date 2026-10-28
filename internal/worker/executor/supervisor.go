@@ -169,6 +169,7 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err != nil {
 		return err
 	}
+	e.trackAuth(r.Key, adapter, mat)
 	configDir := mat.ConfigDir
 	run := harness.RunSpec{
 		RunID: domain.ID(r.RunID), LeaseEpoch: r.LeaseEpoch, Mode: domain.Mode(spec.Mode), Prompt: spec.Prompt, Model: spec.Requirements.Model,
@@ -232,6 +233,16 @@ func (e *Executor) materialize(ctx context.Context, adapter harness.Adapter, dir
 	}
 	return m, err
 }
+
+// trackAuth registers the auth copies of a materialised Run, if the adapter
+// keeps them in step; the Run is forgotten when it is over (forget).
+func (e *Executor) trackAuth(k state.Key, adapter harness.Adapter, mat host.Materialization) {
+	if auth, ok := adapter.(harness.AuthSyncer); ok && e.o.AuthSync != nil && len(mat.AuthCopies) > 0 {
+		e.o.AuthSync.Track(authID(k), auth, e.o.Host, mat.AuthCopyPaths())
+	}
+}
+
+func authID(k state.Key) string { return fmt.Sprintf("%s/%d", k.RunID, k.LeaseEpoch) }
 
 // begin takes a Run from accepted to running: the intention first (phase
 // starting), then the Runtime, then the handle with the report that the harness

@@ -240,11 +240,16 @@ func TestScenario_ApplyAislado(t *testing.T) {
 	if after := dirDigest(t, h.Home()); after != before {
 		t.Errorf("~/.codex changed: %s then %s", before, after)
 	}
-	if !slices.Equal(res.AuthLinks, []string{"auth.json"}) {
-		t.Fatalf("AuthLinks = %v", res.AuthLinks)
+	if !slices.Equal(res.AuthCopies, []string{"auth.json"}) || len(res.AuthLinks) != 0 {
+		t.Fatalf("AuthCopies = %v, AuthLinks = %v", res.AuthCopies, res.AuthLinks)
 	}
-	if target, err := os.Readlink(filepath.Join(run, "auth.json")); err != nil || target != filepath.Join(codexDir(h), "auth.json") {
-		t.Errorf("auth.json -> %q, %v", target, err)
+	want, _ := os.ReadFile(filepath.Join(codexDir(h), "auth.json")) //nolint:gosec // temporary dir
+	copied := filepath.Join(run, "auth.json")
+	if fi, err := os.Lstat(copied); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+		t.Errorf("auth.json of the Run is not a 0600 regular file (%v)", err)
+	}
+	if got, _ := os.ReadFile(copied); !bytes.Equal(got, want) || len(want) == 0 { //nolint:gosec // temporary dir
+		t.Error("auth.json of the Run is not a copy of the host's")
 	}
 	got, err := os.ReadFile(filepath.Join(run, "config.toml")) //nolint:gosec // temporary dir
 	if err != nil || !bytes.Equal(got, file(t, s, "config.toml").Content) {
@@ -253,7 +258,7 @@ func TestScenario_ApplyAislado(t *testing.T) {
 	if fi, err := os.Stat(filepath.Join(run, "skills", "review", "run.sh")); err != nil || fi.Mode().Perm()&0o100 == 0 {
 		t.Errorf("run.sh lost its mode (%v)", err)
 	}
-	d1, err := treedigest.Dir(run, treedigest.Options{ApprovedLinks: res.AuthLinks})
+	d1, err := treedigest.Dir(run, treedigest.Options{ApprovedFiles: res.AuthCopies})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +266,7 @@ func TestScenario_ApplyAislado(t *testing.T) {
 	if _, err := (codex.Adapter{}).ApplyConfig(t.Context(), h, s, harness.ApplyOptions{Target: harness.TargetRun{Dir: run2}, LinkAuth: true}); err != nil {
 		t.Fatal(err)
 	}
-	if d2, _ := treedigest.Dir(run2, treedigest.Options{ApprovedLinks: res.AuthLinks}); d2 != d1 {
+	if d2, _ := treedigest.Dir(run2, treedigest.Options{ApprovedFiles: res.AuthCopies}); d2 != d1 {
 		t.Error("the same snapshot gave two digests")
 	}
 }
@@ -278,11 +283,11 @@ func TestApplyRun_DryRunAndNoLinkWriteNothing(t *testing.T) {
 		t.Errorf("dry run wrote %v", entries)
 	}
 	res, err = codex.Adapter{}.ApplyConfig(t.Context(), h, s, harness.ApplyOptions{Target: harness.TargetRun{Dir: dir}})
-	if err != nil || len(res.AuthLinks) != 0 {
+	if err != nil || len(res.AuthLinks) != 0 || len(res.AuthCopies) != 0 {
 		t.Fatalf("apply = %+v, %v", res, err)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "auth.json")); err == nil {
-		t.Error("auth.json linked without LinkAuth")
+		t.Error("auth.json given without LinkAuth")
 	}
 	if _, err := (codex.Adapter{}).ApplyConfig(t.Context(), h, s, harness.ApplyOptions{Target: harness.TargetRun{Dir: dir}}); err == nil {
 		t.Error("applied to a directory that is not empty")
