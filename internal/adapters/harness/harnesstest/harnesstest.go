@@ -9,6 +9,12 @@
 // cannot skip a check. The only checks left out are those of an operation the
 // adapter itself reports as unsupported, and every one that depends on it
 // must then be unsupported too.
+//
+// Two things an adapter may do differently, and the suite accepts: refuse a
+// snapshot with secret refs applied to TargetGlobal (an error that wraps
+// harness.ErrSecretUnavailable, with nothing written; the ownership checks
+// then apply the components without refs), and give a Run a private copy of
+// the auth (ApplyResult.AuthCopies, 0600, as the host has it) instead of a link.
 package harnesstest
 
 import (
@@ -59,6 +65,13 @@ type Fixture struct {
 	ExpectExit int
 	// ExpectOutput is in the output of the smoke Run.
 	ExpectOutput string
+	// EventsFile is the name, in the RunDir, of the file where the harness's
+	// structured stdout goes (Launch.StructuredStdout), as the executor
+	// gives it to every Run that is not interactive. Empty for a harness
+	// whose events are in its output. When set, the Handles of the checks
+	// carry it as EventsPath and a headless Launch must ask for the
+	// structured stdout.
+	EventsFile string
 	// Recorded writes the output of a Run to h.OutputPath, and to
 	// h.EventsPath when it is set: the source of Events, CollectUsage and
 	// Checkpoint.

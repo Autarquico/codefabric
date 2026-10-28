@@ -119,20 +119,42 @@ func (Adapter) Events(ctx context.Context, _ harness.Handle, src io.ReadCloser) 
 	if src == nil {
 		return nil, errors.New("codex: events: there is no source to read")
 	}
+	// The reader may stay blocked in src until the caller closes it, which
+	// the contract allows; the channel the consumer sees does not wait for it.
+	// Only the relay closes out, and nothing is sent after that.
+	lines := make(chan []byte)
+	go func() {
+		defer close(lines)
+		forEachLine(ctx, src, func(raw []byte) bool {
+			select {
+			case lines <- raw:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		})
+	}()
 	out := make(chan harness.Event)
 	go func() {
 		defer close(out)
 		var p parser
-		forEachLine(ctx, src, func(raw []byte) bool {
-			for _, ev := range p.parse(raw) {
-				select {
-				case out <- ev:
-				case <-ctx.Done():
-					return false
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case raw, ok := <-lines:
+				if !ok {
+					return
+				}
+				for _, ev := range p.parse(raw) {
+					select {
+					case out <- ev:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
-			return true
-		})
+		}
 	}()
 	return out, nil
 }

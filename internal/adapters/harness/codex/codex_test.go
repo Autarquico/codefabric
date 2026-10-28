@@ -3,6 +3,7 @@ package codex_test
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -17,15 +18,31 @@ func spec(mode domain.Mode) harness.RunSpec {
 	return harness.RunSpec{RunID: "r1", LeaseEpoch: 1, Mode: mode, Prompt: "fix it", RunDir: "/run", ConfigDir: "/run/config", Worktree: "/wt"}
 }
 
+// startHost has a codex at <bin>/codex; Start names it by that path.
+func startHost(t *testing.T) harness.Host {
+	t.Helper()
+	return hostWith(t, "#!/bin/sh\n")
+}
+
+func codexPath(t *testing.T, h harness.Host) string {
+	t.Helper()
+	p, err := h.LookPath(codex.Binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestHeadlessStart(t *testing.T) {
 	s := spec(domain.ModeHeadless)
 	s.Model = "gpt-x"
-	l, err := codex.Adapter{}.Start(t.Context(), nil, s)
+	h := startHost(t)
+	l, err := codex.Adapter{}.Start(t.Context(), h, s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
-		"codex", "exec", "--json", "--sandbox", "workspace-write", "-c", `approval_policy="never"`,
+		codexPath(t, h), "exec", "--json", "--sandbox", "workspace-write", "-c", `approval_policy="never"`,
 		"--skip-git-repo-check", "-C", "/wt", "-m", "gpt-x", "--", "fix it",
 	}
 	if !slices.Equal(l.Argv, want) || !slices.Equal(l.Env, []string{"CODEX_HOME=/run/config"}) || !l.StructuredStdout || len(l.SecretEnv) != 0 {
@@ -34,11 +51,12 @@ func TestHeadlessStart(t *testing.T) {
 }
 
 func TestInteractiveStartWithoutModel(t *testing.T) {
-	l, err := codex.Adapter{}.Start(t.Context(), nil, spec(domain.ModeInteractive))
+	h := startHost(t)
+	l, err := codex.Adapter{}.Start(t.Context(), h, spec(domain.ModeInteractive))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"codex", "--sandbox", "workspace-write", "-a", "never", "-C", "/wt", "--", "fix it"}
+	want := []string{codexPath(t, h), "--sandbox", "workspace-write", "-a", "never", "-C", "/wt", "--", "fix it"}
 	if !slices.Equal(l.Argv, want) || !slices.Equal(l.Env, []string{"CODEX_HOME=/run/config"}) || l.StructuredStdout {
 		t.Errorf("launch = %+v", l)
 	}
@@ -47,7 +65,7 @@ func TestInteractiveStartWithoutModel(t *testing.T) {
 func TestPromptStartingWithDashStaysAfterTheSeparator(t *testing.T) {
 	s := spec(domain.ModeHeadless)
 	s.Prompt = "--dangerously-bypass-approvals-and-sandbox"
-	l, err := codex.Adapter{}.Start(t.Context(), nil, s)
+	l, err := codex.Adapter{}.Start(t.Context(), startHost(t), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,11 +79,12 @@ func TestStartIsIdempotentAndWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	s := spec(domain.ModeHeadless)
 	s.RunDir, s.ConfigDir = dir, filepath.Join(dir, "config")
-	a, err := codex.Adapter{}.Start(t.Context(), nil, s)
+	h := startHost(t)
+	a, err := codex.Adapter{}.Start(t.Context(), h, s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := codex.Adapter{}.Start(t.Context(), nil, s)
+	b, _ := codex.Adapter{}.Start(t.Context(), h, s)
 	entries, _ := os.ReadDir(dir)
 	if !slices.Equal(a.Argv, b.Argv) || len(entries) != 0 {
 		t.Errorf("%v %v, %d files", a.Argv, b.Argv, len(entries))
@@ -75,16 +94,23 @@ func TestStartIsIdempotentAndWritesNothing(t *testing.T) {
 func TestStartRefusals(t *testing.T) {
 	s := spec(domain.ModeHeadless)
 	s.Prompt = ""
-	if _, err := (codex.Adapter{}).Start(t.Context(), nil, s); err == nil {
+	if _, err := (codex.Adapter{}).Start(t.Context(), startHost(t), s); err == nil {
 		t.Error("empty prompt accepted")
 	}
 	s = spec(domain.ModeHeadless)
 	s.ConfigDir = ""
-	if _, err := (codex.Adapter{}).Start(t.Context(), nil, s); err == nil {
+	if _, err := (codex.Adapter{}).Start(t.Context(), startHost(t), s); err == nil {
 		t.Error("empty config dir accepted")
 	}
-	if _, err := (codex.Adapter{}).Start(t.Context(), nil, spec("batch")); !errors.Is(err, harness.ErrUnsupportedMode) {
+	if _, err := (codex.Adapter{}).Start(t.Context(), startHost(t), spec("batch")); !errors.Is(err, harness.ErrUnsupportedMode) {
 		t.Errorf("unknown mode: %v", err)
+	}
+}
+
+func TestStartWithoutTheBinaryInTheHost(t *testing.T) {
+	_, err := codex.Adapter{}.Start(t.Context(), hostWith(t, ""), spec(domain.ModeHeadless))
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Errorf("err = %v, want exec.ErrNotFound", err)
 	}
 }
 

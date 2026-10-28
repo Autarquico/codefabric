@@ -165,9 +165,11 @@ func (e *env) applyRun(t *testing.T, s harness.NativeSnapshot) (dir, digest stri
 	if err != nil {
 		t.Fatalf("ApplyConfig to a TargetRun: %v", err)
 	}
-	if len(res.AuthLinks) == 0 {
-		t.Error("ApplyConfig with LinkAuth linked no auth, but the home has credentials")
+	if len(res.AuthLinks)+len(res.AuthCopies) == 0 {
+		t.Error("ApplyConfig with LinkAuth gave no auth, neither link nor copy, but the home has credentials")
 	}
+	credentials := e.credentialContents(t)
+	copied := map[string]bool{}
 	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -187,6 +189,11 @@ func (e *env) applyRun(t *testing.T, s harness.NativeSnapshot) (dir, digest stri
 			if err != nil {
 				return err
 			}
+			if slices.Contains(res.AuthCopies, rel) {
+				copied[rel] = true
+				e.checkAuthCopy(t, rel, p, b, credentials)
+				return nil // its content is the credential, by design
+			}
 			if secret, leaked := e.leaks(b); leaked {
 				t.Errorf("the Run configuration file %s carries the secret %q", rel, secret)
 			}
@@ -196,11 +203,31 @@ func (e *env) applyRun(t *testing.T, s harness.NativeSnapshot) (dir, digest stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err = treedigest.Dir(dir, treedigest.Options{ApprovedLinks: res.AuthLinks})
+	for _, rel := range res.AuthCopies {
+		if !copied[rel] {
+			t.Errorf("the AuthCopy %s is not a regular file of the Run configuration", rel)
+		}
+	}
+	digest, err = treedigest.Dir(dir, treedigest.Options{ApprovedLinks: res.AuthLinks, ApprovedFiles: res.AuthCopies})
 	if err != nil {
 		t.Fatalf("the Run configuration has no digest: %v", err)
 	}
 	return dir, digest
+}
+
+// checkAuthCopy fails t unless the AuthCopy rel, at path with content b, is
+// private (0600) and has the content of one of the credential files of the
+// host: it is their copy, not a stale or made-up file.
+func (e *env) checkAuthCopy(t *testing.T, rel, path string, b []byte, credentials map[string][]byte) {
+	t.Helper()
+	if fi, err := os.Lstat(path); err != nil {
+		t.Error(err)
+	} else if fi.Mode().Perm() != 0o600 {
+		t.Errorf("the AuthCopy %s has the mode %v, want 0600", rel, fi.Mode().Perm())
+	}
+	if !slices.ContainsFunc(slices.Collect(maps.Values(credentials)), func(c []byte) bool { return bytes.Equal(b, c) }) {
+		t.Errorf("the AuthCopy %s is not a copy of a credential file of the host", rel)
+	}
 }
 
 // withRotatedRef is s with the first secret ref it has renamed.
@@ -274,14 +301,33 @@ func checkApplyIsolated(t *testing.T, f Fixture) {
 }
 
 // applyGlobal applies s to the home of e, and false when the adapter does
-// not apply there.
+// not apply there. An adapter may refuse a snapshot with secret refs, since a
+// global apply has no secret to render them with: it must then wrap
+// harness.ErrSecretUnavailable and write nothing, and the components without
+// refs are applied instead.
 func (e *env) applyGlobal(t *testing.T, s harness.NativeSnapshot) bool {
 	t.Helper()
 	credentials := map[string]manifest{}
 	for _, rel := range e.f.CredentialFiles {
 		credentials[rel] = takeManifest(t, filepath.Join(e.home, rel))
 	}
-	res, err := e.a.ApplyConfig(t.Context(), e.host, s, harness.ApplyOptions{Target: harness.TargetGlobal{}})
+	apply := func(s harness.NativeSnapshot) (harness.ApplyResult, error) {
+		return e.a.ApplyConfig(t.Context(), e.host, s, harness.ApplyOptions{Target: harness.TargetGlobal{}})
+	}
+	before := takeManifest(t, e.home)
+	res, err := apply(s)
+	if errors.Is(err, harness.ErrSecretUnavailable) {
+		if d := before.diff(takeManifest(t, e.home)); d != "" {
+			t.Errorf("ApplyConfig to TargetGlobal refused a snapshot with secret refs, but wrote:\n%s", d)
+		}
+		if !hasSecretRefs(s) {
+			t.Errorf("ApplyConfig to TargetGlobal refused a snapshot with no secret ref: %v", err)
+		}
+		if !reflect.DeepEqual(res, harness.ApplyResult{}) {
+			t.Errorf("ApplyConfig to TargetGlobal refused a snapshot but returned %s", describe(res))
+		}
+		res, err = apply(withoutSecretRefs(s))
+	}
 	if errors.Is(err, harness.ErrUnsupported) {
 		isUnsupported(t, "ApplyConfig to TargetGlobal", res, err)
 		return false
@@ -295,6 +341,21 @@ func (e *env) applyGlobal(t *testing.T, s harness.NativeSnapshot) bool {
 		}
 	}
 	return true
+}
+
+func hasSecretRefs(s harness.NativeSnapshot) bool {
+	return slices.ContainsFunc(s.Components, func(c harness.Component) bool {
+		return slices.ContainsFunc(c.Files, func(f harness.File) bool { return len(f.SecretRefs) > 0 })
+	})
+}
+
+// withoutSecretRefs is s without the components that have a secret ref.
+func withoutSecretRefs(s harness.NativeSnapshot) harness.NativeSnapshot {
+	out := s
+	out.Components = slices.DeleteFunc(slices.Clone(s.Components), func(c harness.Component) bool {
+		return hasSecretRefs(harness.NativeSnapshot{Components: []harness.Component{c}})
+	})
+	return out
 }
 
 func component(s harness.NativeSnapshot, name string) (harness.Component, bool) {

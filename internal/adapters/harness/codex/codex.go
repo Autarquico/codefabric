@@ -79,10 +79,11 @@ func (Adapter) Version(ctx context.Context, host harness.Host) (string, error) {
 }
 
 // Start builds the process of the Run without writing anything: the same spec
-// gives the same Launch. Codex reads its configuration from ConfigDir and runs
+// gives the same Launch. Argv[0] is the path of the binary in the host, so that
+// whoever execs it does not look it up in a PATH of its own. Codex reads its configuration from ConfigDir and runs
 // in the sandbox of the worktree without asking for approvals, since nobody
 // answers them.
-func (a Adapter) Start(_ context.Context, _ harness.Host, run harness.RunSpec) (harness.Launch, error) {
+func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec) (harness.Launch, error) {
 	if err := a.Capabilities().CheckMode(run.Mode); err != nil {
 		return harness.Launch{}, fmt.Errorf("codex: %w", err)
 	}
@@ -92,15 +93,19 @@ func (a Adapter) Start(_ context.Context, _ harness.Host, run harness.RunSpec) (
 	if run.ConfigDir == "" {
 		return harness.Launch{}, errors.New("codex: the config directory is empty: Codex would read the global one")
 	}
+	binary, err := host.LookPath(Binary)
+	if err != nil {
+		return harness.Launch{}, fmt.Errorf("codex: finding %s in the PATH of the host: %w", Binary, err)
+	}
 	launch := harness.Launch{Env: []string{ConfigHomeEnv + "=" + run.ConfigDir}}
 	if run.Mode == domain.ModeHeadless {
 		launch.Argv = []string{
-			Binary, "exec", "--json", "--sandbox", "workspace-write",
+			binary, "exec", "--json", "--sandbox", "workspace-write",
 			"-c", `approval_policy="never"`, "--skip-git-repo-check", "-C", run.Worktree,
 		}
 		launch.StructuredStdout = true
 	} else {
-		launch.Argv = []string{Binary, "--sandbox", "workspace-write", "-a", "never", "-C", run.Worktree}
+		launch.Argv = []string{binary, "--sandbox", "workspace-write", "-a", "never", "-C", run.Worktree}
 	}
 	if run.Model != "" {
 		launch.Argv = append(launch.Argv, "-m", run.Model)
