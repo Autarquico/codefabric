@@ -9,6 +9,7 @@
 ## Done esta semana
 
 <!-- pm-sync:done-this-week -->
+- #21 Adapter de Codex CLI
 - #23 Secrets locales al Worker
 <!-- /pm-sync:done-this-week -->
 

@@ -2,7 +2,7 @@
 codename: codefabric
 title: Adapter de Codex CLI
 type: task
-status: active
+status: shipped
 priority: P0
 size: M
 issue: 21
