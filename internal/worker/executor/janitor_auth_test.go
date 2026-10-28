@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -294,5 +295,33 @@ func TestForget_LeavesTheReleaseOfRenderedFilesWorking(t *testing.T) {
 	}
 	if !secretjit.HasRendered(dir) {
 		t.Error("the Run forgot that it used secrets")
+	}
+}
+
+// A Run whose last refresh the Broker could not keep keeps its auth copies: the
+// janitor releases it again, and removes them only once the Broker has.
+func TestForget_KeepsTheAuthCopiesWhileTheBrokerCannotKeepTheLastRefresh(t *testing.T) {
+	rec := &authRecorder{tracked: map[string][]string{}, releaseErr: errors.New("host is read-only")}
+	f := newFixture(t, func(o *Options) { o.AuthSync = rec })
+	k := state.Key{RunID: "gone", LeaseEpoch: 1}
+	copied := materialised(t, f.runDir(k))
+	rec.tracked[authID(k)] = []string{copied}
+
+	f.e.forget(k)
+	if !exists(copied) {
+		t.Fatal("forget removed the copy though the Broker could not keep its last refresh")
+	}
+	f.e.sweep(t.Context())
+	if !exists(copied) {
+		t.Fatal("the janitor removed the copy though the Broker still fails")
+	}
+
+	rec.releaseErr = nil
+	f.e.sweep(t.Context())
+	if exists(copied) {
+		t.Error("the janitor did not finish the cleanup once the Broker released the Run")
+	}
+	if len(rec.tracked) != 0 {
+		t.Errorf("the Run is still registered: %v", rec.tracked)
 	}
 }

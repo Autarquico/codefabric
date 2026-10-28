@@ -85,6 +85,10 @@ func TestARunOfCodexHasItsAuthCopyBrokeredWhileItLives(t *testing.T) {
 		t.Errorf("the host has %s after a refresh of the live Run", got)
 	}
 
+	// Codex refreshes again just before the Run ends, with no poll in between:
+	// the Worker reconciles the copy before it deletes it.
+	writeAuth(t, copied, codexAuth(90*time.Minute))
+
 	// The Run ends: nothing of it is kept, so a later write to its copy goes nowhere.
 	f.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: t0.Add(2 * time.Second), Cause: execwrap.CauseExit})
 	w := newWrapperProcess(t, "exit 0")
@@ -100,9 +104,12 @@ func TestARunOfCodexHasItsAuthCopyBrokeredWhileItLives(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(copied), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if got := readAuth(t, global); got != codexAuth(90*time.Minute) {
+		t.Errorf("the host has %s: the last refresh of the Run was lost with its copy", got)
+	}
 	writeAuth(t, copied, codexAuth(2*time.Hour))
 	broker.Poll()
-	if got := readAuth(t, global); got != codexAuth(time.Hour) {
+	if got := readAuth(t, global); got != codexAuth(90*time.Minute) {
 		t.Errorf("the host has %s: the Run, over, is still brokered", got)
 	}
 }

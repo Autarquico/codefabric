@@ -47,7 +47,7 @@ type Broker struct {
 
 	mu      sync.Mutex
 	runs    map[string]tracked
-	watches map[string]*watch // by path of the file (host, resolved, or copy) whose replaced inode is watched
+	watches map[string][]*watch // by path of the file (host, resolved, or copy) whose replaced inodes are watched, oldest first
 
 	// hook, when set by a test, is called at the named stage of replace of path.
 	hook func(stage, path string)
@@ -61,7 +61,7 @@ type tracked struct {
 
 // New is a Broker with o.
 func New(o Options) *Broker {
-	b := &Broker{clock: o.Clock, log: o.Log, interval: o.Interval, runs: map[string]tracked{}, watches: map[string]*watch{}}
+	b := &Broker{clock: o.Clock, log: o.Log, interval: o.Interval, runs: map[string]tracked{}, watches: map[string][]*watch{}}
 	if b.clock == nil {
 		b.clock = clock.Real{}
 	}
@@ -78,7 +78,9 @@ func New(o Options) *Broker {
 // auth. It replaces what was registered for id.
 func (b *Broker) Track(id string, auth harness.AuthSyncer, host harness.Host, copies []string) {
 	if len(copies) == 0 {
-		b.Untrack(id)
+		if err := b.Release(id); err != nil {
+			b.log.Warn("the auth of a Run was not reconciled before it was dropped", "run", id, "err", err)
+		}
 		return
 	}
 	b.mu.Lock()
@@ -87,12 +89,37 @@ func (b *Broker) Track(id string, auth harness.AuthSyncer, host harness.Host, co
 	b.runs[id] = tracked{auth: auth, global: auth.GlobalAuth(host), copies: copies}
 }
 
-// Untrack forgets the Run id: the Broker never touches its copies again. Once
-// it returns, no poll is writing them.
-func (b *Broker) Untrack(id string) {
+// Release ends the Run id. Before it forgets the Run it reconciles one last
+// time, synchronously: the copy of the Run and every inode the Broker kept of
+// it are candidates, under the validations of a poll, and the most recent
+// version reaches the host and the other copies. Only then are the Run and its
+// descriptors dropped, so that what Codex wrote after the last poll is not lost
+// with the copy.
+//
+// If the host could not be written, Release returns the error and the Run stays
+// registered: the caller keeps the copies and calls Release again. A host that
+// is not valid or readable has nowhere to receive anything, and is not an
+// error. Once Release returns nil, the Broker never touches the copies of the
+// Run again and no poll is writing them. An id that is not registered is nil.
+func (b *Broker) Release(id string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	r, ok := b.runs[id]
+	if !ok {
+		return nil
+	}
+	files := []string{r.global}
+	for _, o := range b.runs {
+		if o.global == r.global {
+			files = append(files, o.copies...)
+		}
+	}
+	// A copy is listed once: this Run's copies are among those of the group.
+	if err := b.sync(r.auth, files); err != nil {
+		return err
+	}
 	b.forget(id)
+	return nil
 }
 
 // forget drops the Run id and closes the descriptors it holds. Needs b.mu.
@@ -114,10 +141,10 @@ func (b *Broker) unwatchAll() {
 }
 
 func (b *Broker) unwatch(path string) {
-	if w := b.watches[path]; w != nil {
+	for _, w := range b.watches[path] {
 		_ = w.file.Close()
-		delete(b.watches, path)
 	}
+	delete(b.watches, path)
 }
 
 // Run polls every interval until ctx ends.
@@ -158,7 +185,7 @@ func (b *Broker) Poll() {
 		g.files = append(g.files, r.copies...)
 	}
 	for _, g := range groups {
-		b.sync(g.auth, g.files)
+		_ = b.sync(g.auth, g.files) // logged where it fails; the next poll tries again
 	}
 }
 
@@ -176,10 +203,14 @@ type version struct {
 // neither the most recent nor replaced, and with no valid auth of an account
 // in the host nothing is propagated, since nothing says which account the
 // copies are to be.
-func (b *Broker) sync(auth harness.AuthSyncer, files []string) {
+//
+// It returns the error of writing the host, which is what must not be lost; a
+// copy that could not be written is tried again by the next poll and is the
+// business of its own Run.
+func (b *Broker) sync(auth harness.AuthSyncer, files []string) error {
 	hostVersion, ok := b.read(auth, files[0], true)
 	if !ok || hostVersion.identity == "" {
-		return
+		return nil
 	}
 	versions := []version{hostVersion}
 	for _, f := range files[1:] {
@@ -191,8 +222,10 @@ func (b *Broker) sync(auth harness.AuthSyncer, files []string) {
 	// in a copy, is one more candidate, a source only: its path now holds what
 	// the Broker put there.
 	for _, f := range append([]string{hostVersion.path}, files[1:]...) {
-		if v, ok := b.orphan(auth, f); ok && v.identity == hostVersion.identity {
-			versions = append(versions, v)
+		for _, v := range b.orphans(auth, f) {
+			if v.identity == hostVersion.identity {
+				versions = append(versions, v)
+			}
 		}
 	}
 	best := -1
@@ -202,15 +235,19 @@ func (b *Broker) sync(auth harness.AuthSyncer, files []string) {
 		}
 	}
 	if best < 0 {
-		return
+		return nil
 	}
+	var hostErr error
 	for i, v := range versions {
 		if i != best && v.stamp.Before(versions[best].stamp) {
 			if v.path != "" {
-				b.replace(auth, v.path, versions[best])
+				if err := b.replace(auth, v.path, versions[best]); err != nil && i == 0 {
+					hostErr = err
+				}
 			}
 		}
 	}
+	return hostErr
 }
 
 // read is the version at path, when it is a regular file the adapter accepts
@@ -280,30 +317,39 @@ func openRegular(path string) (*os.File, os.FileInfo, []byte, bool) {
 	return f, info, content, true
 }
 
-// watchPolls is how many polls the Broker keeps looking at an inode it has
-// replaced: Codex truncates and then writes, without a lock, so a write that
-// began before the rename may land after it, in the inode no path names.
-const watchPolls = 3
+// maxRetained is the most inodes the Broker holds open for one file. Codex
+// truncates and then writes, without a lock, so a write that began before a
+// rename may land after it, in an inode no path names, and nothing bounds the
+// time between its open and its write. The inodes replaced are therefore kept
+// for the whole life of the Run (of the last Run, for the host) and read at
+// every poll and at the final reconciliation. The bound is a descriptor limit:
+// past it the oldest is read one last time, as a candidate, before it is
+// closed. A refresh can be lost only if the same copy was replaced more than
+// maxRetained times while a write begun before the first of them is still
+// pending.
+const maxRetained = 8
 
 // watch is a replaced inode, still open, and the content it had when it was
-// read. It holds one descriptor, until the polls run out or the Run is forgotten.
+// read. It holds one descriptor, until its Run is released.
 type watch struct {
-	file  *os.File
-	last  []byte
-	polls int
+	file *os.File
+	last []byte
 }
 
-// orphan is the version Codex left in the replaced inode of path, if it
-// changed since the last look. Needs b.mu.
-func (b *Broker) orphan(auth harness.AuthSyncer, path string) (version, bool) {
-	w := b.watches[path]
-	if w == nil {
-		return version{}, false
+// orphans are the versions Codex left in the replaced inodes of path that
+// changed since the last look, each a source only. Needs b.mu.
+func (b *Broker) orphans(auth harness.AuthSyncer, path string) []version {
+	var out []version
+	for _, w := range b.watches[path] {
+		if v, ok := b.changed(auth, path, w); ok {
+			out = append(out, v)
+		}
 	}
-	if w.polls--; w.polls < 0 {
-		b.unwatch(path)
-		return version{}, false
-	}
+	return out
+}
+
+// changed is the valid version in w, if it changed since the last look.
+func (b *Broker) changed(auth harness.AuthSyncer, path string, w *watch) (version, bool) {
 	content, err := io.ReadAll(io.NewSectionReader(w.file, 0, maxAuthSize+1))
 	if err != nil || len(content) > maxAuthSize || bytes.Equal(content, w.last) {
 		return version{}, false
@@ -314,15 +360,46 @@ func (b *Broker) orphan(auth harness.AuthSyncer, path string) (version, bool) {
 	return v, ok
 }
 
+// upgrade is the version to publish at path: from, unless the oldest inode of
+// path, which is about to be closed to stay within maxRetained, holds a valid
+// version of the same account that is more recent. It does not mark what it
+// reads as seen, so that a failed publication loses nothing. Needs b.mu.
+func (b *Broker) upgrade(auth harness.AuthSyncer, path string, from version) version {
+	ws := b.watches[path]
+	if len(ws) < maxRetained {
+		return from
+	}
+	content, err := io.ReadAll(io.NewSectionReader(ws[0].file, 0, maxAuthSize+1))
+	if err != nil || len(content) > maxAuthSize {
+		return from
+	}
+	if v, ok := b.validate(auth, path, content); ok && v.identity == from.identity && v.stamp.After(from.stamp) {
+		v.path = ""
+		return v
+	}
+	return from
+}
+
+// keepInode holds w, evicting the oldest inode of path if maxRetained is
+// reached. Needs b.mu.
+func (b *Broker) keepInode(path string, w *watch) {
+	ws := b.watches[path]
+	if len(ws) >= maxRetained {
+		_ = ws[0].file.Close()
+		ws = ws[1:]
+	}
+	b.watches[path] = append(ws, w)
+}
+
 // replace writes from over the file at path, if the file is still valid, of
 // the same account and older than from: the harness may have refreshed it
 // since it was read. A file whose identity changed between reading it and
 // publishing is left to the next poll; one written after that check is caught
 // by watching the inode that is replaced.
-func (b *Broker) replace(auth harness.AuthSyncer, path string, from version) {
+func (b *Broker) replace(auth harness.AuthSyncer, path string, from version) error {
 	f, info, content, ok := openRegular(path)
 	if !ok {
-		return
+		return nil
 	}
 	keep := false
 	defer func() {
@@ -332,20 +409,23 @@ func (b *Broker) replace(auth harness.AuthSyncer, path string, from version) {
 	}()
 	cur, ok := b.validate(auth, path, content)
 	if !ok || cur.identity != from.identity || !cur.stamp.Before(from.stamp) {
-		return
+		return nil
 	}
 	b.call("read", path)
 	if !unchanged(path, f, info) {
-		return
+		return nil
 	}
 	b.call("publish", path)
+	// The oldest inode, if it is to be closed after this write, is read now: if
+	// it holds a more recent version, that one is what is published.
+	from = b.upgrade(auth, path, from)
 	if err := atomicfile.Write(path, from.content, 0o600); err != nil {
 		b.log.Warn("propagating the auth did not finish; it is tried again", "file", path, "err", err)
-		return
+		return err
 	}
-	b.unwatch(path)
-	b.watches[path] = &watch{file: f, last: content, polls: watchPolls}
+	b.keepInode(path, &watch{file: f, last: content})
 	keep = true
+	return nil
 }
 
 func (b *Broker) call(stage, path string) {

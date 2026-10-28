@@ -130,26 +130,6 @@ func TestReplace_SkipsACopyThatChangedSinceItWasRead(t *testing.T) {
 	}
 }
 
-func TestWatches_AreBoundedAndClosed(t *testing.T) {
-	r := newWatchRig(t)
-	r.b.Poll()
-	if n := len(r.b.watches); n != 2 {
-		t.Fatalf("watches after replacing = %d, want 2", n)
-	}
-	for range watchPolls + 1 {
-		r.b.Poll()
-	}
-	if n := len(r.b.watches); n != 0 {
-		t.Errorf("watches after %d quiet polls = %d, want 0", watchPolls+1, n)
-	}
-	r.b.Track("c", stamped{global: r.global}, nil, []string{r.copyA})
-	r.b.Poll() // nothing to replace, nothing to watch
-	r.b.Untrack("c")
-	if n := len(r.b.watches); n != 0 {
-		t.Errorf("watches after untrack = %d, want 0", n)
-	}
-}
-
 // hostOlderRig is the rig where the most recent version is a copy, so that the
 // host is replaced too.
 func hostOlderRig(t *testing.T) *watchRig {
@@ -166,28 +146,6 @@ func hostOlderRig(t *testing.T) *watchRig {
 func closed(f *os.File) bool {
 	_, err := f.Stat()
 	return err != nil
-}
-
-func TestWatches_OfTheHostExpireAndCloseLikeThoseOfCopies(t *testing.T) {
-	r := hostOlderRig(t)
-	global, err := filepath.EvalSymlinks(r.global)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.b.Poll()
-	host := r.b.watches[global]
-	if host == nil || r.b.watches[r.copyB] == nil || len(r.b.watches) != 2 {
-		t.Fatalf("watches after replacing = %d, want the host and copy b", len(r.b.watches))
-	}
-	for range watchPolls + 1 {
-		r.b.Poll()
-	}
-	if n := len(r.b.watches); n != 0 {
-		t.Errorf("watches after %d quiet polls = %d, want 0", watchPolls+1, n)
-	}
-	if !closed(host.file) {
-		t.Error("the descriptor of the host was left open after its watch expired")
-	}
 }
 
 func TestReplace_KeepsARefreshWrittenIntoTheReplacedInodeOfTheHost(t *testing.T) {
@@ -227,27 +185,240 @@ func TestReplace_KeepsARefreshWrittenIntoTheReplacedInodeOfTheHost(t *testing.T)
 	}
 }
 
-func TestUntrack_OfTheLastRunClosesEveryDescriptor(t *testing.T) {
+func descriptors(b *Broker) []*os.File {
+	var files []*os.File
+	for _, ws := range b.watches {
+		for _, w := range ws {
+			files = append(files, w.file)
+		}
+	}
+	return files
+}
+
+func mustRelease(t *testing.T, b *Broker, id string) {
+	t.Helper()
+	if err := b.Release(id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertAllOpenOrClosed(t *testing.T, files []*os.File, wantClosed bool) {
+	t.Helper()
+	for _, f := range files {
+		if closed(f) != wantClosed {
+			t.Errorf("descriptor %s closed = %v, want %v", f.Name(), closed(f), wantClosed)
+		}
+	}
+}
+
+// truncOnPublish makes the Broker's next publication over path find Codex
+// already holding it open with O_TRUNC, as Codex does before it writes.
+func truncOnPublish(t *testing.T, r *watchRig, path string, into **os.File) {
+	t.Helper()
+	r.b.hook = func(stage, p string) {
+		if stage != "publish" || p != path || *into != nil {
+			return
+		}
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // temporary dir
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		*into = f
+	}
+}
+
+func writeAndClose(t *testing.T, f *os.File, content []byte) {
+	t.Helper()
+	if _, err := f.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A watch does not expire: the write lands after many polls and is still brought in.
+func TestWatches_OutliveAnyNumberOfPolls(t *testing.T) {
+	r := newWatchRig(t)
+	var codex *os.File
+	truncOnPublish(t, r, r.copyA, &codex)
+	r.b.Poll()
+	if codex == nil {
+		t.Fatal("the copy was never replaced")
+	}
+	for range 10 {
+		r.b.Poll()
+	}
+	if n := len(r.b.watches[r.copyA]); n != 1 {
+		t.Fatalf("inodes of copy a after 10 quiet polls = %d, want 1", n)
+	}
+	newest := authAt(10*time.Minute, "late")
+	writeAndClose(t, codex, newest)
+	r.b.Poll()
+	for name, p := range map[string]string{"global": r.global, "copy a": r.copyA, "copy b": r.copyB} {
+		if got := contentOf(t, p); got != string(newest) {
+			t.Errorf("%s = %q, want the late refresh", name, got)
+		}
+	}
+}
+
+// The inode of a first replacement is kept when the path is replaced again.
+func TestWatches_AccumulateAcrossSuccessiveReplacements(t *testing.T) {
+	r := newWatchRig(t)
+	var codex *os.File
+	truncOnPublish(t, r, r.copyA, &codex)
+	r.b.Poll() // copy a replaced; codex holds the first inode
+	if err := os.WriteFile(r.global, authAt(3*time.Minute, "g2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.b.Poll() // copy a replaced again
+	if got := contentOf(t, r.copyA); got != string(authAt(3*time.Minute, "g2")) {
+		t.Fatalf("precondition: copy a holds %q, want the second replacement", got)
+	}
+	if n := len(r.b.watches[r.copyA]); n != 2 {
+		t.Fatalf("inodes of copy a = %d, want 2", n)
+	}
+	for range 5 {
+		r.b.Poll()
+	}
+	newest := authAt(10*time.Minute, "late")
+	writeAndClose(t, codex, newest)
+	r.b.Poll()
+	for name, p := range map[string]string{"global": r.global, "copy a": r.copyA, "copy b": r.copyB} {
+		if got := contentOf(t, p); got != string(newest) {
+			t.Errorf("%s = %q, want the refresh written into the first inode", name, got)
+		}
+	}
+}
+
+// Past the bound the oldest inode is read before it is closed.
+func TestWatches_AreBoundedAndTheOldestIsReadBeforeItIsClosed(t *testing.T) {
+	r := newWatchRig(t)
+	var codex *os.File
+	truncOnPublish(t, r, r.copyA, &codex)
+	r.b.Poll()
+	first := r.b.watches[r.copyA][0].file
+	// The pending write is made, visible to the Broker only when it evicts.
+	newest := authAt(10*time.Minute, "late")
+	if _, err := codex.Write(newest); err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxRetained {
+		if err := os.WriteFile(r.global, authAt(time.Duration(3+i)*time.Second+2*time.Minute, "g"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// The write is not seen by sync: keep the inode out of the reads by
+		// making the Broker compare against what it holds.
+		r.b.watches[r.copyA][0].last = newest
+		r.b.Poll()
+	}
+	if n := len(r.b.watches[r.copyA]); n != maxRetained {
+		t.Fatalf("inodes of copy a = %d, want the bound %d", n, maxRetained)
+	}
+	if !closed(first) {
+		t.Error("the oldest inode was not closed at the bound")
+	}
+	if got := contentOf(t, r.copyA); got != string(newest) {
+		t.Errorf("copy a = %q, want the content read from the oldest inode before it was closed", got)
+	}
+	if err := codex.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The host is watched while any Run is registered, and read in the
+// reconciliation of the last.
+func TestRelease_KeepsTheHostWatchUntilTheLastRunAndClosesEveryDescriptor(t *testing.T) {
 	r := hostOlderRig(t)
 	r.b.Poll()
-	var files []*os.File
-	for _, w := range r.b.watches {
-		files = append(files, w.file)
-	}
+	files := descriptors(r.b)
 	if len(files) != 2 {
-		t.Fatalf("watches = %d, want 2", len(files))
+		t.Fatalf("descriptors = %d, want the host and copy b", len(files))
 	}
-	r.b.Untrack("a")
+	for range 10 {
+		r.b.Poll()
+	}
+	mustRelease(t, r.b, "a")
 	if len(r.b.watches) == 0 {
 		t.Fatal("the host is still in use by run b; its watch should stay")
 	}
-	r.b.Untrack("b")
+	mustRelease(t, r.b, "b")
 	if n := len(r.b.watches); n != 0 {
-		t.Errorf("watches after the last untrack = %d, want 0", n)
+		t.Errorf("watches after the last release = %d, want 0", n)
 	}
-	for _, f := range files {
-		if !closed(f) {
-			t.Errorf("descriptor %s left open", f.Name())
-		}
+	assertAllOpenOrClosed(t, files, true)
+}
+
+// A refresh Codex writes into the replaced inode of the host after many polls
+// reaches the copies at the release of the last Run.
+func TestRelease_ReadsTheReplacedInodeOfTheHost(t *testing.T) {
+	r := hostOlderRig(t)
+	global, err := filepath.EvalSymlinks(r.global)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var codex *os.File
+	truncOnPublish(t, r, global, &codex)
+	r.b.Poll()
+	if codex == nil {
+		t.Fatal("the host was never replaced")
+	}
+	for range 10 {
+		r.b.Poll()
+	}
+	newest := authAt(10*time.Minute, "late")
+	writeAndClose(t, codex, newest)
+	mustRelease(t, r.b, "a")
+	if got := contentOf(t, r.global); got != string(newest) {
+		t.Errorf("host = %q, want the refresh found in its old inode", got)
+	}
+	mustRelease(t, r.b, "b")
+	if n := len(descriptors(r.b)); n != 0 {
+		t.Errorf("descriptors after the last release = %d", n)
+	}
+}
+
+// What the copy of a Run holds when it is released, with no poll since, is kept.
+func TestRelease_PropagatesTheLastRefreshOfTheCopy(t *testing.T) {
+	r := newWatchRig(t)
+	newest := authAt(10*time.Minute, "codex")
+	if err := os.WriteFile(r.copyA, newest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustRelease(t, r.b, "a")
+	if got := contentOf(t, r.global); got != string(newest) {
+		t.Errorf("host = %q, want the last refresh of the released Run", got)
+	}
+}
+
+// A host that cannot be written fails the release, which leaves the Run
+// registered so it can be tried again.
+func TestRelease_FailsWhenTheHostCannotBeWritten(t *testing.T) {
+	r := newWatchRig(t)
+	newest := authAt(10*time.Minute, "codex")
+	if err := os.WriteFile(r.copyA, newest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(r.global)
+	if err := os.Chmod(dir, 0o500); err != nil { //nolint:gosec // temporary dir
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // temporary dir
+	if os.Geteuid() == 0 {
+		t.Skip("root writes anywhere")
+	}
+	if err := r.b.Release("a"); err == nil {
+		t.Fatal("Release succeeded though the host could not be written")
+	}
+	if _, ok := r.b.runs["a"]; !ok {
+		t.Fatal("the Run was forgotten though its refresh was not kept")
+	}
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // temporary dir
+		t.Fatal(err)
+	}
+	mustRelease(t, r.b, "a")
+	if got := contentOf(t, r.global); got != string(newest) {
+		t.Errorf("host = %q after the retry, want the refresh", got)
 	}
 }

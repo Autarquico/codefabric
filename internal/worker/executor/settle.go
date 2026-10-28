@@ -313,17 +313,30 @@ func fillExit(en *v1.RunReportEntry, f facts) {
 	}
 }
 
-// forget drops what the executor kept in memory about a Run that is over.
+// forget drops what the executor kept in memory about a Run that is over, and
+// removes the auth copies of its materialisation.
 func (e *Executor) forget(k state.Key) {
-	if e.o.AuthSync != nil {
-		e.o.AuthSync.Untrack(authID(k))
-	}
-	// Untracked, nothing writes the copies of the auth any more: the refresh
-	// token they hold does not outlive the Run. A failure is the janitor's.
-	if err := removeMaterialization(e.runDir(k)); err != nil {
-		e.log.Warn("removing the auth copies of a Run did not finish; the janitor tries again", "run", k.RunID, "err", err)
-	}
+	_ = e.dropMaterialization(k, e.runDir(k)) // logged; the janitor retries
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.memos, k)
+}
+
+// dropMaterialization has the Broker reconcile the auth of the Run one last
+// time, and only then removes the materialisation: the refresh token the copies
+// hold does not outlive the Run, and a refresh Codex wrote since the last poll
+// reaches the host first. If the Broker could not persist it, the copies stay
+// and the janitor tries again.
+func (e *Executor) dropMaterialization(k state.Key, runDir string) error {
+	if e.o.AuthSync != nil {
+		if err := e.o.AuthSync.Release(authID(k)); err != nil {
+			e.log.Warn("the last refresh of a Run could not be kept; its auth copies stay and the janitor tries again", "run", k.RunID, "err", err)
+			return err
+		}
+	}
+	err := removeMaterialization(runDir)
+	if err != nil {
+		e.log.Warn("removing the auth copies of a Run did not finish; the janitor tries again", "run", k.RunID, "err", err)
+	}
+	return err
 }

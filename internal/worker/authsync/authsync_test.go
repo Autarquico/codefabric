@@ -202,16 +202,19 @@ func TestPoll_ACopyThatIsALinkIsNoneOfOurs(t *testing.T) {
 	}
 }
 
-func TestUntrack_StopsTouchingTheCopy(t *testing.T) {
+func TestRelease_StopsTouchingTheCopy(t *testing.T) {
 	r := newRig(t, auth(time.Hour))
 	a := r.track("a", auth(time.Minute))
 	b := r.track("b", auth(time.Minute))
-	r.b.Untrack("a")
-	r.b.Poll()
-	if r.read(a) != auth(time.Minute) {
-		t.Error("a forgotten Run's copy was written")
+	if err := r.b.Release("a"); err != nil {
+		t.Fatal(err)
 	}
-	if r.read(b) != auth(time.Hour) {
+	r.write(r.global, auth(2*time.Hour))
+	r.b.Poll()
+	if r.read(a) == auth(2*time.Hour) {
+		t.Error("a released Run's copy was written")
+	}
+	if r.read(b) != auth(2*time.Hour) {
 		t.Error("the Run that is still tracked was not refreshed")
 	}
 }
@@ -220,7 +223,9 @@ func TestNoRunsNothingHappens(t *testing.T) {
 	r := newRig(t, auth(time.Minute))
 	r.b.Poll()
 	r.track("a", auth(time.Minute))
-	r.b.Untrack("a")
+	if err := r.b.Release("a"); err != nil {
+		t.Fatal(err)
+	}
 	r.write(r.global, auth(time.Hour))
 	r.b.Poll()
 	entries, _ := os.ReadDir(filepath.Dir(r.global))
@@ -233,8 +238,9 @@ func TestTrackingNoCopiesForgetsTheRun(t *testing.T) {
 	r := newRig(t, auth(time.Hour))
 	p := r.track("a", auth(time.Minute))
 	r.b.Track("a", r.a, r.host, nil)
+	r.write(r.global, auth(2*time.Hour))
 	r.b.Poll()
-	if r.read(p) != auth(time.Minute) {
+	if r.read(p) == auth(2*time.Hour) {
 		t.Error("a Run with no copies left was still tracked")
 	}
 }

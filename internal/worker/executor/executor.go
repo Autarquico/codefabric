@@ -110,10 +110,13 @@ type Options struct {
 	AuthSync AuthSync
 }
 
-// AuthSync is told which auth copies a live Run has, and when it has none.
+// AuthSync is told which auth copies a live Run has, and when it is over.
+// Release reconciles the Run for the last time before it forgets it, and fails
+// if what the Run refreshed could not be kept; the Run then stays registered
+// and Release is called again.
 type AuthSync interface {
 	Track(id string, auth harness.AuthSyncer, host harness.Host, copies []string)
-	Untrack(id string)
+	Release(id string) error
 }
 
 // ConfigSource is the configuration of the harness a Run is to be run with.

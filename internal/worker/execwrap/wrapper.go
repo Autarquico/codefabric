@@ -27,7 +27,10 @@ const (
 	// GateTimeout is how long the wrapper waits for the Runtime to wire the terminal.
 	GateTimeout  = 30 * time.Second
 	defaultGrace = 30 * time.Second
-	poll         = 50 * time.Millisecond
+	// defaultDrainWait is how long the kill path lets the copies drain what the
+	// survivors still write before it cuts them.
+	defaultDrainWait = 2 * time.Second
+	poll             = 50 * time.Millisecond
 )
 
 // Options parameterise Run. Stdin, Stdout and Stderr are the terminal of the pane.
@@ -112,6 +115,12 @@ type wrapper struct {
 	// events.jsonl, set before wire's channel closes: a capture that failed is
 	// not a complete one. Read it only once that channel is closed.
 	copyErr error
+	// streams are the copies of the output of the harness, one per pipe, so that
+	// the kill path can tell which of them ended and which did not.
+	streams []copyPipe
+	// drainWait bounds, in real time, how long the kill path waits for the copies
+	// to drain before it cuts them; zero is defaultDrainWait.
+	drainWait time.Duration
 
 	deadline <-chan time.Time // its end, nil when not armed
 	timer    clock.Timer
@@ -305,7 +314,7 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 	if w.o.Stdout != nil {
 		sink = io.MultiWriter(log, w.o.Stdout)
 	}
-	logPipe, err := startCopy(sink, func(dst io.Writer, src io.Reader) error {
+	logPipe, err := startCopy("output log", sink, func(dst io.Writer, src io.Reader) error {
 		if set == nil {
 			_, err := io.Copy(dst, src)
 			return err
@@ -332,7 +341,7 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 			return nil, nil, err
 		}
 		var eventsPipe copyPipe
-		eventsPipe, err = startCopy(events, func(dst io.Writer, src io.Reader) error {
+		eventsPipe, err = startCopy("events.jsonl", events, func(dst io.Writer, src io.Reader) error {
 			if w.events == nil {
 				_, err := io.Copy(dst, src)
 				return err
@@ -347,6 +356,7 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 		cmd.Stdout = eventsPipe.w
 		pipes = append(pipes, eventsPipe)
 	}
+	w.streams = pipes
 	go func() {
 		defer close(done)
 		var errs []error
@@ -368,20 +378,36 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 // copyPipe is a pipe whose read end is being copied to a destination; w is the
 // end the harness writes to and done closes when the copy has reached the end.
 type copyPipe struct {
+	name string
 	w    *os.File
 	done chan struct{}
 	r    *os.File
 	res  *error // the result of the copy, valid once done is closed
 }
 
+// ended says whether the copy has reached its end, and so res is valid.
+func (p copyPipe) ended() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// cut closes the read end: the copy gets an error instead of waiting for a
+// writer that does not let go, and flushes what it held back (the redactor's
+// tail, the last line without a newline), redacted, before it ends.
+func (p copyPipe) cut() { _ = p.r.Close() }
+
 func (p copyPipe) err() error { return *p.res }
 
-func startCopy(dst io.Writer, copyAll func(dst io.Writer, src io.Reader) error) (copyPipe, error) {
+func startCopy(name string, dst io.Writer, copyAll func(dst io.Writer, src io.Reader) error) (copyPipe, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return copyPipe{}, err
 	}
-	p := copyPipe{w: pw, r: pr, done: make(chan struct{}), res: new(error)}
+	p := copyPipe{name: name, w: pw, r: pr, done: make(chan struct{}), res: new(error)}
 	go func() {
 		defer close(p.done)
 		*p.res = copyAll(dst, pr)
@@ -562,20 +588,66 @@ func (w *wrapper) endByKillingGroup(log *os.File, copied <-chan struct{}, exit E
 }
 
 // sealed is exit with the time and what failed in the capture. Survivors may
-// still hold the pipes, so the drain is not waited for: events.jsonl belongs to
-// it, and only if it has finished is its sync and close result known.
+// still hold the pipes, so the drain is waited for only so long (see drained):
+// a capture that did not end by itself is cut, and exit.json says so and which
+// stream it was. A capture is never presented as complete when it is not.
 func (w *wrapper) sealed(log *os.File, copied <-chan struct{}, exit Exit) Exit {
 	exit.ExitedAt = w.clock.Now()
-	err := log.Sync()
-	select {
-	case <-copied:
-		err = errors.Join(w.copyErr, err)
-	default:
-	}
+	err := errors.Join(log.Sync(), w.drained(copied))
 	if err != nil {
 		exit.Error = strings.TrimSpace(exit.Error + " capturing the output: " + err.Error())
 	}
 	return exit
+}
+
+// drained is what failed in the capture, for an exit written while the group
+// may still hold the pipes: it waits drainWait for the copies to end by
+// themselves. The ones that did not are cut, which makes each flush, redacted,
+// what it held, and the error says the capture is incomplete and where. If a
+// copy does not end even cut (its destination is stuck), the error says which
+// streams ended and how, and that events.jsonl may not be synced: the exit is
+// written all the same, because the wrapper has nothing else to wait for and
+// is about to be killed with the group. The invariant "drain and close before
+// exit.json" holds whenever the group lets go of the pipes; for a group that
+// does not, this is the documented exception.
+func (w *wrapper) drained(copied <-chan struct{}) error {
+	wait := w.drainWait
+	if wait <= 0 {
+		wait = defaultDrainWait
+	}
+	if waitFor(copied, wait) {
+		return w.copyErr
+	}
+	var held []string
+	for _, p := range w.streams {
+		if !p.ended() {
+			held = append(held, p.name)
+			p.cut()
+		}
+	}
+	incomplete := fmt.Errorf("capture incomplete: the group still held open the %s", strings.Join(held, " and the "))
+	if waitFor(copied, wait) {
+		return errors.Join(incomplete, w.copyErr)
+	}
+	errs := []error{incomplete, errors.New("the copy of the output did not end after being cut; events.jsonl may not be synced")}
+	for _, p := range w.streams {
+		if p.ended() {
+			errs = append(errs, p.err())
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// waitFor says whether ch closed within d of real time: it bounds I/O, not logic.
+func waitFor(ch <-chan struct{}, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ch:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // killGroup is SIGKILL to the group this process leads and keeps reserved by

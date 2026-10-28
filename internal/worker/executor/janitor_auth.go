@@ -14,7 +14,7 @@ import (
 
 // The auth copies of a Run (harness.ApplyResult.AuthCopies) hold the refresh
 // token of the user. They live as long as the Run does: once it is over, and
-// the Broker no longer tracks them, forget removes them, and the janitor
+// the Broker has reconciled and released them, forget removes them, and the janitor
 // removes those a crash or a late prepare left in a Run that is over.
 //
 // The materialisation of a Run that is over is not needed any more (the
@@ -69,7 +69,8 @@ func (e *Executor) sweepAuthCopies(ctx context.Context) error {
 		case r.Phase.Live():
 			continue
 		}
-		if err := removeMaterialization(filepath.Join(runs, d.Name())); err != nil {
+		k := state.Key{RunID: run, LeaseEpoch: epoch}
+		if err := e.dropMaterialization(k, filepath.Join(runs, d.Name())); err != nil {
 			errs = append(errs, err)
 		}
 	}

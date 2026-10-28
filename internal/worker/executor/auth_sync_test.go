@@ -12,12 +12,22 @@ import (
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
-type authRecorder struct{ tracked map[string][]string }
+type authRecorder struct {
+	tracked    map[string][]string
+	releaseErr error // Release fails with it, and keeps the Run, while it is set
+}
 
 func (r *authRecorder) Track(id string, _ harness.AuthSyncer, _ harness.Host, copies []string) {
 	r.tracked[id] = copies
 }
-func (r *authRecorder) Untrack(id string) { delete(r.tracked, id) }
+
+func (r *authRecorder) Release(id string) error {
+	if r.releaseErr != nil {
+		return r.releaseErr
+	}
+	delete(r.tracked, id)
+	return nil
+}
 
 // syncingAdapter is an adapter whose harness rewrites its auth.
 type syncingAdapter struct{ harness.Adapter }
