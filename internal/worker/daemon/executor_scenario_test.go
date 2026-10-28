@@ -240,7 +240,7 @@ func withoutCodex(t *testing.T) {
 	t.Helper()
 	var kept []string
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if _, err := os.Stat(filepath.Join(dir, "codex")); err != nil {
+		if _, err := os.Stat(filepath.Join(dir, "codex")); err != nil { //nolint:gosec // a directory of the PATH of the test
 			kept = append(kept, dir)
 		}
 	}

@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 )
 
@@ -168,36 +168,6 @@ func escapeValue(e harness.Escape, value []byte) ([]byte, error) {
 	return nil, fmt.Errorf("unknown escape %q", e)
 }
 
-// tomlBasicString escapes value for the inside of a TOML basic string: the
-// quote, the backslash and every control character (U+0000 to U+001F and
-// U+007F, which TOML does not allow bare); the rest, Unicode included, is
-// written as it is. A value that is not UTF-8 cannot be a TOML string.
-func tomlBasicString(value []byte) ([]byte, error) {
-	if !utf8.Valid(value) {
-		return nil, errors.New("the value is not valid UTF-8, and a TOML string is")
-	}
-	const hex = "0123456789abcdef"
-	out := make([]byte, 0, len(value)+8)
-	for _, r := range string(value) {
-		switch {
-		case r == '"' || r == '\\':
-			out = append(out, '\\', byte(r))
-		case r == '\b':
-			out = append(out, `\b`...)
-		case r == '\t':
-			out = append(out, `\t`...)
-		case r == '\n':
-			out = append(out, `\n`...)
-		case r == '\f':
-			out = append(out, `\f`...)
-		case r == '\r':
-			out = append(out, `\r`...)
-		case r < 0x20 || r == 0x7f:
-			out = append(out, `\u00`...)
-			out = append(out, hex[r>>4], hex[r&0xf])
-		default:
-			out = utf8.AppendRune(out, r)
-		}
-	}
-	return out, nil
-}
+// tomlBasicString is redact.TOMLBasicString: the escape of the secrets that
+// the redaction derives its forms from is the one they are rendered with.
+func tomlBasicString(value []byte) ([]byte, error) { return redact.TOMLBasicString(value) }

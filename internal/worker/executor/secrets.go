@@ -338,7 +338,7 @@ func (p *secretPrepare) deliver(ctx context.Context, dir string) (map[string][]b
 	if code, msg := scopeVerdict(p.r.ProjectID, refs, held); code != "" {
 		return nil, fmt.Errorf("%s: %s", code, msg)
 	}
-	if _, err := redact.NewSet(needles); err != nil {
+	if _, err := redact.NewEscapedSet(needles); err != nil {
 		return nil, fmt.Errorf("%s: the output could not be redacted of the secrets: %w", domain.CodeSecretUnavailable, err)
 	}
 	err := p.e.jit.Deliver(dir, p.attempt, needles, func() error { return p.current(ctx) })

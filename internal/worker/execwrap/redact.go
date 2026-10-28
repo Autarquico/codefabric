@@ -24,29 +24,18 @@ const CaptureDisabledNote = "[cf: output capture disabled: secrets could not be 
 // retention of its delivery (secretjit.Load), not the harness's access to it.
 type LoadSecrets func() ([]redact.Needle, error)
 
-// redaction is the matcher of the secrets load returns. It fails rather than
-// leave one out: no loader, a value it cannot load, or one too short or too
-// many to redact.
+// redaction is the matcher of the secrets load returns, with the escaped forms
+// of each (redact.NewEscapedSet). It fails rather than leave one out: no
+// loader, a value it cannot load, or one too short or too many to redact.
 func redaction(load LoadSecrets) (*redact.Set, error) {
-	set, _, err := redactions(load, false)
-	return set, err
-}
-
-// redactions is redaction, and with structured also the matcher of the
-// structured stream (jsonRedaction), built from the same load.
-func redactions(load LoadSecrets, structured bool) (set, events *redact.Set, err error) {
 	if load == nil {
-		return nil, nil, errors.New("this Worker keeps no secrets")
+		return nil, errors.New("this Worker keeps no secrets")
 	}
 	needles, err := load()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if set, err = redact.NewSet(needles); err != nil || !structured {
-		return set, nil, err
-	}
-	events, err = jsonRedaction(needles)
-	return set, events, err
+	return redact.NewEscapedSet(needles)
 }
 
 // PipeOptions parameterise RedactPipe.

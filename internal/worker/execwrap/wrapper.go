@@ -229,9 +229,10 @@ func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
 			return nil, nil, fmt.Errorf("%s: the secret %q goes to %q, which is not the name of a variable", domain.CodeSecretUnavailable, s.Ref, s.Name)
 		}
 	}
-	if set, w.events, err = redactions(w.o.Retention, w.structured()); err != nil {
+	if set, err = redaction(w.o.Retention); err != nil {
 		return nil, nil, fmt.Errorf("%s: the output cannot be redacted: %w", domain.CodeSecretUnavailable, err)
 	}
+	w.events = set // one matcher for the log, the terminal and the event stream
 	if w.launch.Mode == ModeInteractive {
 		if acked, err := cfruntime.CaptureAcked(filepath.Join(w.o.RunDir, CaptureAckFile)); !acked {
 			if err == nil {

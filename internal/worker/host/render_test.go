@@ -26,7 +26,7 @@ func (escMini) SecretEscape(p string) (harness.Escape, error) {
 }
 
 const (
-	secretA = "tok\"en\\with\nnewline-é-中-sentinel-AAAA"
+	secretA = "tok\"en\\with\nnewline-é-中-sentinel-AAAA" //nolint:gosec // a value of the test
 	secretB = "second-sentinel-BBBB"
 )
 

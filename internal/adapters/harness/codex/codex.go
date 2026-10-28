@@ -94,8 +94,10 @@ func (a Adapter) Start(_ context.Context, _ harness.Host, run harness.RunSpec) (
 	}
 	launch := harness.Launch{Env: []string{ConfigHomeEnv + "=" + run.ConfigDir}}
 	if run.Mode == domain.ModeHeadless {
-		launch.Argv = []string{Binary, "exec", "--json", "--sandbox", "workspace-write",
-			"-c", `approval_policy="never"`, "--skip-git-repo-check", "-C", run.Worktree}
+		launch.Argv = []string{
+			Binary, "exec", "--json", "--sandbox", "workspace-write",
+			"-c", `approval_policy="never"`, "--skip-git-repo-check", "-C", run.Worktree,
+		}
 		launch.StructuredStdout = true
 	} else {
 		launch.Argv = []string{Binary, "--sandbox", "workspace-write", "-a", "never", "-C", run.Worktree}

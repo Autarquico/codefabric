@@ -183,8 +183,10 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err != nil {
 		return err
 	}
-	l := execwrap.Launch{Argv: launch.Argv, Env: launch.Env, Dir: worktree, Mode: spec.Mode, Grace: e.grace,
-		StructuredStdout: launch.StructuredStdout && spec.Mode != execwrap.ModeInteractive}
+	l := execwrap.Launch{
+		Argv: launch.Argv, Env: launch.Env, Dir: worktree, Mode: spec.Mode, Grace: e.grace,
+		StructuredStdout: launch.StructuredStdout && spec.Mode != execwrap.ModeInteractive,
+	}
 	env, extra, err := launchSecretEnv(spec, launch.SecretEnv)
 	if err != nil {
 		return err

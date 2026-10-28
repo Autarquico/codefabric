@@ -24,8 +24,10 @@ func TestHeadlessStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"codex", "exec", "--json", "--sandbox", "workspace-write", "-c", `approval_policy="never"`,
-		"--skip-git-repo-check", "-C", "/wt", "-m", "gpt-x", "--", "fix it"}
+	want := []string{
+		"codex", "exec", "--json", "--sandbox", "workspace-write", "-c", `approval_policy="never"`,
+		"--skip-git-repo-check", "-C", "/wt", "-m", "gpt-x", "--", "fix it",
+	}
 	if !slices.Equal(l.Argv, want) || !slices.Equal(l.Env, []string{"CODEX_HOME=/run/config"}) || !l.StructuredStdout || len(l.SecretEnv) != 0 {
 		t.Errorf("launch = %+v", l)
 	}

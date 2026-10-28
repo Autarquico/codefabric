@@ -24,8 +24,6 @@ func collect(t *testing.T, in string) []harness.Event {
 	return evs
 }
 
-func i64(v int64) *int64 { return &v }
-
 func TestScenario_Usage(t *testing.T) {
 	f, err := os.Open("testdata/exec-0.160.1.jsonl")
 	if err != nil {
