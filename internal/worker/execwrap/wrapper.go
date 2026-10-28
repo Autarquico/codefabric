@@ -214,14 +214,14 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // secretEnv is the environment of the SecretEnv of the launch, resolved now,
 // just before the harness starts, so that their values live only in its
 // environment, and set, what its output is redacted of. A launch without
-// SecretEnv has neither, and runs as it always did.
+// SecretEnv and without RedactOutput has neither, and runs as it always did.
 //
 // Nothing runs whose output would not be redacted: in headless mode this
 // process redacts it, and in interactive mode the capture filter of the
 // Runtime must have acknowledged that it does. Nor is a value given to the
 // harness that set would not redact.
 func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
-	if len(w.launch.SecretEnv) == 0 {
+	if len(w.launch.SecretEnv) == 0 && !w.launch.RedactOutput {
 		return nil, nil, nil
 	}
 	for _, s := range w.launch.SecretEnv {

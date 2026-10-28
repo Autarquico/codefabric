@@ -301,7 +301,7 @@ func (e *Executor) forbidden(local state.Run) (gitops.Forbidden, error) {
 		return gitops.Forbidden{Since: local.SourceCommit, Values: values}, nil
 	case !spec.known():
 		return gitops.Forbidden{}, &gitops.BlockedError{Reason: "this Worker rebuilt the record of the Run without its spec and cannot tell whether it declared secrets, so its result cannot be checked"}
-	case len(spec.refs()) > 0:
+	case e.usesSecrets(local):
 		return gitops.Forbidden{}, &gitops.BlockedError{Reason: "the values of the secrets of the Run are no longer on this Worker, so its result cannot be checked"}
 	}
 	return gitops.Forbidden{}, nil

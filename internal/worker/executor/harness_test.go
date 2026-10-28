@@ -71,7 +71,9 @@ func TestARunOfAnIsolatedHarnessIsPreparedWithItsOwnConfiguration(t *testing.T) 
 		t.Fatalf("the Run ended: %+v", f.reports(k))
 	}
 	dir := f.runDir(k)
-	if !slices.Equal(asked, []string{k.RunID + "/fake"}) {
+	// Once when the assignment was evaluated (its secrets, if any, are the
+	// Worker's to check) and once to prepare it.
+	if want := k.RunID + "/fake"; !slices.Equal(asked, []string{want, want}) {
 		t.Errorf("the configuration was asked for %v", asked)
 	}
 	settings, err := os.ReadFile(filepath.Join(dir, "config", "settings.json")) //nolint:gosec // a file of the test
@@ -115,15 +117,12 @@ func TestCommandIsNotMaterialised(t *testing.T) {
 	}
 }
 
-func TestAConfigurationWithSecretsEndsTheRunAsUnavailable(t *testing.T) {
-	f := newFixture(t, func(o *Options) {
+// A harness that names no escape for its files cannot have the markers of its
+// configuration rendered: the Run ends as unavailable, with nothing written.
+func TestAConfigurationWithSecretsOfAnAdapterWithoutEscapeEndsTheRunAsUnavailable(t *testing.T) {
+	f := secretFixture(t, newFakeStore(map[string]string{"team/token": apiValue}), func(o *Options) {
 		o.Harnesses = registry(t, isolated)
-		o.ConfigSource = func(_ context.Context, _ state.Run, id string) (harness.NativeSnapshot, error) {
-			return harness.NativeSnapshot{Harness: id, SchemaVersion: fakeharness.SchemaVersion, Components: []harness.Component{{
-				Name: "settings", Kind: harness.KindFile, Ownership: harness.Managed,
-				Files: []harness.File{{Path: "auth.json", Mode: 0o600, Content: []byte(harness.SecretMarker("team/token"))}},
-			}}}, nil
-		}
+		o.ConfigSource = configWithSecret("team/token")
 	})
 	k := f.acceptedSpec(fakeSpec("do it", ""))
 	if !f.e.step(t.Context(), k) {
@@ -137,8 +136,10 @@ func TestAConfigurationWithSecretsEndsTheRunAsUnavailable(t *testing.T) {
 	if f.rt.startCount() != 0 {
 		t.Error("it started")
 	}
-	if _, err := os.Stat(filepath.Join(f.runDir(k), "config")); err == nil {
-		t.Error("the configuration was written")
+	for _, name := range []string{"config", "config.staging", "rendered.json"} {
+		if _, err := os.Stat(filepath.Join(f.runDir(k), name)); err == nil {
+			t.Errorf("%s was written", name)
+		}
 	}
 }
 

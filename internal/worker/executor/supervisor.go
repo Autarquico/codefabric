@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
@@ -16,6 +17,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/host"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -123,6 +125,16 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err := checkSpecSecrets(spec); err != nil {
 		return fmt.Errorf("%s: the secrets of the Run: %w", domain.CodeInvalidRequest, err)
 	}
+	var (
+		snap    harness.NativeSnapshot
+		cfgRefs []string
+	)
+	if adapter.Capabilities().ConfigIsolation {
+		var err error
+		if snap, cfgRefs, err = e.configOf(ctx, r, adapter); err != nil {
+			return err
+		}
+	}
 	var sp *secretPrepare
 	attempt := func() (*secretPrepare, error) {
 		if sp == nil {
@@ -132,12 +144,17 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 		}
 		return sp, nil
 	}
-	if refs := spec.refs(); len(refs) > 0 {
+	// The secrets of the configuration are asked for with the rest. The
+	// Controller does not know them from the spec yet: it denies a ref the spec
+	// does not declare, which fails the prepare here, before anything is cloned.
+	want := slices.Sorted(slices.Values(slices.Concat(spec.refs(), cfgRefs)))
+	want = slices.Compact(want)
+	if len(want) > 0 {
 		p, err := attempt()
 		if err != nil {
 			return err
 		}
-		if err := p.grant(ctx, refs); err != nil {
+		if err := p.grant(ctx, want); err != nil {
 			return err
 		}
 	}
@@ -148,10 +165,11 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err := e.makeWorktree(ctx, r, spec, worktree); err != nil {
 		return err
 	}
-	configDir, err := e.materialize(ctx, r, adapter, dir)
+	mat, err := e.materialize(ctx, adapter, dir, snap)
 	if err != nil {
 		return err
 	}
+	configDir := mat.ConfigDir
 	run := harness.RunSpec{
 		RunID: domain.ID(r.RunID), LeaseEpoch: r.LeaseEpoch, Mode: domain.Mode(spec.Mode), Prompt: spec.Prompt, Model: spec.Requirements.Model,
 		RunDir: dir, ConfigDir: configDir, Worktree: worktree, OutputPath: filepath.Join(dir, execwrap.OutputLog),
@@ -172,7 +190,9 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 		return err
 	}
 	l.SecretEnv = env
-	if len(spec.refs())+len(extra) > 0 {
+	l.RedactOutput = len(cfgRefs) > 0
+	extra = slices.DeleteFunc(extra, func(ref string) bool { return slices.Contains(want, ref) })
+	if len(want)+len(extra) > 0 {
 		p, err := attempt()
 		if err != nil {
 			return err
@@ -182,7 +202,11 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 		if err := p.grant(ctx, extra); err != nil {
 			return err
 		}
-		if err := p.deliver(ctx, dir); err != nil {
+		values, err := p.deliver(ctx, dir)
+		if err != nil {
+			return err
+		}
+		if err := p.render(ctx, dir, mat, values); err != nil {
 			return err
 		}
 	}
@@ -192,25 +216,19 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	return execwrap.Write(dir, execwrap.LaunchFile, l)
 }
 
-// materialize writes the configuration of the Run into its directory (§8.12)
-// and says where, when the harness reads one per Run; otherwise it does
-// nothing and says nothing.
-func (e *Executor) materialize(ctx context.Context, r state.Run, adapter harness.Adapter, dir string) (string, error) {
+// materialize writes the configuration of the Run into its directory (§8.12),
+// with the markers of its secrets unrendered, when the harness reads one per
+// Run; otherwise it does nothing and says nothing. The secrets are rendered
+// into it once they are delivered.
+func (e *Executor) materialize(ctx context.Context, adapter harness.Adapter, dir string, snap harness.NativeSnapshot) (host.Materialization, error) {
 	if !adapter.Capabilities().ConfigIsolation {
-		return "", nil
-	}
-	snap, err := e.o.ConfigSource(ctx, r, adapter.ID())
-	if err != nil {
-		return "", fmt.Errorf("the configuration of the harness %q: %w", adapter.ID(), err)
+		return host.Materialization{}, nil
 	}
 	m, err := e.materializer.Materialize(ctx, adapter, dir, snap)
 	if errors.Is(err, harness.ErrSecretUnavailable) {
-		return "", fmt.Errorf("%s: %w", domain.CodeSecretUnavailable, err)
+		return host.Materialization{}, fmt.Errorf("%s: %w", domain.CodeSecretUnavailable, err)
 	}
-	if err != nil {
-		return "", err
-	}
-	return m.ConfigDir, nil
+	return m, err
 }
 
 // begin takes a Run from accepted to running: the intention first (phase
@@ -277,7 +295,7 @@ func (e *Executor) sessionSpec(r state.Run) cfruntime.Spec {
 	run := parseSpec(r.Spec)
 	if run.Mode == execwrap.ModeInteractive {
 		spec.Capture, spec.Ready = filepath.Join(dir, execwrap.OutputLog), filepath.Join(dir, paneReady)
-		if len(run.refs()) > 0 {
+		if e.usesSecrets(r) {
 			// The terminal of a Run with secrets is captured through a filter that
 			// redacts them, and the gate stays shut until it says it does.
 			spec.CaptureFilter = append(append([]string{}, e.redactPipe...), "--run-dir", dir)

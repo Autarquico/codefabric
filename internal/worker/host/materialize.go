@@ -50,7 +50,13 @@ type Materialization struct {
 	SourceDigest string            `json:"source_digest"`
 	Components   []ComponentDigest `json:"components"`
 	AuthLinks    []string          `json:"auth_links"`
-	At           time.Time         `json:"materialized_at"`
+	// Rendered are the files that carry secret markers, which Render fills
+	// in. The tree this record digests has them unrendered, with the markers:
+	// once rendered, the tree no longer digests to Digest, and a Materialize
+	// that finds it so rebuilds it (and Render renders it again, with the
+	// value of that moment).
+	Rendered []RenderFile `json:"rendered,omitempty"`
+	At       time.Time    `json:"materialized_at"`
 	// ConfigDir is the configuration directory; not recorded, it follows from
 	// where the record is.
 	ConfigDir string `json:"-"`
@@ -106,16 +112,20 @@ func NewMaterializer(host harness.Host) *Materializer {
 // error. Staging is synced, file by file and directory by directory, before
 // it is renamed into place; config.json is written atomically last.
 //
-// A snapshot with secret refs, or with a file that fails CheckSecrets, is
-// refused with harness.ErrSecretUnavailable (CF_SECRET_UNAVAILABLE) before
-// anything is written: where secrets are
-// rendered, and how they are cleaned, is secrets-local's.
+// A file that fails CheckSecrets is refused with harness.ErrSecretUnavailable
+// (CF_SECRET_UNAVAILABLE) before anything is written, and so is one with
+// secret refs whose adapter is no harness.SecretEscaper or names no escape for
+// it. The markers are written as they are, and the files that have them are
+// the Rendered of the result: no value is written here (see Render).
 func (m *Materializer) Materialize(ctx context.Context, a harness.Adapter, runDir string, snap harness.NativeSnapshot) (Materialization, error) {
 	if !a.Capabilities().ConfigIsolation {
 		return Materialization{}, fmt.Errorf("materialize: harness %s: %w", a.ID(), harness.NewUnsupportedError("config isolation"))
 	}
 	src, err := sourceOf(a.ID(), snap)
 	if err != nil {
+		return Materialization{}, fmt.Errorf("materialize: harness %s: %w", a.ID(), err)
+	}
+	if src.rendered, err = renderedOf(a, snap); err != nil {
 		return Materialization{}, fmt.Errorf("materialize: harness %s: %w", a.ID(), err)
 	}
 	if done, ok := m.reusable(runDir, src); ok {
@@ -135,7 +145,10 @@ func (m *Materializer) Materialize(ctx context.Context, a harness.Adapter, runDi
 }
 
 // reusable is the materialisation of runDir, when one is done for src and
-// its directory still digests to what it says.
+// its directory still digests to what it says: unrendered, with the markers.
+// A tree that has been rendered (or half rendered, with a temporary file of
+// a render left in it) digests to something else, so it is not reused: it is
+// rebuilt, which removes every value it held, and rendered again.
 func (m *Materializer) reusable(runDir string, src source) (Materialization, bool) {
 	data, err := os.ReadFile(filepath.Join(runDir, recordName)) //nolint:gosec // the run directory is the Worker's
 	if err != nil {
@@ -155,6 +168,7 @@ func (m *Materializer) reusable(runDir string, src source) (Materialization, boo
 	if got, err := treedigest.Dir(dir, treedigest.Options{ApprovedLinks: rec.AuthLinks}); err != nil || got != rec.Digest {
 		return Materialization{}, false
 	}
+	rec.Rendered = src.rendered
 	rec.ConfigDir = dir
 	return rec, true
 }
@@ -185,7 +199,8 @@ func (m *Materializer) reset(runDir string) error {
 			return err
 		}
 	}
-	return nil
+	// What was removed may have held values: the unlinks are made durable.
+	return m.fs.sync(runDir)
 }
 
 func (m *Materializer) build(ctx context.Context, a harness.Adapter, runDir string, snap harness.NativeSnapshot, src source) (Materialization, error) {
@@ -221,7 +236,7 @@ func (m *Materializer) build(ctx context.Context, a harness.Adapter, runDir stri
 	}
 	rec := Materialization{
 		Schema: recordSchema, Harness: src.harness, Digest: digest, SourceDigest: src.digest,
-		Components: src.components, AuthLinks: links, At: m.host.Clock().Now(),
+		Components: src.components, AuthLinks: links, Rendered: src.rendered, At: m.host.Clock().Now(),
 	}
 	if rec.AuthLinks == nil {
 		rec.AuthLinks = []string{}
@@ -269,6 +284,7 @@ type source struct {
 	harness    string
 	digest     string
 	components []ComponentDigest
+	rendered   []RenderFile
 }
 
 // sourceOf checks snap and digests it. Each component's digest is the
@@ -317,9 +333,6 @@ func componentDigest(c harness.Component) (string, error) {
 	for _, f := range c.Files {
 		if err := f.CheckSecrets(); err != nil {
 			return "", fmt.Errorf("component %q: %w", c.Name, err)
-		}
-		if len(f.SecretRefs) > 0 {
-			return "", fmt.Errorf("%w: component %q has secret refs in %q, and secrets are not rendered yet", harness.ErrSecretUnavailable, c.Name, f.Path)
 		}
 	}
 	digest, err := harness.FilesDigest(c.Files)

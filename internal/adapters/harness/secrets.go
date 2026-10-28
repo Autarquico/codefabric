@@ -56,6 +56,53 @@ func markers(content []byte) (refs []string, count int) {
 	return refs, count
 }
 
+// Escape is how a secret value is written inside a File so that the format of
+// the file reads back exactly that value. The marker of a secret stands where
+// the value will be; the escape is what the value goes through there.
+type Escape string
+
+// The escapes a File may ask for.
+const (
+	// EscapeRaw writes the value as it is.
+	EscapeRaw Escape = "raw"
+	// EscapeTOMLBasicString escapes the value for the inside of a TOML basic
+	// string ("..."): the marker must stand between its quotes, never in a
+	// literal string, a multi-line string or a bare value.
+	EscapeTOMLBasicString Escape = "toml-basic-string"
+)
+
+// SecretEscaper is implemented by an adapter whose configuration files carry
+// markers: it says, for each file of its snapshots, how a value is escaped
+// in it. The port knows no file format; the Worker renders the markers of a
+// Run's configuration with the escape the adapter names, and refuses a file
+// with markers whose adapter names none.
+type SecretEscaper interface {
+	SecretEscape(path string) (Escape, error)
+}
+
+// RenderSecrets is content with every marker replaced by value(ref), in one
+// pass: a value that looks like a marker is not expanded again. It fails with
+// the error of value, naming no value.
+func RenderSecrets(content []byte, value func(ref string) ([]byte, error)) ([]byte, error) {
+	var out bytes.Buffer
+	last := 0
+	for _, loc := range marker.FindAllSubmatchIndex(content, -1) {
+		ref := string(content[loc[2]:loc[3]])
+		if !domain.ValidSecretRef(ref) {
+			continue
+		}
+		v, err := value(ref)
+		if err != nil {
+			return nil, err
+		}
+		out.Write(content[last:loc[0]])
+		out.Write(v)
+		last = loc[1]
+	}
+	out.Write(content[last:])
+	return out.Bytes(), nil
+}
+
 // CheckSecrets is an error, wrapping ErrSecretUnavailable, when the secrets of
 // f are not what they seem: a {{cf-secret: that opens no valid marker, which
 // would otherwise be written as it is, or SecretRefs that are not

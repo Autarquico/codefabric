@@ -13,7 +13,8 @@ import (
 )
 
 // Release removes the secrets of the run directory runDir: any staging or
-// retired delivery and, if verify allows it, the delivery in place. verify is
+// retired delivery and, if verify allows it, the delivery in place and the
+// rendered files (see Render). verify is
 // the caller's fence, called under the lock: it fails while the Run still
 // needs its values (its capture or its publication are open), and Release
 // then stops with its error, leaving the delivery whole.
@@ -43,12 +44,19 @@ func (m *Manager) release(runDir string, verify func() error) error {
 	if err := m.tidy(runDir); err != nil {
 		return err
 	}
-	if ok, err := present(live); err != nil {
+	delivered, err := present(live)
+	if err != nil {
 		return fmt.Errorf("%w: %w", ErrPending, err)
-	} else if ok {
+	}
+	// A registry that cannot be read does not stop the delivery from going:
+	// settled keeps saying it is pending.
+	left, leftErr := renderedLeft(runDir)
+	if delivered || len(left) > 0 {
 		if err := verify(); err != nil {
 			return err
 		}
+	}
+	if delivered {
 		if err := m.retire(runDir, live, deleting); err != nil {
 			return err
 		}
@@ -56,8 +64,16 @@ func (m *Manager) release(runDir string, verify func() error) error {
 			return err
 		}
 	}
+	if len(left) > 0 {
+		if err := m.dropRendered(runDir); err != nil {
+			return err
+		}
+	}
 	if err := m.fs.sync(runDir); err != nil {
 		return fmt.Errorf("%w: syncing %s: %w", ErrPending, runDir, err)
+	}
+	if leftErr != nil {
+		return fmt.Errorf("%w: %w", ErrPending, leftErr)
 	}
 	return settled(runDir)
 }
@@ -74,6 +90,13 @@ func settled(runDir string) error {
 		if ok {
 			return fmt.Errorf("%w: %s is left in %s", ErrPending, name, runDir)
 		}
+	}
+	left, err := renderedLeft(runDir)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrPending, err)
+	}
+	if len(left) > 0 {
+		return fmt.Errorf("%w: %d rendered files are left in %s", ErrPending, len(left), runDir)
 	}
 	return nil
 }

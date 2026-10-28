@@ -65,6 +65,10 @@ type Launch struct {
 	Gate      string        `json:"gate,omitempty"`
 
 	StructuredStdout bool `json:"structured_stdout,omitempty"`
+	// RedactOutput redacts the output of the harness of the secrets the Run
+	// retains even when it has no SecretEnv: the secrets of its configuration
+	// are in files, not in its environment.
+	RedactOutput bool `json:"redact_output,omitempty"`
 }
 
 // SecretEnv is a variable of the harness whose value is the secret Ref names.

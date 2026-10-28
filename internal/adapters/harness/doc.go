@@ -48,4 +48,9 @@
 // content as {{cf-secret:<ref>}} (see [SecretMarker]) and lists the refs in
 // File.SecretRefs. Digests are taken over the unrendered content, so they
 // change with the ref and never with the value.
+//
+// The values of the markers of a Run's configuration are written by the
+// Worker into the configuration of that Run only (a TargetRun apply leaves
+// the markers as they are), after the Controller has granted them, with the
+// [Escape] that the adapter names for each file ([SecretEscaper]).
 package harness

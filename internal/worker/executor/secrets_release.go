@@ -101,7 +101,7 @@ type releases struct {
 // declares no secret has none to release: the janitor sweeps whatever a Run
 // left all the same.
 func (e *Executor) queueRelease(r state.Run, after <-chan struct{}) {
-	if len(parseSpec(r.Spec).refs()) == 0 {
+	if !e.usesSecrets(r) {
 		return
 	}
 	e.releases.mu.Lock()
