@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"log/slog"
+	"os"
 	"syscall"
 	"time"
 
@@ -375,7 +376,9 @@ func (e *Executor) reconcileAuth(k state.Key, runDir string) error {
 // offerStrayAuth has the Broker reconcile the copies a Run left in runDir, from
 // its record, when the Broker did not know the Run (the Worker restarted after
 // it ended): the most recent one reaches the host before the copies are removed.
-// A Run with no readable record has no copy that is known to be a refresh.
+// A Run with no readable record has no copy that is known to be a refresh, and
+// one whose copies are gone (config/ outlives its record by nothing) has
+// nothing left to offer.
 func (e *Executor) offerStrayAuth(runDir string) error {
 	mat, err := host.ReadMaterialization(runDir)
 	if err != nil {
@@ -385,8 +388,18 @@ func (e *Executor) offerStrayAuth(runDir string) error {
 	if !ok {
 		return nil
 	}
-	if auth, ok := adapter.(harness.AuthSyncer); ok && len(mat.AuthCopies) > 0 {
-		return e.o.AuthSync.Offer(auth, e.o.Host, mat.AuthCopyPaths())
+	auth, ok := adapter.(harness.AuthSyncer)
+	if !ok {
+		return nil
 	}
-	return nil
+	var left []string
+	for _, c := range mat.AuthCopyPaths() {
+		if _, err := os.Lstat(c); err == nil {
+			left = append(left, c)
+		}
+	}
+	if len(left) == 0 {
+		return nil
+	}
+	return e.o.AuthSync.Offer(auth, e.o.Host, left)
 }

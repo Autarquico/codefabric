@@ -378,6 +378,28 @@ func TestJanitor_OffersTheCopyOfAnUnregisteredRunBeforeRemovingIt(t *testing.T) 
 	}
 }
 
+// A Run whose copies are already gone is not offered again on later sweeps:
+// nothing is pending and nothing is warned, whatever the host holds.
+func TestJanitor_DoesNotOfferARunWhoseCopiesAreGone(t *testing.T) {
+	var out syncLog
+	f, _, global := codexJanitorFixture(t, slog.New(slog.NewTextHandler(&out, nil)))
+	rec := &authRecorder{tracked: map[string][]string{}}
+	f.e.o.AuthSync = rec
+	writeAuth(t, global, "not json")
+	k := state.Key{RunID: "gone", LeaseEpoch: 1}
+	copied := copyOfCodex(t, f.runDir(k), codexAuth(time.Hour))
+	if err := os.RemoveAll(filepath.Dir(copied)); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		f.e.sweep(t.Context())
+		f.clock.Advance(releaseGrace)
+	}
+	if len(rec.offered) != 0 || len(f.e.authPending) != 0 || strings.Contains(out.String(), "refresh") {
+		t.Errorf("offered=%v pending=%v log=%s; want nothing for a Run with no copy left", rec.offered, f.e.authPending, out.String())
+	}
+}
+
 // A host that cannot be read keeps the copies for releaseGrace; then the Run is
 // given up, its copies go, and the log says, without content, that its last
 // refresh may be lost.

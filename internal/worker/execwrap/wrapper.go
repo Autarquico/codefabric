@@ -401,9 +401,9 @@ func (p copyPipe) ended() bool {
 }
 
 // cut closes the read end: the copy gets an error instead of waiting for a
-// writer that does not let go, and flushes what it held back (the redactor's
-// tail, the last line without a newline) is dropped, and a marker without
-// content is written in its place, before it ends.
+// writer that does not let go. What it held back (the redactor's tail, the last
+// line without a newline) is dropped, and a marker without content is written in
+// its place before it ends.
 func (p copyPipe) cut() { _ = p.r.Close() }
 
 func (p copyPipe) err() error { return *p.res }
