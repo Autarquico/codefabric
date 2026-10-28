@@ -189,7 +189,7 @@ func TestAnUnreadableRegistryStaysUntilWhatWasRemovedFromAKeptTreeIsDurable(t *t
 	if err := jit.Release(dir, allow); !errors.Is(err, ErrPending) {
 		t.Fatalf("Release = %v, want ErrPending", err)
 	}
-	if got, _ := os.ReadFile(filepath.Join(dir, renderedName)); string(got) != string(corrupt) {
+	if got, _ := os.ReadFile(filepath.Join(dir, renderedName)); string(got) != string(corrupt) { //nolint:gosec // under t.TempDir()
 		t.Errorf("the registry was emptied before the tree was synced: %q", got)
 	}
 }
