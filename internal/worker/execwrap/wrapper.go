@@ -89,6 +89,11 @@ type wrapper struct {
 
 	launch   Launch
 	stopping bool
+	// events is the matcher of events.jsonl when the launch has secrets and
+	// asked for StructuredStdout.
+	events *redact.Set
+	// eventsFile is events.jsonl while it is open, for the kill path to sync.
+	eventsFile *os.File
 
 	deadline <-chan time.Time // its end, nil when not armed
 	timer    clock.Timer
@@ -224,7 +229,7 @@ func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
 			return nil, nil, fmt.Errorf("%s: the secret %q goes to %q, which is not the name of a variable", domain.CodeSecretUnavailable, s.Ref, s.Name)
 		}
 	}
-	if set, err = redaction(w.o.Retention); err != nil {
+	if set, w.events, err = redactions(w.o.Retention, w.structured()); err != nil {
 		return nil, nil, fmt.Errorf("%s: the output cannot be redacted: %w", domain.CodeSecretUnavailable, err)
 	}
 	if w.launch.Mode == ModeInteractive {
@@ -251,11 +256,18 @@ func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
 	return env, set, nil
 }
 
+// structured says whether stdout goes apart, to events.jsonl: only in headless mode.
+func (w *wrapper) structured() bool {
+	return w.launch.StructuredStdout && w.launch.Mode != ModeInteractive
+}
+
 // wire connects the harness to the terminal and the log. In interactive mode
 // it uses the terminal of the pane itself, whose output the Runtime captures; in
 // headless mode it has no input and its output goes to the log and the pane,
-// with set, if any, redacted from both. copied closes when the output has been
-// copied to its end; parentEnds are the files of the pipe that this process
+// with set, if any, redacted from both. With StructuredStdout, stdout goes
+// instead to events.jsonl (alone, redacted line by line with w.events), and
+// only stderr to the log and the pane. copied closes when every stream has been
+// copied to its end and events.jsonl is synced and closed; parentEnds are the files of the pipe that this process
 // must close once the harness has started.
 func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-chan struct{}, parentEnds []*os.File, err error) {
 	done := make(chan struct{})
@@ -264,29 +276,90 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 		close(done)
 		return done, nil, nil
 	}
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		return nil, nil, err
-	}
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, pw, pw
 	var sink io.Writer = log
 	if w.o.Stdout != nil {
 		sink = io.MultiWriter(log, w.o.Stdout)
 	}
-	var redactor *redact.Writer
-	if set != nil {
-		redactor = redact.NewWriter(sink, set)
-		sink = redactor
+	logPipe, err := startCopy(sink, func(dst io.Writer, src io.Reader) error {
+		if set == nil {
+			_, err := io.Copy(dst, src)
+			return err
+		}
+		red := redact.NewWriter(dst, set)
+		_, err := io.Copy(red, src)
+		return errors.Join(err, red.Close()) // what it held back, before the log is synced
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, logPipe.w, logPipe.w
+	pipes := []copyPipe{logPipe}
+	if w.structured() {
+		events, err := os.OpenFile(filepath.Join(w.o.RunDir, EventsFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			_ = logPipe.abort()
+			return nil, nil, err
+		}
+		w.eventsFile = events
+		var eventsPipe copyPipe
+		eventsPipe, err = startCopy(events, func(dst io.Writer, src io.Reader) error {
+			if w.events == nil {
+				_, err := io.Copy(dst, src)
+				return err
+			}
+			return copyEvents(dst, src, w.events)
+		})
+		if err != nil {
+			_ = logPipe.abort()
+			_ = events.Close()
+			return nil, nil, err
+		}
+		cmd.Stdout = eventsPipe.w
+		pipes = append(pipes, eventsPipe)
 	}
 	go func() {
 		defer close(done)
-		_, _ = io.Copy(sink, pr)
-		if redactor != nil {
-			_ = redactor.Close() // what it held back, before the log is synced
+		for _, p := range pipes {
+			<-p.done
 		}
+		if w.eventsFile != nil {
+			_ = w.eventsFile.Sync()
+			_ = w.eventsFile.Close()
+		}
+	}()
+	for _, p := range pipes {
+		parentEnds = append(parentEnds, p.w)
+	}
+	return done, parentEnds, nil
+}
+
+// copyPipe is a pipe whose read end is being copied to a destination; w is the
+// end the harness writes to and done closes when the copy has reached the end.
+type copyPipe struct {
+	w    *os.File
+	done chan struct{}
+	r    *os.File
+}
+
+func startCopy(dst io.Writer, copyAll func(dst io.Writer, src io.Reader) error) (copyPipe, error) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return copyPipe{}, err
+	}
+	p := copyPipe{w: pw, r: pr, done: make(chan struct{})}
+	go func() {
+		defer close(p.done)
+		_ = copyAll(dst, pr)
 		_ = pr.Close()
 	}()
-	return done, []*os.File{pw}, nil
+	return p, nil
+}
+
+// abort closes both ends of a pipe that will not be used and waits for its copy.
+func (p copyPipe) abort() error {
+	err := p.w.Close()
+	<-p.done
+	return err
 }
 
 // waitForGate waits until the Runtime says that the terminal is wired. stopped
@@ -448,6 +521,9 @@ func (w *wrapper) count() int {
 func (w *wrapper) endByKillingGroup(log *os.File, exit Exit) error {
 	exit.ExitedAt = w.clock.Now()
 	_ = log.Sync()
+	if w.eventsFile != nil {
+		_ = w.eventsFile.Sync()
+	}
 	if err := Write(w.o.RunDir, ExitFile, exit); err != nil {
 		fmt.Fprintf(os.Stderr, "cf worker exec: writing the exit: %v; killing the group all the same\n", err)
 	}

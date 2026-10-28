@@ -28,14 +28,25 @@ type LoadSecrets func() ([]redact.Needle, error)
 // leave one out: no loader, a value it cannot load, or one too short or too
 // many to redact.
 func redaction(load LoadSecrets) (*redact.Set, error) {
+	set, _, err := redactions(load, false)
+	return set, err
+}
+
+// redactions is redaction, and with structured also the matcher of the
+// structured stream (jsonRedaction), built from the same load.
+func redactions(load LoadSecrets, structured bool) (set, events *redact.Set, err error) {
 	if load == nil {
-		return nil, errors.New("this Worker keeps no secrets")
+		return nil, nil, errors.New("this Worker keeps no secrets")
 	}
 	needles, err := load()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return redact.NewSet(needles)
+	if set, err = redact.NewSet(needles); err != nil || !structured {
+		return set, nil, err
+	}
+	events, err = jsonRedaction(needles)
+	return set, events, err
 }
 
 // PipeOptions parameterise RedactPipe.

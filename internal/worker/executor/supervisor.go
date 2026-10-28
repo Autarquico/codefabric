@@ -152,14 +152,21 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err != nil {
 		return err
 	}
-	launch, err := adapter.Start(ctx, e.o.Host, harness.RunSpec{
+	run := harness.RunSpec{
 		RunID: domain.ID(r.RunID), LeaseEpoch: r.LeaseEpoch, Mode: domain.Mode(spec.Mode), Prompt: spec.Prompt, Model: spec.Requirements.Model,
 		RunDir: dir, ConfigDir: configDir, Worktree: worktree, OutputPath: filepath.Join(dir, execwrap.OutputLog),
-	})
+	}
+	if spec.Mode != execwrap.ModeInteractive {
+		// Where the structured stdout goes if the adapter asks for it; the path
+		// is the same on every rebuild of the Handle.
+		run.EventsPath = filepath.Join(dir, execwrap.EventsFile)
+	}
+	launch, err := adapter.Start(ctx, e.o.Host, run)
 	if err != nil {
 		return err
 	}
-	l := execwrap.Launch{Argv: launch.Argv, Env: launch.Env, Dir: worktree, Mode: spec.Mode, Grace: e.grace}
+	l := execwrap.Launch{Argv: launch.Argv, Env: launch.Env, Dir: worktree, Mode: spec.Mode, Grace: e.grace,
+		StructuredStdout: launch.StructuredStdout && spec.Mode != execwrap.ModeInteractive}
 	env, extra, err := launchSecretEnv(spec, launch.SecretEnv)
 	if err != nil {
 		return err
