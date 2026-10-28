@@ -168,6 +168,32 @@ func TestAnUnreadableRegistryDiscardsTheConfigurationTreeButTheFilesItsOwnerKeep
 	}
 }
 
+func TestAnUnreadableRegistryStaysUntilWhatWasRemovedFromAKeptTreeIsDurable(t *testing.T) {
+	dir := runDir(t)
+	render(t, dir, 1, false)
+	if err := os.WriteFile(filepath.Join(dir, "config", "auth.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := []byte("{not json")
+	if err := os.WriteFile(filepath.Join(dir, renderedName), corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	jit := New().DiscardingConfig("config", func(string) []string { return []string{"config/auth.json"} })
+	tree, sync := filepath.Join(dir, "config"), jit.fs.sync
+	jit.fs.sync = func(path string) error {
+		if path == tree {
+			return errors.New("injected")
+		}
+		return sync(path)
+	}
+	if err := jit.Release(dir, allow); !errors.Is(err, ErrPending) {
+		t.Fatalf("Release = %v, want ErrPending", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, renderedName)); string(got) != string(corrupt) {
+		t.Errorf("the registry was emptied before the tree was synced: %q", got)
+	}
+}
+
 func TestAnUnreadableRegistryIsPendingWhenTheConfigurationTreeIsNotKnown(t *testing.T) {
 	dir := runDir(t)
 	render(t, dir, 1, false)

@@ -262,6 +262,13 @@ func (m *Manager) discardConfig(runDir string) error {
 	if err := removeAllBut(root, m.tree, keep); err != nil {
 		return fmt.Errorf("%w: removing %s: %w", ErrPending, m.tree, err)
 	}
+	// What was removed inside a kept tree is durable only once the tree is
+	// synced: an empty registry must not outlive a crash that brings them back.
+	if tree := filepath.Join(runDir, m.tree); len(keep) > 0 {
+		if err := m.fs.sync(tree); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: syncing %s: %w", ErrPending, tree, err)
+		}
+	}
 	if err := m.fs.sync(runDir); err != nil {
 		return fmt.Errorf("%w: syncing %s: %w", ErrPending, runDir, err)
 	}
