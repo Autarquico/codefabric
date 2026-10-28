@@ -15,6 +15,19 @@ import (
 type authRecorder struct {
 	tracked    map[string][]string
 	releaseErr error // Release fails with it, and keeps the Run, while it is set
+	abandoned  []string
+	offered    [][]string // the copies of each Offer
+	offerErr   error
+}
+
+func (r *authRecorder) Abandon(id string) {
+	r.abandoned = append(r.abandoned, id)
+	delete(r.tracked, id)
+}
+
+func (r *authRecorder) Offer(_ harness.AuthSyncer, _ harness.Host, copies []string) error {
+	r.offered = append(r.offered, copies)
+	return r.offerErr
 }
 
 func (r *authRecorder) Track(id string, _ harness.AuthSyncer, _ harness.Host, copies []string) {

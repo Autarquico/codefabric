@@ -4,10 +4,15 @@ package executor
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
+	"github.com/Autarquico/codefabric/internal/worker/authsync"
 	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -323,5 +328,115 @@ func TestForget_KeepsTheAuthCopiesWhileTheBrokerCannotKeepTheLastRefresh(t *test
 	}
 	if len(rec.tracked) != 0 {
 		t.Errorf("the Run is still registered: %v", rec.tracked)
+	}
+}
+
+// codexJanitorFixture is a fixture whose Runs are of codex, brokered by the
+// real Broker, with the auth of the host at global.
+func codexJanitorFixture(t *testing.T, log *slog.Logger) (f *fixture, broker *authsync.Broker, global string) {
+	t.Helper()
+	broker = authsync.New(authsync.Options{})
+	f = newFixture(t, func(o *Options) {
+		o.Host = hostWithCodex(t)
+		o.Harnesses = registry(t, codex.Adapter{})
+		o.AuthSync = broker
+		if log != nil {
+			o.Log = log
+		}
+	})
+	global = codex.Adapter{}.GlobalAuth(f.opts.Host)
+	if err := os.MkdirAll(filepath.Dir(global), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return f, broker, global
+}
+
+// copyOfCodex materialises a Run of codex in runDir with an auth copy holding content.
+func copyOfCodex(t *testing.T, runDir, content string) string {
+	t.Helper()
+	copied := materialised(t, runDir)
+	writeAuth(t, copied, content)
+	if err := os.WriteFile(filepath.Join(runDir, "config.json"), []byte(`{"schema":1,"harness":"codex","auth_copies":["auth.json"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return copied
+}
+
+// After a restart of the Worker the Broker does not know the Run that ended: the
+// janitor offers its copy to the host before it removes it.
+func TestJanitor_OffersTheCopyOfAnUnregisteredRunBeforeRemovingIt(t *testing.T) {
+	f, _, global := codexJanitorFixture(t, nil)
+	writeAuth(t, global, codexAuth(time.Minute))
+	copied := copyOfCodex(t, f.runDir(state.Key{RunID: "gone", LeaseEpoch: 1}), codexAuth(time.Hour))
+
+	f.e.sweep(t.Context())
+	if got := readAuth(t, global); got != codexAuth(time.Hour) {
+		t.Errorf("the host has %s, want the last refresh of the Run that was not registered", got)
+	}
+	if exists(copied) {
+		t.Error("the copy survived the janitor")
+	}
+}
+
+// A host that cannot be read keeps the copies for releaseGrace; then the Run is
+// given up, its copies go, and the log says, without content, that its last
+// refresh may be lost.
+func TestJanitor_GivesUpTheReleaseOfARunWhenTheHostCannotTakeItForGood(t *testing.T) {
+	var out syncLog
+	f, _, global := codexJanitorFixture(t, slog.New(slog.NewTextHandler(&out, nil)))
+	rec := &authRecorder{tracked: map[string][]string{}, releaseErr: errors.New("host is read-only")}
+	f.e.o.AuthSync = rec
+	k := state.Key{RunID: "gone", LeaseEpoch: 1}
+	writeAuth(t, global, "")
+	secret := codexAuth(3 * time.Hour)
+	copied := copyOfCodex(t, f.runDir(k), secret)
+	rec.tracked[authID(k)] = []string{copied}
+	for range 3 {
+		f.e.sweep(t.Context())
+		f.clock.Advance(releaseGrace / 4)
+	}
+	if !exists(copied) || len(rec.abandoned) != 0 {
+		t.Fatalf("the Run was given up before releaseGrace: copy kept=%v, abandoned=%v", exists(copied), rec.abandoned)
+	}
+	f.clock.Advance(releaseGrace)
+	f.e.sweep(t.Context())
+	if exists(copied) || exists(filepath.Join(f.runDir(k), "config")) {
+		t.Error("the auth copy of a Run given up is still there")
+	}
+	if len(rec.abandoned) != 1 || rec.abandoned[0] != authID(k) {
+		t.Errorf("abandoned = %v, want the Run", rec.abandoned)
+	}
+	if len(f.e.authPending) != 0 {
+		t.Errorf("authPending = %v", f.e.authPending)
+	}
+	log := out.String()
+	if !strings.Contains(log, "may have been lost") || strings.Contains(log, "token-") || strings.Contains(log, "access_token") {
+		t.Errorf("log = %s; want the warning, with no content", log)
+	}
+}
+
+// With the real Broker: a host that is always unreadable ends with no copy, the
+// Run forgotten and the refresh unpropagated.
+func TestJanitor_GivesUpWithTheRealBroker(t *testing.T) {
+	f, broker, global := codexJanitorFixture(t, nil)
+	k := state.Key{RunID: "gone", LeaseEpoch: 1}
+	writeAuth(t, global, "")
+	copied := copyOfCodex(t, f.runDir(k), codexAuth(time.Hour))
+	h := f.opts.Host
+	broker.Track(authID(k), codex.Adapter{}, h, []string{copied})
+
+	f.e.sweep(t.Context())
+	if !exists(copied) {
+		t.Fatal("the copy was removed though the host could not take the refresh")
+	}
+	f.clock.Advance(releaseGrace)
+	f.e.sweep(t.Context())
+	if exists(copied) {
+		t.Fatal("the copy is still there past releaseGrace")
+	}
+	// The Run is forgotten: a valid host that appears now is not synchronised
+	// with a copy that is gone, and Release has nothing to do.
+	if err := broker.Release(authID(k)); err != nil {
+		t.Errorf("the Run is still registered: %v", err)
 	}
 }

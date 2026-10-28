@@ -422,3 +422,126 @@ func TestRelease_FailsWhenTheHostCannotBeWritten(t *testing.T) {
 		t.Errorf("host = %q after the retry, want the refresh", got)
 	}
 }
+
+// A refresh that lives only in an inode the Broker retained is not consumed by
+// a Release whose host write failed: the retry publishes it.
+func TestRelease_RetriesARefreshThatOnlyLivesInARetainedInode(t *testing.T) {
+	r := newWatchRig(t)
+	var codex *os.File
+	r.b.hook = func(stage, path string) {
+		if stage != "publish" || path != r.copyA || codex != nil {
+			return
+		}
+		f, err := os.OpenFile(r.copyA, os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // temporary dir
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		codex = f
+	}
+	r.b.Poll()
+	newest := authAt(10*time.Minute, "codex")
+	if _, err := codex.Write(newest); err != nil {
+		t.Fatal(err)
+	}
+	if err := codex.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(r.global)
+	if os.Geteuid() == 0 {
+		t.Skip("root writes anywhere")
+	}
+	if err := os.Chmod(dir, 0o500); err != nil { //nolint:gosec // temporary dir
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // temporary dir
+	for range 2 {
+		if err := r.b.Release("a"); err == nil {
+			t.Fatal("Release succeeded though the host could not be written")
+		}
+	}
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // temporary dir
+		t.Fatal(err)
+	}
+	mustRelease(t, r.b, "a")
+	if got := contentOf(t, r.global); got != string(newest) {
+		t.Errorf("host = %q after the retry, want the refresh of the retained inode", got)
+	}
+}
+
+// A host that is momentarily not valid (Codex truncates before it writes) is a
+// retryable error, and the Run, meanwhile, is a source and no destination.
+func TestRelease_ATruncatedHostIsRetryableAndTheEndedRunIsNotWritten(t *testing.T) {
+	r := newWatchRig(t)
+	newest := authAt(10*time.Minute, "codex")
+	if err := os.WriteFile(r.copyA, newest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.global, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.b.Release("a"); !errors.Is(err, errHostUnavailable) {
+		t.Fatalf("Release = %v, want a retryable error", err)
+	}
+	if _, ok := r.b.runs["a"]; !ok {
+		t.Fatal("the Run was forgotten though the host could not take its refresh")
+	}
+
+	// The host comes back with a version newer than the copy of the ended Run.
+	later := authAt(20*time.Minute, "host")
+	if err := os.WriteFile(r.global, later, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.b.Poll()
+	if got := contentOf(t, r.copyA); got != string(newest) {
+		t.Errorf("the copy of an ended Run was written: %q", got)
+	}
+	if got := contentOf(t, r.copyB); got != string(later) {
+		t.Errorf("the live copy = %q, want the host's", got)
+	}
+	mustRelease(t, r.b, "a")
+}
+
+func TestRelease_AMissingHostIsNotAnError(t *testing.T) {
+	r := newWatchRig(t)
+	if err := os.Remove(r.global); err != nil {
+		t.Fatal(err)
+	}
+	mustRelease(t, r.b, "a")
+}
+
+func TestOffer_PublishesTheCopyOfARunTheBrokerDoesNotKnow(t *testing.T) {
+	r := newWatchRig(t)
+	h, err := localhost.New(localhost.Options{Home: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(t.TempDir(), "auth.json")
+	newest := authAt(10*time.Minute, "stray")
+	if err := os.WriteFile(stray, newest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.b.Offer(stamped{global: r.global}, h, []string{stray}); err != nil {
+		t.Fatal(err)
+	}
+	if got := contentOf(t, r.global); got != string(newest) {
+		t.Errorf("host = %q, want the copy of the stray Run", got)
+	}
+	if got := contentOf(t, r.copyA); got != string(newest) {
+		t.Errorf("live copy = %q, want the refresh", got)
+	}
+}
+
+func TestAbandon_ForgetsTheRunWithoutReconciling(t *testing.T) {
+	r := newWatchRig(t)
+	if err := os.WriteFile(r.copyA, authAt(10*time.Minute, "codex"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.b.Abandon("a")
+	if _, ok := r.b.runs["a"]; ok {
+		t.Error("the Run is still registered")
+	}
+	if got := contentOf(t, r.global); got != string(authAt(2*time.Minute, "g")) {
+		t.Errorf("Abandon reconciled: host = %q", got)
+	}
+}

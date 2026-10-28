@@ -3,10 +3,13 @@ package authsync
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -57,7 +60,18 @@ type tracked struct {
 	auth   harness.AuthSyncer
 	global string
 	copies []string
+	// ended is a Run whose Release did not finish: its copies are candidates
+	// and nothing else, never written and holding no new descriptor.
+	ended bool
 }
+
+var (
+	// errHostUnavailable is a host that is not readable or valid now: Codex
+	// truncates the file before it writes it, so it may be so for a moment.
+	errHostUnavailable = errors.New("authsync: the auth of the host is not valid or readable now")
+	// errHostChanged is a host that changed between being read and being replaced.
+	errHostChanged = errors.New("authsync: the auth of the host changed while it was replaced")
+)
 
 // New is a Broker with o.
 func New(o Options) *Broker {
@@ -96,11 +110,14 @@ func (b *Broker) Track(id string, auth harness.AuthSyncer, host harness.Host, co
 // descriptors dropped, so that what Codex wrote after the last poll is not lost
 // with the copy.
 //
-// If the host could not be written, Release returns the error and the Run stays
-// registered: the caller keeps the copies and calls Release again. A host that
-// is not valid or readable has nowhere to receive anything, and is not an
-// error. Once Release returns nil, the Broker never touches the copies of the
-// Run again and no poll is writing them. An id that is not registered is nil.
+// If the host could not take the refresh (it could not be written, it is not
+// valid or readable at this moment, or it changed while it was replaced),
+// Release returns an error and the Run stays registered, as a source only: the
+// caller keeps the copies and calls Release again, or gives the Run up with
+// [Broker.Abandon]. A host that does not exist, or that holds no account, has
+// nowhere to receive anything, and is not an error. Once Release returns nil,
+// the Broker never touches the copies of the Run again and no poll is writing
+// them. An id that is not registered is nil.
 func (b *Broker) Release(id string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -108,18 +125,47 @@ func (b *Broker) Release(id string) error {
 	if !ok {
 		return nil
 	}
-	files := []string{r.global}
-	for _, o := range b.runs {
-		if o.global == r.global {
-			files = append(files, o.copies...)
-		}
-	}
-	// A copy is listed once: this Run's copies are among those of the group.
-	if err := b.sync(r.auth, files); err != nil {
+	r.ended = true
+	b.runs[id] = r
+	live, ended := b.group(r.global)
+	if err := b.sync(r.auth, r.global, live, ended); err != nil {
 		return err
 	}
 	b.forget(id)
 	return nil
+}
+
+// Offer reconciles once the copies of a Run the Broker does not know (the
+// Worker restarted since), as sources only, under the validations of a poll.
+// It registers nothing; the error is the one of Release.
+func (b *Broker) Offer(auth harness.AuthSyncer, host harness.Host, copies []string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	global := auth.GlobalAuth(host)
+	live, ended := b.group(global)
+	return b.sync(auth, global, live, append(ended, copies...))
+}
+
+// Abandon drops the Run id and closes its descriptors without reconciling it:
+// what it refreshed since its last publication is lost.
+func (b *Broker) Abandon(id string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.forget(id)
+}
+
+// group is the copies of the Runs whose auth is global, live and ended. Needs b.mu.
+func (b *Broker) group(global string) (live, ended []string) {
+	for _, o := range b.runs {
+		switch {
+		case o.global != global:
+		case o.ended:
+			ended = append(ended, o.copies...)
+		default:
+			live = append(live, o.copies...)
+		}
+	}
+	return live, ended
 }
 
 // forget drops the Run id and closes the descriptors it holds. Needs b.mu.
@@ -171,21 +217,14 @@ func (b *Broker) Run(ctx context.Context) error {
 func (b *Broker) Poll() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	type group struct {
-		auth  harness.AuthSyncer
-		files []string
-	}
-	groups := map[string]*group{}
+	done := map[string]bool{}
 	for _, r := range b.runs {
-		g := groups[r.global]
-		if g == nil {
-			g = &group{auth: r.auth, files: []string{r.global}}
-			groups[r.global] = g
+		if done[r.global] {
+			continue
 		}
-		g.files = append(g.files, r.copies...)
-	}
-	for _, g := range groups {
-		_ = b.sync(g.auth, g.files) // logged where it fails; the next poll tries again
+		done[r.global] = true
+		live, ended := b.group(r.global)
+		_ = b.sync(r.auth, r.global, live, ended) // logged where it fails; the next poll tries again
 	}
 }
 
@@ -195,25 +234,34 @@ type version struct {
 	content  []byte
 	stamp    time.Time
 	identity string
+	// seen is the replaced inode the version was read from, if it was.
+	seen *watch
 }
 
-// sync propagates the most recent of the versions of files, the first of
-// which is the auth of the host, to the others that are older. The auth of the
-// host says whose account it is: a version of another account (or of none) is
-// neither the most recent nor replaced, and with no valid auth of an account
-// in the host nothing is propagated, since nothing says which account the
-// copies are to be.
+// sync propagates the most recent of the versions of host, live and ended to
+// the host and to the live copies that are older. The auth of the host says
+// whose account it is: a version of another account (or of none) is neither the
+// most recent nor replaced, and with no valid auth of an account in the host
+// nothing is propagated, since nothing says which account the copies are to be.
+// The copies of ended Runs are candidates only.
 //
-// It returns the error of writing the host, which is what must not be lost; a
-// copy that could not be written is tried again by the next poll and is the
-// business of its own Run.
-func (b *Broker) sync(auth harness.AuthSyncer, files []string) error {
-	hostVersion, ok := b.read(auth, files[0], true)
-	if !ok || hostVersion.identity == "" {
+// It returns the error of the host not taking the version, which is what must
+// not be lost; a copy that could not be written is tried again by the next poll
+// and is the business of its own Run. A version read from a replaced inode is
+// seen only once it has been published, or lost to a better one.
+func (b *Broker) sync(auth harness.AuthSyncer, host string, live, ended []string) error {
+	hostVersion, ok := b.read(auth, host, true)
+	if !ok {
+		if _, err := os.Stat(host); errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return errHostUnavailable
+	}
+	if hostVersion.identity == "" {
 		return nil
 	}
 	versions := []version{hostVersion}
-	for _, f := range files[1:] {
+	for _, f := range append(slices.Clone(live), ended...) {
 		if v, ok := b.read(auth, f, false); ok && v.identity == hostVersion.identity {
 			versions = append(versions, v)
 		}
@@ -221,10 +269,12 @@ func (b *Broker) sync(auth harness.AuthSyncer, files []string) error {
 	// What Codex wrote into an inode that was replaced under it, in the host or
 	// in a copy, is one more candidate, a source only: its path now holds what
 	// the Broker put there.
-	for _, f := range append([]string{hostVersion.path}, files[1:]...) {
+	for _, f := range slices.Concat([]string{hostVersion.path}, live, ended) {
 		for _, v := range b.orphans(auth, f) {
 			if v.identity == hostVersion.identity {
 				versions = append(versions, v)
+			} else {
+				v.seen.last = v.content
 			}
 		}
 	}
@@ -234,21 +284,29 @@ func (b *Broker) sync(auth harness.AuthSyncer, files []string) error {
 			best = i
 		}
 	}
-	if best < 0 {
-		return nil
-	}
-	var hostErr error
-	for i, v := range versions {
-		if i != best && v.stamp.Before(versions[best].stamp) {
-			if v.path != "" {
-				if err := b.replace(auth, v.path, versions[best]); err != nil && i == 0 {
+	var hostErr, failed error
+	if best >= 0 {
+		for i, v := range versions {
+			if i == best || !v.stamp.Before(versions[best].stamp) || v.path == "" || (i > 0 && isEnded(v.path, ended)) {
+				continue
+			}
+			if err := b.replace(auth, v.path, versions[best]); err != nil {
+				failed = err
+				if i == 0 {
 					hostErr = err
 				}
 			}
 		}
 	}
+	for i, v := range versions {
+		if v.seen != nil && (i != best || failed == nil) {
+			v.seen.last = v.content
+		}
+	}
 	return hostErr
 }
+
+func isEnded(path string, ended []string) bool { return slices.Contains(ended, path) }
 
 // read is the version at path, when it is a regular file the adapter accepts
 // and whose stamp is not in the future. The auth of the host may be a link (a
@@ -348,16 +406,22 @@ func (b *Broker) orphans(auth harness.AuthSyncer, path string) []version {
 	return out
 }
 
-// changed is the valid version in w, if it changed since the last look.
+// changed is the valid version in w, if it changed since the last look. It
+// is not marked as seen: the caller does it once the version has been
+// published, so that a failed publication leaves it a candidate. What is not
+// valid is seen at once; there is nothing to publish in it.
 func (b *Broker) changed(auth harness.AuthSyncer, path string, w *watch) (version, bool) {
 	content, err := io.ReadAll(io.NewSectionReader(w.file, 0, maxAuthSize+1))
 	if err != nil || len(content) > maxAuthSize || bytes.Equal(content, w.last) {
 		return version{}, false
 	}
-	w.last = content
 	v, ok := b.validate(auth, path, content)
-	v.path = ""
-	return v, ok
+	if !ok {
+		w.last = content
+		return version{}, false
+	}
+	v.path, v.seen = "", w
+	return v, true
 }
 
 // upgrade is the version to publish at path: from, unless the oldest inode of
@@ -393,13 +457,13 @@ func (b *Broker) keepInode(path string, w *watch) {
 
 // replace writes from over the file at path, if the file is still valid, of
 // the same account and older than from: the harness may have refreshed it
-// since it was read. A file whose identity changed between reading it and
-// publishing is left to the next poll; one written after that check is caught
-// by watching the inode that is replaced.
+// since it was read. A file that changed between reading it and publishing is
+// not written and is an error, for the next attempt; one written after that
+// check is caught by watching the inode that is replaced.
 func (b *Broker) replace(auth harness.AuthSyncer, path string, from version) error {
 	f, info, content, ok := openRegular(path)
 	if !ok {
-		return nil
+		return errHostUnavailable
 	}
 	keep := false
 	defer func() {
@@ -408,12 +472,15 @@ func (b *Broker) replace(auth harness.AuthSyncer, path string, from version) err
 		}
 	}()
 	cur, ok := b.validate(auth, path, content)
-	if !ok || cur.identity != from.identity || !cur.stamp.Before(from.stamp) {
+	if !ok {
+		return errHostUnavailable
+	}
+	if cur.identity != from.identity || !cur.stamp.Before(from.stamp) {
 		return nil
 	}
 	b.call("read", path)
 	if !unchanged(path, f, info) {
-		return nil
+		return errHostChanged
 	}
 	b.call("publish", path)
 	// The oldest inode, if it is to be closed after this write, is read now: if

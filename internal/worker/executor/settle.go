@@ -7,8 +7,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/host"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -326,17 +328,65 @@ func (e *Executor) forget(k state.Key) {
 // time, and only then removes the materialisation: the refresh token the copies
 // hold does not outlive the Run, and a refresh Codex wrote since the last poll
 // reaches the host first. If the Broker could not persist it, the copies stay
-// and the janitor tries again.
+// and the janitor tries again, for releaseGrace; then the Run is given up.
 func (e *Executor) dropMaterialization(k state.Key, runDir string) error {
-	if e.o.AuthSync != nil {
-		if err := e.o.AuthSync.Release(authID(k)); err != nil {
-			e.log.Warn("the last refresh of a Run could not be kept; its auth copies stay and the janitor tries again", "run", k.RunID, "err", err)
-			return err
-		}
+	if err := e.reconcileAuth(k, runDir); err != nil {
+		return err
 	}
 	err := removeMaterialization(runDir)
 	if err != nil {
 		e.log.Warn("removing the auth copies of a Run did not finish; the janitor tries again", "run", k.RunID, "err", err)
 	}
 	return err
+}
+
+// reconcileAuth is nil when the Run may be removed: its last refresh reached
+// the host, or the Broker has had releaseGrace to keep it and gave up.
+func (e *Executor) reconcileAuth(k state.Key, runDir string) error {
+	if e.o.AuthSync == nil {
+		return nil
+	}
+	err := e.o.AuthSync.Release(authID(k))
+	if err == nil {
+		err = e.offerStrayAuth(runDir)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err == nil {
+		delete(e.authPending, k)
+		return nil
+	}
+	now := e.clock.Now()
+	first, pending := e.authPending[k]
+	if !pending {
+		first = now
+		e.authPending[k] = first
+	}
+	if now.Sub(first) < releaseGrace {
+		e.log.Warn("the last refresh of a Run could not be kept; its auth copies stay and the janitor tries again", "run", k.RunID, "err", err)
+		return err
+	}
+	delete(e.authPending, k)
+	e.o.AuthSync.Abandon(authID(k))
+	e.log.Warn("the last refresh of a Run may have been lost; it may be necessary to log in to codex again", "run", k.RunID, "err", err)
+	return nil
+}
+
+// offerStrayAuth has the Broker reconcile the copies a Run left in runDir, from
+// its record, when the Broker did not know the Run (the Worker restarted after
+// it ended): the most recent one reaches the host before the copies are removed.
+// A Run with no readable record has no copy that is known to be a refresh.
+func (e *Executor) offerStrayAuth(runDir string) error {
+	mat, err := host.ReadMaterialization(runDir)
+	if err != nil {
+		return nil
+	}
+	adapter, ok := e.harnesses.Get(mat.Harness)
+	if !ok {
+		return nil
+	}
+	if auth, ok := adapter.(harness.AuthSyncer); ok && len(mat.AuthCopies) > 0 {
+		return e.o.AuthSync.Offer(auth, e.o.Host, mat.AuthCopyPaths())
+	}
+	return nil
 }

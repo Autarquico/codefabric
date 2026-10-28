@@ -187,27 +187,100 @@ func TestTheKillPathSaysTheCaptureIsIncompleteWhenAStreamIsHeld(t *testing.T) {
 	}
 }
 
-// The last line of the events, with no newline, is kept redacted when the
-// stream is held to the end, and the exit says the capture is incomplete.
-func TestTheKillPathKeepsTheLastEventLineRedactedWhenTheStreamIsHeld(t *testing.T) {
-	set, err := redact.NewEscapedSet([]redact.Needle{{Ref: "k", Value: []byte("s3cr3t-value")}})
+// A secret split exactly at the cut: the prefix the redactors held is written
+// nowhere (log, pane, events.jsonl), not even as a prefix of MinSecretLen or
+// more, and a marker without content stands in its place.
+func TestTheKillPathNeverWritesWhatACutStreamHeld(t *testing.T) {
+	const secret = "s3cr3t-value-0123456789"
+	set, err := redact.NewEscapedSet([]redact.Needle{{Ref: "k", Value: []byte(secret)}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	sink := &recordingSink{}
-	w, log, copied, ends := held(t, sink, set)
-	if _, err := ends["events"].WriteString("{\"token\":\"s3cr3t-value\"}"); err != nil {
+	dir := t.TempDir()
+	panePath := filepath.Join(dir, "pane")
+	paneFile, err := os.Create(panePath) //nolint:gosec // temporary dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = paneFile.Close() })
+	w := &wrapper{
+		o:         Options{RunDir: dir, Stdout: paneFile, openEvents: func(string) (eventsSink, error) { return sink, nil }},
+		launch:    Launch{StructuredStdout: true, Mode: ModeHeadless},
+		clock:     clock.Real{},
+		events:    set,
+		drainWait: 100 * time.Millisecond,
+	}
+	logPath := filepath.Join(dir, OutputLog)
+	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // temporary dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	copied, ends, err := w.wire(exec.CommandContext(t.Context(), "true"), log, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, f := range ends {
+			_ = f.Close()
+		}
+	})
+	prefix := secret[:redact.MinSecretLen+4]
+	if _, err := ends[0].WriteString("ok line\n" + prefix); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ends[1].WriteString("{\"a\":1}\n{\"token\":\"" + prefix); err != nil {
 		t.Fatal(err)
 	}
 	sealed := w.sealed(log, copied, Exit{Cause: CauseStop, GroupKilled: true})
-	got := sink.written()
-	if strings.Contains(got, "s3cr3t-value") {
-		t.Fatalf("the last line was written unredacted: %q", got)
-	}
-	if !strings.Contains(got, "REDACTED") {
-		t.Fatalf("the last line was lost: %q", got)
-	}
 	if !strings.Contains(sealed.Error, "capture incomplete") {
-		t.Fatalf("a held stream went unreported: %q", sealed.Error)
+		t.Fatalf("a cut capture went unreported: %q", sealed.Error)
+	}
+	onDisk, err := os.ReadFile(logPath) //nolint:gosec // temporary dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane, err := os.ReadFile(panePath) //nolint:gosec // temporary dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]string{"log": string(onDisk), "pane": string(pane), "events": sink.written()} {
+		for n := redact.MinSecretLen; n <= len(secret); n++ {
+			if strings.Contains(got, secret[:n]) {
+				t.Errorf("%s holds a prefix of the secret of %d bytes: %q", name, n, got)
+				break
+			}
+		}
+	}
+	if !strings.Contains(string(onDisk), "[capture cut]") || !strings.Contains(string(pane), "[capture cut]") {
+		t.Errorf("the log or the pane lack the marker: %q / %q", onDisk, pane)
+	}
+	if !strings.Contains(sink.written(), cutLine) || !strings.Contains(sink.written(), "{\"a\":1}") {
+		t.Errorf("events.jsonl lacks the marker or the complete line: %q", sink.written())
 	}
 }
+
+// Both streams ended but events.jsonl is still being synced: the exit names
+// what is missing instead of blaming no stream.
+func TestTheKillPathNamesTheSyncOfTheEventsWhenBothStreamsEnded(t *testing.T) {
+	release := make(chan struct{})
+	sink := &slowSyncSink{release: release}
+	w, log, copied, ends := held(t, sink, nil)
+	for _, f := range ends {
+		_ = f.Close()
+	}
+	go func() { time.Sleep(150 * time.Millisecond); close(release) }()
+	sealed := w.sealed(log, copied, Exit{Cause: CauseStop, GroupKilled: true})
+	if !strings.Contains(sealed.Error, "events.jsonl was still being synced") {
+		t.Fatalf("the missing sync is not named: %q", sealed.Error)
+	}
+}
+
+// slowSyncSink is an events.jsonl whose Sync waits for release.
+type slowSyncSink struct {
+	eventsDouble
+	release chan struct{}
+}
+
+func (s *slowSyncSink) Sync() error { <-s.release; return nil }

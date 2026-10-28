@@ -17,6 +17,8 @@ const (
 	// is; both are valid JSON, so a reader of the stream never meets a broken line.
 	redactedLine  = `{"cf_redacted_line":true}`
 	truncatedLine = `{"cf_truncated_line":true}`
+	// cutLine stands for the unfinished line of a stream that was cut.
+	cutLine = `{"cf_capture_cut":true}`
 )
 
 // copyEvents copies the structured stream line by line, redacting each line
@@ -24,7 +26,9 @@ const (
 // (a match that swallowed a quote) becomes redactedLine; one beyond
 // maxEventLine becomes truncatedLine. Lines are the unit because the
 // redaction must not break the JSON of one: the final line, with no newline,
-// is kept without one.
+// is kept without one. If the read fails (the stream was cut), the line in
+// progress is dropped, for it may end in the start of a secret, and cutLine is
+// written in its place.
 func copyEvents(dst io.Writer, src io.Reader, set *redact.Set) error {
 	r := bufio.NewReaderSize(src, 64<<10)
 	var line []byte
@@ -39,6 +43,10 @@ func copyEvents(dst io.Writer, src io.Reader, set *redact.Set) error {
 		}
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
+		}
+		if err != nil && err != io.EOF {
+			_, _ = io.WriteString(dst, cutLine+"\n")
+			return err
 		}
 		if len(chunk) > 0 || len(line) > 0 || tooLong {
 			if werr := writeEventLine(dst, line, tooLong, set); werr != nil {

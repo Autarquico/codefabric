@@ -320,8 +320,13 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 			return err
 		}
 		red := redact.NewWriter(dst, set)
-		_, err := io.Copy(red, src)
-		return errors.Join(err, red.Close()) // what it held back, before the log is synced
+		if _, err := io.Copy(red, src); err != nil {
+			// A cut: what the redactor holds may be the start of a secret
+			// whose rest never came. It is dropped, never written.
+			_, _ = io.WriteString(dst, captureCutMarker)
+			return err
+		}
+		return red.Close() // the stream ended: what it held back, before the log is synced
 	})
 	if err != nil {
 		return nil, nil, err
@@ -397,10 +402,14 @@ func (p copyPipe) ended() bool {
 
 // cut closes the read end: the copy gets an error instead of waiting for a
 // writer that does not let go, and flushes what it held back (the redactor's
-// tail, the last line without a newline), redacted, before it ends.
+// tail, the last line without a newline) is dropped, and a marker without
+// content is written in its place, before it ends.
 func (p copyPipe) cut() { _ = p.r.Close() }
 
 func (p copyPipe) err() error { return *p.res }
+
+// captureCutMarker stands in the log for what a cut stream still held.
+const captureCutMarker = "[capture cut]\n"
 
 func startCopy(name string, dst io.Writer, copyAll func(dst io.Writer, src io.Reader) error) (copyPipe, error) {
 	pr, pw, err := os.Pipe()
@@ -590,10 +599,12 @@ func (w *wrapper) endByKillingGroup(log *os.File, copied <-chan struct{}, exit E
 // sealed is exit with the time and what failed in the capture. Survivors may
 // still hold the pipes, so the drain is waited for only so long (see drained):
 // a capture that did not end by itself is cut, and exit.json says so and which
-// stream it was. A capture is never presented as complete when it is not.
+// stream it was. The log is synced after the drain and the cut, so that the
+// marker of a cut is on disk too. A capture is never presented as complete when it is not.
 func (w *wrapper) sealed(log *os.File, copied <-chan struct{}, exit Exit) Exit {
 	exit.ExitedAt = w.clock.Now()
-	err := errors.Join(log.Sync(), w.drained(copied))
+	drained := w.drained(copied)
+	err := errors.Join(drained, log.Sync())
 	if err != nil {
 		exit.Error = strings.TrimSpace(exit.Error + " capturing the output: " + err.Error())
 	}
@@ -602,8 +613,8 @@ func (w *wrapper) sealed(log *os.File, copied <-chan struct{}, exit Exit) Exit {
 
 // drained is what failed in the capture, for an exit written while the group
 // may still hold the pipes: it waits drainWait for the copies to end by
-// themselves. The ones that did not are cut, which makes each flush, redacted,
-// what it held, and the error says the capture is incomplete and where. If a
+// themselves. The ones that did not are cut, which makes each drop what
+// it held (it could be the start of a secret) and write a marker, and the error says the capture is incomplete and where. If a
 // copy does not end even cut (its destination is stuck), the error says which
 // streams ended and how, and that events.jsonl may not be synced: the exit is
 // written all the same, because the wrapper has nothing else to wait for and
@@ -625,7 +636,10 @@ func (w *wrapper) drained(copied <-chan struct{}) error {
 			p.cut()
 		}
 	}
-	incomplete := fmt.Errorf("capture incomplete: the group still held open the %s", strings.Join(held, " and the "))
+	incomplete := errors.New("capture incomplete: events.jsonl was still being synced and closed")
+	if len(held) > 0 {
+		incomplete = fmt.Errorf("capture incomplete: the group still held open the %s", strings.Join(held, " and the "))
+	}
 	if waitFor(copied, wait) {
 		return errors.Join(incomplete, w.copyErr)
 	}
