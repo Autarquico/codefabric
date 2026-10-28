@@ -96,6 +96,11 @@ func newWorkerRun(t *testing.T, host config.Paths) *workerRun {
 	created := ok[v1.CreateTaskResponse](t, "do", "x", "--name", "auth-race")
 	r := &workerRun{host: host, worker: w, run: *created.Run}
 	soon(t, "the Run to be assigned", func() bool {
+		// A short offline TTL would otherwise take the Worker offline before
+		// the scheduler sees it.
+		if _, err := w.Heartbeat(t.Context(), onlineHeartbeat()); err != nil {
+			t.Fatal(err)
+		}
 		page, err := w.Assignments(t.Context(), 0, time.Second, 0)
 		if err != nil || len(page.Commands) == 0 || page.Commands[0].Assign == nil {
 			return false
@@ -107,6 +112,27 @@ func newWorkerRun(t *testing.T, host config.Paths) *workerRun {
 		t.Fatal(err)
 	}
 	return r
+}
+
+// keepOnline heartbeats for the Worker until the returned func makes it go quiet.
+func (r *workerRun) keepOnline(t *testing.T) (quiet func()) {
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for tick := time.NewTicker(200 * time.Millisecond); ; {
+			_, _ = r.worker.Heartbeat(ctx, onlineHeartbeat())
+			select {
+			case <-ctx.Done():
+				tick.Stop()
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	quiet = func() { cancel(); <-done }
+	t.Cleanup(quiet)
+	return quiet
 }
 
 func (r *workerRun) upload(t *testing.T, offset uint64, text string) {
@@ -227,6 +253,7 @@ func TestScenario_ObserveAttachEvents_Ps(t *testing.T) {
 	}
 	serve(t, host, daemon.Options{})
 	r := newWorkerRun(t, host)
+	quiet := r.keepOnline(t)
 
 	use(t, host)
 	ps := ok[v1.PsResponse](t, "ps")
@@ -250,6 +277,7 @@ func TestScenario_ObserveAttachEvents_Ps(t *testing.T) {
 	}
 
 	// The Worker goes quiet: it is offline within a few seconds, and the Run says so.
+	quiet()
 	soon(t, "the Worker to be offline", func() bool {
 		ps := ok[v1.PsResponse](t, "ps")
 		return len(ps.Runs) == 1 && ps.Runs[0].WorkerReachable != nil && !*ps.Runs[0].WorkerReachable

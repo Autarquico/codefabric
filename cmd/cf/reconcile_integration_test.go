@@ -340,12 +340,18 @@ func relayTip(t *testing.T, host config.Paths, project, branch string) string {
 	return gittest.Run(t, filepath.Join(host.RelayDir(), project+".git"), "rev-parse", "refs/heads/"+branch)
 }
 
+// harnessPID waits for the wrapper to record its harness: a Run reaches running
+// before started.json is written.
 func harnessPID(t *testing.T, box config.Paths, run string) int {
 	t.Helper()
 	var w execwrap.Started
-	if found, err := execwrap.Read(box.WorkerRunDir(run, 1), execwrap.StartedFile, &w); err != nil || !found {
-		t.Fatalf("started.json: %v %v", found, err)
-	}
+	eventually(t, "started.json", func() bool {
+		found, err := execwrap.Read(box.WorkerRunDir(run, 1), execwrap.StartedFile, &w)
+		if err != nil {
+			t.Fatalf("started.json: %v", err)
+		}
+		return found
+	})
 	return w.PID
 }
 
