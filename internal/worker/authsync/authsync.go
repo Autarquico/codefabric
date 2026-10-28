@@ -47,7 +47,7 @@ type Broker struct {
 
 	mu      sync.Mutex
 	runs    map[string]tracked
-	watches map[string]*watch // by path of the copy whose replaced inode is watched
+	watches map[string]*watch // by path of the file (host, resolved, or copy) whose replaced inode is watched
 
 	// hook, when set by a test, is called at the named stage of replace of path.
 	hook func(stage, path string)
@@ -101,6 +101,16 @@ func (b *Broker) forget(id string) {
 		b.unwatch(c)
 	}
 	delete(b.runs, id)
+	if len(b.runs) == 0 {
+		b.unwatchAll()
+	}
+}
+
+// unwatchAll closes every descriptor held, whichever file it was of. Needs b.mu.
+func (b *Broker) unwatchAll() {
+	for p := range b.watches {
+		b.unwatch(p)
+	}
 }
 
 func (b *Broker) unwatch(path string) {
@@ -112,6 +122,11 @@ func (b *Broker) unwatch(path string) {
 
 // Run polls every interval until ctx ends.
 func (b *Broker) Run(ctx context.Context) error {
+	defer func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.unwatchAll()
+	}()
 	t := b.clock.NewTicker(b.interval)
 	defer t.Stop()
 	for {
@@ -172,9 +187,10 @@ func (b *Broker) sync(auth harness.AuthSyncer, files []string) {
 			versions = append(versions, v)
 		}
 	}
-	// What Codex wrote into an inode that was replaced under it is one more
-	// candidate, a source only: its path now holds what the Broker put there.
-	for _, f := range files[1:] {
+	// What Codex wrote into an inode that was replaced under it, in the host or
+	// in a copy, is one more candidate, a source only: its path now holds what
+	// the Broker put there.
+	for _, f := range append([]string{hostVersion.path}, files[1:]...) {
 		if v, ok := b.orphan(auth, f); ok && v.identity == hostVersion.identity {
 			versions = append(versions, v)
 		}

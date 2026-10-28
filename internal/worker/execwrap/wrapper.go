@@ -48,6 +48,21 @@ type Options struct {
 	// wire the terminal, which it does once the capture filter acknowledged.
 	// Zero is GateTimeout.
 	GateTimeout time.Duration
+
+	// openEvents opens events.jsonl; tests inject a sink that fails. Nil opens the file.
+	openEvents func(path string) (eventsSink, error)
+}
+
+// eventsSink is where events.jsonl goes. wire's drain syncs and closes it,
+// exactly once, and nothing else touches it.
+type eventsSink interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+
+func openEventsFile(path string) (eventsSink, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // inside the run dir
 }
 
 // ResolveSecret is the value of the secret ref names.
@@ -93,10 +108,9 @@ type wrapper struct {
 	// events is the matcher of events.jsonl when the launch has secrets and
 	// asked for StructuredStdout.
 	events *redact.Set
-	// eventsFile is events.jsonl while it is open, for the kill path to sync.
-	eventsFile *os.File
-	// copyErr is what failed in copying the output, set before wire's channel
-	// closes: a capture that failed is not a complete one.
+	// copyErr is what failed in copying the output and in syncing and closing
+	// events.jsonl, set before wire's channel closes: a capture that failed is
+	// not a complete one. Read it only once that channel is closed.
 	copyErr error
 
 	deadline <-chan time.Time // its end, nil when not armed
@@ -184,7 +198,7 @@ func (w *wrapper) run() error {
 	if !w.supervise(waited) {
 		// The harness ignored the stop for the whole grace: it is killed with the
 		// group, and says so.
-		return w.endByKillingGroup(log, Exit{Cause: CauseStop, Signal: "SIGKILL", GroupKilled: true, RemnantsKilled: w.count()})
+		return w.endByKillingGroup(log, copied, Exit{Cause: CauseStop, Signal: "SIGKILL", GroupKilled: true, RemnantsKilled: w.count()})
 	}
 	exit.ExitCode, exit.Signal = outcome(cmd.ProcessState)
 	if !w.stopping && w.diedOfAStop(cmd.ProcessState) {
@@ -201,9 +215,15 @@ func (w *wrapper) run() error {
 	exit.RemnantsKilled = found
 	if survivors {
 		exit.GroupKilled = true
-		return w.endByKillingGroup(log, exit)
+		return w.endByKillingGroup(log, copied, exit)
 	}
-	<-copied // every writer is gone: the pipe is at its end
+	return w.finish(log, copied, exit)
+}
+
+// finish writes the exit of a group that is gone, every writer with it and the
+// pipe at its end. A capture that failed is the exit's failure.
+func (w *wrapper) finish(log *os.File, copied <-chan struct{}, exit Exit) error {
+	<-copied
 	if err := errors.Join(w.copyErr, log.Sync()); err != nil {
 		return w.fail("capturing the output: %v", err)
 	}
@@ -299,13 +319,18 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, logPipe.w, logPipe.w
 	pipes := []copyPipe{logPipe}
+	var events eventsSink // set when stdout goes apart
 	if w.structured() {
-		events, err := os.OpenFile(filepath.Join(w.o.RunDir, EventsFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		open := w.o.openEvents
+		if open == nil {
+			open = openEventsFile
+		}
+		var err error
+		events, err = open(filepath.Join(w.o.RunDir, EventsFile))
 		if err != nil {
 			_ = logPipe.abort()
 			return nil, nil, err
 		}
-		w.eventsFile = events
 		var eventsPipe copyPipe
 		eventsPipe, err = startCopy(events, func(dst io.Writer, src io.Reader) error {
 			if w.events == nil {
@@ -329,8 +354,8 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 			<-p.done
 			errs = append(errs, p.err())
 		}
-		if w.eventsFile != nil {
-			errs = append(errs, w.eventsFile.Sync(), w.eventsFile.Close())
+		if events != nil {
+			errs = append(errs, events.Sync(), events.Close())
 		}
 		w.copyErr = errors.Join(errs...)
 	}()
@@ -528,21 +553,29 @@ func (w *wrapper) count() int {
 // does, kills the whole group, itself included. The exit is on disk before the
 // kill, so the daemon finds it and finds the wrapper gone. The group is killed
 // even when the exit cannot be written: the daemon then settles a lost wrapper.
-func (w *wrapper) endByKillingGroup(log *os.File, exit Exit) error {
-	exit.ExitedAt = w.clock.Now()
-	if err := log.Sync(); err != nil {
-		exit.Error = "syncing the output log: " + err.Error()
-	}
-	if w.eventsFile != nil {
-		if err := w.eventsFile.Sync(); err != nil {
-			exit.Error = strings.TrimSpace(exit.Error + " syncing the events: " + err.Error())
-		}
-	}
-	if err := Write(w.o.RunDir, ExitFile, exit); err != nil {
+func (w *wrapper) endByKillingGroup(log *os.File, copied <-chan struct{}, exit Exit) error {
+	if err := Write(w.o.RunDir, ExitFile, w.sealed(log, copied, exit)); err != nil {
 		fmt.Fprintf(os.Stderr, "cf worker exec: writing the exit: %v; killing the group all the same\n", err)
 	}
 	w.killGroup()
 	return nil
+}
+
+// sealed is exit with the time and what failed in the capture. Survivors may
+// still hold the pipes, so the drain is not waited for: events.jsonl belongs to
+// it, and only if it has finished is its sync and close result known.
+func (w *wrapper) sealed(log *os.File, copied <-chan struct{}, exit Exit) Exit {
+	exit.ExitedAt = w.clock.Now()
+	err := log.Sync()
+	select {
+	case <-copied:
+		err = errors.Join(w.copyErr, err)
+	default:
+	}
+	if err != nil {
+		exit.Error = strings.TrimSpace(exit.Error + " capturing the output: " + err.Error())
+	}
+	return exit
 }
 
 // killGroup is SIGKILL to the group this process leads and keeps reserved by

@@ -149,3 +149,105 @@ func TestWatches_AreBoundedAndClosed(t *testing.T) {
 		t.Errorf("watches after untrack = %d, want 0", n)
 	}
 }
+
+// hostOlderRig is the rig where the most recent version is a copy, so that the
+// host is replaced too.
+func hostOlderRig(t *testing.T) *watchRig {
+	t.Helper()
+	r := newWatchRig(t)
+	for p, c := range map[string][]byte{r.global: authAt(time.Minute, "g"), r.copyA: authAt(5*time.Minute, "a")} {
+		if err := os.WriteFile(p, c, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return r
+}
+
+func closed(f *os.File) bool {
+	_, err := f.Stat()
+	return err != nil
+}
+
+func TestWatches_OfTheHostExpireAndCloseLikeThoseOfCopies(t *testing.T) {
+	r := hostOlderRig(t)
+	global, err := filepath.EvalSymlinks(r.global)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.b.Poll()
+	host := r.b.watches[global]
+	if host == nil || r.b.watches[r.copyB] == nil || len(r.b.watches) != 2 {
+		t.Fatalf("watches after replacing = %d, want the host and copy b", len(r.b.watches))
+	}
+	for range watchPolls + 1 {
+		r.b.Poll()
+	}
+	if n := len(r.b.watches); n != 0 {
+		t.Errorf("watches after %d quiet polls = %d, want 0", watchPolls+1, n)
+	}
+	if !closed(host.file) {
+		t.Error("the descriptor of the host was left open after its watch expired")
+	}
+}
+
+func TestReplace_KeepsARefreshWrittenIntoTheReplacedInodeOfTheHost(t *testing.T) {
+	r := hostOlderRig(t)
+	global, err := filepath.EvalSymlinks(r.global)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var codex *os.File
+	r.b.hook = func(stage, path string) {
+		if stage != "publish" || path != global {
+			return
+		}
+		f, err := os.OpenFile(global, os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // temporary dir
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		codex = f
+	}
+	r.b.Poll()
+	if codex == nil {
+		t.Fatal("the host was never replaced")
+	}
+	newest := authAt(10*time.Minute, "codex")
+	if _, err := codex.Write(newest); err != nil {
+		t.Fatal(err)
+	}
+	if err := codex.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r.b.Poll()
+	for name, p := range map[string]string{"global": r.global, "copy a": r.copyA, "copy b": r.copyB} {
+		if got := contentOf(t, p); got != string(newest) {
+			t.Errorf("%s = %q, want the refresh Codex wrote into the replaced inode of the host", name, got)
+		}
+	}
+}
+
+func TestUntrack_OfTheLastRunClosesEveryDescriptor(t *testing.T) {
+	r := hostOlderRig(t)
+	r.b.Poll()
+	var files []*os.File
+	for _, w := range r.b.watches {
+		files = append(files, w.file)
+	}
+	if len(files) != 2 {
+		t.Fatalf("watches = %d, want 2", len(files))
+	}
+	r.b.Untrack("a")
+	if len(r.b.watches) == 0 {
+		t.Fatal("the host is still in use by run b; its watch should stay")
+	}
+	r.b.Untrack("b")
+	if n := len(r.b.watches); n != 0 {
+		t.Errorf("watches after the last untrack = %d, want 0", n)
+	}
+	for _, f := range files {
+		if !closed(f) {
+			t.Errorf("descriptor %s left open", f.Name())
+		}
+	}
+}

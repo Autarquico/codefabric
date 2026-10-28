@@ -232,6 +232,9 @@ func (r *runner) record(rec Recorder) error {
 		if out.ConfigDigest, err = treedigest.Dir(cfg, treedigest.Options{ApprovedLinks: []string{AuthFile}}); err != nil {
 			return fmt.Errorf("record: %w", err)
 		}
+		if info, err := os.Lstat(filepath.Join(cfg, AuthFile)); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			out.AuthLinked = true
+		}
 	}
 	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

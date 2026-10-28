@@ -52,6 +52,9 @@ func TestRemoveMaterialization_RemovesTheCopyAndFollowsNoLink(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Dir(copied), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(outside, copied); err != nil {
 		t.Fatal(err)
 	}
@@ -71,9 +74,7 @@ func TestRemoveMaterialization_RemovesTheCopyAndFollowsNoLink(t *testing.T) {
 	if err := os.Symlink(elsewhere, filepath.Join(runDir, "config")); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeMaterialization(runDir); err == nil {
-		t.Error("a link out of the run directory was followed without complaint")
-	}
+	remove()
 	if !exists(filepath.Join(elsewhere, "auth.json")) {
 		t.Error("a file outside the run directory was removed")
 	}
@@ -186,18 +187,61 @@ func TestRemoveMaterialization_UnreadableRecordRemovesConfigWhole(t *testing.T) 
 	}
 }
 
-func TestRemoveMaterialization_WithARecordKeepsTheRestOfConfig(t *testing.T) {
+func TestRemoveMaterialization_WithARecordRemovesConfigWhole(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "r1-e1")
 	copied := materialised(t, runDir)
-	other := filepath.Join(runDir, "config", "settings.toml")
+	tmp := filepath.Join(runDir, "config", "auth.json.tmp-x")
+	other := filepath.Join(runDir, "config", "sessions", "s.jsonl")
+	if err := os.WriteFile(tmp, []byte("refresh"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(other), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(other, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeMaterialization(runDir); err != nil {
 		t.Fatal(err)
 	}
-	if exists(copied) || !exists(other) {
-		t.Errorf("copy kept=%v, rest of config kept=%v", exists(copied), exists(other))
+	for _, p := range []string{copied, tmp, other, filepath.Join(runDir, "config")} {
+		if exists(p) {
+			t.Errorf("%s survived", p)
+		}
+	}
+}
+
+// With a readable record, forget and the janitor leave no config either; a
+// live Run keeps its own.
+func TestForgetAndJanitor_WithARecordRemoveConfigWhole(t *testing.T) {
+	f := newFixture(t)
+	k := state.Key{RunID: "r1", LeaseEpoch: 1}
+	orphan := state.Key{RunID: "gone", LeaseEpoch: 1}
+	live := f.assign(specJSON("fix it", "command", "headless"))
+	var leftovers, liveFiles []string
+	for _, rk := range []state.Key{k, orphan, live} {
+		copied := materialised(t, f.runDir(rk))
+		tmp := filepath.Join(filepath.Dir(copied), "auth.json.tmp-x")
+		if err := os.WriteFile(tmp, []byte("refresh"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if rk == live {
+			liveFiles = append(liveFiles, copied, tmp)
+		} else {
+			leftovers = append(leftovers, filepath.Dir(copied))
+		}
+	}
+	f.e.forget(k)
+	f.e.sweep(t.Context())
+	for _, d := range leftovers {
+		if exists(d) {
+			t.Errorf("%s survived", d)
+		}
+	}
+	for _, p := range liveFiles {
+		if !exists(p) {
+			t.Errorf("a live Run lost %s", p)
+		}
 	}
 }
 

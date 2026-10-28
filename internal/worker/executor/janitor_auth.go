@@ -17,20 +17,17 @@ import (
 // the Broker no longer tracks them, forget removes them, and the janitor
 // removes those a crash or a late prepare left in a Run that is over.
 //
-// A materialisation writes the copies before it records them (config.json is
-// written last), so a crash can leave a copy nobody has a record of, in
-// config.staging or in a published config. The materialisation of a Run that
-// is over is not needed any more (the harness has ended, a publication works
-// on the worktree, and the files secretjit rendered into config are removed
-// by Release whether or not they are still there), so what is not recorded is
-// removed whole.
+// The materialisation of a Run that is over is not needed any more (the
+// harness has ended, a publication works on the worktree, and the files
+// secretjit rendered into config are removed by Release whether or not they
+// are still there). Whatever the harness or the Broker left in it (a copy no
+// record names, a temporary of the Broker, files codex wrote) may hold the
+// token, so it goes whole, with or without a record.
 
-// removeMaterialization removes what the materialisation of the Run in runDir
-// holds of the auth of the host. config.staging goes whole. With a readable
-// record, the auth copies it lists go; without one the copies cannot be named,
-// so config goes whole. Names are resolved inside runDir without following a
-// link out of it, and a copy that is itself a link is unlinked, not followed.
-// What is not there is nothing to remove.
+// removeMaterialization removes config and config.staging of the Run in runDir
+// whole. Names are resolved inside runDir without following a link out of it,
+// and one that is itself a link is unlinked, not followed. What is not there is
+// nothing to remove.
 func removeMaterialization(runDir string) error {
 	root, err := os.OpenRoot(runDir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -40,22 +37,10 @@ func removeMaterialization(runDir string) error {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	errs := []error{root.RemoveAll(filepath.Base(host.StagingDir(runDir)))}
-	mat, err := host.ReadMaterialization(runDir)
-	if err != nil {
-		errs = append(errs, root.RemoveAll(filepath.Base(host.ConfigDir(runDir))))
-		return errors.Join(errs...)
-	}
-	for _, c := range mat.AuthCopies {
-		rel, err := filepath.Rel(runDir, filepath.Join(mat.ConfigDir, filepath.FromSlash(c)))
-		if err == nil {
-			err = root.Remove(rel)
-		}
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	return errors.Join(
+		root.RemoveAll(filepath.Base(host.StagingDir(runDir))),
+		root.RemoveAll(filepath.Base(host.ConfigDir(runDir))),
+	)
 }
 
 // sweepAuthCopies removes the auth of the host left in the run directories whose

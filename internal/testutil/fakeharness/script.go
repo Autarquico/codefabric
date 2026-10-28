@@ -114,6 +114,8 @@ type Record struct {
 	// ConfigDigest is the treedigest/v1 of FAKEHARNESS_CONFIG_DIR, with
 	// credentials.json left out as the auth link; empty when it is unset.
 	ConfigDigest string `json:"config_digest,omitempty"`
+	// AuthLinked says that the auth in FAKEHARNESS_CONFIG_DIR was a link.
+	AuthLinked bool `json:"auth_linked,omitempty"`
 }
 
 // ReadRecord reads the Record a record step wrote at path.

@@ -97,6 +97,9 @@ func TestARunOfCodexHasItsAuthCopyBrokeredWhileItLives(t *testing.T) {
 	if _, err := os.Lstat(copied); !os.IsNotExist(err) {
 		t.Errorf("the auth copy of a Run that is over is still there (%v)", err)
 	}
+	if err := os.MkdirAll(filepath.Dir(copied), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	writeAuth(t, copied, codexAuth(2*time.Hour))
 	broker.Poll()
 	if got := readAuth(t, global); got != codexAuth(time.Hour) {
