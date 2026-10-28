@@ -6,14 +6,14 @@ status: active
 priority: P0
 size: M
 issue: 21
-prs: []
+prs: [45]
 related_issues: [21]
 sub_issues: []
 depends_on: [harness-adapter-framework]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-16
+updated: 2026-10-28
 ---
 
 # Adapter de Codex CLI
