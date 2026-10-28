@@ -1,6 +1,7 @@
 package authsync
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -44,8 +45,12 @@ type Broker struct {
 	log      *slog.Logger
 	interval time.Duration
 
-	mu   sync.Mutex
-	runs map[string]tracked
+	mu      sync.Mutex
+	runs    map[string]tracked
+	watches map[string]*watch // by path of the copy whose replaced inode is watched
+
+	// hook, when set by a test, is called at the named stage of replace of path.
+	hook func(stage, path string)
 }
 
 type tracked struct {
@@ -56,7 +61,7 @@ type tracked struct {
 
 // New is a Broker with o.
 func New(o Options) *Broker {
-	b := &Broker{clock: o.Clock, log: o.Log, interval: o.Interval, runs: map[string]tracked{}}
+	b := &Broker{clock: o.Clock, log: o.Log, interval: o.Interval, runs: map[string]tracked{}, watches: map[string]*watch{}}
 	if b.clock == nil {
 		b.clock = clock.Real{}
 	}
@@ -78,6 +83,7 @@ func (b *Broker) Track(id string, auth harness.AuthSyncer, host harness.Host, co
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.forget(id)
 	b.runs[id] = tracked{auth: auth, global: auth.GlobalAuth(host), copies: copies}
 }
 
@@ -86,7 +92,22 @@ func (b *Broker) Track(id string, auth harness.AuthSyncer, host harness.Host, co
 func (b *Broker) Untrack(id string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.forget(id)
+}
+
+// forget drops the Run id and closes the descriptors it holds. Needs b.mu.
+func (b *Broker) forget(id string) {
+	for _, c := range b.runs[id].copies {
+		b.unwatch(c)
+	}
 	delete(b.runs, id)
+}
+
+func (b *Broker) unwatch(path string) {
+	if w := b.watches[path]; w != nil {
+		_ = w.file.Close()
+		delete(b.watches, path)
+	}
 }
 
 // Run polls every interval until ctx ends.
@@ -151,6 +172,13 @@ func (b *Broker) sync(auth harness.AuthSyncer, files []string) {
 			versions = append(versions, v)
 		}
 	}
+	// What Codex wrote into an inode that was replaced under it is one more
+	// candidate, a source only: its path now holds what the Broker put there.
+	for _, f := range files[1:] {
+		if v, ok := b.orphan(auth, f); ok && v.identity == hostVersion.identity {
+			versions = append(versions, v)
+		}
+	}
 	best := -1
 	for i, v := range versions {
 		if !v.stamp.IsZero() && (best < 0 || v.stamp.After(versions[best].stamp)) {
@@ -162,7 +190,9 @@ func (b *Broker) sync(auth harness.AuthSyncer, files []string) {
 	}
 	for i, v := range versions {
 		if i != best && v.stamp.Before(versions[best].stamp) {
-			b.replace(auth, v.path, versions[best])
+			if v.path != "" {
+				b.replace(auth, v.path, versions[best])
+			}
 		}
 	}
 }
@@ -184,6 +214,12 @@ func (b *Broker) read(auth harness.AuthSyncer, path string, host bool) (version,
 	if !ok {
 		return version{}, false
 	}
+	return b.validate(auth, path, content)
+}
+
+// validate is the version of content, when the adapter accepts it and its
+// stamp is not in the future.
+func (b *Broker) validate(auth harness.AuthSyncer, path string, content []byte) (version, bool) {
 	stamp, identity, err := auth.AuthStamp(content)
 	if err != nil {
 		b.log.Debug("an auth file is not valid; it is not propagated nor replaced", "file", path)
@@ -200,32 +236,116 @@ func (b *Broker) read(auth harness.AuthSyncer, path string, host bool) (version,
 // a link and what it names is a regular file of a reasonable size: the type is
 // looked at in the descriptor that is read, not in the name.
 func readRegular(path string) ([]byte, bool) {
+	f, _, content, ok := openRegular(path)
+	if ok {
+		_ = f.Close()
+	}
+	return content, ok
+}
+
+// openRegular is readRegular that keeps the descriptor open (and its info at
+// the time of reading) when it succeeds.
+func openRegular(path string) (*os.File, os.FileInfo, []byte, bool) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, false
+		return nil, nil, nil, false
 	}
 	f := os.NewFile(uintptr(fd), path)
-	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxAuthSize {
-		return nil, false
+		_ = f.Close()
+		return nil, nil, nil, false
 	}
 	content, err := io.ReadAll(io.LimitReader(f, maxAuthSize+1))
 	if err != nil || len(content) > maxAuthSize {
-		return nil, false
+		_ = f.Close()
+		return nil, nil, nil, false
 	}
-	return content, true
+	return f, info, content, true
+}
+
+// watchPolls is how many polls the Broker keeps looking at an inode it has
+// replaced: Codex truncates and then writes, without a lock, so a write that
+// began before the rename may land after it, in the inode no path names.
+const watchPolls = 3
+
+// watch is a replaced inode, still open, and the content it had when it was
+// read. It holds one descriptor, until the polls run out or the Run is forgotten.
+type watch struct {
+	file  *os.File
+	last  []byte
+	polls int
+}
+
+// orphan is the version Codex left in the replaced inode of path, if it
+// changed since the last look. Needs b.mu.
+func (b *Broker) orphan(auth harness.AuthSyncer, path string) (version, bool) {
+	w := b.watches[path]
+	if w == nil {
+		return version{}, false
+	}
+	if w.polls--; w.polls < 0 {
+		b.unwatch(path)
+		return version{}, false
+	}
+	content, err := io.ReadAll(io.NewSectionReader(w.file, 0, maxAuthSize+1))
+	if err != nil || len(content) > maxAuthSize || bytes.Equal(content, w.last) {
+		return version{}, false
+	}
+	w.last = content
+	v, ok := b.validate(auth, path, content)
+	v.path = ""
+	return v, ok
 }
 
 // replace writes from over the file at path, if the file is still valid, of
 // the same account and older than from: the harness may have refreshed it
-// since it was read.
+// since it was read. A file whose identity changed between reading it and
+// publishing is left to the next poll; one written after that check is caught
+// by watching the inode that is replaced.
 func (b *Broker) replace(auth harness.AuthSyncer, path string, from version) {
-	cur, ok := b.read(auth, path, false)
+	f, info, content, ok := openRegular(path)
+	if !ok {
+		return
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = f.Close()
+		}
+	}()
+	cur, ok := b.validate(auth, path, content)
 	if !ok || cur.identity != from.identity || !cur.stamp.Before(from.stamp) {
 		return
 	}
+	b.call("read", path)
+	if !unchanged(path, f, info) {
+		return
+	}
+	b.call("publish", path)
 	if err := atomicfile.Write(path, from.content, 0o600); err != nil {
 		b.log.Warn("propagating the auth did not finish; it is tried again", "file", path, "err", err)
+		return
 	}
+	b.unwatch(path)
+	b.watches[path] = &watch{file: f, last: content, polls: watchPolls}
+	keep = true
+}
+
+func (b *Broker) call(stage, path string) {
+	if b.hook != nil {
+		b.hook(stage, path)
+	}
+}
+
+// unchanged reports whether path still names the inode of f, with the size and
+// modification time it had when it was read.
+func unchanged(path string, f *os.File, read os.FileInfo) bool {
+	onDisk, err := os.Lstat(path)
+	if err != nil || !os.SameFile(onDisk, read) {
+		return false
+	}
+	now, err := f.Stat()
+	return err == nil && now.Size() == read.Size() && now.ModTime().Equal(read.ModTime()) &&
+		onDisk.Size() == read.Size() && onDisk.ModTime().Equal(read.ModTime())
 }

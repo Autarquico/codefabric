@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -94,6 +95,9 @@ type wrapper struct {
 	events *redact.Set
 	// eventsFile is events.jsonl while it is open, for the kill path to sync.
 	eventsFile *os.File
+	// copyErr is what failed in copying the output, set before wire's channel
+	// closes: a capture that failed is not a complete one.
+	copyErr error
 
 	deadline <-chan time.Time // its end, nil when not armed
 	timer    clock.Timer
@@ -200,8 +204,8 @@ func (w *wrapper) run() error {
 		return w.endByKillingGroup(log, exit)
 	}
 	<-copied // every writer is gone: the pipe is at its end
-	if err := log.Sync(); err != nil {
-		return w.fail("syncing the output log: %v", err)
+	if err := errors.Join(w.copyErr, log.Sync()); err != nil {
+		return w.fail("capturing the output: %v", err)
 	}
 	exit.ExitedAt = w.clock.Now()
 	return Write(w.o.RunDir, ExitFile, exit)
@@ -320,13 +324,15 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 	}
 	go func() {
 		defer close(done)
+		var errs []error
 		for _, p := range pipes {
 			<-p.done
+			errs = append(errs, p.err())
 		}
 		if w.eventsFile != nil {
-			_ = w.eventsFile.Sync()
-			_ = w.eventsFile.Close()
+			errs = append(errs, w.eventsFile.Sync(), w.eventsFile.Close())
 		}
+		w.copyErr = errors.Join(errs...)
 	}()
 	for _, p := range pipes {
 		parentEnds = append(parentEnds, p.w)
@@ -340,17 +346,20 @@ type copyPipe struct {
 	w    *os.File
 	done chan struct{}
 	r    *os.File
+	res  *error // the result of the copy, valid once done is closed
 }
+
+func (p copyPipe) err() error { return *p.res }
 
 func startCopy(dst io.Writer, copyAll func(dst io.Writer, src io.Reader) error) (copyPipe, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return copyPipe{}, err
 	}
-	p := copyPipe{w: pw, r: pr, done: make(chan struct{})}
+	p := copyPipe{w: pw, r: pr, done: make(chan struct{}), res: new(error)}
 	go func() {
 		defer close(p.done)
-		_ = copyAll(dst, pr)
+		*p.res = copyAll(dst, pr)
 		_ = pr.Close()
 	}()
 	return p, nil
@@ -521,9 +530,13 @@ func (w *wrapper) count() int {
 // even when the exit cannot be written: the daemon then settles a lost wrapper.
 func (w *wrapper) endByKillingGroup(log *os.File, exit Exit) error {
 	exit.ExitedAt = w.clock.Now()
-	_ = log.Sync()
+	if err := log.Sync(); err != nil {
+		exit.Error = "syncing the output log: " + err.Error()
+	}
 	if w.eventsFile != nil {
-		_ = w.eventsFile.Sync()
+		if err := w.eventsFile.Sync(); err != nil {
+			exit.Error = strings.TrimSpace(exit.Error + " syncing the events: " + err.Error())
+		}
 	}
 	if err := Write(w.o.RunDir, ExitFile, exit); err != nil {
 		fmt.Fprintf(os.Stderr, "cf worker exec: writing the exit: %v; killing the group all the same\n", err)

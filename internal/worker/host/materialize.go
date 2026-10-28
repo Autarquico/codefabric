@@ -36,6 +36,11 @@ const (
 // runDir: RunSpec.ConfigDir once it is materialised.
 func ConfigDir(runDir string) string { return filepath.Join(runDir, configName) }
 
+// StagingDir is where the configuration of the Run whose directory is runDir is
+// built, before it is published as ConfigDir. ApplyConfig writes the auth of
+// the host into it, so what a crash leaves there is as sensitive as ConfigDir.
+func StagingDir(runDir string) string { return filepath.Join(runDir, stagingName) }
+
 // ReadMaterialization is the record of the materialisation of the Run whose
 // directory is runDir, with its ConfigDir.
 func ReadMaterialization(runDir string) (Materialization, error) {

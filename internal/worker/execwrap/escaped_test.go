@@ -4,6 +4,7 @@ package execwrap_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -77,5 +78,28 @@ func TestTheEscapedFormsOfAValueAreRedactedFromTheInteractiveFilter(t *testing.T
 	}
 	if got, want := out.String(), strings.Repeat("out: "+marker+"\r\n", 3); got != want {
 		t.Errorf("the log is %q, want %q", got, want)
+	}
+}
+
+// The text of a rendered config.toml, carried as a string of a JSON event, has
+// the value escaped twice: for TOML, then for JSON.
+func TestTheValueInTheTOMLTextOfAnEventIsRedactedFromTheEvents(t *testing.T) {
+	toml, err := redact.TOMLBasicString([]byte(specialValue))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := json.Marshal(`key = "` + string(toml) + `"` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `printf '%s\n' '{"text":` + string(text) + `}'`
+	dir := delivered(t, redact.Needle{Ref: apiRef, Value: []byte(specialValue)})
+	s := launchIn(t, dir, execwrap.Launch{Argv: shell(script), SecretEnv: []execwrap.SecretEnv{{Name: "API_KEY", Ref: apiRef}}, Grace: time.Second, StructuredStdout: true}, true, withDelivery+"=1")
+	if exit := s.waitExit(); exit.ExitCode == nil || *exit.ExitCode != 0 || exit.Error != "" {
+		t.Fatalf("exit.json = %+v", exit)
+	}
+	events := readFile(t, dir, execwrap.EventsFile)
+	if strings.Contains(events, `pass\\\"word`) || strings.Contains(events, `back/x`) || !strings.Contains(events, marker) {
+		t.Errorf("events.jsonl = %q", events)
 	}
 }

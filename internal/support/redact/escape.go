@@ -9,7 +9,8 @@ import (
 // NewEscapedSet is NewSet over the secrets and every escaped form in which a
 // harness may print them: the TOML basic string a configuration file is
 // rendered with (TOMLBasicString) and every JSON string encoding (the
-// structured stream of a harness). It is the one place that derives them, so
+// structured stream of a harness), also of the TOML form: an event that holds
+// the text of the file. It is the one place that derives them, so
 // the log, the terminal and the event stream redact the same forms. A form
 // equal to the raw value is not repeated; one that overflows the budget is
 // ErrTooLarge, as any needle.
@@ -27,11 +28,15 @@ func withEscapes(secrets []Needle) []Needle {
 				all = append(all, Needle{Ref: n.Ref, Value: []byte(v)})
 			}
 		}
+		forms := []string{string(n.Value)}
 		if toml, err := TOMLBasicString(n.Value); err == nil {
 			add(string(toml))
+			forms = append(forms, string(toml)) // and the JSON of the file's text, in an event that carries it
 		}
-		for flags := 0; flags < 1<<5; flags++ {
-			add(jsonEscape(string(n.Value), flags))
+		for _, form := range forms {
+			for flags := 0; flags < 1<<5; flags++ {
+				add(jsonEscape(form, flags))
+			}
 		}
 	}
 	return all

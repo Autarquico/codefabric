@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package executor
 
 import (
@@ -5,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -30,11 +33,11 @@ func exists(path string) bool {
 	return err == nil
 }
 
-func TestRemoveAuthCopies_RemovesTheCopyAndFollowsNoLink(t *testing.T) {
+func TestRemoveMaterialization_RemovesTheCopyAndFollowsNoLink(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "r1-e1")
 	copied := materialised(t, runDir)
 	remove := func() {
-		if err := removeAuthCopies(runDir); err != nil {
+		if err := removeMaterialization(runDir); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -68,7 +71,7 @@ func TestRemoveAuthCopies_RemovesTheCopyAndFollowsNoLink(t *testing.T) {
 	if err := os.Symlink(elsewhere, filepath.Join(runDir, "config")); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeAuthCopies(runDir); err == nil {
+	if err := removeMaterialization(runDir); err == nil {
 		t.Error("a link out of the run directory was followed without complaint")
 	}
 	if !exists(filepath.Join(elsewhere, "auth.json")) {
@@ -97,5 +100,155 @@ func TestJanitor_RemovesAnAuthCopyLeftInARunThatIsOver(t *testing.T) {
 	}
 	if !exists(liveCopy) {
 		t.Error("the janitor removed the copy of a live Run")
+	}
+}
+
+// crashed leaves in runDir what a crash of a materialisation leaves before
+// config.json is written: an auth copy, in staging or in a published config,
+// with no record to name it. It returns the paths of every copy.
+func crashed(t *testing.T, runDir string, dirs ...string) []string {
+	t.Helper()
+	var copies []string
+	for _, d := range dirs {
+		dir := filepath.Join(runDir, d)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, "auth.json")
+		if err := os.WriteFile(p, []byte(`{"tokens":{"refresh_token":"r"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		copies = append(copies, p)
+	}
+	return copies
+}
+
+var crashLayouts = map[string][]string{
+	"after the copy, in staging":            {"config.staging"},
+	"after the rename, before config.json":  {"config"},
+	"published config with a stale staging": {"config", "config.staging"},
+}
+
+func TestForget_RemovesTheAuthOfAMaterialisationThatWasNeverRecorded(t *testing.T) {
+	for name, dirs := range crashLayouts {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			k := state.Key{RunID: "r1", LeaseEpoch: 1}
+			copies := crashed(t, f.runDir(k), dirs...)
+			f.e.forget(k)
+			for _, c := range copies {
+				if exists(c) {
+					t.Errorf("%s survived forget", c)
+				}
+			}
+		})
+	}
+}
+
+func TestJanitor_RemovesTheAuthOfAMaterialisationThatWasNeverRecorded(t *testing.T) {
+	for name, dirs := range crashLayouts {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			orphan := crashed(t, f.runDir(state.Key{RunID: "gone", LeaseEpoch: 1}), dirs...)
+			// A Run that is live and has not recorded yet (prepare in progress) keeps everything.
+			live := f.assign(specJSON("fix it", "command", "headless"))
+			liveCopies := crashed(t, f.runDir(live), dirs...)
+			f.e.sweep(t.Context())
+			for _, c := range orphan {
+				if exists(c) {
+					t.Errorf("%s survived the janitor", c)
+				}
+			}
+			for _, c := range liveCopies {
+				if !exists(c) {
+					t.Errorf("the janitor removed %s of a live Run", c)
+				}
+			}
+		})
+	}
+}
+
+func TestRemoveMaterialization_UnreadableRecordRemovesConfigWhole(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "r1-e1")
+	copied := materialised(t, runDir)
+	other := filepath.Join(runDir, "config", "settings.toml")
+	if err := os.WriteFile(other, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "config.json"), []byte("{torn"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeMaterialization(runDir); err != nil {
+		t.Fatal(err)
+	}
+	if exists(copied) || exists(other) {
+		t.Error("an unreadable record left the configuration behind")
+	}
+}
+
+func TestRemoveMaterialization_WithARecordKeepsTheRestOfConfig(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "r1-e1")
+	copied := materialised(t, runDir)
+	other := filepath.Join(runDir, "config", "settings.toml")
+	if err := os.WriteFile(other, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeMaterialization(runDir); err != nil {
+		t.Fatal(err)
+	}
+	if exists(copied) || !exists(other) {
+		t.Errorf("copy kept=%v, rest of config kept=%v", exists(copied), exists(other))
+	}
+}
+
+func TestRemoveMaterialization_StagingLinkIsUnlinkedNotFollowed(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "r1-e1")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := t.TempDir()
+	keep := filepath.Join(elsewhere, "auth.json")
+	if err := os.WriteFile(keep, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"config.staging", "config"} {
+		if err := os.Symlink(elsewhere, filepath.Join(runDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := removeMaterialization(runDir); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(keep) {
+		t.Error("a file outside the run directory was removed")
+	}
+	if exists(filepath.Join(runDir, "config")) || exists(filepath.Join(runDir, "config.staging")) {
+		t.Error("the links stayed")
+	}
+}
+
+// The release of the rendered files finds them gone when forget removed the
+// whole config of a Run that never recorded its materialisation: it still
+// finishes, and the registry stays as the mark that the Run used secrets.
+func TestForget_LeavesTheReleaseOfRenderedFilesWorking(t *testing.T) {
+	f := configFixture(t, newFakeStore(map[string]string{"team/token": tomlValue}))
+	k := state.Key{RunID: "gone", LeaseEpoch: 1}
+	dir := f.runDir(k)
+	crashed(t, dir, "config")
+	err := f.e.jit.Render(dir, 1, []string{"config/config.toml"}, func() error { return nil }, func() error {
+		return os.WriteFile(filepath.Join(dir, "config", "config.toml"), []byte(tomlValue), 0o600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.e.forget(k)
+	if exists(filepath.Join(dir, "config")) {
+		t.Fatal("config survived forget")
+	}
+	if err := f.e.sweepSecrets(t.Context()); err != nil {
+		t.Fatalf("the release after forget: %v", err)
+	}
+	if !secretjit.HasRendered(dir) {
+		t.Error("the Run forgot that it used secrets")
 	}
 }

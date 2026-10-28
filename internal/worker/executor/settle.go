@@ -320,7 +320,7 @@ func (e *Executor) forget(k state.Key) {
 	}
 	// Untracked, nothing writes the copies of the auth any more: the refresh
 	// token they hold does not outlive the Run. A failure is the janitor's.
-	if err := removeAuthCopies(e.runDir(k)); err != nil {
+	if err := removeMaterialization(e.runDir(k)); err != nil {
 		e.log.Warn("removing the auth copies of a Run did not finish; the janitor tries again", "run", k.RunID, "err", err)
 	}
 	e.mu.Lock()
