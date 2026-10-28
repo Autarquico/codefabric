@@ -377,7 +377,7 @@ func (e *Executor) reconcileAuth(k state.Key, runDir string) error {
 // its record, when the Broker did not know the Run (the Worker restarted after
 // it ended): the most recent one reaches the host before the copies are removed.
 // A Run with no readable record has no copy that is known to be a refresh, and
-// one whose copies are gone (config/ outlives its record by nothing) has
+// one whose copies are gone (its record outlives config/) has
 // nothing left to offer.
 func (e *Executor) offerStrayAuth(runDir string) error {
 	mat, err := host.ReadMaterialization(runDir)
