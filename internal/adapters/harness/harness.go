@@ -10,7 +10,9 @@ type Launch struct {
 	// Launch that has any fails before the process starts (CF_SECRET_UNAVAILABLE).
 	SecretEnv []SecretEnv
 	// StructuredStdout asks for stdout apart from stderr, for a harness whose
-	// events are a stream on stdout. Reserved: the wrapper ignores it until a
-	// structured adapter needs it.
+	// events are a stream on stdout. In headless mode the wrapper writes stdout
+	// to RunSpec.EventsPath (events.jsonl in the run directory), redacted line
+	// by line, and stderr to OutputPath. Interactive mode ignores it: the
+	// terminal is a single stream.
 	StructuredStdout bool
 }

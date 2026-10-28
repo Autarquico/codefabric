@@ -15,6 +15,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/host"
 	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -142,6 +143,66 @@ func refList(refs []string) string {
 	return list
 }
 
+// usesSecrets says whether the Run r has secrets on this Worker: the spec
+// declares them, or its configuration was rendered with some (the Controller
+// does not know the refs of the configuration yet, so the spec cannot say so).
+func (e *Executor) usesSecrets(r state.Run) bool {
+	return len(parseSpec(r.Spec).refs()) > 0 || secretjit.HasRendered(e.runDir(r.Key))
+}
+
+// snapshotRefs are the refs of the markers of the files of snap, sorted and
+// without repeats. A file whose refs are not those of its content is refused,
+// wrapping harness.ErrSecretUnavailable.
+func snapshotRefs(snap harness.NativeSnapshot) ([]string, error) {
+	var refs []string
+	for _, c := range snap.Components {
+		for _, f := range c.Files {
+			if err := f.CheckSecrets(); err != nil {
+				return nil, fmt.Errorf("component %q: %w", c.Name, err)
+			}
+			refs = append(refs, f.SecretRefs...)
+		}
+	}
+	slices.Sort(refs)
+	return slices.Compact(refs), nil
+}
+
+// configOf is the configuration the Run r is materialised from, and the refs
+// of the secrets its files carry.
+func (e *Executor) configOf(ctx context.Context, r state.Run, adapter harness.Adapter) (harness.NativeSnapshot, []string, error) {
+	snap, err := e.o.ConfigSource(ctx, r, adapter.ID())
+	if err != nil {
+		return harness.NativeSnapshot{}, nil, fmt.Errorf("the configuration of the harness %q: %w", adapter.ID(), err)
+	}
+	refs, err := snapshotRefs(snap)
+	if err != nil {
+		return harness.NativeSnapshot{}, nil, fmt.Errorf("%s: the configuration of the harness %q: %w", domain.CodeSecretUnavailable, adapter.ID(), err)
+	}
+	return snap, refs, nil
+}
+
+// configSecretsVerdict is secretsVerdict for the secrets of the configuration
+// of the harness. The Controller cannot know them yet (the snapshot is the
+// Worker's), so this is where the Run is turned away before it is accepted,
+// for a secret this Worker cannot give it; the Controller still decides every
+// grant. A configuration that cannot be read now is the prepare's to report.
+func (e *Executor) configSecretsVerdict(ctx context.Context, r state.Run, adapter harness.Adapter) verdict {
+	if !adapter.Capabilities().ConfigIsolation {
+		return verdict{}
+	}
+	_, refs, err := e.configOf(ctx, r, adapter)
+	switch {
+	case errors.Is(err, harness.ErrSecretUnavailable):
+		return verdict{domain.CodeSecretUnavailable, err.Error()}
+	case err != nil || len(refs) == 0:
+		return verdict{}
+	}
+	if code, msg := e.localPolicy(ctx, r.ProjectID, refs); code != "" {
+		return verdict{code, msg}
+	}
+	return verdict{}
+}
+
 // secretPrepare is one prepare attempt of a Run with secrets: its number,
 // taken in state.db before anything is asked, and the refs granted to it.
 type secretPrepare struct {
@@ -251,13 +312,13 @@ func (p *secretPrepare) current(ctx context.Context) error {
 // directory, fenced by the phase and the attempt. Nothing is delivered that
 // the output could not be redacted of: values too short, or too many, stop
 // the Run before it starts.
-func (p *secretPrepare) deliver(ctx context.Context, dir string) error {
+func (p *secretPrepare) deliver(ctx context.Context, dir string) (map[string][]byte, error) {
 	refs := slices.Sorted(slices.Values(p.granted))
 	if err := domain.CheckSecretRefs(refs, domain.MaxRunSecrets); err != nil {
-		return fmt.Errorf("%s: %w", domain.CodeSecretUnavailable, err)
+		return nil, fmt.Errorf("%s: %w", domain.CodeSecretUnavailable, err)
 	}
 	if p.e.o.Secrets == nil {
-		return fmt.Errorf("%s: this Worker keeps no secrets: %s", domain.CodeSecretUnavailable, refList(refs))
+		return nil, fmt.Errorf("%s: this Worker keeps no secrets: %s", domain.CodeSecretUnavailable, refList(refs))
 	}
 	// The catalog may have changed since the assignment was evaluated: the
 	// scope checked is that of each value read, never of another version.
@@ -266,21 +327,44 @@ func (p *secretPrepare) deliver(ctx context.Context, dir string) error {
 	for _, ref := range refs {
 		s, err := p.e.o.Secrets.Get(ctx, ref)
 		if errors.Is(err, secrets.ErrNotFound) {
-			return fmt.Errorf("%s: this Worker no longer holds the secret %q", domain.CodeSecretUnavailable, ref)
+			return nil, fmt.Errorf("%s: this Worker no longer holds the secret %q", domain.CodeSecretUnavailable, ref)
 		}
 		if err != nil {
-			return fmt.Errorf("%s: the secret %q cannot be read: %w", domain.CodeSecretUnavailable, ref, err)
+			return nil, fmt.Errorf("%s: the secret %q cannot be read: %w", domain.CodeSecretUnavailable, ref, err)
 		}
 		held = append(held, s.Metadata)
 		needles = append(needles, redact.Needle{Ref: ref, Value: s.Value})
 	}
 	if code, msg := scopeVerdict(p.r.ProjectID, refs, held); code != "" {
-		return fmt.Errorf("%s: %s", code, msg)
+		return nil, fmt.Errorf("%s: %s", code, msg)
 	}
-	if _, err := redact.NewSet(needles); err != nil {
-		return fmt.Errorf("%s: the output could not be redacted of the secrets: %w", domain.CodeSecretUnavailable, err)
+	if _, err := redact.NewEscapedSet(needles); err != nil {
+		return nil, fmt.Errorf("%s: the output could not be redacted of the secrets: %w", domain.CodeSecretUnavailable, err)
 	}
 	err := p.e.jit.Deliver(dir, p.attempt, needles, func() error { return p.current(ctx) })
+	switch {
+	case err == nil:
+		values := make(map[string][]byte, len(needles))
+		for _, n := range needles {
+			values[n.Ref] = n.Value
+		}
+		return values, nil
+	case errors.Is(err, errPrepareLater):
+		return nil, err
+	case errors.Is(err, secretjit.ErrStale):
+		return nil, fmt.Errorf("%w: %w", errPrepareLater, err)
+	}
+	return nil, fmt.Errorf("%s: delivering the secrets: %w", domain.CodeSecretUnavailable, err)
+}
+
+// render writes the values into the files of the configuration that carry
+// their markers, fenced like the delivery and registered before any value is
+// written (secretjit.Manager.Render).
+func (p *secretPrepare) render(ctx context.Context, dir string, mat host.Materialization, values map[string][]byte) error {
+	fence := func(paths []string, write func() error) error {
+		return p.e.jit.Render(dir, p.attempt, paths, func() error { return p.current(ctx) }, write)
+	}
+	err := p.e.materializer.Render(dir, mat, values, fence)
 	switch {
 	case err == nil:
 		return nil
@@ -289,7 +373,7 @@ func (p *secretPrepare) deliver(ctx context.Context, dir string) error {
 	case errors.Is(err, secretjit.ErrStale):
 		return fmt.Errorf("%w: %w", errPrepareLater, err)
 	}
-	return fmt.Errorf("%s: delivering the secrets: %w", domain.CodeSecretUnavailable, err)
+	return fmt.Errorf("%s: rendering the secrets of the configuration: %w", domain.CodeSecretUnavailable, err)
 }
 
 // launchSecretEnv is the secret environment of the harness: what the spec
@@ -329,7 +413,7 @@ func launchSecretEnv(spec specView, adapter []harness.SecretEnv) (env []execwrap
 // else is to read them. What the output is redacted of stays until the
 // release. It is done once per life of the daemon; doing it again is harmless.
 func (e *Executor) revokeOnce(ctx context.Context, r state.Run) {
-	if len(parseSpec(r.Spec).refs()) == 0 {
+	if !e.usesSecrets(r) {
 		return
 	}
 	e.mu.Lock()

@@ -78,6 +78,18 @@ var broken = []struct {
 			return a
 		})
 	}},
+	{"refuses a global apply with secrets but writes first", "ownership", func() harnesstest.Fixture {
+		return wrap(everyCap, func(a fakeharness.Adapter) harness.Adapter { return refuser{Adapter: a, writeFirst: true} })
+	}},
+	{"refuses a global apply with no secret to refuse", "ownership", func() harnesstest.Fixture {
+		return wrap(everyCap, func(a fakeharness.Adapter) harness.Adapter { return refuser{Adapter: a, always: true} })
+	}},
+	{"copies the auth with the mode of the host", "apply-isolated", func() harnesstest.Fixture {
+		return wrap(everyCap, func(a fakeharness.Adapter) harness.Adapter { return authCopier{Adapter: a, mode: 0o644} })
+	}},
+	{"copies a stale auth", "apply-isolated", func() harnesstest.Fixture {
+		return wrap(everyCap, func(a fakeharness.Adapter) harness.Adapter { return authCopier{Adapter: a, mode: 0o600, stale: true} })
+	}},
 	{"does not pass its secret to the harness", "run", func() harnesstest.Fixture {
 		return wrap(noCap, func(a fakeharness.Adapter) harness.Adapter {
 			a.SecretEnv = nil
@@ -282,4 +294,78 @@ func handle(t *testing.T, run harness.RunSpec) harness.Handle {
 	}
 	write(t, out, b, 0o600)
 	return harness.Handle{RunID: run.RunID, LeaseEpoch: run.LeaseEpoch, Mode: run.Mode, RunDir: run.RunDir, Worktree: run.Worktree, OutputPath: out}
+}
+
+// refuser refuses, as a codex would, a global apply of a snapshot with
+// secret refs. writeFirst leaves a file in the home before it does; always
+// refuses also those without refs.
+type refuser struct {
+	fakeharness.Adapter
+	writeFirst, always bool
+}
+
+func (a refuser) ApplyConfig(ctx context.Context, host harness.Host, s harness.NativeSnapshot, opts harness.ApplyOptions) (harness.ApplyResult, error) {
+	if _, global := opts.Target.(harness.TargetGlobal); global {
+		refs := false
+		for _, c := range s.Components {
+			for _, f := range c.Files {
+				refs = refs || len(f.SecretRefs) > 0
+			}
+		}
+		if refs || a.always {
+			if a.writeFirst {
+				if err := os.WriteFile(filepath.Join(host.Home(), ".partial"), nil, 0o600); err != nil {
+					return harness.ApplyResult{}, err
+				}
+			}
+			return harness.ApplyResult{}, errors.Join(harness.ErrSecretUnavailable, errors.New("a global apply renders no secret"))
+		}
+	}
+	return a.Adapter.ApplyConfig(ctx, host, s, opts)
+}
+
+// authCopier gives a Run a copy of the auth instead of the link of the
+// fakeharness; stale makes the copy differ from the auth of the host.
+type authCopier struct {
+	fakeharness.Adapter
+	mode  os.FileMode
+	stale bool
+}
+
+func (a authCopier) ApplyConfig(ctx context.Context, host harness.Host, s harness.NativeSnapshot, opts harness.ApplyOptions) (harness.ApplyResult, error) {
+	res, err := a.Adapter.ApplyConfig(ctx, host, s, opts)
+	run, isRun := opts.Target.(harness.TargetRun)
+	if err != nil || !isRun || opts.DryRun || len(res.AuthLinks) == 0 {
+		return res, err
+	}
+	for _, rel := range res.AuthLinks {
+		path := filepath.Join(run.Dir, rel)
+		content, err := os.ReadFile(path) //nolint:gosec // through the link of the test
+		if err != nil {
+			return harness.ApplyResult{}, err
+		}
+		if a.stale {
+			content = append(content, " stale"...)
+		}
+		if err := os.Remove(path); err != nil {
+			return harness.ApplyResult{}, err
+		}
+		if err := os.WriteFile(path, content, a.mode); err != nil { //nolint:gosec // the test's own copy
+			return harness.ApplyResult{}, err
+		}
+		if err := os.Chmod(path, a.mode); err != nil {
+			return harness.ApplyResult{}, err
+		}
+	}
+	res.AuthCopies, res.AuthLinks = res.AuthLinks, nil
+	return res, nil
+}
+
+func TestScenario_HarnessAdapterFramework_Contrato_RechazoYCopias(t *testing.T) {
+	t.Run("a global apply that refuses the secrets", func(t *testing.T) {
+		harnesstest.Run(t, wrap(everyCap, func(a fakeharness.Adapter) harness.Adapter { return refuser{Adapter: a} }))
+	})
+	t.Run("a Run that gets a copy of the auth", func(t *testing.T) {
+		harnesstest.Run(t, wrap(everyCap, func(a fakeharness.Adapter) harness.Adapter { return authCopier{Adapter: a, mode: 0o600} }))
+	})
 }

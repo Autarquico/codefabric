@@ -35,6 +35,14 @@ func (e *env) runSpec(t *testing.T, m domain.Mode) harness.RunSpec {
 		RunDir: filepath.Join(root, "run"), Worktree: filepath.Join(root, "worktree"),
 	}
 	run.OutputPath = filepath.Join(run.RunDir, "output.log")
+	if e.caps.ConfigIsolation {
+		// Where its configuration would be: a harness that reads the global one
+		// without a ConfigDir may refuse to start without it.
+		run.ConfigDir = filepath.Join(root, "config")
+	}
+	if e.f.EventsFile != "" && m != domain.ModeInteractive {
+		run.EventsPath = filepath.Join(run.RunDir, e.f.EventsFile)
+	}
 	for _, d := range []string{run.RunDir, run.Worktree} {
 		if err := os.Mkdir(d, 0o700); err != nil {
 			t.Fatal(err)
@@ -122,6 +130,9 @@ func checkStart(t *testing.T, f Fixture) {
 	e := newEnv(t, f)
 	run := e.runSpec(t, e.mode())
 	plain := e.launch(t, "Start", run, func() (harness.Launch, error) { return e.a.Start(t.Context(), e.host, run) })
+	if run.Mode == domain.ModeHeadless && plain.StructuredStdout != (e.f.EventsFile != "") {
+		t.Errorf("Start: StructuredStdout is %v but the fixture's EventsFile is %q", plain.StructuredStdout, e.f.EventsFile)
+	}
 	isolated := run
 	isolated.ConfigDir = filepath.Join(t.TempDir(), "config-of-the-run")
 	l := e.launch(t, "Start with a ConfigDir", isolated, func() (harness.Launch, error) { return e.a.Start(t.Context(), e.host, isolated) })

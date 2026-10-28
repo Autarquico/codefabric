@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -167,6 +168,7 @@ func TestScenario_WorkerExecutorTmux_CrashAntesDelAccept(t *testing.T) {
 }
 
 func TestRun_OffersTheCommandHarnessWhenItHasARuntime(t *testing.T) {
+	withoutCodex(t)
 	c := newController(t)
 	paths := machine(t)
 	c.join("box", paths)
@@ -229,4 +231,18 @@ func TestRun_OffersNoHarnessWithoutAUsableGit(t *testing.T) {
 	if len(w.Capabilities) != 0 {
 		t.Errorf("a Worker without git offers %v", w.Capabilities)
 	}
+}
+
+// withoutCodex leaves out of the PATH of the test every directory with a
+// codex binary, so that what the Worker offers by default does not depend on
+// the machine.
+func withoutCodex(t *testing.T) {
+	t.Helper()
+	var kept []string
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if _, err := os.Stat(filepath.Join(dir, "codex")); err != nil { //nolint:gosec // a directory of the PATH of the test
+			kept = append(kept, dir)
+		}
+	}
+	t.Setenv("PATH", strings.Join(kept, string(os.PathListSeparator)))
 }

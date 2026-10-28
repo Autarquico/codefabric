@@ -123,6 +123,12 @@ type Options struct {
 	// approved path that exists but is not a symlink; one that does not exist
 	// is ignored.
 	ApprovedLinks []string
+	// ApprovedFiles are the paths, relative to the root, of the regular files
+	// to leave out of the digest, because their content is not part of the
+	// tree: a copy the program that reads it rewrites. An approved path that
+	// exists but is not a regular file is an error; one that does not exist
+	// is ignored.
+	ApprovedFiles []string
 }
 
 // Dir returns the treedigest/v1 of the tree under root, which is not part of
@@ -134,6 +140,13 @@ func Dir(root string, opts Options) (string, error) {
 			return "", fmt.Errorf("approved link: %w", err)
 		}
 		approved[p] = true
+	}
+	files := make(map[string]bool, len(opts.ApprovedFiles))
+	for _, p := range opts.ApprovedFiles {
+		if err := checkPath(p); err != nil {
+			return "", fmt.Errorf("approved file: %w", err)
+		}
+		files[p] = true
 	}
 	r, err := os.OpenRoot(root)
 	if err != nil {
@@ -153,6 +166,12 @@ func Dir(root string, opts Options) (string, error) {
 		if approved[p] {
 			if typ&fs.ModeSymlink == 0 {
 				return fmt.Errorf("treedigest: approved link %q is not a symlink", p)
+			}
+			return nil
+		}
+		if files[p] {
+			if !typ.IsRegular() {
+				return fmt.Errorf("treedigest: approved file %q is not a regular file", p)
 			}
 			return nil
 		}

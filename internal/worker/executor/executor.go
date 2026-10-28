@@ -54,6 +54,11 @@ const (
 	unverifiedRetry = time.Minute
 	noWrapperLimit  = 30 * time.Second
 	startAttempts   = 3
+	// releaseGrace is how long the Broker has, from its first failure, to keep
+	// the last refresh of a Run that is over. Past it the Run is given up and
+	// its auth copies, which hold the token of the user, are removed: the
+	// janitor sweeps every sweepInterval, so this is some fifteen tries.
+	releaseGrace = 15 * time.Minute
 )
 
 // Hooks let tests stop the executor between two steps that must be
@@ -105,6 +110,21 @@ type Options struct {
 	// RelayTLS are the files git presents to the relay when it pushes.
 	RelayTLS RelayTLS
 	Hooks    Hooks
+	// AuthSync keeps the auth copies of the Runs in step (harness.AuthSyncer);
+	// nil is none.
+	AuthSync AuthSync
+}
+
+// AuthSync is told which auth copies a live Run has, and when it is over.
+// Release reconciles the Run for the last time before it forgets it, and fails
+// if what the Run refreshed could not be kept; the Run then stays registered
+// and Release is called again, until Abandon gives it up. Offer reconciles the
+// copies of a Run that is not registered (the Worker restarted), once.
+type AuthSync interface {
+	Track(id string, auth harness.AuthSyncer, host harness.Host, copies []string)
+	Release(id string) error
+	Abandon(id string)
+	Offer(auth harness.AuthSyncer, host harness.Host, copies []string) error
 }
 
 // ConfigSource is the configuration of the harness a Run is to be run with.
@@ -172,8 +192,11 @@ type Executor struct {
 
 	mu    sync.Mutex
 	memos map[state.Key]*runMemo
-	locks map[state.Key]*runLock
-	spawn func(state.Key) // starts the supervisor of a Run; set by Run
+	// authPending is when the Broker first failed to keep the last refresh of
+	// a Run that is over (see releaseGrace).
+	authPending map[state.Key]time.Time
+	locks       map[state.Key]*runLock
+	spawn       func(state.Key) // starts the supervisor of a Run; set by Run
 }
 
 // runMemo is what the executor remembers of a Run apart from state.db, and
@@ -223,7 +246,7 @@ func New(o Options) (*Executor, error) {
 	}
 	e := &Executor{
 		o: o, harnesses: o.Harnesses, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, redactPipe: o.RedactPipeArgv, grace: o.StopGrace, jit: secretjit.New(),
-		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), reconcileWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, locks: map[state.Key]*runLock{},
+		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), reconcileWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, authPending: map[state.Key]time.Time{}, locks: map[state.Key]*runLock{},
 	}
 	e.reconcileGen.Store(1) // the start asks for a reconciliation
 	if e.clock == nil {

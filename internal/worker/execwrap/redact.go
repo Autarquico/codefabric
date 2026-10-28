@@ -24,9 +24,9 @@ const CaptureDisabledNote = "[cf: output capture disabled: secrets could not be 
 // retention of its delivery (secretjit.Load), not the harness's access to it.
 type LoadSecrets func() ([]redact.Needle, error)
 
-// redaction is the matcher of the secrets load returns. It fails rather than
-// leave one out: no loader, a value it cannot load, or one too short or too
-// many to redact.
+// redaction is the matcher of the secrets load returns, with the escaped forms
+// of each (redact.NewEscapedSet). It fails rather than leave one out: no
+// loader, a value it cannot load, or one too short or too many to redact.
 func redaction(load LoadSecrets) (*redact.Set, error) {
 	if load == nil {
 		return nil, errors.New("this Worker keeps no secrets")
@@ -35,7 +35,7 @@ func redaction(load LoadSecrets) (*redact.Set, error) {
 	if err != nil {
 		return nil, err
 	}
-	return redact.NewSet(needles)
+	return redact.NewEscapedSet(needles)
 }
 
 // PipeOptions parameterise RedactPipe.
