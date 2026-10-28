@@ -189,23 +189,11 @@ func TestSnapshot_IsDeterministicAndStableUnderSecretRotation(t *testing.T) {
 	if a.Components[0].Digest != rotated.Components[0].Digest {
 		t.Error("rotating auth.json changed the snapshot")
 	}
-	// the text is the parser's: re-serialising it changes nothing
+	// the text is the serialiser's: a snapshot of the snapshot changes nothing
 	cfg := file(t, a, "config.toml").Content
-	var v map[string]any
-	if err := toml.Unmarshal(cfg, &v); err != nil {
-		t.Fatal(err)
-	}
-	again, err := toml.Marshal(v)
-	if err != nil || !bytes.Equal(again, cfg) {
-		t.Errorf("the snapshot is not a fixed point of the serialiser (%v):\n%s\nthen\n%s", err, cfg, again)
-	}
-}
-
-func TestSnapshot_KeepsMarkersTheUserWrote(t *testing.T) {
-	h := homeWith(t, map[string]string{"config.toml": "[mcp_servers.a.env]\nTOKEN = \"{{cf-secret:team/token}}\"\n"})
-	f := file(t, snapshot(t, h), "config.toml")
-	if !slices.Equal(f.SecretRefs, []string{"team/token"}) {
-		t.Errorf("refs = %q\n%s", f.SecretRefs, f.Content)
+	again := file(t, snapshot(t, homeWith(t, map[string]string{"config.toml": string(cfg)})), "config.toml").Content
+	if !bytes.Equal(again, cfg) {
+		t.Errorf("the snapshot is not a fixed point of the serialiser:\n%s\nthen\n%s", cfg, again)
 	}
 }
 

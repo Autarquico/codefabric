@@ -16,26 +16,33 @@ import (
 
 var epoch = time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
 
-// stampedAuth is an AuthSyncer for files {"at": <RFC3339>, ...}.
+// now is the clock of the Broker of the tests: after every stamp of a test but
+// the ones that are meant to be in the future.
+var now = epoch.Add(2 * time.Hour)
+
+// stampedAuth is an AuthSyncer for files {"at": <RFC3339>, "acct": <account>, ...}.
 type stampedAuth struct{ global string }
 
 func (a stampedAuth) GlobalAuth(harness.Host) string { return a.global }
 
-func (stampedAuth) AuthStamp(content []byte) (time.Time, error) {
+func (stampedAuth) AuthStamp(content []byte) (time.Time, string, error) {
 	var v struct {
-		At *time.Time `json:"at"`
+		At   *time.Time `json:"at"`
+		Acct string     `json:"acct"`
 	}
 	if err := json.Unmarshal(content, &v); err != nil {
-		return time.Time{}, errors.New("invalid")
+		return time.Time{}, "", errors.New("invalid")
 	}
 	if v.At == nil {
-		return time.Time{}, nil
+		return time.Time{}, v.Acct, nil
 	}
-	return *v.At, nil
+	return *v.At, v.Acct, nil
 }
 
-func auth(at time.Duration) string {
-	b, _ := json.Marshal(map[string]any{"at": epoch.Add(at), "token": "secret-" + at.String()})
+func auth(at time.Duration) string { return authOf("A", at) }
+
+func authOf(acct string, at time.Duration) string {
+	b, _ := json.Marshal(map[string]any{"at": epoch.Add(at), "acct": acct, "token": "secret-" + at.String()})
 	return string(b)
 }
 
@@ -54,7 +61,7 @@ func newRig(t *testing.T, globalContent string) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &rig{t: t, host: h, global: filepath.Join(dir, "global.json"), b: authsync.New(authsync.Options{})}
+	r := &rig{t: t, host: h, global: filepath.Join(dir, "global.json"), b: authsync.New(authsync.Options{Clock: clock.NewFake(now)})}
 	r.a = stampedAuth{global: r.global}
 	if globalContent != "" {
 		r.write(r.global, globalContent)
@@ -112,20 +119,20 @@ func TestPoll_AGlobalRefreshReachesTheCopies(t *testing.T) {
 }
 
 func TestPoll_TiesAndUnstampedChangeNothing(t *testing.T) {
-	r := newRig(t, `{"at":"2026-10-28T09:01:00Z","token":"global"}`)
-	a := r.track("a", `{"at":"2026-10-28T09:01:00Z","token":"copy"}`)
-	b := r.track("b", `{"token":"no stamp"}`)
+	r := newRig(t, `{"at":"2026-10-28T09:01:00Z","acct":"A","token":"global"}`)
+	a := r.track("a", `{"at":"2026-10-28T09:01:00Z","acct":"A","token":"copy"}`)
+	b := r.track("b", `{"acct":"A","token":"no stamp"}`)
 	r.b.Poll()
-	if r.read(a) != `{"at":"2026-10-28T09:01:00Z","token":"copy"}` {
+	if r.read(a) != `{"at":"2026-10-28T09:01:00Z","acct":"A","token":"copy"}` {
 		t.Error("a tie replaced a copy")
 	}
-	if r.read(b) != `{"at":"2026-10-28T09:01:00Z","token":"global"}` {
+	if r.read(b) != `{"at":"2026-10-28T09:01:00Z","acct":"A","token":"global"}` {
 		t.Errorf("a copy with no stamp was not brought up to date: %s", r.read(b))
 	}
-	r2 := newRig(t, `{"token":"global"}`)
-	c := r2.track("c", `{"token":"copy"}`)
+	r2 := newRig(t, `{"acct":"A","token":"global"}`)
+	c := r2.track("c", `{"acct":"A","token":"copy"}`)
 	r2.b.Poll()
-	if r2.read(c) != `{"token":"copy"}` || r2.read(r2.global) != `{"token":"global"}` {
+	if r2.read(c) != `{"acct":"A","token":"copy"}` || r2.read(r2.global) != `{"acct":"A","token":"global"}` {
 		t.Error("versions with no stamp were propagated")
 	}
 }
@@ -233,7 +240,7 @@ func TestTrackingNoCopiesForgetsTheRun(t *testing.T) {
 }
 
 func TestRun_PollsOnEveryTick(t *testing.T) {
-	fake := clock.NewFake(epoch)
+	fake := clock.NewFake(now)
 	b := authsync.New(authsync.Options{Clock: fake, Interval: time.Second})
 	r := newRig(t, auth(time.Hour))
 	r.b = b
@@ -250,5 +257,77 @@ func TestRun_PollsOnEveryTick(t *testing.T) {
 			t.Fatal("the copy was not refreshed after a tick")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestPoll_AFutureStampIsNeitherPropagatedNorReplaced(t *testing.T) {
+	future := authOf("A", 48*time.Hour)
+	r := newRig(t, auth(time.Minute))
+	poisoned := r.track("poisoned", future)
+	other := r.track("other", auth(time.Minute))
+	r.b.Poll()
+	if r.read(r.global) != auth(time.Minute) || r.read(other) != auth(time.Minute) {
+		t.Error("a stamp in the future reached the host or another Run")
+	}
+	if r.read(poisoned) != future {
+		t.Error("a version stamped in the future was replaced")
+	}
+	// A stamp within the skew is believed.
+	near := authOf("A", 2*time.Hour+authsync.MaxClockSkew)
+	ok := r.track("near", near)
+	r.b.Poll()
+	if r.read(r.global) != near || r.read(ok) != near {
+		t.Error("a stamp within the skew was not propagated")
+	}
+	// A host stamped in the future propagates nothing.
+	r2 := newRig(t, future)
+	c := r2.track("c", auth(time.Hour))
+	r2.b.Poll()
+	if r2.read(c) != auth(time.Hour) {
+		t.Error("a host stamped in the future was propagated")
+	}
+}
+
+func TestPoll_AnotherAccountNeverReachesTheHostNorTheOtherRuns(t *testing.T) {
+	r := newRig(t, auth(time.Minute))
+	evil := r.track("evil", authOf("B", time.Hour))
+	mine := r.track("mine", auth(2*time.Minute))
+	r.b.Poll()
+	if r.read(r.global) != auth(2*time.Minute) || r.read(mine) != auth(2*time.Minute) {
+		t.Error("the auth of another account was propagated")
+	}
+	if r.read(evil) != authOf("B", time.Hour) {
+		t.Error("a copy of another account was replaced")
+	}
+}
+
+func TestPoll_WithoutAnAccountInTheHostNothingIsPropagated(t *testing.T) {
+	for name, global := range map[string]string{
+		"no account": `{"at":"2026-10-28T09:01:00Z"}`,
+		"no file":    "",
+		"invalid":    `{"at":`,
+	} {
+		r := newRig(t, global)
+		a := r.track("a", authOf("", time.Hour))
+		b := r.track("b", authOf("", time.Minute))
+		r.b.Poll()
+		if r.read(a) != authOf("", time.Hour) || r.read(b) != authOf("", time.Minute) {
+			t.Errorf("%s: a copy was written", name)
+		}
+	}
+}
+
+func TestPoll_ACopyThatBecomesALinkAfterTheRunChoseIsNotFollowed(t *testing.T) {
+	r := newRig(t, auth(time.Minute))
+	outside := filepath.Join(t.TempDir(), "outside.json")
+	r.write(outside, auth(time.Hour)) // would be the most recent, if it were read
+	p := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.Symlink(outside, p); err != nil {
+		t.Fatal(err)
+	}
+	r.b.Track("a", r.a, r.host, []string{p})
+	r.b.Poll()
+	if r.read(r.global) != auth(time.Minute) {
+		t.Error("the Broker read through a link and propagated what it found")
 	}
 }

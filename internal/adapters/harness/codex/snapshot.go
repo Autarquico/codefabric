@@ -216,6 +216,9 @@ func checkComponent(c harness.Component) error {
 		if _, err := parseTable(c.Files[0].Content); err != nil {
 			return err
 		}
+		if err := checkMarkersQuoted(c.Files[0].Content); err != nil {
+			return err
+		}
 	}
 	return nil
 }

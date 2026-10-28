@@ -16,6 +16,14 @@
 //     again at the next poll.
 //   - Only a version with a stamp strictly later than another replaces that
 //     one; a tie, or a version with no stamp, replaces nothing.
+//   - Only versions of the account of the auth of the host are brought in
+//     step (harness.AuthSyncer says whose a version is): a Run's copy of
+//     another account never reaches the host nor the other Runs, and is never
+//     replaced. A host with no valid auth of an account propagates nothing.
+//   - A stamp later than the clock plus [MaxClockSkew] is not valid: that
+//     version is neither propagated nor replaced.
+//   - A copy is opened without following a link, and what is read is the file
+//     of the descriptor, not of the name.
 //   - A file that is missing or invalid is never replaced: it is not the
 //     Broker's to create, and it may be in the middle of a write.
 //   - Every replacement is a temporary file renamed over the target, 0600, so

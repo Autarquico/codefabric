@@ -318,6 +318,11 @@ func (e *Executor) forget(k state.Key) {
 	if e.o.AuthSync != nil {
 		e.o.AuthSync.Untrack(authID(k))
 	}
+	// Untracked, nothing writes the copies of the auth any more: the refresh
+	// token they hold does not outlive the Run. A failure is the janitor's.
+	if err := removeAuthCopies(e.runDir(k)); err != nil {
+		e.log.Warn("removing the auth copies of a Run did not finish; the janitor tries again", "run", k.RunID, "err", err)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.memos, k)

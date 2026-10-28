@@ -15,6 +15,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/authsync"
 )
 
@@ -22,7 +23,7 @@ import (
 // writing it takes more than one write.
 func codexAuth(refreshedAt time.Time, who string, n int) []byte {
 	b, _ := json.Marshal(map[string]any{
-		"tokens":       map[string]string{"access_token": fmt.Sprintf("access-%s-%d", who, n), "refresh_token": fmt.Sprintf("refresh-%s-%d", who, n)},
+		"tokens":       map[string]string{"access_token": fmt.Sprintf("access-%s-%d", who, n), "refresh_token": fmt.Sprintf("refresh-%s-%d", who, n), "account_id": "acct-user"},
 		"last_refresh": refreshedAt.Format(time.RFC3339Nano),
 		"pad":          strings.Repeat("x", 8<<10),
 	})
@@ -65,7 +66,7 @@ func TestScenario_RefreshConcurrente(t *testing.T) {
 		t.Fatal(err)
 	}
 	adapter := codex.Adapter{}
-	b := authsync.New(authsync.Options{})
+	b := authsync.New(authsync.Options{Clock: clock.NewFake(epoch.Add(time.Hour))})
 
 	// Two Runs, each with the copy that materialising it gives.
 	copies := map[string]string{}

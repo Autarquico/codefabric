@@ -1,8 +1,10 @@
 package codex
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -10,9 +12,11 @@ import (
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml/v2/unstable"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 )
 
 // table is a parsed TOML table. Every operation on config.toml works on it,
@@ -29,12 +33,153 @@ func parseTable(b []byte) (table, error) {
 
 // renderTable is the TOML of t. The encoder sorts the keys, so the same
 // table gives the same bytes.
+//
+// go-toml writes a string as a literal ('...') when it can, and the secrets
+// of a Run are written inside basic strings ("..."), the escape the host
+// renders them with. So each string that has a marker is written by this
+// function as a basic string, and the result is checked against t.
 func renderTable(t table) ([]byte, error) {
-	b, err := toml.Marshal(t)
+	shield := &markerShield{}
+	shielded, err := shield.table(t)
+	if err != nil {
+		return nil, err
+	}
+	b, err := toml.Marshal(shielded)
 	if err != nil {
 		return nil, fmt.Errorf("rendering TOML: %w", err)
 	}
+	if len(shield.originals) == 0 {
+		return b, nil
+	}
+	if b, err = shield.restore(b); err != nil {
+		return nil, err
+	}
+	back, err := parseTable(b)
+	if err != nil || !reflect.DeepEqual(back, t) {
+		return nil, errors.New("rendering TOML: the result does not parse back to the table")
+	}
+	if err := checkMarkersQuoted(b); err != nil {
+		return nil, err
+	}
 	return b, nil
+}
+
+// markerShield stands in for the strings with markers while the encoder runs:
+// a placeholder has a single quote, which makes the encoder write it as a
+// basic string, and is replaced afterwards, quotes included, by the string
+// written as a basic string.
+type markerShield struct{ originals []string }
+
+const placeholderPrefix = "'cf-marker-"
+
+func (m *markerShield) table(t table) (table, error) {
+	out := make(table, len(t))
+	for k, v := range t {
+		if strings.Contains(k, markerOpen) {
+			return nil, fmt.Errorf("%w: a key of the configuration has a secret marker", harness.ErrSecretUnavailable)
+		}
+		sv, err := m.value(v)
+		if err != nil {
+			return nil, err
+		}
+		out[k] = sv
+	}
+	return out, nil
+}
+
+func (m *markerShield) value(v any) (any, error) {
+	switch v := v.(type) {
+	case table:
+		return m.table(v)
+	case []any:
+		out := make([]any, len(v))
+		for i, el := range v {
+			var err error
+			if out[i], err = m.value(el); err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
+	case string:
+		if strings.Contains(v, markerOpen) {
+			m.originals = append(m.originals, v)
+			return fmt.Sprintf("%s%d'", placeholderPrefix, len(m.originals)-1), nil
+		}
+	}
+	return v, nil
+}
+
+func (m *markerShield) restore(b []byte) ([]byte, error) {
+	if bytes.Count(b, []byte(`"`+placeholderPrefix)) != len(m.originals) {
+		return nil, errors.New("rendering TOML: a placeholder is not where it was put")
+	}
+	for i, s := range m.originals {
+		inner, err := redact.TOMLBasicString([]byte(s))
+		if err != nil {
+			return nil, fmt.Errorf("rendering TOML: %w", err)
+		}
+		holder := []byte(fmt.Sprintf(`"%s%d'"`, placeholderPrefix, i))
+		if bytes.Count(b, holder) != 1 {
+			return nil, errors.New("rendering TOML: a placeholder is not where it was put")
+		}
+		b = bytes.Replace(b, holder, append(append([]byte(`"`), inner...), '"'), 1)
+	}
+	return b, nil
+}
+
+// markerOpen is how every marker begins.
+const markerOpen = "{{cf-secret:"
+
+// checkMarkersQuoted is an error, wrapping harness.ErrSecretUnavailable, when
+// content has a marker anywhere but inside a TOML basic string ("..."): in a
+// literal string, a key, a comment. A marker there would be rendered with the
+// escape of a basic string and written wrong, or break the file.
+func checkMarkersQuoted(content []byte) error {
+	var p unstable.Parser
+	p.Reset(content)
+	quoted := 0
+	for p.NextExpression() {
+		if node := p.Expression(); node.Kind == unstable.KeyValue {
+			if err := quotedMarkers(&p, node.Value(), &quoted); err != nil {
+				return err
+			}
+		}
+	}
+	if err := p.Error(); err != nil {
+		return fmt.Errorf("not valid TOML: %w", err)
+	}
+	if bytes.Count(content, []byte(markerOpen)) != quoted {
+		return fmt.Errorf("%w: a secret marker is not inside a TOML basic string", harness.ErrSecretUnavailable)
+	}
+	return nil
+}
+
+// quotedMarkers adds to quoted the markers inside the basic strings of n, and
+// is an error for a string with markers that is not a basic one.
+func quotedMarkers(p *unstable.Parser, n *unstable.Node, quoted *int) error {
+	switch n.Kind {
+	case unstable.String:
+		raw := p.Raw(n.Raw)
+		count := bytes.Count(raw, []byte(markerOpen))
+		if count == 0 {
+			return nil
+		}
+		if len(raw) < 2 || raw[0] != '"' || bytes.HasPrefix(raw, []byte(`"""`)) {
+			return fmt.Errorf("%w: a secret marker is not inside a TOML basic string", harness.ErrSecretUnavailable)
+		}
+		*quoted += count
+	case unstable.Array, unstable.InlineTable:
+		for it := n.Children(); it.Next(); {
+			child := it.Node()
+			if child.Kind == unstable.KeyValue {
+				child = child.Value()
+			}
+			if err := quotedMarkers(p, child, quoted); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // localKeys are the top-level keys that describe the machine, not the

@@ -22,8 +22,10 @@ func (r *authRecorder) Untrack(id string) { delete(r.tracked, id) }
 // syncingAdapter is an adapter whose harness rewrites its auth.
 type syncingAdapter struct{ harness.Adapter }
 
-func (syncingAdapter) GlobalAuth(harness.Host) string      { return "" }
-func (syncingAdapter) AuthStamp([]byte) (time.Time, error) { return time.Time{}, nil }
+func (syncingAdapter) GlobalAuth(harness.Host) string { return "" }
+func (syncingAdapter) AuthStamp([]byte) (time.Time, string, error) {
+	return time.Time{}, "", nil
+}
 
 func TestAuthCopiesAreTrackedWhileTheRunIsLive(t *testing.T) {
 	rec := &authRecorder{tracked: map[string][]string{}}

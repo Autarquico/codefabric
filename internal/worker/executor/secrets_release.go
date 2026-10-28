@@ -242,6 +242,9 @@ func (e *Executor) sweepSecrets(ctx context.Context) error {
 
 // sweep runs the janitor and logs what it could not finish.
 func (e *Executor) sweep(ctx context.Context) {
+	if err := e.sweepAuthCopies(ctx); err != nil && ctx.Err() == nil {
+		e.log.WarnContext(ctx, "the janitor of the auth copies did not finish; it sweeps again", "err", err)
+	}
 	if err := e.sweepSecrets(ctx); err != nil && ctx.Err() == nil {
 		e.log.WarnContext(ctx, "the janitor of the secrets did not finish; it sweeps again", "err", err)
 	}

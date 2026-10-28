@@ -19,7 +19,7 @@ import (
 
 // codexAuth is an auth.json that Codex refreshed at the offset from t0.
 func codexAuth(refreshed time.Duration) string {
-	return `{"tokens":{"access_token":"token-` + refreshed.String() + `"},"last_refresh":"` +
+	return `{"tokens":{"account_id":"acct-user","access_token":"token-` + refreshed.String() + `"},"last_refresh":"` +
 		t0.Add(refreshed).Format(time.RFC3339Nano) + `"}`
 }
 
@@ -93,6 +93,9 @@ func TestARunOfCodexHasItsAuthCopyBrokeredWhileItLives(t *testing.T) {
 	f.writeStarted(k, w.w, t0.Add(time.Second))
 	if !f.e.step(t.Context(), k) {
 		t.Fatal("the Run was not settled")
+	}
+	if _, err := os.Lstat(copied); !os.IsNotExist(err) {
+		t.Errorf("the auth copy of a Run that is over is still there (%v)", err)
 	}
 	writeAuth(t, copied, codexAuth(2*time.Hour))
 	broker.Poll()
