@@ -9,7 +9,8 @@
 //	started.json  the harness was spawned
 //	exit.json     it ended and nothing of its group is left
 //
-// output.log is the output, appended as it comes. With secrets it never holds
+// output.log is the output, appended as it comes (in headless mode with
+// StructuredStdout, stdout goes to events.jsonl and output.log holds stderr). With secrets it never holds
 // their values: in headless mode the wrapper redacts the output on its way to
 // the log and the pane, and in interactive mode the capture filter of the
 // Runtime (RedactPipe) redacts what the terminal shows on its way to the log.
@@ -35,6 +36,9 @@ const (
 	StartedFile = "started.json"
 	ExitFile    = "exit.json"
 	OutputLog   = "output.log"
+	// EventsFile is the stdout of a headless harness that asked for
+	// Launch.StructuredStdout: its structured stream, apart from OutputLog.
+	EventsFile = "events.jsonl"
 )
 
 // Modes of execution (§7.4).
@@ -48,7 +52,9 @@ const (
 // file the Runtime creates once it has wired the terminal, and the wrapper
 // waits for it before it starts anything. SecretEnv names the refs of the
 // variables whose values the wrapper resolves just before it starts the
-// harness: their values are never in this file.
+// harness: their values are never in this file. StructuredStdout sends the
+// stdout of a headless harness to EventsFile instead of OutputLog (stderr stays
+// in OutputLog); interactive mode ignores it, as the terminal is one stream.
 type Launch struct {
 	Argv      []string      `json:"argv"`
 	Env       []string      `json:"env,omitempty"`
@@ -57,6 +63,12 @@ type Launch struct {
 	Mode      string        `json:"mode"`
 	Grace     time.Duration `json:"grace_ns"`
 	Gate      string        `json:"gate,omitempty"`
+
+	StructuredStdout bool `json:"structured_stdout,omitempty"`
+	// RedactOutput redacts the output of the harness of the secrets the Run
+	// retains even when it has no SecretEnv: the secrets of its configuration
+	// are in files, not in its environment.
+	RedactOutput bool `json:"redact_output,omitempty"`
 }
 
 // SecretEnv is a variable of the harness whose value is the secret Ref names.

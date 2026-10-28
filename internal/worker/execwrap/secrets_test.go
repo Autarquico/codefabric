@@ -325,3 +325,24 @@ func TestAFilterThatCannotWriteTheLogStops(t *testing.T) {
 		t.Errorf("RedactPipe = %v", err)
 	}
 }
+
+// The secrets of a configuration are in files, not in the environment: a launch
+// with RedactOutput and no SecretEnv still redacts what the delivery retains,
+// and does not run if it cannot.
+func TestRedactOutputRedactsWithoutAnySecretEnv(t *testing.T) {
+	dir := delivered(t, redact.Needle{Ref: apiRef, Value: []byte(apiValue)})
+	l := execwrap.Launch{Argv: shell("echo " + apiValue), Grace: time.Second, RedactOutput: true}
+	s := launchIn(t, dir, l, true, withDelivery+"=1")
+	if exit := s.waitExit(); exit.ExitCode == nil || *exit.ExitCode != 0 || exit.Error != "" {
+		t.Fatalf("exit.json = %+v", exit)
+	}
+	log, _ := os.ReadFile(filepath.Join(dir, execwrap.OutputLog)) //nolint:gosec // a file of the test
+	if string(log) != marker+"\n" {
+		t.Errorf("the log is %q, want the secret redacted", log)
+	}
+}
+
+func TestRedactOutputWithoutRetentionRunsNothing(t *testing.T) {
+	l := execwrap.Launch{Argv: shell("touch must-not-run"), Grace: time.Second, RedactOutput: true}
+	assertNothingRan(t, launchIn(t, t.TempDir(), l, true), "the output cannot be redacted")
+}

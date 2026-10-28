@@ -42,7 +42,7 @@ func (f Forbidden) redaction() (*redact.Set, error) {
 	if f.none() {
 		return nil, nil //nolint:nilnil // no values, nothing to redact
 	}
-	return redact.NewSet(f.Values)
+	return redact.NewEscapedSet(f.Values)
 }
 
 // Redact is s without the values of f: what of a text about the result may be
@@ -184,7 +184,7 @@ func newScanner(values []redact.Needle) (*scanner, error) {
 		if bytes.Contains(v.Value, []byte(markerPrefix)) {
 			return nil, blocked("the result cannot be checked for secrets: the value of secret %q looks like a redaction marker", v.Ref)
 		}
-		set, err := redact.NewSet([]redact.Needle{v})
+		set, err := redact.NewEscapedSet([]redact.Needle{v})
 		if err != nil {
 			return nil, blocked("the result cannot be checked for secrets: %v", err)
 		}

@@ -28,14 +28,21 @@
 //     secrets.deleting/ first. secrets/ is therefore either absent or a
 //     complete delivery; it is never half written. A delivery records the
 //     attempt that made it, and an older attempt cannot replace a newer one.
+//
 //   - Release removes secrets.staging/ and secrets.deleting/, and then, if the
 //     caller verifies that the Run may let its secrets go, renames secrets/ to
 //     secrets.deleting/ and removes it. It reads nothing, so a missing or
 //     corrupt manifest does not stop it. It succeeds only when none of the
 //     three directories is left; a failure to remove is ErrPending, to retry,
 //     and never success.
+//
 //   - Sweep is the janitor: it runs Release over every run directory, letting
 //     the caller decide which Runs are done.
+//
+//   - Render registers the files of the Run that will carry secret values (its
+//     rendered configuration), synced, before they are written, all under the
+//     same lock and fence; Release removes them with the delivery and leaves the
+//     registry empty, and the janitor finishes what a crash left.
 //
 // Release is a logical deletion: the files are unlinked and the unlinks
 // synced. It does not promise that the bytes are gone from the disk, from an

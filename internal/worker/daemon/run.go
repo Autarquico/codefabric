@@ -14,6 +14,7 @@ import (
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
@@ -26,6 +27,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/envutil"
+	"github.com/Autarquico/codefabric/internal/worker/authsync"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/host"
@@ -154,6 +156,8 @@ func Run(ctx context.Context, o Options) error {
 		DB: db, Controller: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
 		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
 	}
+	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})
+	eo.AuthSync = broker
 	// Publishing the result of a Run needs git: without it this Worker offers no harness.
 	if git, gitErr := gitops.New(ctx, gitops.Options{Paths: o.Paths, Clock: d.clock, Log: d.log, GitPath: o.GitPath}); gitErr != nil {
 		d.log.WarnContext(ctx, "git is not usable: this Worker offers no harness and will reject the Runs it is given", "err", gitErr)
@@ -201,6 +205,7 @@ func Run(ctx context.Context, o Options) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return d.loop(gctx) })
 	g.Go(func() error { return ex.Run(gctx) })
+	g.Go(func() error { return broker.Run(gctx) })
 	g.Go(func() error { return sender.Run(gctx) })
 	shipper := outputship.New(outputship.Options{
 		DB: db, Uploader: c, Paths: o.Paths, Clock: d.clock, Log: d.log, Interval: o.OutputInterval,
@@ -237,7 +242,7 @@ func (d *daemon) runtimeAndHarnesses(ctx context.Context, o Options) (cfruntime.
 	if o.Harnesses != nil {
 		return rt, o.Harnesses
 	}
-	return rt, []harness.Adapter{command.Adapter{}}
+	return rt, []harness.Adapter{command.Adapter{}, codex.Adapter{}}
 }
 
 // host is the machine the harnesses run on: this one, with the home and the

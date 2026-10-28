@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,7 +27,10 @@ const (
 	// GateTimeout is how long the wrapper waits for the Runtime to wire the terminal.
 	GateTimeout  = 30 * time.Second
 	defaultGrace = 30 * time.Second
-	poll         = 50 * time.Millisecond
+	// defaultDrainWait is how long the kill path lets the copies drain what the
+	// survivors still write before it cuts them.
+	defaultDrainWait = 2 * time.Second
+	poll             = 50 * time.Millisecond
 )
 
 // Options parameterise Run. Stdin, Stdout and Stderr are the terminal of the pane.
@@ -47,6 +51,21 @@ type Options struct {
 	// wire the terminal, which it does once the capture filter acknowledged.
 	// Zero is GateTimeout.
 	GateTimeout time.Duration
+
+	// openEvents opens events.jsonl; tests inject a sink that fails. Nil opens the file.
+	openEvents func(path string) (eventsSink, error)
+}
+
+// eventsSink is where events.jsonl goes. wire's drain syncs and closes it,
+// exactly once, and nothing else touches it.
+type eventsSink interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+
+func openEventsFile(path string) (eventsSink, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // inside the run dir
 }
 
 // ResolveSecret is the value of the secret ref names.
@@ -89,6 +108,19 @@ type wrapper struct {
 
 	launch   Launch
 	stopping bool
+	// events is the matcher of events.jsonl when the launch has secrets and
+	// asked for StructuredStdout.
+	events *redact.Set
+	// copyErr is what failed in copying the output and in syncing and closing
+	// events.jsonl, set before wire's channel closes: a capture that failed is
+	// not a complete one. Read it only once that channel is closed.
+	copyErr error
+	// streams are the copies of the output of the harness, one per pipe, so that
+	// the kill path can tell which of them ended and which did not.
+	streams []copyPipe
+	// drainWait bounds, in real time, how long the kill path waits for the copies
+	// to drain before it cuts them; zero is defaultDrainWait.
+	drainWait time.Duration
 
 	deadline <-chan time.Time // its end, nil when not armed
 	timer    clock.Timer
@@ -175,7 +207,7 @@ func (w *wrapper) run() error {
 	if !w.supervise(waited) {
 		// The harness ignored the stop for the whole grace: it is killed with the
 		// group, and says so.
-		return w.endByKillingGroup(log, Exit{Cause: CauseStop, Signal: "SIGKILL", GroupKilled: true, RemnantsKilled: w.count()})
+		return w.endByKillingGroup(log, copied, Exit{Cause: CauseStop, Signal: "SIGKILL", GroupKilled: true, RemnantsKilled: w.count()})
 	}
 	exit.ExitCode, exit.Signal = outcome(cmd.ProcessState)
 	if !w.stopping && w.diedOfAStop(cmd.ProcessState) {
@@ -192,11 +224,17 @@ func (w *wrapper) run() error {
 	exit.RemnantsKilled = found
 	if survivors {
 		exit.GroupKilled = true
-		return w.endByKillingGroup(log, exit)
+		return w.endByKillingGroup(log, copied, exit)
 	}
-	<-copied // every writer is gone: the pipe is at its end
-	if err := log.Sync(); err != nil {
-		return w.fail("syncing the output log: %v", err)
+	return w.finish(log, copied, exit)
+}
+
+// finish writes the exit of a group that is gone, every writer with it and the
+// pipe at its end. A capture that failed is the exit's failure.
+func (w *wrapper) finish(log *os.File, copied <-chan struct{}, exit Exit) error {
+	<-copied
+	if err := errors.Join(w.copyErr, log.Sync()); err != nil {
+		return w.fail("capturing the output: %v", err)
 	}
 	exit.ExitedAt = w.clock.Now()
 	return Write(w.o.RunDir, ExitFile, exit)
@@ -209,14 +247,14 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // secretEnv is the environment of the SecretEnv of the launch, resolved now,
 // just before the harness starts, so that their values live only in its
 // environment, and set, what its output is redacted of. A launch without
-// SecretEnv has neither, and runs as it always did.
+// SecretEnv and without RedactOutput has neither, and runs as it always did.
 //
 // Nothing runs whose output would not be redacted: in headless mode this
 // process redacts it, and in interactive mode the capture filter of the
 // Runtime must have acknowledged that it does. Nor is a value given to the
 // harness that set would not redact.
 func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
-	if len(w.launch.SecretEnv) == 0 {
+	if len(w.launch.SecretEnv) == 0 && !w.launch.RedactOutput {
 		return nil, nil, nil
 	}
 	for _, s := range w.launch.SecretEnv {
@@ -227,6 +265,7 @@ func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
 	if set, err = redaction(w.o.Retention); err != nil {
 		return nil, nil, fmt.Errorf("%s: the output cannot be redacted: %w", domain.CodeSecretUnavailable, err)
 	}
+	w.events = set // one matcher for the log, the terminal and the event stream
 	if w.launch.Mode == ModeInteractive {
 		if acked, err := cfruntime.CaptureAcked(filepath.Join(w.o.RunDir, CaptureAckFile)); !acked {
 			if err == nil {
@@ -251,11 +290,18 @@ func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
 	return env, set, nil
 }
 
+// structured says whether stdout goes apart, to events.jsonl: only in headless mode.
+func (w *wrapper) structured() bool {
+	return w.launch.StructuredStdout && w.launch.Mode != ModeInteractive
+}
+
 // wire connects the harness to the terminal and the log. In interactive mode
 // it uses the terminal of the pane itself, whose output the Runtime captures; in
 // headless mode it has no input and its output goes to the log and the pane,
-// with set, if any, redacted from both. copied closes when the output has been
-// copied to its end; parentEnds are the files of the pipe that this process
+// with set, if any, redacted from both. With StructuredStdout, stdout goes
+// instead to events.jsonl (alone, redacted line by line with w.events), and
+// only stderr to the log and the pane. copied closes when every stream has been
+// copied to its end and events.jsonl is synced and closed; parentEnds are the files of the pipe that this process
 // must close once the harness has started.
 func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-chan struct{}, parentEnds []*os.File, err error) {
 	done := make(chan struct{})
@@ -264,29 +310,126 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 		close(done)
 		return done, nil, nil
 	}
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		return nil, nil, err
-	}
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, pw, pw
 	var sink io.Writer = log
 	if w.o.Stdout != nil {
 		sink = io.MultiWriter(log, w.o.Stdout)
 	}
-	var redactor *redact.Writer
-	if set != nil {
-		redactor = redact.NewWriter(sink, set)
-		sink = redactor
+	logPipe, err := startCopy("output log", sink, func(dst io.Writer, src io.Reader) error {
+		if set == nil {
+			_, err := io.Copy(dst, src)
+			return err
+		}
+		red := redact.NewWriter(dst, set)
+		if _, err := io.Copy(red, src); err != nil {
+			// A cut: what the redactor holds may be the start of a secret
+			// whose rest never came. It is dropped, never written.
+			_, _ = io.WriteString(dst, captureCutMarker)
+			return err
+		}
+		return red.Close() // the stream ended: what it held back, before the log is synced
+	})
+	if err != nil {
+		return nil, nil, err
 	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, logPipe.w, logPipe.w
+	pipes := []copyPipe{logPipe}
+	var events eventsSink // set when stdout goes apart
+	if w.structured() {
+		open := w.o.openEvents
+		if open == nil {
+			open = openEventsFile
+		}
+		var err error
+		events, err = open(filepath.Join(w.o.RunDir, EventsFile))
+		if err != nil {
+			_ = logPipe.abort()
+			return nil, nil, err
+		}
+		var eventsPipe copyPipe
+		eventsPipe, err = startCopy("events.jsonl", events, func(dst io.Writer, src io.Reader) error {
+			if w.events == nil {
+				_, err := io.Copy(dst, src)
+				return err
+			}
+			return copyEvents(dst, src, w.events)
+		})
+		if err != nil {
+			_ = logPipe.abort()
+			_ = events.Close()
+			return nil, nil, err
+		}
+		cmd.Stdout = eventsPipe.w
+		pipes = append(pipes, eventsPipe)
+	}
+	w.streams = pipes
 	go func() {
 		defer close(done)
-		_, _ = io.Copy(sink, pr)
-		if redactor != nil {
-			_ = redactor.Close() // what it held back, before the log is synced
+		var errs []error
+		for _, p := range pipes {
+			<-p.done
+			errs = append(errs, p.err())
 		}
+		if events != nil {
+			errs = append(errs, events.Sync(), events.Close())
+		}
+		w.copyErr = errors.Join(errs...)
+	}()
+	for _, p := range pipes {
+		parentEnds = append(parentEnds, p.w)
+	}
+	return done, parentEnds, nil
+}
+
+// copyPipe is a pipe whose read end is being copied to a destination; w is the
+// end the harness writes to and done closes when the copy has reached the end.
+type copyPipe struct {
+	name string
+	w    *os.File
+	done chan struct{}
+	r    *os.File
+	res  *error // the result of the copy, valid once done is closed
+}
+
+// ended says whether the copy has reached its end, and so res is valid.
+func (p copyPipe) ended() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// cut closes the read end: the copy gets an error instead of waiting for a
+// writer that does not let go. What it held back (the redactor's tail, the last
+// line without a newline) is dropped, and a marker without content is written in
+// its place before it ends.
+func (p copyPipe) cut() { _ = p.r.Close() }
+
+func (p copyPipe) err() error { return *p.res }
+
+// captureCutMarker stands in the log for what a cut stream still held.
+const captureCutMarker = "[capture cut]\n"
+
+func startCopy(name string, dst io.Writer, copyAll func(dst io.Writer, src io.Reader) error) (copyPipe, error) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return copyPipe{}, err
+	}
+	p := copyPipe{name: name, w: pw, r: pr, done: make(chan struct{}), res: new(error)}
+	go func() {
+		defer close(p.done)
+		*p.res = copyAll(dst, pr)
 		_ = pr.Close()
 	}()
-	return done, []*os.File{pw}, nil
+	return p, nil
+}
+
+// abort closes both ends of a pipe that will not be used and waits for its copy.
+func (p copyPipe) abort() error {
+	err := p.w.Close()
+	<-p.done
+	return err
 }
 
 // waitForGate waits until the Runtime says that the terminal is wired. stopped
@@ -445,14 +588,80 @@ func (w *wrapper) count() int {
 // does, kills the whole group, itself included. The exit is on disk before the
 // kill, so the daemon finds it and finds the wrapper gone. The group is killed
 // even when the exit cannot be written: the daemon then settles a lost wrapper.
-func (w *wrapper) endByKillingGroup(log *os.File, exit Exit) error {
-	exit.ExitedAt = w.clock.Now()
-	_ = log.Sync()
-	if err := Write(w.o.RunDir, ExitFile, exit); err != nil {
+func (w *wrapper) endByKillingGroup(log *os.File, copied <-chan struct{}, exit Exit) error {
+	if err := Write(w.o.RunDir, ExitFile, w.sealed(log, copied, exit)); err != nil {
 		fmt.Fprintf(os.Stderr, "cf worker exec: writing the exit: %v; killing the group all the same\n", err)
 	}
 	w.killGroup()
 	return nil
+}
+
+// sealed is exit with the time and what failed in the capture. Survivors may
+// still hold the pipes, so the drain is waited for only so long (see drained):
+// a capture that did not end by itself is cut, and exit.json says so and which
+// stream it was. The log is synced after the drain and the cut, so that the
+// marker of a cut is on disk too. A capture is never presented as complete when it is not.
+func (w *wrapper) sealed(log *os.File, copied <-chan struct{}, exit Exit) Exit {
+	exit.ExitedAt = w.clock.Now()
+	drained := w.drained(copied)
+	err := errors.Join(drained, log.Sync())
+	if err != nil {
+		exit.Error = strings.TrimSpace(exit.Error + " capturing the output: " + err.Error())
+	}
+	return exit
+}
+
+// drained is what failed in the capture, for an exit written while the group
+// may still hold the pipes: it waits drainWait for the copies to end by
+// themselves. The ones that did not are cut, which makes each drop what
+// it held (it could be the start of a secret) and write a marker, and the error says the capture is incomplete and where. If a
+// copy does not end even cut (its destination is stuck), the error says which
+// streams ended and how, and that events.jsonl may not be synced: the exit is
+// written all the same, because the wrapper has nothing else to wait for and
+// is about to be killed with the group. The invariant "drain and close before
+// exit.json" holds whenever the group lets go of the pipes; for a group that
+// does not, this is the documented exception.
+func (w *wrapper) drained(copied <-chan struct{}) error {
+	wait := w.drainWait
+	if wait <= 0 {
+		wait = defaultDrainWait
+	}
+	if waitFor(copied, wait) {
+		return w.copyErr
+	}
+	var held []string
+	for _, p := range w.streams {
+		if !p.ended() {
+			held = append(held, p.name)
+			p.cut()
+		}
+	}
+	incomplete := errors.New("capture incomplete: events.jsonl was still being synced and closed")
+	if len(held) > 0 {
+		incomplete = fmt.Errorf("capture incomplete: the group still held open the %s", strings.Join(held, " and the "))
+	}
+	if waitFor(copied, wait) {
+		return errors.Join(incomplete, w.copyErr)
+	}
+	errs := []error{incomplete, errors.New("the copy of the output did not end after being cut; events.jsonl may not be synced")}
+	for _, p := range w.streams {
+		if p.ended() {
+			errs = append(errs, p.err())
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// waitFor says whether ch closed within d of real time: it bounds I/O, not logic.
+func waitFor(ch <-chan struct{}, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ch:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // killGroup is SIGKILL to the group this process leads and keeps reserved by

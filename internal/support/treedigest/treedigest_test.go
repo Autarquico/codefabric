@@ -170,3 +170,37 @@ func TestDir_MissingRoot(t *testing.T) {
 		t.Fatalf("Dir = %q, want an error", got)
 	}
 }
+
+func TestDir_ApprovedFilesAreLeftOut(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	without, err := Dir(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "auth.json"), []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{ApprovedFiles: []string{"auth.json", "missing.json"}}
+	one, err := Dir(root, opts)
+	if err != nil || one != without {
+		t.Fatalf("approved file digest = %s, %v; want %s", one, err, without)
+	}
+	if err := os.WriteFile(filepath.Join(root, "auth.json"), []byte("two"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if two, err := Dir(root, opts); err != nil || two != without {
+		t.Errorf("the content of an approved file changed the digest: %s, %v", two, err)
+	}
+	if err := os.Remove(filepath.Join(root, "auth.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "auth.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Dir(root, opts); err == nil {
+		t.Errorf("an approved path that is a directory was accepted: %s", got)
+	}
+}

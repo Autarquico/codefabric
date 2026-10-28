@@ -158,6 +158,25 @@ func TestGuard_AValueAnywhereInTheResultBlocksTheSealing(t *testing.T) {
 	}
 }
 
+// A value a configuration rendered escaped, copied into the result in that
+// form, blocks the sealing as the raw value does.
+func TestGuard_AValueInItsEscapedFormBlocksTheSealing(t *testing.T) {
+	for name, c := range map[string]struct{ value, form string }{
+		"TOML": {`ghp-"quoted"\path-0123456789abcdef0123456789`, `ghp-\"quoted\"\\path-0123456789abcdef0123456789`},
+		"JSON": {"ghp-a/b-0123456789abcdef0123456789", `ghp-a\/b-0123456789abcdef0123456789`},
+	} {
+		value, form := c.value, c.form
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			r.prepare()
+			r.write("config.copy", "token = \""+form+"\"\n")
+			head := gittest.Run(t, r.worktree, "rev-parse", "HEAD")
+			_, err := r.g.Seal(t.Context(), r.worktree, r.intent(head), r.forbidden(value))
+			isBlocked(t, err, secretRef)
+		})
+	}
+}
+
 // An excluded path is redacted before the list is sorted and bounded, which is
 // what the Controller checks of a `sealed` report.
 func TestGuard_AnExcludedPathHoldingAValueIsRedactedAndStaysSorted(t *testing.T) {

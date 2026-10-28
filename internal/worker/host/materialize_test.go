@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -449,5 +450,102 @@ func TestMaterialize_RecordsTheComponentsAndTheTime(t *testing.T) {
 	}
 	if len(mat.AuthLinks) != 1 || mat.AuthLinks[0] != "credentials.json" {
 		t.Errorf("auth links = %v", mat.AuthLinks)
+	}
+}
+
+func TestMaterialize_AuthCopyIsLeftOutOfTheDigestAndReused(t *testing.T) {
+	f := newFixture(t)
+	f.a.copyAuth = true
+	mat := f.must(snapshot("A"))
+	if len(mat.AuthCopies) != 1 || mat.AuthCopies[0] != "credentials.json" || len(mat.AuthLinks) != 0 {
+		t.Fatalf("auth copies = %v, links = %v", mat.AuthCopies, mat.AuthLinks)
+	}
+	if want := []string{filepath.Join(f.path("config"), "credentials.json")}; !slices.Equal(mat.AuthCopyPaths(), want) {
+		t.Errorf("AuthCopyPaths = %v, want %v", mat.AuthCopyPaths(), want)
+	}
+	if got, err := treedigest.Dir(f.path("config"), treedigest.Options{ApprovedFiles: mat.AuthCopies}); err != nil || got != mat.Digest {
+		t.Errorf("config digests to %s, %v; want %s", got, err, mat.Digest)
+	}
+	read, err := ReadMaterialization(f.runDir)
+	if err != nil || !slices.Equal(read.AuthCopies, mat.AuthCopies) || read.ConfigDir != mat.ConfigDir {
+		t.Errorf("ReadMaterialization = %+v, %v", read, err)
+	}
+	// The harness rewrites its copy: that is no reason to rebuild.
+	if err := os.WriteFile(filepath.Join(f.path("config"), "credentials.json"), []byte(`{"refreshed":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applies := f.a.applies.Load()
+	again := f.must(snapshot("A"))
+	if f.a.applies.Load() != applies || again.Digest != mat.Digest {
+		t.Error("a rewritten auth copy made the materialisation be rebuilt")
+	}
+	// A copy that is gone is.
+	if err := os.Remove(filepath.Join(f.path("config"), "credentials.json")); err != nil {
+		t.Fatal(err)
+	}
+	f.must(snapshot("A"))
+	if f.a.applies.Load() == applies {
+		t.Error("a missing auth copy was reused")
+	}
+}
+
+// A crash between the copy of the auth and config.json leaves the copy in the
+// run directory with no record that names it: the janitor and forget of the
+// executor remove it by what the layout is (see executor.removeMaterialization).
+// This pins the layouts they depend on, at each point of the build.
+func TestMaterialize_AuthCopyIsOnDiskBeforeItsRecord(t *testing.T) {
+	cases := []struct {
+		name   string
+		arm    func(f *fixture, crash func())
+		copyAt string
+	}{
+		{name: "after the copy, in staging", copyAt: "config.staging", arm: func(f *fixture, crash func()) {
+			sync := f.m.fs.sync
+			f.m.fs.sync = func(p string) error {
+				if strings.HasSuffix(p, filepath.Join("config.staging", "credentials.json")) {
+					crash()
+				}
+				return sync(p)
+			}
+		}},
+		{name: "after the rename, before config.json", copyAt: "config", arm: func(f *fixture, crash func()) {
+			sync := f.m.fs.sync
+			f.m.fs.sync = func(p string) error {
+				if p == f.runDir && exists(f.t, f.path("config")) {
+					crash()
+				}
+				return sync(p)
+			}
+		}},
+		{name: "while config.json is written", copyAt: "config", arm: func(f *fixture, crash func()) {
+			write := f.m.fs.writeRecord
+			f.m.fs.writeRecord = func(p string, data []byte) error {
+				crash()
+				return write(p, data)
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.a.copyAuth = true
+			crashed := false
+			c.arm(f, func() {
+				crashed = true
+				if !exists(t, filepath.Join(f.path(c.copyAt), "credentials.json")) {
+					t.Errorf("no auth copy in %s at the crash", c.copyAt)
+				}
+				if exists(t, f.path("config.json")) {
+					t.Error("config.json exists at the crash: nothing names the copy")
+				}
+			})
+			f.must(snapshot("A"))
+			if !crashed {
+				t.Fatal("the build never reached the crash point")
+			}
+		})
+	}
+	if got := StagingDir("/r"); got != filepath.Join("/r", "config.staging") {
+		t.Errorf("StagingDir = %s", got)
 	}
 }

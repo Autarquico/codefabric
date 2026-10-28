@@ -70,7 +70,7 @@ func checkSecrets(attempt uint64, secrets []redact.Needle) error {
 	if err := domain.CheckSecretRefs(refs, domain.MaxRunSecrets); err != nil {
 		return fmt.Errorf("secretjit: %w", err)
 	}
-	if _, err := redact.NewSet(secrets); err != nil {
+	if _, err := redact.NewEscapedSet(secrets); err != nil {
 		return fmt.Errorf("secretjit: the output could not be redacted: %w", err)
 	}
 	return nil

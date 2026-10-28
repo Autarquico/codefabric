@@ -1,0 +1,37 @@
+# personal config
+model = "gpt-5"
+approval_policy = "on-request"
+
+[projects."/Users/me/src/app"]
+trust_level = "trusted"
+
+[mcp_servers.docs]
+command = "npx"
+args = ["-y", "docs-mcp"]
+env_vars = ["DOCS_HOME"]
+bearer_token_env_var = "DOCS_TOKEN"
+
+[mcp_servers.docs.env]
+DOCS_API_KEY = "sk-docs-secret-1"
+REGION = "eu"
+
+[mcp_servers.web]
+url = "https://example.com/mcp"
+
+[mcp_servers.web.http_headers]
+Authorization = "Bearer web-secret-2"
+"X Odd/Key" = "odd-secret-3"
+
+[mcp_servers.web.env_http_headers]
+X-Org = "ORG_HEADER_VAR"
+
+[model_providers.corp]
+name = "Corp"
+env_key = "CORP_API_KEY"
+experimental_bearer_token = "corp-secret-4"
+
+[model_providers.corp.query_params]
+api-version = "corp-secret-5"
+
+[shell_environment_policy.set]
+GH_TOKEN = "gh-secret-6"

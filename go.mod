@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/oklog/ulid/v2 v2.1.2
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sync v0.23.0

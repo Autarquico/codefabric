@@ -146,8 +146,10 @@ func (f *fakeFixture) assertSeesItsOwnConfiguration(k state.Key, rec fakeharness
 	if m.Harness != fakeharness.DefaultID || m.Digest == "" || rec.ConfigDigest != m.Digest {
 		f.t.Errorf("the harness digested %q, config.json says %+v", rec.ConfigDigest, m)
 	}
-	if info, err := os.Lstat(filepath.Join(want, fakeharness.AuthFile)); err != nil || info.Mode()&os.ModeSymlink == 0 {
-		f.t.Errorf("the auth in the configuration is %v (%v), want a link", info, err)
+	// What the harness saw while it ran: a Run that is over has no
+	// configuration left to look at.
+	if !rec.AuthLinked {
+		f.t.Error("the auth in the configuration of the Run was not a link")
 	}
 }
 
