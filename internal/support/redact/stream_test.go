@@ -13,7 +13,7 @@ import (
 // oracle is the specification of the redaction, written apart from the
 // automaton: it derives the needles from scratch and, at each position, takes
 // the longest needle that starts there, the earlier secret on a tie.
-func oracle(in []byte, secrets []Needle) []byte {
+func oracle(in []byte, secrets []Needle, whole bool) []byte {
 	type needle struct{ value, ref string }
 	var needles []needle
 	for _, s := range secrets {
@@ -35,10 +35,11 @@ func oracle(in []byte, secrets []Needle) []byte {
 			}
 		}
 	}
-	// The end of the stream that starts a needle (the longest suffix that is a
-	// proper prefix of one) is not text: what no needle matches there is PartialMarker.
+	// The end of a stream that starts a needle (the longest suffix that is a
+	// proper prefix of one) is not text: what no needle matches there is
+	// PartialMarker. The end of a whole text is.
 	partial := len(in)
-	for i := len(in) - 1; i >= 0; i-- {
+	for i := len(in) - 1; i >= 0 && !whole; i-- {
 		for _, n := range needles {
 			if len(n.value) > len(in)-i && strings.HasPrefix(n.value, string(in[i:])) {
 				partial = i
@@ -190,11 +191,11 @@ func TestWriterRedactsAgainstTheOracle(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			set := mustSet(t, tc.secrets)
-			if got := string(oracle([]byte(tc.in), tc.secrets)); got != tc.want {
+			if got := string(oracle([]byte(tc.in), tc.secrets, false)); got != tc.want {
 				t.Fatalf("the oracle disagrees with the case: %q", got)
 			}
-			if got := string(Bytes([]byte(tc.in), set)); got != tc.want {
-				t.Errorf("Bytes = %q, want %q", got, tc.want)
+			if got, want := string(Bytes([]byte(tc.in), set)), string(oracle([]byte(tc.in), tc.secrets, true)); got != want {
+				t.Errorf("Bytes = %q, want %q", got, want)
 			}
 			in := []byte(tc.in)
 			for cut := range len(in) + 1 {
@@ -225,7 +226,7 @@ func TestWriterEOFAtEveryPosition(t *testing.T) {
 			in[i] = "ab\r\n"[rng.IntN(4)]
 		}
 		for end := range len(in) + 1 {
-			want := oracle(in[:end], sec)
+			want := oracle(in[:end], sec, false)
 			var chunks [][]byte
 			for i := 0; i < end; {
 				n := min(end-i, rng.IntN(5))
@@ -267,6 +268,16 @@ func TestWriterReplacesAPartialMatchAtTheEnd(t *testing.T) {
 	}
 	if got := out.String(); got != "say "+PartialMarker {
 		t.Errorf("output = %q, want the held start of the secret replaced", got)
+	}
+}
+
+func TestBytesKeepsTheEndOfAWholeTextThatStartsASecret(t *testing.T) {
+	set := mustSet(t, secrets("api", "n0tasecret-value"))
+	if got := string(Bytes([]byte("docs/design"), set)); got != "docs/design" {
+		t.Errorf("Bytes = %q, want the text as it is", got)
+	}
+	if got := string(Bytes([]byte("a n0tasecret-value"), set)); strings.Contains(got, "n0tasecret") {
+		t.Errorf("Bytes = %q, want the value redacted", got)
 	}
 }
 

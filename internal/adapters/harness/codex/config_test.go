@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -317,6 +318,46 @@ func TestApplyGlobal_RejectsMarkersAndWritesNothing(t *testing.T) {
 	}
 }
 
+// localOf are the settings of the machine in a config.toml.
+func localOf(config map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, k := range []string{"projects", "sandbox_workspace_write", "permissions"} {
+		if v, ok := config[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// An earlier version could record a local setting as its own: a global apply
+// still leaves it, whether the snapshot drops it or the component goes.
+func TestApplyGlobal_NeverRemovesALocalSettingAnEarlierApplyRecorded(t *testing.T) {
+	const config = "model = \"old\"\n[sandbox_workspace_write]\nwritable_roots = [\"/w\"]\n[permissions.work.network]\nenabled = true\n"
+	want := map[string]any{
+		"sandbox_workspace_write": map[string]any{"writable_roots": []any{"/w"}},
+		"permissions":             map[string]any{"work": map[string]any{"network": map[string]any{"enabled": true}}},
+	}
+	record := `{"config.toml": [["model"], ["sandbox_workspace_write", "writable_roots"], ["permissions", "work", "network", "enabled"]]}`
+	for name, dropConfig := range map[string]bool{"dropped by the snapshot": false, "component removed": true} {
+		s := snapshot(t, homeWith(t, map[string]string{"config.toml": "model = \"gpt-5\"\n"}))
+		if dropConfig {
+			s.Components = slices.DeleteFunc(s.Components, func(c harness.Component) bool { return c.Name == codex.ConfigComponent })
+		}
+		dst := homeWith(t, map[string]string{"config.toml": config, ".cf-applied.json": record})
+		if _, err := (codex.Adapter{}).ApplyConfig(t.Context(), dst, s, harness.ApplyOptions{Target: harness.TargetGlobal{}}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		b, _ := os.ReadFile(filepath.Join(codexDir(dst), "config.toml")) //nolint:gosec // temporary home
+		var got map[string]any
+		if err := toml.Unmarshal(b, &got); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !reflect.DeepEqual(localOf(got), want) {
+			t.Errorf("%s: config.toml = %s", name, b)
+		}
+	}
+}
+
 func TestApplyGlobal_KeepsLocalSettingsAndComponents(t *testing.T) {
 	src := homeWith(t, map[string]string{"config.toml": "model = \"gpt-5\"\n[mcp_servers.docs]\ncommand = \"npx\"\n"})
 	s := snapshot(t, src)
@@ -346,8 +387,15 @@ func TestApplyGlobal_KeepsLocalSettingsAndComponents(t *testing.T) {
 	if err := toml.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["model"] != "gpt-5" || got["theme"] != "dark" || got["projects"] == nil || got["sandbox_workspace_write"] == nil || got["permissions"] == nil {
+	if got["model"] != "gpt-5" || got["theme"] != "dark" {
 		t.Errorf("config.toml = %s", b)
+	}
+	if !reflect.DeepEqual(localOf(got), map[string]any{
+		"projects":                map[string]any{"/x": map[string]any{"trust_level": "trusted"}},
+		"sandbox_workspace_write": map[string]any{"writable_roots": []any{"/w"}},
+		"permissions":             map[string]any{"work": map[string]any{"network": map[string]any{"enabled": true}}},
+	}) {
+		t.Errorf("the local settings changed: %s", b)
 	}
 	servers := got["mcp_servers"].(map[string]any)
 	if servers["mine"] == nil || servers["docs"] == nil {

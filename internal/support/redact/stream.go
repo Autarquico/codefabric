@@ -13,7 +13,8 @@ var ErrClosed = errors.New("redact: writer closed")
 // of a needle of its Set becomes "[REDACTED:<ref>]", however the stream is
 // split into writes. It holds back only the end of the stream that a match in
 // progress spans, always shorter than the longest needle, and has no flush
-// timer: flushing on idleness would leak a secret printed in two goes.
+// timer: flushing on idleness would leak a secret printed in two goes. What it
+// holds when Close ends the stream becomes [PartialMarker].
 //
 // A Writer is not safe for concurrent use. After an error of dst every call
 // returns that error and nothing else reaches dst.
@@ -30,6 +31,9 @@ type Writer struct {
 	err  error
 	// matched says a whole needle has been redacted.
 	matched bool
+	// whole says the input is a whole text, not a stream that may have been
+	// cut: a start of a needle at its end is text, not a secret cut short.
+	whole bool
 }
 
 // NewWriter returns a Writer that redacts set on its way to dst.
@@ -141,7 +145,10 @@ func (w *Writer) emitEnd() {
 			marked = false
 			continue
 		}
-		if !marked {
+		switch {
+		case w.whole:
+			w.out = append(w.out, w.held[i])
+		case !marked:
 			w.out = append(w.out, PartialMarker...)
 			marked = true
 		}
@@ -166,9 +173,11 @@ func (w *Writer) flush() error {
 }
 
 // Bytes is the batch form of a Writer: b with every needle of set redacted.
+// b is the whole text, so its end is never PartialMarker.
 func Bytes(b []byte, set *Set) []byte {
 	var out bytes.Buffer
 	w := NewWriter(&out, set)
+	w.whole = true
 	_, _ = w.Write(b)
 	_ = w.Close()
 	return out.Bytes()

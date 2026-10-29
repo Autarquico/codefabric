@@ -74,6 +74,15 @@ func deliveredTo(dir, delivery string) (execwrap.ResolveSecret, execwrap.LoadSec
 	switch delivery {
 	case "1":
 		return secretjit.Resolver(dir), func() ([]redact.Needle, error) { return secretjit.Load(dir) }
+	case "longer":
+		// the retention holds only a longer value that starts with the secret
+		return secretjit.Resolver(dir), func() ([]redact.Needle, error) {
+			needles, err := secretjit.Load(dir)
+			for i := range needles {
+				needles[i].Value = append(needles[i].Value, "-and-more"...)
+			}
+			return needles, err
+		}
 	case "broken":
 		return secretjit.Resolver(dir), func() ([]redact.Needle, error) { return nil, errors.New("the retention is unreadable") }
 	}
