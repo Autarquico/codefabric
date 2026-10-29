@@ -9,8 +9,13 @@
 ## Done esta semana
 
 <!-- pm-sync:done-this-week -->
+- #19 Workflows: almacenamiento, adopt y commit
 - #21 Adapter de Codex CLI
 - #23 Secrets locales al Worker
+- #47 codex-adapter: el executor no publica usage de los Runs
+- #48 authsync: límites residuales del broker de auth.json
+- #49 codex-adapter: minors de las reviews de #45
+- #50 e2e: flakes de cmd/cf bajo carga
 <!-- /pm-sync:done-this-week -->
 
 ---

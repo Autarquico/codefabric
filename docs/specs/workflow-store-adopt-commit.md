@@ -2,7 +2,7 @@
 codename: codefabric
 title: "Workflows: almacenamiento, adopt y commit"
 type: task
-status: active
+status: shipped
 priority: P0
 size: L
 issue: 19
