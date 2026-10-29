@@ -34,6 +34,12 @@ type Options struct {
 	// Terminal opens the session of a Run in this terminal (`cf attach`). Without
 	// one, attach answers CF_NOT_IMPLEMENTED once the Controller has answered.
 	Terminal Terminal
+	// Workflows builds the adopter of the harness configuration of this machine
+	// (`cf workflow adopt|commit`). Without one they answer CF_NOT_IMPLEMENTED.
+	Workflows WorkflowAdopterFactory
+
+	// workflowStore replaces the Controller client of the workflow commands in tests.
+	workflowStore func(*cobra.Command) (workflowStore, error)
 }
 
 // Execute runs the cf command tree, plus any extra top-level commands the
@@ -166,7 +172,8 @@ func newRootCmd(opts Options) *cobra.Command {
 	flags.Bool(flagDebug, false, "show the details of an error")
 	root.AddCommand(newVersionCmd(), newStatusCmd(), newConnectCmd(), newClientCmd(), newConfigCmd(),
 		newProjectCmd(), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd(),
-		newAttachCmd(opts.Terminal), newPsCmd(), newEventsCmd(), newLogsCmd())
+		newAttachCmd(opts.Terminal), newPsCmd(), newEventsCmd(), newLogsCmd(),
+		newWorkflowCmd(workflowDepsOf(opts)))
 	return root
 }
 
