@@ -11,6 +11,7 @@ import (
 	"slices"
 	"unicode/utf8"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/input"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/controller/blob"
@@ -62,6 +63,9 @@ func (s *Service) Commit(ctx context.Context, by pki.Session, req CommitRequest)
 	if err := req.Manifest.Validate(); err != nil {
 		return Version{}, input.Invalid("%v", err)
 	}
+	if err := servable(req.Manifest); err != nil {
+		return Version{}, err
+	}
 	if err := s.verify(ctx, req.Manifest); err != nil {
 		return Version{}, err
 	}
@@ -97,6 +101,21 @@ func (s *Service) Commit(ctx context.Context, by pki.Session, req CommitRequest)
 			map[string]any{"head": out.Head, "parent": req.Parent})
 	}
 	return out.Version, nil
+}
+
+// servable refuses a manifest that the read endpoint could not serve within
+// v1.MaxServedManifestBytes: it is measured as the API encodes it (json
+// escapes &, < and > as six bytes), not as it arrived, so what is stored is
+// always readable.
+func servable(m domain.Manifest) error {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return input.Invalid("%v", err)
+	}
+	if len(b) > v1.MaxServedManifestBytes {
+		return input.Invalid("the manifest is %d bytes as the API serves it (\"&\", \"<\" and \">\" count six each); at most %d", len(b), v1.MaxServedManifestBytes)
+	}
+	return nil
 }
 
 func validParentAndChangelog(req CommitRequest) error {

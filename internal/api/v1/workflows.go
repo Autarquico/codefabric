@@ -9,6 +9,13 @@ import (
 // Workflows (§8.9) are versioned sets of native harness configuration. Their
 // files are blobs: uploaded first by digest, then named by a manifest.
 
+// MaxServedManifestBytes bounds a manifest as the API serves it: its JSON with
+// "&", "<" and ">" escaped as the encoder of every answer does, which is up to
+// six times its bytes in a path. The Controller refuses to store a larger one;
+// the SDK reads answers that carry a manifest with room for the rest of the
+// version on top (see the client).
+const MaxServedManifestBytes = 6 << 20
+
 // WorkflowAuthor is the principal that made a version.
 type WorkflowAuthor struct {
 	Kind string `json:"kind"`

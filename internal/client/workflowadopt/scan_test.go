@@ -156,6 +156,7 @@ func TestScanArgsNotReplaceable(t *testing.T) {
 		"flag and value apart (json)":        `{"mcpServers":{"x":{"args":["--access-token", "` + assignedVal + `"]}}}`,
 		"flag and value on lines":            "args = [\n  \"--token\",\n  \"" + assignedVal + "\",\n]\n",
 		"flag before the flag (SEC-11)":      `args = ["--token", "--api-key", "` + assignedVal + `"]`,
+		"value that starts with a dash":      `args = ["--api-key", "-` + assignedVal + `"]`,
 		"flag with key in its name (SEC-11)": `args = ["--no-key-cache", "--api-key", "` + assignedVal + `"]`,
 		"json":                               `{"mcpServers":{"x":{"args":["--key=` + ghToken + `"]}}}`,
 	} {

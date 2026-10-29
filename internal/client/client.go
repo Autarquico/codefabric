@@ -35,10 +35,9 @@ const (
 	idleConnTimeout = 90 * time.Second
 	maxResponse     = 1 << 20
 	// maxWorkflowResponse bounds the answers that carry a manifest. The
-	// Controller stores only a manifest that arrived in a commit body of at most
-	// 4 MiB (maxCommitBytes of controller/api), so the version read back is that
-	// large plus its metadata: twice the body cap leaves room for it.
-	maxWorkflowResponse = 8 << 20
+	// Controller stores only a manifest that serves in at most
+	// v1.MaxServedManifestBytes; 2 MiB on top hold the rest of the version.
+	maxWorkflowResponse = v1.MaxServedManifestBytes + 2<<20
 
 	pemTypeCert    = "CERTIFICATE"
 	pemTypeCertReq = "CERTIFICATE REQUEST"

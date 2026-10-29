@@ -196,9 +196,12 @@ var (
 	generic = regexp.MustCompile(`(?i)([A-Za-z0-9_.-]*(?:key|token|secret|passw(?:or)?d)[A-Za-z0-9_.-]*)["']?[ \t]*[=:][ \t]*["']?([^\s"',;\\]+)`)
 	// argvFlag: "--api-key", "value" as two strings of an args list. Only a
 	// flag whose name has key, token, secret or password in it; the value is
-	// the next string, which is not itself a flag (so that a flag with no value
-	// does not use up the pair of the one after it). A short flag ("-k") says nothing about what it takes.
-	argvFlag = regexp.MustCompile(`(?i)["'](-{1,2}[A-Za-z0-9_.-]*(?:key|token|secret|passw(?:or)?d)[A-Za-z0-9_.-]*)["'][ \t]*,[ \t\r\n]*["']([^"'\s-][^"'\s]*)["']`)
+	// the next string unless that is itself a flag (see flagShaped). A short
+	// flag ("-k") says nothing about what it takes.
+	argvFlag = regexp.MustCompile(`(?i)["'](-{1,2}[A-Za-z0-9_.-]*(?:key|token|secret|passw(?:or)?d)[A-Za-z0-9_.-]*)["'][ \t]*,[ \t\r\n]*["']([^"'\s][^"'\s]*)["']`)
+	// flagShaped: a dash and then letters, hyphens and underscores only. A
+	// secret has digits; "-Zx9kQ2mL7pR4tW8vAa" is a value, "--verbose" a flag.
+	flagShaped = regexp.MustCompile(`^--?[A-Za-z][A-Za-z_-]*$`)
 	// not a value: the name of a variable or a file, not a secret.
 	namesAnother = regexp.MustCompile(`(?i)([_-]env|[_-]env[_-]var|[_-]file|[_-]path|[_-]name|[_-]url)$`)
 	namesSecret  = regexp.MustCompile(`(?i)token|secret|passw`)
@@ -252,9 +255,16 @@ func scanFile(content []byte) []fileHit {
 		}
 		add(text, s, e, "assigned-secret", key+"=")
 	}
-	for _, m := range argvFlag.FindAllStringSubmatchIndex(text, -1) {
-		flag, s, e := text[m[2]:m[3]], m[4], m[5]
-		if namesAnother.MatchString(flag) || overlaps(s, e) || !looksSecret(flag, text[s:e]) {
+	// Pairs are walked from the end of each flag, not of its value: a flag that
+	// takes no value must not use up the one after it.
+	for pos := 0; pos < len(text); {
+		m := argvFlag.FindStringSubmatchIndex(text[pos:])
+		if m == nil {
+			break
+		}
+		flag, s, e := text[pos+m[2]:pos+m[3]], pos+m[4], pos+m[5]
+		pos += m[3] + 1
+		if flagShaped.MatchString(text[s:e]) || namesAnother.MatchString(flag) || overlaps(s, e) || !looksSecret(flag, text[s:e]) {
 			continue
 		}
 		add(text, s, e, "assigned-secret", flag+" ")

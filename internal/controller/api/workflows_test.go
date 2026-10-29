@@ -251,3 +251,46 @@ func TestWorkflowRoutes_ABigManifestRoundTripsThroughTheSDK(t *testing.T) {
 		t.Fatalf("second commit: %v", err)
 	}
 }
+
+// A manifest within the request limit can serialise far larger in the answer
+// ("&" is six bytes there): one the API could not serve within what the SDK
+// reads is refused at commit, never stored but unreadable.
+func TestWorkflowRoutes_AManifestThatServesTooLargeIsRefusedAtCommit(t *testing.T) {
+	tc := newController(t, time.Now(), withBlobs(t))
+	const content = "x"
+	_, _, _ = tc.wfCall(tc.httpClientFor(tc.ownerDir), "PUT", "/v1/blobs/"+digestOf(content), strings.NewReader(content))
+	var m domain.Manifest
+	m.SchemaVersion = domain.ManifestSchemaVersion
+	for c := range 4 {
+		var entries []treedigest.Entry
+		comp := domain.ManifestComponent{Harness: "codex", Name: "c" + strings.Repeat("d", c), Kind: "file", Ownership: domain.OwnershipManaged}
+		for i := range 256 {
+			path := strings.Repeat("&", 2000) + strconv.Itoa(c*1000+i)
+			entries = append(entries, treedigest.File{Path: path, Content: []byte(content)})
+			comp.Files = append(comp.Files, domain.ManifestFile{Path: path, SHA256: digestOf(content), SecretRefs: []string{}})
+		}
+		tree, err := treedigest.Files(entries)
+		must(t, err)
+		comp.TreeDigest = tree
+		m.Components = append(m.Components, comp)
+	}
+	var sent bytes.Buffer
+	enc := json.NewEncoder(&sent)
+	enc.SetEscapeHTML(false)
+	must(t, enc.Encode(m))
+	served, err := json.Marshal(m)
+	must(t, err)
+	if sent.Len() > 4<<20 || len(served) <= v1.MaxServedManifestBytes {
+		t.Fatalf("manifest is %d bytes sent, %d served: the test needs it within the request limit and over the served one", sent.Len(), len(served))
+	}
+
+	body := []byte(`{"parent":0,"changelog":"c","manifest":` + sent.String() + `}`) // unescaped, as a client may send it
+	hc := tc.httpClientFor(tc.ownerDir)
+	status, eb, _ := tc.wfCall(hc, "POST", "/v1/workflows/amp/commits", bytes.NewReader(body))
+	if status != http.StatusBadRequest || eb.Code != domain.CodeInvalidRequest || !strings.Contains(eb.Message, "as the API serves it") {
+		t.Fatalf("commit = %d %s %q, want 400 CF_INVALID_REQUEST for its served size", status, eb.Code, eb.Message)
+	}
+	if _, err := tc.owner.ShowWorkflow(t.Context(), "amp"); err == nil {
+		t.Fatal("the refused manifest was stored")
+	}
+}
