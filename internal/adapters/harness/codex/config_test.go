@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -163,6 +164,26 @@ func TestScenario_Snapshot(t *testing.T) {
 	}
 }
 
+func TestSnapshot_LeavesTheSandboxOfTheHostOut(t *testing.T) {
+	h := homeWith(t, map[string]string{"config.toml": `model = "gpt-5"
+sandbox_mode = "workspace-write"
+[sandbox_workspace_write]
+writable_roots = ["/home/me"]
+network_access = true
+[permissions.work.network]
+enabled = true
+`})
+	text := string(file(t, snapshot(t, h), "config.toml").Content)
+	for _, local := range []string{"sandbox_workspace_write", "writable_roots", "permissions", "network_access"} {
+		if strings.Contains(text, local) {
+			t.Errorf("config.toml carries %s of the host:\n%s", local, text)
+		}
+	}
+	if !strings.Contains(text, "gpt-5") {
+		t.Errorf("config.toml lost the rest of the configuration:\n%s", text)
+	}
+}
+
 func TestSnapshot_SelectsComponentsAndSkipsAbsentOnes(t *testing.T) {
 	h := homeWith(t, nil)
 	if got := names(snapshot(t, h, "skills", "AGENTS.md")); !slices.Equal(got, []string{"AGENTS.md", "skills"}) {
@@ -297,11 +318,51 @@ func TestApplyGlobal_RejectsMarkersAndWritesNothing(t *testing.T) {
 	}
 }
 
+// localOf are the settings of the machine in a config.toml.
+func localOf(config map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, k := range []string{"projects", "sandbox_workspace_write", "permissions"} {
+		if v, ok := config[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// An earlier version could record a local setting as its own: a global apply
+// still leaves it, whether the snapshot drops it or the component goes.
+func TestApplyGlobal_NeverRemovesALocalSettingAnEarlierApplyRecorded(t *testing.T) {
+	const config = "model = \"old\"\n[sandbox_workspace_write]\nwritable_roots = [\"/w\"]\n[permissions.work.network]\nenabled = true\n"
+	want := map[string]any{
+		"sandbox_workspace_write": map[string]any{"writable_roots": []any{"/w"}},
+		"permissions":             map[string]any{"work": map[string]any{"network": map[string]any{"enabled": true}}},
+	}
+	record := `{"config.toml": [["model"], ["sandbox_workspace_write", "writable_roots"], ["permissions", "work", "network", "enabled"]]}`
+	for name, dropConfig := range map[string]bool{"dropped by the snapshot": false, "component removed": true} {
+		s := snapshot(t, homeWith(t, map[string]string{"config.toml": "model = \"gpt-5\"\n"}))
+		if dropConfig {
+			s.Components = slices.DeleteFunc(s.Components, func(c harness.Component) bool { return c.Name == codex.ConfigComponent })
+		}
+		dst := homeWith(t, map[string]string{"config.toml": config, ".cf-applied.json": record})
+		if _, err := (codex.Adapter{}).ApplyConfig(t.Context(), dst, s, harness.ApplyOptions{Target: harness.TargetGlobal{}}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		b, _ := os.ReadFile(filepath.Join(codexDir(dst), "config.toml")) //nolint:gosec // temporary home
+		var got map[string]any
+		if err := toml.Unmarshal(b, &got); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !reflect.DeepEqual(localOf(got), want) {
+			t.Errorf("%s: config.toml = %s", name, b)
+		}
+	}
+}
+
 func TestApplyGlobal_KeepsLocalSettingsAndComponents(t *testing.T) {
 	src := homeWith(t, map[string]string{"config.toml": "model = \"gpt-5\"\n[mcp_servers.docs]\ncommand = \"npx\"\n"})
 	s := snapshot(t, src)
 	dst := homeWith(t, map[string]string{
-		"config.toml":       "model = \"old\"\ntheme = \"dark\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.mine]\ncommand = \"mine\"\n",
+		"config.toml":       "model = \"old\"\ntheme = \"dark\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[sandbox_workspace_write]\nwritable_roots = [\"/w\"]\n[permissions.work.network]\nenabled = true\n[mcp_servers.mine]\ncommand = \"mine\"\n",
 		"AGENTS.md":         "mine",
 		"prompts/local.md":  "mine",
 		"skills/stale/a.md": "stale",
@@ -326,8 +387,15 @@ func TestApplyGlobal_KeepsLocalSettingsAndComponents(t *testing.T) {
 	if err := toml.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["model"] != "gpt-5" || got["theme"] != "dark" || got["projects"] == nil {
+	if got["model"] != "gpt-5" || got["theme"] != "dark" {
 		t.Errorf("config.toml = %s", b)
+	}
+	if !reflect.DeepEqual(localOf(got), map[string]any{
+		"projects":                map[string]any{"/x": map[string]any{"trust_level": "trusted"}},
+		"sandbox_workspace_write": map[string]any{"writable_roots": []any{"/w"}},
+		"permissions":             map[string]any{"work": map[string]any{"network": map[string]any{"enabled": true}}},
+	}) {
+		t.Errorf("the local settings changed: %s", b)
 	}
 	servers := got["mcp_servers"].(map[string]any)
 	if servers["mine"] == nil || servers["docs"] == nil {
@@ -355,7 +423,7 @@ func TestApplyGlobal_KeepsLocalSettingsAndComponents(t *testing.T) {
 	if err := toml.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["model"] != nil || got["theme"] != "dark" || got["projects"] == nil || got["mcp_servers"].(map[string]any)["docs"] != nil || got["mcp_servers"].(map[string]any)["mine"] == nil {
+	if got["model"] != nil || got["theme"] != "dark" || got["projects"] == nil || got["sandbox_workspace_write"] == nil || got["permissions"] == nil || got["mcp_servers"].(map[string]any)["docs"] != nil || got["mcp_servers"].(map[string]any)["mine"] == nil {
 		t.Errorf("after the empty snapshot config.toml = %s", b)
 	}
 	if _, err := os.Stat(filepath.Join(codexDir(dst), "skills")); err == nil {
@@ -418,12 +486,12 @@ protocol = "json"
 [otel.metrics_exporter.otlp-http.headers]
 x-api-key = "%[1]s-http-metrics"
 
-[permissions.work.network.mitm.hooks.github]
+[profiles.work.network.mitm.hooks.github]
 host = "api.github.com"
 methods = ["GET"]
 path_prefixes = ["/"]
 action = ["inject"]
-[permissions.work.network.mitm.hooks.github.headers]
+[profiles.work.network.mitm.hooks.github.headers]
 x-token = ["%[1]s-hook-a", "%[1]s-hook-b"]
 `
 
@@ -431,8 +499,8 @@ var secretRoutes = map[string]string{
 	"otel.exporter":         "codex/otel/exporter/otlp-http/headers/x-api-key",
 	"otel.trace_exporter":   "codex/otel/trace_exporter/otlp-grpc/headers/authorization",
 	"otel.metrics_exporter": "codex/otel/metrics_exporter/otlp-http/headers/x-api-key",
-	"mitm hook, first":      "codex/permissions/work/network/mitm/hooks/github/headers/x-token/0",
-	"mitm hook, second":     "codex/permissions/work/network/mitm/hooks/github/headers/x-token/1",
+	"mitm hook, first":      "codex/profiles/work/network/mitm/hooks/github/headers/x-token/0",
+	"mitm hook, second":     "codex/profiles/work/network/mitm/hooks/github/headers/x-token/1",
 }
 
 func TestSnapshot_OtelAndMitmHeadersAreSecrets(t *testing.T) {

@@ -52,11 +52,11 @@ func FuzzWriterChunking(f *testing.F) {
 			i += n
 		}
 		got := stream(t, set, chunks...)
-		if want := oracle(in, sec); !bytes.Equal(got, want) {
+		if want := oracle(in, sec, false); !bytes.Equal(got, want) {
 			t.Fatalf("stream = %q, oracle = %q", got, want)
 		}
-		if batch := Bytes(in, set); !bytes.Equal(got, batch) {
-			t.Fatalf("stream = %q, Bytes = %q", got, batch)
+		if batch, want := Bytes(in, set), oracle(in, sec, true); !bytes.Equal(batch, want) {
+			t.Fatalf("Bytes = %q, oracle = %q", batch, want)
 		}
 		for n := range needlesOf(set) {
 			if strings.Contains(string(got), n) {

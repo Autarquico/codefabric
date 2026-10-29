@@ -13,7 +13,8 @@ var ErrClosed = errors.New("redact: writer closed")
 // of a needle of its Set becomes "[REDACTED:<ref>]", however the stream is
 // split into writes. It holds back only the end of the stream that a match in
 // progress spans, always shorter than the longest needle, and has no flush
-// timer: flushing on idleness would leak a secret printed in two goes.
+// timer: flushing on idleness would leak a secret printed in two goes. What it
+// holds when Close ends the stream becomes [PartialMarker].
 //
 // A Writer is not safe for concurrent use. After an error of dst every call
 // returns that error and nothing else reaches dst.
@@ -28,6 +29,11 @@ type Writer struct {
 	head int
 	out  []byte
 	err  error
+	// matched says a whole needle has been redacted.
+	matched bool
+	// whole says the input is a whole text, not a stream that may have been
+	// cut: a start of a needle at its end is text, not a secret cut short.
+	whole bool
 }
 
 // NewWriter returns a Writer that redacts set on its way to dst.
@@ -54,8 +60,18 @@ func (w *Writer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Matched says whether a whole needle has been redacted so far; the start of
+// one that a Close turns into PartialMarker is not.
+func (w *Writer) Matched() bool { return w.matched }
+
+// PartialMarker stands in the output for the end of a stream that stopped
+// inside a match: the start of a secret whose rest never came. It is not
+// written as it is, for a prefix of a secret is part of it.
+const PartialMarker = "[REDACTED]"
+
 // Close writes what was held back, redacting the longest needle at each
-// position, and leaves dst open. Later Writes fail with ErrClosed.
+// position, and leaves dst open. Later Writes fail with ErrClosed. The held
+// bytes that are only the start of a needle become PartialMarker, one per run.
 func (w *Writer) Close() error {
 	if w.err != nil {
 		if errors.Is(w.err, ErrClosed) {
@@ -63,7 +79,7 @@ func (w *Writer) Close() error {
 		}
 		return w.err
 	}
-	w.emit(len(w.held))
+	w.emitEnd()
 	err := w.flush()
 	if err == nil {
 		w.err = ErrClosed
@@ -98,6 +114,7 @@ func (w *Writer) emit(final int) {
 	for i < final {
 		if needle := w.best[i]; needle >= 0 {
 			w.out = append(w.out, s.markers[s.refOf[needle]]...)
+			w.matched = true
 			i += int(s.lens[needle])
 			continue
 		}
@@ -110,6 +127,34 @@ func (w *Writer) emit(final int) {
 		w.best = w.best[:copy(w.best, w.best[w.head:])]
 		w.head = 0
 	}
+}
+
+// emitEnd decides the whole held end of the stream. What no needle matched
+// inside the bytes of a match in progress is not text: it may be the start of
+// a secret, so it is replaced rather than flushed.
+func (w *Writer) emitEnd() {
+	s := w.set
+	partial := len(w.held) - int(s.live[w.state])
+	w.emit(partial)
+	marked := false
+	for i := w.head; i < len(w.held); {
+		if needle := w.best[i]; needle >= 0 {
+			w.out = append(w.out, s.markers[s.refOf[needle]]...)
+			w.matched = true
+			i += int(s.lens[needle])
+			marked = false
+			continue
+		}
+		switch {
+		case w.whole:
+			w.out = append(w.out, w.held[i])
+		case !marked:
+			w.out = append(w.out, PartialMarker...)
+			marked = true
+		}
+		i++
+	}
+	w.held, w.best, w.head = w.held[:0], w.best[:0], 0
 }
 
 func (w *Writer) flush() error {
@@ -128,9 +173,11 @@ func (w *Writer) flush() error {
 }
 
 // Bytes is the batch form of a Writer: b with every needle of set redacted.
+// b is the whole text, so its end is never PartialMarker.
 func Bytes(b []byte, set *Set) []byte {
 	var out bytes.Buffer
 	w := NewWriter(&out, set)
+	w.whole = true
 	_, _ = w.Write(b)
 	_ = w.Close()
 	return out.Bytes()

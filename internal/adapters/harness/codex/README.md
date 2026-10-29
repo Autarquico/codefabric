@@ -19,27 +19,29 @@ The adapter of the Codex CLI (OpenAI). A Run gets it when it asks for
 3. **Adoptable components.** `config.toml`, `AGENTS.md`, `prompts/` and
    `skills/`, those that exist. `config.toml` is read as TOML and written
    again from what was parsed: the output is deterministic and loses the
-   comments. It loses `projects` (the trust of a machine), and the value of
+   comments. It loses the keys of the machine: `projects` (its trust),
+   `sandbox_workspace_write` and `permissions` (its sandbox and permission
+   profiles; the sandbox of a Run is the one `Start` sets). The value of
    every secret becomes a `{{cf-secret:codex/<path>}}` marker: `env`,
    `http_headers` and `query_params` of MCP servers and model providers,
    `experimental_bearer_token`, `shell_environment_policy.set`, the `headers`
    of the OTLP exporters of `otel` and of the MITM hooks of `permissions`. The
    names of variables (`env_vars`, `env_http_headers`, `env_key`,
    `bearer_token_env_var`, the `env` of a credential provider) stay as they
-   are. Known limits: the `args` of an MCP server and the sandbox settings
-   (`sandbox_workspace_write.*`, `permissions`) are copied as written; a
-   secret in `args` is not marked, and a `writable_roots` of the host reaches
-   every Run, since `--sandbox workspace-write` does not cancel it. In a Run
+   are. Known limit: the `args` of an MCP server are copied as written
+   (see below). In a Run
    the markers are rendered as TOML basic strings once the secrets are
    granted, and removed at its release. Applied globally,
-   `config.toml` is merged key by key, keeping `projects` and every local key;
+   `config.toml` is merged key by key, keeping `projects`, `sandbox_workspace_write`, `permissions` and every
+   local key;
    managed components are written and removed, local ones never; a snapshot
    with secrets is refused there (`CF_SECRET_UNAVAILABLE`).
 
-   Limitation: the `args` of an MCP server or a command can hold a secret, but
-   a list of arguments cannot be told apart into secret and not: they are kept
-   as they are. Put secrets in `env`, `http_headers` or
-   `bearer_token_env_var`, never in `args`.
+   Decision: the `args` of an MCP server or a command are kept as they
+   are, in every snapshot and Run. A list of arguments cannot be told apart
+   into secret and not, and a secret in `args` is neither marked nor
+   redacted by name. Secrets go through `env`, `http_headers` or
+   `bearer_token_env_var`, which are secret-bearing; never in `args`.
 
 4. **Auth.** The login of the user lives in `auth.json`, which is never part
    of a snapshot. Each Run gets its own copy, mode 0600, in its `CODEX_HOME`

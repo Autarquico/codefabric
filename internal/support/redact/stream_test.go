@@ -13,7 +13,7 @@ import (
 // oracle is the specification of the redaction, written apart from the
 // automaton: it derives the needles from scratch and, at each position, takes
 // the longest needle that starts there, the earlier secret on a tie.
-func oracle(in []byte, secrets []Needle) []byte {
+func oracle(in []byte, secrets []Needle, whole bool) []byte {
 	type needle struct{ value, ref string }
 	var needles []needle
 	for _, s := range secrets {
@@ -35,7 +35,19 @@ func oracle(in []byte, secrets []Needle) []byte {
 			}
 		}
 	}
+	// The end of a stream that starts a needle (the longest suffix that is a
+	// proper prefix of one) is not text: what no needle matches there is
+	// PartialMarker. The end of a whole text is.
+	partial := len(in)
+	for i := len(in) - 1; i >= 0 && !whole; i-- {
+		for _, n := range needles {
+			if len(n.value) > len(in)-i && strings.HasPrefix(n.value, string(in[i:])) {
+				partial = i
+			}
+		}
+	}
 	var out []byte
+	marked := false
 	for i := 0; i < len(in); {
 		best := -1
 		for k, n := range needles {
@@ -43,11 +55,20 @@ func oracle(in []byte, secrets []Needle) []byte {
 				best = k
 			}
 		}
+		if best < 0 && i >= partial {
+			if !marked {
+				out = append(out, PartialMarker...)
+				marked = true
+			}
+			i++
+			continue
+		}
 		if best < 0 {
 			out = append(out, in[i])
 			i++
 			continue
 		}
+		marked = false
 		out = append(out, "[REDACTED:"+needles[best].ref+"]"...)
 		i += len(needles[best].value)
 	}
@@ -120,27 +141,27 @@ func TestWriterRedactsAgainstTheOracle(t *testing.T) {
 		},
 		"prefix of the secret is not redacted": {
 			secrets("tok", "s3cr3t-value"),
-			"s3cr3t-valu and s3cr3t-", "s3cr3t-valu and s3cr3t-",
+			"s3cr3t-valu and s3cr3t-", "s3cr3t-valu and [REDACTED]",
 		},
 		"one secret is a prefix of another": {
 			secrets("short", "abcdefgh", "long", "abcdefghijkl"),
-			"abcdefghijkl abcdefghijk", "[REDACTED:long] [REDACTED:short]ijk",
+			"abcdefghijkl abcdefghijk", "[REDACTED:long] [REDACTED:short][REDACTED]",
 		},
 		"overlap takes the leftmost": {
 			secrets("a", "01234567", "b", "45678901"),
-			"0123456789012", "[REDACTED:a]89012",
+			"0123456789012", "[REDACTED:a]89[REDACTED]",
 		},
 		"overlap later starts": {
 			secrets("a", "01234567", "b", "45678901"),
-			"x45678901234567", "x[REDACTED:b]234567",
+			"x45678901234567", "x[REDACTED:b]23[REDACTED]",
 		},
 		"inner needle is swallowed": {
 			secrets("outer", "xxABCDEFGHxx", "inner", "ABCDEFGH"),
-			"-xxABCDEFGHxx-xABCDEFGHx", "-[REDACTED:outer]-x[REDACTED:inner]x",
+			"-xxABCDEFGHxx-xABCDEFGHx", "-[REDACTED:outer]-x[REDACTED:inner][REDACTED]",
 		},
 		"self overlap": {
 			secrets("a", "aaaaaaaa"),
-			strings.Repeat("a", 19), "[REDACTED:a][REDACTED:a]aaa",
+			strings.Repeat("a", 19), "[REDACTED:a][REDACTED:a][REDACTED]",
 		},
 		"equal values keep the first ref": {
 			secrets("one", "same-value", "two", "same-value"),
@@ -164,17 +185,17 @@ func TestWriterRedactsAgainstTheOracle(t *testing.T) {
 		},
 		"EOF inside a longer needle": {
 			secrets("short", "abcdefgh", "long", "abcdefghijkl"),
-			"abcdefghij", "[REDACTED:short]ij",
+			"abcdefghij", "[REDACTED:short][REDACTED]",
 		},
 		"no secrets": {nil, "pass through", "pass through"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			set := mustSet(t, tc.secrets)
-			if got := string(oracle([]byte(tc.in), tc.secrets)); got != tc.want {
+			if got := string(oracle([]byte(tc.in), tc.secrets, false)); got != tc.want {
 				t.Fatalf("the oracle disagrees with the case: %q", got)
 			}
-			if got := string(Bytes([]byte(tc.in), set)); got != tc.want {
-				t.Errorf("Bytes = %q, want %q", got, tc.want)
+			if got, want := string(Bytes([]byte(tc.in), set)), string(oracle([]byte(tc.in), tc.secrets, true)); got != want {
+				t.Errorf("Bytes = %q, want %q", got, want)
 			}
 			in := []byte(tc.in)
 			for cut := range len(in) + 1 {
@@ -205,7 +226,7 @@ func TestWriterEOFAtEveryPosition(t *testing.T) {
 			in[i] = "ab\r\n"[rng.IntN(4)]
 		}
 		for end := range len(in) + 1 {
-			want := oracle(in[:end], sec)
+			want := oracle(in[:end], sec, false)
 			var chunks [][]byte
 			for i := 0; i < end; {
 				n := min(end-i, rng.IntN(5))
@@ -234,6 +255,51 @@ func TestWriterHoldsBackNoCompleteSecret(t *testing.T) {
 	}
 	if out.String() != "say [REDACTED:tok]!" {
 		t.Fatalf("after the end of the secret = %q", out.String())
+	}
+}
+
+func TestWriterReplacesAPartialMatchAtTheEnd(t *testing.T) {
+	set := mustSet(t, secrets("tok", "s3cr3t-value"))
+	var out bytes.Buffer
+	w := NewWriter(&out, set)
+	_, _ = w.Write([]byte("say s3cr3t-val"))
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "say "+PartialMarker {
+		t.Errorf("output = %q, want the held start of the secret replaced", got)
+	}
+}
+
+func TestBytesKeepsTheEndOfAWholeTextThatStartsASecret(t *testing.T) {
+	set := mustSet(t, secrets("api", "n0tasecret-value"))
+	if got := string(Bytes([]byte("docs/design"), set)); got != "docs/design" {
+		t.Errorf("Bytes = %q, want the text as it is", got)
+	}
+	if got := string(Bytes([]byte("a n0tasecret-value"), set)); strings.Contains(got, "n0tasecret") {
+		t.Errorf("Bytes = %q, want the value redacted", got)
+	}
+}
+
+func TestWriterMatchedCountsOnlyWholeValues(t *testing.T) {
+	set := mustSet(t, secrets("tok", "s3cr3t-value"))
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{
+		{"say s3cr3t-val", false},
+		{"say s3cr3t-value", true},
+		{"say s3cr3t-value and s3cr", true},
+		{"nothing here", false},
+	} {
+		w := NewWriter(io.Discard, set)
+		_, _ = w.Write([]byte(tc.in))
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := w.Matched(); got != tc.want {
+			t.Errorf("%q: Matched = %v, want %v", tc.in, got, tc.want)
+		}
 	}
 }
 

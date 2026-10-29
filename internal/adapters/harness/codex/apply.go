@@ -210,9 +210,9 @@ func writeConfig(root string, f harness.File, before [][]string) ([][]string, er
 	if err != nil {
 		return nil, err
 	}
-	paths := leafPaths(want)
+	paths := slices.DeleteFunc(leafPaths(want), isLocal)
 	for _, old := range before {
-		if !slices.ContainsFunc(paths, func(p []string) bool { return slices.Equal(p, old) }) {
+		if !isLocal(old) && !slices.ContainsFunc(paths, func(p []string) bool { return slices.Equal(p, old) }) {
 			unassign(host, old)
 		}
 	}
@@ -274,10 +274,16 @@ func removeComponent(root, name string, paths [][]string) error {
 		return err
 	}
 	for _, p := range paths {
-		unassign(host, p)
+		if !isLocal(p) {
+			unassign(host, p)
+		}
 	}
 	return putConfig(root, host, 0o600)
 }
+
+// isLocal says whether a setting is of the machine (localKeys): a global apply
+// never writes nor removes one, even if an earlier version recorded it.
+func isLocal(p []string) bool { return len(p) > 0 && slices.Contains(localKeys, p[0]) }
 
 func readApplied(root string) (applied, error) {
 	b, err := os.ReadFile(filepath.Join(root, appliedFile)) //nolint:gosec // under the configuration directory

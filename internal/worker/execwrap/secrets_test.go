@@ -187,9 +187,10 @@ func TestNothingRunsWithoutTheSecrets(t *testing.T) {
 			},
 			delivery: "1", why: "not available to the harness",
 		},
-		"not delivered":        {delivery: "1", why: "no secrets delivered"},
-		"retention unreadable": {delivery: "broken", why: "the output cannot be redacted"},
-		"no secret store":      {why: "the output cannot be redacted"},
+		"not delivered":                {delivery: "1", why: "no secrets delivered"},
+		"retention unreadable":         {delivery: "broken", why: "the output cannot be redacted"},
+		"only a longer value retained": {delivery: "longer", why: "would not be redacted"},
+		"no secret store":              {why: "the output cannot be redacted"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
