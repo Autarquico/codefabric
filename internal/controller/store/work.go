@@ -101,6 +101,10 @@ type Run struct {
 	LeaseID    domain.ID
 	LeaseEpoch uint64
 	LeaseState domain.LeaseState
+
+	// Workflow is the version of the Workflow the Run froze (§8.9); the zero
+	// value for a Run without one.
+	Workflow domain.WorkflowRef
 }
 
 func scanErr(err error, what string) error {
@@ -407,7 +411,7 @@ const runColumns = `id, short_n, task_id, attempt, lineage_kind, spec, spec_dige
     COALESCE(worker_id, ''), created_at, started_at, finished_at,
     COALESCE(lease_id, ''), COALESCE(lease_epoch, 0), COALESCE((SELECT l.state FROM leases l WHERE l.id = runs.lease_id), ''),
     exit_code, COALESCE(runtime_handle, ''), COALESCE(branch, ''), COALESCE(result_commit, ''), COALESCE(result_excluded, ''),
-    COALESCE(lineage_parent_id, ''), harness_ran`
+    COALESCE(lineage_parent_id, ''), harness_ran, COALESCE(workflow_id, ''), COALESCE(workflow_version, 0), COALESCE(workflow_digest, '')`
 
 func scanRun(row rowScanner) (Run, error) {
 	var (
@@ -421,11 +425,13 @@ func scanRun(row rowScanner) (Run, error) {
 		excluded          string
 		parent            string
 		harnessRan        sql.NullBool
+		workflow          string
 	)
 	if err := row.Scan(&id, &r.Short, &task, &r.Attempt, &r.Lineage, &spec, &r.SpecDigest, &r.SourceCommit, &r.State,
 		&r.EndReason, &r.QueuedReason, &r.Publication, &r.Evaluation, &r.Runtime, &r.Promoted,
 		&worker, &created, &started, &finished, &lease, &r.LeaseEpoch, &leaseState, &exitCode, &r.RuntimeHandle,
-		&r.Branch, &r.ResultCommit, &excluded, &parent, &harnessRan); err != nil {
+		&r.Branch, &r.ResultCommit, &excluded, &parent, &harnessRan,
+		&workflow, &r.Workflow.Version, &r.Workflow.Digest); err != nil {
 		return Run{}, scanErr(err, "run")
 	}
 	if excluded != "" {
@@ -446,7 +452,15 @@ func scanRun(row rowScanner) (Run, error) {
 		r.HarnessRan = &harnessRan.Bool
 	}
 	r.LineageParent = domain.ID(parent)
+	r.Workflow.ID = domain.ID(workflow)
 	return r, nil
+}
+
+func nullableInt(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
 }
 
 // InsertRun stores a new Run.
@@ -454,12 +468,13 @@ func (t *Tx) InsertRun(ctx context.Context, r Run) error {
 	_, err := t.Exec(ctx,
 		`INSERT INTO runs (id, short_n, task_id, attempt, lineage_kind, spec, spec_digest, source_commit, state,
 		     end_reason, queued_reason, publication, evaluation, runtime, promoted, worker_id, created_at, started_at, finished_at, branch,
-		     lineage_parent_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     lineage_parent_id, workflow_id, workflow_version, workflow_digest)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(r.ID), r.Short, string(r.TaskID), r.Attempt, string(r.Lineage), string(r.Spec), r.SpecDigest, r.SourceCommit,
 		string(r.State), nullable(string(r.EndReason)), nullable(r.QueuedReason),
 		string(r.Publication), string(r.Evaluation), string(r.Runtime), r.Promoted, nullable(string(r.WorkerID)),
-		r.CreatedAt.UnixNano(), nanosOrNil(r.StartedAt), nanosOrNil(r.FinishedAt), nullable(r.Branch), nullable(string(r.LineageParent)))
+		r.CreatedAt.UnixNano(), nanosOrNil(r.StartedAt), nanosOrNil(r.FinishedAt), nullable(r.Branch), nullable(string(r.LineageParent)),
+		nullable(string(r.Workflow.ID)), nullableInt(r.Workflow.Version), nullable(r.Workflow.Digest))
 	if err != nil {
 		return fmt.Errorf("store: inserting run: %w", err)
 	}

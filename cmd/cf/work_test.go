@@ -330,12 +330,12 @@ func TestProjectsTasksRunsApi_CLILifecycle(t *testing.T) {
 	}
 }
 
-func TestProjectsTasksRunsApi_WorkflowReferencesAreNotImplementedYet(t *testing.T) {
+func TestProjectsTasksRunsApi_AWorkflowThatDoesNotExistRefusesTheRun(t *testing.T) {
 	bringUpController(t)
 	newOrigin(t).clone(t)
 	ok[v1.Project](t, "project", "create", "backend", "--workflow", "personal@latest")
 
-	fails(t, 8, domain.CodeNotImplemented, "do", "x")
+	fails(t, 3, domain.CodeNotFound, "do", "x")
 	if tasks := ok[v1.ListTasksResponse](t, "task", "list", "--all"); len(tasks.Tasks) != 0 {
 		t.Errorf("a refused Run left %d Tasks", len(tasks.Tasks))
 	}

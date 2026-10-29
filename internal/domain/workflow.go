@@ -19,11 +19,3 @@ type Workflow struct {
 	Digest       string
 	ParentDigest string
 }
-
-// WorkflowComponent is one native snapshot inside a Workflow.
-type WorkflowComponent struct {
-	Harness   string
-	Path      string
-	Digest    string
-	Ownership Ownership
-}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/app"
+	"github.com/Autarquico/codefabric/internal/app/workflows"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
@@ -93,25 +95,29 @@ type Config struct {
 	// Relay is the git relay (§22.1); nil when this machine cannot serve one,
 	// and then its routes answer CF_INTERNAL.
 	Relay *relay.Relay
+	// MaxBlobBytes bounds one blob upload; 0 takes workflows.DefaultMaxBlobBytes.
+	// It must be the limit the app.Config of Work was built with.
+	MaxBlobBytes int64
 }
 
 // Server is the Controller API over mutual TLS.
 type Server struct {
-	authority *pki.Authority
-	timeouts  Timeouts
-	log       *slog.Logger
-	store     Store
-	work      *app.Services
-	relay     *relay.Relay
-	clock     clock.Clock
-	startedAt time.Time
-	build     buildinfo.Info
-	cert      atomic.Pointer[tls.Certificate]
-	tlsConfig *tls.Config
-	mux       *http.ServeMux
-	routes    map[string]route
-	health    healthCache
-	streams   *streamHub
+	authority    *pki.Authority
+	timeouts     Timeouts
+	log          *slog.Logger
+	store        Store
+	work         *app.Services
+	relay        *relay.Relay
+	maxBlobBytes int64
+	clock        clock.Clock
+	startedAt    time.Time
+	build        buildinfo.Info
+	cert         atomic.Pointer[tls.Certificate]
+	tlsConfig    *tls.Config
+	mux          *http.ServeMux
+	routes       map[string]route
+	health       healthCache
+	streams      *streamHub
 }
 
 // New builds the server and its route table. It fails when Config.Work is missing.
@@ -130,15 +136,16 @@ func New(c Config) (*Server, error) {
 	roots := x509.NewCertPool()
 	roots.AddCert(c.CA.Cert)
 	s := &Server{
-		authority: c.Authority,
-		timeouts:  c.Timeouts.orDefaults(),
-		log:       log,
-		store:     c.Store,
-		work:      c.Work,
-		relay:     c.Relay,
-		clock:     clk,
-		startedAt: c.StartedAt,
-		build:     c.Build,
+		authority:    c.Authority,
+		timeouts:     c.Timeouts.orDefaults(),
+		log:          log,
+		store:        c.Store,
+		work:         c.Work,
+		relay:        c.Relay,
+		maxBlobBytes: cmp.Or(c.MaxBlobBytes, workflows.DefaultMaxBlobBytes),
+		clock:        clk,
+		startedAt:    c.StartedAt,
+		build:        c.Build,
 		tlsConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13,
 			// A certificate is optional at the handshake because /v1/join is
@@ -154,6 +161,7 @@ func New(c Config) (*Server, error) {
 	s.SetServerCert(c.ServerCert)
 	s.registerRoutes()
 	s.registerWorkRoutes()
+	s.registerWorkflowRoutes()
 	if s.work.Workers != nil {
 		s.registerWorkerRoutes()
 	}

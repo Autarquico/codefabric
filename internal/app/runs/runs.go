@@ -14,6 +14,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/app/refs"
+	"github.com/Autarquico/codefabric/internal/app/workflows"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -66,8 +67,9 @@ type Source struct{ Ref, Commit string }
 // A Task that ended, by a marker or by its derived state, gets no more Runs.
 //
 // The first Run also freezes the Task's completion and retry policy (§3.3). A Project or Task
-// that names a Workflow or an Environment cannot get a Run yet: resolving them
-// to a version is Phase 2, and freezing the bare reference would pin nothing.
+// that names a Workflow gets it resolved to a version in this transaction and
+// pinned (§8.9); one that names an Environment cannot get a Run yet, since
+// freezing the bare reference would pin nothing.
 func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID, source Source) (v1.Run, error) {
 	commit := source.Commit
 	if !domain.ValidCommitID(commit) {
@@ -89,10 +91,16 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		return v1.Run{}, err
 	}
 	in := Inherit(task, project)
-	if in.Workflow != "" || in.Environment != "" {
+	if in.Environment != "" {
 		return v1.Run{}, domain.NewError(domain.CodeNotImplemented,
-			"Workflow and Environment references are not resolved yet: a Run cannot be created while the Task or its Project names one",
-			map[string]any{"workflow": in.Workflow, "environment": in.Environment})
+			"Environment references are not resolved yet: a Run cannot be created while the Task or its Project names one",
+			map[string]any{"environment": in.Environment})
+	}
+	var pin domain.WorkflowRef
+	if in.Workflow != "" {
+		if pin, in.Workflow, err = pinWorkflow(ctx, tx, in.Workflow); err != nil {
+			return v1.Run{}, err
+		}
 	}
 
 	raw, digest, err := newSpec(in, task.SourceSnapshot, source).encode()
@@ -112,7 +120,7 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		Lineage: domain.LineageInitial, Spec: raw, SpecDigest: digest, SourceCommit: commit,
 		Branch: domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: short}),
 		State:  domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,
-		Runtime: domain.RuntimeNone, CreatedAt: act.Now,
+		Runtime: domain.RuntimeNone, CreatedAt: act.Now, Workflow: pin,
 	}
 	if task.Completion == "" {
 		task.Completion, task.Retry = in.Completion, &in.Retry
@@ -133,6 +141,21 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		return v1.Run{}, err
 	}
 	return view(run, false), nil
+}
+
+// pinWorkflow resolves the Workflow reference of a Task in tx, so that the
+// version a Run freezes is the head of the same snapshot the Run is written in.
+// The spec records the canonical name@sha256:<digest>.
+func pinWorkflow(ctx context.Context, tx *store.Tx, selector string) (domain.WorkflowRef, string, error) {
+	ref, err := workflows.Resolve(ctx, tx, selector)
+	if err != nil {
+		return domain.WorkflowRef{}, "", err
+	}
+	sel, err := domain.ParseWorkflowRef(selector)
+	if err != nil {
+		return domain.WorkflowRef{}, "", input.Invalid("%q is not a workflow reference", selector)
+	}
+	return ref, sel.Name + "@" + ref.Digest, nil
 }
 
 // ended says whether the Task can no longer get Runs: it carries a marker
@@ -313,6 +336,9 @@ func view(r store.Run, withSpec bool) v1.Run {
 	}
 	if r.LeaseID != "" {
 		out.Lease = &v1.RunLease{ID: string(r.LeaseID), Epoch: r.LeaseEpoch, State: r.LeaseState}
+	}
+	if r.Workflow.Version > 0 {
+		out.Workflow = &v1.RunWorkflow{Version: r.Workflow.Version, Digest: r.Workflow.Digest}
 	}
 	if withSpec {
 		out.Spec = json.RawMessage(r.Spec)

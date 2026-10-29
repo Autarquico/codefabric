@@ -15,9 +15,11 @@ import (
 	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/workers"
+	"github.com/Autarquico/codefabric/internal/app/workflows"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/api"
+	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
 	"github.com/Autarquico/codefabric/internal/controller/store"
@@ -127,9 +129,16 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	build := buildinfo.Get()
 	offlineTTL := cmp.Or(o.WorkerOfflineTTL, time.Duration(cfg.WorkerOfflineTTL))
 	startedAt := o.Clock.Now()
+	blobs, err := blob.New(p.DataDir, o.Clock)
+	if err != nil {
+		_ = ln.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("opening the blob store: %w", err)
+	}
 	services := app.New(db, o.Clock, domain.NewIDGenerator(o.Clock.Now, rand.Reader), app.Config{
 		Workers:        workers.Config{ControllerVersion: build.Version, OfflineTTL: offlineTTL, StartedAt: startedAt},
 		RunLostTimeout: cmp.Or(o.RunLostTimeout, time.Duration(cfg.RunLostTimeout)),
+		Blobs:          blobs, MaxBlobBytes: workflows.DefaultMaxBlobBytes,
 	}, runOpts...)
 	// §27.1: the stops that are owed are resumed before anything is served.
 	if err := services.Reconciliation.Startup(ctx, o.Logger); err != nil {
@@ -139,7 +148,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	}
 	srv, err := api.New(api.Config{
 		Authority: newAuthority(db, ca, o.Clock, host, port), CA: ca, ServerCert: serverCert,
-		Store: db, Work: services, Relay: gitRelay,
+		Store: db, Work: services, Relay: gitRelay, MaxBlobBytes: workflows.DefaultMaxBlobBytes,
 		Clock: o.Clock, StartedAt: startedAt, Build: build, Logger: o.Logger,
 	})
 	if err != nil {
