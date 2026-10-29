@@ -144,6 +144,11 @@ func TestManifestValidate(t *testing.T) {
 		"same name other harness":   func(m *Manifest) { m.Components[1].Name = "skills" },
 		"bad harness":               func(m *Manifest) { m.Components[0].Harness = "Codex" },
 		"empty name":                func(m *Manifest) { m.Components[0].Name = "" },
+		"file name":                 func(m *Manifest) { m.Components[0].Name = "AGENTS.md" },
+		"path name":                 func(m *Manifest) { m.Components[0].Name = "skills/review" },
+		"dot dot name":              func(m *Manifest) { m.Components[0].Name = "../skills" },
+		"absolute name":             func(m *Manifest) { m.Components[0].Name = "/skills" },
+		"name with a space":         func(m *Manifest) { m.Components[0].Name = "my skills" },
 		"empty kind":                func(m *Manifest) { m.Components[0].Kind = "" },
 		"merged ownership":          func(m *Manifest) { m.Components[0].Ownership = OwnershipMerged },
 		"ignored ownership":         func(m *Manifest) { m.Components[0].Ownership = OwnershipIgnored },
@@ -165,7 +170,7 @@ func TestManifestValidate(t *testing.T) {
 		"bad secret ref":            func(m *Manifest) { m.Components[0].Files[0].SecretRefs = []string{"a b"} },
 		"repeated secret ref":       func(m *Manifest) { m.Components[0].Files[0].SecretRefs = []string{"k", "k"} },
 	}
-	wantValid := map[string]bool{"valid": true, "same name other harness": true, "same path other component": true, "backslash is a name": true}
+	wantValid := map[string]bool{"valid": true, "file name": true, "path name": true, "same name other harness": true, "same path other component": true, "backslash is a name": true}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			m := sampleManifest()

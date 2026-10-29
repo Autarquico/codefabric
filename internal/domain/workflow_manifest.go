@@ -87,8 +87,8 @@ func (c ManifestComponent) validate() error {
 	switch {
 	case !token.MatchString(c.Harness):
 		return invalidManifest("component %q: harness must be a lower-case token", id)
-	case !token.MatchString(c.Name) || len(c.Name) > maxManifestName:
-		return invalidManifest("component %q: name must be a lower-case token of at most %d characters", id, maxManifestName)
+	case !validComponentName(c.Name):
+		return invalidManifest("component %q: name must be a relative slash path of at most %d characters, with no space", id, maxManifestName)
 	case !token.MatchString(c.Kind):
 		return invalidManifest("component %q: kind must be a lower-case token", id)
 	case c.Ownership != OwnershipManaged && c.Ownership != OwnershipLocal:
@@ -172,4 +172,19 @@ func (m Manifest) Digest() (string, error) {
 	}
 	sum := sha256.Sum256(canonical)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// validComponentName says whether name can name a component: the adapter names
+// them after what they hold (config.toml, skills/review), so a relative slash
+// path, with no space nor control character.
+func validComponentName(name string) bool {
+	if len(name) > maxManifestName || name == "." || !fs.ValidPath(name) {
+		return false
+	}
+	for _, r := range name {
+		if r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
