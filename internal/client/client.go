@@ -34,6 +34,10 @@ const (
 	requestTimeout  = 30 * time.Second
 	idleConnTimeout = 90 * time.Second
 	maxResponse     = 1 << 20
+	// maxWorkflowResponse bounds the answers that carry a manifest. The
+	// Controller stores only a manifest that serves in at most
+	// v1.MaxServedManifestBytes; 2 MiB on top hold the rest of the version.
+	maxWorkflowResponse = v1.MaxServedManifestBytes + 2<<20
 
 	pemTypeCert    = "CERTIFICATE"
 	pemTypeCertReq = "CERTIFICATE REQUEST"
@@ -254,6 +258,11 @@ func (c *Client) Renew(ctx context.Context) error {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	return c.doLimited(ctx, maxResponse, method, path, in, out)
+}
+
+// doLimited is do for an answer of up to limit bytes.
+func (c *Client) doLimited(ctx context.Context, limit int64, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
@@ -274,7 +283,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return c.transportError(ctx, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return c.transportError(ctx, err)
 	}
@@ -288,6 +297,46 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return domain.NewError(domain.CodeInternal, "the Controller sent an unreadable response", nil)
 	}
 	return nil
+}
+
+// send makes a request whose body is raw bytes, not JSON (size is its length, or
+// -1 if unknown), over hc, and returns the response of whatever status: the
+// caller closes it. Auth, TLS and transport errors are those of do.
+func (c *Client) send(ctx context.Context, hc *http.Client, method, path string, body io.Reader, size int64) (*http.Response, error) {
+	if body == nil || size == 0 {
+		body, size = http.NoBody, 0
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("client: building request: %w", err)
+	}
+	if body != http.NoBody {
+		req.ContentLength = size
+		req.Header.Set("Content-Type", "application/octet-stream")
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, c.transportError(ctx, err)
+	}
+	return resp, nil
+}
+
+// sendOK is send for a caller that wants a 2xx: any other answer is decoded,
+// as do decodes it, into a domain error and the body is closed.
+func (c *Client) sendOK(ctx context.Context, hc *http.Client, method, path string, body io.Reader, size int64) (*http.Response, error) {
+	resp, err := c.send(ctx, hc, method, path, body, size)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		return resp, nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
+	if err != nil {
+		return nil, c.transportError(ctx, err)
+	}
+	return nil, c.decodeError(resp.StatusCode, raw)
 }
 
 // decodeError turns an error envelope into a domain error. An authentication

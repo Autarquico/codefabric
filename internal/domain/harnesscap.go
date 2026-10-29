@@ -10,6 +10,11 @@ import (
 // announcement of modes (§10.1).
 const HarnessModesMarker = "harness-modes:v1"
 
+// WorkflowConfigCapability is that of a Worker that materialises the
+// configuration of a Workflow version for the Runs that froze one. A Run with a
+// Workflow is only placed on a Worker that announces it.
+const WorkflowConfigCapability = "workflow-config:v1"
+
 // legacyHarness is the only harness of the Workers that predate
 // HarnessModesMarker, and legacyModes the modes it ran in there.
 const legacyHarness = "command"

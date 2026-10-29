@@ -73,8 +73,8 @@ type File struct {
 	// Content is unrendered: a secret appears in it as its marker
 	// {{cf-secret:<ref>}}, never as its value.
 	Content []byte
-	// SecretRefs are the refs of the markers in Content, in order of first
-	// appearance; what SecretRefs(Content) returns. CheckSecrets says so.
+	// SecretRefs are the refs of the markers in Content, sorted and
+	// without repeats; what SecretRefs(Content) returns. CheckSecrets says so.
 	SecretRefs []string
 }
 

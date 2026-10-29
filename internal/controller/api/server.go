@@ -97,21 +97,22 @@ type Config struct {
 
 // Server is the Controller API over mutual TLS.
 type Server struct {
-	authority *pki.Authority
-	timeouts  Timeouts
-	log       *slog.Logger
-	store     Store
-	work      *app.Services
-	relay     *relay.Relay
-	clock     clock.Clock
-	startedAt time.Time
-	build     buildinfo.Info
-	cert      atomic.Pointer[tls.Certificate]
-	tlsConfig *tls.Config
-	mux       *http.ServeMux
-	routes    map[string]route
-	health    healthCache
-	streams   *streamHub
+	authority    *pki.Authority
+	timeouts     Timeouts
+	log          *slog.Logger
+	store        Store
+	work         *app.Services
+	relay        *relay.Relay
+	maxBlobBytes int64
+	clock        clock.Clock
+	startedAt    time.Time
+	build        buildinfo.Info
+	cert         atomic.Pointer[tls.Certificate]
+	tlsConfig    *tls.Config
+	mux          *http.ServeMux
+	routes       map[string]route
+	health       healthCache
+	streams      *streamHub
 }
 
 // New builds the server and its route table. It fails when Config.Work is missing.
@@ -130,15 +131,16 @@ func New(c Config) (*Server, error) {
 	roots := x509.NewCertPool()
 	roots.AddCert(c.CA.Cert)
 	s := &Server{
-		authority: c.Authority,
-		timeouts:  c.Timeouts.orDefaults(),
-		log:       log,
-		store:     c.Store,
-		work:      c.Work,
-		relay:     c.Relay,
-		clock:     clk,
-		startedAt: c.StartedAt,
-		build:     c.Build,
+		authority:    c.Authority,
+		timeouts:     c.Timeouts.orDefaults(),
+		log:          log,
+		store:        c.Store,
+		work:         c.Work,
+		relay:        c.Relay,
+		maxBlobBytes: c.Work.Workflows.MaxBlobBytes(),
+		clock:        clk,
+		startedAt:    c.StartedAt,
+		build:        c.Build,
 		tlsConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13,
 			// A certificate is optional at the handshake because /v1/join is
@@ -154,6 +156,7 @@ func New(c Config) (*Server, error) {
 	s.SetServerCert(c.ServerCert)
 	s.registerRoutes()
 	s.registerWorkRoutes()
+	s.registerWorkflowRoutes()
 	if s.work.Workers != nil {
 		s.registerWorkerRoutes()
 	}

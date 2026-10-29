@@ -14,6 +14,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app/scheduler"
 	"github.com/Autarquico/codefabric/internal/app/tasks"
 	"github.com/Autarquico/codefabric/internal/app/workers"
+	"github.com/Autarquico/codefabric/internal/app/workflows"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -28,6 +29,8 @@ type Services struct {
 	Workers   *workers.Service
 	Leases    *leases.Service
 	Scheduler *scheduler.Service
+	// Workflows are the versioned configurations and the blobs they name (§8.9).
+	Workflows *workflows.Service
 	// Reconciliation is the start of the Controller, the reconciliation of the
 	// Workers and the Runs they lose (§27).
 	Reconciliation *reconciliation.Service
@@ -46,6 +49,11 @@ type Config struct {
 	RunLostTimeout time.Duration
 	// ReconciliationHooks let tests step into the reconciliation.
 	ReconciliationHooks reconciliation.Hooks
+	// Blobs is the content-addressed store of Workflow files; nil leaves the
+	// Workflow commit and blob operations unavailable. *blob.Store implements it.
+	Blobs workflows.BlobStore
+	// MaxBlobBytes is the largest blob a client may upload; 0 takes the default.
+	MaxBlobBytes int64
 }
 
 // New wires the use cases. Runs re-derive their Task through tasks.NewRederive,
@@ -67,8 +75,9 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 			StartedAt: workersCfg.StartedAt, LostTimeout: cfg.RunLostTimeout, OfflineTTL: workersCfg.OfflineTTL,
 			Hooks: cfg.ReconciliationHooks,
 		}),
-		Events: events.New(db, clk),
-		db:     db,
+		Events:    events.New(db, clk),
+		Workflows: workflows.New(db, clk, ids, cfg.Blobs, blobLimit(cfg.MaxBlobBytes)...),
+		db:        db,
 	}
 }
 
@@ -76,4 +85,11 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 // narrows a Task name that more than one Project has.
 func (s *Services) Resolve(ctx context.Context, kind domain.Kind, ref, project string) (v1.Resolved, error) {
 	return refs.Resolve(ctx, s.db, kind, ref, project)
+}
+
+func blobLimit(n int64) []workflows.Option {
+	if n <= 0 {
+		return nil
+	}
+	return []workflows.Option{workflows.WithMaxBlobBytes(n)}
 }

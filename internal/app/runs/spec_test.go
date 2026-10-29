@@ -270,3 +270,21 @@ func jsonOf(v any) string {
 	raw, _ := json.Marshal(v)
 	return string(raw)
 }
+
+// A Run without a Workflow asks for no capability of its own: the placement
+// of its spec is what its requirements say, and with one it adds exactly
+// domain.WorkflowConfigCapability.
+func TestPlacementOf_AWorkflowAddsItsCapability(t *testing.T) {
+	project := store.Project{DefaultBranch: "main"}
+	plain, _ := digestOf(t, store.Task{Prompt: "x", Requirements: v1.Requirements{Capabilities: []string{"docker"}}}, project, commit)
+	flow, _ := digestOf(t, store.Task{Prompt: "x", Workflow: "review@sha256:" + strings.Repeat("a", 64), Requirements: v1.Requirements{Capabilities: []string{"docker"}}}, project, commit)
+
+	p, err := PlacementOf([]byte(plain))
+	if err != nil || len(p.Capabilities) != 1 {
+		t.Fatalf("plain placement = %+v, %v", p.Capabilities, err)
+	}
+	p, err = PlacementOf([]byte(flow))
+	if err != nil || len(p.Capabilities) != 2 || p.Capabilities[1] != domain.WorkflowConfigCapability {
+		t.Fatalf("workflow placement = %+v, %v", p.Capabilities, err)
+	}
+}

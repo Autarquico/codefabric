@@ -220,6 +220,15 @@ type Run struct {
 	StartedAt       *time.Time      `json:"started_at,omitempty"`
 	FinishedAt      *time.Time      `json:"finished_at,omitempty"`
 	Spec            json.RawMessage `json:"spec,omitempty"`
+	// Workflow is the version the Run froze, absent for a Run without one. The
+	// spec names it as name@sha256:<digest>.
+	Workflow *RunWorkflow `json:"workflow,omitempty"`
+}
+
+// RunWorkflow is the Workflow version a Run is pinned to (§8.9).
+type RunWorkflow struct {
+	Version int    `json:"version"`
+	Digest  string `json:"digest"`
 }
 
 // ListRunsResponse is GET /v1/runs.

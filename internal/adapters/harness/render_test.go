@@ -25,3 +25,16 @@ func TestRenderSecretsStopsAtTheFirstValueItCannotGive(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// The first error is that of the ref that appears first, not the smallest.
+func TestRenderSecretsAsksForRefsInOrderOfFirstAppearance(t *testing.T) {
+	content := []byte(SecretMarker("z") + SecretMarker("a") + SecretMarker("z"))
+	var asked []string
+	_, err := RenderSecrets(content, func(ref string) ([]byte, error) {
+		asked = append(asked, ref)
+		return nil, errors.New("no " + ref)
+	})
+	if err == nil || err.Error() != "no z" || len(asked) != 1 {
+		t.Errorf("err = %v, asked = %v", err, asked)
+	}
+}

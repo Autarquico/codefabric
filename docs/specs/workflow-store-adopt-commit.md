@@ -6,14 +6,14 @@ status: active
 priority: P0
 size: L
 issue: 19
-prs: []
+prs: [54]
 related_issues: [19]
 sub_issues: []
 depends_on: [projects-tasks-runs-api, harness-adapter-framework]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-29
 ---
 
 # Workflows: almacenamiento, adopt y commit

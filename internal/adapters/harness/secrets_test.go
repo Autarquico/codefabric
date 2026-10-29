@@ -10,7 +10,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-func TestSecretRefsFindsTheMarkersInOrderOnce(t *testing.T) {
+func TestSecretRefsAreSortedAndWithoutRepeats(t *testing.T) {
 	content := []byte(`{"token": "` + harness.SecretMarker("claude/api-key") + `", ` +
 		`"other": "` + harness.SecretMarker("gh.token_2") + `", ` +
 		`"again": "` + harness.SecretMarker("claude/api-key") + `"}`)
@@ -101,5 +101,17 @@ func TestAMarkerInsideAnotherIsNotTakenForValid(t *testing.T) {
 	}
 	if err := (harness.File{Content: content, SecretRefs: []string{"b"}}).CheckSecrets(); !errors.Is(err, harness.ErrSecretUnavailable) {
 		t.Errorf("CheckSecrets = %v, want ErrSecretUnavailable for the open marker", err)
+	}
+}
+
+// There is one grammar of a marker: the harness reads what domain.SecretRefsIn reads.
+func TestSecretRefsAreThoseOfTheDomain(t *testing.T) {
+	content := []byte("{{cf-secret:z}} {{cf-secret:a}} {{cf-secret:bad ref}} {{cf-secret:z}}")
+	if got, want := harness.SecretRefs(content), domain.SecretRefsIn(content); !slices.Equal(got, want) || !slices.Equal(got, []string{"a", "z"}) {
+		t.Errorf("SecretRefs = %q, domain = %q", got, want)
+	}
+	out, err := harness.RenderSecrets(content, func(ref string) ([]byte, error) { return []byte("<" + ref + ">"), nil })
+	if err != nil || string(out) != "<z> <a> {{cf-secret:bad ref}} <z>" {
+		t.Errorf("RenderSecrets = %q, %v", out, err)
 	}
 }

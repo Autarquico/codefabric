@@ -199,12 +199,14 @@ func (s runSpec) encode() (raw []byte, digest string, err error) {
 	return raw, "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// PlacementOf reads the placement out of a Run's stored spec: its requirements,
+// PlacementOf reads the placement out of a Run's stored spec: its requirements
+// (plus domain.WorkflowConfigCapability when it froze a Workflow),
 // the mode the harness must run in and the secrets the Worker must hold. A spec
 // without requirements asks for nothing.
 func PlacementOf(spec []byte) (domain.Placement, error) {
 	var stored struct {
 		Mode         domain.Mode      `json:"mode"`
+		Workflow     string           `json:"workflow"`
 		Requirements specRequirements `json:"requirements"`
 		Secrets      *specSecrets     `json:"secrets"`
 	}
@@ -212,8 +214,12 @@ func PlacementOf(spec []byte) (domain.Placement, error) {
 		return domain.Placement{}, fmt.Errorf("runs: reading the placement of a spec: %w", err)
 	}
 	r := stored.Requirements
+	capabilities := r.Capabilities
+	if stored.Workflow != "" {
+		capabilities = append(slices.Clone(capabilities), domain.WorkflowConfigCapability)
+	}
 	placement := domain.Placement{
-		Harness: r.Harness, Mode: stored.Mode, Capabilities: r.Capabilities,
+		Harness: r.Harness, Mode: stored.Mode, Capabilities: capabilities,
 		Resources: domain.Capacity{CPU: r.Resources.CPU, MemoryMB: r.Resources.MemoryMB},
 		Prefer:    r.Workers.Prefer, Avoid: r.Workers.Avoid, Require: r.Workers.Require,
 	}
