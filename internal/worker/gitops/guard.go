@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -276,47 +277,25 @@ func (s *scanner) fail(err error) {
 	s.stop()
 }
 
-// detector runs one object through the redaction of one secret and compares
-// what comes out with what went in.
+// detector runs one object through the redaction of one secret and says
+// whether a whole value was redacted in it.
 type detector struct {
-	ref  string
-	w    *redact.Writer
-	sink *compare
+	ref string
+	w   *redact.Writer
 }
 
 func newDetector(ref string, set *redact.Set) *detector {
-	c := &compare{}
-	return &detector{ref: ref, w: redact.NewWriter(c, set), sink: c}
+	return &detector{ref: ref, w: redact.NewWriter(io.Discard, set)}
 }
 
 func (d *detector) feed(p []byte) {
-	if d.sink.changed {
-		return
+	if !d.w.Matched() {
+		_, _ = d.w.Write(p)
 	}
-	d.sink.in = append(d.sink.in, p...)
-	_, _ = d.w.Write(p)
 }
 
 // close says whether the object held the value.
 func (d *detector) close() bool {
-	if !d.sink.changed {
-		_ = d.w.Close()
-	}
-	return d.sink.changed || len(d.sink.in) != 0
-}
-
-// compare is the destination of a redaction: it checks each byte that comes
-// out against the input still unmatched.
-type compare struct {
-	in      []byte
-	changed bool
-}
-
-func (c *compare) Write(out []byte) (int, error) {
-	if c.changed || len(out) > len(c.in) || !bytes.Equal(out, c.in[:len(out)]) {
-		c.changed = true
-		return len(out), nil
-	}
-	c.in = c.in[:copy(c.in, c.in[len(out):])]
-	return len(out), nil
+	_ = d.w.Close()
+	return d.w.Matched()
 }

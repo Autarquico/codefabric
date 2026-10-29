@@ -62,7 +62,8 @@ func layoutOf(name string) (layout, bool) {
 func globalDir(host harness.Host) string { return filepath.Join(host.Home(), ConfigDirName) }
 
 // SnapshotConfig reads the components of ~/.codex that exist, all managed.
-// config.toml comes without `projects` (the trust of this machine) and with
+// config.toml comes without the keys of this machine (`projects`, the sandbox
+// and permission settings; see localKeys) and with
 // the value of every secret replaced by its marker; see secretify.
 func (Adapter) SnapshotConfig(_ context.Context, host harness.Host, opts harness.SnapshotOptions) (harness.NativeSnapshot, error) {
 	for _, n := range opts.Components {

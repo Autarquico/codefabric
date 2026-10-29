@@ -211,8 +211,13 @@ func quotedMarkers(p *unstable.Parser, n *unstable.Node, quoted *int) error {
 }
 
 // localKeys are the top-level keys that describe the machine, not the
-// configuration: `projects` is the trust of each path of this machine.
-var localKeys = []string{"projects"}
+// configuration: `projects` is the trust of each path of this machine, and
+// `sandbox_workspace_write` and `permissions` are its sandbox and permission
+// profiles. A Run must not inherit them (a writable root of the host would
+// widen the workspace-write sandbox, which `--sandbox` does not cancel): its
+// sandbox is the one Start sets. A global apply keeps them in the host, as it
+// keeps any key the snapshot does not carry.
+var localKeys = []string{"projects", "sandbox_workspace_write", "permissions"}
 
 // secretTables are the keys whose table has a secret in each of its string
 // values (config.schema.json of codex 0.160.1): the environment and headers
@@ -222,6 +227,9 @@ var secretTables = []string{"env", "http_headers", "query_params"}
 // secretScalars are the keys whose string value is a secret.
 var secretScalars = []string{"experimental_bearer_token", "bearer_token"}
 
+// The `args` of an MCP server are in none either, on purpose: a list of
+// arguments cannot be told apart into secret and not, so they stay as written
+// and secrets go through `env` (README, "Decision").
 // The keys that name an environment variable (env_vars, env_http_headers,
 // env_key, bearer_token_env_var) are in none of the lists: a name is not a
 // secret, and Codex needs it to find the value.
@@ -233,8 +241,9 @@ var otelExporterKinds = []string{"otlp-http", "otlp-grpc"}
 
 // holdsSecrets says whether the table at path has secrets as values: every
 // string, or every string of the lists when the values are lists. The match
-// headers of a MITM hook (permissions.<p>.network.mitm.hooks.<h>.headers) are
-// the lists.
+// headers of a MITM hook (<p>.network.mitm.hooks.<h>.headers) are the lists.
+// The top-level `permissions` never gets here (localKeys), but the rule is by
+// shape: it holds wherever such a hook is.
 func holdsSecrets(path []string) (secrets, lists bool) {
 	n := len(path)
 	key, parent := path[n-1], last(path[:n-1])

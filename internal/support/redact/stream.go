@@ -28,6 +28,8 @@ type Writer struct {
 	head int
 	out  []byte
 	err  error
+	// matched says a whole needle has been redacted.
+	matched bool
 }
 
 // NewWriter returns a Writer that redacts set on its way to dst.
@@ -54,8 +56,18 @@ func (w *Writer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Matched says whether a whole needle has been redacted so far; the start of
+// one that a Close turns into PartialMarker is not.
+func (w *Writer) Matched() bool { return w.matched }
+
+// PartialMarker stands in the output for the end of a stream that stopped
+// inside a match: the start of a secret whose rest never came. It is not
+// written as it is, for a prefix of a secret is part of it.
+const PartialMarker = "[REDACTED]"
+
 // Close writes what was held back, redacting the longest needle at each
-// position, and leaves dst open. Later Writes fail with ErrClosed.
+// position, and leaves dst open. Later Writes fail with ErrClosed. The held
+// bytes that are only the start of a needle become PartialMarker, one per run.
 func (w *Writer) Close() error {
 	if w.err != nil {
 		if errors.Is(w.err, ErrClosed) {
@@ -63,7 +75,7 @@ func (w *Writer) Close() error {
 		}
 		return w.err
 	}
-	w.emit(len(w.held))
+	w.emitEnd()
 	err := w.flush()
 	if err == nil {
 		w.err = ErrClosed
@@ -98,6 +110,7 @@ func (w *Writer) emit(final int) {
 	for i < final {
 		if needle := w.best[i]; needle >= 0 {
 			w.out = append(w.out, s.markers[s.refOf[needle]]...)
+			w.matched = true
 			i += int(s.lens[needle])
 			continue
 		}
@@ -110,6 +123,31 @@ func (w *Writer) emit(final int) {
 		w.best = w.best[:copy(w.best, w.best[w.head:])]
 		w.head = 0
 	}
+}
+
+// emitEnd decides the whole held end of the stream. What no needle matched
+// inside the bytes of a match in progress is not text: it may be the start of
+// a secret, so it is replaced rather than flushed.
+func (w *Writer) emitEnd() {
+	s := w.set
+	partial := len(w.held) - int(s.live[w.state])
+	w.emit(partial)
+	marked := false
+	for i := w.head; i < len(w.held); {
+		if needle := w.best[i]; needle >= 0 {
+			w.out = append(w.out, s.markers[s.refOf[needle]]...)
+			w.matched = true
+			i += int(s.lens[needle])
+			marked = false
+			continue
+		}
+		if !marked {
+			w.out = append(w.out, PartialMarker...)
+			marked = true
+		}
+		i++
+	}
+	w.held, w.best, w.head = w.held[:0], w.best[:0], 0
 }
 
 func (w *Writer) flush() error {
