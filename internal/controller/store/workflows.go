@@ -287,28 +287,3 @@ func BlobMeta(ctx context.Context, q Querier, digest string) (Blob, error) {
 	b.CreatedAt = time.Unix(0, created).UTC()
 	return b, nil
 }
-
-// HasBlobMeta says which of the digests were uploaded.
-func HasBlobMeta(ctx context.Context, q Querier, digests []string) (map[string]bool, error) {
-	out := make(map[string]bool, len(digests))
-	if len(digests) == 0 {
-		return out, nil
-	}
-	args := make([]any, len(digests))
-	for i, d := range digests {
-		args[i] = d
-	}
-	rows, err := q.Query(ctx, `SELECT digest FROM blobs_meta WHERE digest IN (`+placeholders(len(digests))+`)`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: reading blobs: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var d string
-		if err := rows.Scan(&d); err != nil {
-			return nil, scanErr(err, "blob")
-		}
-		out[d] = true
-	}
-	return out, rows.Err()
-}

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/app"
-	"github.com/Autarquico/codefabric/internal/app/workflows"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
@@ -95,9 +93,6 @@ type Config struct {
 	// Relay is the git relay (§22.1); nil when this machine cannot serve one,
 	// and then its routes answer CF_INTERNAL.
 	Relay *relay.Relay
-	// MaxBlobBytes bounds one blob upload; 0 takes workflows.DefaultMaxBlobBytes.
-	// It must be the limit the app.Config of Work was built with.
-	MaxBlobBytes int64
 }
 
 // Server is the Controller API over mutual TLS.
@@ -142,7 +137,7 @@ func New(c Config) (*Server, error) {
 		store:        c.Store,
 		work:         c.Work,
 		relay:        c.Relay,
-		maxBlobBytes: cmp.Or(c.MaxBlobBytes, workflows.DefaultMaxBlobBytes),
+		maxBlobBytes: c.Work.Workflows.MaxBlobBytes(),
 		clock:        clk,
 		startedAt:    c.StartedAt,
 		build:        c.Build,

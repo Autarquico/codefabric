@@ -102,14 +102,11 @@ func (a *fakeAdopter) Components(context.Context, string) ([]WorkflowComponent, 
 func (a *fakeAdopter) Prepare(ctx context.Context, sel []workflowadopt.Selection) (*workflowadopt.Prepared, error) {
 	a.selections = append(a.selections, sel)
 	if len(a.secrets) > 0 {
-		if a.confirmer == nil {
-			return nil, fmt.Errorf("%w: headless without accept-all", workflowadopt.ErrSecretsUnconfirmed)
-		}
-		d, err := a.confirmer.ConfirmSecrets(ctx, a.secrets)
+		ok, err := a.confirmer.ConfirmSecrets(ctx, a.secrets)
 		if err != nil {
 			return nil, err
 		}
-		if !d.Proceed {
+		if !ok {
 			return nil, fmt.Errorf("%w: declined", workflowadopt.ErrSecretsUnconfirmed)
 		}
 	}
@@ -219,7 +216,7 @@ func TestAdoptHeadlessNeedsItsFlags(t *testing.T) {
 func TestAdoptHeadlessRefusesSecretsWithoutReplaceSecrets(t *testing.T) {
 	secrets := []workflowadopt.HarnessSecrets{{Harness: "codex", Report: workflowadopt.Report{
 		Substituted: []workflowadopt.Substituted{{Component: "settings", File: "config.toml", Ref: "github-token"}},
-		Hits:        []workflowadopt.Hit{{ID: "h1", Component: "settings", File: "config.toml", Line: 3, Kind: "github-token", Preview: "ghp_… (40)", Ref: "codex-settings-token", Replaceable: true}},
+		Hits:        []workflowadopt.Hit{{Component: "settings", File: "config.toml", Line: 3, Kind: "github-token", Preview: "ghp_… (40)", Ref: "codex-settings-token", Replaceable: true}},
 	}}}
 	a := &fakeAdopter{snapshot: headManifest(), secrets: secrets}
 	args := []string{"workflow", "adopt", "team", "--harness", "codex", "--yes"}
@@ -299,6 +296,15 @@ func TestCommitKeepsTheOwnershipOfTheHead(t *testing.T) {
 	}
 	if got := a.commits[0].manifest.Components[0].Ownership; got != domain.OwnershipLocal {
 		t.Errorf("ownership %q, want local", got)
+	}
+}
+
+func TestCommitKeepsWhatTheHeadKeptLocal(t *testing.T) {
+	hm := manifestOf(component("codex", "settings", domain.OwnershipLocal, "config.toml"))
+	a := &fakeAdopter{snapshot: manifestOf(component("codex", "settings", domain.OwnershipManaged, "changed.toml"))}
+	code, _, errOut := runWorkflow(t, &fakeStore{heads: []v1.WorkflowVersion{versionOf(2, &hm)}}, a, "workflow", "commit", "team", "--yes")
+	if code != 0 || len(a.commits) != 1 || a.commits[0].manifest.Components[0].Ownership != domain.OwnershipLocal {
+		t.Errorf("exit %d, commits %+v, %q", code, a.commits, errOut)
 	}
 }
 
@@ -395,15 +401,15 @@ func TestPickAndConfirm(t *testing.T) {
 	}
 }
 
-func TestTTYConfirmerListsEveryRefAndNeverAValue(t *testing.T) {
+func TestConfirmerListsEveryRefAndNeverAValue(t *testing.T) {
 	found := []workflowadopt.HarnessSecrets{{Harness: "codex", Report: workflowadopt.Report{
 		Substituted: []workflowadopt.Substituted{{Component: "settings", File: "config.toml", Ref: "github-token"}},
-		Hits:        []workflowadopt.Hit{{ID: "h1", Component: "settings", File: "config.toml", Line: 7, Kind: "github-token", Preview: "ghp_… (40 chars)", Ref: "codex-settings-token", Replaceable: true}},
+		Hits:        []workflowadopt.Hit{{Component: "settings", File: "config.toml", Line: 7, Kind: "github-token", Preview: "ghp_… (40 chars)", Ref: "codex-settings-token", Replaceable: true}},
 	}}}
 	p, out := newPrompter("y\n")
-	d, err := ttyConfirmer{ui: p}.ConfirmSecrets(context.Background(), found)
-	if err != nil || !d.Proceed || !d.Accept["codex"]["h1"] {
-		t.Fatalf("accepted: %+v, %v", d, err)
+	ok, err := cliConfirmer{ui: p}.ConfirmSecrets(context.Background(), found)
+	if err != nil || !ok {
+		t.Fatalf("accepted: %v, %v", ok, err)
 	}
 	for _, want := range []string{"github-token", "config.toml:7", "ghp_… (40 chars)", "codex-settings-token"} {
 		if !strings.Contains(out.String(), want) {
@@ -411,7 +417,7 @@ func TestTTYConfirmerListsEveryRefAndNeverAValue(t *testing.T) {
 		}
 	}
 	p, _ = newPrompter("n\n")
-	if d, err := (ttyConfirmer{ui: p}).ConfirmSecrets(context.Background(), found); err != nil || d.Proceed {
-		t.Errorf("declined: %+v, %v", d, err)
+	if ok, err := (cliConfirmer{ui: p}).ConfirmSecrets(context.Background(), found); err != nil || ok {
+		t.Errorf("declined: %v, %v", ok, err)
 	}
 }

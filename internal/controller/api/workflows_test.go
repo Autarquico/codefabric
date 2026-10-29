@@ -32,7 +32,6 @@ func withBlobs(t *testing.T) func(*api.Config) {
 		must(t, err)
 		c.Work = app.New(c.Store.(*store.DB), clk, domain.NewIDGenerator(clk.Now, rand.Reader),
 			app.Config{Workers: workers.Config{ControllerVersion: controllerVersion}, Blobs: bs, MaxBlobBytes: testBlobLimit})
-		c.MaxBlobBytes = testBlobLimit
 	}
 }
 

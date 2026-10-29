@@ -19,12 +19,14 @@ const DefaultMaxBlobBytes = 8 << 20
 // BlobStore is the content-addressed store the manifests' files live in.
 // *blob.Store implements it.
 type BlobStore interface {
-	Has(d blob.Digest) (bool, error)
 	Open(d blob.Digest) (io.ReadCloser, error)
 	// Put installs the content of r only if it hashes to want, and nothing
 	// if r fails.
 	Put(ctx context.Context, r io.Reader, want blob.Digest) (blob.Digest, int64, error)
 }
+
+// MaxBlobBytes is the largest blob PutBlob accepts: the one limit of the upload.
+func (s *Service) MaxBlobBytes() int64 { return s.maxBlobBytes }
 
 // BlobInfo describes a blob the Controller holds.
 type BlobInfo struct {
@@ -62,24 +64,6 @@ func (s *Service) PutBlob(ctx context.Context, by pki.Session, digest string, r 
 		return err
 	})
 	return info, err
-}
-
-// HasBlobs says which of the digests were uploaded.
-func (s *Service) HasBlobs(ctx context.Context, by pki.Session, digests []string) (map[string]bool, error) {
-	if err := s.mayUseBlobs(by); err != nil {
-		return nil, err
-	}
-	for _, d := range digests {
-		if _, err := parseDigest(d); err != nil {
-			return nil, err
-		}
-	}
-	var out map[string]bool
-	err := s.db.Read(ctx, func(q store.Querier) (err error) {
-		out, err = store.HasBlobMeta(ctx, q, digests)
-		return err
-	})
-	return out, err
 }
 
 // OpenBlob returns the content of an uploaded blob and its size.

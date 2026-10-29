@@ -353,7 +353,11 @@ func TestScenario_WorkflowStoreAdoptCommit_Congelacion_E2E(t *testing.T) {
 	if len(explained.Workers) != 1 || len(explained.Workers[0].Failed) != 1 || explained.Workers[0].Failed[0].Filter != "capabilities" {
 		t.Errorf("the Worker should fail only on %s: %+v", domain.WorkflowConfigCapability, explained.Workers)
 	}
-	time.Sleep(time.Second)
+	// The scheduler has looked at the Run and left it queued with that reason:
+	// waiting on the fact, not on the clock.
+	soon(t, "the scheduler to have refused the Run", func() bool {
+		return ok[v1.Run](t, "run", "show", run.Short).QueuedReason == string(domain.CodeNoEligibleWorker)
+	})
 	if later := ok[v1.Run](t, "run", "show", run.Short); later.State != domain.RunQueued || later.Lease != nil || later.WorkerID != "" {
 		t.Errorf("Run = %+v, want queued with no Worker", later)
 	}

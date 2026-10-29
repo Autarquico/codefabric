@@ -10,12 +10,3 @@ const (
 	OwnershipMerged  Ownership = "merged"
 	OwnershipIgnored Ownership = "ignored"
 )
-
-// Workflow is a versioned composition of native harness configuration (§3.6).
-type Workflow struct {
-	ID           ID
-	Name         string
-	Version      int
-	Digest       string
-	ParentDigest string
-}

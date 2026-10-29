@@ -103,3 +103,15 @@ func TestAMarkerInsideAnotherIsNotTakenForValid(t *testing.T) {
 		t.Errorf("CheckSecrets = %v, want ErrSecretUnavailable for the open marker", err)
 	}
 }
+
+// There is one grammar of a marker: the harness reads what domain.SecretRefsIn reads.
+func TestSecretRefsAreThoseOfTheDomain(t *testing.T) {
+	content := []byte("{{cf-secret:z}} {{cf-secret:a}} {{cf-secret:bad ref}} {{cf-secret:z}}")
+	if got, want := harness.SecretRefs(content), domain.SecretRefsIn(content); !slices.Equal(got, want) || !slices.Equal(got, []string{"a", "z"}) {
+		t.Errorf("SecretRefs = %q, domain = %q", got, want)
+	}
+	out, err := harness.RenderSecrets(content, func(ref string) ([]byte, error) { return []byte("<" + ref + ">"), nil })
+	if err != nil || string(out) != "<z> <a> {{cf-secret:bad ref}} <z>" {
+		t.Errorf("RenderSecrets = %q, %v", out, err)
+	}
+}

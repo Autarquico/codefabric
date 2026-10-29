@@ -147,13 +147,13 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 // version a Run freezes is the head of the same snapshot the Run is written in.
 // The spec records the canonical name@sha256:<digest>.
 func pinWorkflow(ctx context.Context, tx *store.Tx, selector string) (domain.WorkflowRef, string, error) {
-	ref, err := workflows.Resolve(ctx, tx, selector)
-	if err != nil {
-		return domain.WorkflowRef{}, "", err
-	}
 	sel, err := domain.ParseWorkflowRef(selector)
 	if err != nil {
 		return domain.WorkflowRef{}, "", input.Invalid("%q is not a workflow reference", selector)
+	}
+	ref, err := workflows.ResolveRef(ctx, tx, sel, selector)
+	if err != nil {
+		return domain.WorkflowRef{}, "", err
 	}
 	return ref, sel.Name + "@" + ref.Digest, nil
 }

@@ -1,8 +1,6 @@
 package workflows
 
 import (
-	"bytes"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -88,6 +86,11 @@ func (s *Service) Commit(ctx context.Context, by pki.Session, req CommitRequest)
 	if err != nil {
 		return Version{}, err
 	}
+	if out.Conflict && req.Parent == 0 {
+		return Version{}, domain.NewError(domain.CodeWorkflowConflict,
+			fmt.Sprintf("workflow %q already exists at version %d: use `cf workflow commit`", req.Name, out.Head),
+			map[string]any{"head": out.Head, "parent": req.Parent})
+	}
 	if out.Conflict {
 		return Version{}, domain.NewError(domain.CodeWorkflowConflict,
 			fmt.Sprintf("workflow %q is at version %d, not %d: rebase on the head", req.Name, out.Head, req.Parent),
@@ -130,7 +133,7 @@ func (c commit) run(ctx context.Context) (commitOutcome, error) {
 			fmt.Sprintf("nothing to commit: the manifest is that of version %d of %q", head.Version, w.Name),
 			map[string]any{"nothing_to_commit": true, "head": head.Version})
 	}
-	changed, err := changedAgainst(head.Manifest, c.canonical)
+	changed, err := changedAgainst(head.Manifest, c.req.Manifest)
 	if err != nil {
 		return commitOutcome{}, err
 	}
@@ -197,63 +200,28 @@ func (c commit) conflict(ctx context.Context, w store.Workflow, head int) (commi
 	return commitOutcome{Conflict: true, Head: head}, nil
 }
 
-// changedAgainst lists the components whose definition differs between two
-// canonical manifests, by (harness, name). An empty parent is no manifest.
-func changedAgainst(parent, current []byte) ([]ChangedComponent, error) {
-	before, err := componentsOf(parent)
-	if err != nil {
-		return nil, err
-	}
-	after, err := componentsOf(current)
-	if err != nil {
-		return nil, err
-	}
-	var out []ChangedComponent
-	for key, def := range after {
-		old, existed := before[key]
-		switch {
-		case !existed:
-			out = append(out, ChangedComponent{Harness: key.harness, Name: key.name, Change: "added"})
-		case !bytes.Equal(old, def):
-			out = append(out, ChangedComponent{Harness: key.harness, Name: key.name, Change: "modified"})
+// changedAgainst lists the components the commit touches against the head's
+// stored (canonical) manifest; an empty one is no version.
+func changedAgainst(head []byte, next domain.Manifest) ([]ChangedComponent, error) {
+	var base *domain.Manifest
+	if len(head) > 0 {
+		base = new(domain.Manifest)
+		if err := json.Unmarshal(head, base); err != nil {
+			return nil, fmt.Errorf("workflows: reading the head manifest: %w", err)
 		}
 	}
-	for key := range before {
-		if _, kept := after[key]; !kept {
-			out = append(out, ChangedComponent{Harness: key.harness, Name: key.name, Change: "removed"})
-		}
-	}
-	slices.SortFunc(out, func(a, b ChangedComponent) int {
-		return cmp.Or(cmp.Compare(a.Harness, b.Harness), cmp.Compare(a.Name, b.Name))
-	})
-	return out, nil
-}
-
-type componentKey struct{ harness, name string }
-
-func componentsOf(canonical []byte) (map[componentKey][]byte, error) {
-	out := map[componentKey][]byte{}
-	if len(canonical) == 0 {
-		return out, nil
-	}
-	var m domain.Manifest
-	if err := json.Unmarshal(canonical, &m); err != nil {
-		return nil, fmt.Errorf("workflows: reading a manifest: %w", err)
-	}
-	for _, c := range m.Components {
-		def, err := json.Marshal(c)
-		if err != nil {
-			return nil, err
-		}
-		out[componentKey{c.Harness, c.Name}] = def
+	out := []ChangedComponent{}
+	for _, ch := range next.ChangesFrom(base) {
+		out = append(out, ChangedComponent(ch))
 	}
 	return out, nil
 }
 
 // verify is the integrity check of a commit: every file's blob was uploaded,
 // the content the Controller holds hashes to the declared sha256, and each
-// component's tree_digest is that of its files. The caller's claims are never
-// taken for the content's.
+// component's tree_digest is that of its files, and each file's secret_refs
+// are those of the markers in its content. The caller's claims are never taken
+// for the content's.
 func (s *Service) verify(ctx context.Context, m domain.Manifest) error {
 	sizes, err := s.blobSizes(ctx, m)
 	if err != nil {
@@ -267,6 +235,9 @@ func (s *Service) verify(ctx context.Context, m domain.Manifest) error {
 			if err != nil {
 				return input.Invalid("component %s: %v", id, err)
 			}
+			if !slices.Equal(domain.SecretRefsIn(content), sortedCopy(f.SecretRefs)) {
+				return input.Invalid("component %s: file %q: secret_refs do not match the secret markers in its content", id, f.Path)
+			}
 			entries = append(entries, treedigest.File{Path: f.Path, Exec: f.Exec, Content: content})
 		}
 		got, err := treedigest.Files(entries)
@@ -278,6 +249,12 @@ func (s *Service) verify(ctx context.Context, m domain.Manifest) error {
 		}
 	}
 	return nil
+}
+
+func sortedCopy(refs []string) []string {
+	out := append([]string{}, refs...)
+	slices.Sort(out)
+	return out
 }
 
 // blobSizes checks that every blob is uploaded and the whole is within bounds,

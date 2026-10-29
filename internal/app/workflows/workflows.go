@@ -143,6 +143,12 @@ func Resolve(ctx context.Context, q store.Querier, selector string) (domain.Work
 	if err != nil {
 		return domain.WorkflowRef{}, input.Invalid("%q is not a workflow reference: name, name@latest, name@N or name@sha256:<hex>", selector)
 	}
+	return ResolveRef(ctx, q, sel, selector)
+}
+
+// ResolveRef is Resolve for a selector already parsed into sel; selector is
+// only what the errors quote.
+func ResolveRef(ctx context.Context, q store.Querier, sel domain.WorkflowSelector, selector string) (domain.WorkflowRef, error) {
 	w, err := workflowNamed(ctx, q, sel.Name)
 	if err != nil {
 		return domain.WorkflowRef{}, err

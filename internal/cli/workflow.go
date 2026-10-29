@@ -263,6 +263,8 @@ type session struct {
 	store   workflowStore
 	ui      *prompter
 	flags   adoptFlags
+	// confirmer is how the user decides about secrets and diffs.
+	confirmer cliConfirmer
 }
 
 func startSession(cmd *cobra.Command, deps workflowDeps, f adoptFlags) (*session, error) {
@@ -280,14 +282,8 @@ func startSession(cmd *cobra.Command, deps workflowDeps, f adoptFlags) (*session
 		return nil, err
 	}
 	s.store = store
-	var confirmer workflowadopt.Confirmer
-	switch {
-	case f.replaceSecrets:
-		confirmer = workflowadopt.AcceptAll{}
-	case s.ui != nil:
-		confirmer = ttyConfirmer{ui: s.ui}
-	}
-	s.adopter = deps.adopter(store, confirmer)
+	s.confirmer = cliConfirmer{ui: s.ui, out: cmd.ErrOrStderr(), yes: f.yes, replaceSecrets: f.replaceSecrets}
+	s.adopter = deps.adopter(store, s.confirmer)
 	return s, nil
 }
 
@@ -304,10 +300,10 @@ func runAdopt(cmd *cobra.Command, deps workflowDeps, name string, f adoptFlags) 
 	if err != nil {
 		return adoptError(err)
 	}
-	if err := s.chooseOwnership(p); err != nil {
+	if err := s.chooseOwnership(&p.Manifest); err != nil {
 		return err
 	}
-	if err := s.confirm(fmt.Sprintf("Adopt %d component(s) as %s v1?", len(p.Manifest.Components), name), p.Manifest.Components, nil); err != nil {
+	if err := s.confirmAdopt(name, p.Manifest.Components); err != nil {
 		return err
 	}
 	v, err := s.adopter.Commit(cmd.Context(), name, p, 0, f.changelog)
@@ -322,66 +318,24 @@ func runCommit(cmd *cobra.Command, deps workflowDeps, name string, f adoptFlags)
 	if err != nil {
 		return err
 	}
-	for attempt := 0; ; attempt++ {
-		v, head, err := s.commitOnHead(cmd.Context(), name)
-		if err == nil {
-			return emitCommitted(cmd, v)
-		}
-		var coded *domain.Error
-		if f.rebase && attempt == 0 && errors.As(err, &coded) && coded.Code == domain.CodeWorkflowConflict {
-			fmt.Fprintf(cmd.ErrOrStderr(), "The head of %s moved past v%d; rebasing on it.\n", name, head)
-			continue
-		}
+	if len(f.harnesses) == 0 && len(f.components) > 0 {
+		return usageError(errors.New("--" + flagComponent + " needs --" + flagHarness))
+	}
+	var sel []workflowadopt.Selection
+	if len(f.harnesses) > 0 {
+		sel = selectionOf(f.harnesses, f.components)
+	}
+	got, err := workflowadopt.CommitOnHead(cmd.Context(), s.adopter, s.store, name, workflowadopt.CommitOptions{
+		Selection: sel, Changelog: f.changelog, Rebase: f.rebase, Confirmer: s.confirmer,
+		Adjust: func(m *domain.Manifest) error { return s.chooseOwnership(m) },
+	})
+	if err != nil {
 		return adoptError(err)
 	}
-}
-
-// commitOnHead reads the head, snapshots, shows the diff against it, asks, and
-// commits on top. head is the version it committed on.
-func (s *session) commitOnHead(ctx context.Context, name string) (v1.WorkflowVersion, int, error) {
-	head, err := s.store.ShowWorkflow(ctx, name)
-	if err != nil {
-		return v1.WorkflowVersion{}, 0, err
+	if got.Unchanged {
+		fmt.Fprintf(cmd.ErrOrStderr(), "No changes against %s v%d.\n", name, got.Version.Version)
 	}
-	if head.Manifest == nil {
-		return v1.WorkflowVersion{}, head.Version, fmt.Errorf("the head of %s came without a manifest", name)
-	}
-	sel, err := s.commitSelection(*head.Manifest)
-	if err != nil {
-		return v1.WorkflowVersion{}, head.Version, err
-	}
-	p, err := s.adopter.Prepare(ctx, sel)
-	if err != nil {
-		return v1.WorkflowVersion{}, head.Version, err
-	}
-	keepOwnership(&p.Manifest, *head.Manifest)
-	if err := s.chooseOwnership(p); err != nil {
-		return v1.WorkflowVersion{}, head.Version, err
-	}
-	diff, err := workflowadopt.Diff(head.Manifest, p.Manifest)
-	if err != nil {
-		return v1.WorkflowVersion{}, head.Version, err
-	}
-	if len(diff) == 0 {
-		fmt.Fprintf(s.cmd.ErrOrStderr(), "No changes against %s v%d.\n", name, head.Version)
-		return head, head.Version, nil
-	}
-	if err := s.confirm(fmt.Sprintf("Commit these changes as %s v%d?", name, head.Version+1), nil, diff); err != nil {
-		return v1.WorkflowVersion{}, head.Version, err
-	}
-	v, err := s.adopter.Commit(ctx, name, p, head.Version, s.flags.changelog)
-	return v, head.Version, err
-}
-
-// commitSelection is what the flags name, or the components of the head.
-func (s *session) commitSelection(head domain.Manifest) ([]workflowadopt.Selection, error) {
-	if len(s.flags.harnesses) == 0 {
-		if len(s.flags.components) > 0 {
-			return nil, usageError(errors.New("--" + flagComponent + " needs --" + flagHarness))
-		}
-		return workflowadopt.SelectionOf(head), nil
-	}
-	return selectionOf(s.flags.harnesses, s.flags.components), nil
+	return emitCommitted(cmd, got.Version)
 }
 
 func selectionOf(harnesses, components []string) []workflowadopt.Selection {
@@ -445,11 +399,11 @@ func (s *session) chooseSelection(ctx context.Context) ([]workflowadopt.Selectio
 
 // chooseOwnership marks local the components the flags name, or the ones the
 // user picks on a terminal.
-func (s *session) chooseOwnership(p *workflowadopt.Prepared) error {
+func (s *session) chooseOwnership(m *domain.Manifest) error {
 	names := s.flags.local
 	if len(names) == 0 && s.ui != nil {
-		labels := make([]string, len(p.Manifest.Components))
-		for i, c := range p.Manifest.Components {
+		labels := make([]string, len(m.Components))
+		for i, c := range m.Components {
 			labels[i] = fmt.Sprintf("%s/%s (now %s)", c.Harness, c.Name, c.Ownership)
 		}
 		picked, err := s.ui.pick("Components to keep local (the rest stay as listed)", labels, []int{})
@@ -457,10 +411,10 @@ func (s *session) chooseOwnership(p *workflowadopt.Prepared) error {
 			return err
 		}
 		for _, i := range picked {
-			names = append(names, p.Manifest.Components[i].Harness+"/"+p.Manifest.Components[i].Name)
+			names = append(names, m.Components[i].Harness+"/"+m.Components[i].Name)
 		}
 	}
-	return markLocal(&p.Manifest, names)
+	return markLocal(m, names)
 }
 
 // markLocal sets ownership local on the components named, by name or
@@ -481,39 +435,13 @@ func markLocal(m *domain.Manifest, names []string) error {
 	return nil
 }
 
-// keepOwnership gives the components next shares with base the ownership base
-// has: a commit does not undo what an earlier adopt decided.
-func keepOwnership(next *domain.Manifest, base domain.Manifest) {
-	for i := range next.Components {
-		c := &next.Components[i]
-		for _, b := range base.Components {
-			if b.Harness == c.Harness && b.Name == c.Name {
-				c.Ownership = b.Ownership
-			}
-		}
-	}
-}
-
-// confirm shows what is about to be committed and asks, unless --yes.
-func (s *session) confirm(question string, components []domain.ManifestComponent, diff []v1.ChangedComponent) error {
+// confirmAdopt shows what is about to be adopted and asks, unless --yes.
+func (s *session) confirmAdopt(name string, components []domain.ManifestComponent) error {
 	errOut := s.cmd.ErrOrStderr()
 	for _, c := range components {
 		fmt.Fprintf(errOut, "  %s/%s  %s  %s  %d file(s)\n", printable(c.Harness), printable(c.Name), printable(c.Kind), c.Ownership, len(c.Files))
 	}
-	for _, c := range diff {
-		fmt.Fprintf(errOut, "  %-8s %s/%s\n", c.Change, printable(c.Harness), printable(c.Name))
-	}
-	if s.flags.yes || s.ui == nil {
-		return nil
-	}
-	ok, err := s.ui.confirm(question)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return domain.NewError(domain.CodeConfirmationRequired, "not confirmed; nothing was committed", nil)
-	}
-	return nil
+	return s.confirmer.ask(fmt.Sprintf("Adopt %d component(s) as %s v1?", len(components), name))
 }
 
 func emitCommitted(cmd *cobra.Command, v v1.WorkflowVersion) error {
@@ -526,7 +454,7 @@ func emitCommitted(cmd *cobra.Command, v v1.WorkflowVersion) error {
 // adoptError gives the refusals of the adopt their place in the §40 codes:
 // they are about the request (what was asked cannot be adopted safely).
 func adoptError(err error) error {
-	for _, refusal := range []error{workflowadopt.ErrSecretsUnconfirmed, workflowadopt.ErrNotReplaceable, workflowadopt.ErrAuthInSnapshot, workflowadopt.ErrUnknownHit} {
+	for _, refusal := range []error{workflowadopt.ErrSecretsUnconfirmed, workflowadopt.ErrNotReplaceable, workflowadopt.ErrAuthInSnapshot} {
 		if errors.Is(err, refusal) {
 			return domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
 		}
@@ -622,23 +550,59 @@ func (p *prompter) confirm(question string) (bool, error) {
 	return false, nil
 }
 
-// ttyConfirmer lists every secret ref of the snapshot (the adapter's and the
-// scanner's), with redacted previews, and asks once for all of them.
-type ttyConfirmer struct{ ui *prompter }
+// cliConfirmer is how the user decides: on a terminal by asking, headless by
+// the flags. --yes answers the questions about a diff; --replace-secrets
+// answers the one about secrets.
+type cliConfirmer struct {
+	ui             *prompter // nil when headless
+	out            io.Writer
+	yes            bool
+	replaceSecrets bool
+}
 
-func (t ttyConfirmer) ConfirmSecrets(ctx context.Context, found []workflowadopt.HarnessSecrets) (workflowadopt.Decision, error) {
-	fmt.Fprintln(t.ui.out, "Secret refs in this configuration (values are never sent):")
+// ask is a yes/no question, unless --yes or nobody is there to ask.
+func (c cliConfirmer) ask(question string) error {
+	if c.yes || c.ui == nil {
+		return nil
+	}
+	ok, err := c.ui.confirm(question)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return domain.NewError(domain.CodeConfirmationRequired, "not confirmed; nothing was committed", nil)
+	}
+	return nil
+}
+
+// ConfirmChanges shows the diff and asks once.
+func (c cliConfirmer) ConfirmChanges(_ context.Context, r workflowadopt.Review) (bool, error) {
+	if r.Attempt > 0 {
+		fmt.Fprintf(c.out, "The head of %s moved; rebased on v%d.\n", printable(r.Name), r.Head)
+	}
+	for _, ch := range r.Diff {
+		fmt.Fprintf(c.out, "  %-8s %s/%s\n", ch.Change, printable(ch.Harness), printable(ch.Name))
+	}
+	return true, c.ask(fmt.Sprintf("Commit these changes as %s v%d?", r.Name, r.Head+1))
+}
+
+// ConfirmSecrets lists every secret ref of the snapshot (the adapter's and the
+// scanner's), with redacted previews, and asks once for all of them.
+func (c cliConfirmer) ConfirmSecrets(_ context.Context, found []workflowadopt.HarnessSecrets) (bool, error) {
+	if c.replaceSecrets {
+		return true, nil
+	}
+	if c.ui == nil {
+		return false, fmt.Errorf("%w: the snapshot has secret refs and this adopt is headless without --%s", workflowadopt.ErrSecretsUnconfirmed, flagReplaceSecrets)
+	}
+	fmt.Fprintln(c.ui.out, "Secret refs in this configuration (values are never sent):")
 	for _, f := range found {
 		for _, s := range f.Substituted {
-			fmt.Fprintf(t.ui.out, "  %s/%s %s: ref %s (already a marker)\n", printable(f.Harness), printable(s.Component), printable(s.File), printable(s.Ref))
+			fmt.Fprintf(c.ui.out, "  %s/%s %s: ref %s (already a marker)\n", printable(f.Harness), printable(s.Component), printable(s.File), printable(s.Ref))
 		}
 		for _, h := range f.Hits {
-			fmt.Fprintf(t.ui.out, "  %s/%s %s:%d: %s %s -> ref %s\n", printable(f.Harness), printable(h.Component), printable(h.File), h.Line, printable(h.Kind), printable(h.Preview), printable(h.Ref))
+			fmt.Fprintf(c.ui.out, "  %s/%s %s:%d: %s %s -> ref %s\n", printable(f.Harness), printable(h.Component), printable(h.File), h.Line, printable(h.Kind), printable(h.Preview), printable(h.Ref))
 		}
 	}
-	ok, err := t.ui.confirm("Replace the values by their markers and continue?")
-	if err != nil || !ok {
-		return workflowadopt.Decision{}, err
-	}
-	return workflowadopt.AcceptAll{}.ConfirmSecrets(ctx, found)
+	return c.ui.confirm("Replace the values by their markers and continue?")
 }

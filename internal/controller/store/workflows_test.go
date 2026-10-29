@@ -239,13 +239,6 @@ func TestBlobMeta_RecordsUploadsOnce(t *testing.T) {
 	if _, err := BlobMeta(t.Context(), dbQ{db}, digestB); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
-	has, err := HasBlobMeta(t.Context(), dbQ{db}, []string{digestA, digestB})
-	if err != nil || !has[digestA] || has[digestB] {
-		t.Errorf("HasBlobMeta = %v, %v", has, err)
-	}
-	if has, err := HasBlobMeta(t.Context(), dbQ{db}, nil); err != nil || len(has) != 0 {
-		t.Errorf("no digests: %v, %v", has, err)
-	}
 }
 
 func TestWorkflowTables_AreWhatTheStoreWrites(t *testing.T) {

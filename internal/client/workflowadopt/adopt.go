@@ -23,8 +23,6 @@ var (
 	ErrSecretsUnconfirmed = errors.New("workflowadopt: secrets not confirmed")
 	// ErrAuthInSnapshot is an auth file in a snapshot: an adapter bug, never uploaded.
 	ErrAuthInSnapshot = errors.New("workflowadopt: a snapshot carries an auth file")
-	// ErrRebaseDeclined is a rebase whose diff the caller did not confirm.
-	ErrRebaseDeclined = errors.New("workflowadopt: rebase declined")
 )
 
 // authNames are file names that hold credentials in any harness. They are
@@ -44,32 +42,25 @@ type HarnessSecrets struct {
 	Report
 }
 
-// Decision is the answer to a confirmation. Accept lists, by harness and
-// [Hit.ID], the hits to replace by their markers; every hit must be there.
-type Decision struct {
-	Proceed bool
-	Accept  map[string]map[string]bool
+// Review is what a commit on the head shows before it is made.
+type Review struct {
+	Name string
+	// Head is the version the commit goes on top of.
+	Head int
+	// Attempt is 0 for the first read of the head, 1 after a rebase.
+	Attempt int
+	Diff    []domain.ComponentChange
 }
 
-// Confirmer is how the user decides about secrets: a checklist on a TTY, or a
-// flag. It sees every ref, the adapter's and the scanner's.
+// Confirmer is how the user decides: about secrets (a checklist on a TTY, or
+// a flag) and about the diff of a commit. It sees every ref, the adapter's
+// and the scanner's.
 type Confirmer interface {
-	ConfirmSecrets(ctx context.Context, found []HarnessSecrets) (Decision, error)
-}
-
-// AcceptAll is the Confirmer of the headless accept-all flag.
-type AcceptAll struct{}
-
-// ConfirmSecrets accepts every hit.
-func (AcceptAll) ConfirmSecrets(_ context.Context, found []HarnessSecrets) (Decision, error) {
-	d := Decision{Proceed: true, Accept: map[string]map[string]bool{}}
-	for _, f := range found {
-		d.Accept[f.Harness] = map[string]bool{}
-		for _, h := range f.Hits {
-			d.Accept[f.Harness][h.ID] = true
-		}
-	}
-	return d, nil
+	// ConfirmSecrets says whether every ref is replaced by its marker and the
+	// adopt goes on; there is no partial yes.
+	ConfirmSecrets(ctx context.Context, found []HarnessSecrets) (bool, error)
+	// ConfirmChanges says whether the diff is committed.
+	ConfirmChanges(ctx context.Context, r Review) (bool, error)
 }
 
 // Adopter snapshots the native configuration of Host and sends it to a Workflow.
@@ -125,41 +116,6 @@ func (a *Adopter) Commit(ctx context.Context, name string, p *Prepared, parent i
 		return v1.WorkflowVersion{}, err
 	}
 	return a.Store.CommitWorkflow(ctx, name, v1.CommitWorkflowRequest{RequestID: id, Parent: parent, Manifest: p.Manifest, Changelog: changelog})
-}
-
-// Rebase re-reads the head of name, snapshots again (the selection of the head
-// when sel is empty), and hands the diff against that head to confirm; if
-// confirmed, it commits on top of it. It never merges. A head that moves again
-// is the Controller's conflict, returned as it is.
-func (a *Adopter) Rebase(ctx context.Context, name string, sel []Selection, changelog string,
-	confirm func(head v1.WorkflowVersion, diff []v1.ChangedComponent) (bool, error),
-) (v1.WorkflowVersion, error) {
-	head, err := a.Store.ShowWorkflow(ctx, name)
-	if err != nil {
-		return v1.WorkflowVersion{}, err
-	}
-	if head.Manifest == nil {
-		return v1.WorkflowVersion{}, fmt.Errorf("workflowadopt: head of %s came without a manifest", name)
-	}
-	if len(sel) == 0 {
-		sel = SelectionOf(*head.Manifest)
-	}
-	p, err := a.Prepare(ctx, sel)
-	if err != nil {
-		return v1.WorkflowVersion{}, err
-	}
-	diff, err := Diff(head.Manifest, p.Manifest)
-	if err != nil {
-		return v1.WorkflowVersion{}, err
-	}
-	ok, err := confirm(head, diff)
-	if err != nil {
-		return v1.WorkflowVersion{}, err
-	}
-	if !ok {
-		return v1.WorkflowVersion{}, ErrRebaseDeclined
-	}
-	return a.Commit(ctx, name, p, head.Version, changelog)
 }
 
 // snapshot asks each selected adapter for its components and refuses any
@@ -228,16 +184,16 @@ func (a *Adopter) sanitise(ctx context.Context, snaps []harness.NativeSnapshot) 
 	if a.Confirmer == nil {
 		return nil, fmt.Errorf("%w: the snapshot has secret refs and this adopt is headless without accept-all", ErrSecretsUnconfirmed)
 	}
-	dec, err := a.Confirmer.ConfirmSecrets(ctx, found)
+	ok, err := a.Confirmer.ConfirmSecrets(ctx, found)
 	if err != nil {
 		return nil, err
 	}
-	if !dec.Proceed {
+	if !ok {
 		return nil, fmt.Errorf("%w: declined", ErrSecretsUnconfirmed)
 	}
 	out := make([]harness.NativeSnapshot, 0, len(snaps))
 	for _, snap := range snaps {
-		clean, err := Apply(snap, dec.Accept[snap.Harness])
+		clean, err := Apply(snap)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", snap.Harness, err)
 		}

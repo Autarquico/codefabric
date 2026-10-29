@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -63,7 +64,29 @@ func (c *Client) HasBlob(ctx context.Context, digest string) (bool, error) {
 	case resp.StatusCode >= 200 && resp.StatusCode <= 299:
 		return true, nil
 	}
-	return false, c.decodeError(resp.StatusCode, nil)
+	return false, c.statusError(resp.StatusCode)
+}
+
+// statusError is the error of a response with no body (a HEAD): the code the
+// Controller gives the same status in JSON, with the same hint.
+func (c *Client) statusError(status int) error {
+	code := domain.CodeInternal
+	switch status {
+	case http.StatusBadRequest:
+		code = domain.CodeInvalidRequest
+	case http.StatusUnauthorized:
+		code = domain.CodeUnauthenticated
+	case http.StatusForbidden:
+		code = domain.CodePolicyDenied
+	}
+	msg := fmt.Sprintf("the Controller refused the request (HTTP %d)", status)
+	if code == domain.CodeInternal {
+		msg = fmt.Sprintf("unexpected response from the Controller (HTTP %d)", status)
+	}
+	if code == domain.CodeUnauthenticated && c.dir != "" {
+		msg += ": " + c.recovery
+	}
+	return domain.NewError(code, msg, nil)
 }
 
 // PutBlob streams size bytes of r to the store under digest, which they must

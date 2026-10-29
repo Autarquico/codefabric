@@ -193,7 +193,7 @@ func TestScenario_Adopt(t *testing.T) {
 	t.Run("codex real adapter", func(t *testing.T) {
 		home, auth := codexFixture(t)
 		store := newStore()
-		a := &Adopter{Registry: registry(t, codex.Adapter{}), Host: hostAt(t, home), Store: store, Confirmer: AcceptAll{}}
+		a := &Adopter{Registry: registry(t, codex.Adapter{}), Host: hostAt(t, home), Store: store, Confirmer: &acceptAll{}}
 		v, err := a.Adopt(context.Background(), "team", []Selection{{Harness: "codex"}}, "first")
 		if err != nil {
 			t.Fatal(err)
@@ -363,14 +363,33 @@ func assertDigests(t *testing.T, s *fakeStore, m domain.Manifest) {
 
 // recording is a Confirmer that keeps what it was shown.
 type recording struct {
-	decision func([]HarnessSecrets) Decision
+	decision func([]HarnessSecrets) bool
 	seen     []HarnessSecrets
 }
 
-func (r *recording) ConfirmSecrets(_ context.Context, found []HarnessSecrets) (Decision, error) {
+func (r *recording) ConfirmSecrets(_ context.Context, found []HarnessSecrets) (bool, error) {
 	r.seen = found
 	return r.decision(found), nil
 }
+
+func (r *recording) ConfirmChanges(context.Context, Review) (bool, error) { return true, nil }
+
+// acceptAll confirms whatever it is shown.
+type acceptAll struct{ reviews []Review }
+
+func (*acceptAll) ConfirmSecrets(context.Context, []HarnessSecrets) (bool, error) { return true, nil }
+
+func (a *acceptAll) ConfirmChanges(_ context.Context, r Review) (bool, error) {
+	a.reviews = append(a.reviews, r)
+	return true, nil
+}
+
+// refuseAll declines whatever it is shown.
+type refuseAll struct{}
+
+func (refuseAll) ConfirmSecrets(context.Context, []HarnessSecrets) (bool, error) { return false, nil }
+
+func (refuseAll) ConfirmChanges(context.Context, Review) (bool, error) { return false, nil }
 
 func TestScenario_SecretosEnSettings(t *testing.T) {
 	token := "ghp" + "_" + "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5"
@@ -381,10 +400,7 @@ func TestScenario_SecretosEnSettings(t *testing.T) {
 	t.Run("confirmed: replaced by a ref, the value goes nowhere", func(t *testing.T) {
 		home := fakeHome(t, settings)
 		store := newStore()
-		rec := &recording{decision: func(f []HarnessSecrets) Decision {
-			d, _ := AcceptAll{}.ConfirmSecrets(context.Background(), f)
-			return d
-		}}
+		rec := &recording{decision: func([]HarnessSecrets) bool { return true }}
 		a := &Adopter{Registry: adapters(t), Host: hostAt(t, home), Store: store, Confirmer: rec}
 		v, err := a.Adopt(context.Background(), "team", sel, "")
 		if err != nil {
@@ -409,19 +425,9 @@ func TestScenario_SecretosEnSettings(t *testing.T) {
 		assertDigests(t, store, *v.Manifest)
 	})
 
-	t.Run("rejected: abort, nothing uploaded", func(t *testing.T) {
-		store := newStore()
-		rec := &recording{decision: func([]HarnessSecrets) Decision {
-			return Decision{Proceed: true, Accept: map[string]map[string]bool{}}
-		}}
-		a := &Adopter{Registry: adapters(t), Host: hostAt(t, fakeHome(t, settings)), Store: store, Confirmer: rec}
-		_, err := a.Adopt(context.Background(), "team", sel, "")
-		assertAborted(t, store, err, ErrRejected, token)
-	})
-
 	t.Run("declined", func(t *testing.T) {
 		store := newStore()
-		rec := &recording{decision: func([]HarnessSecrets) Decision { return Decision{} }}
+		rec := &recording{decision: func([]HarnessSecrets) bool { return false }}
 		a := &Adopter{Registry: adapters(t), Host: hostAt(t, fakeHome(t, settings)), Store: store, Confirmer: rec}
 		_, err := a.Adopt(context.Background(), "team", sel, "")
 		assertAborted(t, store, err, ErrSecretsUnconfirmed, token)
@@ -436,7 +442,7 @@ func TestScenario_SecretosEnSettings(t *testing.T) {
 
 	t.Run("adapter without markers in that file", func(t *testing.T) {
 		store := newStore()
-		a := &Adopter{Registry: registry(t, fakeharness.Adapter{}), Host: hostAt(t, fakeHome(t, settings)), Store: store, Confirmer: AcceptAll{}}
+		a := &Adopter{Registry: registry(t, fakeharness.Adapter{}), Host: hostAt(t, fakeHome(t, settings)), Store: store, Confirmer: &acceptAll{}}
 		_, err := a.Adopt(context.Background(), "team", sel, "")
 		assertAborted(t, store, err, ErrNotReplaceable, token)
 	})
@@ -445,7 +451,7 @@ func TestScenario_SecretosEnSettings(t *testing.T) {
 		home := t.TempDir()
 		write(t, filepath.Join(home, codex.ConfigDirName), codex.AgentsComponent, "use "+token+" for gh\n", 0o644)
 		store := newStore()
-		a := &Adopter{Registry: registry(t, codex.Adapter{}), Host: hostAt(t, home), Store: store, Confirmer: AcceptAll{}}
+		a := &Adopter{Registry: registry(t, codex.Adapter{}), Host: hostAt(t, home), Store: store, Confirmer: &acceptAll{}}
 		_, err := a.Adopt(context.Background(), "team", []Selection{{Harness: "codex"}}, "")
 		assertAborted(t, store, err, ErrNotReplaceable, token)
 	})
@@ -453,7 +459,7 @@ func TestScenario_SecretosEnSettings(t *testing.T) {
 	t.Run("a hit in MCP args is not replaceable", func(t *testing.T) {
 		args := `{"mcpServers":{"gh":{"command":"gh-mcp","args":["--token","` + token + `"]}}}`
 		store := newStore()
-		a := &Adopter{Registry: adapters(t), Host: hostAt(t, fakeHome(t, args)), Store: store, Confirmer: AcceptAll{}}
+		a := &Adopter{Registry: adapters(t), Host: hostAt(t, fakeHome(t, args)), Store: store, Confirmer: &acceptAll{}}
 		_, err := a.Adopt(context.Background(), "team", sel, "")
 		assertAborted(t, store, err, ErrNotReplaceable, token)
 	})
@@ -494,19 +500,28 @@ func TestCommitConflictIsTheDomainError(t *testing.T) {
 	}
 }
 
-func TestRebase(t *testing.T) {
+func TestCommitOnHead(t *testing.T) {
 	sel := []Selection{{Harness: fakeharness.DefaultID}}
 	setup := func(t *testing.T) (*Adopter, *fakeStore, string) {
 		home := fakeHome(t, cleanSettings)
 		store := newStore()
 		a := &Adopter{Registry: registry(t, fakeharness.Adapter{}), Host: hostAt(t, home), Store: store}
-		if _, err := a.Adopt(context.Background(), "team", sel, ""); err != nil {
+		p, err := a.Prepare(context.Background(), sel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range p.Manifest.Components {
+			if p.Manifest.Components[i].Name == "settings" {
+				p.Manifest.Components[i].Ownership = domain.OwnershipLocal
+			}
+		}
+		if _, err := a.Commit(context.Background(), "team", p, 0, ""); err != nil {
 			t.Fatal(err)
 		}
 		return a, store, home
 	}
 	advance := func(t *testing.T, a *Adopter) {
-		// Someone else's commit: a different snapshot on top of v1.
+		// Someone else's commit: a different snapshot on top of the head.
 		other := hostAt(t, fakeHome(t, `{"model":"other"}`))
 		b := &Adopter{Registry: a.Registry, Host: other, Store: a.Store}
 		p, err := b.Prepare(context.Background(), sel)
@@ -517,82 +532,122 @@ func TestRebase(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		keepOwnership(&p.Manifest, *head.Manifest)
 		if _, err := b.Commit(context.Background(), "team", p, head.Version, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
+	ownership := func(t *testing.T, store *fakeStore, name string) domain.Ownership {
+		head, _ := store.ShowWorkflow(context.Background(), "team")
+		for _, c := range head.Manifest.Components {
+			if c.Name == name {
+				return c.Ownership
+			}
+		}
+		t.Fatalf("no component %s", name)
+		return ""
+	}
 
-	t.Run("commits on the new head with the diff confirmed", func(t *testing.T) {
-		a, _, home := setup(t)
-		advance(t, a)
+	t.Run("commits on the head with the diff confirmed", func(t *testing.T) {
+		a, store, home := setup(t)
 		write(t, filepath.Join(home, fakeharness.ConfigDirName), "skills/review/SKILL.md", "# changed\n", 0o644)
-		var diff []v1.ChangedComponent
-		var seen int
-		v, err := a.Rebase(context.Background(), "team", nil, "rebased", func(h v1.WorkflowVersion, d []v1.ChangedComponent) (bool, error) {
-			seen, diff = h.Version, d
-			return true, nil
-		})
-		if err != nil {
+		c := &acceptAll{}
+		got, err := CommitOnHead(context.Background(), a, store, "team", CommitOptions{Changelog: "next", Confirmer: c})
+		if err != nil || got.Unchanged || got.Version.Version != 2 || got.Version.Parent != 1 {
+			t.Fatalf("got %+v, %v", got, err)
+		}
+		if len(c.reviews) != 1 || c.reviews[0].Head != 1 || c.reviews[0].Attempt != 0 || len(c.reviews[0].Diff) != 1 || c.reviews[0].Diff[0].Name != "skills/review" {
+			t.Errorf("reviews = %+v", c.reviews)
+		}
+	})
+
+	t.Run("a component that was local stays local", func(t *testing.T) {
+		a, store, home := setup(t)
+		write(t, filepath.Join(home, fakeharness.ConfigDirName), fakeharness.SettingsFile, `{"model":"changed"}`, 0o644)
+		if _, err := CommitOnHead(context.Background(), a, store, "team", CommitOptions{Confirmer: &acceptAll{}}); err != nil {
 			t.Fatal(err)
 		}
-		if seen != 2 || v.Version != 3 || v.Parent != 2 {
-			t.Fatalf("head seen %d, version %+v", seen, v)
-		}
-		got := map[string]string{}
-		for _, c := range diff {
-			got[c.Name] = c.Change
-		}
-		if got["settings"] != "modified" || got["skills/review"] != "modified" || len(got) != 2 {
-			t.Errorf("diff = %v", got)
+		if got := ownership(t, store, "settings"); got != domain.OwnershipLocal {
+			t.Errorf("settings is %s after the commit, want local", got)
 		}
 	})
 
-	t.Run("declined", func(t *testing.T) {
+	t.Run("a rebase keeps the ownership of the head it lands on", func(t *testing.T) {
 		a, store, _ := setup(t)
-		advance(t, a)
-		commits := store.commits
-		_, err := a.Rebase(context.Background(), "team", nil, "", func(v1.WorkflowVersion, []v1.ChangedComponent) (bool, error) { return false, nil })
-		if !errors.Is(err, ErrRebaseDeclined) || store.commits != commits {
-			t.Fatalf("err = %v, commits %d -> %d", err, commits, store.commits)
+		advance(t, a) // v2: someone else's settings, still local
+		store.beforeCommit = func() {
+			store.beforeCommit = nil
+			advance(t, a) // v3 arrives under our first commit
+		}
+		c := &acceptAll{}
+		got, err := CommitOnHead(context.Background(), a, store, "team", CommitOptions{Rebase: true, Confirmer: c})
+		if err != nil || got.Version.Version != 4 || got.Version.Parent != 3 {
+			t.Fatalf("got %+v, %v", got, err)
+		}
+		if len(c.reviews) != 2 || c.reviews[1].Attempt != 1 || c.reviews[1].Head != 3 {
+			t.Errorf("reviews = %+v: want a second look at the new head", c.reviews)
+		}
+		if got := ownership(t, store, "settings"); got != domain.OwnershipLocal {
+			t.Errorf("settings is %s after the rebase, want local", got)
 		}
 	})
 
-	t.Run("a second conflict is returned as it is", func(t *testing.T) {
+	t.Run("without Rebase a conflict is returned", func(t *testing.T) {
 		a, store, _ := setup(t)
 		advance(t, a)
 		store.beforeCommit = func() {
 			store.beforeCommit = nil
 			advance(t, a)
 		}
-		_, err := a.Rebase(context.Background(), "team", nil, "", func(v1.WorkflowVersion, []v1.ChangedComponent) (bool, error) { return true, nil })
+		_, err := CommitOnHead(context.Background(), a, store, "team", CommitOptions{Confirmer: &acceptAll{}})
 		if head, ok := isConflict(err); !ok || head != 3 {
 			t.Fatalf("err = %v", err)
 		}
 	})
+
+	t.Run("a second conflict is returned as it is", func(t *testing.T) {
+		a, store, _ := setup(t)
+		advance(t, a)
+		moves := 0
+		var hook func()
+		hook = func() {
+			if moves++; moves <= 2 {
+				store.beforeCommit = nil
+				advance(t, a)
+				store.beforeCommit = hook
+			}
+		}
+		store.beforeCommit = hook
+		_, err := CommitOnHead(context.Background(), a, store, "team", CommitOptions{Rebase: true, Confirmer: &acceptAll{}})
+		if head, ok := isConflict(err); !ok || head != 4 || moves != 2 {
+			t.Fatalf("err = %v, moves %d", err, moves)
+		}
+	})
+
+	t.Run("declined commits nothing", func(t *testing.T) {
+		a, store, _ := setup(t)
+		advance(t, a)
+		commits := store.commits
+		_, err := CommitOnHead(context.Background(), a, store, "team", CommitOptions{Confirmer: refuseAll{}})
+		var de *domain.Error
+		if !errors.As(err, &de) || de.Code != domain.CodeConfirmationRequired || store.commits != commits {
+			t.Fatalf("err = %v, commits %d -> %d", err, commits, store.commits)
+		}
+	})
+
+	t.Run("nothing new is not a commit and needs no confirmer", func(t *testing.T) {
+		a, store, _ := setup(t)
+		got, err := CommitOnHead(context.Background(), a, store, "team", CommitOptions{})
+		if err != nil || !got.Unchanged || got.Version.Version != 1 || store.commits != 1 {
+			t.Fatalf("got %+v, %v, commits %d", got, err, store.commits)
+		}
+	})
 }
 
-func TestDiff(t *testing.T) {
-	comp := func(name, digest string) domain.ManifestComponent {
-		return domain.ManifestComponent{
-			Harness: "h", Name: name, Kind: "file", Ownership: domain.OwnershipManaged, TreeDigest: "sha256:" + strings.Repeat(digest, 64),
-			Files: []domain.ManifestFile{{Path: "a", SHA256: "sha256:" + strings.Repeat("1", 64)}},
-		}
-	}
-	base := domain.Manifest{SchemaVersion: 1, Components: []domain.ManifestComponent{comp("keep", "a"), comp("edit", "b"), comp("drop", "c")}}
-	next := domain.Manifest{SchemaVersion: 1, Components: []domain.ManifestComponent{comp("new", "d"), comp("edit", "e"), comp("keep", "a")}}
-	got, err := Diff(&base, next)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []v1.ChangedComponent{{Harness: "h", Name: "drop", Change: "removed"}, {Harness: "h", Name: "edit", Change: "modified"}, {Harness: "h", Name: "new", Change: "added"}}
-	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
-		t.Fatalf("diff = %+v", got)
-	}
-	all, _ := Diff(nil, next)
-	if len(all) != 3 || all[0].Change != "added" {
-		t.Errorf("against nothing = %+v", all)
-	}
-	if sel := SelectionOf(next); len(sel) != 1 || strings.Join(sel[0].Components, ",") != "edit,keep,new" {
+func TestSelectionOf(t *testing.T) {
+	comp := func(name string) domain.ManifestComponent { return domain.ManifestComponent{Harness: "h", Name: name} }
+	m := domain.Manifest{Components: []domain.ManifestComponent{comp("new"), comp("edit"), comp("keep")}}
+	if sel := SelectionOf(m); len(sel) != 1 || strings.Join(sel[0].Components, ",") != "edit,keep,new" {
 		t.Errorf("selection = %+v", sel)
 	}
 }

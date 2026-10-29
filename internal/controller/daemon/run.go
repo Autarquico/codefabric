@@ -148,7 +148,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	}
 	srv, err := api.New(api.Config{
 		Authority: newAuthority(db, ca, o.Clock, host, port), CA: ca, ServerCert: serverCert,
-		Store: db, Work: services, Relay: gitRelay, MaxBlobBytes: workflows.DefaultMaxBlobBytes,
+		Store: db, Work: services, Relay: gitRelay,
 		Clock: o.Clock, StartedAt: startedAt, Build: build, Logger: o.Logger,
 	})
 	if err != nil {

@@ -1,6 +1,6 @@
 // Package workflowadopt prepares a native configuration to be adopted into a
 // Workflow: it finds the secrets a snapshot still carries, and replaces the
-// ones the user accepts with secret markers, so that no value is ever
+// ones the user confirms with secret markers, so that no value is ever
 // uploaded (spec "Secretos en settings").
 package workflowadopt
 
@@ -20,12 +20,8 @@ import (
 
 // Errors of [Apply]. They name a component, a file and a line, never a value.
 var (
-	// ErrRejected is a secret the user did not accept to replace.
-	ErrRejected = errors.New("workflowadopt: secret not accepted for replacement")
 	// ErrNotReplaceable is a secret that cannot be replaced by a marker.
 	ErrNotReplaceable = errors.New("workflowadopt: secret cannot be replaced by a marker")
-	// ErrUnknownHit is a decision for a hit the snapshot does not have.
-	ErrUnknownHit = errors.New("workflowadopt: decision for an unknown finding")
 )
 
 // Substituted is a ref the adapter already put in a file, in place of a value.
@@ -38,8 +34,6 @@ type Substituted struct {
 
 // Hit is a value that looks like a secret and is still in the content.
 type Hit struct {
-	// ID identifies the hit in the decisions given to [Apply].
-	ID        string
 	Component string
 	File      string
 	// Line is 1-based; for a PEM block, the line of its header.
@@ -83,7 +77,6 @@ func Scan(snap harness.NativeSnapshot) Report {
 		for _, f := range c.Files {
 			for _, h := range scanFile(f.Content) {
 				h.Component, h.File = c.Name, f.Path
-				h.ID = fmt.Sprintf("%s:%s:%d", c.Name, f.Path, h.start)
 				h.Ref = uniqueRef(snap.Harness, c.Name, f.Path, h.key, h.Kind, used)
 				r.Hits = append(r.Hits, h.Hit)
 			}
@@ -92,26 +85,15 @@ func Scan(snap harness.NativeSnapshot) Report {
 	return r
 }
 
-// Apply replaces the hits accepted in accept (by Hit.ID) with their markers,
-// and recomputes the SecretRefs of each file and the Digest of each component
-// it changed. Every hit the snapshot has must be accepted and replaceable: a
-// rejected or missing decision, or a hit that cannot be replaced, is an error
-// and nothing is returned. The input is never modified.
-func Apply(snap harness.NativeSnapshot, accept map[string]bool) (harness.NativeSnapshot, error) {
+// Apply replaces every hit of the snapshot with its marker, and recomputes the
+// SecretRefs of each file and the Digest of each component it changed. A hit
+// that cannot be replaced is an error and nothing is returned. The input is
+// never modified.
+func Apply(snap harness.NativeSnapshot) (harness.NativeSnapshot, error) {
 	report := Scan(snap)
-	known := make(map[string]bool, len(report.Hits))
 	for _, h := range report.Hits {
-		known[h.ID] = true
 		if !h.Replaceable {
 			return harness.NativeSnapshot{}, fmt.Errorf("%w: %s", ErrNotReplaceable, h.where())
-		}
-		if !accept[h.ID] {
-			return harness.NativeSnapshot{}, fmt.Errorf("%w: %s", ErrRejected, h.where())
-		}
-	}
-	for id := range accept {
-		if !known[id] {
-			return harness.NativeSnapshot{}, fmt.Errorf("%w: %s", ErrUnknownHit, id)
 		}
 	}
 
@@ -196,6 +178,12 @@ var patterns = []pattern{
 	{kind: "aws-access-key", prefix: "AK", re: regexp.MustCompile(lead + `((?:AKIA|ASIA)[A-Z0-9]{16})`), fixedLen: true},
 	{kind: "slack-token", prefix: "xox", re: regexp.MustCompile(lead + `(xox[abprs]-[A-Za-z0-9-]{10,})`), ok: mixed},
 	{kind: "google-api-key", prefix: "AIza", re: regexp.MustCompile(lead + `(AIza[A-Za-z0-9_-]{35})`), fixedLen: true},
+	// The password of scheme://user:password@host.
+	{kind: "url-credentials", re: regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@"'<>]+:([^\s/@"'<>]+)@`), ok: credential},
+	// A credential in the query of a URL.
+	{kind: "url-token", re: regexp.MustCompile(`(?i)[?&](?:access_token|auth_token|id_token|refresh_token|token|api_key|apikey|key|client_secret|secret|password)=([^&\s"'#<>]+)`), ok: credential},
+	// The value of a Bearer header, or of a Basic one under Authorization.
+	{kind: "authorization-header", re: regexp.MustCompile(`(?i)(?:\bbearer|authorization["']?[ \t]*[=:][ \t]*["']?basic)[ \t]+([A-Za-z0-9._~+/-]{16,}=*)`), ok: mixed},
 }
 
 var (
@@ -205,6 +193,7 @@ var (
 	generic = regexp.MustCompile(`(?i)([A-Za-z0-9_.-]*(?:key|token|secret|passw(?:or)?d)[A-Za-z0-9_.-]*)["']?[ \t]*[=:][ \t]*["']?([^\s"',;\\]+)`)
 	// not a value: the name of a variable or a file, not a secret.
 	namesAnother = regexp.MustCompile(`(?i)(_env|_env_var|_file|_path|_name|_url)$`)
+	namesSecret  = regexp.MustCompile(`(?i)token|secret|passw`)
 	uuid         = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	hexOnly      = regexp.MustCompile(`^[0-9a-fA-F]+$`)
 	markerRe     = regexp.MustCompile(`\{\{cf-secret:[^{}]*\}\}`)
@@ -250,7 +239,7 @@ func scanFile(content []byte) []fileHit {
 	}
 	for _, m := range generic.FindAllStringSubmatchIndex(text, -1) {
 		key, s, e := text[m[2]:m[3]], m[4], m[5]
-		if namesAnother.MatchString(key) || overlaps(s, e) || !looksSecret(text[s:e]) {
+		if namesAnother.MatchString(key) || overlaps(s, e) || !looksSecret(key, text[s:e]) {
 			continue
 		}
 		add(text, s, e, "assigned-secret", key+"=")
@@ -263,27 +252,40 @@ func isAlnum(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
+// credential: a value that is not a reference or a placeholder.
+func credential(v string) bool {
+	return len(v) >= 8 && !strings.HasPrefix(v, "$") && !strings.HasPrefix(v, "{{") && !placeholder(v)
+}
+
+func placeholder(v string) bool {
+	lv := strings.ToLower(v)
+	for _, w := range []string{"example", "changeme", "placeholder", "your", "xxxx", "redacted"} {
+		if strings.Contains(lv, w) {
+			return true
+		}
+	}
+	return false
+}
+
 // mixed: a prose word that begins like a key ("sk-") has no digits.
 func mixed(v string) bool { return strings.ContainsAny(v, "0123456789") && entropy(v) >= 3.0 }
 
-// looksSecret is the filter of a generic assignment, biased against false
-// positives: long, with letters and digits, high entropy, and not an
-// identifier, path, URL, UUID, git object ID, placeholder or reference.
-func looksSecret(v string) bool {
+// looksSecret is the filter of a generic assignment to key, biased against
+// false positives: long, with letters and digits, high entropy, and not an
+// identifier, path, URL, UUID, placeholder or reference. A 40 or 64 digit hex
+// value is a git object ID or a digest unless the key says it is a secret.
+func looksSecret(key, v string) bool {
 	switch {
 	case len(v) < 16,
 		strings.HasPrefix(v, "{{"), strings.HasPrefix(v, "$"),
 		strings.HasPrefix(v, "/"), strings.HasPrefix(v, "./"), strings.HasPrefix(v, "../"), strings.HasPrefix(v, "~"),
 		strings.Contains(v, "://"), strings.ContainsAny(v, "<>"),
 		uuid.MatchString(v),
-		hexOnly.MatchString(v) && (len(v) == 40 || len(v) == 64):
+		hexOnly.MatchString(v) && (len(v) == 40 || len(v) == 64) && !namesSecret.MatchString(key):
 		return false
 	}
-	lv := strings.ToLower(v)
-	for _, w := range []string{"example", "changeme", "placeholder", "your", "xxxx", "redacted"} {
-		if strings.Contains(lv, w) {
-			return false
-		}
+	if placeholder(v) {
+		return false
 	}
 	hasLetter := strings.IndexFunc(v, func(r rune) bool { return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' }) >= 0
 	return hasLetter && strings.ContainsAny(v, "0123456789") && entropy(v) >= 3.0

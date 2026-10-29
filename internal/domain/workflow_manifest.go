@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"reflect"
 	"regexp"
 	"slices"
 	"unicode/utf8"
@@ -15,6 +16,14 @@ import (
 
 // ManifestSchemaVersion is the only layout of Manifest this code reads and writes.
 const ManifestSchemaVersion = 1
+
+// Bounds of a manifest, so that a version cannot be made to cost more to
+// verify, store or materialize than a configuration ever does.
+const (
+	MaxManifestComponents = 256
+	MaxComponentFiles     = 1024
+	MaxManifestFiles      = 4096
+)
 
 // ErrInvalidManifest wraps every violation Manifest.Validate reports.
 var ErrInvalidManifest = errors.New("invalid workflow manifest")
@@ -24,6 +33,9 @@ var (
 	// CAS, of tree digests and of version digests.
 	digestForm = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	token      = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	// secretMarker is {{cf-secret:<ref>}}, as the adapters write it; only
+	// those whose ref is ValidSecretRef are markers.
+	secretMarker = regexp.MustCompile(`\{\{cf-secret:([^{}]*)\}\}`)
 )
 
 // Manifest is the content of one Workflow version (§8.9): native snapshots of
@@ -68,6 +80,16 @@ func (m Manifest) Validate() error {
 	if len(m.Components) == 0 {
 		return invalidManifest("no components")
 	}
+	if len(m.Components) > MaxManifestComponents {
+		return invalidManifest("%d components, at most %d", len(m.Components), MaxManifestComponents)
+	}
+	files := 0
+	for _, c := range m.Components {
+		files += len(c.Files)
+	}
+	if files > MaxManifestFiles {
+		return invalidManifest("%d files, at most %d", files, MaxManifestFiles)
+	}
 	type key struct{ harness, name string }
 	seen := make(map[key]bool, len(m.Components))
 	for _, c := range m.Components {
@@ -97,6 +119,8 @@ func (c ManifestComponent) validate() error {
 		return invalidManifest("component %q: tree_digest is not sha256:<hex>", id)
 	case len(c.Files) == 0:
 		return invalidManifest("component %q has no files", id)
+	case len(c.Files) > MaxComponentFiles:
+		return invalidManifest("component %q has %d files, at most %d", id, len(c.Files), MaxComponentFiles)
 	}
 	paths := make(map[string]bool, len(c.Files))
 	for _, f := range c.Files {
@@ -115,8 +139,8 @@ const maxManifestName = 128
 
 func (f ManifestFile) validate() error {
 	switch {
-	case !fs.ValidPath(f.Path) || f.Path == "." || !utf8.ValidString(f.Path):
-		return fmt.Errorf("path %q is not a relative slash path", f.Path)
+	case !validFilePath(f.Path):
+		return fmt.Errorf("path %q is not a relative slash path without control characters, '\\' or ':'", f.Path)
 	case !digestForm.MatchString(f.SHA256):
 		return fmt.Errorf("file %q: sha256 is not sha256:<hex>", f.Path)
 	}
@@ -187,4 +211,78 @@ func validComponentName(name string) bool {
 		}
 	}
 	return true
+}
+
+// validFilePath says whether p can be a file of a component: a relative slash
+// path of UTF-8 with no control character, backslash or colon, which some
+// platform would take for a separator or a stream.
+func validFilePath(p string) bool {
+	if p == "." || !fs.ValidPath(p) || !utf8.ValidString(p) {
+		return false
+	}
+	for _, r := range p {
+		if r < ' ' || r == 0x7f || r == '\\' || r == ':' {
+			return false
+		}
+	}
+	return true
+}
+
+// SecretRefsIn are the refs of the secret markers in content, sorted and
+// without repeats: what a file's SecretRefs must be.
+func SecretRefsIn(content []byte) []string {
+	refs := []string{}
+	for _, m := range secretMarker.FindAllSubmatch(content, -1) {
+		if ref := string(m[1]); ValidSecretRef(ref) && !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	slices.Sort(refs)
+	return refs
+}
+
+// ComponentChange is a component whose definition differs between two manifests.
+type ComponentChange struct {
+	Harness string
+	Name    string
+	// Change is "added", "modified" or "removed".
+	Change string
+}
+
+// ChangesFrom lists the components that m adds, changes or drops against base,
+// by (harness, name), sorted. A component is modified when its definition
+// differs in any field. A nil base is no version, so everything is added.
+func (m Manifest) ChangesFrom(base *Manifest) []ComponentChange {
+	type key struct{ harness, name string }
+	index := func(m Manifest) map[key]ManifestComponent {
+		out := make(map[key]ManifestComponent, len(m.Components))
+		for _, c := range m.sorted().Components {
+			out[key{c.Harness, c.Name}] = c
+		}
+		return out
+	}
+	before := map[key]ManifestComponent{}
+	if base != nil {
+		before = index(*base)
+	}
+	after := index(m)
+	var out []ComponentChange
+	for k, c := range after {
+		old, existed := before[k]
+		switch {
+		case !existed:
+			out = append(out, ComponentChange{k.harness, k.name, "added"})
+		case !reflect.DeepEqual(old, c):
+			out = append(out, ComponentChange{k.harness, k.name, "modified"})
+		}
+	}
+	for k := range before {
+		if _, kept := after[k]; !kept {
+			out = append(out, ComponentChange{k.harness, k.name, "removed"})
+		}
+	}
+	slices.SortFunc(out, func(a, b ComponentChange) int {
+		return cmp.Or(cmp.Compare(a.Harness, b.Harness), cmp.Compare(a.Name, b.Name))
+	})
+	return out
 }

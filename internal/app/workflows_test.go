@@ -188,6 +188,9 @@ func TestWorkflows_ParentRules(t *testing.T) {
 	e.mustCommit("review", 0, m1)
 	_, err = e.commit("review", 0, m2)
 	wantCode(t, err, domain.CodeWorkflowConflict) // adopting a name in use
+	if !strings.Contains(err.Error(), "already exists") || !strings.Contains(err.Error(), "cf workflow commit") {
+		t.Errorf("adopting a name in use says %q", err)
+	}
 	_, err = e.commit("review", 2, m2)
 	wantCode(t, err, domain.CodeWorkflowConflict) // a parent in the future
 	_, err = e.commit("review", -1, m2)
@@ -364,17 +367,10 @@ func TestWorkflows_Blobs(t *testing.T) {
 	if string(body) != "hello" || size != 5 {
 		t.Errorf("open = %q, %d", body, size)
 	}
-	has, err := e.app.Workflows.HasBlobs(ctx, e.owner, []string{sha("hello"), sha("absent")})
-	if err != nil || !has[sha("hello")] || has[sha("absent")] {
-		t.Errorf("has = %v, %v", has, err)
-	}
 
 	big := strings.Repeat("x", 17)
 	_, err = e.app.Workflows.PutBlob(ctx, e.owner, sha(big), strings.NewReader(big))
 	wantCode(t, err, domain.CodeInvalidRequest)
-	if has, _ := e.app.Workflows.HasBlobs(ctx, e.owner, []string{sha(big)}); has[sha(big)] {
-		t.Error("a blob over the limit was recorded")
-	}
 	if _, _, err := e.app.Workflows.OpenBlob(ctx, e.owner, sha(big)); err == nil {
 		t.Error("a blob over the limit can be opened")
 	}
@@ -392,7 +388,7 @@ func TestWorkflows_Blobs(t *testing.T) {
 	worker := pki.Session{Principal: domain.Principal{Kind: domain.KindWorker, ID: "worker-x"}}
 	_, err = e.app.Workflows.PutBlob(ctx, worker, sha("hello"), strings.NewReader("hello"))
 	wantCode(t, err, domain.CodePolicyDenied)
-	_, err = e.app.Workflows.HasBlobs(ctx, worker, nil)
+	_, _, err = e.app.Workflows.OpenBlob(ctx, worker, sha("hello"))
 	wantCode(t, err, domain.CodePolicyDenied)
 }
 
@@ -406,4 +402,25 @@ func countFiles(t *testing.T, root string) int {
 		return err
 	}))
 	return n
+}
+
+func TestWorkflows_SecretRefsAreThoseOfTheContent(t *testing.T) {
+	e := newWorkflowEnv(t, 0)
+	with := func(content string, refs []string) domain.Manifest {
+		c := e.component("codex", "cfg", content)
+		c.Files[0].SecretRefs = refs
+		return manifest(c)
+	}
+	for name, m := range map[string]domain.Manifest{
+		"declared but absent":    with("plain", []string{"tok"}),
+		"used but undeclared":    with("a={{cf-secret:tok}}", nil),
+		"declared the wrong one": with("a={{cf-secret:tok}}", []string{"other"}),
+	} {
+		_, err := e.commit("review", 0, m)
+		wantCode(t, err, domain.CodeInvalidRequest)
+		if err != nil && !strings.Contains(err.Error(), "secret_refs") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	e.mustCommit("review", 0, with("a={{cf-secret:b}} {{cf-secret:a}} {{cf-secret:b}}", []string{"b", "a"}))
 }

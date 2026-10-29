@@ -22,6 +22,11 @@ var (
 	googleKey   = "AIza" + "Sy" + "A3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3h"
 	pemBlock    = "-----BEGIN " + "PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nabc123def456\n-----END " + "PRIVATE KEY-----"
 	assignedVal = "Tr0ub4dor&3xK9mQz"
+	urlPass     = "p4ss" + "W0rd-x9Kq"
+	queryTok    = "t0k3n" + "Zq8Lm2Vx7"
+	opaqueTok   = "aB3dE5gH7jK9" + "mN1pQ3sT5vX7"
+	basicTok    = "dXNlcjpwNHNzVzByZC14OUtx" + "Zg=="
+	hexSecret   = "9f86d081884c7d659a2f" + "eaa0c55ad015a3bf4f1b"
 )
 
 func snapOf(content string) harness.NativeSnapshot {
@@ -46,6 +51,14 @@ func TestScanTruePositives(t *testing.T) {
 		{"generic-toml", `DB_PASSWORD = "` + assignedVal + `"`, "assigned-secret"},
 		{"generic-json", `{"apiToken": "` + assignedVal + `"}`, "assigned-secret"},
 		{"generic-env", "MY_SECRET=" + assignedVal, "assigned-secret"},
+		{"url-credentials", `DATABASE = "postgresql://app:` + urlPass + `@db.internal:5432/app"`, "url-credentials"},
+		{"url-token-query", `endpoint = "https://api.internal/v1/stream?access_token=` + queryTok + `&v=2"`, "url-token"},
+		{"url-key-query", `u = "https://maps.internal/api?x=1&key=` + queryTok + `"`, "url-token"},
+		{"bearer", `Authorization = "Bearer ` + opaqueTok + `"`, "authorization-header"},
+		{"bearer-header-line", "Authorization: Bearer " + opaqueTok, "authorization-header"},
+		{"basic", `{"Authorization": "Basic ` + basicTok + `"}`, "authorization-header"},
+		{"hex-secret-under-secret-key", `SENTRY_AUTH_TOKEN = "` + hexSecret + `"`, "assigned-secret"},
+		{"hex64-secret-under-secret-key", `hmac_secret = "` + hexSecret + hexSecret[:24] + `"`, "assigned-secret"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -62,24 +75,37 @@ func TestScanTruePositives(t *testing.T) {
 }
 
 func TestScanFalsePositives(t *testing.T) {
-	for name, content := range map[string]string{
-		"uuid":            `API_KEY = "123e4567-e89b-12d3-a456-426614174000"`,
-		"git sha":         `TOKEN_COMMIT = "` + strings.Repeat("a1b2c3d4e5", 4) + `"`,
-		"sha256":          `KEY = "` + strings.Repeat("0123456789abcdef", 4) + `"`,
-		"path":            `SECRET_FILE_DIR = "/home/alex/.config/cf/secrets-long-path-1"`,
-		"home path":       `key_dir = "~/.ssh/id_ed25519_2024_backup"`,
-		"short base64":    `msg = "SGVsbG8gd29ybGQ="`,
-		"base64 no key":   `blob = "aGVsbG8gd29ybGQgZnJvbSBjZiBhZG9wdA=="`,
-		"sk in prose":     "the task-force risk-assessment needs sk-learn style tasks, see disk-usage-report-quarterly-2024-summary",
-		"sk kebab":        "sk-assessment-for-the-quarterly-planning-report",
-		"env var name":    `bearer_token_env_var = "MY_SERVICE_TOKEN_2"`,
-		"env ref":         `API_KEY = "${OPENAI_API_KEY_FROM_HOST_1}"`,
-		"url":             `TOKEN_URL = "https://auth.example.com/oauth/token?v=12345678"`,
-		"placeholder":     `API_KEY = "your-api-key-goes-here-1234"`,
-		"short":           `PASSWORD = "hunter2"`,
-		"identifier":      `secret_name = "database_password_for_prod"`,
-		"word key":        `keyboard = "layout-us-international-variant"`,
-		"existing marker": `API_KEY = "{{cf-secret:codex/mcp/docs/env/API_KEY}}"`,
+	for name, content := range map[string]string{ //nolint:gosec // inputs that must not look like secrets
+		"uuid":                    `API_KEY = "123e4567-e89b-12d3-a456-426614174000"`,
+		"git sha":                 `COMMIT_KEY = "` + strings.Repeat("a1b2c3d4e5", 4) + `"`,
+		"sha256":                  `KEY = "` + strings.Repeat("0123456789abcdef", 4) + `"`,
+		"path":                    `SECRET_FILE_DIR = "/home/alex/.config/cf/secrets-long-path-1"`,
+		"home path":               `key_dir = "~/.ssh/id_ed25519_2024_backup"`,
+		"short base64":            `msg = "SGVsbG8gd29ybGQ="`,
+		"base64 no key":           `blob = "aGVsbG8gd29ybGQgZnJvbSBjZiBhZG9wdA=="`,
+		"sk in prose":             "the task-force risk-assessment needs sk-learn style tasks, see disk-usage-report-quarterly-2024-summary",
+		"sk kebab":                "sk-assessment-for-the-quarterly-planning-report",
+		"env var name":            `bearer_token_env_var = "MY_SERVICE_TOKEN_2"`,
+		"env ref":                 `API_KEY = "${OPENAI_API_KEY_FROM_HOST_1}"`,
+		"url":                     `TOKEN_URL = "https://auth.example.com/oauth/token?v=12345678"`,
+		"placeholder":             `API_KEY = "your-api-key-goes-here-1234"`,
+		"short":                   `PASSWORD = "hunter2"`,
+		"identifier":              `secret_name = "database_password_for_prod"`,
+		"word key":                `keyboard = "layout-us-international-variant"`,
+		"url without credentials": `u = "postgresql://db.internal:5432/app"`,
+		"url with user only":      `u = "ssh://git@github.com/org/repo.git"`,
+		"url with port":           `u = "http://localhost:8080/path@2"`,
+		"url credential ref":      `u = "postgresql://app:${DB_PASSWORD}@db.internal/app"`,
+		"url placeholder":         `u = "postgresql://user:your-password-here@host/db"`,
+		"query not a secret":      `u = "https://example.org/search?q=tokens&page=2&keyboard=us-international"`,
+		"query ref":               `u = "https://api.internal/v1?token=${API_TOKEN_FROM_ENV}"`,
+		"query short":             `u = "https://api.internal/v1?key=abc"`,
+		"bearer in prose":         "Send the Bearer token in the Authorization header, as the documentation describes.",
+		"bearer long word":        "a Bearer authentication-scheme-description is described there",
+		"bearer ref":              `Authorization = "Bearer {{cf-secret:codex/mcp/docs/env/T}}"`,
+		"basic in prose":          "Basic configuration-management-practices-overview apply",
+		"hex under plain key":     `commit = "` + strings.Repeat("a1b2c3d4e5", 4) + `"`,
+		"existing marker":         `API_KEY = "{{cf-secret:codex/mcp/docs/env/API_KEY}}"`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if hits := Scan(snapOf(content)).Hits; len(hits) != 0 {
@@ -114,6 +140,7 @@ func TestScanArgsNotReplaceable(t *testing.T) {
 	for name, content := range map[string]string{
 		"toml":      "[mcp_servers.x]\ncommand = \"npx\"\nargs = [\"-y\", \"srv\", \"--token\", \"" + ghToken + "\"]\n",
 		"multiline": "args = [\n  \"-y\",\n  \"" + ghToken + "\",\n]\n",
+		"url":       `args = ["-y", "pg-mcp", "postgresql://app:` + urlPass + `@db/app"]`,
 		"json":      `{"mcpServers":{"x":{"args":["--key=` + ghToken + `"]}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -121,7 +148,7 @@ func TestScanArgsNotReplaceable(t *testing.T) {
 			if len(r.Hits) != 1 || r.Hits[0].Replaceable || r.Hits[0].Reason == "" {
 				t.Fatalf("hits = %+v", r.Hits)
 			}
-			_, err := Apply(snapOf(content), map[string]bool{r.Hits[0].ID: true})
+			_, err := Apply(snapOf(content))
 			if !errors.Is(err, ErrNotReplaceable) {
 				t.Fatalf("err = %v", err)
 			}
@@ -138,11 +165,7 @@ func TestApplyReplacesAndRecomputes(t *testing.T) {
 	content := "[mcp_servers.docs.env]\nGITHUB_TOKEN = \"" + ghToken + "\"\nDB_PASSWORD = \"" + assignedVal + "\"\nK = \"{{cf-secret:codex/mcp/docs/env/K}}\"\n"
 	in := snapOf(content)
 	r := Scan(in)
-	accept := map[string]bool{}
-	for _, h := range r.Hits {
-		accept[h.ID] = true
-	}
-	out, err := Apply(in, accept)
+	out, err := Apply(in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,31 +197,12 @@ func TestApplyKeepsUntouchedComponents(t *testing.T) {
 	in := snapOf(`GITHUB_TOKEN = "` + ghToken + `"`)
 	clean := harness.File{Path: "AGENTS.md", Mode: 0o644, Content: []byte("hello")}
 	in.Components = append(in.Components, harness.Component{Name: "agents", Files: []harness.File{clean}, Digest: "sha256:keep"})
-	out, err := Apply(in, map[string]bool{Scan(in).Hits[0].ID: true})
+	out, err := Apply(in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out.Components[1].Digest != "sha256:keep" {
 		t.Fatalf("digest = %q", out.Components[1].Digest)
-	}
-}
-
-func TestApplyRejections(t *testing.T) {
-	in := snapOf(`GITHUB_TOKEN = "` + ghToken + `"`)
-	id := Scan(in).Hits[0].ID
-	for name, accept := range map[string]map[string]bool{
-		"missing":  nil,
-		"rejected": {id: false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			out, err := Apply(in, accept)
-			if !errors.Is(err, ErrRejected) || len(out.Components) != 0 {
-				t.Fatalf("out=%+v err=%v", out, err)
-			}
-		})
-	}
-	if _, err := Apply(in, map[string]bool{id: true, "nope": true}); !errors.Is(err, ErrUnknownHit) {
-		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -213,11 +217,9 @@ func TestNoValueSurvives(t *testing.T) {
 	}, "\n")
 	in := snapOf(content)
 	r := Scan(in)
-	accept := map[string]bool{}
 	for _, h := range r.Hits {
-		accept[h.ID] = true
 		for _, v := range values {
-			if strings.Contains(h.Preview+h.Ref+h.ID+h.Reason+h.where(), v) {
+			if strings.Contains(h.Preview+h.Ref+h.Reason+h.where(), v) {
 				t.Fatalf("value in finding %+v", h)
 			}
 		}
@@ -225,7 +227,7 @@ func TestNoValueSurvives(t *testing.T) {
 	if len(r.Hits) != 9 {
 		t.Fatalf("hits = %d, want 9", len(r.Hits))
 	}
-	out, err := Apply(in, accept)
+	out, err := Apply(in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,17 +243,7 @@ func TestNoValueSurvives(t *testing.T) {
 		}
 	}
 	// Errors name no value either.
-	_, err = Apply(in, nil)
-	var msg string
-	if err != nil {
-		msg = err.Error()
-	}
-	for _, v := range values {
-		if strings.Contains(msg, v) {
-			t.Fatal("value in error")
-		}
-	}
-	_, err = Apply(snapOf(`args = ["`+ghToken+`"]`), nil)
+	_, err = Apply(snapOf(`args = ["` + ghToken + `"]`))
 	if err == nil || strings.Contains(err.Error(), ghToken) {
 		t.Fatalf("err = %v", err)
 	}

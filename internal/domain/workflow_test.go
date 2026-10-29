@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -162,15 +163,29 @@ func TestManifestValidate(t *testing.T) {
 		"dot dot":                   func(m *Manifest) { m.Components[0].Files[0].Path = "../x" },
 		"dot segment":               func(m *Manifest) { m.Components[0].Files[0].Path = "a/./b" },
 		"trailing slash":            func(m *Manifest) { m.Components[0].Files[0].Path = "a/" },
-		"backslash is a name":       func(m *Manifest) { m.Components[0].Files[0].Path = `a\b` },
-		"root":                      func(m *Manifest) { m.Components[0].Files[0].Path = "." },
-		"empty path":                func(m *Manifest) { m.Components[0].Files[0].Path = "" },
-		"bad sha256":                func(m *Manifest) { m.Components[0].Files[0].SHA256 = "abc" },
-		"no prefix sha256":          func(m *Manifest) { m.Components[0].Files[0].SHA256 = strings.Repeat("a", 64) },
-		"bad secret ref":            func(m *Manifest) { m.Components[0].Files[0].SecretRefs = []string{"a b"} },
-		"repeated secret ref":       func(m *Manifest) { m.Components[0].Files[0].SecretRefs = []string{"k", "k"} },
+		"backslash in a path":       func(m *Manifest) { m.Components[0].Files[0].Path = `a\b` },
+		"newline in a path":         func(m *Manifest) { m.Components[0].Files[0].Path = "a\nb" },
+		"colon in a path":           func(m *Manifest) { m.Components[0].Files[0].Path = "a:b" },
+		"too many components": func(m *Manifest) {
+			for i := range MaxManifestComponents {
+				c := m.Components[0]
+				c.Name = fmt.Sprintf("c%d", i)
+				m.Components = append(m.Components, c)
+			}
+		},
+		"too many files in a component": func(m *Manifest) {
+			for i := range MaxComponentFiles {
+				m.Components[0].Files = append(m.Components[0].Files, ManifestFile{Path: fmt.Sprintf("f%d", i), SHA256: hexDigest('a')})
+			}
+		},
+		"root":                func(m *Manifest) { m.Components[0].Files[0].Path = "." },
+		"empty path":          func(m *Manifest) { m.Components[0].Files[0].Path = "" },
+		"bad sha256":          func(m *Manifest) { m.Components[0].Files[0].SHA256 = "abc" },
+		"no prefix sha256":    func(m *Manifest) { m.Components[0].Files[0].SHA256 = strings.Repeat("a", 64) },
+		"bad secret ref":      func(m *Manifest) { m.Components[0].Files[0].SecretRefs = []string{"a b"} },
+		"repeated secret ref": func(m *Manifest) { m.Components[0].Files[0].SecretRefs = []string{"k", "k"} },
 	}
-	wantValid := map[string]bool{"valid": true, "file name": true, "path name": true, "same name other harness": true, "same path other component": true, "backslash is a name": true}
+	wantValid := map[string]bool{"valid": true, "file name": true, "path name": true, "same name other harness": true, "same path other component": true}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			m := sampleManifest()
@@ -235,5 +250,35 @@ func TestParseWorkflowRef(t *testing.T) {
 				t.Fatalf("ParseWorkflowRef(%q) = %+v, want %+v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSecretRefsIn(t *testing.T) {
+	got := SecretRefsIn([]byte("a={{cf-secret:b}} {{cf-secret:a/x}} {{cf-secret:b}} {{cf-secret:not valid}} {{cf-secret:"))
+	if len(got) != 2 || got[0] != "a/x" || got[1] != "b" {
+		t.Errorf("refs = %q, want [a/x b]", got)
+	}
+	if got := SecretRefsIn([]byte("none")); got == nil || len(got) != 0 {
+		t.Errorf("no markers = %#v, want an empty list", got)
+	}
+}
+
+func TestManifestChangesFrom(t *testing.T) {
+	base := sampleManifest()
+	if got := base.ChangesFrom(&base); len(got) != 0 {
+		t.Errorf("against itself = %+v", got)
+	}
+	next := sampleManifest()
+	next.Components[0].TreeDigest = hexDigest('f')
+	got := next.ChangesFrom(&base)
+	if len(got) != 1 || got[0].Change != "modified" || got[0].Name != next.Components[0].Name {
+		t.Errorf("modified = %+v", got)
+	}
+	if all := next.ChangesFrom(nil); len(all) != len(next.Components) || all[0].Change != "added" {
+		t.Errorf("against nothing = %+v", all)
+	}
+	dropped := Manifest{SchemaVersion: 1, Components: next.Components[:1]}
+	if got := dropped.ChangesFrom(&base); len(got) != 2 || got[0].Change != "removed" || got[1].Change != "modified" {
+		t.Errorf("dropped = %+v", got)
 	}
 }

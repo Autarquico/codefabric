@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -99,10 +100,23 @@ func TestHasBlob_PresentAndAbsent(t *testing.T) {
 	}
 }
 
-func TestHasBlob_OtherRefusalsAreErrors(t *testing.T) {
-	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }))
-	if ok, err := c.HasBlob(context.Background(), testDigest); err == nil || ok {
-		t.Fatalf("got %v %v", ok, err)
+func TestHasBlob_RefusalsKeepTheirDomainCode(t *testing.T) {
+	for status, want := range map[int]domain.Code{
+		http.StatusUnauthorized:        domain.CodeUnauthenticated,
+		http.StatusForbidden:           domain.CodePolicyDenied,
+		http.StatusBadRequest:          domain.CodeInvalidRequest,
+		http.StatusInternalServerError: domain.CodeInternal,
+	} {
+		c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
+		c.dir = t.TempDir()
+		ok, err := c.HasBlob(context.Background(), testDigest)
+		var de *domain.Error
+		if ok || !errors.As(err, &de) || de.Code != want {
+			t.Errorf("HTTP %d: %v %v, want %s", status, ok, err, want)
+		}
+		if status == http.StatusUnauthorized && !strings.Contains(err.Error(), renewHint) {
+			t.Errorf("no recovery hint: %v", err)
+		}
 	}
 }
 
