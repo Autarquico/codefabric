@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -207,5 +208,46 @@ func TestBlobRoutes_RoundTripAndRejections(t *testing.T) {
 	// A malformed digest is refused.
 	if s, _, _ := tc.wfCall(hc, "PUT", "/v1/blobs/nonsense", strings.NewReader("x")); s != http.StatusBadRequest {
 		t.Errorf("malformed digest = %d, want 400", s)
+	}
+}
+
+// A manifest at the file caps serialises above the 1 MiB the SDK reads of other
+// answers; it must still commit, show and be the parent of the next commit.
+func TestWorkflowRoutes_ABigManifestRoundTripsThroughTheSDK(t *testing.T) {
+	tc := newController(t, time.Now(), withBlobs(t))
+	const content = "x"
+	_, _, _ = tc.wfCall(tc.httpClientFor(tc.ownerDir), "PUT", "/v1/blobs/"+digestOf(content), strings.NewReader(content))
+	var m domain.Manifest
+	m.SchemaVersion = domain.ManifestSchemaVersion
+	for c := range 4 {
+		var entries []treedigest.Entry
+		comp := domain.ManifestComponent{Harness: "codex", Name: "c" + strings.Repeat("d", c), Kind: "file", Ownership: domain.OwnershipManaged}
+		for i := range domain.MaxComponentFiles {
+			path := strings.Repeat("p", 200) + "/" + strings.Repeat("0", 4-len(strconv.Itoa(i))) + strconv.Itoa(i)
+			entries = append(entries, treedigest.File{Path: path, Content: []byte(content)})
+			comp.Files = append(comp.Files, domain.ManifestFile{Path: path, SHA256: digestOf(content), SecretRefs: []string{}})
+		}
+		tree, err := treedigest.Files(entries)
+		must(t, err)
+		comp.TreeDigest = tree
+		m.Components = append(m.Components, comp)
+	}
+	raw, err := json.Marshal(m)
+	must(t, err)
+	if len(raw) <= 1<<20 {
+		t.Fatalf("manifest is %d bytes, the test needs more than 1 MiB", len(raw))
+	}
+
+	ctx := t.Context()
+	v, err := tc.owner.CommitWorkflow(ctx, "big", v1.CommitWorkflowRequest{Manifest: m, Changelog: "c"})
+	must(t, err)
+	shown, err := tc.owner.ShowWorkflow(ctx, "big")
+	must(t, err)
+	if shown.Version != 1 || shown.Digest != v.Digest || shown.Manifest == nil || len(shown.Manifest.Components) != 4 {
+		t.Fatalf("show = version %d, %v", shown.Version, shown.Manifest != nil)
+	}
+	m.Components = m.Components[:3]
+	if _, err := tc.owner.CommitWorkflow(ctx, "big", v1.CommitWorkflowRequest{Parent: 1, Manifest: m, Changelog: "c"}); err != nil {
+		t.Fatalf("second commit: %v", err)
 	}
 }

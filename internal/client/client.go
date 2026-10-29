@@ -34,6 +34,11 @@ const (
 	requestTimeout  = 30 * time.Second
 	idleConnTimeout = 90 * time.Second
 	maxResponse     = 1 << 20
+	// maxWorkflowResponse bounds the answers that carry a manifest. The
+	// Controller stores only a manifest that arrived in a commit body of at most
+	// 4 MiB (maxCommitBytes of controller/api), so the version read back is that
+	// large plus its metadata: twice the body cap leaves room for it.
+	maxWorkflowResponse = 8 << 20
 
 	pemTypeCert    = "CERTIFICATE"
 	pemTypeCertReq = "CERTIFICATE REQUEST"
@@ -254,6 +259,11 @@ func (c *Client) Renew(ctx context.Context) error {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	return c.doLimited(ctx, maxResponse, method, path, in, out)
+}
+
+// doLimited is do for an answer of up to limit bytes.
+func (c *Client) doLimited(ctx context.Context, limit int64, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
@@ -274,7 +284,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return c.transportError(ctx, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return c.transportError(ctx, err)
 	}

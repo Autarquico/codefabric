@@ -196,8 +196,9 @@ var (
 	generic = regexp.MustCompile(`(?i)([A-Za-z0-9_.-]*(?:key|token|secret|passw(?:or)?d)[A-Za-z0-9_.-]*)["']?[ \t]*[=:][ \t]*["']?([^\s"',;\\]+)`)
 	// argvFlag: "--api-key", "value" as two strings of an args list. Only a
 	// flag whose name has key, token, secret or password in it; the value is
-	// the next string. A short flag ("-k") says nothing about what it takes.
-	argvFlag = regexp.MustCompile(`(?i)["'](-{1,2}[A-Za-z0-9_.-]*(?:key|token|secret|passw(?:or)?d)[A-Za-z0-9_.-]*)["'][ \t]*,[ \t\r\n]*["']([^"'\s]+)["']`)
+	// the next string, which is not itself a flag (so that a flag with no value
+	// does not use up the pair of the one after it). A short flag ("-k") says nothing about what it takes.
+	argvFlag = regexp.MustCompile(`(?i)["'](-{1,2}[A-Za-z0-9_.-]*(?:key|token|secret|passw(?:or)?d)[A-Za-z0-9_.-]*)["'][ \t]*,[ \t\r\n]*["']([^"'\s-][^"'\s]*)["']`)
 	// not a value: the name of a variable or a file, not a secret.
 	namesAnother = regexp.MustCompile(`(?i)([_-]env|[_-]env[_-]var|[_-]file|[_-]path|[_-]name|[_-]url)$`)
 	namesSecret  = regexp.MustCompile(`(?i)token|secret|passw`)

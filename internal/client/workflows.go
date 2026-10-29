@@ -25,14 +25,14 @@ func (c *Client) ListWorkflows(ctx context.Context) ([]v1.WorkflowSummary, error
 // "name@N" or "name@sha256:<hex>", as the Controller resolves it.
 func (c *Client) ShowWorkflow(ctx context.Context, ref string) (v1.WorkflowVersion, error) {
 	var out v1.WorkflowVersion
-	err := c.do(ctx, http.MethodGet, refPath("workflows", ref), nil, &out)
+	err := c.doLimited(ctx, maxWorkflowResponse, http.MethodGet, refPath("workflows", ref), nil, &out)
 	return out, err
 }
 
 // WorkflowHistory lists the versions of a Workflow, newest first.
 func (c *Client) WorkflowHistory(ctx context.Context, name string) ([]v1.WorkflowVersion, error) {
 	var out v1.WorkflowHistoryResponse
-	if err := c.do(ctx, http.MethodGet, refPath("workflows", name, "history"), nil, &out); err != nil {
+	if err := c.doLimited(ctx, maxWorkflowResponse, http.MethodGet, refPath("workflows", name, "history"), nil, &out); err != nil {
 		return nil, err
 	}
 	return out.Versions, nil
@@ -44,7 +44,7 @@ func (c *Client) WorkflowHistory(ctx context.Context, name string) ([]v1.Workflo
 // the current head. Every blob the manifest names must be uploaded first.
 func (c *Client) CommitWorkflow(ctx context.Context, name string, req v1.CommitWorkflowRequest) (v1.WorkflowVersion, error) {
 	var out v1.WorkflowVersion
-	err := c.do(ctx, http.MethodPost, refPath("workflows", name, "commits"), req, &out)
+	err := c.doLimited(ctx, maxWorkflowResponse, http.MethodPost, refPath("workflows", name, "commits"), req, &out)
 	return out, err
 }
 

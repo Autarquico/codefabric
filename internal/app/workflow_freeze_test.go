@@ -116,3 +116,32 @@ func TestScenario_WorkflowRunWaitsForTheConfigCapability(t *testing.T) {
 		t.Errorf("with the capability the Run went to %q", got)
 	}
 }
+
+// A retry carries the pin of the Run it repeats, in row, spec and view, even
+// when the head has moved since.
+func TestFreezing_ARetryKeepsTheParentsWorkflowPin(t *testing.T) {
+	e := newWorkflowEnv(t, 0)
+	v1c := e.mustCommit("review", 0, manifest(e.component("codex", "agents", "one")))
+	r := e.failedRun("x", withWorkflow("review@latest"), withRetry(domain.RetryReschedule, domain.RetryAsk, 2))
+	e.mustCommit("review", 1, manifest(e.component("codex", "agents", "two")))
+
+	runs := e.runsOf(r.run.TaskID)
+	if len(runs) != 2 {
+		t.Fatalf("runs = %d, want the failed one and its retry", len(runs))
+	}
+	parent, retry := runs[0], runs[1]
+	if parent.Workflow.Version != 1 {
+		t.Fatalf("parent pin = %+v", parent.Workflow)
+	}
+	if retry.Workflow != parent.Workflow || retry.Workflow.Digest != v1c.Digest {
+		t.Errorf("retry row pin = %+v, want %+v", retry.Workflow, parent.Workflow)
+	}
+	view, err := e.app.Runs.Get(t.Context(), string(retry.ID))
+	must(t, err)
+	if view.Workflow == nil || view.Workflow.Version != 1 || view.Workflow.Digest != v1c.Digest {
+		t.Errorf("retry view pin = %+v", view.Workflow)
+	}
+	if !strings.Contains(string(view.Spec), `"workflow":"review@`+v1c.Digest+`"`) {
+		t.Errorf("retry spec = %s", view.Spec)
+	}
+}

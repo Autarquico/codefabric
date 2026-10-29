@@ -186,3 +186,15 @@ func TestOpenBlob_StreamsAndErrorsDecode(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// A version whose manifest outgrows the 1 MiB of the other answers is read in full.
+func TestShowWorkflow_ReadsAManifestAboveOneMiB(t *testing.T) {
+	big := v1.WorkflowVersion{Workflow: "a", Version: 1, Changelog: strings.Repeat("x", 2<<20)}
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(big)
+	}))
+	v, err := c.ShowWorkflow(context.Background(), "a")
+	if err != nil || len(v.Changelog) != len(big.Changelog) {
+		t.Fatalf("show: %d bytes, %v", len(v.Changelog), err)
+	}
+}

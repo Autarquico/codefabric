@@ -229,6 +229,9 @@ func build(snaps []harness.NativeSnapshot) (*Prepared, error) {
 	p := &Prepared{Manifest: domain.Manifest{SchemaVersion: domain.ManifestSchemaVersion}, blobs: map[string][]byte{}}
 	for _, snap := range snaps {
 		for _, c := range snap.Components {
+			if len(c.Files) == 0 {
+				continue // an empty directory holds nothing to adopt: it is absent
+			}
 			digest, err := harness.FilesDigest(c.Files)
 			if err != nil {
 				return nil, fmt.Errorf("workflowadopt: digest of %s/%s: %w", snap.Harness, c.Name, err)

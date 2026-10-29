@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -648,4 +649,74 @@ func TestSelectionOf(t *testing.T) {
 	if sel := SelectionOf(m); len(sel) != 1 || strings.Join(sel[0].Components, ",") != "edit,keep,new" {
 		t.Errorf("selection = %+v", sel)
 	}
+}
+
+// withEmptyDir is an adapter that, like Codex, reports a component for a
+// directory that exists but holds no file.
+type withEmptyDir struct {
+	fakeharness.Adapter
+	empty *bool
+}
+
+func (a withEmptyDir) SnapshotConfig(ctx context.Context, h harness.Host, o harness.SnapshotOptions) (harness.NativeSnapshot, error) {
+	snap, err := a.Adapter.SnapshotConfig(ctx, h, o)
+	if err == nil && *a.empty {
+		snap.Components = append(snap.Components, harness.Component{Name: "skills", Kind: snap.Components[0].Kind, Ownership: snap.Components[0].Ownership})
+	}
+	return snap, err
+}
+
+func TestEmptyComponentsAreAbsent(t *testing.T) {
+	sel := []Selection{{Harness: fakeharness.DefaultID}}
+	ctx := context.Background()
+	empty := true
+	a := &Adopter{Registry: registry(t, withEmptyDir{empty: &empty}), Host: hostAt(t, fakeHome(t, cleanSettings)), Store: newStore()}
+
+	t.Run("adopt leaves the empty directory out", func(t *testing.T) {
+		p, err := a.Prepare(ctx, sel)
+		if err != nil {
+			t.Fatalf("adopt with an empty directory: %v", err)
+		}
+		if slices.Contains(names(p.Manifest, fakeharness.DefaultID), "skills") || len(p.Manifest.Components) == 0 {
+			t.Errorf("components = %v", names(p.Manifest, fakeharness.DefaultID))
+		}
+	})
+
+	t.Run("commit removes a component whose directory was emptied", func(t *testing.T) {
+		empty = false
+		p, err := a.Prepare(ctx, sel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.Commit(ctx, "team", p, 0, ""); err != nil {
+			t.Fatal(err)
+		}
+		// skills/twin is emptied: the adapter still reports it, with no file.
+		empty = true
+		a.Registry = registry(t, emptiesTwin{withEmptyDir{empty: &empty}})
+		c := &acceptAll{}
+		got, err := CommitOnHead(ctx, a, a.Store, "team", CommitOptions{Confirmer: c})
+		if err != nil || got.Unchanged {
+			t.Fatalf("commit: %+v, %v", got, err)
+		}
+		if slices.Contains(names(*got.Version.Manifest, fakeharness.DefaultID), "skills/twin") {
+			t.Errorf("components = %v", names(*got.Version.Manifest, fakeharness.DefaultID))
+		}
+		if len(c.reviews) != 1 || len(c.reviews[0].Diff) != 1 || c.reviews[0].Diff[0].Name != "skills/twin" || c.reviews[0].Diff[0].Change != "removed" {
+			t.Errorf("diff = %+v", c.reviews)
+		}
+	})
+}
+
+// emptiesTwin reports skills/twin with no file.
+type emptiesTwin struct{ withEmptyDir }
+
+func (a emptiesTwin) SnapshotConfig(ctx context.Context, h harness.Host, o harness.SnapshotOptions) (harness.NativeSnapshot, error) {
+	snap, err := a.withEmptyDir.SnapshotConfig(ctx, h, o)
+	for i := range snap.Components {
+		if snap.Components[i].Name == "skills/twin" {
+			snap.Components[i].Files = nil
+		}
+	}
+	return snap, err
 }

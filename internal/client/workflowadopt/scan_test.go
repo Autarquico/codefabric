@@ -149,13 +149,15 @@ func TestScanLineAndRefDeterminism(t *testing.T) {
 
 func TestScanArgsNotReplaceable(t *testing.T) {
 	for name, content := range map[string]string{
-		"toml":                        "[mcp_servers.x]\ncommand = \"npx\"\nargs = [\"-y\", \"srv\", \"--token\", \"" + ghToken + "\"]\n",
-		"multiline":                   "args = [\n  \"-y\",\n  \"" + ghToken + "\",\n]\n",
-		"url":                         `args = ["-y", "pg-mcp", "postgresql://app:` + urlPass + `@db/app"]`,
-		"flag and value apart (toml)": `args = ["-y", "ctx7", "--api-key", "` + assignedVal + `"]`,
-		"flag and value apart (json)": `{"mcpServers":{"x":{"args":["--access-token", "` + assignedVal + `"]}}}`,
-		"flag and value on lines":     "args = [\n  \"--token\",\n  \"" + assignedVal + "\",\n]\n",
-		"json":                        `{"mcpServers":{"x":{"args":["--key=` + ghToken + `"]}}}`,
+		"toml":                               "[mcp_servers.x]\ncommand = \"npx\"\nargs = [\"-y\", \"srv\", \"--token\", \"" + ghToken + "\"]\n",
+		"multiline":                          "args = [\n  \"-y\",\n  \"" + ghToken + "\",\n]\n",
+		"url":                                `args = ["-y", "pg-mcp", "postgresql://app:` + urlPass + `@db/app"]`,
+		"flag and value apart (toml)":        `args = ["-y", "ctx7", "--api-key", "` + assignedVal + `"]`,
+		"flag and value apart (json)":        `{"mcpServers":{"x":{"args":["--access-token", "` + assignedVal + `"]}}}`,
+		"flag and value on lines":            "args = [\n  \"--token\",\n  \"" + assignedVal + "\",\n]\n",
+		"flag before the flag (SEC-11)":      `args = ["--token", "--api-key", "` + assignedVal + `"]`,
+		"flag with key in its name (SEC-11)": `args = ["--no-key-cache", "--api-key", "` + assignedVal + `"]`,
+		"json":                               `{"mcpServers":{"x":{"args":["--key=` + ghToken + `"]}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := Scan(snapOf(content))
