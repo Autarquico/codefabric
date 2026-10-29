@@ -52,13 +52,16 @@ type Review struct {
 	Diff    []domain.ComponentChange
 }
 
-// Confirmer is how the user decides: about secrets (a checklist on a TTY, or
-// a flag) and about the diff of a commit. It sees every ref, the adapter's
-// and the scanner's.
+// Confirmer is how the user decides about secrets (a checklist on a TTY, or a
+// flag). It sees every ref, the adapter's and the scanner's.
 type Confirmer interface {
 	// ConfirmSecrets says whether every ref is replaced by its marker and the
 	// adopt goes on; there is no partial yes.
 	ConfirmSecrets(ctx context.Context, found []HarnessSecrets) (bool, error)
+}
+
+// ChangesConfirmer is how the user decides about the diff of a commit.
+type ChangesConfirmer interface {
 	// ConfirmChanges says whether the diff is committed.
 	ConfirmChanges(ctx context.Context, r Review) (bool, error)
 }

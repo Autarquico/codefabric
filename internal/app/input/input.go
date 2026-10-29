@@ -4,7 +4,6 @@ package input
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"unicode"
 
@@ -13,9 +12,8 @@ import (
 )
 
 const (
-	maxNameLen = 63
-	maxRefLen  = 255
-	maxURLLen  = 2048
+	maxRefLen = 255
+	maxURLLen = 2048
 )
 
 // Invalid is the error for a request that cannot be honoured as sent.
@@ -23,13 +21,11 @@ func Invalid(format string, args ...any) *domain.Error {
 	return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf(format, args...), nil)
 }
 
-var slug = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
-
 // Name checks a Project or Task name (§3.13): a lower-case slug that no
 // reference rule would read as an ID, since IDs resolve before names.
 func Name(what, name string) error {
-	if len(name) > maxNameLen || !slug.MatchString(name) {
-		return Invalid("%s must be a slug of at most %d characters: lower-case letters and digits, joined by '-', '_' or '.'", what, maxNameLen)
+	if !domain.ValidSlug(name) {
+		return Invalid("%s must be a slug of at most %d characters: lower-case letters and digits, joined by '-', '_' or '.'", what, domain.MaxSlugLen)
 	}
 	if _, err := domain.ParseShortID(name); err == nil {
 		return Invalid("%s %q reads as a short ID", what, name)

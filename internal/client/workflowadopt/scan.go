@@ -178,8 +178,11 @@ var patterns = []pattern{
 	{kind: "aws-access-key", prefix: "AK", re: regexp.MustCompile(lead + `((?:AKIA|ASIA)[A-Z0-9]{16})`), fixedLen: true},
 	{kind: "slack-token", prefix: "xox", re: regexp.MustCompile(lead + `(xox[abprs]-[A-Za-z0-9-]{10,})`), ok: mixed},
 	{kind: "google-api-key", prefix: "AIza", re: regexp.MustCompile(lead + `(AIza[A-Za-z0-9_-]{35})`), fixedLen: true},
-	// The password of scheme://user:password@host.
-	{kind: "url-credentials", re: regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@"'<>]+:([^\s/@"'<>]+)@`), ok: credential},
+	// The password of scheme://user:password@host, with or without a user
+	// (redis://:password@host). In that position the shape alone says it is a
+	// password, so there is no length floor: only a reference or a placeholder
+	// is let through.
+	{kind: "url-credentials", re: regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@"'<>]*:([^\s/@"'<>]+)@`), ok: notReference},
 	// A credential in the query of a URL.
 	{kind: "url-token", re: regexp.MustCompile(`(?i)[?&](?:access_token|auth_token|id_token|refresh_token|token|api_key|apikey|key|client_secret|secret|password)=([^&\s"'#<>]+)`), ok: credential},
 	// The value of a Bearer header, or of a Basic one under Authorization.
@@ -191,8 +194,12 @@ var (
 	// generic: NAME = value, NAME: value, "NAME": "value", where NAME has
 	// key, token, secret or password in it.
 	generic = regexp.MustCompile(`(?i)([A-Za-z0-9_.-]*(?:key|token|secret|passw(?:or)?d)[A-Za-z0-9_.-]*)["']?[ \t]*[=:][ \t]*["']?([^\s"',;\\]+)`)
+	// argvFlag: "--api-key", "value" as two strings of an args list. Only a
+	// flag whose name has key, token, secret or password in it; the value is
+	// the next string. A short flag ("-k") says nothing about what it takes.
+	argvFlag = regexp.MustCompile(`(?i)["'](-{1,2}[A-Za-z0-9_.-]*(?:key|token|secret|passw(?:or)?d)[A-Za-z0-9_.-]*)["'][ \t]*,[ \t\r\n]*["']([^"'\s]+)["']`)
 	// not a value: the name of a variable or a file, not a secret.
-	namesAnother = regexp.MustCompile(`(?i)(_env|_env_var|_file|_path|_name|_url)$`)
+	namesAnother = regexp.MustCompile(`(?i)([_-]env|[_-]env[_-]var|[_-]file|[_-]path|[_-]name|[_-]url)$`)
 	namesSecret  = regexp.MustCompile(`(?i)token|secret|passw`)
 	uuid         = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	hexOnly      = regexp.MustCompile(`^[0-9a-fA-F]+$`)
@@ -244,6 +251,13 @@ func scanFile(content []byte) []fileHit {
 		}
 		add(text, s, e, "assigned-secret", key+"=")
 	}
+	for _, m := range argvFlag.FindAllStringSubmatchIndex(text, -1) {
+		flag, s, e := text[m[2]:m[3]], m[4], m[5]
+		if namesAnother.MatchString(flag) || overlaps(s, e) || !looksSecret(flag, text[s:e]) {
+			continue
+		}
+		add(text, s, e, "assigned-secret", flag+" ")
+	}
 	slices.SortFunc(hits, func(a, b fileHit) int { return a.start - b.start })
 	return hits
 }
@@ -255,6 +269,11 @@ func isAlnum(c byte) bool {
 // credential: a value that is not a reference or a placeholder.
 func credential(v string) bool {
 	return len(v) >= 8 && !strings.HasPrefix(v, "$") && !strings.HasPrefix(v, "{{") && !placeholder(v)
+}
+
+// notReference: a value that is not a reference or a placeholder, of any length.
+func notReference(v string) bool {
+	return !strings.HasPrefix(v, "$") && !strings.HasPrefix(v, "{{") && !placeholder(v)
 }
 
 func placeholder(v string) bool {

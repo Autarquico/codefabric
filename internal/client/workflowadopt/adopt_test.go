@@ -372,8 +372,6 @@ func (r *recording) ConfirmSecrets(_ context.Context, found []HarnessSecrets) (b
 	return r.decision(found), nil
 }
 
-func (r *recording) ConfirmChanges(context.Context, Review) (bool, error) { return true, nil }
-
 // acceptAll confirms whatever it is shown.
 type acceptAll struct{ reviews []Review }
 

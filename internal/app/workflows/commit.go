@@ -235,6 +235,9 @@ func (s *Service) verify(ctx context.Context, m domain.Manifest) error {
 			if err != nil {
 				return input.Invalid("component %s: %v", id, err)
 			}
+			if domain.HasDanglingSecretMarker(content) {
+				return input.Invalid("component %s: file %q: has a %s that is not a valid marker", id, f.Path, domain.SecretMarkerPrefix)
+			}
 			if !slices.Equal(domain.SecretRefsIn(content), sortedCopy(f.SecretRefs)) {
 				return input.Invalid("component %s: file %q: secret_refs do not match the secret markers in its content", id, f.Path)
 			}

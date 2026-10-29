@@ -424,3 +424,14 @@ func TestWorkflows_SecretRefsAreThoseOfTheContent(t *testing.T) {
 	}
 	e.mustCommit("review", 0, with("a={{cf-secret:b}} {{cf-secret:a}} {{cf-secret:b}}", []string{"b", "a"}))
 }
+
+func TestWorkflows_ADanglingMarkerIsRefused(t *testing.T) {
+	e := newWorkflowEnv(t, 0)
+	c := e.component("codex", "cfg", "a={{cf-secret:tok}} b={{cf-secret:Bad Ref}}")
+	c.Files[0].SecretRefs = []string{"tok"}
+	_, err := e.commit("review", 0, manifest(c))
+	wantCode(t, err, domain.CodeInvalidRequest)
+	if err == nil || !strings.Contains(err.Error(), "not a valid marker") {
+		t.Errorf("err = %v", err)
+	}
+}

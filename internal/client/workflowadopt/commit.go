@@ -27,7 +27,7 @@ type CommitOptions struct {
 	// computed; nil is none. The ownership the head has is already kept.
 	Adjust func(*domain.Manifest) error
 	// Confirmer is asked about the diff. Nil refuses to commit.
-	Confirmer Confirmer
+	Confirmer ChangesConfirmer
 }
 
 // Committed is the outcome of CommitOnHead.

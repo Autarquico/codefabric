@@ -2,10 +2,13 @@ package domain
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // harnessRefGrammar is the grammar the {{cf-secret:<ref>}} markers of the
@@ -151,6 +154,85 @@ func TestRunSpecSchema(t *testing.T) {
 	for schema, want := range map[int]bool{0: false, 1: false, 2: true, 3: true, 4: false} {
 		if got := ReadableRunSpecSchema(schema); got != want {
 			t.Errorf("ReadableRunSpecSchema(%d) = %v, want %v", schema, got, want)
+		}
+	}
+}
+
+func distinctMarkers(n int) []byte {
+	var b strings.Builder
+	for i := range n {
+		fmt.Fprintf(&b, "{{cf-secret:a%d}}", i)
+	}
+	return []byte(b.String())
+}
+
+func fastest(runs int, f func()) time.Duration {
+	best := time.Duration(math.MaxInt64)
+	for range runs {
+		start := time.Now()
+		f()
+		best = min(best, time.Since(start))
+	}
+	return best
+}
+
+// Client blobs reach this on the Controller: many distinct markers must not
+// cost the square of their number (105k markers took 6.9 s when it did).
+// Four times the markers costs about four times as much when linearithmic and
+// up to sixteen times when quadratic; the bound of eight sits between, and takes
+// the fastest of two runs so a busy machine does not trip it.
+func TestSecretRefsInManyDistinctMarkersIsNotQuadratic(t *testing.T) {
+	small, large := distinctMarkers(10_000), distinctMarkers(40_000)
+	if refs := SecretRefsIn(large); len(refs) != 40_000 || !slices.IsSorted(refs) || HasDanglingSecretMarker(large) {
+		t.Fatalf("got %d refs", len(refs))
+	}
+	tSmall := fastest(2, func() { SecretRefsIn(small) })
+	tLarge := fastest(2, func() { SecretRefsIn(large) })
+	if tLarge > 8*tSmall {
+		t.Fatalf("4x the markers took %.1fx as long (%v for %v)", float64(tLarge)/float64(tSmall), tLarge, tSmall)
+	}
+}
+
+func BenchmarkSecretRefsIn(b *testing.B) {
+	content := distinctMarkers(50_000)
+	b.ResetTimer()
+	for range b.N {
+		SecretRefsIn(content)
+	}
+}
+
+func TestSecretRefsInOrderIsFirstAppearance(t *testing.T) {
+	content := []byte("{{cf-secret:z}} {{cf-secret:a}} {{cf-secret:z}} {{cf-secret:bad ref}}")
+	if got := SecretRefsInOrder(content); !slices.Equal(got, []string{"z", "a"}) {
+		t.Errorf("order = %q", got)
+	}
+	if got := SecretRefsIn(content); !slices.Equal(got, []string{"a", "z"}) {
+		t.Errorf("sorted = %q", got)
+	}
+}
+
+func TestHasDanglingSecretMarker(t *testing.T) {
+	for content, want := range map[string]bool{
+		"":                                false,
+		"{{cf-secret:a}} {{cf-secret:a}}": false,
+		"{{cf-secret:Bad Ref}}":           true,
+		"{{cf-secret:a}} {{cf-secret:":    true,
+		"{{cf-secret:a}} {{cf-secret:}}":  true,
+		"{{secret:a}}":                    false,
+	} {
+		if got := HasDanglingSecretMarker([]byte(content)); got != want {
+			t.Errorf("HasDanglingSecretMarker(%q) = %v, want %v", content, got, want)
+		}
+	}
+}
+
+func TestValidSlug(t *testing.T) {
+	for s, want := range map[string]bool{
+		"a": true, "a-b_c.d": true, strings.Repeat("a", MaxSlugLen): true,
+		"": false, "A": false, "-a": false, "a--b": false, strings.Repeat("a", MaxSlugLen+1): false,
+	} {
+		if got := ValidSlug(s); got != want {
+			t.Errorf("ValidSlug(%q) = %v, want %v", s, got, want)
 		}
 	}
 }

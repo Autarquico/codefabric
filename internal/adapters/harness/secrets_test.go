@@ -10,7 +10,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-func TestSecretRefsFindsTheMarkersInOrderOnce(t *testing.T) {
+func TestSecretRefsAreSortedAndWithoutRepeats(t *testing.T) {
 	content := []byte(`{"token": "` + harness.SecretMarker("claude/api-key") + `", ` +
 		`"other": "` + harness.SecretMarker("gh.token_2") + `", ` +
 		`"again": "` + harness.SecretMarker("claude/api-key") + `"}`)

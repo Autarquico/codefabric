@@ -441,7 +441,14 @@ func (s *session) confirmAdopt(name string, components []domain.ManifestComponen
 	for _, c := range components {
 		fmt.Fprintf(errOut, "  %s/%s  %s  %s  %d file(s)\n", printable(c.Harness), printable(c.Name), printable(c.Kind), c.Ownership, len(c.Files))
 	}
-	return s.confirmer.ask(fmt.Sprintf("Adopt %d component(s) as %s v1?", len(components), name))
+	ok, err := s.confirmer.ask(fmt.Sprintf("Adopt %d component(s) as %s v1?", len(components), name))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return domain.NewError(domain.CodeConfirmationRequired, "not confirmed; nothing was committed", nil)
+	}
+	return nil
 }
 
 func emitCommitted(cmd *cobra.Command, v v1.WorkflowVersion) error {
@@ -560,19 +567,13 @@ type cliConfirmer struct {
 	replaceSecrets bool
 }
 
-// ask is a yes/no question, unless --yes or nobody is there to ask.
-func (c cliConfirmer) ask(question string) error {
+// ask is a yes/no question: true without asking when --yes is set or nobody is
+// there to ask.
+func (c cliConfirmer) ask(question string) (bool, error) {
 	if c.yes || c.ui == nil {
-		return nil
+		return true, nil
 	}
-	ok, err := c.ui.confirm(question)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return domain.NewError(domain.CodeConfirmationRequired, "not confirmed; nothing was committed", nil)
-	}
-	return nil
+	return c.ui.confirm(question)
 }
 
 // ConfirmChanges shows the diff and asks once.
@@ -583,7 +584,7 @@ func (c cliConfirmer) ConfirmChanges(_ context.Context, r workflowadopt.Review) 
 	for _, ch := range r.Diff {
 		fmt.Fprintf(c.out, "  %-8s %s/%s\n", ch.Change, printable(ch.Harness), printable(ch.Name))
 	}
-	return true, c.ask(fmt.Sprintf("Commit these changes as %s v%d?", r.Name, r.Head+1))
+	return c.ask(fmt.Sprintf("Commit these changes as %s v%d?", r.Name, r.Head+1))
 }
 
 // ConfirmSecrets lists every secret ref of the snapshot (the adapter's and the

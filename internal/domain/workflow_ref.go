@@ -11,16 +11,20 @@ import (
 // ErrInvalidWorkflowRef reports text that is not a Workflow reference.
 var ErrInvalidWorkflowRef = errors.New("invalid workflow reference")
 
-const maxWorkflowNameLen = 63
+// MaxSlugLen is the longest slug.
+const MaxSlugLen = 63
 
-// workflowName is the slug rule of Project and Task names (§3.13), which lives
-// in app/input and cannot be imported here.
-var workflowName = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
+var slugForm = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
+
+// ValidSlug reports whether s is a slug (§3.13): lower-case letters and
+// digits joined by '-', '_' or '.', of at most MaxSlugLen characters. It is
+// the shape of Project, Task and Workflow names.
+func ValidSlug(s string) bool {
+	return len(s) <= MaxSlugLen && slugForm.MatchString(s)
+}
 
 // ValidWorkflowName reports whether name is a Workflow name.
-func ValidWorkflowName(name string) bool {
-	return len(name) <= maxWorkflowNameLen && workflowName.MatchString(name)
-}
+func ValidWorkflowName(name string) bool { return ValidSlug(name) }
 
 // WorkflowSelector is the parsed text form of a reference; it points at a Workflow, and optionally at one of its versions.
 // Exactly one of Latest, Version and Digest is set when a version is named;

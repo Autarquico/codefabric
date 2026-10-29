@@ -54,6 +54,8 @@ func TestScanTruePositives(t *testing.T) {
 		{"url-credentials", `DATABASE = "postgresql://app:` + urlPass + `@db.internal:5432/app"`, "url-credentials"},
 		{"url-token-query", `endpoint = "https://api.internal/v1/stream?access_token=` + queryTok + `&v=2"`, "url-token"},
 		{"url-key-query", `u = "https://maps.internal/api?x=1&key=` + queryTok + `"`, "url-token"},
+		{"url-empty-user", `REDIS = "redis://:` + urlPass + `@cache.internal:6379"`, "url-credentials"},
+		{"url-short-password", `u = "postgresql://app:p4ss@db.internal/app"`, "url-credentials"},
 		{"bearer", `Authorization = "Bearer ` + opaqueTok + `"`, "authorization-header"},
 		{"bearer-header-line", "Authorization: Bearer " + opaqueTok, "authorization-header"},
 		{"basic", `{"Authorization": "Basic ` + basicTok + `"}`, "authorization-header"},
@@ -105,6 +107,15 @@ func TestScanFalsePositives(t *testing.T) {
 		"bearer ref":              `Authorization = "Bearer {{cf-secret:codex/mcp/docs/env/T}}"`,
 		"basic in prose":          "Basic configuration-management-practices-overview apply",
 		"hex under plain key":     `commit = "` + strings.Repeat("a1b2c3d4e5", 4) + `"`,
+		"flag with a port":        `args = ["--port", "8080"]`,
+		"flag with a model":       `args = ["-y", "srv", "--model", "gpt-5"]`,
+		"flag naming a file":      `args = ["--token-file", "/run/secrets/token"]`,
+		"flag naming an env var":  `args = ["--api-key-env", "MY_SERVICE_API_KEY_2"]`,
+		"flag with a reference":   `args = ["--api-key", "${CONTEXT7_API_KEY_FROM_HOST}"]`,
+		"flag with a short value": `args = ["--token", "abc"]`,
+		"flag without a value":    `args = ["--api-key", "--verbose"]`,
+		"url empty password":      `u = "redis://:@cache.internal:6379"`,
+		"url reference password":  `u = "redis://:${REDIS_PASSWORD}@cache.internal"`,
 		"existing marker":         `API_KEY = "{{cf-secret:codex/mcp/docs/env/API_KEY}}"`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -138,10 +149,13 @@ func TestScanLineAndRefDeterminism(t *testing.T) {
 
 func TestScanArgsNotReplaceable(t *testing.T) {
 	for name, content := range map[string]string{
-		"toml":      "[mcp_servers.x]\ncommand = \"npx\"\nargs = [\"-y\", \"srv\", \"--token\", \"" + ghToken + "\"]\n",
-		"multiline": "args = [\n  \"-y\",\n  \"" + ghToken + "\",\n]\n",
-		"url":       `args = ["-y", "pg-mcp", "postgresql://app:` + urlPass + `@db/app"]`,
-		"json":      `{"mcpServers":{"x":{"args":["--key=` + ghToken + `"]}}}`,
+		"toml":                        "[mcp_servers.x]\ncommand = \"npx\"\nargs = [\"-y\", \"srv\", \"--token\", \"" + ghToken + "\"]\n",
+		"multiline":                   "args = [\n  \"-y\",\n  \"" + ghToken + "\",\n]\n",
+		"url":                         `args = ["-y", "pg-mcp", "postgresql://app:` + urlPass + `@db/app"]`,
+		"flag and value apart (toml)": `args = ["-y", "ctx7", "--api-key", "` + assignedVal + `"]`,
+		"flag and value apart (json)": `{"mcpServers":{"x":{"args":["--access-token", "` + assignedVal + `"]}}}`,
+		"flag and value on lines":     "args = [\n  \"--token\",\n  \"" + assignedVal + "\",\n]\n",
+		"json":                        `{"mcpServers":{"x":{"args":["--key=` + ghToken + `"]}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := Scan(snapOf(content))

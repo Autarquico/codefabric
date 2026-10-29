@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -21,28 +20,16 @@ type SecretEnv struct {
 // (CF_SECRET_UNAVAILABLE).
 var ErrSecretUnavailable = errors.New("harness: secret unavailable")
 
-const markerPrefix = "{{cf-secret:"
-
 // SecretMarker is how ref appears in the content of a File:
 // {{cf-secret:<ref>}}, with ref as domain.ValidSecretRef has it.
 func SecretMarker(ref string) string {
-	return markerPrefix + ref + "}}"
+	return domain.SecretMarkerPrefix + ref + "}}"
 }
 
 // SecretRefs are the refs of the markers in content: domain.SecretRefsIn, the
 // one grammar of a marker.
 func SecretRefs(content []byte) []string {
 	return domain.SecretRefsIn(content)
-}
-
-// markers are the refs of the markers in content and how many markers there
-// are, repeats included. A marker is the literal SecretMarker of a valid ref.
-func markers(content []byte) (refs []string, count int) {
-	refs = SecretRefs(content)
-	for _, ref := range refs {
-		count += bytes.Count(content, []byte(SecretMarker(ref)))
-	}
-	return refs, count
 }
 
 // Escape is how a secret value is written inside a File so that the format of
@@ -70,15 +57,12 @@ type SecretEscaper interface {
 }
 
 // RenderSecrets is content with every marker replaced by value(ref), in one
-// pass: a value that looks like a marker is not expanded again. It fails with
-// the error of value, naming no value.
+// pass: a value that looks like a marker is not expanded again. It asks value
+// for the refs in order of first appearance and fails with the first error,
+// naming no value.
 func RenderSecrets(content []byte, value func(ref string) ([]byte, error)) ([]byte, error) {
-	refs := slices.Clone(SecretRefs(content))
-	slices.SortFunc(refs, func(a, b string) int {
-		return bytes.Index(content, []byte(SecretMarker(a))) - bytes.Index(content, []byte(SecretMarker(b)))
-	})
-	pairs := make([]string, 0, 2*len(refs))
-	for _, ref := range refs {
+	var pairs []string
+	for _, ref := range domain.SecretRefsInOrder(content) {
 		v, err := value(ref)
 		if err != nil {
 			return nil, err
@@ -93,10 +77,10 @@ func RenderSecrets(content []byte, value func(ref string) ([]byte, error)) ([]by
 // would otherwise be written as it is, or SecretRefs that are not
 // SecretRefs(Content).
 func (f File) CheckSecrets() error {
-	refs, count := markers(f.Content)
-	if bytes.Count(f.Content, []byte(markerPrefix)) != count {
-		return fmt.Errorf("%w: %s has a %s that is not a valid marker", ErrSecretUnavailable, f.Path, markerPrefix)
+	if domain.HasDanglingSecretMarker(f.Content) {
+		return fmt.Errorf("%w: %s has a %s that is not a valid marker", ErrSecretUnavailable, f.Path, domain.SecretMarkerPrefix)
 	}
+	refs := SecretRefs(f.Content)
 	if !slices.Equal(f.SecretRefs, refs) {
 		return fmt.Errorf("%w: %s says its secret refs are %q, but its content has %q", ErrSecretUnavailable, f.Path, f.SecretRefs, refs)
 	}

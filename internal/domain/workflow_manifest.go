@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
@@ -37,6 +38,9 @@ var (
 	// those whose ref is ValidSecretRef are markers.
 	secretMarker = regexp.MustCompile(`\{\{cf-secret:([^{}]*)\}\}`)
 )
+
+// SecretMarkerPrefix opens every secret marker (not a credential).
+const SecretMarkerPrefix = "{{cf-secret:" //nolint:gosec // the opening of a marker, not a credential
 
 // Manifest is the content of one Workflow version (§8.9): native snapshots of
 // one or more harnesses. Author, origin, timestamp and changelog are version
@@ -231,14 +235,42 @@ func validFilePath(p string) bool {
 // SecretRefsIn are the refs of the secret markers in content, sorted and
 // without repeats: what a file's SecretRefs must be.
 func SecretRefsIn(content []byte) []string {
-	refs := []string{}
+	refs, _ := scanSecretMarkers(content)
+	slices.Sort(refs)
+	return refs
+}
+
+// SecretRefsInOrder are the same refs in order of first appearance.
+func SecretRefsInOrder(content []byte) []string {
+	refs, _ := scanSecretMarkers(content)
+	return refs
+}
+
+// HasDanglingSecretMarker says whether content has a {{cf-secret: that opens
+// no valid marker, which a Worker refuses to render.
+func HasDanglingSecretMarker(content []byte) bool {
+	_, count := scanSecretMarkers(content)
+	return bytes.Count(content, []byte(SecretMarkerPrefix)) != count
+}
+
+// scanSecretMarkers is one pass over content: the distinct refs of its valid
+// markers in order of first appearance, and how many markers there are,
+// repeats included. It costs O(n) in the size of content.
+func scanSecretMarkers(content []byte) (refs []string, count int) {
+	refs = []string{}
+	seen := map[string]struct{}{}
 	for _, m := range secretMarker.FindAllSubmatch(content, -1) {
-		if ref := string(m[1]); ValidSecretRef(ref) && !slices.Contains(refs, ref) {
+		ref := string(m[1])
+		if !ValidSecretRef(ref) {
+			continue
+		}
+		count++
+		if _, ok := seen[ref]; !ok {
+			seen[ref] = struct{}{}
 			refs = append(refs, ref)
 		}
 	}
-	slices.Sort(refs)
-	return refs
+	return refs, count
 }
 
 // ComponentChange is a component whose definition differs between two manifests.

@@ -421,3 +421,18 @@ func TestConfirmerListsEveryRefAndNeverAValue(t *testing.T) {
 		t.Errorf("declined: %v, %v", ok, err)
 	}
 }
+
+func TestConfirmChangesReportsADeclineAsFalseNotAsAnError(t *testing.T) {
+	review := workflowadopt.Review{Name: "team", Head: 1}
+	p, _ := newPrompter("n\n")
+	if ok, err := (cliConfirmer{ui: p, out: io.Discard}).ConfirmChanges(context.Background(), review); err != nil || ok {
+		t.Errorf("declined: %v, %v", ok, err)
+	}
+	p, _ = newPrompter("y\n")
+	if ok, err := (cliConfirmer{ui: p, out: io.Discard}).ConfirmChanges(context.Background(), review); err != nil || !ok {
+		t.Errorf("accepted: %v, %v", ok, err)
+	}
+	if ok, err := (cliConfirmer{yes: true, out: io.Discard}).ConfirmChanges(context.Background(), review); err != nil || !ok {
+		t.Errorf("--yes: %v, %v", ok, err)
+	}
+}

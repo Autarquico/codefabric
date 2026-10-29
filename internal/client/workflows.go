@@ -21,8 +21,8 @@ func (c *Client) ListWorkflows(ctx context.Context) ([]v1.WorkflowSummary, error
 	return out.Workflows, nil
 }
 
-// ShowWorkflow reads a version with its manifest. ref is "name", "name@N" or
-// an id, as the Controller resolves it.
+// ShowWorkflow reads a version with its manifest. ref is "name", "name@latest",
+// "name@N" or "name@sha256:<hex>", as the Controller resolves it.
 func (c *Client) ShowWorkflow(ctx context.Context, ref string) (v1.WorkflowVersion, error) {
 	var out v1.WorkflowVersion
 	err := c.do(ctx, http.MethodGet, refPath("workflows", ref), nil, &out)
