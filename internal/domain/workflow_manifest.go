@@ -109,14 +109,19 @@ func (m Manifest) Validate() error {
 }
 
 func (c ManifestComponent) validate() error {
+	// Checked first, so that no unbounded identifier reaches a message.
+	if !validToken(c.Harness) {
+		return invalidManifest("a component's harness must be a lower-case token of at most %d characters", maxManifestToken)
+	}
+	if len(c.Name) > maxManifestName {
+		return invalidManifest("a component of %s has a name longer than %d characters", c.Harness, maxManifestName)
+	}
 	id := c.Harness + "/" + c.Name
 	switch {
-	case !token.MatchString(c.Harness):
-		return invalidManifest("component %q: harness must be a lower-case token", id)
 	case !validComponentName(c.Name):
 		return invalidManifest("component %q: name must be a relative slash path of at most %d characters, with no space", id, maxManifestName)
-	case !token.MatchString(c.Kind):
-		return invalidManifest("component %q: kind must be a lower-case token", id)
+	case !validToken(c.Kind):
+		return invalidManifest("component %q: kind must be a lower-case token of at most %d characters", id, maxManifestToken)
 	case c.Ownership != OwnershipManaged && c.Ownership != OwnershipLocal:
 		return invalidManifest("component %q: ownership %q is not managed or local", id, c.Ownership)
 	case !digestForm.MatchString(c.TreeDigest):
@@ -140,6 +145,12 @@ func (c ManifestComponent) validate() error {
 }
 
 const maxManifestName = 128
+
+// maxManifestToken bounds a harness or a kind: with the caps on components and
+// names, it bounds what a version adds to a response besides its files.
+const maxManifestToken = 32
+
+func validToken(s string) bool { return len(s) <= maxManifestToken && token.MatchString(s) }
 
 func (f ManifestFile) validate() error {
 	switch {
