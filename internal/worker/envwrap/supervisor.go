@@ -158,6 +158,9 @@ func (s *supervisor) run() error {
 		return errors.New("envwrap: another supervisor holds the identity of this Run")
 	}
 	switch stopped, err := s.waitForGate(); {
+	case err != nil && s.launch.Recover:
+		// No stop was attempted: this is not an exit the daemon may take as final.
+		return errors.Join(err, s.finish(CauseRecoveryNotRun, bound(err.Error())))
 	case err != nil:
 		return s.fail("%v", err)
 	case stopped:

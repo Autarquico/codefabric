@@ -158,6 +158,9 @@ const (
 	CauseServicesFailed = "services-failed"
 	CauseError          = "error" // the supervisor could not do its job; Error says why
 	CauseLost           = "lost"  // the supervisor died with no exit; a recovery supervisor stopped what it had started
+	// CauseRecoveryNotRun: a recovery supervisor ended at its gate, before it
+	// attempted any stop. It settles nothing: the daemon launches the recovery again.
+	CauseRecoveryNotRun = "recovery_not_run"
 )
 
 // StopFailure is a service whose stop command failed. Stopping is best effort

@@ -422,9 +422,10 @@ func later(a, b time.Time) time.Time {
 // many died), the stops are failures; the reservation is released all the same
 // (best effort, §25), but never while a recovery supervisor may still be running.
 func (e *Executor) environmentGone(ctx context.Context, k state.Key, dir string, rec state.Environment) envSettlement {
-	if exit, _ := readMarker[envwrap.Exit](dir, envwrap.ExitFile); exit != nil {
+	if exit, _ := readMarker[envwrap.Exit](dir, envwrap.ExitFile); exit != nil && exit.Cause != envwrap.CauseRecoveryNotRun {
 		return envSettlement{done: true, failures: exit.StopFailures}
 	}
+	// No exit, or one of a recovery that never ran its stops: neither settles anything.
 	started, err := readMarker[envwrap.Started](dir, envwrap.StartedFile)
 	switch {
 	case err != nil:
@@ -435,7 +436,7 @@ func (e *Executor) environmentGone(ctx context.Context, k state.Key, dir string,
 	lost := func() envSettlement {
 		out := envSettlement{done: true}
 		for _, name := range started.Services {
-			out.failures = append(out.failures, envwrap.StopFailure{Service: name, Error: "stop not attempted: supervisor lost"})
+			out.failures = append(out.failures, envwrap.StopFailure{Service: name, Error: "stop not attempted: recovery abandoned"})
 		}
 		return out
 	}
@@ -454,7 +455,7 @@ func (e *Executor) environmentGone(ctx context.Context, k state.Key, dir string,
 // this one's; the stop order stands, and it is not heeded by the recovery.
 func (e *Executor) launchRecovery(ctx context.Context, k state.Key, dir string, launch envwrap.Launch) envSettlement {
 	pending := envSettlement{unverified: "the recovery of the Environment could not be launched"}
-	for _, name := range []string{envwrap.WrapperFile, envwrap.AuthorizedFile} {
+	for _, name := range []string{envwrap.WrapperFile, envwrap.AuthorizedFile, envwrap.ExitFile} {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
 			e.log.ErrorContext(ctx, "clearing the files of a lost Environment supervisor", "run", k.RunID, "err", err)
 			return pending

@@ -569,3 +569,41 @@ func TestEnvironment_ReadyMarkersAreNotTakenOnceTheSupervisorIsGone(t *testing.T
 		t.Error("the record of a settled Environment stays")
 	}
 }
+
+// A recovery supervisor that ended at its gate ran no stop: its exit is not the
+// end of the Environment, and the recovery is launched again.
+func TestEnvironment_ARecoveryThatNeverRanItsStopsIsLaunchedAgain(t *testing.T) {
+	f, _, k := envRun(t, scriptsEnv())
+	dir := f.runDir(k)
+	f.writeEnv(k, envwrap.StartedFile, envwrap.Started{Services: []string{"db"}})
+	f.writeEnv(k, envwrap.LaunchFile, envwrap.Launch{Dir: dir, Recover: true})
+	f.writeEnv(k, envwrap.ExitFile, envwrap.Exit{Cause: envwrap.CauseRecoveryNotRun, ExitedAt: t0})
+	rec, _ := f.environmentRecord(k)
+	res := f.e.environmentGone(t.Context(), k, dir, rec)
+	if res.done || len(res.failures) != 0 {
+		t.Fatalf("settlement = %+v: an exit that ran no stop settled the Environment", res)
+	}
+	if after, _ := f.environmentRecord(k); after.Launches != rec.Launches+1 {
+		t.Errorf("launches = %d, want the recovery launched again", after.Launches)
+	}
+	if f.envFile(k, envwrap.ExitFile) {
+		t.Error("the exit of the recovery that never ran was left for the next to be taken for")
+	}
+}
+
+func TestEnvironment_AbandonedRecoveryReportsEveryStartedServiceAsAStopFailure(t *testing.T) {
+	f, _, k := envRun(t, scriptsEnv())
+	dir := f.runDir(k)
+	f.writeEnv(k, envwrap.StartedFile, envwrap.Started{Services: []string{"db", "cache"}})
+	f.writeEnv(k, envwrap.ExitFile, envwrap.Exit{Cause: envwrap.CauseRecoveryNotRun, ExitedAt: t0})
+	rec, _ := f.environmentRecord(k)
+	rec.Launches = envMaxLaunches + envMaxRecoveries
+	res := f.e.environmentGone(t.Context(), k, dir, rec)
+	want := []envwrap.StopFailure{
+		{Service: "db", Error: "stop not attempted: recovery abandoned"},
+		{Service: "cache", Error: "stop not attempted: recovery abandoned"},
+	}
+	if !res.done || !slices.Equal(res.failures, want) {
+		t.Errorf("settlement = %+v", res)
+	}
+}

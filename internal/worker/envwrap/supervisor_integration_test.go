@@ -24,6 +24,7 @@ import (
 const (
 	asSupervisor = "CF_TEST_AS_ENVWRAP"
 	withDelivery = "CF_TEST_WITH_DELIVERY"
+	withGate     = "CF_TEST_GATE_TIMEOUT"
 )
 
 // The supervisor signals its group, and a group of the test binary would be
@@ -34,6 +35,9 @@ func TestMain(m *testing.M) {
 	if dir := os.Getenv(asSupervisor); dir != "" {
 		_ = os.Unsetenv(asSupervisor)
 		o := envwrap.Options{RunDir: dir, GateTimeout: 5 * time.Second, ReadyInterval: 20 * time.Millisecond}
+		if g, err := time.ParseDuration(os.Getenv(withGate)); err == nil {
+			o.GateTimeout = g
+		}
 		if delivery == "1" {
 			o.Secrets = secretjit.Resolver(dir)
 			o.Retention = func() ([]redact.Needle, error) { return secretjit.Load(dir) }
@@ -510,5 +514,25 @@ func TestARecoverySupervisorStopsWhatALostOneStartedAndNothingElse(t *testing.T)
 		if time.Now().After(deadline) {
 			t.Fatal("what a stop left behind outlived the recovery supervisor")
 		}
+	}
+}
+
+// A recovery supervisor whose gate times out has attempted no stop: its exit is
+// not a final one, and it leaves the stops to the next recovery.
+func TestARecoverySupervisorThatTimesOutAtItsGateSaysItRanNothing(t *testing.T) {
+	runDir := t.TempDir()
+	s := start(t, runDir, envwrap.Launch{
+		Recover:  true,
+		Services: []domain.EnvironmentService{svc("db", "x", "", "touch db-stopped")},
+	}, withGate+"=200ms")
+	if err := execwrap.Write(runDir, envwrap.StartedFile, envwrap.Started{Services: []string{"db"}}); err != nil {
+		t.Fatal(err)
+	}
+	exit := s.exit()
+	if exit.Cause != envwrap.CauseRecoveryNotRun || len(exit.StopFailures) != 0 {
+		t.Errorf("exit = %+v", exit)
+	}
+	if s.exists("db-stopped") {
+		t.Error("a stop ran without the authorization of the daemon")
 	}
 }
