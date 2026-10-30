@@ -576,6 +576,56 @@ func TestEnvironment_ReadyMarkersAreNotTakenOnceTheSupervisorIsGone(t *testing.T
 	}
 }
 
+// Once a recovery was launched for a lost supervisor whose services were ready,
+// the ready markers are never taken again: no harness starts, the recovery is
+// authorized, and the Run fails as an Environment failure.
+func TestEnvironment_ARecoveryIsNeverTakenForAReadyEnvironment(t *testing.T) {
+	f, _, k := envRun(t, scriptsEnv())
+	sup := f.supervisorProcess(k)
+	f.e.step(t.Context(), k)
+	f.writeEnv(k, envwrap.PreparedFile, envwrap.Prepared{Status: envwrap.StatusOK, At: t0})
+	f.writeEnv(k, envwrap.ServicesFile, envwrap.Services{Status: envwrap.StatusOK, At: t0})
+	f.writeEnv(k, envwrap.StartedFile, envwrap.Started{Services: []string{"db"}})
+	sup.kill(t)
+	if f.e.step(t.Context(), k) {
+		t.Fatal("the Run ended with a service not stopped")
+	}
+	if rec, _ := f.environmentRecord(k); rec.Launches != 2 {
+		t.Fatalf("launches = %d, want the normal one and a recovery", rec.Launches)
+	}
+	// The recovery identifies itself, as a live process of ours.
+	rp := newWrapperProcess(t, "sleep 30")
+	f.writeEnv(k, envwrap.WrapperFile, rp.w)
+	for range 4 {
+		f.e.step(t.Context(), k)
+	}
+	if f.rt.startCount() != 0 {
+		t.Fatal("the harness started under a recovery supervisor")
+	}
+	var a envwrap.Authorized
+	if ok, err := execwrap.Read(f.runDir(k), envwrap.AuthorizedFile, &a); err != nil || !ok || a.PID != rp.w.PID {
+		t.Errorf("authorized = %+v, %v, %v: the recovery was not authorized", a, ok, err)
+	}
+	if !f.envFile(k, envwrap.StopFile) {
+		t.Error("the stop of the Environment was not ordered")
+	}
+	// The recovery stops what was started and says so.
+	f.writeEnv(k, envwrap.ExitFile, envwrap.Exit{Cause: envwrap.CauseLost, ExitedAt: t0})
+	rp.kill(t)
+	for range 4 {
+		if f.e.step(t.Context(), k) {
+			break
+		}
+	}
+	reports := f.reports(k)
+	if len(reports) == 0 || reports[0].Kind != v1.ReportPrepareFailed || f.rt.startCount() != 0 {
+		t.Errorf("reports = %+v, starts = %d", reports, f.rt.startCount())
+	}
+	if f.run(k).Phase != state.PhaseStopped {
+		t.Errorf("phase = %s", f.run(k).Phase)
+	}
+}
+
 // A recovery supervisor that ended at its gate ran no stop: its exit is not the
 // end of the Environment, and the recovery is launched again.
 func TestEnvironment_ARecoveryThatNeverRanItsStopsIsLaunchedAgain(t *testing.T) {

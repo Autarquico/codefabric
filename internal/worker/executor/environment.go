@@ -136,6 +136,12 @@ func (e *Executor) environmentStage(ctx context.Context, r state.Run, def *domai
 		e.log.ErrorContext(ctx, "recording the Environment of a Run", "run", k.RunID, "err", err)
 		return envPending, ""
 	}
+	if rec.Launches > 1 {
+		// A recovery was launched: the normal supervisor is lost and the Run is on its
+		// way to be finalized. Nothing it wrote (the ready markers included) is taken
+		// again, and the settlement of the Run authorizes and waits for the recovery.
+		return envFailed, envLost
+	}
 	if st, msg, decided := e.environmentOutcome(dir); decided {
 		if st == envReady {
 			return e.confirmReady(ctx, k, dir)
