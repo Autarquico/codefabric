@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,6 +136,18 @@ func TestExplain_DenyIgnoresTheFileEvenIfInvalid(t *testing.T) {
 	}
 	if got := field(t, e, "resources.cpu"); got.Origin == domain.OriginRepo {
 		t.Errorf("cpu came from the repo under deny: %+v", got)
+	}
+}
+
+// The Worker fails the Run on an effective configuration over 16 KiB, so
+// explain says the same of the same file (the parser takes up to 64 KiB).
+func TestExplain_AnEffectiveConfigOverTheLimitIsInvalid(t *testing.T) {
+	f := newFixture(t)
+	f.project(v1.CreateProjectRequest{})
+	e := f.explain("evaluation:\n  description: "+strings.Repeat("x", 20<<10)+"\n", nil)
+
+	if e.Invalid == nil || e.Invalid.Code != domain.CodeRepoConfigInvalid || len(e.Fields) != 0 {
+		t.Fatalf("invalid = %+v, fields %d, want CF_REPO_CONFIG_INVALID and no fields", e.Invalid, len(e.Fields))
 	}
 }
 

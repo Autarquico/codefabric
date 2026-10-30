@@ -10,6 +10,11 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
+// MaxEffectiveBytes bounds the effective configuration once marshaled; it is
+// v1.MaxEffectiveConfigBytes, which the Controller enforces on the report (the
+// executor tests keep both equal: this package may not import the API).
+const MaxEffectiveBytes = 16 << 10
+
 // Names of the fields of Effective.Origins.
 const (
 	FieldCPU                  = "resources.cpu"
@@ -70,8 +75,26 @@ type Effective struct {
 // Resolve merges the file of the repo over the configuration of the
 // Controller, field by field. The repo can lower resources, never raise them
 // (a higher request is clamped to the Controller's value and marked so), and
-// it cannot touch the provider or the capabilities of an Environment.
+// it cannot touch the provider or the capabilities of an Environment. A result
+// over MaxEffectiveBytes once marshaled is CodeRepoConfigInvalid, for
+// the Worker and for explain alike.
 func Resolve(in Inputs) (Effective, error) {
+	eff, err := resolve(in)
+	if err != nil {
+		return Effective{}, err
+	}
+	raw, err := json.Marshal(eff)
+	if err != nil {
+		return Effective{}, err
+	}
+	if len(raw) > MaxEffectiveBytes {
+		return Effective{}, domain.NewError(domain.CodeRepoConfigInvalid,
+			fmt.Sprintf("the effective configuration is over %d bytes", MaxEffectiveBytes), nil)
+	}
+	return eff, nil
+}
+
+func resolve(in Inputs) (Effective, error) {
 	for _, o := range []domain.Origin{in.CPUOrigin, in.MemoryOrigin} {
 		if !controllerOrigin(o) {
 			return Effective{}, fmt.Errorf("repoconfig: resources need a controller origin, got %q", o)

@@ -64,7 +64,7 @@ func (s *Service) Explain(ctx context.Context, ref string, req v1.ExplainProject
 		}
 		eff, err := repoconfig.Resolve(inputs)
 		if err != nil {
-			return err
+			return invalidFile(&out, err)
 		}
 		out.Fields = fields(in, origins, pin, eff)
 		for _, path := range eff.DigestInputPaths() {

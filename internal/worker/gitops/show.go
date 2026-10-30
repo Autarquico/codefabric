@@ -32,7 +32,9 @@ func (g *Git) lsTree(ctx context.Context, project, commit string, paths []string
 	}
 	bare := g.o.Paths.WorkerRepoDir(project)
 	res, err := g.run(ctx, cmd{
-		dir: bare, env: isolatedEnv(bare), timeout: quickTimeout,
+		// Literal pathspecs: a path is a name, so ':(glob)x' or '*' match nothing
+		// but a file called that, and a name with a leading '-' is safe after "--".
+		dir: bare, env: append(isolatedEnv(bare), "GIT_LITERAL_PATHSPECS=1"), timeout: quickTimeout,
 		args: append([]string{"ls-tree", "-z", commit, "--"}, paths...),
 	})
 	if err != nil {
@@ -112,7 +114,7 @@ func (g *Git) BlobIDs(ctx context.Context, project, commit string, paths []strin
 }
 
 func validRepoPath(p string) error {
-	if p == "" || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "-") || bytes.ContainsAny([]byte(p), "\x00\\") {
+	if p == "" || strings.HasPrefix(p, "/") || bytes.ContainsAny([]byte(p), "\x00\\") {
 		return fmt.Errorf("gitops: %q is not a path of the repository", p)
 	}
 	return nil

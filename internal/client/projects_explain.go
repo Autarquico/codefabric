@@ -46,15 +46,8 @@ func (c *Client) ExplainProjectAt(ctx context.Context, dir, projectRef, ref stri
 		return v1.ProjectExplanation{}, err
 	}
 	req := v1.ExplainProjectRequest{Commit: commit}
-	blob, err := fileBlob(ctx, dir, commit, repoconfig.Path)
-	if err != nil {
+	if err := readRepoFile(ctx, dir, commit, project.RepoConfig, &req); err != nil {
 		return v1.ProjectExplanation{}, err
-	}
-	if blob != "" {
-		req.FilePresent = true
-		if req.File, err = blobBytes(ctx, dir, blob); err != nil {
-			return v1.ProjectExplanation{}, err
-		}
 	}
 	out, err := c.ExplainProject(ctx, projectRef, req)
 	if err != nil || len(out.NeedBlobs) == 0 {
@@ -67,6 +60,24 @@ func (c *Client) ExplainProjectAt(ctx context.Context, dir, projectRef, ref stri
 		}
 	}
 	return c.ExplainProject(ctx, projectRef, req)
+}
+
+// readRepoFile puts the file of the repo in req. With repo_config deny the
+// Worker ignores the file, so here too: only whether the commit has an entry
+// there is looked up, whatever it is, and nothing is validated or read.
+func readRepoFile(ctx context.Context, dir, commit string, policy domain.RepoConfig, req *v1.ExplainProjectRequest) error {
+	if policy == domain.RepoConfigDeny {
+		_, oid, err := treeEntry(ctx, dir, commit, repoconfig.Path)
+		req.FilePresent = oid != ""
+		return err
+	}
+	blob, err := fileBlob(ctx, dir, commit, repoconfig.Path)
+	if err != nil || blob == "" {
+		return err
+	}
+	req.FilePresent = true
+	req.File, err = blobBytes(ctx, dir, blob)
+	return err
 }
 
 // checkClone refuses a directory whose origin is not a URL of the Project.
@@ -148,7 +159,7 @@ func blobBytes(ctx context.Context, dir, blob string) ([]byte, error) {
 // contents survive. Its failure carries git's message.
 func localGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // fixed git subcommands; user values follow "--" or --end-of-options
-	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C", "GIT_LITERAL_PATHSPECS=1")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {

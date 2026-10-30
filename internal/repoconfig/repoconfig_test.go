@@ -304,3 +304,15 @@ func TestDigestInputPaths_AreTheEffectiveOnesSorted(t *testing.T) {
 		t.Fatalf("paths = %s", got)
 	}
 }
+
+func TestResolve_RejectsAnEffectiveConfigOverTheLimit(t *testing.T) {
+	file := mustParse(t, "evaluation:\n  description: "+strings.Repeat("x", 20<<10)+"\n")
+	_, err := repoconfig.Resolve(repoconfig.Inputs{
+		RepoConfig: domain.RepoConfigAllow, File: &file,
+		Resources: domain.Resources{CPU: 1, MemoryMB: 1}, CPUOrigin: domain.OriginGlobal, MemoryOrigin: domain.OriginGlobal,
+	})
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.CodeRepoConfigInvalid {
+		t.Fatalf("Resolve = %v, want CF_REPO_CONFIG_INVALID", err)
+	}
+}

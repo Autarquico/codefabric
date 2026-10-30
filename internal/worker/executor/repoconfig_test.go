@@ -348,3 +348,33 @@ func TestRepoConfig_ADroppedReportIsNotAnAck(t *testing.T) {
 		t.Errorf("the configuration was not reported again (seq %d)", again.WorkerSeq)
 	}
 }
+
+// The same file that explain reports Invalid for (see app/projects) fails the Run.
+func TestRepoConfig_AnEffectiveConfigOverTheLimitFailsTheRun(t *testing.T) {
+	file := []byte("evaluation:\n  description: " + strings.Repeat("x", 20<<10) + "\n")
+	f, _, k := repoConfigRun(t, specV4(domain.RepoConfigAllow, nil), file)
+	if !f.e.step(t.Context(), k) {
+		t.Fatal("the Run did not end")
+	}
+	if r := f.reports(k)[0]; r.Kind != v1.ReportPrepareFailed || r.Code != domain.CodeRepoConfigInvalid {
+		t.Errorf("report = %+v", r)
+	}
+}
+
+// Under deny the file is not read, but the digest inputs of the Environment
+// still need the commit: it is fetched before any read.
+func TestRepoConfig_DenyStillEnsuresTheSourceForDigestInputs(t *testing.T) {
+	env := &domain.EnvironmentDef{Provider: "host", DigestInputs: []string{"-lock"}}
+	f, g, k := repoConfigRun(t, specV4(domain.RepoConfigDeny, env), []byte("bogus: [\n"))
+	g.blobs = map[string]string{"-lock": "abc123"}
+	f.e.step(t.Context(), k)
+	if !slices.Equal(g.callList(), []string{"ensure", "blobs"}) {
+		t.Errorf("git calls = %v", g.callList())
+	}
+}
+
+func TestRepoConfig_TheLimitIsTheOneOfTheReport(t *testing.T) {
+	if repoconfig.MaxEffectiveBytes != v1.MaxEffectiveConfigBytes {
+		t.Fatalf("repoconfig limit %d != report limit %d", repoconfig.MaxEffectiveBytes, v1.MaxEffectiveConfigBytes)
+	}
+}

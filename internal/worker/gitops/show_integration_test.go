@@ -98,3 +98,18 @@ func TestBlobIDsLeavesOutWhatTheCommitLacks(t *testing.T) {
 		t.Errorf("BlobIDs = %v", got)
 	}
 }
+
+// A name that starts with '-' is a name (the client takes it too), and pathspec
+// magic is literal.
+func TestBlobIDsTakeDashNamesAndLiteralPathspecs(t *testing.T) {
+	r := newRig(t)
+	commit := r.source4(map[string]string{"-lock": "one", "a.txt": "two"})
+	r.ensure(commit)
+	got, err := r.g.BlobIDs(t.Context(), project, commit, []string{"-lock", ":(glob)*.txt", "*.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := gittest.Run(t, r.origin, "rev-parse", "HEAD:-lock"); len(got) != 1 || got["-lock"] != want {
+		t.Errorf("BlobIDs = %v, want only -lock = %s", got, want)
+	}
+}

@@ -79,6 +79,13 @@ func (e *Executor) recordResolution(ctx context.Context, r state.Run, spec specV
 		CPUOrigin: spec.Origins.Resources, MemoryOrigin: spec.Origins.Resources,
 		Environment: spec.EnvironmentDef, EnvironmentOrigin: spec.Origins.Environment,
 	}
+	// The commit must be here before any git read: the file of the repo (if the
+	// Project allows it) and the digest inputs of the Environment both need it.
+	if e.o.Git != nil {
+		if err := e.ensureSource(ctx, r, spec); err != nil {
+			return err
+		}
+	}
 	if err := e.readRepoFile(ctx, r, spec, &in); err != nil {
 		return err
 	}
@@ -97,9 +104,6 @@ func (e *Executor) recordResolution(ctx context.Context, r state.Run, spec specV
 	raw, err := json.Marshal(eff)
 	if err != nil {
 		return invalidConfig(err)
-	}
-	if len(raw) > v1.MaxEffectiveConfigBytes {
-		return &codedFailure{domain.CodeRepoConfigInvalid, fmt.Sprintf("the effective configuration is over %d bytes", v1.MaxEffectiveConfigBytes)}
 	}
 	now := e.clock.Now()
 	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
@@ -134,9 +138,6 @@ func (e *Executor) recordResolution(ctx context.Context, r state.Run, spec specV
 func (e *Executor) readRepoFile(ctx context.Context, r state.Run, spec specView, in *repoconfig.Inputs) error {
 	if e.o.Git == nil || spec.RepoConfig == domain.RepoConfigDeny {
 		return nil
-	}
-	if err := e.ensureSource(ctx, r, spec); err != nil {
-		return err
 	}
 	data, found, err := e.o.Git.Show(ctx, r.ProjectID, r.SourceCommit, repoconfig.Path)
 	switch {
