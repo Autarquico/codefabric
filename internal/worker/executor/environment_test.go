@@ -577,7 +577,7 @@ func TestEnvironment_ARecoveryThatNeverRanItsStopsIsLaunchedAgain(t *testing.T) 
 	dir := f.runDir(k)
 	f.writeEnv(k, envwrap.StartedFile, envwrap.Started{Services: []string{"db"}})
 	f.writeEnv(k, envwrap.LaunchFile, envwrap.Launch{Dir: dir, Recover: true})
-	f.writeEnv(k, envwrap.ExitFile, envwrap.Exit{Cause: envwrap.CauseRecoveryNotRun, ExitedAt: t0})
+	f.writeEnv(k, envwrap.ExitFile, envwrap.Exit{Cause: envwrap.CauseStopsPending, ExitedAt: t0})
 	rec, _ := f.environmentRecord(k)
 	res := f.e.environmentGone(t.Context(), k, dir, rec)
 	if res.done || len(res.failures) != 0 {
@@ -595,7 +595,7 @@ func TestEnvironment_AbandonedRecoveryReportsEveryStartedServiceAsAStopFailure(t
 	f, _, k := envRun(t, scriptsEnv())
 	dir := f.runDir(k)
 	f.writeEnv(k, envwrap.StartedFile, envwrap.Started{Services: []string{"db", "cache"}})
-	f.writeEnv(k, envwrap.ExitFile, envwrap.Exit{Cause: envwrap.CauseRecoveryNotRun, ExitedAt: t0})
+	f.writeEnv(k, envwrap.ExitFile, envwrap.Exit{Cause: envwrap.CauseStopsPending, ExitedAt: t0})
 	rec, _ := f.environmentRecord(k)
 	rec.Launches = envMaxLaunches + envMaxRecoveries
 	res := f.e.environmentGone(t.Context(), k, dir, rec)

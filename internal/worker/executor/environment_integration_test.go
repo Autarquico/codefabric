@@ -285,3 +285,46 @@ func TestEnvironmentIntegration_ARecoveryThatOutlivesTheDaemonKeepsTheRunUntilIt
 		t.Error("the recovery supervisor is still alive")
 	}
 }
+
+// The supervisor dies while a service is not yet ready, with its start recorded.
+// The daemon launches a normal supervisor over the record, and the Run is stopped
+// before the daemon authorizes it: it ends at its gate without having stopped the
+// recorded service, which is not an exit that releases the Run. The stop runs in
+// an authorized recovery supervisor.
+func TestEnvironmentIntegration_AStopBeforeTheGateOfARelaunchedSupervisorStillStopsWhatWasStarted(t *testing.T) {
+	dir := t.TempDir()
+	stopped := filepath.Join(dir, "stopped")
+	env := &domain.EnvironmentDef{Provider: "host", Services: []domain.EnvironmentService{{
+		Name:  "svc",
+		Start: "sleep 600 & echo $! > " + filepath.Join(dir, "svc.pid"),
+		Ready: "false",
+		Stop:  "touch " + stopped,
+	}}}
+	f, k := realEnvRun(t, env, EnvironmentTimeouts{Grace: time.Second})
+	f.drive(k, "the start to be recorded", func() bool { return fileExists(filepath.Join(f.runDir(k), envwrap.StartedFile)) })
+	w := f.supervisorIdentity(k)
+	if err := syscall.Kill(w.PID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the supervisor to be gone", func() bool { return procident.Verify(w.PID, w.Start) != procident.Same })
+	// Steps until the second supervisor is launched, and no further: it is not authorized.
+	waitFor(t, "a supervisor to be relaunched", func() bool {
+		f.e.step(t.Context(), k)
+		rec, _ := f.environmentRecord(k)
+		return rec.Launches >= 2
+	})
+	if err := f.e.Stop(t.Context(), k.RunID, k.LeaseEpoch, "enough", SourceController); err != nil {
+		t.Fatal(err)
+	}
+	f.rt.setAlive(f.e.sessionName(k), false)
+	f.drive(k, "the Run to stop", func() bool {
+		over := f.run(k).Phase == state.PhaseStopped
+		if over && !fileExists(stopped) {
+			t.Fatal("the Run was released with its recorded service not stopped")
+		}
+		return over
+	})
+	if last := f.lastReport(k); last.Kind != v1.ReportStopped || len(last.StopFailures) != 0 {
+		t.Errorf("last report = %+v", last)
+	}
+}

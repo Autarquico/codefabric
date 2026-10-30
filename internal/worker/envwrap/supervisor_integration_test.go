@@ -79,6 +79,13 @@ func start(t *testing.T, runDir string, l envwrap.Launch, env ...string) *spawne
 	if err := execwrap.Write(runDir, envwrap.LaunchFile, l); err != nil {
 		t.Fatal(err)
 	}
+	s.run(env...)
+	return s
+}
+
+// run starts the supervisor process on whatever launch file the run dir holds.
+func (s *spawned) run(env ...string) {
+	t, runDir := s.t, s.runDir
 	s.cmd = exec.CommandContext(t.Context(), os.Args[0]) //nolint:gosec // the test binary itself
 	s.cmd.Env = append(append(os.Environ(), asSupervisor+"="+runDir, "TMUX=/tmp/tmux-0/default,1,0"), env...)
 	s.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -93,7 +100,6 @@ func start(t *testing.T, runDir string, l envwrap.Launch, env ...string) *spawne
 		_ = s.cmd.Wait()
 		close(s.exited)
 	}()
-	return s
 }
 
 func (s *spawned) authorize() {
@@ -529,10 +535,99 @@ func TestARecoverySupervisorThatTimesOutAtItsGateSaysItRanNothing(t *testing.T) 
 		t.Fatal(err)
 	}
 	exit := s.exit()
-	if exit.Cause != envwrap.CauseRecoveryNotRun || len(exit.StopFailures) != 0 {
+	if exit.Cause != envwrap.CauseStopsPending || len(exit.StopFailures) != 0 {
 		t.Errorf("exit = %+v", exit)
 	}
 	if s.exists("db-stopped") {
 		t.Error("a stop ran without the authorization of the daemon")
+	}
+}
+
+// The invariant of every exit: env-exit.json is final only if every service
+// recorded in env-started.json had its stop attempted by the supervisor that
+// wrote it, whichever way the supervisor ended and whether or not it had loaded
+// the record. A stop is never run without the authorization of the daemon.
+func TestEveryExitIsFinalOnlyIfEveryRecordedServiceHadItsStopAttempted(t *testing.T) {
+	stopOld := svc("old", "true", "", "touch old-stopped")
+	paths := []struct {
+		name string
+		// run drives a supervisor, with the record already written, to its exit.
+		run func(t *testing.T, runDir string) *spawned
+		// stops: the path is authorized and loads the record, so it stops what is recorded.
+		stops bool
+		// starts: the path starts the services itself, so it stops them whatever was inherited.
+		starts bool
+	}{
+		{"stop ordered before the gate", func(t *testing.T, runDir string) *spawned {
+			s := start(t, runDir, envwrap.Launch{Services: []domain.EnvironmentService{stopOld}})
+			s.order()
+			return s
+		}, false, false},
+		{"gate timeout", func(t *testing.T, runDir string) *spawned {
+			return start(t, runDir, envwrap.Launch{Services: []domain.EnvironmentService{stopOld}}, withGate+"=200ms")
+		}, false, false},
+		{"gate timeout of a recovery", func(t *testing.T, runDir string) *spawned {
+			return start(t, runDir, envwrap.Launch{Recover: true, Services: []domain.EnvironmentService{stopOld}}, withGate+"=200ms")
+		}, false, false},
+		{"fail before the claim", func(t *testing.T, runDir string) *spawned {
+			if err := os.WriteFile(filepath.Join(runDir, envwrap.LaunchFile), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s := &spawned{t: t, runDir: runDir, workDir: t.TempDir(), exited: make(chan struct{})}
+			s.run()
+			return s
+		}, false, false},
+		{"fail after the claim", func(t *testing.T, runDir string) *spawned {
+			if err := execwrap.Write(runDir, envwrap.PreparedFile, envwrap.Prepared{Status: envwrap.StatusOK, At: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			s := start(t, runDir, envwrap.Launch{Services: []domain.EnvironmentService{stopOld}, SecretEnv: []execwrap.SecretEnv{{Name: "not a name", Ref: "x"}}})
+			s.authorize()
+			return s
+		}, false, false},
+		{"prepare failed before the record is loaded", func(t *testing.T, runDir string) *spawned {
+			if err := execwrap.Write(runDir, envwrap.PreparedFile, envwrap.Prepared{Status: envwrap.StatusFailed, At: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			s := start(t, runDir, envwrap.Launch{Services: []domain.EnvironmentService{stopOld}})
+			s.authorize()
+			return s
+		}, false, false},
+		{"normal stop", func(t *testing.T, runDir string) *spawned {
+			s := start(t, runDir, envwrap.Launch{Services: []domain.EnvironmentService{stopOld}})
+			s.authorize()
+			s.services()
+			s.order()
+			return s
+		}, true, true},
+		{"recovery", func(t *testing.T, runDir string) *spawned {
+			s := start(t, runDir, envwrap.Launch{Recover: true, Services: []domain.EnvironmentService{stopOld}})
+			s.authorize()
+			return s
+		}, true, false},
+	}
+	for _, p := range paths {
+		for _, inherited := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/inherited=%v", p.name, inherited), func(t *testing.T) {
+				runDir := t.TempDir()
+				if inherited {
+					if err := execwrap.Write(runDir, envwrap.StartedFile, envwrap.Started{Services: []string{"old"}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				s := p.run(t, runDir)
+				exit := s.exit()
+				pending := inherited && !p.stops
+				if got := exit.Cause == envwrap.CauseStopsPending; got != pending || exit.Final() == pending {
+					t.Errorf("exit = %+v, want stops pending = %v", exit, pending)
+				}
+				if ran := s.exists("old-stopped"); ran != (p.stops && (inherited || p.starts)) {
+					t.Errorf("the inherited stop ran = %v", ran)
+				}
+				if len(exit.StopFailures) != 0 {
+					t.Errorf("failures = %+v", exit.StopFailures)
+				}
+			})
+		}
 	}
 }

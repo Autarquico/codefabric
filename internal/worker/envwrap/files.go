@@ -158,9 +158,10 @@ const (
 	CauseServicesFailed = "services-failed"
 	CauseError          = "error" // the supervisor could not do its job; Error says why
 	CauseLost           = "lost"  // the supervisor died with no exit; a recovery supervisor stopped what it had started
-	// CauseRecoveryNotRun: a recovery supervisor ended at its gate, before it
-	// attempted any stop. It settles nothing: the daemon launches the recovery again.
-	CauseRecoveryNotRun = "recovery_not_run"
+	// CauseStopsPending: the supervisor ended with services recorded as started
+	// (env-started.json) whose stop it did not attempt, nor report as failed. The
+	// exit is not final: the daemon launches an authorized recovery for them.
+	CauseStopsPending = "stops_pending"
 )
 
 // StopFailure is a service whose stop command failed. Stopping is best effort
@@ -181,3 +182,7 @@ type Exit struct {
 	GroupKilled    bool          `json:"group_killed,omitempty"`
 	Error          string        `json:"error,omitempty"`
 }
+
+// Final says the exit settles the stops: every service recorded as started had
+// its stop attempted by the supervisor that wrote it, or is a StopFailure.
+func (e Exit) Final() bool { return e.Cause != CauseStopsPending }

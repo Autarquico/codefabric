@@ -158,9 +158,6 @@ func (s *supervisor) run() error {
 		return errors.New("envwrap: another supervisor holds the identity of this Run")
 	}
 	switch stopped, err := s.waitForGate(); {
-	case err != nil && s.launch.Recover:
-		// No stop was attempted: this is not an exit the daemon may take as final.
-		return errors.Join(err, s.finish(CauseRecoveryNotRun, bound(err.Error())))
 	case err != nil:
 		return s.fail("%v", err)
 	case stopped:
@@ -531,8 +528,10 @@ func (s *supervisor) finish(cause, msg string) error {
 		msg = s.problem
 	}
 	exit := Exit{Cause: cause, Error: msg}
+	attempted := map[string]bool{}
 	for i := len(s.spawned) - 1; i >= 0; i-- {
 		svc := s.spawned[i]
+		attempted[svc.Name] = true
 		switch {
 		case svc.Stop == "":
 		case s.lostStops:
@@ -542,6 +541,15 @@ func (s *supervisor) finish(cause, msg string) error {
 				exit.StopFailures = append(exit.StopFailures, *f)
 			}
 		}
+	}
+	if s.stopsPending(attempted) {
+		// Services were recorded as started that this supervisor did not stop (it
+		// ended before it took them, or before it was authorized to run anything):
+		// this exit settles nothing, and an authorized recovery supervisor does.
+		if exit.Error == "" {
+			exit.Error = "ended (" + cause + ") with services not stopped"
+		}
+		exit.Cause = CauseStopsPending
 	}
 	if s.ran && !s.survivors {
 		found, survivors := s.settleGroup()
@@ -565,6 +573,24 @@ func (s *supervisor) finish(cause, msg string) error {
 		execwrap.KillGroup(s.pgid)
 	}
 	return errors.Join(errs...)
+}
+
+// stopsPending says whether env-started.json records a service whose stop this
+// supervisor neither ran nor reported as failed. It reads the record itself, not
+// what this supervisor loaded: whichever path led here. A record that cannot be
+// read leaves every stop unknown, which is pending too.
+func (s *supervisor) stopsPending(attempted map[string]bool) bool {
+	var st Started
+	if _, err := execwrap.Read(s.o.RunDir, StartedFile, &st); err != nil {
+		return true
+	}
+	for _, name := range st.Services {
+		i := slices.IndexFunc(s.launch.Services, func(o domain.EnvironmentService) bool { return o.Name == name })
+		if !attempted[name] && (i < 0 || s.launch.Services[i].Stop != "") {
+			return true
+		}
+	}
+	return false
 }
 
 // runStop runs the stop script of a service, with the same environment as the

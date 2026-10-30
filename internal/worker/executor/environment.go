@@ -422,10 +422,10 @@ func later(a, b time.Time) time.Time {
 // many died), the stops are failures; the reservation is released all the same
 // (best effort, §25), but never while a recovery supervisor may still be running.
 func (e *Executor) environmentGone(ctx context.Context, k state.Key, dir string, rec state.Environment) envSettlement {
-	if exit, _ := readMarker[envwrap.Exit](dir, envwrap.ExitFile); exit != nil && exit.Cause != envwrap.CauseRecoveryNotRun {
+	if exit, _ := readMarker[envwrap.Exit](dir, envwrap.ExitFile); exit != nil && exit.Final() {
 		return envSettlement{done: true, failures: exit.StopFailures}
 	}
-	// No exit, or one of a recovery that never ran its stops: neither settles anything.
+	// No exit, or one that left recorded stops pending: neither settles anything.
 	started, err := readMarker[envwrap.Started](dir, envwrap.StartedFile)
 	switch {
 	case err != nil:
