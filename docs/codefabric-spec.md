@@ -2274,6 +2274,7 @@ digest_inputs: [mise.toml, go.sum, docker-compose.yml]
 - `Digest` se calcula sobre la definición + `digest_inputs`; se registra en el Run.
 - `requires_capabilities` alimenta el filtro de elegibilidad del scheduler.
 - Fallo de `prepare` → Run `failed` con `end_reason: environment`, sin arrancar el harness.
+- Provider `host`: un supervisor por Run ejecuta `prepare`, `start`, `ready` y `stop` en su propio grupo de procesos, con los secrets del Run y la salida redactada. La contención sólo se garantiza para lo que vive en ese grupo: un `start` que sale con 0 deja un servicio desacoplado (p. ej. `docker compose up -d`), que sólo su `stop` limpia. Ese `stop` es best-effort: si falla, el Run registra `EnvironmentStopFailed` y la reserva se libera igual. El provider `host` no aísla (ADR 0002 D7). Vive en `worker/envwrap` y el executor, no en `adapters/environment/host`, porque necesita el run dir, los secrets y la identidad de procesos del Worker; un provider futuro se enchufa como Environment en el executor.
 
 ---
 

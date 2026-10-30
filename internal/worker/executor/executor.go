@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -113,6 +114,13 @@ type Options struct {
 	// AuthSync keeps the auth copies of the Runs in step (harness.AuthSyncer);
 	// nil is none.
 	AuthSync AuthSync
+	// EnvironmentArgv is the command that supervises the Environment of a Run,
+	// to which --run-dir <dir> is added. It defaults to WrapperArgv with `env`
+	// (this binary with `worker exec env`).
+	EnvironmentArgv []string
+	// EnvironmentTimeouts are the limits of the scripts of an Environment; zero
+	// is the default of each.
+	EnvironmentTimeouts EnvironmentTimeouts
 }
 
 // AuthSync is told which auth copies a live Run has, and when it is over.
@@ -160,6 +168,7 @@ type Executor struct {
 	log          *slog.Logger
 	wrapper      []string
 	redactPipe   []string
+	envArgv      []string
 	grace        time.Duration
 	// jit delivers the secrets of a Run to its directory and takes them back.
 	jit *secretjit.Manager
@@ -220,6 +229,7 @@ type runMemo struct {
 	prepareWait   time.Duration // the backoff of that retry
 	ackWait       bool          // the prepare waits for the Controller's ack of config_resolved, polled at exitTick
 	revoked       bool          // the harness's access to the secrets was taken back in this life of the daemon
+	noEnvProcess  bool          // launching the Environment supervisor failed: there is no process to wait for
 }
 
 // runLock serialises the changes to a Run. It exists only while someone holds
@@ -270,6 +280,10 @@ func New(o Options) (*Executor, error) {
 		if len(e.redactPipe) == 0 {
 			e.redactPipe = []string{self, "worker", "redact-pipe"}
 		}
+	}
+	e.envArgv = o.EnvironmentArgv
+	if len(e.envArgv) == 0 {
+		e.envArgv = append(slices.Clone(e.wrapper), "env")
 	}
 	if e.harnesses == nil {
 		e.harnesses, _ = harness.NewRegistry()

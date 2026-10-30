@@ -331,6 +331,21 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 	if err := receipt(); err != nil {
 		return outcome(""), internalError{err}
 	}
+	if e.Kind == v1.ReportStopped && len(e.StopFailures) > 0 {
+		// The services of the Environment did not stop cleanly. It is a warning of
+		// its own: the Run is released all the same.
+		warn := ev
+		warn.Type, warn.Level, warn.Message = domain.EventEnvironmentStopFailed, domain.LevelWarn, "the Environment did not stop cleanly"
+		warn.WorkerSeq, warn.WorkerEpoch = nil, "" // it is not the report: the report has the seq
+		failures := make([]map[string]string, len(e.StopFailures))
+		for i, f := range e.StopFailures {
+			failures[i] = map[string]string{"service": f.Service, "error": f.Error}
+		}
+		warn.Data = map[string]any{"lease_epoch": e.LeaseEpoch, "short_id": shortID(run.Short), "failures": failures}
+		if _, _, err := tx.AppendEvent(ctx, warn); err != nil {
+			return outcome(""), internalError{err}
+		}
+	}
 	if noEvent {
 		return outcome(v1.ReportApplied), nil
 	}
@@ -446,6 +461,19 @@ func validateReport(req v1.RunReportRequest, now time.Time) error {
 	return nil
 }
 
+func validStopFailures(fs []v1.StopFailure) bool {
+	if len(fs) > v1.MaxStopFailures {
+		return false
+	}
+	for _, f := range fs {
+		if f.Service == "" || len(f.Service) > v1.MaxReportMessageLen || len(f.Error) > v1.MaxReportMessageLen ||
+			!domain.Printable(f.Service) || !domain.Printable(f.Error) {
+			return false
+		}
+	}
+	return true
+}
+
 func validateEntry(e v1.RunReportEntry, now time.Time) error {
 	switch {
 	case e.LeaseEpoch == 0 || e.LeaseEpoch > maxSeq:
@@ -474,6 +502,10 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		return input.Invalid("only prepare_failed carries a code")
 	case e.WasRunning && (e.Kind != v1.ReportStopped || e.NeverStarted):
 		return input.Invalid("only a stopped of a Run that started says was_running")
+	case e.Kind != v1.ReportStopped && len(e.StopFailures) > 0:
+		return input.Invalid("only stopped carries stop failures")
+	case !validStopFailures(e.StopFailures):
+		return input.Invalid("stop_failures must be at most %d, each with a service and a printable error of at most %d characters", v1.MaxStopFailures, v1.MaxReportMessageLen)
 	}
 	switch e.Kind {
 	case v1.ReportConfigResolved:

@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +164,45 @@ func TestReport_PrepareFailedFailsTheRunAndLeavesPublicationNone(t *testing.T) {
 	}
 	if res := e.reservation(r.lease.ID); res.ReleasedAt == nil {
 		t.Error("a Run that never started kept its reservation")
+	}
+}
+
+func TestReport_AStoppedThatWarnsOfAServiceReleasesTheRunAndRaisesEnvironmentStopFailed(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	out := r.mustSend(r.entry(v1.ReportPrepareFailed, func(en *v1.RunReportEntry) { en.Message = "make deps failed" }),
+		r.entry(v1.ReportStopped, neverStarted, func(en *v1.RunReportEntry) {
+			en.StopFailures = []v1.StopFailure{{Service: "db", Error: "stop exited with 1"}}
+		}))
+	if got := results(out); got != "applied,applied" {
+		t.Fatalf("outcomes = %s", got)
+	}
+	if res := e.reservation(r.lease.ID); res.ReleasedAt == nil {
+		t.Error("a warning held the reservation")
+	}
+	evs := e.events(domain.EventEnvironmentStopFailed)
+	if len(evs) != 1 || evs[0].Level != domain.LevelWarn || !jsonIs(evs[0].Data["failures"], `[{"error":"stop exited with 1","service":"db"}]`) || string(evs[0].RunID) != string(r.run.ID) {
+		t.Fatalf("EnvironmentStopFailed = %+v", evs)
+	}
+	if evs := e.events(domain.EventRunStopped); len(evs) != 1 {
+		t.Errorf("RunStopped = %+v", evs)
+	}
+}
+
+func jsonIs(v any, want string) bool {
+	b, err := json.Marshal(v)
+	return err == nil && string(b) == want
+}
+
+func TestReport_AStoppedWithOnlyAMessageRaisesNoEnvironmentStopFailed(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	out := r.mustSend(r.entry(v1.ReportStopped, neverStarted, func(en *v1.RunReportEntry) { en.Message = "nothing of the Run is on this Worker" }))
+	if got := results(out); got != "applied" {
+		t.Fatalf("outcomes = %s", got)
+	}
+	if evs := e.events(domain.EventEnvironmentStopFailed); len(evs) != 0 {
+		t.Errorf("EnvironmentStopFailed = %+v: a message of a stopped is not a stop failure", evs)
 	}
 }
 

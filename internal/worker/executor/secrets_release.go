@@ -263,6 +263,7 @@ func (e *Executor) releaseLoop(ctx context.Context) {
 		case <-ticker.C():
 			e.releaseQueued(ctx)
 		case <-sweeper.C():
+			e.settleStrays(ctx)
 			e.sweep(ctx)
 		}
 	}

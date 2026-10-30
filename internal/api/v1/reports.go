@@ -15,6 +15,7 @@ const (
 	MaxReportBytes      = 48 << 10
 	MaxReportMessageLen = 512
 	MaxHandleLen        = 256
+	MaxStopFailures     = 16 // services of one stopped that did not stop cleanly
 
 	// MaxEffectiveConfigBytes bounds the effective configuration of a
 	// config_resolved, which must fit a report with room to spare.
@@ -109,6 +110,9 @@ type RunReportEntry struct {
 	// under a lease epoch that is not the live one, it is an orphan.
 	WasRunning bool   `json:"was_running,omitempty"`
 	Message    string `json:"message,omitempty"`
+	// StopFailures (stopped): the services of the Environment whose stop failed.
+	// Stopping them is best effort: the Run is released all the same, with a warning.
+	StopFailures []StopFailure `json:"stop_failures,omitempty"`
 
 	ResultCommit      string   `json:"result_commit,omitempty"`      // sealed, published, orphan_preserved
 	Excluded          []string `json:"excluded,omitempty"`           // sealed: untracked paths the sealing left out
@@ -122,6 +126,13 @@ type RunReportEntry struct {
 	Effective       json.RawMessage `json:"effective,omitempty"`
 	EffectiveDigest string          `json:"effective_digest,omitempty"`
 	Code            domain.Code     `json:"code,omitempty"`
+}
+
+// StopFailure is a service of an Environment that did not stop cleanly. Error
+// is redacted and bounded by the Worker.
+type StopFailure struct {
+	Service string `json:"service"`
+	Error   string `json:"error"`
 }
 
 // RunReportRequest is POST /v1/worker/runs/{run}/report: 1 to MaxReportEntries

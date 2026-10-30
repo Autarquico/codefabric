@@ -108,7 +108,7 @@ func TestAnnounce(t *testing.T) {
 			}
 			h, _ := testHost(t)
 			got := Announce(context.Background(), h, reg, c.runtimeModes)
-			want := slices.Sorted(slices.Values(append(slices.Clone(c.want), domain.RepoConfigCapability)))
+			want := slices.Sorted(slices.Values(append(slices.Clone(c.want), domain.RepoConfigCapability, domain.EnvironmentHostCapability)))
 			if !slices.Equal(got.Capabilities, want) {
 				t.Errorf("capabilities = %q, want %q", got.Capabilities, want)
 			}

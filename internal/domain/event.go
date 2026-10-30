@@ -56,6 +56,9 @@ const (
 	EventRunPublicationFailed    EventType = "RunPublicationFailed"
 	EventRunPublicationRequested EventType = "RunPublicationRequested" // `cf run publish` asked for another try
 	EventJournalTruncated        EventType = "JournalTruncated"
+	// EventEnvironmentStopFailed warns that a service of the Environment of a Run did
+	// not stop cleanly (§25: stopping is best effort, the reservation is released all the same).
+	EventEnvironmentStopFailed EventType = "EnvironmentStopFailed"
 
 	EventWorkflowAdopted       EventType = "WorkflowAdopted"
 	EventWorkflowCommitted     EventType = "WorkflowCommitted"

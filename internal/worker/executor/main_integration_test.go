@@ -8,6 +8,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
+	"github.com/Autarquico/codefabric/internal/worker/envwrap"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 )
@@ -22,6 +23,20 @@ const asWrapper = "CF_TEST_AS_CF"
 // testing package reads its flags.
 func TestMain(m *testing.M) {
 	fakeharness.RunIfRequested()
+	if os.Getenv(asWrapper) == "1" && len(os.Args) == 6 && os.Args[1] == "worker" && os.Args[2] == "exec" && os.Args[3] == "env" && os.Args[4] == "--run-dir" {
+		// The supervisor of the Environment of a Run (`worker exec env`).
+		dir := os.Args[5]
+		release, err := HoldCapture(dir)
+		if err != nil {
+			os.Exit(1)
+		}
+		err = envwrap.Run(envwrap.Options{RunDir: dir, Secrets: secretjit.Resolver(dir), Retention: func() ([]redact.Needle, error) { return secretjit.Load(dir) }})
+		release()
+		if err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if os.Getenv(asWrapper) == "1" && len(os.Args) == 5 && os.Args[1] == "worker" && os.Args[3] == "--run-dir" {
 		dir := os.Args[4]
 		retention := func() ([]redact.Needle, error) { return secretjit.Load(dir) }

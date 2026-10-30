@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: M
 issue: 24
-prs: [58]
+prs: [58, 60]
 related_issues: [24]
 sub_issues: []
 depends_on: [git-relay-publication, secrets-local]

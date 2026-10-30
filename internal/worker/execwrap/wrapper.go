@@ -1,7 +1,6 @@
 package execwrap
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -9,7 +8,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -237,10 +235,6 @@ func (w *wrapper) finish(log *os.File, copied <-chan struct{}, exit Exit) error 
 	return Write(w.o.RunDir, ExitFile, exit)
 }
 
-// envName is the name of an environment variable a secret may take: no '=',
-// nothing a shell would not take as a name.
-var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
 // secretEnv is the environment of the SecretEnv of the launch, resolved now,
 // just before the harness starts, so that their values live only in its
 // environment, and set, what its output is redacted of. A launch without
@@ -254,13 +248,11 @@ func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
 	if len(w.launch.SecretEnv) == 0 && !w.launch.RedactOutput {
 		return nil, nil, nil
 	}
-	for _, s := range w.launch.SecretEnv {
-		if !envName.MatchString(s.Name) {
-			return nil, nil, fmt.Errorf("%s: the secret %q goes to %q, which is not the name of a variable", domain.CodeSecretUnavailable, s.Ref, s.Name)
-		}
+	if err := CheckSecretNames(w.launch.SecretEnv); err != nil {
+		return nil, nil, err
 	}
-	if set, err = redaction(w.o.Retention); err != nil {
-		return nil, nil, fmt.Errorf("%s: the output cannot be redacted: %w", domain.CodeSecretUnavailable, err)
+	if set, err = Redaction(w.o.Retention); err != nil {
+		return nil, nil, err
 	}
 	if w.launch.Mode == ModeInteractive {
 		if acked, err := cfruntime.CaptureAcked(filepath.Join(w.o.RunDir, CaptureAckFile)); !acked {
@@ -270,18 +262,8 @@ func (w *wrapper) secretEnv() (env []string, set *redact.Set, err error) {
 			return nil, nil, fmt.Errorf("%s: the capture of the terminal does not redact the output: %w", domain.CodeSecretUnavailable, err)
 		}
 	}
-	for _, s := range w.launch.SecretEnv {
-		if w.o.Secrets == nil {
-			return nil, nil, fmt.Errorf("%s: the secret %q of %s cannot be resolved: this Worker has no secret store", domain.CodeSecretUnavailable, s.Ref, s.Name)
-		}
-		value, err := w.o.Secrets(s.Ref)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%s: the secret %q of %s cannot be resolved: %w", domain.CodeSecretUnavailable, s.Ref, s.Name, err)
-		}
-		if bytes.Contains(redact.Bytes([]byte(value), set), []byte(value)) {
-			return nil, nil, fmt.Errorf("%s: the secret %q of %s would not be redacted from the output", domain.CodeSecretUnavailable, s.Ref, s.Name)
-		}
-		env = append(env, s.Name+"="+value)
+	if env, err = ResolveSecrets(w.launch.SecretEnv, w.o.Secrets, set); err != nil {
+		return nil, nil, err
 	}
 	return env, set, nil
 }
@@ -319,7 +301,7 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 		if _, err := io.Copy(red, src); err != nil {
 			// A cut: what the redactor holds may be the start of a secret
 			// whose rest never came. It is dropped, never written.
-			_, _ = io.WriteString(dst, captureCutMarker)
+			_, _ = io.WriteString(dst, CaptureCutMarker)
 			return err
 		}
 		return red.Close() // the stream ended: what it held back, before the log is synced
@@ -404,8 +386,8 @@ func (p copyPipe) cut() { _ = p.r.Close() }
 
 func (p copyPipe) err() error { return *p.res }
 
-// captureCutMarker stands in the log for what a cut stream still held.
-const captureCutMarker = "[capture cut]\n"
+// CaptureCutMarker stands in the log for what a cut stream still held.
+const CaptureCutMarker = "[capture cut]\n"
 
 func startCopy(name string, dst io.Writer, copyAll func(dst io.Writer, src io.Reader) error) (copyPipe, error) {
 	pr, pw, err := os.Pipe()
@@ -566,19 +548,7 @@ func (w *wrapper) settleGroup() (found int, survivors bool) {
 // count is the number of live processes of the group but this one. It only
 // counts: it is never used to choose whom to signal. If it cannot tell, it
 // says 1, so that the group is asked to end rather than assumed empty.
-func (w *wrapper) count() int {
-	members, err := procident.GroupMembers(w.pgid)
-	if err != nil {
-		return 1
-	}
-	n := 0
-	for _, pid := range members {
-		if pid != w.self {
-			n++
-		}
-	}
-	return n
-}
+func (w *wrapper) count() int { return GroupOthers(w.pgid, w.self) }
 
 // endByKillingGroup writes the exit and then, as the last thing this process
 // does, kills the whole group, itself included. The exit is on disk before the
@@ -665,7 +635,7 @@ func waitFor(ch <-chan struct{}, d time.Duration) bool {
 
 // killGroup is SIGKILL to the group this process leads and keeps reserved by
 // being alive. It is the only way this process kills anything.
-func (w *wrapper) killGroup() { _ = syscall.Kill(-w.pgid, syscall.SIGKILL) }
+func (w *wrapper) killGroup() { KillGroup(w.pgid) }
 
 // outcome reads how the harness ended: its exit code, or the signal that killed it.
 func outcome(ps *os.ProcessState) (code *int, sig string) {
