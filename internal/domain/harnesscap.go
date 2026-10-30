@@ -15,6 +15,17 @@ const HarnessModesMarker = "harness-modes:v1"
 // Workflow is only placed on a Worker that announces it.
 const WorkflowConfigCapability = "workflow-config:v1"
 
+// RepoConfigCapability is that of a Worker that reads .codefabric/project.yaml
+// at the commit of a Run and registers the effective configuration before it
+// runs anything. A Run of RunSpecSchemaRepoConfig is only placed on a Worker
+// that announces it.
+const RepoConfigCapability = "repo-config:v1"
+
+// EnvironmentHostCapability is that of a Worker that runs the prepare and the
+// services of an Environment with the host provider. A Run with an Environment
+// of the Controller is only placed on a Worker that announces it.
+const EnvironmentHostCapability = "environment-host:v1"
+
 // legacyHarness is the only harness of the Workers that predate
 // HarnessModesMarker, and legacyModes the modes it ran in there.
 const legacyHarness = "command"

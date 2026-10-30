@@ -34,6 +34,7 @@ const (
 	EventLeaseAccepted           EventType = "LeaseAccepted"
 	EventLeaseExpired            EventType = "LeaseExpired" // never accepted: timed out, or its Run ended first
 	EventLeaseRejected           EventType = "LeaseRejected"
+	EventRunConfigResolved       EventType = "RunConfigResolved"
 	EventRunStarted              EventType = "RunStarted"
 	EventRunCheckpointed         EventType = "RunCheckpointed"
 	EventRunCheckpointFailed     EventType = "RunCheckpointFailed"
