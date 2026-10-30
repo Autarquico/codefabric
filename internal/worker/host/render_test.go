@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path"
@@ -21,6 +22,9 @@ type escMini struct{ *mini }
 func (escMini) SecretEscape(p string) (harness.Escape, error) {
 	if strings.HasSuffix(p, ".toml") {
 		return harness.EscapeTOMLBasicString, nil
+	}
+	if strings.HasSuffix(p, ".json") {
+		return harness.EscapeJSONString, nil
 	}
 	return harness.EscapeRaw, nil
 }
@@ -350,5 +354,58 @@ func TestRenderDoesNotFollowASymlinkSwappedInBeforeTheRename(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(outside, "more.toml")); err == nil {
 		t.Error("the rendered file was moved outside the run directory")
+	}
+}
+
+func TestJSONStringReadsBackWhatWasEscaped(t *testing.T) {
+	for _, v := range []string{
+		`plain`, `with "quotes"`, `back\slash`, `a\"b\\`, "line\nbreak", "tab\tcr\rbell\x07", "\x00\x01\x1f\x7f",
+		"unicode é 中 😀", "sep \u2028 \u2029", `A \n not an escape`, `{{cf-secret:team/a}}`, "<a href=\"x\">&</a>", "",
+	} {
+		out, err := escapeValue(harness.EscapeJSONString, []byte(v))
+		if err != nil {
+			t.Fatalf("%q: %v", v, err)
+		}
+		var parsed struct{ V string }
+		if err := json.Unmarshal([]byte(`{"v":"`+string(out)+`"}`), &parsed); err != nil || parsed.V != v {
+			t.Errorf("%q escaped as %q reads back %q (%v)", v, out, parsed.V, err)
+		}
+	}
+	if _, err := escapeValue(harness.EscapeJSONString, []byte{0xff, 0xfe}); err == nil {
+		t.Error("a value that is not UTF-8 was escaped")
+	}
+}
+
+func TestRenderOfAJSONFileParsesBackToTheValues(t *testing.T) {
+	f := newEscFixture(t)
+	snap := harness.NativeSnapshot{Harness: "mini", SchemaVersion: 1, Components: []harness.Component{{
+		Name: "settings", Kind: harness.KindFile, Ownership: harness.Managed, Files: []harness.File{{
+			Path: "settings.json", Mode: 0o644, SecretRefs: []string{"team/a", "team/b"},
+			Content: []byte(`{"env": {"A": "` + harness.SecretMarker("team/a") + `"}, "list": ["x-` + harness.SecretMarker("team/b") + `-y"]}`),
+		}},
+	}}}
+	mat, err := f.materializeEsc(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mat.Rendered) != 1 || mat.Rendered[0].Escape != harness.EscapeJSONString {
+		t.Fatalf("Rendered = %+v", mat.Rendered)
+	}
+	if err := f.m.Render(f.runDir, mat, values, registryFence(f.runDir, 1)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(f.path("config"), "settings.json")) //nolint:gosec // a test tree
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Env  map[string]string
+		List []string
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("the rendered file is not JSON: %v\n%s", err, raw)
+	}
+	if parsed.Env["A"] != secretA || len(parsed.List) != 1 || parsed.List[0] != "x-"+secretB+"-y" {
+		t.Errorf("rendered = %+v, want the values back", parsed)
 	}
 }

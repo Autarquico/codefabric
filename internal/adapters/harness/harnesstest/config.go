@@ -441,14 +441,28 @@ func checkOwnership(t *testing.T, f Fixture) {
 			return
 		}
 		orig := s.Components[i]
-		fields := jsonFields(t, orig.Files[0].Content)
-		keys := slices.Sorted(maps.Keys(fields))
-		if len(keys) < 2 {
-			t.Fatalf("json-subset %s has %d field; the fixture must seed two or more", orig.Name, len(keys))
+		path := hostFile(t, e.home, orig.Files[0].Path)
+		hostBytes, err := os.ReadFile(path) //nolint:gosec // under the home of the check
+		if err != nil {
+			t.Fatal(err)
+		}
+		host := jsonFields(t, hostBytes)
+		owned := slices.Sorted(maps.Keys(jsonFields(t, orig.Files[0].Content)))
+		if len(owned) == 0 {
+			t.Fatalf("json-subset %s has no field", orig.Name)
+		}
+		var foreign []string
+		for _, k := range slices.Sorted(maps.Keys(host)) {
+			if k != owned[0] {
+				foreign = append(foreign, k)
+			}
+		}
+		if len(foreign) == 0 {
+			t.Fatalf("json-subset %s: the file has only the field %s; the fixture must seed a foreign field", orig.Name, owned[0])
 		}
 		subset := orig
 		subset.Files = slices.Clone(orig.Files)
-		subset.Files[0].Content = []byte(`{"` + keys[0] + `":"harnesstest"}`)
+		subset.Files[0].Content = []byte(`{"` + owned[0] + `":{"` + probeEntry + `":{"command":"probe"}}}`)
 		subset.Files[0].SecretRefs = nil
 		subset.Digest = filesDigest(t, subset.Files)
 		partial := s
@@ -457,18 +471,41 @@ func checkOwnership(t *testing.T, f Fixture) {
 		if !e.applyGlobal(t, partial) {
 			return
 		}
-		after, _ := e.snapshot(t)
-		got, _ := component(after, orig.Name)
-		gotFields := jsonFields(t, got.Files[0].Content)
-		if v := gotFields[keys[0]]; v != "harnesstest" {
-			t.Errorf("json-subset %s: the applied field %s is %v", orig.Name, keys[0], v)
+		got, err := os.ReadFile(path) //nolint:gosec // under the home of the check
+		if err != nil {
+			t.Fatal(err)
 		}
-		for _, k := range keys[1:] {
-			if !reflect.DeepEqual(gotFields[k], fields[k]) {
-				t.Errorf("json-subset %s: the foreign field %s went from %v to %v", orig.Name, k, fields[k], gotFields[k])
+		gotFields := jsonFields(t, got)
+		if applied, _ := gotFields[owned[0]].(map[string]any); applied[probeEntry] == nil {
+			t.Errorf("json-subset %s: the owned field %s has no %s entry after the apply: %v", orig.Name, owned[0], probeEntry, gotFields[owned[0]])
+		}
+		for _, k := range foreign {
+			if !reflect.DeepEqual(gotFields[k], host[k]) {
+				t.Errorf("json-subset %s: the foreign field %s went from %v to %v", orig.Name, k, host[k], gotFields[k])
 			}
 		}
 	})
+}
+
+// probeEntry is the entry the json-subset check puts under the owned field to
+// see that the apply wrote it.
+const probeEntry = "cf-contract-probe"
+
+// hostFile is the file of the home that a snapshot path, relative to the
+// configuration root of the adapter, names: the one whose path ends with it.
+func hostFile(t *testing.T, home, rel string) string {
+	t.Helper()
+	var found []string
+	err := filepath.WalkDir(home, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && (p == filepath.Join(home, rel) || strings.HasSuffix(p, string(filepath.Separator)+filepath.FromSlash(rel))) {
+			found = append(found, p)
+		}
+		return err
+	})
+	if err != nil || len(found) != 1 {
+		t.Fatalf("the home has %d files for the json-subset path %s (%v), want one", len(found), rel, err)
+	}
+	return found[0]
 }
 
 func jsonFields(t *testing.T, b []byte) map[string]any {
