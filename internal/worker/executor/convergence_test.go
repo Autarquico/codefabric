@@ -249,7 +249,7 @@ func (w *world) restart(loseState ...bool) {
 
 func (w *world) heartbeat() {
 	_, err := w.ctrl.app.Workers.Heartbeat(w.t.Context(), w.ctrl.w, v1.HeartbeatRequest{
-		Epoch: w.beat, Hostname: "box", OS: "linux", Arch: "amd64", Capabilities: []string{"harness:command"},
+		Epoch: w.beat, Hostname: "box", OS: "linux", Arch: "amd64", Capabilities: []string{"harness:command", domain.RepoConfigCapability},
 		Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 1000}, Health: v1.Health{Status: v1.HealthOK},
 	})
 	must(w.t, err)

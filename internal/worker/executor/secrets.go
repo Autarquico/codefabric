@@ -52,7 +52,7 @@ func checkSpecSecrets(spec specView) error {
 	switch {
 	case spec.Schema == domain.RunSpecSchemaSecrets && len(refs) == 0:
 		return errors.New("the spec has schema 3 and declares no secret")
-	case spec.Schema != domain.RunSpecSchemaSecrets && spec.Secrets != nil:
+	case spec.Schema == domain.RunSpecSchema && spec.Secrets != nil:
 		return fmt.Errorf("the spec has schema %d and declares secrets", spec.Schema)
 	}
 	if err := domain.CheckSecretRefs(refs, domain.MaxRunSecrets); err != nil {

@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -148,6 +149,7 @@ type cmd struct {
 	secrets []string    // removed from every message
 	values  *redact.Set // the values of secrets: redacted from every message before it is cut
 	stdin   string
+	maxOut  int // if > 0, stdout keeps at most this many bytes
 }
 
 // result is what a child printed.
@@ -166,12 +168,16 @@ func (g *Git) run(ctx context.Context, c cmd) (result, error) {
 	p := exec.Command(g.git, c.args...) //nolint:gosec,noctx // git is the located executable; arguments are built by this package; ctx goes to procgroup
 	p.Dir, p.Env = c.dir, c.env
 	var out bytes.Buffer
+	var stdout io.Writer = &out
+	if c.maxOut > 0 {
+		stdout = &cappedWriter{w: &out, room: c.maxOut}
+	}
 	errOut := &boundedBuffer{max: stderrBytes}
 	if c.stdin != "" {
 		p.Stdin = strings.NewReader(c.stdin)
 	}
 	child, err := procgroup.Start(ctx, p, procgroup.Options{
-		Stdout: &out, Stderr: errOut, Drain: killDelay,
+		Stdout: stdout, Stderr: errOut, Drain: killDelay,
 	})
 	if err == nil {
 		err = child.Wait()
@@ -217,6 +223,24 @@ func redacted(s string, set *redact.Set) string {
 		return s
 	}
 	return string(redact.Bytes([]byte(s), set))
+}
+
+// cappedWriter passes on at most room bytes and swallows the rest, so that the
+// child never blocks on a pipe nobody reads.
+type cappedWriter struct {
+	w    io.Writer
+	room int
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	if c.room > 0 {
+		n := min(c.room, len(p))
+		if _, err := c.w.Write(p[:n]); err != nil {
+			return 0, err
+		}
+		c.room -= n
+	}
+	return len(p), nil
 }
 
 // boundedBuffer keeps at most max bytes and drops the rest without failing, so

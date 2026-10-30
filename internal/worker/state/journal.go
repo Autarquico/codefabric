@@ -87,7 +87,15 @@ func forSeqs(ctx context.Context, tx *Tx, prefix string, seqs []uint64) error {
 // DeleteJournalOf removes the reports of an assignment the Controller will
 // never take (an orphan's, or reports it said are worth nothing). An
 // orphan_preserved stays: it is the one report of an orphan the Controller takes.
+// A resolution whose report goes with them goes too: its row leaving the journal
+// would otherwise read as the Controller's ack, and the configuration would be
+// taken as confirmed though the Controller never stored it.
 func DeleteJournalOf(ctx context.Context, tx *Tx, k Key) error {
+	if _, err := tx.exec(ctx, `DELETE FROM config_resolutions WHERE run_id = ? AND lease_epoch = ?
+		AND journal_seq IN (SELECT seq FROM journal WHERE run_id = ? AND lease_epoch = ? AND kind <> 'orphan_preserved')`,
+		k.RunID, k.LeaseEpoch, k.RunID, k.LeaseEpoch); err != nil {
+		return fmt.Errorf("state: dropping the unconfirmed resolution of an assignment: %w", err)
+	}
 	_, err := tx.exec(ctx, `DELETE FROM journal WHERE run_id = ? AND lease_epoch = ? AND kind <> 'orphan_preserved'`, k.RunID, k.LeaseEpoch)
 	if err != nil {
 		return fmt.Errorf("state: dropping the reports of an assignment: %w", err)

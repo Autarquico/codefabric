@@ -182,7 +182,7 @@ func (e *Executor) answer(ctx context.Context, r state.Run, err error, done stat
 func (e *Executor) evaluate(ctx context.Context, r state.Run, lim Limits, load state.Load) verdict {
 	spec := parseSpec(r.Spec)
 	if !domain.ReadableRunSpecSchema(spec.Schema) {
-		return verdict{domain.CodeVersionIncompatible, fmt.Sprintf("the spec has schema %d: this Worker reads schemas %d and %d", spec.Schema, domain.RunSpecSchema, domain.RunSpecSchemaSecrets)}
+		return verdict{domain.CodeVersionIncompatible, fmt.Sprintf("the spec has schema %d: this Worker reads schemas %d, %d and %d", spec.Schema, domain.RunSpecSchema, domain.RunSpecSchemaSecrets, domain.RunSpecSchemaRepoConfig)}
 	}
 	adapter, ok := e.harnesses.Get(spec.Requirements.Harness)
 	switch {

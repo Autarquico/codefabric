@@ -30,6 +30,7 @@ func onlineHeartbeat() v1.HeartbeatRequest {
 	return v1.HeartbeatRequest{
 		Epoch: "01J00000000000000000000000", DaemonVersion: buildinfo.Get().Version, Hostname: "box", OS: "linux", Arch: "amd64",
 		Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 500000}, Health: v1.Health{Status: v1.HealthOK},
+		Capabilities: []string{domain.RepoConfigCapability},
 	}
 }
 

@@ -5,6 +5,7 @@ package executor
 import (
 	"context"
 	"os"
+	"slices"
 	"sync"
 
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
@@ -32,6 +33,44 @@ type fakeGit struct {
 	// push is checked against, and an error it returns is theirs.
 	guard     func(f gitops.Forbidden) error
 	forbidden []gitops.Forbidden
+	// The repo configuration: what Show answers for the file of the repo, and
+	// the blob ids; calls is the order of the operations seen.
+	showData []byte
+	showErr  error
+	blobs    map[string]string
+	blobsErr error
+	ensure   error
+	calls    []string
+}
+
+func (g *fakeGit) called(op string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls = append(g.calls, op)
+}
+
+func (g *fakeGit) callList() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.calls)
+}
+
+func (g *fakeGit) EnsureSource(context.Context, gitops.SourceSpec) error {
+	g.called("ensure")
+	return g.ensure
+}
+
+func (g *fakeGit) Show(_ context.Context, _, _, _ string) ([]byte, bool, error) {
+	g.called("show")
+	if g.showErr != nil {
+		return nil, g.showData != nil, g.showErr
+	}
+	return g.showData, g.showData != nil, nil
+}
+
+func (g *fakeGit) BlobIDs(context.Context, string, string, []string) (map[string]string, error) {
+	g.called("blobs")
+	return g.blobs, g.blobsErr
 }
 
 func (g *fakeGit) check(f gitops.Forbidden) error {
@@ -46,6 +85,7 @@ func (g *fakeGit) check(f gitops.Forbidden) error {
 }
 
 func (g *fakeGit) Prepare(_ context.Context, s gitops.PrepareSpec, worktree string) error {
+	g.called("prepare")
 	if g.onPrepare != nil {
 		if err := g.onPrepare(s, worktree); err != nil {
 			return err

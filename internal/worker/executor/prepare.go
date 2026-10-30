@@ -20,6 +20,11 @@ import (
 // offers no harness, so it is never assigned a Run.
 type Git interface {
 	Prepare(ctx context.Context, s gitops.PrepareSpec, worktree string) error
+	// EnsureSource, Show and BlobIDs read the commit of a Run before its
+	// worktree exists: the repo configuration of schema 4 is resolved with them.
+	EnsureSource(ctx context.Context, s gitops.SourceSpec) error
+	Show(ctx context.Context, project, commit, path string) (data []byte, found bool, err error)
+	BlobIDs(ctx context.Context, project, commit string, paths []string) (map[string]string, error)
 	Head(ctx context.Context, worktree string) (string, error)
 	// Seal, Push and PushRef take the values the result must not carry
 	// (gitops.Forbidden), in memory, apart from what is stored.
@@ -103,8 +108,28 @@ func (e *Executor) postponePrepare(k state.Key) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	m := e.memo(k)
+	m.ackWait = false
 	m.prepareWait = min(max(m.prepareWait*2, prepareRetryInitial), prepareRetryMax)
 	m.prepareAt = e.clock.Now().Add(m.prepareWait)
+}
+
+// postponePrepareFor puts off the next prepare of a Run by a fixed time, apart
+// from the backoff.
+func (e *Executor) postponePrepareFor(k state.Key, d time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m := e.memo(k)
+	m.ackWait, m.prepareAt = true, e.clock.Now().Add(d)
+}
+
+// waitingForAck says that the prepare of a Run waits for the ack of its
+// resolved configuration: the supervisor looks at it every exitTick, not
+// every tick.
+func (e *Executor) waitingForAck(k state.Key) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m := e.memos[k]
+	return m != nil && m.ackWait
 }
 
 // HeartbeatTaken says that the Controller took a heartbeat of this daemon: it
@@ -126,7 +151,7 @@ func (e *Executor) preparedNow(k state.Key) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if m := e.memos[k]; m != nil {
-		m.prepareAt, m.prepareWait = time.Time{}, 0
+		m.prepareAt, m.prepareWait, m.ackWait = time.Time{}, 0, false
 	}
 }
 
