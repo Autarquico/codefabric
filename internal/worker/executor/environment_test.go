@@ -324,33 +324,61 @@ func TestEnvironment_ALiveSupervisorIsKeptAcrossARestartAndNotLaunchedAgain(t *t
 	}
 }
 
-func TestEnvironment_ASupervisorThatDiedWithoutAnExitIsLaunchedAgainOverAnEmptyGroupAndNotForEver(t *testing.T) {
-	f, _, k := envRun(t, scriptsEnv())
-	for launches := 1; launches < envMaxLaunches; launches++ {
-		dead := newWrapperProcess(t, "exit 0")
-		<-dead.ended
-		f.writeEnv(k, envwrap.WrapperFile, dead.w)
-		f.writeEnv(k, envwrap.AuthorizedFile, envwrap.Authorized{At: t0})
-		if f.e.step(t.Context(), k) {
-			t.Fatal("the Run ended")
-		}
-		if rec, _ := f.environmentRecord(k); rec.Launches != launches+1 {
-			t.Fatalf("launches = %d, want %d", rec.Launches, launches+1)
-		}
-		if f.envFile(k, envwrap.WrapperFile) || f.envFile(k, envwrap.AuthorizedFile) {
-			t.Fatal("the files of the supervisor that died were left for the next to be taken for")
-		}
+// A normal supervisor is launched once per Run: one that is lost before the
+// harness started is never replaced by another. The Run fails as an Environment
+// failure, and what the lost one recorded as started is stopped by a recovery.
+func TestEnvironment_ALostSupervisorIsNeverReplacedByANormalOneAndTheRunFails(t *testing.T) {
+	launches := filepath.Join(t.TempDir(), "launches")
+	count := func() int {
+		raw, _ := os.ReadFile(launches) //nolint:gosec // a file of the test
+		return strings.Count(string(raw), "x")
 	}
+	f, _, k := envRun(t, scriptsEnv(), func(o *Options) {
+		o.EnvironmentArgv = []string{"/bin/sh", "-c", "echo x >> " + launches, "sh"}
+	})
+	waitFor(t, "the supervisor to be launched", func() bool { return count() == 1 })
 	dead := newWrapperProcess(t, "exit 0")
 	<-dead.ended
 	f.writeEnv(k, envwrap.WrapperFile, dead.w)
-	f.e.step(t.Context(), k)
-	f.clock.Advance(2 * time.Minute)
+	f.writeEnv(k, envwrap.AuthorizedFile, envwrap.Authorized{At: t0})
+	for range 3 {
+		f.e.step(t.Context(), k)
+	}
 	if !f.e.step(t.Context(), k) {
 		t.Fatal("the Run did not end")
 	}
-	if r := f.reports(k)[0]; r.Kind != v1.ReportPrepareFailed || !strings.Contains(r.Message, "kept dying") {
+	if r := f.reports(k)[0]; r.Kind != v1.ReportPrepareFailed || !strings.Contains(r.Message, "was lost") {
 		t.Errorf("report = %+v", r)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if count() != 1 {
+		t.Errorf("%d supervisors were launched: a normal one is launched once", count())
+	}
+}
+
+// With services recorded as started, the lost supervisor is followed by a
+// recovery supervisor (never a normal one), and the Run fails once it is done.
+func TestEnvironment_ALostSupervisorWithStartedServicesIsFollowedByARecoveryOnly(t *testing.T) {
+	f, _, k := envRun(t, scriptsEnv())
+	dead := newWrapperProcess(t, "exit 0")
+	<-dead.ended
+	f.writeEnv(k, envwrap.WrapperFile, dead.w)
+	f.writeEnv(k, envwrap.AuthorizedFile, envwrap.Authorized{At: t0})
+	f.writeEnv(k, envwrap.StartedFile, envwrap.Started{Services: []string{"db"}})
+	var launch envwrap.Launch
+	if _, err := execwrap.Read(f.runDir(k), envwrap.LaunchFile, &launch); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if f.e.step(t.Context(), k) {
+			t.Fatal("the Run ended with a service not stopped")
+		}
+	}
+	if _, err := execwrap.Read(f.runDir(k), envwrap.LaunchFile, &launch); err != nil || !launch.Recover {
+		t.Fatalf("launch = %+v (%v): the supervisor launched after a lost one must be a recovery", launch, err)
+	}
+	if rec, _ := f.environmentRecord(k); rec.Launches != 2 {
+		t.Errorf("launches = %d, want the normal one and one recovery", rec.Launches)
 	}
 }
 
@@ -436,28 +464,6 @@ func TestEnvironment_TheAuthorizationNamesTheIdentityAndTheRunItAuthorizes(t *te
 	var launch envwrap.Launch
 	if ok, err := execwrap.Read(f.runDir(k), envwrap.LaunchFile, &launch); !ok || err != nil || launch.RunID != k.RunID || launch.LeaseEpoch != k.LeaseEpoch {
 		t.Errorf("launch = %+v (%v, %v): the supervisor needs the Run it is for", launch, ok, err)
-	}
-}
-
-// A supervisor that was launched first and is late registers after a relaunch:
-// what the daemon authorizes is the identity in the file, so the other one
-// (which the supervisor itself ends at its gate) is not.
-func TestEnvironment_ALateFirstSupervisorIsNotTheOneAuthorizedAfterARelaunch(t *testing.T) {
-	f, _, k := envRun(t, scriptsEnv())
-	f.clock.Advance(envGateWait + time.Second) // nothing came: relaunch
-	f.e.step(t.Context(), k)
-	if rec, _ := f.environmentRecord(k); rec.Launches != 2 {
-		t.Fatalf("launches = %d, want the relaunch", rec.Launches)
-	}
-	second := f.supervisorProcess(k) // the relaunched one registers
-	f.e.step(t.Context(), k)
-	late := newWrapperProcess(t, "sleep 60") // the first one wakes up
-	var a envwrap.Authorized
-	if ok, err := execwrap.Read(f.runDir(k), envwrap.AuthorizedFile, &a); !ok || err != nil {
-		t.Fatalf("authorization: %v, %v", ok, err)
-	}
-	if !a.AuthorizesWrapper(k.RunID, k.LeaseEpoch, second.w) || a.AuthorizesWrapper(k.RunID, k.LeaseEpoch, late.w) {
-		t.Errorf("authorization = %+v: it must name the relaunched supervisor only", a)
 	}
 }
 
@@ -597,7 +603,7 @@ func TestEnvironment_AbandonedRecoveryReportsEveryStartedServiceAsAStopFailure(t
 	f.writeEnv(k, envwrap.StartedFile, envwrap.Started{Services: []string{"db", "cache"}})
 	f.writeEnv(k, envwrap.ExitFile, envwrap.Exit{Cause: envwrap.CauseStopsPending, ExitedAt: t0})
 	rec, _ := f.environmentRecord(k)
-	rec.Launches = envMaxLaunches + envMaxRecoveries
+	rec.Launches = 1 + envMaxRecoveries
 	res := f.e.environmentGone(t.Context(), k, dir, rec)
 	want := []envwrap.StopFailure{
 		{Service: "db", Error: "stop not attempted: recovery abandoned"},

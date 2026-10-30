@@ -39,14 +39,17 @@ const (
 	// envGateWait is how long a launched supervisor may take to say who it is: its
 	// gate times out after envwrap.GateTimeout, so past this it is not coming.
 	envGateWait = envwrap.GateTimeout + stopMargin
-	// envMaxLaunches is how many supervisors a Run gets: one that dies without
-	// leaving an exit is launched again, but not for ever.
-	envMaxLaunches = 3
-	// envMaxRecoveries is how many supervisors, beyond those, a Run gets to stop
-	// the services of one that was lost: a recovery supervisor that dies leaves no
-	// stop proven, so it is launched again, but not for ever.
+	// envMaxRecoveries is how many supervisors, beyond the one normal supervisor a
+	// Run gets, are launched to stop the services of one that was lost: a recovery
+	// supervisor that dies leaves no stop proven, so it is launched again, but not
+	// for ever.
 	envMaxRecoveries = 2
 )
+
+// envLost is why a Run whose Environment supervisor was lost before the harness
+// started fails: a normal supervisor is launched once per Run, never again over
+// what a lost one left, as a start is not idempotent.
+const envLost = "the Environment supervisor was lost"
 
 // EnvironmentTimeouts are the limits of the scripts of an Environment. Zero is
 // the default of package envwrap: prepare 10 minutes, ready and stop of each
@@ -144,10 +147,13 @@ func (e *Executor) environmentStage(ctx context.Context, r state.Run, def *domai
 		return envFailed, "the identity of the Environment supervisor is unreadable"
 	}
 	if w == nil {
-		if rec.Launches > 0 && now.Sub(rec.LaunchedAt) < envGateWait {
+		if rec.Launches == 0 {
+			return e.launchEnvironment(ctx, r, def)
+		}
+		if now.Sub(rec.LaunchedAt) < envGateWait {
 			return envPending, "" // it is starting
 		}
-		return e.launchEnvironment(ctx, r, def, rec)
+		return envFailed, envLost // it never said who it is: it is not coming
 	}
 	switch v := verdictOf(w); v {
 	case procident.Same:
@@ -174,8 +180,9 @@ func (e *Executor) environmentStage(ctx context.Context, r state.Run, def *domai
 		}
 	}
 	// Gone and empty, or another boot, or the pid in other hands (whose group is
-	// then empty): the supervisor is over.
-	return e.launchEnvironment(ctx, r, def, rec)
+	// then empty): the supervisor is over, and a normal one is never launched again.
+	// The settlement of the Run stops what it recorded as started.
+	return envFailed, envLost
 }
 
 // confirmReady accepts the ready markers only while the supervisor that wrote
@@ -213,6 +220,9 @@ func (e *Executor) environmentOutcome(dir string) (st envStatus, msg string, dec
 		return envFailed, orDefault(prepared.Message, "prepare failed"), true
 	case services != nil && services.Status == envwrap.StatusFailed:
 		return envFailed, orDefault(services.Message, "a service failed"), true
+	case exit != nil && exit.Cause == envwrap.CauseLost:
+		// A recovery supervisor ended what a lost one started.
+		return envFailed, envLost, true
 	case exit != nil:
 		// Its stop was never ordered: it ended on its own (or was signalled).
 		return envFailed, orDefault(exit.Error, "the Environment supervisor ended before the Run started"), true
@@ -230,24 +240,13 @@ func orDefault(s, def string) string {
 }
 
 // launchEnvironment launches the supervisor of a Run: the launch file, the
-// intention to launch (in state.db), then the process. Nothing of a previous
-// supervisor is left to be taken for this one's. It is the first launch or a
-// relaunch; the markers prepared.json (which says prepare never runs again)
-// stays.
-func (e *Executor) launchEnvironment(ctx context.Context, r state.Run, def *domain.EnvironmentDef, rec state.Environment) (envStatus, string) {
+// intention to launch (in state.db), then the process. It is the only normal
+// launch a Run gets.
+func (e *Executor) launchEnvironment(ctx context.Context, r state.Run, def *domain.EnvironmentDef) (envStatus, string) {
 	k, dir := r.Key, e.runDir(r.Key)
-	if rec.Launches >= envMaxLaunches {
-		return envFailed, "the Environment supervisor kept dying before it finished"
-	}
 	launch, err := e.environmentLaunch(r, def)
 	if err != nil {
 		return envFailed, err.Error()
-	}
-	for _, name := range []string{envwrap.WrapperFile, envwrap.AuthorizedFile, envwrap.ServicesFile, envwrap.StopFile} {
-		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
-			e.log.ErrorContext(ctx, "clearing the files of a previous Environment supervisor", "run", k.RunID, "err", err)
-			return envPending, ""
-		}
 	}
 	if err := execwrap.Write(dir, envwrap.LaunchFile, launch); err != nil {
 		e.log.ErrorContext(ctx, "writing the launch file of an Environment", "run", k.RunID, "err", err)
@@ -440,7 +439,7 @@ func (e *Executor) environmentGone(ctx context.Context, k state.Key, dir string,
 		}
 		return out
 	}
-	if rec.Launches >= envMaxLaunches+envMaxRecoveries {
+	if rec.Launches > envMaxRecoveries { // the normal launch, and then the recoveries
 		return lost()
 	}
 	var launch envwrap.Launch

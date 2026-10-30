@@ -190,9 +190,6 @@ func (s *supervisor) run() error {
 		return s.fail("%v", err)
 	}
 	defer func() { _ = s.log.Close() }()
-	if err := s.loadStarted(); err != nil {
-		return s.fail("%v", err)
-	}
 
 	if !hasPrepared {
 		if s.stopOrdered() {
@@ -424,8 +421,9 @@ func (s *supervisor) noteStarted(svc domain.EnvironmentService) bool {
 	return s.write(StartedFile, Started{Services: names})
 }
 
-// loadStarted takes the services a supervisor before this one recorded as
-// started: their stop is this one's to run too.
+// loadStarted takes the services a lost supervisor recorded as started, for a
+// recovery supervisor to stop. A normal supervisor is the only one of its Run and
+// inherits nothing.
 func (s *supervisor) loadStarted() error {
 	var st Started
 	if _, err := execwrap.Read(s.o.RunDir, StartedFile, &st); err != nil {

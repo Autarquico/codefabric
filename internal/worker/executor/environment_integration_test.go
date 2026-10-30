@@ -286,45 +286,67 @@ func TestEnvironmentIntegration_ARecoveryThatOutlivesTheDaemonKeepsTheRunUntilIt
 	}
 }
 
-// The supervisor dies while a service is not yet ready, with its start recorded.
-// The daemon launches a normal supervisor over the record, and the Run is stopped
-// before the daemon authorizes it: it ends at its gate without having stopped the
-// recorded service, which is not an exit that releases the Run. The stop runs in
-// an authorized recovery supervisor.
-func TestEnvironmentIntegration_AStopBeforeTheGateOfARelaunchedSupervisorStillStopsWhatWasStarted(t *testing.T) {
+// The supervisor dies while a service is not yet ready, with its start recorded,
+// and its start creates a distinct resource per invocation. A normal supervisor is
+// never launched over the record, so the start ran once and its stop ran: nothing
+// is orphaned, and the Run fails as an Environment failure.
+func TestEnvironmentIntegration_ALostSupervisorDuringReadinessRunsTheStartOnceAndStopsItsResource(t *testing.T) {
 	dir := t.TempDir()
-	stopped := filepath.Join(dir, "stopped")
+	starts, stopped := filepath.Join(dir, "starts"), filepath.Join(dir, "stopped")
 	env := &domain.EnvironmentDef{Provider: "host", Services: []domain.EnvironmentService{{
 		Name:  "svc",
-		Start: "sleep 600 & echo $! > " + filepath.Join(dir, "svc.pid"),
+		Start: "echo x >> " + starts + "; n=$(wc -l < " + starts + "); sleep 600 >/dev/null 2>&1 </dev/null & echo $! > " + dir + "/res.$n",
 		Ready: "false",
-		Stop:  "touch " + stopped,
+		Stop:  "for p in " + dir + "/res.*; do kill $(cat $p) 2>/dev/null; done; touch " + stopped,
 	}}}
 	f, k := realEnvRun(t, env, EnvironmentTimeouts{Grace: time.Second})
-	f.drive(k, "the start to be recorded", func() bool { return fileExists(filepath.Join(f.runDir(k), envwrap.StartedFile)) })
+	f.drive(k, "the start to have run", func() bool { return fileExists(starts) })
 	w := f.supervisorIdentity(k)
 	if err := syscall.Kill(w.PID, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the supervisor to be gone", func() bool { return procident.Verify(w.PID, w.Start) != procident.Same })
-	// Steps until the second supervisor is launched, and no further: it is not authorized.
-	waitFor(t, "a supervisor to be relaunched", func() bool {
-		f.e.step(t.Context(), k)
-		rec, _ := f.environmentRecord(k)
-		return rec.Launches >= 2
-	})
-	if err := f.e.Stop(t.Context(), k.RunID, k.LeaseEpoch, "enough", SourceController); err != nil {
+	f.drive(k, "the Run to stop", f.phaseIs(k, state.PhaseStopped))
+	if !fileExists(stopped) {
+		t.Error("the stop of the recorded service never ran")
+	}
+	raw, _ := os.ReadFile(starts) //nolint:gosec // a file of the test
+	if n := strings.Count(string(raw), "x"); n != 1 {
+		t.Errorf("the start ran %d times: a lost supervisor is never replaced by a normal one", n)
+	}
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportPrepareFailed, v1.ReportStopped}) || !strings.Contains(reports[0].Message, "was lost") {
+		t.Errorf("reports = %+v", reports)
+	}
+	if last := reports[len(reports)-1]; len(last.StopFailures) != 0 || !last.NeverStarted {
+		t.Errorf("last report = %+v", last)
+	}
+}
+
+// The supervisor dies during prepare: nothing was started, no other supervisor
+// is launched, and the Run fails.
+func TestEnvironmentIntegration_ALostSupervisorDuringPrepareFailsTheRunWithoutAnotherSupervisor(t *testing.T) {
+	f, k := realEnvRun(t, &domain.EnvironmentDef{Provider: "host", Prepare: "sleep 600"}, EnvironmentTimeouts{Grace: time.Second})
+	f.drive(k, "the supervisor to be authorized", func() bool { return fileExists(filepath.Join(f.runDir(k), envwrap.AuthorizedFile)) })
+	w := f.supervisorIdentity(k)
+	if err := syscall.Kill(w.PID, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
-	f.rt.setAlive(f.e.sessionName(k), false)
+	waitFor(t, "the supervisor to be gone", func() bool { return procident.Verify(w.PID, w.Start) != procident.Same })
+	launches := 0
 	f.drive(k, "the Run to stop", func() bool {
-		over := f.run(k).Phase == state.PhaseStopped
-		if over && !fileExists(stopped) {
-			t.Fatal("the Run was released with its recorded service not stopped")
+		if rec, ok := f.environmentRecord(k); ok {
+			launches = max(launches, rec.Launches)
 		}
-		return over
+		return f.run(k).Phase == state.PhaseStopped
 	})
-	if last := f.lastReport(k); last.Kind != v1.ReportStopped || len(last.StopFailures) != 0 {
-		t.Errorf("last report = %+v", last)
+	if launches > 1 {
+		t.Errorf("launches = %d: a normal supervisor is launched once", launches)
+	}
+	if r := f.reports(k)[0]; r.Kind != v1.ReportPrepareFailed || !strings.Contains(r.Message, "was lost") {
+		t.Errorf("report = %+v", r)
+	}
+	if f.rt.startCount() != 0 {
+		t.Error("the harness started")
 	}
 }
