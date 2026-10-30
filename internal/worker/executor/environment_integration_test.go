@@ -233,3 +233,55 @@ func TestEnvironmentIntegration_ADetachedServiceOfALostSupervisorIsStoppedByTheD
 		t.Errorf("last report = %+v", last)
 	}
 }
+
+// The stops of a lost supervisor run in a recovery supervisor that the next
+// daemon finds and waits for: the Run is not released while a stop still runs,
+// and no second recovery is launched over the first.
+func TestEnvironmentIntegration_ARecoveryThatOutlivesTheDaemonKeepsTheRunUntilItsStopIsOver(t *testing.T) {
+	dir := t.TempDir()
+	stopped := filepath.Join(dir, "stopped")
+	env := &domain.EnvironmentDef{Provider: "host", Services: []domain.EnvironmentService{{
+		Name:  "svc",
+		Start: "sleep 600 & echo $! > " + filepath.Join(dir, "svc.pid"),
+		Stop:  "sleep 2; touch " + stopped,
+	}}}
+	f, k := realEnvRun(t, env, EnvironmentTimeouts{Grace: time.Second})
+	f.drive(k, "the Run to run", f.phaseIs(k, state.PhaseRunning))
+	w := f.supervisorIdentity(k)
+	if err := syscall.Kill(w.PID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the supervisor to be gone", func() bool { return procident.Verify(w.PID, w.Start) != procident.Same })
+	if err := f.e.Stop(t.Context(), k.RunID, k.LeaseEpoch, "enough", SourceController); err != nil {
+		t.Fatal(err)
+	}
+	f.rt.setAlive(f.e.sessionName(k), false)
+	recovering := func() bool {
+		var l envwrap.Launch
+		ok, _ := execwrap.Read(f.runDir(k), envwrap.LaunchFile, &l)
+		return ok && l.Recover && fileExists(filepath.Join(f.runDir(k), envwrap.WrapperFile))
+	}
+	f.drive(k, "the recovery supervisor to be launched", recovering)
+	rec := f.supervisorIdentity(k)
+	waitFor(t, "the recovery to be authorized", func() bool {
+		f.e.step(t.Context(), k)
+		return fileExists(filepath.Join(f.runDir(k), envwrap.AuthorizedFile))
+	})
+	if fileExists(stopped) {
+		t.Fatal("the stop was already over")
+	}
+	f.restart("epoch-2") // the daemon died and is back; the recovery supervisor was not its child
+	f.drive(k, "the Run to stop", func() bool {
+		over := f.run(k).Phase == state.PhaseStopped
+		if over && !fileExists(stopped) {
+			t.Fatal("the Run was released while the stop of its service still ran")
+		}
+		return over
+	})
+	if got := f.supervisorIdentity(k); got.PID != rec.PID {
+		t.Errorf("a second recovery was launched: %d after %d", got.PID, rec.PID)
+	}
+	if procident.Verify(rec.PID, rec.Start) == procident.Same {
+		t.Error("the recovery supervisor is still alive")
+	}
+}

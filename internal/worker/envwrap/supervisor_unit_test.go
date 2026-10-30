@@ -196,20 +196,19 @@ func TestADrainThatIsHeldIsCutOnTheClockOfTheSupervisor(t *testing.T) {
 	p.release()
 }
 
-func TestRecoverWithoutSecretsAttemptsNoStopAndSaysSo(t *testing.T) {
+func TestARecoveryWithoutSecretsAttemptsNoStopAndSaysSo(t *testing.T) {
 	dir := t.TempDir()
 	ran := dir + "/ran"
-	l := Launch{Dir: dir, RedactOutput: true, Services: []domain.EnvironmentService{
+	l := Launch{Dir: dir, Recover: true, RedactOutput: true, Services: []domain.EnvironmentService{
 		{Name: "db", Start: "x", Stop: "touch " + ran},
 		{Name: "cache", Start: "x"},
 	}}
-	for name, v := range map[string]any{LaunchFile: l, StartedFile: Started{Services: []string{"db", "cache"}}} {
-		if err := execwrap.Write(dir, name, v); err != nil {
-			t.Fatal(err)
-		}
+	if err := execwrap.Write(dir, StartedFile, Started{Services: []string{"db", "cache"}}); err != nil {
+		t.Fatal(err)
 	}
 	revoked := func() ([]redact.Needle, error) { return nil, errors.New("no access") }
-	if err := Recover(Options{RunDir: dir, Retention: revoked}); err != nil {
+	s := &supervisor{o: Options{RunDir: dir, Retention: revoked}, clock: clock.Real{}, launch: l, stop: make(chan struct{})}
+	if err := s.recover(); err != nil {
 		t.Fatal(err)
 	}
 	var exit Exit
@@ -222,5 +221,16 @@ func TestRecoverWithoutSecretsAttemptsNoStopAndSaysSo(t *testing.T) {
 	}
 	if _, err := os.Stat(ran); err == nil {
 		t.Error("a stop ran without the environment of the supervisor")
+	}
+}
+
+func TestARecoverySupervisorIgnoresAStopOrder(t *testing.T) {
+	dir := t.TempDir()
+	if err := execwrap.Write(dir, StopFile, StopOrder{}); err != nil {
+		t.Fatal(err)
+	}
+	s := &supervisor{o: Options{RunDir: dir}, launch: Launch{Recover: true}, stop: make(chan struct{})}
+	if s.stopOrdered() {
+		t.Error("a recovery supervisor took the stop order for its own")
 	}
 }

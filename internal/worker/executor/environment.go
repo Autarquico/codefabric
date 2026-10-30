@@ -17,11 +17,9 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/repoconfig"
-	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/worker/envwrap"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
-	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -44,6 +42,10 @@ const (
 	// envMaxLaunches is how many supervisors a Run gets: one that dies without
 	// leaving an exit is launched again, but not for ever.
 	envMaxLaunches = 3
+	// envMaxRecoveries is how many supervisors, beyond those, a Run gets to stop
+	// the services of one that was lost: a recovery supervisor that dies leaves no
+	// stop proven, so it is launched again, but not for ever.
+	envMaxRecoveries = 2
 )
 
 // EnvironmentTimeouts are the limits of the scripts of an Environment. Zero is
@@ -335,7 +337,7 @@ func (e *Executor) settleEnvironment(ctx context.Context, k state.Key) envSettle
 	}
 	switch v := verdictOf(w); v {
 	case procident.Same:
-		return e.settleLiving(ctx, k, dir, w, order, now)
+		return e.settleLiving(ctx, k, dir, w, rec, order, now)
 	case procident.Gone:
 		if !e.groupEmpty(ctx, w) {
 			e.log.WarnContext(ctx, "processes of an Environment survive its supervisor: killing them", "run", k.RunID)
@@ -349,7 +351,7 @@ func (e *Executor) settleEnvironment(ctx context.Context, k state.Key) envSettle
 	default:
 		return envSettlement{unverified: "the identity of the Environment supervisor cannot be verified"}
 	}
-	return e.environmentGone(ctx, k, dir)
+	return e.environmentGone(ctx, k, dir, rec)
 }
 
 // settleUnidentified is a supervisor that never said who it is. Until its gate
@@ -363,13 +365,14 @@ func (e *Executor) settleUnidentified(ctx context.Context, k state.Key, rec stat
 		if !none && rec.Launches > 0 {
 			e.log.WarnContext(ctx, "an Environment supervisor never identified itself: it is taken as not having run", "run", k.RunID)
 		}
-		return e.environmentGone(ctx, k, e.runDir(k))
+		return e.environmentGone(ctx, k, e.runDir(k), rec)
 	}
 	return envSettlement{}
 }
 
 // settleLiving is a supervisor that is alive and ours.
-func (e *Executor) settleLiving(ctx context.Context, k state.Key, dir string, w *execwrap.Wrapper, order envwrap.StopOrder, now time.Time) envSettlement {
+func (e *Executor) settleLiving(ctx context.Context, k state.Key, dir string, w *execwrap.Wrapper, rec state.Environment, order envwrap.StopOrder, now time.Time) envSettlement {
+	e.authorizeRecovery(ctx, k, dir, w, now)
 	if exit, _ := readMarker[envwrap.Exit](dir, envwrap.ExitFile); exit != nil {
 		if now.Sub(exit.ExitedAt) < wrapperExitWait {
 			return envSettlement{} // it is ending
@@ -378,7 +381,9 @@ func (e *Executor) settleLiving(ctx context.Context, k state.Key, dir string, w 
 		_ = syscall.Kill(-w.PGID, syscall.SIGKILL)
 		return envSettlement{}
 	}
-	if now.Before(order.At.Add(e.environmentStopBudget(dir))) {
+	// The time runs from the later of the order and the launch of this supervisor:
+	// a recovery supervisor is launched after the order.
+	if now.Before(later(order.At, rec.LaunchedAt).Add(e.environmentStopBudget(dir))) {
 		return envSettlement{}
 	}
 	e.log.WarnContext(ctx, "the Environment did not stop in time: killing its group", "run", k.RunID)
@@ -386,69 +391,97 @@ func (e *Executor) settleLiving(ctx context.Context, k state.Key, dir string, w 
 	return envSettlement{}
 }
 
+// authorizeRecovery opens the gate of a recovery supervisor that is alive and
+// ours, as environmentStage does for the supervisor of a Run that is starting:
+// it authorizes the identity just verified, and no other process. A supervisor
+// that is not a recovery one finds its gate in environmentStage, or ends at it.
+func (e *Executor) authorizeRecovery(ctx context.Context, k state.Key, dir string, w *execwrap.Wrapper, now time.Time) {
+	var l envwrap.Launch
+	if ok, err := execwrap.Read(dir, envwrap.LaunchFile, &l); err != nil || !ok || !l.Recover || fileExists(filepath.Join(dir, envwrap.AuthorizedFile)) {
+		return
+	}
+	a := envwrap.Authorized{RunID: k.RunID, LeaseEpoch: k.LeaseEpoch, PID: w.PID, PGID: w.PGID, Start: w.Start, At: now}
+	if err := execwrap.Write(dir, envwrap.AuthorizedFile, a); err != nil {
+		e.log.ErrorContext(ctx, "authorizing the recovery of an Environment", "run", k.RunID, "err", err)
+	}
+}
+
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
 // environmentGone is the end of a settlement whose supervisor and group are gone:
 // what its exit says of the stops that failed. A supervisor that left no exit but
 // recorded services as started (env-started.json) is lost with them running, as
-// far as anyone knows: their stops are run (envwrap.Recover, off the step, so
-// this is "not yet" until it is done) and any that cannot be are failures. The
-// reservation is released all the same (best effort, §25).
-func (e *Executor) environmentGone(ctx context.Context, k state.Key, dir string) envSettlement {
-	exit, _ := readMarker[envwrap.Exit](dir, envwrap.ExitFile)
-	var lost []envwrap.StopFailure
-	if exit == nil {
-		started, err := readMarker[envwrap.Started](dir, envwrap.StartedFile)
-		switch {
-		case err != nil:
-			lost = []envwrap.StopFailure{{Service: "environment", Error: "stop not attempted: the record of started services is unreadable"}}
-		case started != nil && len(started.Services) > 0:
-			if !e.recoverStops(ctx, k, dir) {
-				return envSettlement{}
-			}
-			if exit, _ = readMarker[envwrap.Exit](dir, envwrap.ExitFile); exit == nil {
-				for _, name := range started.Services {
-					lost = append(lost, envwrap.StopFailure{Service: name, Error: "stop not attempted: supervisor lost"})
-				}
-			}
+// far as anyone knows: a recovery supervisor is launched to stop them, which goes
+// through the same identity, gate and exit as any other, and this is "not yet"
+// until its exit is there and its group is gone. If none can be launched (or too
+// many died), the stops are failures; the reservation is released all the same
+// (best effort, §25), but never while a recovery supervisor may still be running.
+func (e *Executor) environmentGone(ctx context.Context, k state.Key, dir string, rec state.Environment) envSettlement {
+	if exit, _ := readMarker[envwrap.Exit](dir, envwrap.ExitFile); exit != nil {
+		return envSettlement{done: true, failures: exit.StopFailures}
+	}
+	started, err := readMarker[envwrap.Started](dir, envwrap.StartedFile)
+	switch {
+	case err != nil:
+		return envSettlement{done: true, failures: []envwrap.StopFailure{{Service: "environment", Error: "stop not attempted: the record of started services is unreadable"}}}
+	case started == nil || len(started.Services) == 0:
+		return envSettlement{done: true}
+	}
+	lost := func() envSettlement {
+		out := envSettlement{done: true}
+		for _, name := range started.Services {
+			out.failures = append(out.failures, envwrap.StopFailure{Service: name, Error: "stop not attempted: supervisor lost"})
 		}
+		return out
 	}
-	out := envSettlement{done: true, failures: lost}
-	if exit != nil {
-		out.failures = exit.StopFailures
+	if rec.Launches >= envMaxLaunches+envMaxRecoveries {
+		return lost()
 	}
-	return out
+	var launch envwrap.Launch
+	if ok, err := execwrap.Read(dir, envwrap.LaunchFile, &launch); err != nil || !ok {
+		return lost()
+	}
+	return e.launchRecovery(ctx, k, dir, launch)
 }
 
-// recoverStops runs the stops of a lost supervisor in the background, once, and
-// says whether they are over. The scripts see the secrets of the Run if they can
-// still be resolved.
-func (e *Executor) recoverStops(ctx context.Context, k state.Key, dir string) (over bool) {
-	e.mu.Lock()
-	m := e.memo(k)
-	if m.recovering == nil {
-		done := make(chan struct{})
-		m.recovering = done
-		o := envwrap.Options{
-			RunDir: dir, Clock: e.clock, Secrets: secretjit.Resolver(dir),
-			Retention: func() ([]redact.Needle, error) { return secretjit.Load(dir) },
+// launchRecovery launches a supervisor whose only job is to stop the services
+// the lost one started. Nothing of a previous supervisor is left to be taken for
+// this one's; the stop order stands, and it is not heeded by the recovery.
+func (e *Executor) launchRecovery(ctx context.Context, k state.Key, dir string, launch envwrap.Launch) envSettlement {
+	pending := envSettlement{unverified: "the recovery of the Environment could not be launched"}
+	for _, name := range []string{envwrap.WrapperFile, envwrap.AuthorizedFile} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+			e.log.ErrorContext(ctx, "clearing the files of a lost Environment supervisor", "run", k.RunID, "err", err)
+			return pending
 		}
-		go func() {
-			defer close(done)
-			if err := envwrap.Recover(o); err != nil {
-				e.log.ErrorContext(ctx, "stopping the services of a lost Environment supervisor", "run", k.RunID, "err", err)
-			}
-		}()
 	}
-	done := m.recovering
+	launch.Recover = true
+	if err := execwrap.Write(dir, envwrap.LaunchFile, launch); err != nil {
+		e.log.ErrorContext(ctx, "writing the launch file of an Environment recovery", "run", k.RunID, "err", err)
+		return pending
+	}
+	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.NoteEnvironmentLaunch(ctx, tx, k, e.clock.Now()) })
+	if err != nil {
+		e.log.ErrorContext(ctx, "recording the launch of an Environment recovery", "run", k.RunID, "err", err)
+		return pending
+	}
+	spawnErr := e.spawnEnvironment(ctx, dir)
+	e.mu.Lock()
+	if spawnErr != nil {
+		e.memo(k).noEnvProcess = true
+	} else if m := e.memos[k]; m != nil {
+		m.noEnvProcess = false // there is a process to wait for again
+	}
 	e.mu.Unlock()
-	select {
-	case <-done:
-		e.mu.Lock()
-		e.memo(k).recovering = nil
-		e.mu.Unlock()
-		return true
-	default:
-		return false
+	if spawnErr != nil {
+		e.log.ErrorContext(ctx, "launching the recovery of an Environment failed", "run", k.RunID, "err", spawnErr)
 	}
+	return envSettlement{}
 }
 
 // orderEnvironmentStop writes the stop order of the supervisor if there is none

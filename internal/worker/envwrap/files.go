@@ -14,7 +14,7 @@
 //	                     bound to that identity and to the Run
 //	prepared.json        prepare ended: ok, or failed with a redacted message
 //	env-started.json     the services whose start was about to be spawned, written before each
-//	                     spawn: what a lost supervisor leaves for the daemon to stop (Recover)
+//	                     spawn: what a lost supervisor leaves for a recovery supervisor to stop (Launch.Recover)
 //	services-ready.json  every service is ready, or one failed and the started ones were cleaned
 //	env-stop.json        written by the daemon: stop the services and end
 //	env-exit.json        the services are stopped and nothing of the group is left but the supervisor
@@ -80,6 +80,10 @@ type Launch struct {
 	Prepare   string                      `json:"prepare"`
 	Services  []domain.EnvironmentService `json:"services"`
 	SecretEnv []execwrap.SecretEnv        `json:"secret_env,omitempty"`
+	// Recover: this supervisor only stops the services a lost supervisor
+	// recorded as started (env-started.json), through the same identity, gate and
+	// exit as any other, and ends with CauseLost. It ignores stop orders.
+	Recover bool `json:"recover,omitempty"`
 	// RedactOutput redacts the output of the secrets the Run retains even when
 	// it has no SecretEnv.
 	RedactOutput bool `json:"redact_output,omitempty"`
@@ -153,7 +157,7 @@ const (
 	CausePrepareFailed  = "prepare-failed"
 	CauseServicesFailed = "services-failed"
 	CauseError          = "error" // the supervisor could not do its job; Error says why
-	CauseLost           = "lost"  // the supervisor died with no exit; Recover stopped what it had started
+	CauseLost           = "lost"  // the supervisor died with no exit; a recovery supervisor stopped what it had started
 )
 
 // StopFailure is a service whose stop command failed. Stopping is best effort

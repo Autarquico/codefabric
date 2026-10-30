@@ -462,3 +462,53 @@ func TestAnAuthorizationOfAnotherIdentityRunsNothing(t *testing.T) {
 		})
 	}
 }
+
+// A recovery supervisor goes through the same identity and gate as any other,
+// ignores the stop order that is already there, runs the stops of the services
+// the lost supervisor recorded in reverse order and nothing else, and leaves
+// nothing of its group behind.
+func TestARecoverySupervisorStopsWhatALostOneStartedAndNothingElse(t *testing.T) {
+	runDir := t.TempDir()
+	s := start(t, runDir, envwrap.Launch{
+		Recover: true,
+		Prepare: "touch prepare-ran",
+		Services: []domain.EnvironmentService{
+			svc("db", "touch db-start-ran", "", "echo db >> order"),
+			svc("cache", "touch cache-start-ran", "", "echo cache >> order; sleep 600 & echo $! > leftover"),
+			svc("unrecorded", "touch x", "", "echo unrecorded >> order"),
+		},
+	})
+	if err := execwrap.Write(runDir, envwrap.StartedFile, envwrap.Started{Services: []string{"db", "cache"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := execwrap.Write(runDir, envwrap.StopFile, envwrap.StopOrder{At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	s.waitFor(envwrap.WrapperFile)
+	time.Sleep(300 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(runDir, envwrap.ExitFile)); err == nil {
+		t.Fatal("a recovery supervisor ended at its gate on a stop order")
+	}
+	s.authorize()
+	exit := s.exit()
+	if exit.Cause != envwrap.CauseLost || len(exit.StopFailures) != 0 {
+		t.Errorf("exit = %+v", exit)
+	}
+	if got := s.work("order"); got != "cache\ndb\n" {
+		t.Errorf("stops ran as %q", got)
+	}
+	for _, name := range []string{"prepare-ran", "db-start-ran", "cache-start-ran"} {
+		if s.exists(name) {
+			t.Errorf("%s: a recovery runs no prepare and no start", name)
+		}
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(s.work("leftover")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); syscall.Kill(pid, 0) == nil; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("what a stop left behind outlived the recovery supervisor")
+		}
+	}
+}
