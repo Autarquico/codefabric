@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 )
@@ -38,13 +39,14 @@ type capture struct {
 	dst  *lockedWriter
 	set  *redact.Set // nil: nothing to redact
 	wait time.Duration
+	clk  clock.Clock
 
 	mu    sync.Mutex
 	pipes []*pipes
 }
 
-func newCapture(dst io.Writer, set *redact.Set) *capture {
-	return &capture{dst: &lockedWriter{w: dst}, set: set, wait: defaultDrainWait}
+func newCapture(dst io.Writer, set *redact.Set, clk clock.Clock) *capture {
+	return &capture{dst: &lockedWriter{w: dst}, set: set, wait: defaultDrainWait, clk: clk}
 }
 
 // pipes are the two streams (stdout, stderr) of one script.
@@ -108,12 +110,12 @@ func (p *pipes) release() {
 	p.parents = nil
 }
 
-// drain waits of real time for the copies to reach their end; those that did
+// drain waits, on the clock of the supervisor, for the copies to reach their end; those that did
 // not, because something the script left behind still holds the pipe, are cut.
 // The error says what is missing from the log.
 func (p *pipes) drain() error {
 	wait := p.c.wait
-	if waitAll(p.done, wait) {
+	if waitAll(p.c.clk, p.done, wait) {
 		return errors.Join(p.errs...)
 	}
 	var held []string
@@ -126,7 +128,7 @@ func (p *pipes) drain() error {
 		}
 	}
 	err := fmt.Errorf("capture incomplete: a process left behind still held open the %s", strings.Join(held, " and the "))
-	if !waitAll(p.done, wait) {
+	if !waitAll(p.c.clk, p.done, wait) {
 		return errors.Join(err, errors.New("the copy of the output did not end after being cut"))
 	}
 	return errors.Join(err, errors.Join(p.errs...))
@@ -144,13 +146,13 @@ func (c *capture) drainAll() error {
 	return errors.Join(errs...)
 }
 
-func waitAll(done []chan struct{}, d time.Duration) bool {
-	timer := time.NewTimer(d)
+func waitAll(clk clock.Clock, done []chan struct{}, d time.Duration) bool {
+	timer := clk.NewTimer(d)
 	defer timer.Stop()
 	for _, ch := range done {
 		select {
 		case <-ch:
-		case <-timer.C:
+		case <-timer.C():
 			return false
 		}
 	}

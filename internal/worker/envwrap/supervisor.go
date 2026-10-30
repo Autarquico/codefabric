@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -80,7 +81,8 @@ type supervisor struct {
 	log      *os.File
 	capture  *capture
 
-	spawned   []domain.EnvironmentService // those whose start was spawned, in order
+	spawned   []domain.EnvironmentService // those whose start was recorded (env-started.json) before it was spawned, in order
+	contain   bool                        // Recover: every script leads a group of its own, ended with it
 	remnants  int
 	survivors bool // some process of the group outlived the grace
 }
@@ -178,6 +180,9 @@ func (s *supervisor) run() error {
 		return s.fail("%v", err)
 	}
 	defer func() { _ = s.log.Close() }()
+	if err := s.loadStarted(); err != nil {
+		return s.fail("%v", err)
+	}
 
 	if !hasPrepared {
 		if s.stopOrdered() {
@@ -223,7 +228,7 @@ func (s *supervisor) openOutput() error {
 	if err != nil {
 		return fmt.Errorf("opening the output log: %w", err)
 	}
-	s.log, s.capture = log, newCapture(log, s.set)
+	s.log, s.capture = log, newCapture(log, s.set, s.clock)
 	return nil
 }
 
@@ -372,11 +377,13 @@ func (s *supervisor) startServices() string {
 		if s.stopOrdered() {
 			return CauseStop // checked before every spawn; what was spawned as the order landed is stopped with the rest
 		}
+		if !s.noteStarted(svc) {
+			return CauseError // without the record, a lost supervisor would leave this service unstopped
+		}
 		p, err := s.spawn(svc.Start)
 		if err != nil {
 			return s.servicesFailed(fmt.Sprintf("service %s: %v", svc.Name, err))
 		}
-		s.spawned = append(s.spawned, svc)
 		switch outcome, msg := s.awaitReady(svc, p); outcome {
 		case endStopped:
 			return CauseStop
@@ -390,6 +397,36 @@ func (s *supervisor) startServices() string {
 		return CauseError
 	}
 	return ""
+}
+
+// noteStarted records, durably and before it is spawned, that the start of svc
+// is about to run: the record may say a service started that did not, never
+// the opposite.
+func (s *supervisor) noteStarted(svc domain.EnvironmentService) bool {
+	if slices.ContainsFunc(s.spawned, func(o domain.EnvironmentService) bool { return o.Name == svc.Name }) {
+		return true
+	}
+	s.spawned = append(s.spawned, svc)
+	names := make([]string, len(s.spawned))
+	for i, o := range s.spawned {
+		names[i] = o.Name
+	}
+	return s.write(StartedFile, Started{Services: names})
+}
+
+// loadStarted takes the services a supervisor before this one recorded as
+// started: their stop is this one's to run too.
+func (s *supervisor) loadStarted() error {
+	var st Started
+	if _, err := execwrap.Read(s.o.RunDir, StartedFile, &st); err != nil {
+		return err
+	}
+	for _, name := range st.Services {
+		if i := slices.IndexFunc(s.launch.Services, func(o domain.EnvironmentService) bool { return o.Name == name }); i >= 0 {
+			s.spawned = append(s.spawned, s.launch.Services[i])
+		}
+	}
+	return nil
 }
 
 func (s *supervisor) servicesFailed(msg string) string {
@@ -592,6 +629,9 @@ func (s *supervisor) spawn(script string) (*proc, error) {
 	cmd := exec.Command("/bin/sh", "-c", script) //nolint:gosec,noctx // the scripts are what the repo's configuration asks for; the supervisor ends them
 	cmd.Dir = s.launch.Dir
 	cmd.Env = s.env
+	if s.contain {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	var pp *pipes
 	if s.capture != nil {
 		var err error
@@ -699,10 +739,71 @@ func (s *supervisor) runScript(script string, limit time.Duration, stop <-chan s
 	}
 	timer := s.clock.NewTimer(limit)
 	defer timer.Stop()
+	if s.contain {
+		defer s.endGroup(p)
+	}
 	e := s.await(p, timer.C(), stop, nil)
 	if e != endExited {
 		p.kill()
 		return result{end: e, limit: limit}
 	}
 	return result{end: e, code: p.code(), limit: limit}
+}
+
+// endGroup kills what a contained script left in its group (its own, with the
+// pid of the script as ID: nothing else can have it while a member lives).
+func (s *supervisor) endGroup(p *proc) {
+	pgid := p.cmd.Process.Pid
+	if execwrap.GroupOthers(pgid, 0) > 0 {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	}
+}
+
+// lostStopError is the failure of a stop that Recover could not attempt.
+const lostStopError = "stop not attempted: supervisor lost"
+
+// Recover is what the daemon does for a supervisor that died with no exit
+// after it recorded services as started (env-started.json): it runs their stop
+// scripts, in reverse order, each in a process group of its own that is ended
+// with it, bounded by the stop timeout, and writes env-exit.json with
+// CauseLost and the stops that failed. It runs nothing else: prepare and start
+// never run again. The scripts get the environment the supervisor's had if the
+// secrets can still be resolved; if they cannot (the harness started, so the
+// access was revoked), no stop is attempted and each is recorded as a failure.
+func Recover(o Options) error {
+	clk := o.Clock
+	if clk == nil {
+		clk = clock.Real{}
+	}
+	s := &supervisor{o: o, clock: clk, self: os.Getpid(), stop: make(chan struct{}), contain: true}
+	if ok, err := execwrap.Read(o.RunDir, LaunchFile, &s.launch); err != nil || !ok {
+		return errors.New("envwrap: the launch file is missing or unreadable")
+	}
+	if err := s.loadStarted(); err != nil {
+		return err
+	}
+	exit := Exit{Cause: CauseLost}
+	if err := s.resolveEnv(); err != nil {
+		for i := len(s.spawned) - 1; i >= 0; i-- {
+			if svc := s.spawned[i]; svc.Stop != "" {
+				exit.StopFailures = append(exit.StopFailures, StopFailure{Service: svc.Name, Error: lostStopError})
+			}
+		}
+	} else if err := s.openOutput(); err != nil {
+		return err
+	} else {
+		defer func() { _ = s.log.Close() }()
+		for i := len(s.spawned) - 1; i >= 0; i-- {
+			if svc := s.spawned[i]; svc.Stop != "" {
+				if f := s.runStop(svc); f != nil {
+					exit.StopFailures = append(exit.StopFailures, *f)
+				}
+			}
+		}
+		if err := s.capture.drainAll(); err != nil {
+			exit.Error = bound(err.Error())
+		}
+	}
+	exit.ExitedAt = s.clock.Now()
+	return execwrap.Write(o.RunDir, ExitFile, exit)
 }

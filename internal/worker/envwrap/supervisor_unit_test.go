@@ -4,8 +4,12 @@ package envwrap
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -13,6 +17,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 )
 
@@ -166,5 +171,56 @@ func TestAFailureBeforeTheClaimWritesNothingWhenAnotherSupervisorHoldsTheRun(t *
 	}
 	if ok, err := execwrap.Read(dir, ExitFile, &Exit{}); err != nil || ok {
 		t.Errorf("env-exit.json written (%v, %v) over the supervisor that holds the Run", ok, err)
+	}
+}
+
+func TestADrainThatIsHeldIsCutOnTheClockOfTheSupervisor(t *testing.T) {
+	fake := clock.NewFake(time.Unix(0, 0))
+	c := newCapture(io.Discard, nil, fake)
+	p, err := c.attach(exec.CommandContext(t.Context(), "true")) // its ends stay open: something holds the pipe
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan error, 1)
+	go func() { got <- p.drain() }()
+	blockUntil(t, fake, 1)
+	select {
+	case err := <-got:
+		t.Fatalf("cut before its time: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	fake.Advance(defaultDrainWait)
+	if err := <-got; err == nil || !strings.Contains(err.Error(), "capture incomplete") {
+		t.Errorf("drain = %v", err)
+	}
+	p.release()
+}
+
+func TestRecoverWithoutSecretsAttemptsNoStopAndSaysSo(t *testing.T) {
+	dir := t.TempDir()
+	ran := dir + "/ran"
+	l := Launch{Dir: dir, RedactOutput: true, Services: []domain.EnvironmentService{
+		{Name: "db", Start: "x", Stop: "touch " + ran},
+		{Name: "cache", Start: "x"},
+	}}
+	for name, v := range map[string]any{LaunchFile: l, StartedFile: Started{Services: []string{"db", "cache"}}} {
+		if err := execwrap.Write(dir, name, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	revoked := func() ([]redact.Needle, error) { return nil, errors.New("no access") }
+	if err := Recover(Options{RunDir: dir, Retention: revoked}); err != nil {
+		t.Fatal(err)
+	}
+	var exit Exit
+	if ok, err := execwrap.Read(dir, ExitFile, &exit); !ok || err != nil {
+		t.Fatalf("exit: %v, %v", ok, err)
+	}
+	want := []StopFailure{{Service: "db", Error: lostStopError}}
+	if exit.Cause != CauseLost || !slices.Equal(exit.StopFailures, want) {
+		t.Errorf("exit = %+v", exit)
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Error("a stop ran without the environment of the supervisor")
 	}
 }

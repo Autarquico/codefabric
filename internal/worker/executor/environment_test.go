@@ -18,6 +18,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/envwrap"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/procident"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -534,5 +535,37 @@ func TestEnvironment_StopFailuresEncodedStayInsideTheReportBudget(t *testing.T) 
 	raw, err := json.Marshal(v1.RunReportRequest{Entries: []v1.RunReportEntry{{Kind: v1.ReportStopped, StopFailures: got}}})
 	if err != nil || len(raw) > v1.MaxReportBytes {
 		t.Errorf("encoded stopped = %d bytes (%v), limit %d", len(raw), err, v1.MaxReportBytes)
+	}
+}
+
+func TestEnvironment_ReadyMarkersAreNotTakenOnceTheSupervisorIsGone(t *testing.T) {
+	f, _, k := envRun(t, scriptsEnv())
+	sup := f.supervisorProcess(k)
+	f.e.step(t.Context(), k)
+	f.writeEnv(k, envwrap.PreparedFile, envwrap.Prepared{Status: envwrap.StatusOK, At: t0})
+	f.writeEnv(k, envwrap.ServicesFile, envwrap.Services{Status: envwrap.StatusOK, At: t0})
+	// It dies after services-ready.json, before the daemon's next step.
+	sup.kill(t)
+	if !f.e.step(t.Context(), k) {
+		t.Fatal("the Run did not end")
+	}
+	if f.rt.startCount() != 0 {
+		t.Fatal("the harness started with no supervisor to keep the Environment")
+	}
+	reports := f.reports(k)
+	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportPrepareFailed, v1.ReportStopped}) {
+		t.Fatalf("reports = %v", got)
+	}
+	if !strings.Contains(reports[0].Message, "ended after the services were ready") || !reports[1].NeverStarted {
+		t.Errorf("reports = %+v", reports)
+	}
+	if f.run(k).Phase != state.PhaseStopped {
+		t.Errorf("phase = %s", f.run(k).Phase)
+	}
+	if empty, err := procident.GroupEmpty(sup.w.PGID); err != nil || !empty {
+		t.Errorf("group empty = %v, %v", empty, err)
+	}
+	if _, ok := f.environmentRecord(k); ok {
+		t.Error("the record of a settled Environment stays")
 	}
 }

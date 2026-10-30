@@ -230,6 +230,7 @@ type runMemo struct {
 	ackWait       bool          // the prepare waits for the Controller's ack of config_resolved, polled at exitTick
 	revoked       bool          // the harness's access to the secrets was taken back in this life of the daemon
 	noEnvProcess  bool          // launching the Environment supervisor failed: there is no process to wait for
+	recovering    chan struct{} // the stops of a lost Environment supervisor are running; closed when over
 }
 
 // runLock serialises the changes to a Run. It exists only while someone holds

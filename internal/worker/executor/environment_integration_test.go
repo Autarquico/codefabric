@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -165,17 +166,70 @@ func TestEnvironmentIntegration_ASupervisorWhoseIdentityIsAnotherProcessIsNeverS
 	f, k := realEnvRun(t, env, EnvironmentTimeouts{Grace: time.Second})
 	f.drive(k, "the Run to run", f.phaseIs(k, state.PhaseRunning))
 	w := f.supervisorIdentity(k)
-	// The record now says another start time for the pid: the process with it is not the one recorded.
-	boot, _, _ := strings.Cut(w.Start, "|")
-	forged := w
+	// The record now names another process, with a start time that is not the one it
+	// has: it is not the supervisor, and it must be left alone. (The real supervisor,
+	// whose record it no longer is, ends by itself on the order; the test restores
+	// the record afterwards for the cleanup of its group.)
+	other := newWrapperProcess(t, "sleep 600")
+	boot, _, _ := strings.Cut(other.w.Start, "|")
+	forged := other.w
 	forged.Start = boot + "|not-the-start-of-this-process"
 	f.writeEnv(k, envwrap.WrapperFile, forged)
+	t.Cleanup(func() { f.writeEnv(k, envwrap.WrapperFile, w) })
 	if err := f.e.Stop(t.Context(), k.RunID, k.LeaseEpoch, "enough", SourceController); err != nil {
 		t.Fatal(err)
 	}
 	f.rt.setAlive(f.e.sessionName(k), false)
 	f.drive(k, "the Run to stop", f.phaseIs(k, state.PhaseStopped))
-	if procident.Verify(w.PID, w.Start) != procident.Same {
+	if !other.alive() {
 		t.Error("a process whose identity did not match was signalled")
+	}
+}
+
+// A service that detaches from the group of the supervisor (a new session, as a
+// daemon does) is out of reach of any signal to the group: only its stop script
+// can end it. The supervisor is killed with it running.
+func TestEnvironmentIntegration_ADetachedServiceOfALostSupervisorIsStoppedByTheDaemon(t *testing.T) {
+	dir := t.TempDir()
+	pidFile, stopped := filepath.Join(dir, "svc.pid"), filepath.Join(dir, "stopped")
+	env := &domain.EnvironmentDef{Provider: "host", Services: []domain.EnvironmentService{{
+		Name:  "svc",
+		Start: "perl -MPOSIX -e 'POSIX::setsid(); exec \"sleep\", \"600\"' >/dev/null 2>&1 </dev/null & echo $! > " + pidFile,
+		Stop:  "kill $(cat " + pidFile + ") && touch " + stopped,
+	}}}
+	f, k := realEnvRun(t, env, EnvironmentTimeouts{Grace: time.Second})
+	f.drive(k, "the Run to run", f.phaseIs(k, state.PhaseRunning))
+	raw, err := os.ReadFile(pidFile) //nolint:gosec // a file of the test
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(svc, syscall.SIGKILL) })
+	w := f.supervisorIdentity(k)
+	if !fileExists(filepath.Join(f.runDir(k), envwrap.StartedFile)) {
+		t.Fatal("the start of the service was not recorded")
+	}
+	if err := syscall.Kill(w.PID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the supervisor to be gone", func() bool { return procident.Verify(w.PID, w.Start) != procident.Same })
+	if err := syscall.Kill(svc, 0); err != nil {
+		t.Fatalf("the detached service is not running: %v", err)
+	}
+	if err := f.e.Stop(t.Context(), k.RunID, k.LeaseEpoch, "enough", SourceController); err != nil {
+		t.Fatal(err)
+	}
+	f.rt.setAlive(f.e.sessionName(k), false)
+	f.drive(k, "the Run to stop", f.phaseIs(k, state.PhaseStopped))
+	if !fileExists(stopped) {
+		t.Error("the stop of the service never ran")
+	}
+	waitFor(t, "the detached service to end", func() bool { return syscall.Kill(svc, 0) != nil })
+	reports := f.reports(k)
+	if last := reports[len(reports)-1]; last.Kind != v1.ReportStopped || len(last.StopFailures) != 0 {
+		t.Errorf("last report = %+v", last)
 	}
 }

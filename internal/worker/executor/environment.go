@@ -17,9 +17,11 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/repoconfig"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/worker/envwrap"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
+	"github.com/Autarquico/codefabric/internal/worker/secretjit"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -130,6 +132,9 @@ func (e *Executor) environmentStage(ctx context.Context, r state.Run, def *domai
 		return envPending, ""
 	}
 	if st, msg, decided := e.environmentOutcome(dir); decided {
+		if st == envReady {
+			return e.confirmReady(ctx, k, dir)
+		}
 		return st, msg
 	}
 	w, err := readMarker[execwrap.Wrapper](dir, envwrap.WrapperFile)
@@ -169,6 +174,29 @@ func (e *Executor) environmentStage(ctx context.Context, r state.Run, def *domai
 	// Gone and empty, or another boot, or the pid in other hands (whose group is
 	// then empty): the supervisor is over.
 	return e.launchEnvironment(ctx, r, def, rec)
+}
+
+// confirmReady accepts the ready markers only while the supervisor that wrote
+// them is alive and ours: they say the Environment was up, not that it is. If it
+// is gone the harness does not start; the Run fails and the settlement of the
+// Run ends what the supervisor left (and stops the services it started).
+func (e *Executor) confirmReady(ctx context.Context, k state.Key, dir string) (envStatus, string) {
+	const lost = "the Environment supervisor ended after the services were ready"
+	w, err := readMarker[execwrap.Wrapper](dir, envwrap.WrapperFile)
+	switch {
+	case err != nil:
+		return envFailed, "the identity of the Environment supervisor is unreadable"
+	case w == nil:
+		return envFailed, lost
+	}
+	switch verdictOf(w) {
+	case procident.Same:
+		return envReady, ""
+	case procident.Unknown:
+		e.log.Log(ctx, slog.LevelDebug, "the Environment supervisor of a Run cannot be identified; looking again", "run", k.RunID)
+		return envPending, ""
+	}
+	return envFailed, lost
 }
 
 // environmentOutcome is what the markers of the supervisor already say.
@@ -321,7 +349,7 @@ func (e *Executor) settleEnvironment(ctx context.Context, k state.Key) envSettle
 	default:
 		return envSettlement{unverified: "the identity of the Environment supervisor cannot be verified"}
 	}
-	return e.environmentGone(dir)
+	return e.environmentGone(ctx, k, dir)
 }
 
 // settleUnidentified is a supervisor that never said who it is. Until its gate
@@ -335,7 +363,7 @@ func (e *Executor) settleUnidentified(ctx context.Context, k state.Key, rec stat
 		if !none && rec.Launches > 0 {
 			e.log.WarnContext(ctx, "an Environment supervisor never identified itself: it is taken as not having run", "run", k.RunID)
 		}
-		return envSettlement{done: true}
+		return e.environmentGone(ctx, k, e.runDir(k))
 	}
 	return envSettlement{}
 }
@@ -359,14 +387,68 @@ func (e *Executor) settleLiving(ctx context.Context, k state.Key, dir string, w 
 }
 
 // environmentGone is the end of a settlement whose supervisor and group are gone:
-// what its exit says of the stops that failed.
-func (e *Executor) environmentGone(dir string) envSettlement {
+// what its exit says of the stops that failed. A supervisor that left no exit but
+// recorded services as started (env-started.json) is lost with them running, as
+// far as anyone knows: their stops are run (envwrap.Recover, off the step, so
+// this is "not yet" until it is done) and any that cannot be are failures. The
+// reservation is released all the same (best effort, §25).
+func (e *Executor) environmentGone(ctx context.Context, k state.Key, dir string) envSettlement {
 	exit, _ := readMarker[envwrap.Exit](dir, envwrap.ExitFile)
-	out := envSettlement{done: true}
+	var lost []envwrap.StopFailure
+	if exit == nil {
+		started, err := readMarker[envwrap.Started](dir, envwrap.StartedFile)
+		switch {
+		case err != nil:
+			lost = []envwrap.StopFailure{{Service: "environment", Error: "stop not attempted: the record of started services is unreadable"}}
+		case started != nil && len(started.Services) > 0:
+			if !e.recoverStops(ctx, k, dir) {
+				return envSettlement{}
+			}
+			if exit, _ = readMarker[envwrap.Exit](dir, envwrap.ExitFile); exit == nil {
+				for _, name := range started.Services {
+					lost = append(lost, envwrap.StopFailure{Service: name, Error: "stop not attempted: supervisor lost"})
+				}
+			}
+		}
+	}
+	out := envSettlement{done: true, failures: lost}
 	if exit != nil {
 		out.failures = exit.StopFailures
 	}
 	return out
+}
+
+// recoverStops runs the stops of a lost supervisor in the background, once, and
+// says whether they are over. The scripts see the secrets of the Run if they can
+// still be resolved.
+func (e *Executor) recoverStops(ctx context.Context, k state.Key, dir string) (over bool) {
+	e.mu.Lock()
+	m := e.memo(k)
+	if m.recovering == nil {
+		done := make(chan struct{})
+		m.recovering = done
+		o := envwrap.Options{
+			RunDir: dir, Clock: e.clock, Secrets: secretjit.Resolver(dir),
+			Retention: func() ([]redact.Needle, error) { return secretjit.Load(dir) },
+		}
+		go func() {
+			defer close(done)
+			if err := envwrap.Recover(o); err != nil {
+				e.log.ErrorContext(ctx, "stopping the services of a lost Environment supervisor", "run", k.RunID, "err", err)
+			}
+		}()
+	}
+	done := m.recovering
+	e.mu.Unlock()
+	select {
+	case <-done:
+		e.mu.Lock()
+		e.memo(k).recovering = nil
+		e.mu.Unlock()
+		return true
+	default:
+		return false
+	}
 }
 
 // orderEnvironmentStop writes the stop order of the supervisor if there is none
@@ -485,8 +567,8 @@ const stopFailuresEncodedBudget = 12 << 10
 // failed, as the supervisor left it ("" if it did not fail).
 func (e *Executor) environmentFailure(k state.Key) string {
 	dir := e.runDir(k)
-	if exit, _ := readMarker[envwrap.Exit](dir, envwrap.ExitFile); exit != nil && exit.Cause == envwrap.CauseStop {
-		// The stop was ours; a prepare that was cut short by it left no marker.
+	if exit, _ := readMarker[envwrap.Exit](dir, envwrap.ExitFile); exit != nil && (exit.Cause == envwrap.CauseStop || exit.Cause == envwrap.CauseLost) {
+		// The stop was ours (or the supervisor was lost and the Run ended); a prepare that was cut short by it left no marker.
 		if p, _ := readMarker[envwrap.Prepared](dir, envwrap.PreparedFile); p == nil || p.Status != envwrap.StatusFailed {
 			return ""
 		}

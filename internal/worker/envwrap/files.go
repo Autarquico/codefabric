@@ -13,12 +13,27 @@
 //	env-authorized.json  written by the daemon once it recorded the identity: the gate,
 //	                     bound to that identity and to the Run
 //	prepared.json        prepare ended: ok, or failed with a redacted message
+//	env-started.json     the services whose start was about to be spawned, written before each
+//	                     spawn: what a lost supervisor leaves for the daemon to stop (Recover)
 //	services-ready.json  every service is ready, or one failed and the started ones were cleaned
 //	env-stop.json        written by the daemon: stop the services and end
 //	env-exit.json        the services are stopped and nothing of the group is left but the supervisor
 //
 // environment.log is the output of every script, redacted of the Run's secrets.
 // Everything is written atomically with execwrap.Write and read with execwrap.Read.
+//
+// # Where the host provider lives
+//
+// The Environment of a Run (§25) is brought up by the "host" provider, and it
+// lives here and in package executor, not under adapters/environment/host: it
+// needs what only the Worker has, the run directory (its markers are the
+// protocol), the secrets of the Run (resolved by the supervisor, never passed as
+// values) and the identity of processes (procident), none of which an adapter
+// is given. The executor drives the Environment through its own steps
+// (environmentStage, settleEnvironment); a future provider (a container, a
+// remote machine) plugs in there, behind the same steps: prepare, ready,
+// stop, with the outcome in the same markers, and domain.EnvironmentDef.Provider
+// choosing it. Nothing outside the Worker depends on how a provider runs.
 package envwrap
 
 import (
@@ -35,6 +50,7 @@ const (
 	AuthorizedFile = "env-authorized.json"
 	PreparedFile   = "prepared.json"
 	ServicesFile   = "services-ready.json"
+	StartedFile    = "env-started.json"
 	StopFile       = "env-stop.json"
 	ExitFile       = "env-exit.json"
 	OutputLog      = "environment.log"
@@ -118,6 +134,13 @@ type Services struct {
 	At      time.Time `json:"at"`
 }
 
+// Started lists, in start order, the services whose start the supervisor was
+// about to spawn: it is written before each spawn, so a service that was
+// started has been recorded. A supervisor that is lost leaves it for Recover.
+type Started struct {
+	Services []string `json:"services"`
+}
+
 // StopOrder is the daemon asking the supervisor to stop the services and end.
 type StopOrder struct {
 	At     time.Time `json:"at"`
@@ -130,6 +153,7 @@ const (
 	CausePrepareFailed  = "prepare-failed"
 	CauseServicesFailed = "services-failed"
 	CauseError          = "error" // the supervisor could not do its job; Error says why
+	CauseLost           = "lost"  // the supervisor died with no exit; Recover stopped what it had started
 )
 
 // StopFailure is a service whose stop command failed. Stopping is best effort
