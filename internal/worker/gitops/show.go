@@ -35,7 +35,9 @@ func (g *Git) lsTree(ctx context.Context, project, commit string, paths []string
 		// Literal pathspecs: a path is a name, so ':(glob)x' or '*' match nothing
 		// but a file called that, and a name with a leading '-' is safe after "--".
 		dir: bare, env: append(isolatedEnv(bare), "GIT_LITERAL_PATHSPECS=1"), timeout: quickTimeout,
-		args: append([]string{"ls-tree", "-z", commit, "--"}, paths...),
+		// -t keeps the entry of a directory that git walks into because a
+		// descendant is asked for too.
+		args: append([]string{"ls-tree", "-t", "-z", commit, "--"}, paths...),
 	})
 	if err != nil {
 		return nil, err
@@ -107,8 +109,10 @@ func (g *Git) BlobIDs(ctx context.Context, project, commit string, paths []strin
 	if err != nil {
 		return nil, err
 	}
-	for p, e := range entries {
-		out[p] = e.oid
+	for _, p := range paths {
+		if e, ok := entries[p]; ok {
+			out[p] = e.oid
+		}
 	}
 	return out, nil
 }

@@ -113,3 +113,22 @@ func TestBlobIDsTakeDashNamesAndLiteralPathspecs(t *testing.T) {
 		t.Errorf("BlobIDs = %v, want only -lock = %s", got, want)
 	}
 }
+
+// A directory asked for together with a file inside it keeps its own tree id,
+// as the client reads it one path at a time, and nothing else comes back.
+func TestBlobIDsKeepADirectoryNextToItsDescendant(t *testing.T) {
+	r := newRig(t)
+	commit := r.source4(map[string]string{"lock/a.lock": "one", "lock/b.lock": "two"})
+	r.ensure(commit)
+	got, err := r.g.BlobIDs(t.Context(), project, commit, []string{"lock", "lock/a.lock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"lock":        gittest.Run(t, r.origin, "rev-parse", "HEAD:lock"),
+		"lock/a.lock": gittest.Run(t, r.origin, "rev-parse", "HEAD:lock/a.lock"),
+	}
+	if len(got) != len(want) || got["lock"] != want["lock"] || got["lock/a.lock"] != want["lock/a.lock"] {
+		t.Errorf("BlobIDs = %v, want %v", got, want)
+	}
+}
