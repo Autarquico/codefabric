@@ -6,14 +6,14 @@ status: active
 priority: P0
 size: L
 issue: 20
-prs: []
+prs: [64]
 related_issues: [20]
 sub_issues: []
 depends_on: [harness-adapter-framework]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-30
 ---
 
 # Adapter de Claude Code
