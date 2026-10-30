@@ -205,7 +205,9 @@ type Run struct {
 	SpecDigest    string `json:"spec_digest"`
 	SourceCommit  string `json:"source_commit"`
 	Branch        string `json:"branch,omitempty"`
-	ResultCommit  string `json:"result_commit,omitempty"`
+	// Model is the model the harness said it ran with, known once it ended.
+	Model        string `json:"model,omitempty"`
+	ResultCommit string `json:"result_commit,omitempty"`
 	// ResultExcluded are the untracked paths the sealing left out (§23.1), as
 	// metadata of the Run: the commit does not name them.
 	ResultExcluded          []string           `json:"result_excluded,omitempty"`

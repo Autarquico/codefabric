@@ -97,7 +97,7 @@ func TestSleepEndsWithTheContextWithoutTheTimePassing(t *testing.T) {
 
 func TestAWorkerThatCannotIdentifyItselfOffersNoHarness(t *testing.T) {
 	d := &daemon{log: slog.New(slog.DiscardHandler)}
-	if _, launchers := d.runtimeAndHarnesses(t.Context(), Options{Runtime: unavailable{}}); len(launchers) != 2 {
+	if _, launchers := d.runtimeAndHarnesses(t.Context(), Options{Runtime: unavailable{}}); len(launchers) != 3 {
 		t.Fatalf("with an identity: %d harnesses", len(launchers))
 	}
 	old := selfIdentity

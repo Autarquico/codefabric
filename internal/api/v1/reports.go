@@ -15,6 +15,7 @@ const (
 	MaxReportBytes      = 48 << 10
 	MaxReportMessageLen = 512
 	MaxHandleLen        = 256
+	MaxModelLen         = 128
 	MaxStopFailures     = 16 // services of one stopped that did not stop cleanly
 
 	// MaxEffectiveConfigBytes bounds the effective configuration of a
@@ -95,16 +96,21 @@ type RuntimeHandle struct {
 // for good: the Worker sends it again, unchanged, until the Controller has it.
 // LeaseEpoch is the fencing token the Run was accepted under.
 type RunReportEntry struct {
-	WorkerEpoch  string         `json:"worker_epoch"`
-	WorkerSeq    uint64         `json:"worker_seq"`
-	LeaseEpoch   uint64         `json:"lease_epoch"`
-	Kind         RunReportKind  `json:"kind"`
-	At           time.Time      `json:"at"`
-	Handle       *RuntimeHandle `json:"handle,omitempty"`        // started
-	ExitCode     *int           `json:"exit_code,omitempty"`     // exited; absent when a signal or the loss of the wrapper ended it
-	Signal       string         `json:"signal,omitempty"`        // exited
-	Cause        string         `json:"cause,omitempty"`         // exited: ExitCause*
-	NeverStarted bool           `json:"never_started,omitempty"` // stopped
+	WorkerEpoch string         `json:"worker_epoch"`
+	WorkerSeq   uint64         `json:"worker_seq"`
+	LeaseEpoch  uint64         `json:"lease_epoch"`
+	Kind        RunReportKind  `json:"kind"`
+	At          time.Time      `json:"at"`
+	Handle      *RuntimeHandle `json:"handle,omitempty"`    // started
+	ExitCode    *int           `json:"exit_code,omitempty"` // exited; absent when a signal or the loss of the wrapper ended it
+	Signal      string         `json:"signal,omitempty"`    // exited
+	Cause       string         `json:"cause,omitempty"`     // exited: ExitCause*
+	// EndReason (exited) is why the Worker ended the Run when it was not the
+	// exit alone: only domain.EndInputRequired, the harness waited for input.
+	EndReason domain.EndReason `json:"end_reason,omitempty"`
+	// Model (exited) is the model the harness said it ran with, if it did.
+	Model        string `json:"model,omitempty"`
+	NeverStarted bool   `json:"never_started,omitempty"` // stopped
 	// WasRunning: the process was alive when the stop of the Controller reached
 	// the Worker (stopped, never with NeverStarted). On a Run that is lost, or
 	// under a lease epoch that is not the live one, it is an orphan.

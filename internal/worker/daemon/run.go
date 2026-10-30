@@ -14,6 +14,7 @@ import (
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
@@ -242,7 +243,7 @@ func (d *daemon) runtimeAndHarnesses(ctx context.Context, o Options) (cfruntime.
 	if o.Harnesses != nil {
 		return rt, o.Harnesses
 	}
-	return rt, []harness.Adapter{command.Adapter{}, codex.Adapter{}}
+	return rt, []harness.Adapter{command.Adapter{}, codex.Adapter{}, claude.Adapter{}}
 }
 
 // host is the machine the harnesses run on: this one, with the home and the

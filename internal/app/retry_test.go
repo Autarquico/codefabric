@@ -128,3 +128,23 @@ func TestRetry_AnEarlierRowHoldsTheRetryBack(t *testing.T) {
 		t.Errorf("task = %s(%s)", task.State, task.WaitingReason)
 	}
 }
+
+func TestReport_AHarnessStoppedForInputEndsFailedWithItsReasonAndKeepsTheModel(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	r := e.acceptedRun(w, "x")
+
+	// A harness that ended 0 after the Worker's stop is not a completed Run.
+	r.mustSend(r.entry(v1.ReportStarted), r.entry(v1.ReportExited, exitCode(0), func(en *v1.RunReportEntry) {
+		en.Cause, en.EndReason, en.Model = v1.ExitCauseStop, domain.EndInputRequired, "claude-x"
+	}), r.entry(v1.ReportStopped))
+	got := e.storedRun(r.run.ID)
+	if got.State != domain.RunFailed || got.EndReason != domain.EndInputRequired || got.Model != "claude-x" {
+		t.Errorf("Run = %+v", got)
+	}
+	view, err := e.app.Runs.Get(t.Context(), string(r.run.ID))
+	must(t, err)
+	if view.Model != "claude-x" || view.EndReason != domain.EndInputRequired {
+		t.Errorf("view = %+v", view)
+	}
+}

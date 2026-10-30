@@ -36,6 +36,12 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 	k := state.Key{RunID: runID, LeaseEpoch: leaseEpoch}
 	unlock := e.lock(k)
 	defer unlock()
+	return e.stopLocked(ctx, k, reason, source)
+}
+
+// stopLocked is Stop for a caller that holds the lock of the Run.
+func (e *Executor) stopLocked(ctx context.Context, k state.Key, reason, source string) error {
+	runID, leaseEpoch := k.RunID, k.LeaseEpoch
 	r, err := state.RunBy(ctx, e.o.DB.Reader(), k)
 	if errors.Is(err, state.ErrNotFound) {
 		return fmt.Errorf("executor: there is no assignment of run %s under epoch %d", runID, leaseEpoch)

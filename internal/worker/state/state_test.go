@@ -342,3 +342,17 @@ func TestReconcileState_AdoptUnfenceOrphanAndPendingStops(t *testing.T) {
 		t.Errorf("counts after dropping = %v", counts)
 	}
 }
+
+func TestEventCursorsResumeWhereTheyWere(t *testing.T) {
+	db, _ := open(t)
+	k := state.Key{RunID: "run_1", LeaseEpoch: 1}
+	if c, err := state.EventCursorOf(t.Context(), db.Reader(), k); err != nil || c.Consumed != 0 || c.Model != "" {
+		t.Fatalf("fresh cursor = %+v, %v", c, err)
+	}
+	tx(t, db, func(x *state.Tx) error {
+		return state.SaveEventCursor(t.Context(), x, state.EventCursor{Key: k, Consumed: 42, Model: "m", InputRequired: true})
+	})
+	if c, err := state.EventCursorOf(t.Context(), db.Reader(), k); err != nil || c.Consumed != 42 || c.Model != "m" || !c.InputRequired {
+		t.Errorf("cursor = %+v, %v", c, err)
+	}
+}

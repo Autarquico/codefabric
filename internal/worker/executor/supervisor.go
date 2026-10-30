@@ -359,6 +359,13 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 	if m.started != nil {
 		e.revokeOnce(ctx, r)
 	}
+	if m.exit == nil && m.started != nil {
+		e.consumeEvents(ctx, r)
+		// A stop ordered by what the harness said is the phase from here on.
+		if fresh, err := state.RunBy(ctx, e.o.DB.Reader(), r.Key); err == nil {
+			r = fresh
+		}
+	}
 	if r.Phase == state.PhaseStopping && m.exit == nil && e.firstLook(r.Key) {
 		// A stop the previous daemon began: the signal may not have been sent.
 		e.signalStop(ctx, r, m)
