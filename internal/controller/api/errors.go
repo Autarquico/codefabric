@@ -29,6 +29,7 @@ var statusByCode = map[domain.Code]int{
 	domain.CodeHarnessUnavailable:  http.StatusConflict,
 	domain.CodeVersionIncompatible: http.StatusConflict,
 	domain.CodeNotImplemented:      http.StatusNotImplemented,
+	domain.CodeRepoConfigInvalid:   http.StatusUnprocessableEntity,
 	domain.CodeRunNotAttachable:    http.StatusConflict,
 	domain.CodeCursorExpired:       http.StatusConflict,
 	domain.CodeInProgress:          http.StatusTooManyRequests,

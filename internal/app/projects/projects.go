@@ -35,6 +35,9 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateProje
 	if req.DefaultBranch == "" {
 		req.DefaultBranch = defaultBranch
 	}
+	if req.RepoConfig == "" {
+		req.RepoConfig = domain.Defaults().ProjectRepoConfig
+	}
 	if err := validateNew(req); err != nil {
 		return v1.Project{}, err
 	}
@@ -53,7 +56,7 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateProje
 			p := store.Project{
 				ID: s.ids.New(domain.KindProject), Short: short, Name: req.Name, Repo: req.Repo,
 				DefaultBranch: req.DefaultBranch, DefaultWorkflow: req.DefaultWorkflow,
-				DefaultEnvironment: req.DefaultEnvironment, Defaults: req.Defaults, CreatedAt: act.Now,
+				DefaultEnvironment: req.DefaultEnvironment, Defaults: req.Defaults, RepoConfig: req.RepoConfig, CreatedAt: act.Now,
 			}
 			if err := tx.InsertProject(ctx, p); err != nil {
 				return v1.Project{}, err
@@ -126,7 +129,7 @@ func View(p store.Project) v1.Project {
 		ID: string(p.ID), Short: domain.ShortID{Kind: domain.KindProject, N: p.Short}.String(),
 		Name: p.Name, Repo: p.Repo, RepoAliases: append([]string{}, p.RepoAliases...), DefaultBranch: p.DefaultBranch,
 		DefaultWorkflow: p.DefaultWorkflow, DefaultEnvironment: p.DefaultEnvironment,
-		Defaults: p.Defaults, CreatedAt: p.CreatedAt,
+		Defaults: p.Defaults, RepoConfig: p.RepoConfig, CreatedAt: p.CreatedAt,
 	}
 }
 
@@ -142,6 +145,9 @@ func apply(p *store.Project, req v1.UpdateProjectRequest) error {
 	}
 	if req.DefaultEnvironment != nil {
 		p.DefaultEnvironment = *req.DefaultEnvironment
+	}
+	if req.RepoConfig != nil {
+		p.RepoConfig = *req.RepoConfig
 	}
 	if req.Mode != nil {
 		p.Defaults.Mode = *req.Mode
@@ -191,6 +197,7 @@ func validateNew(req v1.CreateProjectRequest) error {
 	return input.First(
 		input.Name("name", req.Name), input.Repo(req.Repo), input.Ref("default_branch", req.DefaultBranch),
 		input.Label("default_workflow", req.DefaultWorkflow), input.Label("default_environment", req.DefaultEnvironment),
+		repoConfig(req.RepoConfig),
 		validateDefaults(req.Defaults.Mode, req.Defaults.Resources, req.Defaults.Completion, req.Defaults.Retry),
 	)
 }
@@ -214,6 +221,9 @@ func validateUpdate(req v1.UpdateProjectRequest) error {
 	if req.DefaultEnvironment != nil {
 		errs = append(errs, input.Label("default_environment", *req.DefaultEnvironment))
 	}
+	if req.RepoConfig != nil {
+		errs = append(errs, repoConfig(*req.RepoConfig))
+	}
 	var mode domain.Mode
 	var completion domain.Completion
 	if req.Mode != nil {
@@ -223,6 +233,13 @@ func validateUpdate(req v1.UpdateProjectRequest) error {
 		completion = *req.Completion
 	}
 	return input.First(append(errs, validateDefaults(mode, req.Resources, completion, req.Retry))...)
+}
+
+func repoConfig(c domain.RepoConfig) error {
+	if c != domain.RepoConfigAllow && c != domain.RepoConfigDeny {
+		return input.Invalid("repo_config must be allow or deny")
+	}
+	return nil
 }
 
 func validateDefaults(mode domain.Mode, resources *v1.Resources, completion domain.Completion, retry *v1.Retry) error {

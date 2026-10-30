@@ -40,6 +40,8 @@ type Options struct {
 
 	// workflowStore replaces the Controller client of the workflow commands in tests.
 	workflowStore func(*cobra.Command) (workflowStore, error)
+	// environmentStore does the same for the environment commands.
+	environmentStore func(*cobra.Command) (environmentStore, error)
 }
 
 // Execute runs the cf command tree, plus any extra top-level commands the
@@ -173,7 +175,7 @@ func newRootCmd(opts Options) *cobra.Command {
 	root.AddCommand(newVersionCmd(), newStatusCmd(), newConnectCmd(), newClientCmd(), newConfigCmd(),
 		newProjectCmd(), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd(),
 		newAttachCmd(opts.Terminal), newPsCmd(), newEventsCmd(), newLogsCmd(),
-		newWorkflowCmd(workflowDepsOf(opts)))
+		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)))
 	return root
 }
 

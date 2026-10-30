@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/environments"
 	"github.com/Autarquico/codefabric/internal/app/input"
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
@@ -68,8 +69,8 @@ type Source struct{ Ref, Commit string }
 //
 // The first Run also freezes the Task's completion and retry policy (§3.3). A Project or Task
 // that names a Workflow gets it resolved to a version in this transaction and
-// pinned (§8.9); one that names an Environment cannot get a Run yet, since
-// freezing the bare reference would pin nothing.
+// pinned (§8.9); one that names an Environment gets it resolved the same way,
+// and the Run freezes its whole definition (§25.3).
 func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID, source Source) (v1.Run, error) {
 	commit := source.Commit
 	if !domain.ValidCommitID(commit) {
@@ -90,12 +91,7 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if err != nil {
 		return v1.Run{}, err
 	}
-	in := Inherit(task, project)
-	if in.Environment != "" {
-		return v1.Run{}, domain.NewError(domain.CodeNotImplemented,
-			"Environment references are not resolved yet: a Run cannot be created while the Task or its Project names one",
-			map[string]any{"environment": in.Environment})
-	}
+	in, origins := InheritWithOrigins(task, project)
 	var pin domain.WorkflowRef
 	if in.Workflow != "" {
 		if pin, in.Workflow, err = pinWorkflow(ctx, tx, in.Workflow); err != nil {
@@ -103,7 +99,17 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		}
 	}
 
-	raw, digest, err := newSpec(in, task.SourceSnapshot, source).encode()
+	var (
+		envPin domain.EnvironmentRef
+		envDef []byte
+	)
+	if in.Environment != "" {
+		if envPin, in.Environment, envDef, err = pinEnvironment(ctx, tx, in.Environment); err != nil {
+			return v1.Run{}, err
+		}
+	}
+
+	raw, digest, err := newSpec(in, origins, task.SourceSnapshot, source, envDef).encode()
 	if err != nil {
 		return v1.Run{}, fmt.Errorf("runs: encoding the spec: %w", err)
 	}
@@ -120,7 +126,7 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		Lineage: domain.LineageInitial, Spec: raw, SpecDigest: digest, SourceCommit: commit,
 		Branch: domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: short}),
 		State:  domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,
-		Runtime: domain.RuntimeNone, CreatedAt: act.Now, Workflow: pin,
+		Runtime: domain.RuntimeNone, CreatedAt: act.Now, Workflow: pin, Environment: envPin,
 	}
 	if task.Completion == "" {
 		task.Completion, task.Retry = in.Completion, &in.Retry
@@ -156,6 +162,21 @@ func pinWorkflow(ctx context.Context, tx *store.Tx, selector string) (domain.Wor
 		return domain.WorkflowRef{}, "", err
 	}
 	return ref, sel.Name + "@" + ref.Digest, nil
+}
+
+// pinEnvironment resolves the Environment reference of a Task in tx, like
+// pinWorkflow. The spec records the canonical name@sha256:<digest> and carries
+// the definition of that version, whose canonical JSON is returned.
+func pinEnvironment(ctx context.Context, tx *store.Tx, selector string) (domain.EnvironmentRef, string, []byte, error) {
+	ref, err := environments.Resolve(ctx, tx, selector)
+	if err != nil {
+		return domain.EnvironmentRef{}, "", nil, err
+	}
+	v, err := store.EnvironmentVersionByNumber(ctx, tx, ref.ID, ref.Version)
+	if err != nil {
+		return domain.EnvironmentRef{}, "", nil, err
+	}
+	return ref, ref.ID + "@" + ref.Digest, v.Definition, nil
 }
 
 // ended says whether the Task can no longer get Runs: it carries a marker
@@ -340,6 +361,10 @@ func view(r store.Run, withSpec bool) v1.Run {
 	if r.Workflow.Version > 0 {
 		out.Workflow = &v1.RunWorkflow{Version: r.Workflow.Version, Digest: r.Workflow.Digest}
 	}
+	if r.Environment.Version > 0 {
+		out.Environment = &v1.RunEnvironment{Name: r.Environment.ID, Version: r.Environment.Version, Digest: r.Environment.Digest}
+	}
+	out.EffectiveDigest, out.FailureCode = r.EffectiveDigest, domain.Code(r.FailureCode)
 	if withSpec {
 		out.Spec = json.RawMessage(r.Spec)
 	}

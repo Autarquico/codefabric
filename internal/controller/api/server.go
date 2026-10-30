@@ -157,6 +157,8 @@ func New(c Config) (*Server, error) {
 	s.registerRoutes()
 	s.registerWorkRoutes()
 	s.registerWorkflowRoutes()
+	s.registerEnvironmentRoutes()
+	s.registerProjectExplainRoutes()
 	if s.work.Workers != nil {
 		s.registerWorkerRoutes()
 	}

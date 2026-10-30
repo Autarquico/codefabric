@@ -19,6 +19,8 @@ func heartbeat(epoch string) v1.HeartbeatRequest {
 		Epoch: epoch, DaemonVersion: controllerVersion, Hostname: "box.lan", OS: "linux", Arch: "amd64",
 		Total:  v1.Capacity{CPU: 8, MemoryMB: 16384, DiskMB: 100000},
 		Health: v1.Health{Status: v1.HealthOK},
+		// New Runs are schema 4 unless their Project denies the repo's configuration.
+		Capabilities: []string{domain.RepoConfigCapability},
 	}
 }
 

@@ -137,6 +137,26 @@ func (t *Tx) SetHarnessRan(ctx context.Context, run Run, ran bool) error {
 	return changedOne(res, err, "recording whether the harness ran")
 }
 
+// SetEffectiveConfig records what the Worker resolved from the repo: the JSON
+// and its digest. It is a compare-and-set on the Run preparing under the lease
+// and on nothing being recorded yet, so the first answer is the only one.
+func (t *Tx) SetEffectiveConfig(ctx context.Context, run Run, config, digest string) error {
+	res, err := t.Exec(ctx,
+		`UPDATE runs SET effective_config = ?, effective_digest = ?
+		 WHERE id = ? AND state = ? AND effective_digest IS NULL AND lease_id = ? AND lease_epoch = ?`,
+		config, digest, string(run.ID), string(domain.RunPreparing), string(run.LeaseID), run.LeaseEpoch)
+	return changedOne(res, err, "recording the effective configuration")
+}
+
+// SetFailureCode records the code a prepare_failed gave. It is set once, on the
+// Run under the lease that reported it.
+func (t *Tx) SetFailureCode(ctx context.Context, run Run, code string) error {
+	res, err := t.Exec(ctx,
+		`UPDATE runs SET failure_code = ? WHERE id = ? AND failure_code IS NULL AND lease_id = ? AND lease_epoch = ?`,
+		code, string(run.ID), string(run.LeaseID), run.LeaseEpoch)
+	return changedOne(res, err, "recording the failure code")
+}
+
 // Receipt is an applied report entry, by its triple.
 type Receipt struct {
 	RunID  domain.ID
