@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -34,7 +35,7 @@ func options() cli.Options {
 // this binary over the configuration of this machine. A machine without a home
 // directory fails when the adopter is used, not when cf starts.
 func workflowAdopter(store workflowadopt.Store, confirmer workflowadopt.Confirmer) cli.WorkflowAdopter {
-	registry, err := harness.NewRegistry(codex.Adapter{})
+	registry, err := harness.NewRegistry(codex.Adapter{}, claude.Adapter{})
 	if err != nil {
 		return failedAdopter{err}
 	}
