@@ -20,6 +20,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/support/svcunit"
+	"github.com/Autarquico/codefabric/internal/worker/envwrap"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/secretjit"
@@ -147,6 +148,31 @@ func newExecCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&runDir, "run-dir", "", "the directory of the Run, with its launch.json")
+	_ = cmd.MarkFlagRequired("run-dir")
+	cmd.AddCommand(newExecEnvCmd())
+	return cmd
+}
+
+// newExecEnvCmd is the supervisor of the Environment of a Run (§25): it
+// prepares the worktree and runs the services. The Worker starts it, in a
+// process group of its own.
+func newExecEnvCmd() *cobra.Command {
+	var runDir string
+	cmd := &cobra.Command{
+		Use:    "env",
+		Short:  "Prepare the Environment of a Run and run its services (started by the Worker, not by hand)",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			release, err := executor.HoldCapture(runDir)
+			if err != nil {
+				return err
+			}
+			defer release()
+			return envwrap.Run(envwrap.Options{RunDir: runDir, Secrets: secretjit.Resolver(runDir), Retention: retention(runDir)})
+		},
+	}
+	cmd.Flags().StringVar(&runDir, "run-dir", "", "the directory of the Run, with its env-launch.json")
 	_ = cmd.MarkFlagRequired("run-dir")
 	return cmd
 }
