@@ -3,6 +3,7 @@ package app_test
 import (
 	"database/sql"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -50,6 +51,8 @@ func (e *env) beat(w pki.Session, mutate ...func(*v1.HeartbeatRequest)) {
 	req := v1.HeartbeatRequest{
 		Epoch: e.epochOf(w), DaemonVersion: "", Hostname: "box.lan", OS: "linux", Arch: "amd64",
 		Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 500000}, Health: v1.Health{Status: v1.HealthOK},
+		// New Runs are schema 4 unless their Project denies the repo's configuration.
+		Capabilities: []string{domain.RepoConfigCapability},
 	}
 	for _, m := range mutate {
 		m(&req)
@@ -70,7 +73,7 @@ func (e *env) epochOf(w pki.Session) string {
 }
 
 func withCapabilities(c ...string) func(*v1.HeartbeatRequest) {
-	return func(r *v1.HeartbeatRequest) { r.Capabilities = c }
+	return func(r *v1.HeartbeatRequest) { r.Capabilities = append(slices.Clone(c), domain.RepoConfigCapability) }
 }
 
 // offer gives the queued Run to the Worker under a new lease, as the scheduler

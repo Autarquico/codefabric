@@ -273,7 +273,7 @@ func (s *secretWorld) heartbeat() {
 	}
 	s.seq++
 	_, err = s.ctrl.app.Workers.Heartbeat(s.t.Context(), s.ctrl.w, v1.HeartbeatRequest{
-		Epoch: s.beat, Generation: s.gen, Hostname: "box", OS: "linux", Arch: "amd64", Capabilities: []string{"harness:command"},
+		Epoch: s.beat, Generation: s.gen, Hostname: "box", OS: "linux", Arch: "amd64", Capabilities: []string{"harness:command", domain.RepoConfigCapability},
 		Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 1000}, Health: v1.Health{Status: v1.HealthOK},
 		Secrets: &v1.SecretsReport{Seq: s.seq, Refs: metas},
 	})

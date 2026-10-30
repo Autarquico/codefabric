@@ -298,26 +298,6 @@ func TestMutations_ARepeatedRequestIDRevalidatesTheCaller(t *testing.T) {
 	}
 }
 
-func TestEnvironmentReferencesAreNotImplementedYet(t *testing.T) {
-	e := newEnv(t)
-	e.project("env", func(r *v1.CreateProjectRequest) { r.DefaultEnvironment = "backend" })
-
-	_, err := e.createTask("env", "x")
-	wantCode(t, err, domain.CodeNotImplemented)
-	if n := e.count("tasks"); n != 0 {
-		t.Errorf("a failed start left %d tasks", n)
-	}
-	// Without starting, the Task exists; starting it later hits the same wall.
-	task := e.mustTask("env", "x", noStart).Task
-	_, err = e.startRun(task.ID, commitA)
-	wantCode(t, err, domain.CodeNotImplemented)
-
-	e.project("plain")
-	if got := e.mustTask("plain", "ok").Run; got == nil {
-		t.Error("a Project with no Workflow or Environment starts normally")
-	}
-}
-
 func TestFreezing_ChangedDefaultsDoNotMoveAQueuedRunsDigest(t *testing.T) {
 	e := newEnv(t)
 	e.project("backend")

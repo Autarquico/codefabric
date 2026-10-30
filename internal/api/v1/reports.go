@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -14,6 +15,10 @@ const (
 	MaxReportBytes      = 48 << 10
 	MaxReportMessageLen = 512
 	MaxHandleLen        = 256
+
+	// MaxEffectiveConfigBytes bounds the effective configuration of a
+	// config_resolved, which must fit a report with room to spare.
+	MaxEffectiveConfigBytes = 16 << 10
 
 	// A `sealed` names the paths the sealing left out as metadata: at most this
 	// many, within this many bytes, sorted. A longer list is cut and says so.
@@ -40,6 +45,9 @@ const (
 	ReportPublished RunReportKind = "published"
 	// ReportPublicationFailed: the Worker gave up sealing or pushing the result.
 	ReportPublicationFailed RunReportKind = "publication_failed"
+	// ReportConfigResolved: the Worker read and resolved the configuration of
+	// the repo for a Run of RunSpecSchemaRepoConfig, before preparing anything.
+	ReportConfigResolved RunReportKind = "config_resolved"
 	// ReportOrphanPreserved: the result of an orphan, a Run under a lease epoch
 	// that is not the live one, is in the relay (refs/cf/orphans/<run>-e<epoch>).
 	// It is the only report taken under a stale epoch.
@@ -50,11 +58,15 @@ const (
 func (k RunReportKind) IsValid() bool {
 	switch k {
 	case ReportStarted, ReportExited, ReportPrepareFailed, ReportStopped, ReportSealed, ReportPublished, ReportPublicationFailed,
-		ReportOrphanPreserved:
+		ReportOrphanPreserved, ReportConfigResolved:
 		return true
 	}
 	return false
 }
+
+// PrepareFailureCodes are the codes a prepare_failed may carry: the only ones
+// the Controller keeps as the failure code of a Run.
+var PrepareFailureCodes = []domain.Code{domain.CodeRepoConfigInvalid, domain.CodeNotImplemented}
 
 // Causes of an exit. ExitCauseWrapperLost is what the Worker saw, not an exit
 // the harness made: the wrapper died and left no exit code.
@@ -102,6 +114,14 @@ type RunReportEntry struct {
 	Excluded          []string `json:"excluded,omitempty"`           // sealed: untracked paths the sealing left out
 	ExcludedTruncated bool     `json:"excluded_truncated,omitempty"` // sealed
 	Phase             string   `json:"phase,omitempty"`              // publication_failed: PhaseSeal or PhasePush
+
+	// Effective is the configuration the Worker resolved, a JSON object of at
+	// most MaxEffectiveConfigBytes, and EffectiveDigest its digest
+	// (config_resolved). Code is why the preparation failed, one of
+	// PrepareFailureCodes (prepare_failed).
+	Effective       json.RawMessage `json:"effective,omitempty"`
+	EffectiveDigest string          `json:"effective_digest,omitempty"`
+	Code            domain.Code     `json:"code,omitempty"`
 }
 
 // RunReportRequest is POST /v1/worker/runs/{run}/report: 1 to MaxReportEntries

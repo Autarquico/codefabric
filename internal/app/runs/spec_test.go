@@ -2,6 +2,7 @@ package runs
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,7 +15,8 @@ const commit = "0123456789abcdef0123456789abcdef01234567"
 
 func digestOf(t *testing.T, task store.Task, project store.Project, commit string) (string, string) {
 	t.Helper()
-	raw, digest, err := newSpec(Inherit(task, project), task.SourceSnapshot, Source{Ref: Inherit(task, project).SourceRef, Commit: commit}).encode()
+	in, origins := InheritWithOrigins(task, project)
+	raw, digest, err := newSpec(in, origins, task.SourceSnapshot, Source{Ref: Inherit(task, project).SourceRef, Commit: commit}, nil).encode()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,5 +288,119 @@ func TestPlacementOf_AWorkflowAddsItsCapability(t *testing.T) {
 	p, err = PlacementOf([]byte(flow))
 	if err != nil || len(p.Capabilities) != 2 || p.Capabilities[1] != domain.WorkflowConfigCapability {
 		t.Fatalf("workflow placement = %+v, %v", p.Capabilities, err)
+	}
+}
+
+const environmentJSON = `{"provider":"host","requires_capabilities":["docker"],"prepare":"make deps","services":[],"digest_inputs":[]}`
+
+func specWith(t *testing.T, repoConfig domain.RepoConfig, environment []byte) (string, string) {
+	t.Helper()
+	project := store.Project{DefaultBranch: "main", RepoConfig: repoConfig}
+	in, origins := InheritWithOrigins(store.Task{Prompt: "x"}, project)
+	raw, digest, err := newSpec(in, origins, "", Source{Ref: "main", Commit: commit}, environment).encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw), digest
+}
+
+// A Project that allows the repo's configuration freezes schema 4 with the
+// choice spelled out; one that denies it and has no Environment keeps schema 2.
+func TestSpec_Schema4FreezesTheRepoConfigChoice(t *testing.T) {
+	allow, _ := specWith(t, domain.RepoConfigAllow, nil)
+	if !strings.HasPrefix(allow, `{"schema":4,`) || !strings.HasSuffix(allow, `"repo_config":"allow","origins":{"resources":"global"}}`) {
+		t.Errorf("allow spec = %s", allow)
+	}
+	deny, _ := specWith(t, domain.RepoConfigDeny, nil)
+	if !strings.HasPrefix(deny, `{"schema":2,`) || strings.Contains(deny, "repo_config") {
+		t.Errorf("deny spec = %s", deny)
+	}
+	_, a := specWith(t, domain.RepoConfigAllow, nil)
+	_, b := specWith(t, domain.RepoConfigDeny, nil)
+	if a == b {
+		t.Error("the repo_config choice did not change the digest")
+	}
+}
+
+// An Environment makes the Run schema 4 even if the Project denies the repo's
+// configuration, and then the denial is frozen.
+func TestSpec_AnEnvironmentIsSchema4AndFreezesItsDefinition(t *testing.T) {
+	raw, _ := specWith(t, domain.RepoConfigDeny, []byte(environmentJSON))
+	if !strings.HasPrefix(raw, `{"schema":4,`) || !strings.HasSuffix(raw, `"repo_config":"deny","environment_def":`+environmentJSON+`,"origins":{"resources":"global"}}`) {
+		t.Errorf("spec = %s", raw)
+	}
+	// Secrets and schema 4 combine: the layout is 4 and the secrets stay in place.
+	in, origins := InheritWithOrigins(store.Task{Requirements: v1.Requirements{SecretEnv: []v1.SecretEnv{{Name: "T", Ref: "a/b"}}}}, store.Project{RepoConfig: domain.RepoConfigAllow})
+	both, _, err := newSpec(in, origins, "", Source{Ref: "main", Commit: commit}, nil).encode()
+	if err != nil || !strings.HasPrefix(string(both), `{"schema":4,`) || !strings.Contains(string(both), `"secrets":{"env":[{"name":"T","ref":"a/b"}],"refs":["a/b"]},"repo_config":"allow"`) {
+		t.Errorf("spec = %s (%v)", both, err)
+	}
+}
+
+func TestPlacementOf_Schema4AndEnvironmentAddTheirCapabilities(t *testing.T) {
+	for name, c := range map[string]struct {
+		repoConfig domain.RepoConfig
+		env        []byte
+		want       []string
+	}{
+		"schema 2":             {domain.RepoConfigDeny, nil, nil},
+		"schema 4":             {domain.RepoConfigAllow, nil, []string{domain.RepoConfigCapability}},
+		"an environment":       {domain.RepoConfigDeny, []byte(environmentJSON), []string{"docker", domain.EnvironmentHostCapability, domain.RepoConfigCapability}},
+		"environment and repo": {domain.RepoConfigAllow, []byte(environmentJSON), []string{"docker", domain.EnvironmentHostCapability, domain.RepoConfigCapability}},
+	} {
+		raw, _ := specWith(t, c.repoConfig, c.env)
+		p, err := PlacementOf([]byte(raw))
+		if err != nil || !slices.Equal(p.Capabilities, c.want) && len(p.Capabilities)+len(c.want) > 0 {
+			t.Errorf("%s: capabilities = %v (%v), want %v", name, p.Capabilities, err, c.want)
+		}
+	}
+}
+
+// The origin of each inherited field is the layer that gave it, and Inherit
+// resolves the very same values.
+func TestInheritWithOrigins_NamesTheLayerOfEachField(t *testing.T) {
+	task := store.Task{Mode: domain.ModeInteractive, Environment: "e"}
+	project := store.Project{DefaultBranch: "main", DefaultWorkflow: "w", Defaults: v1.ProjectDefaults{Resources: &v1.Resources{CPU: 4, MemoryMB: 8192}}}
+	in, o := InheritWithOrigins(task, project)
+	want := Origins{
+		SourceRef: domain.OriginProject, Mode: domain.OriginTask, Workflow: domain.OriginProject, Environment: domain.OriginTask,
+		Resources: domain.OriginProject, Completion: domain.OriginGlobal, Retry: domain.OriginGlobal,
+	}
+	if o != want {
+		t.Errorf("origins = %+v, want %+v", o, want)
+	}
+	if plain := Inherit(task, project); jsonOf(plain) != jsonOf(in) {
+		t.Errorf("Inherit = %s, with origins %s", jsonOf(plain), jsonOf(in))
+	}
+	if _, o := InheritWithOrigins(store.Task{}, store.Project{}); o.Resources != domain.OriginGlobal || o.Mode != domain.OriginGlobal {
+		t.Errorf("empty origins = %+v", o)
+	}
+}
+
+// The layer that gave the resources and the Environment is frozen in schema 4,
+// so the Worker records the Controller's provenance, not its own.
+func TestSpec_Schema4FreezesTheOriginsOfResourcesAndEnvironment(t *testing.T) {
+	res := func(cpu int) *v1.Resources { return &v1.Resources{CPU: cpu, MemoryMB: 1024} }
+	for name, c := range map[string]struct {
+		task    store.Task
+		project store.Project
+		want    string
+	}{
+		"global":  {store.Task{}, store.Project{}, `"origins":{"resources":"global"}`},
+		"project": {store.Task{}, store.Project{DefaultEnvironment: "e", Defaults: v1.ProjectDefaults{Resources: res(2)}}, `"origins":{"resources":"project","environment":"project"}`},
+		"task":    {store.Task{Environment: "e", Requirements: v1.Requirements{Resources: res(1)}}, store.Project{DefaultEnvironment: "p"}, `"origins":{"resources":"task","environment":"task"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c.project.RepoConfig = domain.RepoConfigAllow
+			in, origins := InheritWithOrigins(c.task, c.project)
+			raw, _, err := newSpec(in, origins, "", Source{Ref: "main", Commit: commit}, []byte(environmentJSON)).encode()
+			if err != nil || !strings.HasSuffix(string(raw), c.want+"}") {
+				t.Errorf("spec = %s (%v), want suffix %s", raw, err, c.want)
+			}
+		})
+	}
+	plain, _ := specWith(t, domain.RepoConfigDeny, nil)
+	if strings.Contains(plain, "origins") {
+		t.Errorf("a schema 2 spec carries origins: %s", plain)
 	}
 }

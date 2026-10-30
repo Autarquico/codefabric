@@ -131,6 +131,7 @@ func (d *simDaemon) heartbeat() v1.HeartbeatRequest {
 		return v1.HeartbeatRequest{
 			Epoch: d.epoch, Hostname: "box.lan", OS: "linux", Arch: "amd64",
 			Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 500000}, Health: v1.Health{Status: v1.HealthOK},
+			Capabilities: []string{domain.RepoConfigCapability},
 		}
 	}
 	metas := []v1.SecretMeta{}
@@ -141,7 +142,7 @@ func (d *simDaemon) heartbeat() v1.HeartbeatRequest {
 	return v1.HeartbeatRequest{
 		Epoch: d.epoch, Generation: d.gen, Hostname: "box.lan", OS: "linux", Arch: "amd64",
 		Total: v1.Capacity{CPU: 16, MemoryMB: 65536, DiskMB: 500000}, Health: v1.Health{Status: v1.HealthOK},
-		Secrets: &v1.SecretsReport{Seq: d.seq, Refs: metas},
+		Secrets: &v1.SecretsReport{Seq: d.seq, Refs: metas}, Capabilities: []string{domain.RepoConfigCapability},
 	}
 }
 

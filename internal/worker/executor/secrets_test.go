@@ -252,7 +252,7 @@ func TestEvaluateRejectsWhatTheWorkerCannotHandOut(t *testing.T) {
 		},
 		{
 			name: "a schema this Worker does not read", store: func() *fakeStore { return newFakeStore(nil) },
-			spec: []byte(`{"schema":4,"prompt":"x","mode":"headless","requirements":{"harness":"command"}}`), code: domain.CodeVersionIncompatible, says: "schema 4",
+			spec: []byte(`{"schema":5,"prompt":"x","mode":"headless","requirements":{"harness":"command"}}`), code: domain.CodeVersionIncompatible, says: "schema 5",
 		},
 	}
 	for _, tc := range cases {

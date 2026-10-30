@@ -29,7 +29,7 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 	}
 	run := store.Run{
 		ID: ids.New(domain.KindRun), Short: short, TaskID: task.ID, Attempt: len(all) + 1,
-		Lineage: domain.LineageRetries, LineageParent: parent.ID, Spec: parent.Spec, SpecDigest: parent.SpecDigest, Workflow: parent.Workflow,
+		Lineage: domain.LineageRetries, LineageParent: parent.ID, Spec: parent.Spec, SpecDigest: parent.SpecDigest, Workflow: parent.Workflow, Environment: parent.Environment,
 		SourceCommit: parent.SourceCommit,
 		Branch:       domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: short}),
 		State:        domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,

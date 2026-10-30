@@ -1,11 +1,13 @@
 package runs
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -244,11 +246,37 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		}
 		ev.Type, ev.Message = domain.EventRunFailed, "run failed before the harness ran"
 		ev.Data["phase"] = string(phase)
+		if e.Code != "" {
+			ev.Data["code"] = string(e.Code)
+		}
 		apply = func() error {
 			if err := tx.FinishRun(ctx, run, next.State, domain.EndEnvironment, e.At); err != nil {
 				return err
 			}
+			if e.Code != "" {
+				if err := tx.SetFailureCode(ctx, run, string(e.Code)); err != nil {
+					return err
+				}
+			}
 			return tx.SetHarnessRan(ctx, run, false)
+		}
+	case e.Kind == v1.ReportConfigResolved:
+		if run.State != domain.RunPreparing {
+			return outcome(""), domain.NewError(domain.CodeInvalidTransition, "the Run is not preparing: the configuration is resolved before the harness starts",
+				map[string]any{"state": string(run.State)})
+		}
+		config := compactJSON(e.Effective)
+		switch {
+		case run.EffectiveDigest == "":
+			ev.Type, ev.Message = domain.EventRunConfigResolved, "run configuration resolved"
+			ev.Data["effective_digest"] = e.EffectiveDigest
+			apply = func() error { return tx.SetEffectiveConfig(ctx, run, config, e.EffectiveDigest) }
+		case run.EffectiveDigest == e.EffectiveDigest && run.EffectiveConfig == config:
+			// The same answer under another seq: the Controller has it.
+			noEvent, apply = true, func() error { return nil }
+		default:
+			return outcome(""), domain.NewError(domain.CodeInvalidRequest, "the Run resolved a different configuration already",
+				map[string]any{"effective_digest": run.EffectiveDigest})
 		}
 	case e.Kind == v1.ReportStopped:
 		if e.NeverStarted && run.Runtime == domain.RuntimeActive {
@@ -363,6 +391,17 @@ func ReleaseIfAllowedIn(ctx context.Context, tx *store.Tx, act mutation.Act, run
 
 const dataReportDigest = "report_digest"
 
+// compactJSON is raw without insignificant whitespace, what is stored and compared.
+func compactJSON(raw json.RawMessage) string {
+	var b bytes.Buffer
+	if json.Compact(&b, raw) != nil {
+		return string(raw)
+	}
+	return b.String()
+}
+
+var effectiveDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
 // Bounds of what a Worker may say: numbers that fit the database, and times that
 // are not the other side of the world.
 const (
@@ -412,7 +451,7 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 	case e.LeaseEpoch == 0 || e.LeaseEpoch > maxSeq:
 		return input.Invalid("lease_epoch must be between 1 and %d", maxSeq)
 	case !e.Kind.IsValid():
-		return input.Invalid("kind must be started, exited, prepare_failed, stopped, sealed, published, publication_failed or orphan_preserved")
+		return input.Invalid("kind must be started, exited, prepare_failed, config_resolved, stopped, sealed, published, publication_failed or orphan_preserved")
 	case e.At.Before(earliestAt) || e.At.After(now.Add(maxAhead)):
 		return input.Invalid("at must be after the year 2000 and at most %s ahead of the Controller", maxAhead)
 	case len(e.Message) > v1.MaxReportMessageLen || !domain.Printable(e.Message):
@@ -429,10 +468,22 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		return input.Invalid("only exited carries an exit code, a signal or a cause")
 	case e.Kind != v1.ReportStopped && e.NeverStarted:
 		return input.Invalid("only stopped says never_started")
+	case e.Kind != v1.ReportConfigResolved && (len(e.Effective) > 0 || e.EffectiveDigest != ""):
+		return input.Invalid("only config_resolved carries an effective configuration")
+	case e.Kind != v1.ReportPrepareFailed && e.Code != "":
+		return input.Invalid("only prepare_failed carries a code")
 	case e.WasRunning && (e.Kind != v1.ReportStopped || e.NeverStarted):
 		return input.Invalid("only a stopped of a Run that started says was_running")
 	}
 	switch e.Kind {
+	case v1.ReportConfigResolved:
+		if err := validateEffective(e); err != nil {
+			return err
+		}
+	case v1.ReportPrepareFailed:
+		if e.Code != "" && !slices.Contains(v1.PrepareFailureCodes, e.Code) {
+			return input.Invalid("code must be one of %v", v1.PrepareFailureCodes)
+		}
 	case v1.ReportStarted:
 		h := e.Handle
 		if h == nil || h.Runtime == "" || h.Ref == "" || len(h.Runtime)+len(h.Ref) > v1.MaxHandleLen ||
@@ -461,6 +512,22 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		if len(e.Signal) > 32 || !domain.Printable(e.Signal) {
 			return input.Invalid("signal must print and be at most 32 characters")
 		}
+	}
+	return nil
+}
+
+// validateEffective bounds a config_resolved: a JSON object that fits, and a
+// digest that is one.
+func validateEffective(e v1.RunReportEntry) error {
+	if len(e.Effective) == 0 || len(e.Effective) > v1.MaxEffectiveConfigBytes {
+		return input.Invalid("effective must be a JSON object of at most %d bytes", v1.MaxEffectiveConfigBytes)
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(e.Effective, &object) != nil || object == nil {
+		return input.Invalid("effective must be a JSON object")
+	}
+	if !effectiveDigestPattern.MatchString(e.EffectiveDigest) {
+		return input.Invalid("effective_digest must be sha256:<64 lower-case hex>")
 	}
 	return nil
 }

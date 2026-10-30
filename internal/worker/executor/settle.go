@@ -11,6 +11,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/host"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
@@ -27,6 +28,9 @@ type facts struct {
 	// exitFirst: the harness had ended before the stop was ordered.
 	exitFirst bool
 	message   string
+	// code is why the preparation failed, if it is one the Controller keeps
+	// (v1.PrepareFailureCodes).
+	code domain.Code
 }
 
 // verdictOf says what the process with the wrapper's pid is now. The wrapper
@@ -152,12 +156,19 @@ func (e *Executor) settleLost(ctx context.Context, r state.Run, m markers, v pro
 
 // settleNeverRan ends a Run whose harness never ran. The caller holds the lock.
 func (e *Executor) settleNeverRan(ctx context.Context, k state.Key, message string) (done bool) {
+	return e.settleNeverRanWith(ctx, k, facts{message: message})
+}
+
+// settleNeverRanWith is settleNeverRan with more to say of why: f.message and
+// f.code.
+func (e *Executor) settleNeverRanWith(ctx context.Context, k state.Key, f facts) (done bool) {
 	r, err := state.RunBy(ctx, e.o.DB.Reader(), k)
 	if err != nil || !r.Phase.Live() {
 		return err == nil
 	}
 	e.endSession(ctx, k)
-	return e.finalize(ctx, r, facts{at: e.clock.Now(), message: message})
+	f.at = e.clock.Now()
+	return e.finalize(ctx, r, f)
 }
 
 // groupEmpty says whether nothing is left of the group of a wrapper that is gone.
@@ -264,7 +275,7 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 			if f.exit != nil && f.exit.Error != "" {
 				message = f.exit.Error
 			}
-			if err := e.report(ctx, tx, r.Key, v1.ReportPrepareFailed, f.at, func(en *v1.RunReportEntry) { en.Message = message }); err != nil {
+			if err := e.report(ctx, tx, r.Key, v1.ReportPrepareFailed, f.at, func(en *v1.RunReportEntry) { en.Message, en.Code = message, f.code }); err != nil {
 				return err
 			}
 		}

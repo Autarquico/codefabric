@@ -59,14 +59,15 @@ type Announcement struct {
 // some of its modes is one of runtimeModes and Detect finds it installed; the
 // Worker then announces harness:<id>, harness:<id>:mode:<m> for each of
 // those modes and harness:<id>:config-isolation if it has ConfigIsolation.
-// It always announces domain.HarnessModesMarker: whatever harness it offers,
+// It always announces domain.RepoConfigCapability (it reads the repo
+// configuration of a Run) and domain.HarnessModesMarker: whatever harness it offers,
 // it offers with its modes.
 //
 // It runs once, at start: a harness installed or removed later is seen at the
 // next start. It waits for each Detect at most DetectTimeout, whether or not
 // the adapter honours its ctx.
 func Announce(ctx context.Context, host harness.Host, reg *harness.Registry, runtimeModes []domain.Mode) Announcement {
-	out := Announcement{Capabilities: []string{domain.HarnessModesMarker}}
+	out := Announcement{Capabilities: []string{domain.HarnessModesMarker, domain.RepoConfigCapability}}
 	for _, id := range reg.IDs() {
 		a, _ := reg.Get(id)
 		h := assess(ctx, host, a, runtimeModes)

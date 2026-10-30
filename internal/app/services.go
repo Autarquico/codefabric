@@ -5,6 +5,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/environments"
 	"github.com/Autarquico/codefabric/internal/app/events"
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/projects"
@@ -31,6 +32,9 @@ type Services struct {
 	Scheduler *scheduler.Service
 	// Workflows are the versioned configurations and the blobs they name (§8.9).
 	Workflows *workflows.Service
+	// Environments are the global, versioned definitions of how a worktree is
+	// prepared (§25.3).
+	Environments *environments.Service
 	// Reconciliation is the start of the Controller, the reconciliation of the
 	// Workers and the Runs they lose (§27).
 	Reconciliation *reconciliation.Service
@@ -75,9 +79,10 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 			StartedAt: workersCfg.StartedAt, LostTimeout: cfg.RunLostTimeout, OfflineTTL: workersCfg.OfflineTTL,
 			Hooks: cfg.ReconciliationHooks,
 		}),
-		Events:    events.New(db, clk),
-		Workflows: workflows.New(db, clk, ids, cfg.Blobs, blobLimit(cfg.MaxBlobBytes)...),
-		db:        db,
+		Events:       events.New(db, clk),
+		Workflows:    workflows.New(db, clk, ids, cfg.Blobs, blobLimit(cfg.MaxBlobBytes)...),
+		Environments: environments.New(db, clk),
+		db:           db,
 	}
 }
 

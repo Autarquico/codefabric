@@ -218,6 +218,7 @@ type runMemo struct {
 	prepared      chan struct{}
 	prepareAt     time.Time     // when a prepare that could not finish is tried again
 	prepareWait   time.Duration // the backoff of that retry
+	ackWait       bool          // the prepare waits for the Controller's ack of config_resolved, polled at exitTick
 	revoked       bool          // the harness's access to the secrets was taken back in this life of the daemon
 }
 
@@ -416,6 +417,9 @@ func (e *Executor) supervise(ctx context.Context, k state.Key) {
 			case <-ticker.C():
 				break wait
 			case <-quickC:
+				if e.waitingForAck(k) {
+					break wait
+				}
 				if fileExists(filepath.Join(e.runDir(k), execwrap.ExitFile)) {
 					if sightings++; sightings >= exitLooks {
 						quickC = nil

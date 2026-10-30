@@ -61,7 +61,9 @@ type Project struct {
 	DefaultWorkflow    string          `json:"default_workflow,omitempty"`
 	DefaultEnvironment string          `json:"default_environment,omitempty"`
 	Defaults           ProjectDefaults `json:"defaults"`
-	CreatedAt          time.Time       `json:"created_at"`
+	// RepoConfig is "allow" or "deny": whether the repo may carry .codefabric/project.yaml.
+	RepoConfig domain.RepoConfig `json:"repo_config"`
+	CreatedAt  time.Time         `json:"created_at"`
 }
 
 // RepoURLs are every URL of the Project: the main repo, then the aliases.
@@ -76,6 +78,8 @@ type CreateProjectRequest struct {
 	DefaultWorkflow    string          `json:"default_workflow,omitempty"`
 	DefaultEnvironment string          `json:"default_environment,omitempty"`
 	Defaults           ProjectDefaults `json:"defaults,omitempty"`
+	// RepoConfig defaults to allow.
+	RepoConfig domain.RepoConfig `json:"repo_config,omitempty"`
 }
 
 // UpdateProjectRequest is PATCH /v1/projects/{ref}: only the fields present
@@ -92,6 +96,7 @@ type UpdateProjectRequest struct {
 	Resources          *Resources         `json:"resources,omitempty"`
 	Completion         *domain.Completion `json:"completion,omitempty"`
 	Retry              *Retry             `json:"retry,omitempty"`
+	RepoConfig         *domain.RepoConfig `json:"repo_config,omitempty"`
 }
 
 // ListProjectsResponse is GET /v1/projects.
@@ -223,6 +228,20 @@ type Run struct {
 	// Workflow is the version the Run froze, absent for a Run without one. The
 	// spec names it as name@sha256:<digest>.
 	Workflow *RunWorkflow `json:"workflow,omitempty"`
+	// Environment is the version the Run froze, absent for a Run without one.
+	Environment *RunEnvironment `json:"environment,omitempty"`
+	// EffectiveDigest is the digest of the configuration the Worker resolved
+	// from the repo, once it told. FailureCode is the code a failed preparation
+	// gave.
+	EffectiveDigest string      `json:"effective_digest,omitempty"`
+	FailureCode     domain.Code `json:"failure_code,omitempty"`
+}
+
+// RunEnvironment is the Environment version a Run is pinned to.
+type RunEnvironment struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	Digest  string `json:"digest"`
 }
 
 // RunWorkflow is the Workflow version a Run is pinned to (§8.9).

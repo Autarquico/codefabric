@@ -7,7 +7,8 @@ import (
 )
 
 // specView is the part of the frozen spec the Worker acts on. It reads the
-// schemas domain.ReadableRunSpecSchema allows: 2, and 3, which adds Secrets.
+// schemas domain.ReadableRunSpecSchema allows: 2; 3, which adds Secrets; and 4,
+// which adds RepoConfig and the EnvironmentDef of the Controller.
 type specView struct {
 	Schema int    `json:"schema"`
 	Prompt string `json:"prompt"`
@@ -16,10 +17,23 @@ type specView struct {
 		Ref string `json:"ref"`
 	} `json:"source"`
 	Requirements struct {
-		Harness string `json:"harness"`
-		Model   string `json:"model"`
+		Harness   string `json:"harness"`
+		Model     string `json:"model"`
+		Resources struct {
+			CPU      int `json:"cpu"`
+			MemoryMB int `json:"memory_mb"`
+		} `json:"resources"`
 	} `json:"requirements"`
 	Secrets *specSecrets `json:"secrets"`
+	// RepoConfig is the policy of the Project frozen with the Run (schema 4);
+	// EnvironmentDef the Environment it pinned, nil if it has none.
+	RepoConfig     domain.RepoConfig      `json:"repo_config"`
+	EnvironmentDef *domain.EnvironmentDef `json:"environment_def"`
+	// Origins is the layer that gave the resources and the Environment (schema 4).
+	Origins struct {
+		Resources   domain.Origin `json:"resources"`
+		Environment domain.Origin `json:"environment"`
+	} `json:"origins"`
 }
 
 // specSecrets is what a Run may resolve on its Worker: the environment of its

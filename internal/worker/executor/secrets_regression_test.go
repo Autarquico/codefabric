@@ -58,7 +58,10 @@ func TestNoGrantIsAskedBeforeTheControllerTookAHeartbeatOfTheDaemon(t *testing.T
 	s.seq = 0
 	s.heartbeat()
 	s.reconcile(false)
-	s.stepAll()
+	s.stepAll()    // resolves the configuration of the repo...
+	s.flush(false) // ...which the Controller confirms...
+	s.f.clock.Advance(prepareRetryMax)
+	s.stepAll() // ...and the Run is prepared
 	if g := s.lastGrant; g == nil || !g.granted {
 		t.Fatalf("the grant after the heartbeat: %+v", g)
 	}
@@ -75,6 +78,9 @@ func TestAFencedRunStoppedWhileItsVerdictIsOnItsWayIsSettled(t *testing.T) {
 	s, k, task := calmSecretWorld(t)
 	_, err := s.ctrl.app.Tasks.Cancel(t.Context(), s.owner, task, "", v1.ActionRequest{})
 	must(t, err)
+	s.stepAll() // the configuration is resolved
+	s.flush(false)
+	s.f.clock.Advance(prepareRetryMax)
 	s.stepAll() // the grant is refused: the Run is no longer preparable
 	if r := s.f.run(k); r.FencedCode == "" {
 		t.Fatalf("the refused grant did not fence the Run: %+v", r)

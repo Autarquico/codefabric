@@ -26,6 +26,19 @@ type PrepareSpec struct {
 	RunDir string
 }
 
+// SourceSpec is what the source commit of a Run is fetched from.
+type SourceSpec struct {
+	Project      string
+	Run          string // only for the log
+	Repo         string
+	SourceRef    string
+	SourceCommit string
+}
+
+func (s PrepareSpec) source() SourceSpec {
+	return SourceSpec{Project: s.Project, Run: s.Run, Repo: s.Repo, SourceRef: s.SourceRef, SourceCommit: s.SourceCommit}
+}
+
 // WrapperFile is the marker the wrapper of the harness writes first (execwrap).
 const wrapperFile = "wrapper.json"
 
@@ -35,6 +48,26 @@ const wrapperFile = "wrapper.json"
 // (PrepareSpec.Branch) is only where the result is pushed to.
 func LocalBranch(run string, epoch uint64) string {
 	return "cf-local/" + domain.RunEpoch(run, epoch)
+}
+
+// EnsureSource brings the source commit of a Run into the bare repository of
+// its Project (created if needed), by the same fetch Prepare makes, and does
+// nothing else: no ref, no worktree. Reading the commit with Show and BlobIDs
+// can then happen before anything of the Run exists.
+func (g *Git) EnsureSource(ctx context.Context, s SourceSpec) error {
+	if err := validateSource(s); err != nil {
+		return err
+	}
+	unlock := g.projectLock(s.Project)
+	defer unlock()
+	return g.ensureSource(ctx, g.o.Paths.WorkerRepoDir(s.Project), s)
+}
+
+func (g *Git) ensureSource(ctx context.Context, bare string, s SourceSpec) error {
+	if err := g.initBare(ctx, bare); err != nil {
+		return err
+	}
+	return g.fetchCommit(ctx, bare, s)
 }
 
 func isProject(id string) bool {
@@ -78,10 +111,7 @@ func (g *Git) Prepare(ctx context.Context, s PrepareSpec, worktree string) (err 
 	defer unlock()
 
 	bare := g.o.Paths.WorkerRepoDir(s.Project)
-	if err := g.initBare(ctx, bare); err != nil {
-		return err
-	}
-	if err := g.fetchCommit(ctx, bare, s); err != nil {
+	if err := g.ensureSource(ctx, bare, s.source()); err != nil {
 		return err
 	}
 	if _, err := g.ok(ctx, cmd{
@@ -111,20 +141,26 @@ func (g *Git) Prepare(ctx context.Context, s PrepareSpec, worktree string) (err 
 
 func validate(s PrepareSpec, worktree string) error {
 	switch {
+	case !domain.ValidBranch(s.Branch):
+		return errors.New("gitops: the branch of the Run is not valid")
+	case !filepath.IsAbs(worktree):
+		return errors.New("gitops: the worktree path must be absolute")
+	}
+	return validateSource(s.source())
+}
+
+func validateSource(s SourceSpec) error {
+	switch {
 	case !isProject(s.Project):
 		return errors.New("gitops: the Project of the Run is not a Project ID")
 	case !domain.ValidCommitID(s.SourceCommit):
 		return errors.New("gitops: the source commit is not a full commit ID")
-	case !domain.ValidBranch(s.Branch):
-		return errors.New("gitops: the branch of the Run is not valid")
 	case s.Repo == "":
 		return errors.New("gitops: this assignment names no repository to fetch from")
 	case !domain.ValidRepoURL(s.Repo):
 		return errors.New("gitops: the repository of the Project is not a form of URL this Worker fetches from")
 	case !domain.ValidSourceRef(s.SourceRef):
 		return errors.New("gitops: the source ref is not a plain ref")
-	case !filepath.IsAbs(worktree):
-		return errors.New("gitops: the worktree path must be absolute")
 	}
 	return nil
 }
@@ -162,7 +198,7 @@ func (g *Git) hasCommit(ctx context.Context, bare, oid string) bool {
 // fetchCommit gets the exact commit into the bare repository: it is there
 // already, or a fetch by ref brings it, or a fetch by hash does. Network
 // failures are retried with a backoff.
-func (g *Git) fetchCommit(ctx context.Context, bare string, s PrepareSpec) error {
+func (g *Git) fetchCommit(ctx context.Context, bare string, s SourceSpec) error {
 	if g.hasCommit(ctx, bare, s.SourceCommit) {
 		return nil
 	}

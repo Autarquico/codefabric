@@ -174,7 +174,7 @@ func TestProjectSecrets_AvailableHonoursTheScopeOfTheWorker(t *testing.T) {
 
 func TestTasks_SecretEnvIsValidatedAndFrozen(t *testing.T) {
 	e := newEnv(t)
-	e.project("backend")
+	e.project("backend", func(r *v1.CreateProjectRequest) { r.RepoConfig = domain.RepoConfigDeny })
 	ctx := t.Context()
 
 	bad := map[string][]v1.SecretEnv{
@@ -228,7 +228,7 @@ func TestTasks_SecretEnvIsValidatedAndFrozen(t *testing.T) {
 // secrets key, and the digest a Task with no secret_env always had.
 func TestTasks_RunWithoutSecretsKeepsSchema2(t *testing.T) {
 	e := newEnv(t)
-	e.project("backend")
+	e.project("backend", func(r *v1.CreateProjectRequest) { r.RepoConfig = domain.RepoConfigDeny })
 	plain := e.mustTask("backend", "fix the flaky test")
 	empty := e.mustTask("backend", "fix the flaky test", func(r *v1.CreateTaskRequest) { r.Requirements.SecretEnv = []v1.SecretEnv{} })
 	a, err := e.app.Runs.Get(t.Context(), plain.Run.ID)

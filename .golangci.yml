@@ -77,6 +77,24 @@ linters:
             - github.com/Autarquico/codefabric/internal/domain
             - github.com/Autarquico/codefabric/internal/config
             - github.com/Autarquico/codefabric/internal/buildinfo
+            - go.yaml.in/yaml/v3
+        # repoconfig parses the untrusted file of a repo and merges it: pure, so
+        # that Controller and Worker share it without knowing each other.
+        repoconfig:
+          list-mode: strict
+          files: ["**/internal/repoconfig/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/Autarquico/codefabric/internal/repoconfig
+            - github.com/Autarquico/codefabric/internal/domain
+            - go.yaml.in/yaml/v3
+        # YAML is read only where the input is untrusted or a user's file.
+        yamlscope:
+          list-mode: lax
+          files: ["$all", "!**/internal/repoconfig/**", "!**/internal/cli/**"]
+          deny:
+            - pkg: go.yaml.in/yaml/v3
+              desc: YAML is parsed only in internal/repoconfig and internal/cli
         # The Worker reaches the Controller only through the SDK (ADR 0001); its
         # tests may stand a real Controller up.
         worker:

@@ -47,13 +47,18 @@ func (e *Executor) step(ctx context.Context, k state.Key) (done bool) {
 		}
 		// Preparing may take long (it will clone), so it is outside the lock; the
 		// phase is checked again inside it, and before every effect on secrets.
-		if prepErr = e.preparing(ctx, r); prepErr != nil {
+		if prepErr = e.preparing(ctx, r); errors.Is(prepErr, errAckPending) {
+			e.log.DebugContext(ctx, "preparing a Run", "run", k.RunID, "wait", prepErr)
+		} else if prepErr != nil {
 			e.log.ErrorContext(ctx, "preparing a Run", "run", k.RunID, "err", prepErr)
 		}
 		switch {
 		case errors.Is(prepErr, errPrepareFenced):
 			e.fenceForGrant(ctx, k)
 			e.postponePrepare(k)
+			return false
+		case errors.Is(prepErr, errAckPending):
+			e.postponePrepareFor(k, ackPoll)
 			return false
 		case errors.Is(prepErr, errPrepareLater):
 			e.postponePrepare(k)
@@ -75,6 +80,10 @@ func (e *Executor) step(ctx context.Context, k state.Key) (done bool) {
 		return true // not ours to supervise yet: the decider answers it
 	case state.PhaseAccepted:
 		if prepErr != nil {
+			var coded *codedFailure
+			if errors.As(prepErr, &coded) {
+				return e.settleNeverRanWith(ctx, k, facts{message: coded.msg, code: coded.code})
+			}
 			return e.settleNeverRan(ctx, k, "preparing the Run failed: "+prepErr.Error())
 		}
 		return errors.Is(e.begin(ctx, r), ErrAborted)
@@ -121,6 +130,12 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	adapter, ok := e.harnesses.Get(spec.Requirements.Harness)
 	if !ok {
 		return fmt.Errorf("this Worker has no harness %q", spec.Requirements.Harness)
+	}
+	if spec.Schema == domain.RunSpecSchemaRepoConfig {
+		// Before anything is made for the Run, or any secret asked for.
+		if err := e.resolveRepoConfig(ctx, r, spec); err != nil {
+			return err
+		}
 	}
 	if err := checkSpecSecrets(spec); err != nil {
 		return fmt.Errorf("%s: the secrets of the Run: %w", domain.CodeInvalidRequest, err)

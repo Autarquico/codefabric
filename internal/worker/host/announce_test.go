@@ -108,8 +108,9 @@ func TestAnnounce(t *testing.T) {
 			}
 			h, _ := testHost(t)
 			got := Announce(context.Background(), h, reg, c.runtimeModes)
-			if !slices.Equal(got.Capabilities, c.want) {
-				t.Errorf("capabilities = %q, want %q", got.Capabilities, c.want)
+			want := slices.Sorted(slices.Values(append(slices.Clone(c.want), domain.RepoConfigCapability)))
+			if !slices.Equal(got.Capabilities, want) {
+				t.Errorf("capabilities = %q, want %q", got.Capabilities, want)
 			}
 			if len(got.Harnesses) != len(c.statuses) {
 				t.Errorf("harnesses = %+v, want %v", got.Harnesses, c.statuses)

@@ -151,7 +151,7 @@ func TestRunSpecSchema(t *testing.T) {
 	if got := RunSpecSchemaFor(true); got != RunSpecSchemaSecrets {
 		t.Errorf("with secrets: schema %d, want %d", got, RunSpecSchemaSecrets)
 	}
-	for schema, want := range map[int]bool{0: false, 1: false, 2: true, 3: true, 4: false} {
+	for schema, want := range map[int]bool{0: false, 1: false, 2: true, 3: true, 4: true, 5: false} {
 		if got := ReadableRunSpecSchema(schema); got != want {
 			t.Errorf("ReadableRunSpecSchema(%d) = %v, want %v", schema, got, want)
 		}

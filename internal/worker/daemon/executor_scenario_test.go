@@ -77,7 +77,7 @@ func TestScenario_WorkerExecutorTmux_CrashAntesDelAccept(t *testing.T) {
 	}
 	if _, err := wc.Heartbeat(ctx, v1.HeartbeatRequest{
 		Epoch: "01J00000000000000000000000", DaemonVersion: buildinfo.Get().Version, Hostname: "box", OS: "linux", Arch: "amd64",
-		Capabilities: []string{"harness:command"}, Total: v1.Capacity{CPU: 8, MemoryMB: 16384, DiskMB: 100000}, Health: v1.Health{Status: v1.HealthOK},
+		Capabilities: []string{"harness:command", domain.RepoConfigCapability}, Total: v1.Capacity{CPU: 8, MemoryMB: 16384, DiskMB: 100000}, Health: v1.Health{Status: v1.HealthOK},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestRun_OffersTheCommandHarnessWhenItHasARuntime(t *testing.T) {
 	w := c.eventually("box", "the harness to be offered", func(w v1.Worker) bool {
 		return w.State == domain.WorkerOnline && len(w.Capabilities) > 0
 	})
-	want := []string{"harness-modes:v1", "harness:command", "harness:command:mode:headless", "harness:command:mode:interactive"}
+	want := []string{"harness-modes:v1", "harness:command", "harness:command:mode:headless", "harness:command:mode:interactive", "repo-config:v1"}
 	if !slices.Equal(slices.Sorted(slices.Values(w.Capabilities)), want) || w.Health.Status != v1.HealthOK {
 		t.Errorf("worker = %+v, want the capabilities %q", w, want)
 	}
@@ -207,7 +207,7 @@ func TestRun_OffersTheInjectedHarnessesThatAreInstalledWithTheirModes(t *testing
 	w := c.eventually("box", "the harness to be offered", func(w v1.Worker) bool {
 		return w.State == domain.WorkerOnline && len(w.Capabilities) > 0
 	})
-	want := []string{"harness-modes:v1", "harness:fake", "harness:fake:config-isolation", "harness:fake:mode:headless"}
+	want := []string{"harness-modes:v1", "harness:fake", "harness:fake:config-isolation", "harness:fake:mode:headless", "repo-config:v1"}
 	if !slices.Equal(slices.Sorted(slices.Values(w.Capabilities)), want) {
 		t.Errorf("capabilities = %q, want %q", w.Capabilities, want)
 	}
