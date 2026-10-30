@@ -209,6 +209,12 @@ func TestEnvironmentIntegration_ADetachedServiceOfALostSupervisorIsStoppedByTheD
 	}
 	t.Cleanup(func() { _ = syscall.Kill(svc, syscall.SIGKILL) })
 	w := f.supervisorIdentity(k)
+	// The service detaches by itself: until it has left the group of the
+	// supervisor, a signal to that group would still reach it.
+	waitFor(t, "the service to leave the group of the supervisor", func() bool {
+		pgid, err := syscall.Getpgid(svc)
+		return err == nil && pgid != w.PGID
+	})
 	if !fileExists(filepath.Join(f.runDir(k), envwrap.StartedFile)) {
 		t.Fatal("the start of the service was not recorded")
 	}
