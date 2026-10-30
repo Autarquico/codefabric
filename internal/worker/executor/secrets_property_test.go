@@ -787,6 +787,7 @@ func (s *secretWorld) noValueInTable(table string) {
 			}
 		}
 	}
+	must(s.t, rows.Err())
 }
 
 // TestProperty_SecretsWorker: W1 (no read without its grant), W2 (the values

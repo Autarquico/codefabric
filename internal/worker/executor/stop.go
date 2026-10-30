@@ -24,7 +24,9 @@ const (
 //     (a stop of the Controller means it is accepted there: it is told);
 //   - over: the order is done;
 //   - accepted and not started: it is aborted, Start refuses it, and the
-//     Controller is told RunStopped(never_started);
+//     Controller is told RunStopped(never_started); if its Environment supervisor
+//     was launched it is not aborted but stopped like a started Run, and
+//     reported stopped once the Environment is settled;
 //   - started: the wrapper is asked to end the group, waits stop.grace and kills
 //     it, and the supervisor reports the exit and RunStopped when it has verified
 //     that nothing is left.
@@ -48,8 +50,17 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 		err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.CompleteStopOrder(ctx, tx, k, now) })
 		return err
 	}
-	switch r.Phase {
-	case state.PhaseAssigned, state.PhaseAccepted:
+	// A Run whose Environment supervisor was launched is not aborted: it stops like
+	// one that started, and is reported stopped only once the Environment is settled.
+	hasEnv := false
+	if r.Phase == state.PhaseAccepted {
+		// Not knowing is not "none": the order is retried and nothing is closed.
+		if hasEnv, err = e.hasEnvironment(ctx, k); err != nil {
+			return err
+		}
+	}
+	switch {
+	case (r.Phase == state.PhaseAssigned || r.Phase == state.PhaseAccepted) && !hasEnv:
 		// A prepare in progress is cut short; whatever it would still deliver is
 		// fenced by the phase this closes. The release of the secrets waits for it.
 		prepared := e.cancelPrepare(k)
@@ -91,7 +102,7 @@ func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, re
 				return err
 			}
 		}
-		if r.Phase == state.PhaseStarting || r.Phase == state.PhaseRunning {
+		if r.Phase == state.PhaseStarting || r.Phase == state.PhaseRunning || hasEnv {
 			return state.Advance(ctx, tx, k, r.Phase, state.PhaseStopping, now)
 		}
 		return nil

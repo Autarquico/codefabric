@@ -235,6 +235,21 @@ func (e *Executor) markUnverified(ctx context.Context, r state.Run, why string) 
 // evidence that releases its reservation (B5). stopped says never_started only
 // if `started` was never reported.
 func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done bool) {
+	// The Environment is gone before the Controller is told anything that
+	// releases the Run: the settlement is repeated until it is done, and a
+	// Run whose Environment cannot be proven gone is not stopped.
+	env := e.settleEnvironment(ctx, r.Key)
+	if env.unverified != "" {
+		return e.markUnverified(ctx, r, env.unverified)
+	}
+	if !env.done {
+		return false
+	}
+	if f.started == nil {
+		if why := e.environmentFailure(r.Key); why != "" {
+			f.message = why
+		}
+	}
 	order, orderErr := state.StopOrderOf(ctx, e.o.DB.Reader(), r.Key)
 	f.ordered = orderErr == nil && order.Reason != ""
 	f.exitFirst = orderErr == nil && order.ExitFirst
@@ -282,7 +297,12 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 		wasRunning := orderErr == nil && order.WasRunning
 		if err := e.report(ctx, tx, r.Key, v1.ReportStopped, f.at, func(en *v1.RunReportEntry) {
 			en.NeverStarted, en.WasRunning = !reportedStart, wasRunning && reportedStart
+			// Stopping the services is best effort: a failure warns, and the Run is released.
+			en.StopFailures = reportedStopFailures(env.failures)
 		}); err != nil {
+			return err
+		}
+		if err := state.DropEnvironment(ctx, tx, r.Key); err != nil {
 			return err
 		}
 		if err := state.Close(ctx, tx, r.Key, state.OccupyingPhases, state.PhaseStopped, !reportedStart, now); err != nil {
@@ -300,6 +320,7 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 		return false
 	}
 	e.o.Journal.Notify()
+	e.warnStopFailures(ctx, r.Key, env.failures)
 	if sealing {
 		e.kickPublisher()
 	}

@@ -619,18 +619,7 @@ func (w *world) dump() {
 	for _, r := range all {
 		w.t.Logf("worker: %s e%d phase %s fenced %q orphaned %v adopted %v started %v", r.RunID, r.LeaseEpoch, r.Phase, r.FencedCode, r.OrphanedAt != nil, r.Adopted, r.StartedAt != nil)
 	}
-	if q, err := w.f.db.Reader().QueryContext(ctx, `SELECT seq, run_id, lease_epoch, kind, payload FROM journal ORDER BY seq`); err == nil {
-		for q.Next() {
-			var (
-				seq            uint64
-				run, kind, raw string
-				epoch          uint64
-			)
-			_ = q.Scan(&seq, &run, &epoch, &kind, &raw)
-			w.t.Logf("journal: %d %s e%d %s %s", seq, run, epoch, kind, raw)
-		}
-		_ = q.Close()
-	}
+	w.logJournal(ctx)
 	pubs, _ := state.UnsettledPublications(ctx, w.f.db.Reader())
 	for _, p := range pubs {
 		w.t.Logf("publication: %s e%d %s attempts %d next %v err %q", p.RunID, p.LeaseEpoch, p.State, p.Attempts, p.NextAttemptAt, p.LastError)
@@ -653,4 +642,24 @@ func envUint(name string, def uint64) uint64 {
 		return def
 	}
 	return n
+}
+
+func (w *world) logJournal(ctx context.Context) {
+	q, err := w.f.db.Reader().QueryContext(ctx, `SELECT seq, run_id, lease_epoch, kind, payload FROM journal ORDER BY seq`)
+	if err != nil {
+		return
+	}
+	defer func() { _ = q.Close() }()
+	for q.Next() {
+		var (
+			seq            uint64
+			run, kind, raw string
+			epoch          uint64
+		)
+		_ = q.Scan(&seq, &run, &epoch, &kind, &raw)
+		w.t.Logf("journal: %d %s e%d %s %s", seq, run, epoch, kind, raw)
+	}
+	if err := q.Err(); err != nil {
+		w.t.Logf("journal: %v", err)
+	}
 }

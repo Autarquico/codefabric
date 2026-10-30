@@ -59,13 +59,7 @@ func (e *Executor) resolveRepoConfig(ctx context.Context, r state.Run, spec spec
 	if pending {
 		return errAckPending
 	}
-	var eff repoconfig.Effective
-	if err := json.Unmarshal(res.Effective, &eff); err != nil {
-		return fmt.Errorf("the stored configuration of the Run is corrupt: %w", err)
-	}
-	if env := eff.Environment; env != nil && (env.Prepare != "" || len(env.Services) > 0) {
-		return &codedFailure{domain.CodeNotImplemented, "this Worker cannot run the prepare or the services of an Environment: it does not offer " + domain.EnvironmentHostCapability}
-	}
+	// The Environment is run later (environmentStage), once the Run is prepared.
 	return nil
 }
 

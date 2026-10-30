@@ -39,12 +39,22 @@ func (e *Executor) step(ctx context.Context, k state.Key) (done bool) {
 		return true
 	}
 	var prepErr error
+	// An accepted Run whose Environment supervisor was launched is prepared: its
+	// prepare would make the worktree again under the scripts that ran in it. A
+	// record that cannot be read is not "none": the step waits for the next tick.
+	launched := false
 	if r.Phase == state.PhaseAccepted {
-		if r.FencedCode != "" || !e.prepareDue(k) {
-			// A fenced Run waits for the reconciliation; one whose prepare could not
-			// finish waits for its retry.
+		if launched, err = e.hasEnvironment(ctx, k); err != nil {
+			e.log.ErrorContext(ctx, "reading the Environment of a Run", "run", k.RunID, "err", err)
 			return false
 		}
+	}
+	if r.Phase == state.PhaseAccepted && (r.FencedCode != "" || (!launched && !e.prepareDue(k))) {
+		// A fenced Run waits for the reconciliation; one whose prepare could not
+		// finish waits for its retry.
+		return false
+	}
+	if r.Phase == state.PhaseAccepted && !launched {
 		// Preparing may take long (it will clone), so it is outside the lock; the
 		// phase is checked again inside it, and before every effect on secrets.
 		if prepErr = e.preparing(ctx, r); errors.Is(prepErr, errAckPending) {
@@ -86,7 +96,7 @@ func (e *Executor) step(ctx context.Context, k state.Key) (done bool) {
 			}
 			return e.settleNeverRan(ctx, k, "preparing the Run failed: "+prepErr.Error())
 		}
-		return errors.Is(e.begin(ctx, r), ErrAborted)
+		return e.beginOrEnvironment(ctx, r)
 	case state.PhaseStarting, state.PhaseRunning, state.PhaseStopping:
 		return e.poll(ctx, r)
 	case state.PhaseStopUnverified:

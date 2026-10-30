@@ -81,7 +81,8 @@ func (f *fixture) failJournal(on bool) {
 		if err != nil {
 			return err
 		}
-		return rows.Close()
+		defer func() { _ = rows.Close() }()
+		return rows.Err()
 	})
 	if err != nil {
 		f.t.Fatal(err)
@@ -355,25 +356,33 @@ func (f *fixture) dumpState() string {
 	f.t.Helper()
 	var b strings.Builder
 	for _, table := range []string{"local_runs", "publications", "journal", "meta", "stop_orders"} {
-		rows, err := f.db.Reader().QueryContext(f.t.Context(), `SELECT * FROM `+table) //nolint:gosec // test constants
-		if err != nil {
-			f.t.Fatal(err)
-		}
-		cols, _ := rows.Columns()
-		for rows.Next() {
-			cells := make([]any, len(cols))
-			ptrs := make([]any, len(cols))
-			for i := range cells {
-				ptrs[i] = &cells[i]
-			}
-			if err := rows.Scan(ptrs...); err != nil {
-				f.t.Fatal(err)
-			}
-			fmt.Fprint(&b, cells...)
-		}
-		_ = rows.Close()
+		f.dumpTable(&b, table)
 	}
 	return b.String()
+}
+
+func (f *fixture) dumpTable(b *strings.Builder, table string) {
+	f.t.Helper()
+	rows, err := f.db.Reader().QueryContext(f.t.Context(), `SELECT * FROM `+table) //nolint:gosec // test constants
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	cols, _ := rows.Columns()
+	for rows.Next() {
+		cells := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range cells {
+			ptrs[i] = &cells[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			f.t.Fatal(err)
+		}
+		fmt.Fprint(b, cells...)
+	}
+	if err := rows.Err(); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 func TestScenario_GitRelayPublication_ControllerCaido_Executor(t *testing.T) {

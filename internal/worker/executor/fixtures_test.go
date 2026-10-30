@@ -280,6 +280,9 @@ func newFixture(t *testing.T, mutate ...func(*Options)) *fixture {
 	f.opts = Options{
 		DB: db, Controller: f.ctrl, Runtime: f.rt, Journal: f.j, Harnesses: registry(t, command.Adapter{}), Host: testHost(t, root),
 		Paths: f.paths, Clock: f.clock, Log: slog.New(slog.DiscardHandler), WrapperArgv: []string{"/wrapper", "worker", "exec"}, StopGrace: 2 * time.Second,
+		// The supervisor of an Environment is a command that does nothing: the tests that need
+		// one write its files themselves (environment_test.go).
+		EnvironmentArgv: []string{"/bin/sh", "-c", "exit 0", "sh"},
 	}
 	for _, m := range mutate {
 		m(&f.opts)

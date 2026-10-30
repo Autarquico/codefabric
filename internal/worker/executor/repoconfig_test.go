@@ -205,35 +205,6 @@ func TestRepoConfig_DigestInputsAreReadFromTheCommit(t *testing.T) {
 	}
 }
 
-func TestRepoConfig_AnEnvironmentWithScriptsIsNotImplementedAndRunsNothing(t *testing.T) {
-	env := &domain.EnvironmentDef{Provider: "host", Prepare: "make deps"}
-	f, g, k := repoConfigRun(t, specV4(domain.RepoConfigAllow, env), nil)
-	f.e.step(t.Context(), k)
-	f.confirmReports(k)
-	if !f.retryStep(k) {
-		t.Fatal("the Run did not end")
-	}
-	reports := f.reports(k)
-	if got := kinds(reports); !slices.Equal(got, []v1.RunReportKind{v1.ReportPrepareFailed, v1.ReportStopped}) || reports[0].Code != domain.CodeNotImplemented {
-		t.Fatalf("reports = %+v", reports)
-	}
-	if slices.Contains(g.callList(), "prepare") || f.rt.startCount() != 0 {
-		t.Errorf("something ran: %v", g.callList())
-	}
-}
-
-func TestRepoConfig_ARepoFileCannotAddScriptsWithoutFailingTheRunLater(t *testing.T) {
-	f, _, k := repoConfigRun(t, specV4(domain.RepoConfigAllow, hostEnv()), []byte("environment:\n  prepare: make deps\n"))
-	f.e.step(t.Context(), k)
-	f.confirmReports(k)
-	if !f.retryStep(k) {
-		t.Fatal("the Run did not end")
-	}
-	if r := f.reports(k)[0]; r.Code != domain.CodeNotImplemented {
-		t.Errorf("report = %+v", r)
-	}
-}
-
 func TestRepoConfig_SchemasTwoAndThreeNeverReadTheRepo(t *testing.T) {
 	v3, _ := json.Marshal(map[string]any{
 		"schema": 3, "prompt": "echo hi", "mode": "headless", "requirements": map[string]any{"harness": "command"},

@@ -62,6 +62,8 @@ func (e *Executor) recoverRuns(ctx context.Context) error {
 		}
 		e.spawn(r.Key)
 	}
+	// The Environments of Runs that are over, which a crash left, are settled.
+	e.settleStrays(ctx)
 	// What a crash left of the secrets of a Run is swept before anything new is taken.
 	e.sweep(ctx)
 	e.kickDecider()
