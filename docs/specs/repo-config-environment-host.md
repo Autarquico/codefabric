@@ -6,14 +6,14 @@ status: active
 priority: P0
 size: M
 issue: 24
-prs: []
+prs: [58]
 related_issues: [24]
 sub_issues: []
 depends_on: [git-relay-publication, secrets-local]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-30
 ---
 
 # Config del repo y Environment host
