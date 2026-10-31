@@ -102,9 +102,10 @@ type SyncWorkflowRequest struct {
 	DryRun     bool     `json:"dry_run,omitempty"`
 }
 
-// ApplyWorkflowResponse answers an apply or rollback. Noop is true when the
-// Worker already holds that digest with the same components and no drift (no
-// order was made, Apply is nil); Reason says why.
+// ApplyWorkflowResponse answers an apply or rollback. The Controller always
+// makes an order (Apply is set): whether it changes anything is for the Worker
+// to say, from a fresh plan, in the plan of the result (noop). Noop and Reason
+// are kept for compatibility and are always empty.
 type ApplyWorkflowResponse struct {
 	Noop   bool           `json:"noop"`
 	Reason string         `json:"reason,omitempty"`
@@ -165,8 +166,12 @@ type ReportWorkflowApplyRequest struct {
 	Error      string             `json:"error,omitempty"`
 	Drift      []DriftedComponent `json:"drift,omitempty"`
 	// Skipped names the selected components the apply left unwritten for drift.
-	Skipped []string        `json:"skipped,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
+	Skipped []string `json:"skipped,omitempty"`
+	// Inspected names the components whose drift the Worker looked at; Drift
+	// replaces the recorded drift of those alone, the rest is kept. Nil means
+	// every component of the harness was inspected.
+	Inspected []string        `json:"inspected,omitempty"`
+	Result    json.RawMessage `json:"result,omitempty"`
 }
 
 // ReportWorkflowApplyResponse says whether the report was taken: false for one

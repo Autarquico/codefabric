@@ -12,6 +12,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 // fakeApplyStore answers apply requests with resp and then serves polls from
@@ -73,10 +74,15 @@ func order(state string, result json.RawMessage) v1.WorkflowApply {
 
 func runApply(t *testing.T, st *fakeApplyStore, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
-	old := applyPollInterval
-	applyPollInterval = time.Millisecond
-	t.Cleanup(func() { applyPollInterval = old })
-	opts := Options{workflowApplyStore: func(*cobra.Command) (workflowApplyStore, error) { return st, nil }}
+	return runApplyOn(t, realTimer, st, args...)
+}
+
+func runApplyOn(t *testing.T, timer timerFunc, st *fakeApplyStore, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	opts := Options{
+		workflowApplyStore: func(*cobra.Command) (workflowApplyStore, error) { return st, nil },
+		applyTimer:         timer, applyPoll: time.Millisecond,
+	}
 	var out, errOut bytes.Buffer
 	code = RunContextWith(context.Background(), opts, args, strings.NewReader(""), &out, &errOut)
 	return code, out.String(), errOut.String()
@@ -184,7 +190,14 @@ func TestApplyFailureSupersededAndTimeout(t *testing.T) {
 	}
 
 	st.polls["operation_1"] = []v1.WorkflowApply{order("running", nil)}
-	code, out, _ = runApply(t, st, "workflow", "apply", "team", "--worker", "w1", "--harness", "codex", "--timeout", "20ms", "--json")
+	fake := clock.NewFake(time.Now())
+	go func() {
+		// Two timers are waiting: the deadline and a poll. Moving past the
+		// timeout ends the wait whatever the Controller says.
+		_ = fake.BlockUntil(t.Context(), 2)
+		fake.Advance(time.Minute)
+	}()
+	code, out, _ = runApplyOn(t, fakeTimer(fake), st, "workflow", "apply", "team", "--worker", "w1", "--harness", "codex", "--timeout", "20ms", "--json")
 	if env := errorOf(t, out); code != int(domain.ExitCode(domain.CodeInProgress)) || env["code"] != string(domain.CodeInProgress) {
 		t.Errorf("timeout: %d %v", code, env)
 	}
@@ -331,4 +344,33 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+func TestApplyPrintsNoChangesWhenTheWorkerReportsANoOpPlan(t *testing.T) {
+	done := order("applied", planJSON(t, v1.WorkflowApplyPlan{NoOp: true}))
+	st := &fakeApplyStore{
+		resp:  v1.ApplyWorkflowResponse{Apply: ptr(order("pending", nil))},
+		polls: map[string][]v1.WorkflowApply{"operation_1": {done}},
+	}
+	code, out, errOut := runApply(t, st, "workflow", "apply", "team", "--worker", "w1", "--harness", "codex")
+	if code != 0 || !strings.Contains(out, "No changes.") {
+		t.Fatalf("apply: %d %q %q", code, out, errOut)
+	}
+
+	st = &fakeApplyStore{
+		sync:  v1.SyncWorkflowResponse{Results: []v1.SyncWorkflowResult{{Worker: "w1", Result: v1.ApplyWorkflowResponse{Apply: ptr(done)}}}},
+		polls: map[string][]v1.WorkflowApply{"operation_1": {done}},
+	}
+	code, out, errOut = runApply(t, st, "workflow", "sync", "team", "--harness", "codex")
+	if code != 0 || !strings.Contains(out, "no-op") {
+		t.Fatalf("sync: %d %q %q", code, out, errOut)
+	}
+}
+
+// fakeTimer starts the timers of a fake clock.
+func fakeTimer(c *clock.Fake) timerFunc {
+	return func(d time.Duration) (<-chan time.Time, func()) {
+		t := c.NewTimer(d)
+		return t.C(), t.Stop
+	}
 }

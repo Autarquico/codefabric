@@ -36,6 +36,8 @@ Owner previsto en el bucle Develop: backend-eng.
 - Worker: mutex por harness; `ApplyConfig` respeta ownership (`managed` se sobrescribe, `local` nunca)
 - CLI: `cf workflow status|diff|apply|rollback|explain|sync` (sync solo a Workers online)
 
+**Entrega en tres PRs:** 22-A (#66: el Worker usa el Workflow congelado del Run), 22-B1 (apply global, drift, rollback, dry-run, no-op, explain, sync y CLI; scenarios Drift local, Dry-run, No-op y Explain) y 22-B2 (lock §8.12, `config_key`, apply con Runs activos y `--no-wait`; scenarios Apply con Runs activos y Lock).
+
 **No entra:**
 - Overlays, `merged`, sync offline (Fase 9)
 

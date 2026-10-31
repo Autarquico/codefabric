@@ -225,28 +225,59 @@ func TestScenario_WorkflowApplyDriftLockA_DryRun(t *testing.T) {
 	}
 }
 
-// No-op: applying the digest the Worker already holds does nothing and makes
-// no new order.
+// No-op: applying the digest the Worker already holds writes nothing and
+// leaves the applied digest as it was. The Controller does not decide it: the
+// order is made and the Worker reports a plan that is a no-op.
 func TestScenario_WorkflowApplyDriftLockA_NoOp(t *testing.T) {
 	f := newApplyFixture(t)
 	first := ok[v1.ApplyWorkflowResponse](t, applyOn("apply")...)
-	if first.Noop || first.Apply == nil || first.Apply.State != v1.ApplyStateApplied {
+	if first.Apply == nil || first.Apply.State != v1.ApplyStateApplied {
 		t.Fatalf("first apply = %+v", first)
 	}
 	if f.read(t, "AGENTS.md") != spanish {
 		t.Fatal("the first apply wrote nothing")
 	}
-	latest := workflowState(t).Latest
+	before := workflowState(t)
+	stat := func() os.FileInfo {
+		info, err := os.Stat(f.path("AGENTS.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info
+	}
+	written := stat().ModTime()
 
 	again := ok[v1.ApplyWorkflowResponse](t, applyOn("apply")...)
-	if !again.Noop || again.Apply != nil {
-		t.Errorf("second apply = %+v, want a noop with no order", again)
+	if again.Apply == nil || again.Apply.State != v1.ApplyStateApplied || !planOf(t, again).NoOp {
+		t.Errorf("second apply = %+v, want an applied order whose plan is a no-op", again)
 	}
-	if st := workflowState(t); st.Latest == nil || latest == nil || st.Latest.ID != latest.ID || st.AppliedDigest != f.v1.Digest {
-		t.Errorf("a new order appeared or the state moved: %+v (was %+v)", st, latest)
+	if got := stat().ModTime(); !got.Equal(written) || f.read(t, "AGENTS.md") != spanish {
+		t.Errorf("the repeated apply wrote AGENTS.md (mtime %v, was %v)", got, written)
+	}
+	if st := workflowState(t); st.AppliedDigest != f.v1.Digest || st.AppliedVersion != before.AppliedVersion || st.PreviousVersion != before.PreviousVersion || len(st.Drift) != 0 {
+		t.Errorf("the state moved: %+v (was %+v)", st, before)
 	}
 	if _, out, _ := cf(t, "", applyOn("apply")...); !strings.Contains(out, "No changes") {
 		t.Errorf("human output = %q, want it to say there are no changes", out)
+	}
+}
+
+// A local edit made after the last apply is seen by the next normal apply
+// (no force, no earlier operation): the Controller's record can be stale, the
+// Worker's fresh plan is not.
+func TestScenario_WorkflowApplyDriftLockA_EditThenNormalApplyShowsTheDrift(t *testing.T) {
+	f := newApplyFixture(t)
+	ok[v1.ApplyWorkflowResponse](t, applyOn("apply")...)
+	if st := workflowState(t); len(st.Drift) != 0 {
+		t.Fatalf("drift before the edit = %+v", st.Drift)
+	}
+	f.edit(t, "AGENTS.md", "edited by hand\n")
+	ok[v1.ApplyWorkflowResponse](t, applyOn("apply")...)
+	if got := f.read(t, "AGENTS.md"); got != "edited by hand\n" {
+		t.Errorf("a managed edit was overwritten without --force: %q", got)
+	}
+	if st := workflowState(t); !strings.Contains(strings.Join(driftNames(st), ","), "AGENTS.md") {
+		t.Errorf("status drift = %+v, want AGENTS.md", st.Drift)
 	}
 }
 

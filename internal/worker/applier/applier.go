@@ -24,6 +24,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/globalapply"
 	"github.com/Autarquico/codefabric/internal/worker/workflowfetch"
 )
@@ -62,6 +63,8 @@ type Options struct {
 	DataDir string
 	Secrets secrets.Store
 	Log     *slog.Logger
+	// Clock times the reads of the secret store; defaults to clock.Real.
+	Clock clock.Clock
 	// Recover replaces globalapply.Recover, for tests.
 	Recover func(dataDir string) error
 }
@@ -105,6 +108,9 @@ func New(o Options) *Applier {
 	if a.log == nil {
 		a.log = slog.Default()
 	}
+	if a.o.Clock == nil {
+		a.o.Clock = clock.Real{}
+	}
 	recoverFn := o.Recover
 	if recoverFn == nil {
 		recoverFn = globalapply.Recover
@@ -123,12 +129,21 @@ func New(o Options) *Applier {
 
 // resolve is the secret store of the Worker as the engine reads it. It never
 // returns a value in an error.
-func (a *Applier) resolve(ref string) ([]byte, error) {
+func (a *Applier) resolve(ctx context.Context, ref string) ([]byte, error) {
 	if a.o.Secrets == nil {
 		return nil, errors.New("this Worker keeps no secrets")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), secretTimeout)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	timeout := a.o.Clock.NewTimer(secretTimeout)
+	defer timeout.Stop()
+	go func() {
+		select {
+		case <-timeout.C():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	s, err := a.o.Secrets.Get(ctx, ref)
 	if err != nil {
 		if errors.Is(err, secrets.ErrNotFound) {
@@ -266,7 +281,7 @@ func (a *Applier) execute(ctx context.Context, o v1.WorkflowApplyOrder) *v1.Repo
 	if a.stale(o) || ctx.Err() != nil {
 		return nil
 	}
-	plan, drift, err := a.run(ctx, o)
+	plan, inspected, drift, err := a.run(ctx, o)
 	if err != nil {
 		var coded *domain.Error
 		if errors.As(err, &coded) && (coded.Code == domain.CodeStaleLease) {
@@ -289,26 +304,26 @@ func (a *Applier) execute(ctx context.Context, o v1.WorkflowApplyOrder) *v1.Repo
 	}
 	return &v1.ReportWorkflowApplyRequest{
 		Generation: o.Generation, Outcome: v1.ApplyStateApplied,
-		Drift: head(drift, maxDriftItems), Skipped: head(skippedOf(plan), maxDriftItems), Result: result,
+		Drift: head(drift, maxDriftItems), Inspected: inspected, Skipped: head(skippedOf(plan), maxDriftItems), Result: result,
 	}
 }
 
 // run downloads what the order names and applies it. The order is checked
 // against newer ones right before anything is written.
-func (a *Applier) run(ctx context.Context, o v1.WorkflowApplyOrder) (v1.WorkflowApplyPlan, []v1.DriftedComponent, error) {
+func (a *Applier) run(ctx context.Context, o v1.WorkflowApplyOrder) (v1.WorkflowApplyPlan, []string, []v1.DriftedComponent, error) {
 	eng, ok := a.engines[o.Harness]
 	if !ok {
-		return v1.WorkflowApplyPlan{}, nil, fmt.Errorf("this Worker cannot apply a Workflow globally to the harness %q", o.Harness)
+		return v1.WorkflowApplyPlan{}, nil, nil, fmt.Errorf("this Worker cannot apply a Workflow globally to the harness %q", o.Harness)
 	}
 	v, err := a.o.Client.ApplyManifest(ctx, o.ID, o.Generation)
 	if err != nil {
-		return v1.WorkflowApplyPlan{}, nil, err
+		return v1.WorkflowApplyPlan{}, nil, nil, err
 	}
 	if v.Digest != o.Digest || v.Manifest == nil {
-		return v1.WorkflowApplyPlan{}, nil, errors.New("the Controller sent a Workflow that is not the one the order names")
+		return v1.WorkflowApplyPlan{}, nil, nil, errors.New("the Controller sent a Workflow that is not the one the order names")
 	}
 	if err := v.Manifest.Validate(); err != nil {
-		return v1.WorkflowApplyPlan{}, nil, err
+		return v1.WorkflowApplyPlan{}, nil, nil, err
 	}
 	f := workflowfetch.Fetcher{
 		DataDir: a.o.DataDir, Log: a.log,
@@ -318,32 +333,33 @@ func (a *Applier) run(ctx context.Context, o v1.WorkflowApplyOrder) (v1.Workflow
 	}
 	snap, err := f.Snapshot(ctx, v.Manifest, o.Harness)
 	if err != nil {
-		return v1.WorkflowApplyPlan{}, nil, err
+		return v1.WorkflowApplyPlan{}, nil, nil, err
 	}
 	if a.stale(o) || ctx.Err() != nil {
-		return v1.WorkflowApplyPlan{}, nil, domain.NewError(domain.CodeStaleLease, "a newer order superseded this one", nil)
+		return v1.WorkflowApplyPlan{}, nil, nil, domain.NewError(domain.CodeStaleLease, "a newer order superseded this one", nil)
 	}
 	res, err := eng.Apply(ctx, globalapply.Request{
 		Snapshot: snap, WorkflowID: o.Workflow, Version: strconv.Itoa(o.Version),
 		Components: o.Components, Force: o.Force, DryRun: o.DryRun, ExpectedPreview: o.ExpectedPreview,
 	})
 	if errors.Is(err, globalapply.ErrPreviewChanged) {
-		return v1.WorkflowApplyPlan{}, nil, errors.New("the host or the Workflow changed since the dry run the apply was based on; run the diff again")
+		return v1.WorkflowApplyPlan{}, nil, nil, errors.New("the host or the Workflow changed since the dry run the apply was based on; run the diff again")
 	}
 	if err != nil {
-		return v1.WorkflowApplyPlan{}, nil, err
+		return v1.WorkflowApplyPlan{}, nil, nil, err
 	}
 	plan := planOf(res)
 	if len(o.Components) == 0 {
-		return plan, driftOf(plan), nil
+		return plan, nil, driftOf(plan), nil
 	}
-	// The report replaces the drift the Controller holds for the harness, so it
-	// covers every component, not only the selected ones.
-	full, err := eng.Plan(ctx, globalapply.Request{Snapshot: snap, WorkflowID: o.Workflow, Version: strconv.Itoa(o.Version)})
+	// A selective order carries only the selected components (the Controller
+	// narrows the manifest), so only those are inspected: the Controller keeps
+	// the recorded drift of the rest.
+	after, err := eng.Plan(ctx, globalapply.Request{Snapshot: snap, WorkflowID: o.Workflow, Version: strconv.Itoa(o.Version), Components: o.Components})
 	if err != nil {
-		return v1.WorkflowApplyPlan{}, nil, err
+		return v1.WorkflowApplyPlan{}, nil, nil, err
 	}
-	return plan, driftOf(planOf(globalapply.Result{Plan: full})), nil
+	return plan, slices.Clone(o.Components), driftOf(planOf(globalapply.Result{Plan: after})), nil
 }
 
 func planOf(res globalapply.Result) v1.WorkflowApplyPlan {

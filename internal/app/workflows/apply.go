@@ -206,25 +206,11 @@ func selection(m domain.Manifest, harness string, asked []string) ([]string, err
 	return out, nil
 }
 
-// order records the order, unless it is a no-op (§27.4): the Worker already
-// holds that digest and those components, no one asks to repair (force) or only
-// to look (dry run), it reported no drift, was not partial and no other real order is alive. Only managed drift counts: an apply
-// repairs that, and local drift is expected and never goes away.
+// order records the order. It never decides a no-op from the state the
+// Controller holds, which can be stale (the Worker's files change on their own):
+// the Worker plans afresh, writes nothing when nothing changes and reports it
+// (plan.noop), and that report refreshes the drift.
 func (s *Service) order(ctx context.Context, tx *store.Tx, act mutation.Act, t target) (v1.ApplyWorkflowResponse, error) {
-	st, err := store.WorkflowStateOf(ctx, tx, t.worker.ID, t.harness)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return v1.ApplyWorkflowResponse{}, err
-	}
-	_, liveErr := store.LiveWorkflowApply(ctx, tx, t.worker.ID, t.harness, false)
-	if liveErr != nil && !errors.Is(liveErr, store.ErrNotFound) {
-		return v1.ApplyWorkflowResponse{}, liveErr
-	}
-	if err == nil && errors.Is(liveErr, store.ErrNotFound) && !t.force && !t.dryRun &&
-		st.AppliedDigest == t.ref.Digest && st.AppliedWorkflow == t.ref.ID &&
-		slices.Equal(st.Components, t.components) && (st.Components == nil) == (t.components == nil) && !st.Partial && noManagedDrift(st.Drift) {
-		return v1.ApplyWorkflowResponse{Noop: true, Reason: fmt.Sprintf("worker %s already has %s version %d (%s)", t.worker.Name, t.name, t.ref.Version, t.harness)}, nil
-	}
-
 	superseded, err := tx.SupersedeWorkflowApplies(ctx, t.worker.ID, t.harness, t.dryRun, act.Now)
 	if err != nil {
 		return v1.ApplyWorkflowResponse{}, err
@@ -261,14 +247,6 @@ func (s *Service) order(ctx context.Context, tx *store.Tx, act mutation.Act, t t
 		return v1.ApplyWorkflowResponse{}, err
 	}
 	return v1.ApplyWorkflowResponse{Apply: &view}, nil
-}
-
-func noManagedDrift(drift []byte) bool {
-	var d []v1.DriftedComponent
-	if len(drift) == 0 || json.Unmarshal(drift, &d) != nil {
-		return len(drift) == 0
-	}
-	return !slices.ContainsFunc(d, func(c v1.DriftedComponent) bool { return c.Ownership != "local" })
 }
 
 // applyResult is what the result column holds: the error and the opaque detail

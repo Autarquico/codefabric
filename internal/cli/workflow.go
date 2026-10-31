@@ -54,6 +54,18 @@ type workflowDeps struct {
 	open      func(*cobra.Command) (workflowStore, error)
 	openApply func(*cobra.Command) (workflowApplyStore, error)
 	adopter   WorkflowAdopterFactory
+	timer     timerFunc     // measures the --timeout and the polling of an order
+	poll      time.Duration // how often an order is asked about
+}
+
+// timerFunc starts a one-shot timer: the channel that fires after d and the
+// function that stops it. The internal/cli package does not import the clock
+// package (depguard), so the binary's real timer and the tests' fake one meet here.
+type timerFunc func(d time.Duration) (fired <-chan time.Time, stop func())
+
+func realTimer(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTimer(d)
+	return t.C, func() { t.Stop() }
 }
 
 func isTerminalWriter(w io.Writer) bool {
@@ -70,7 +82,14 @@ func workflowDepsOf(opts Options) workflowDeps {
 	if openApply == nil {
 		openApply = func(cmd *cobra.Command) (workflowApplyStore, error) { return openClient(cmd) }
 	}
-	return workflowDeps{open: open, openApply: openApply, adopter: opts.Workflows}
+	timer, poll := opts.applyTimer, opts.applyPoll
+	if timer == nil {
+		timer = realTimer
+	}
+	if poll <= 0 {
+		poll = defaultApplyPoll
+	}
+	return workflowDeps{open: open, openApply: openApply, adopter: opts.Workflows, timer: timer, poll: poll}
 }
 
 const (

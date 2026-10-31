@@ -1,6 +1,7 @@
 package globalapply
 
 import (
+	"context"
 	"testing"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
@@ -13,7 +14,7 @@ func TestRenderComponent_ARenderedFileIsForItsOwnerOnly(t *testing.T) {
 		{Path: "settings.json", Mode: 0o644, Content: content, SecretRefs: harness.SecretRefs(content)},
 		{Path: "plain.md", Mode: 0o644, Content: []byte("no secrets\n")},
 	}}
-	out, err := renderComponent(claude.Adapter{}, func(string) ([]byte, error) { return []byte("v"), nil }, c)
+	out, err := renderComponent(context.Background(), claude.Adapter{}, func(context.Context, string) ([]byte, error) { return []byte("v"), nil }, c)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -238,7 +238,7 @@ func (d *daemon) applier(ctx context.Context, o Options, h harness.Host, c *clie
 		adapters = nil
 	}
 	return applier.New(applier.Options{
-		Client: c, Adapters: adapters, Host: h, DataDir: o.Paths.WorkerDataDir(), Secrets: d.secrets, Log: d.log,
+		Client: c, Adapters: adapters, Host: h, DataDir: o.Paths.WorkerDataDir(), Secrets: d.secrets, Log: d.log, Clock: d.clock,
 	})
 }
 

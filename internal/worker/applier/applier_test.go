@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/workflowfetch"
 )
 
@@ -38,6 +40,7 @@ type fakeController struct {
 	attempts    []v1.ReportWorkflowApplyRequest // every report received, accepted or not
 	maxResult   int                             // when set, a report with a bigger Result is refused as the Controller does
 	refuseAll   bool                            // when set, any report with a Result or a drift is refused
+	selection   map[string][]string             // components an order names, by id: the manifest is narrowed to them as the Controller does
 }
 
 func newController() *fakeController {
@@ -80,6 +83,15 @@ func (c *fakeController) ApplyManifest(_ context.Context, id string, _ int) (v1.
 	c.manifests++
 	gate, in := c.gate, c.manifestIn
 	v, ok := c.versions[id]
+	if sel := c.selection[id]; ok && len(sel) > 0 {
+		narrowed := domain.Manifest{SchemaVersion: v.Manifest.SchemaVersion, Components: []domain.ManifestComponent{}}
+		for _, mc := range v.Manifest.Components {
+			if slices.Contains(sel, mc.Name) {
+				narrowed.Components = append(narrowed.Components, mc)
+			}
+		}
+		v.Manifest = &narrowed
+	}
 	c.mu.Unlock()
 	if in != nil {
 		in <- id
@@ -185,6 +197,14 @@ func order(id string, gen int, digest string) v1.WorkflowApplyOrder {
 }
 
 func (r *rig) handle(orders ...v1.WorkflowApplyOrder) {
+	r.c.mu.Lock()
+	for _, o := range orders {
+		if r.c.selection == nil {
+			r.c.selection = map[string][]string{}
+		}
+		r.c.selection[o.ID] = o.Components
+	}
+	r.c.mu.Unlock()
 	r.a.Handle(context.Background(), orders)
 	r.a.Wait()
 }
@@ -362,7 +382,7 @@ func TestLockSerialisesTheHarnessAndLeavesOthersFree(t *testing.T) {
 	<-got
 }
 
-func TestASelectionStillReportsTheDriftOfEveryComponent(t *testing.T) {
+func TestASelectionReportsOnlyTheDriftOfWhatItInspected(t *testing.T) {
 	r := newRig(t, nil)
 	d := r.c.serve(t, "op1", codex.AgentsComponent, map[string]string{"AGENTS.md": "team rules\n"})
 	r.handle(order("op1", 1, d))
@@ -370,8 +390,9 @@ func TestASelectionStillReportsTheDriftOfEveryComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r.c.serve(t, "op2", codex.AgentsComponent, map[string]string{"AGENTS.md": "team rules\n"})
-	o := order("op2", 2, d)
+	// The manifest of op2 reaches the Worker narrowed to the prompts.
+	d2 := r.c.serveKind(t, "op2", codex.PromptsComponent, harness.KindDir, map[string]string{"prompts/a.md": "a\n"})
+	o := order("op2", 2, d2)
 	o.Components = []string{codex.PromptsComponent}
 	r.handle(o)
 
@@ -379,12 +400,58 @@ func TestASelectionStillReportsTheDriftOfEveryComponent(t *testing.T) {
 	if len(reps) != 2 || reps[1].Outcome != v1.ApplyStateApplied {
 		t.Fatalf("reports = %+v", reps)
 	}
-	if got := reps[1].Drift; len(got) != 1 || got[0].Component != codex.AgentsComponent {
-		t.Fatalf("drift = %+v, want the unselected AGENTS.md", got)
+	if got := reps[1].Drift; len(got) != 0 {
+		t.Fatalf("drift = %+v, want none: AGENTS.md was not inspected", got)
+	}
+	if got := reps[1].Inspected; !slices.Equal(got, []string{codex.PromptsComponent}) {
+		t.Fatalf("inspected = %v, want only the selection", got)
 	}
 	if got := r.read(t, agents); got != "edited by hand\n" {
 		t.Fatalf("AGENTS.md = %q, an unselected component was touched", got)
 	}
+}
+
+func TestAnOrderForEveryComponentInspectsAllOfThem(t *testing.T) {
+	r := newRig(t, nil)
+	d := r.c.serve(t, "op1", codex.AgentsComponent, map[string]string{"AGENTS.md": "team rules\n"})
+	r.handle(order("op1", 1, d))
+	reps := r.c.reported()
+	if len(reps) != 1 || reps[0].Inspected != nil {
+		t.Fatalf("reports = %+v, want Inspected nil", reps)
+	}
+}
+
+func TestTheSecretReadEndsWhenTheClockPassesItsTimeout(t *testing.T) {
+	clk := clock.NewFake(time.Unix(0, 0))
+	a := New(Options{Secrets: blockingSecrets{}, Clock: clk, Recover: func(string) error { return nil }})
+	done := make(chan error, 1)
+	go func() { _, err := a.resolve(context.Background(), "tok/a"); done <- err }()
+	if err := clk.BlockUntil(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(secretTimeout)
+	if err := <-done; err == nil {
+		t.Fatal("resolve returned no error after the timeout")
+	}
+}
+
+func TestTheSecretReadEndsWhenTheOrderIsCancelled(t *testing.T) {
+	a := New(Options{Secrets: blockingSecrets{}, Clock: clock.NewFake(time.Unix(0, 0)), Recover: func(string) error { return nil }})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := a.resolve(ctx, "tok/a"); done <- err }()
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("resolve returned no error after the cancellation")
+	}
+}
+
+// blockingSecrets is a store that answers only when its context ends.
+type blockingSecrets struct{ secrets.Store }
+
+func (blockingSecrets) Get(ctx context.Context, _ string) (secrets.Secret, error) {
+	<-ctx.Done()
+	return secrets.Secret{}, ctx.Err()
 }
 
 func TestAStaleExpectedPreviewFailsTheOrderWithAClearErrorAndWritesNothing(t *testing.T) {

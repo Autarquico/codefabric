@@ -2,6 +2,7 @@ package globalapply
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,14 +14,14 @@ import (
 
 // SecretResolver gives the value of a secret ref from the secret store of
 // this Worker. An error must not carry the value.
-type SecretResolver func(ref string) ([]byte, error)
+type SecretResolver func(ctx context.Context, ref string) ([]byte, error)
 
 // renderComponent is c with the markers of its files replaced by their values,
 // each file with the escape the adapter names for it. It writes nothing; a
 // missing secret, an adapter with no escape for a file or no resolver is an
 // error wrapping harness.ErrSecretUnavailable. A rendered file is readable by
 // its owner only, whatever mode the Workflow recorded for it.
-func renderComponent(a harness.Adapter, resolve SecretResolver, c harness.Component) (harness.Component, error) {
+func renderComponent(ctx context.Context, a harness.Adapter, resolve SecretResolver, c harness.Component) (harness.Component, error) {
 	out := c
 	out.Files = make([]harness.File, len(c.Files))
 	for i, f := range c.Files {
@@ -40,7 +41,7 @@ func renderComponent(a harness.Adapter, resolve SecretResolver, c harness.Compon
 			return harness.Component{}, fmt.Errorf("%w: %q: %w", harness.ErrSecretUnavailable, f.Path, err)
 		}
 		content, err := harness.RenderSecrets(f.Content, func(ref string) ([]byte, error) {
-			v, err := resolve(ref)
+			v, err := resolve(ctx, ref)
 			if err != nil {
 				return nil, fmt.Errorf("%w: secret %q of %s: %w", harness.ErrSecretUnavailable, ref, f.Path, err)
 			}

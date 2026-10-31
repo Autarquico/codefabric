@@ -122,6 +122,7 @@ type ComponentPlan struct {
 
 	desired, actual, applied string
 	change                   bool // the adapter must be told about it
+	adopt                    bool // already as the Workflow has it, with no baseline: recorded, not changed
 }
 
 // Plan is the outcome of comparing baseline, host and Workflow.
@@ -288,7 +289,7 @@ func (e *Engine) decide(cp *ComponentPlan, c harness.Component, b baselineEntry,
 		cp.Action, cp.Reason = ActionPreserve, "local: never written"
 		// Drift of a local component: what the host has differs from what the
 		// Workflow carries for it. It is reported, never written.
-		cp.Drift = cp.actual != "" && kind != "" && kind != harness.Added
+		cp.Drift = kind != "" && kind != harness.Added
 		if cp.Drift {
 			cp.Reason = "local: differs from the Workflow, never written"
 		}
@@ -297,10 +298,13 @@ func (e *Engine) decide(cp *ComponentPlan, c harness.Component, b baselineEntry,
 			cp.Reason = "local: ceded to the person"
 		}
 	case !hasBase && kind == "":
-		cp.Action, cp.Reason = ActionPreserve, "already as the Workflow has it"
+		// Identical to the Workflow with no baseline: adopted, so the next version
+		// is compared with this one and not taken for an edit of the host.
+		cp.Action, cp.Reason, cp.adopt, cp.change = ActionPreserve, "already as the Workflow has it", true, true
 		cp.Drift = false
 		if req.Force {
-			cp.Action, cp.Reason, cp.change = ActionWrite, "forced", true
+			cp.Action, cp.Reason, cp.adopt = ActionWrite, "forced", false
+			cp.change = true
 		}
 	case !hasBase && kind != harness.Added && !req.Force:
 		// Something of the host the Workflow would replace, with no baseline to
@@ -402,9 +406,9 @@ func (e *Engine) Apply(ctx context.Context, req Request) (Result, error) {
 		if cp.Action == ActionPreserve {
 			// Ceded to the person: told to the adapter so it forgets it owned
 			// it, never written. Its markers become empty values.
-			resolve = func(string) ([]byte, error) { return nil, nil }
+			resolve = func(context.Context, string) ([]byte, error) { return nil, nil }
 		}
-		r, err := renderComponent(e.Adapter, resolve, byName[cp.Name])
+		r, err := renderComponent(ctx, e.Adapter, resolve, byName[cp.Name])
 		if err != nil {
 			return Result{Plan: plan}, err
 		}
@@ -453,8 +457,8 @@ func (e *Engine) write(ctx context.Context, in harness.GlobalInspector, plan Pla
 		if !cp.change {
 			continue
 		}
-		switch cp.Action {
-		case ActionWrite:
+		switch {
+		case cp.Action == ActionWrite || cp.adopt:
 			bl.Components[cp.Name] = baselineEntry{
 				WorkflowID: req.WorkflowID, WorkflowVersion: req.Version,
 				Ownership: cp.Ownership, Desired: cp.desired, Applied: after[cp.Name],

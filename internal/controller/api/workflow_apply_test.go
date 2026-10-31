@@ -7,6 +7,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/treedigest"
 )
@@ -149,31 +150,21 @@ func TestWorkflowApply_OrderReachesTheHeartbeatAndTheResultUpdatesTheState(t *te
 	}
 }
 
-func TestScenario_NoOp_SameDigestDoesNothing(t *testing.T) {
+// The Controller never decides a no-op from its own, possibly stale, record:
+// every apply is an order and the Worker says from a fresh plan whether
+// anything changes.
+func TestScenario_NoOp_EveryApplyIsAnOrderTheWorkerDecides(t *testing.T) {
 	f := newApplyFixture(t)
 	f.commit(0, "claude-code/a=one", "claude-code/b=two")
 	f.report(f.alpha, func() v1.WorkflowApplyOrder { f.apply("alpha", "team"); return f.order(f.alpha) }())
 
 	again := f.apply("alpha", "team@1")
-	if !again.Noop || again.Apply != nil {
-		t.Fatalf("repeat = %+v, want a no-op", again)
+	if again.Noop || again.Apply == nil || again.Apply.State != "pending" || again.Apply.Generation != 2 {
+		t.Fatalf("repeat = %+v, want an order", again)
 	}
-	if st := f.state("alpha"); st.Latest.Generation != 1 {
-		t.Fatalf("a no-op made an order: %+v", st.Latest)
-	}
-	// Anything that is not the same intent makes an order.
-	for name, m := range map[string]func(*v1.ApplyWorkflowRequest){
-		"force":      func(r *v1.ApplyWorkflowRequest) { r.Force = true },
-		"dry-run":    func(r *v1.ApplyWorkflowRequest) { r.DryRun = true },
-		"components": func(r *v1.ApplyWorkflowRequest) { r.Components = []string{"a"} },
-	} {
-		res := f.apply("alpha", "team", m)
-		if res.Noop || res.Apply == nil {
-			t.Fatalf("%s: %+v", name, res)
-		}
-		o := f.order(f.alpha)
-		f.report(f.alpha, o)
-		_ = o
+	f.report(f.alpha, f.order(f.alpha))
+	if st := f.state("alpha"); st.AppliedVersion != 1 || len(st.Drift) != 0 || st.Latest.Generation != 2 {
+		t.Fatalf("state = %+v", st)
 	}
 }
 
@@ -186,9 +177,7 @@ func TestScenario_DriftReported_MakesTheNextApplyAnOrder(t *testing.T) {
 	if len(st.Drift) != 1 || st.Drift[0].Component != "a" || st.Drift[0].Ownership != "managed" {
 		t.Fatalf("drift = %+v", st.Drift)
 	}
-	if res := f.apply("alpha", "team"); res.Noop {
-		t.Fatal("a Worker with drift must be asked again")
-	}
+	f.apply("alpha", "team")
 	// The next report replaces the drift.
 	f.report(f.alpha, f.order(f.alpha))
 	if st := f.state("alpha"); len(st.Drift) != 0 {
@@ -196,7 +185,7 @@ func TestScenario_DriftReported_MakesTheNextApplyAnOrder(t *testing.T) {
 	}
 }
 
-func TestWorkflowApply_ASkippedComponentMakesTheStatePartialAndNeverANoOp(t *testing.T) {
+func TestWorkflowApply_ASkippedComponentMakesTheStatePartial(t *testing.T) {
 	f := newApplyFixture(t)
 	f.commit(0, "claude-code/a=one")
 	f.apply("alpha", "team")
@@ -204,25 +193,54 @@ func TestWorkflowApply_ASkippedComponentMakesTheStatePartialAndNeverANoOp(t *tes
 	if st := f.state("alpha"); !st.Partial || st.AppliedVersion != 1 {
 		t.Fatalf("state = %+v, want partial v1", st)
 	}
-	// Even once the drift is gone, a partial state is asked again.
 	f.apply("alpha", "team")
 	f.report(f.alpha, f.order(f.alpha))
 	if st := f.state("alpha"); st.Partial {
 		t.Fatalf("a complete apply left the state partial: %+v", st)
 	}
-	if res := f.apply("alpha", "team"); !res.Noop {
-		t.Fatal("a complete state with no drift is a no-op")
-	}
 }
 
-func TestWorkflowApply_APartialStateWithoutDriftIsNotANoOp(t *testing.T) {
+func TestWorkflowApply_InspectedLimitsWhichDriftIsReplaced(t *testing.T) {
 	f := newApplyFixture(t)
-	f.commit(0, "claude-code/a=one")
-	f.apply("alpha", "team")
-	_, err := f.alpha.ReportWorkflowApply(f.t.Context(), f.order(f.alpha).ID, v1.ReportWorkflowApplyRequest{Generation: 1, Outcome: "applied", Skipped: []string{"a"}})
-	must(t, err)
-	if res := f.apply("alpha", "team"); res.Noop {
-		t.Fatal("a partial state must not be a no-op")
+	f.commit(0, "claude-code/a=one", "claude-code/b=two")
+	drift := func(names ...string) []v1.DriftedComponent {
+		var out []v1.DriftedComponent
+		for _, n := range names {
+			out = append(out, v1.DriftedComponent{Component: n, Ownership: "local", Paths: []string{n}})
+		}
+		return out
+	}
+	reportWith := func(inspected []string, d []v1.DriftedComponent) {
+		f.apply("alpha", "team")
+		o := f.order(f.alpha)
+		_, err := f.alpha.ReportWorkflowApply(t.Context(), o.ID, v1.ReportWorkflowApplyRequest{Generation: o.Generation, Outcome: "applied", Drift: d, Inspected: inspected})
+		must(t, err)
+	}
+	names := func() []string {
+		var out []string
+		for _, d := range f.state("alpha").Drift {
+			out = append(out, d.Component)
+		}
+		return out
+	}
+	reportWith(nil, drift("a", "b"))
+	if got := names(); len(got) != 2 {
+		t.Fatalf("drift = %v", got)
+	}
+	// Only b was inspected and it is clean now: a is kept.
+	reportWith([]string{"b"}, nil)
+	if got := names(); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("drift after inspecting b = %v, want [a]", got)
+	}
+	// Inspected a and found it again, b not inspected.
+	reportWith([]string{"a"}, drift("a"))
+	if got := names(); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("drift after inspecting a = %v, want [a]", got)
+	}
+	// nil replaces all.
+	reportWith(nil, nil)
+	if got := names(); len(got) != 0 {
+		t.Fatalf("drift after a full report = %v", got)
 	}
 }
 
@@ -399,19 +417,35 @@ func TestWorkflowApply_SyncOrdersEveryOnlineWorker(t *testing.T) {
 		t.Fatalf("results = %+v", res.Results)
 	}
 	for _, r := range res.Results {
-		if r.Result.Noop || r.Result.Apply == nil {
+		if r.Result.Apply == nil {
 			t.Fatalf("%s: %+v", r.Worker, r.Result)
 		}
 	}
 	for _, w := range []*client.Client{f.alpha, f.beta} {
 		f.report(w, f.order(w))
 	}
-	res, err = f.owner.SyncWorkflow(t.Context(), v1.SyncWorkflowRequest{Harness: "claude-code", Workflow: "team"})
+}
+
+func TestWorkflowApply_SyncSkipsAnOfflineWorker(t *testing.T) {
+	f := newApplyFixture(t)
+	f.commit(0, "claude-code/a=one")
+	beta, err := f.owner.Worker(t.Context(), "beta")
 	must(t, err)
-	for _, r := range res.Results {
-		if !r.Result.Noop {
-			t.Errorf("%s: a second sync must be a no-op: %+v", r.Worker, r.Result)
-		}
+	must(t, f.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		_, err := tx.SetWorkerStatus(t.Context(), domain.ID(beta.ID), domain.WorkerStatus{State: domain.WorkerOnline},
+			domain.WorkerStatus{State: domain.WorkerOffline, BeforeOffline: domain.WorkerOnline}, f.clock.Now())
+		return err
+	}))
+	res, err := f.owner.SyncWorkflow(t.Context(), v1.SyncWorkflowRequest{Harness: "claude-code", Workflow: "team"})
+	must(t, err)
+	if len(res.Results) != 1 || res.Results[0].Worker != "alpha" || res.Results[0].Result.Apply == nil {
+		t.Fatalf("results = %+v, want only alpha", res.Results)
+	}
+	if _, err := f.tryApply("beta", "team"); codeOf(err) != domain.CodeWorkerOffline {
+		t.Fatalf("a direct apply to an offline Worker: %v", err)
+	}
+	if got := f.beat(f.beta).WorkflowApplies; len(got) != 0 {
+		t.Fatalf("the offline Worker got orders: %+v", got)
 	}
 }
 
@@ -471,21 +505,6 @@ func TestWorkflowApply_ARealOrderSupersedesARealOrderAndAPendingDryRun(t *testin
 	}
 	if o := f.order(f.alpha); o.ID != second.ID {
 		t.Errorf("handed %+v", o)
-	}
-}
-
-func TestWorkflowApply_OnlyManagedDriftBlocksTheNoOp(t *testing.T) {
-	f := newApplyFixture(t)
-	f.commit(0, "claude-code/a=one")
-	f.apply("alpha", "team")
-	f.report(f.alpha, f.order(f.alpha), v1.DriftedComponent{Component: "a", Ownership: "local", Paths: []string{"a.md"}})
-	if res := f.apply("alpha", "team"); !res.Noop {
-		t.Fatalf("local drift must not block the no-op: %+v", res)
-	}
-	f.apply("alpha", "team", func(r *v1.ApplyWorkflowRequest) { r.Force = true })
-	f.report(f.alpha, f.order(f.alpha), v1.DriftedComponent{Component: "a", Ownership: "managed"})
-	if res := f.apply("alpha", "team"); res.Noop {
-		t.Fatal("managed drift must make an order")
 	}
 }
 

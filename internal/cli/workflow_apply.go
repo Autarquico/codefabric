@@ -27,8 +27,8 @@ type workflowApplyStore interface {
 	WorkflowState(ctx context.Context, worker, harness string) ([]v1.WorkflowState, error)
 }
 
-// applyPollInterval is how often --wait asks the Controller about the order.
-var applyPollInterval = 500 * time.Millisecond
+// defaultApplyPoll is how often --wait asks the Controller about the order.
+const defaultApplyPoll = 500 * time.Millisecond
 
 const (
 	flagWorker     = "worker"
@@ -267,7 +267,7 @@ func runApplyOne(cmd *cobra.Command, deps workflowDeps, f applyFlags, v applyVie
 		return err
 	}
 	if resp.Apply != nil && !f.detach {
-		settled, err := awaitApply(cmd.Context(), st, *resp.Apply, f.timeout)
+		settled, err := deps.await(cmd.Context(), st, *resp.Apply, f.timeout)
 		if err != nil {
 			return err
 		}
@@ -302,7 +302,7 @@ func runSync(cmd *cobra.Command, deps workflowDeps, f applyFlags, workflow strin
 	for i := range resp.Results {
 		r := &resp.Results[i]
 		if r.Result.Apply != nil && !f.detach {
-			settled, err := awaitApply(cmd.Context(), st, *r.Result.Apply, f.timeout)
+			settled, err := deps.await(cmd.Context(), st, *r.Result.Apply, f.timeout)
 			if err != nil {
 				return err
 			}
@@ -325,29 +325,39 @@ func runSync(cmd *cobra.Command, deps workflowDeps, f applyFlags, workflow strin
 		map[string]any{"failed": failed, "results": resp.Results})
 }
 
-// awaitApply polls the order until the Worker closes it or the timeout runs
-// out. The returned order is the last one read.
-func awaitApply(ctx context.Context, st workflowApplyStore, a v1.WorkflowApply, timeout time.Duration) (v1.WorkflowApply, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+// await polls the order until the Worker closes it or the timeout runs out,
+// both measured with the timer of deps. The returned order is the last one read.
+func (d workflowDeps) await(ctx context.Context, st workflowApplyStore, a v1.WorkflowApply, timeout time.Duration) (v1.WorkflowApply, error) {
+	deadline, stopDeadline := d.timer(timeout)
+	defer stopDeadline()
 	for !closedOrder(a.State) {
+		tick, stopTick := d.timer(d.poll)
 		select {
 		case <-ctx.Done():
-			return a, domain.NewError(domain.CodeInProgress,
-				fmt.Sprintf("the Worker has not finished %s after %s; it keeps going: see `cf workflow status`", a.ID, timeout),
-				map[string]any{"apply": a.ID, "state": a.State})
-		case <-time.After(applyPollInterval):
+			stopTick()
+			return a, stillRunning(a, timeout)
+		case <-deadline:
+			stopTick()
+			return a, stillRunning(a, timeout)
+		case <-tick:
+			stopTick()
 		}
 		next, err := st.WorkflowApply(ctx, a.ID)
 		if err != nil {
 			if ctx.Err() != nil {
-				continue
+				return a, stillRunning(a, timeout)
 			}
 			return a, err
 		}
 		a = next
 	}
 	return a, nil
+}
+
+func stillRunning(a v1.WorkflowApply, timeout time.Duration) error {
+	return domain.NewError(domain.CodeInProgress,
+		fmt.Sprintf("the Worker has not finished %s after %s; it keeps going: see `cf workflow status`", a.ID, timeout),
+		map[string]any{"apply": a.ID, "state": a.State})
 }
 
 func closedOrder(state string) bool {
@@ -496,6 +506,9 @@ func writeSync(out io.Writer, r v1.SyncWorkflowResponse) error {
 		if a := res.Result.Apply; a != nil {
 			state, order, detail = a.State, a.ID, a.Error
 			if plan, ok := planOf(a); ok {
+				if plan.NoOp && a.State == v1.ApplyStateApplied {
+					state = "no-op"
+				}
 				if skipped := skippedForDrift(plan); len(skipped) > 0 && !a.Force {
 					detail = "skipped (local edits, use --force): " + strings.Join(skipped, ", ")
 				}

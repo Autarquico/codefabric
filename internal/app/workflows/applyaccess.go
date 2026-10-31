@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -192,12 +193,8 @@ func (s *Service) ReportResult(ctx context.Context, by pki.Session, id string, r
 			return v1.ReportWorkflowApplyResponse{}, err
 		}
 		a.State = state
-		drift, err := json.Marshal(nonNilDrift(req.Drift))
-		if err != nil {
-			return v1.ReportWorkflowApplyResponse{}, err
-		}
 		if state == store.ApplyApplied && !a.DryRun {
-			if err := recordState(ctx, tx, a, drift, len(req.Skipped) > 0, act.Now); err != nil {
+			if err := recordState(ctx, tx, a, req, act.Now); err != nil {
 				return v1.ReportWorkflowApplyResponse{}, err
 			}
 		}
@@ -211,11 +208,22 @@ func (s *Service) ReportResult(ctx context.Context, by pki.Session, id string, r
 	})
 }
 
-func nonNilDrift(d []v1.DriftedComponent) []v1.DriftedComponent {
-	if d == nil {
-		return []v1.DriftedComponent{}
+// mergedDrift is the drift to record: the reported one, plus what was recorded
+// for the components the Worker did not inspect (all of them when inspected is nil).
+func mergedDrift(recorded []byte, reported []v1.DriftedComponent, inspected []string) ([]byte, error) {
+	out := []v1.DriftedComponent{}
+	if inspected != nil && len(recorded) > 0 {
+		var old []v1.DriftedComponent
+		if err := json.Unmarshal(recorded, &old); err != nil {
+			return nil, fmt.Errorf("workflows: recorded drift: %w", err)
+		}
+		for _, d := range old {
+			if !slices.Contains(inspected, d.Component) {
+				out = append(out, d)
+			}
+		}
 	}
-	return d
+	return json.Marshal(append(out, reported...))
 }
 
 func validReport(req v1.ReportWorkflowApplyRequest) error {
@@ -235,6 +243,9 @@ func validReport(req v1.ReportWorkflowApplyRequest) error {
 	if len(req.Skipped) > maxReportDrift {
 		checks = append(checks, input.Invalid("skipped lists at most %d components", maxReportDrift))
 	}
+	if len(req.Inspected) > maxReportDrift {
+		checks = append(checks, input.Invalid("inspected lists at most %d components", maxReportDrift))
+	}
 	if len(req.Drift) > maxReportDrift {
 		checks = append(checks, input.Invalid("drift lists at most %d components", maxReportDrift))
 	}
@@ -243,16 +254,20 @@ func validReport(req v1.ReportWorkflowApplyRequest) error {
 
 // recordState writes what the Worker holds after an applied order that was not
 // a dry run.
-func recordState(ctx context.Context, tx *store.Tx, a store.WorkflowApply, drift []byte, partial bool, now time.Time) error {
+func recordState(ctx context.Context, tx *store.Tx, a store.WorkflowApply, req v1.ReportWorkflowApplyRequest, now time.Time) error {
 	st, err := store.WorkflowStateOf(ctx, tx, a.WorkerID, a.Harness)
 	if errors.Is(err, store.ErrNotFound) {
 		st = store.WorkflowState{WorkerID: a.WorkerID, Harness: a.Harness}
 	} else if err != nil {
 		return err
 	}
+	drift, err := mergedDrift(st.Drift, req.Drift, req.Inspected)
+	if err != nil {
+		return err
+	}
 	st.PreviousVersion = previousAfter(st, a)
 	st.AppliedWorkflow, st.AppliedVersion, st.AppliedDigest, st.Components = a.WorkflowID, a.Version, a.Digest, a.Components
-	st.Drift, st.Partial, st.UpdatedAt = drift, partial, now
+	st.Drift, st.Partial, st.UpdatedAt = drift, len(req.Skipped) > 0, now
 	return tx.PutWorkflowState(ctx, st)
 }
 

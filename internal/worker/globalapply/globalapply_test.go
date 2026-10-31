@@ -100,7 +100,7 @@ func newWorld(t *testing.T, k kit) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &Engine{Adapter: k.adapter, Host: h, DataDir: data, Secrets: func(ref string) ([]byte, error) {
+	e := &Engine{Adapter: k.adapter, Host: h, DataDir: data, Secrets: func(_ context.Context, ref string) ([]byte, error) {
 		if ref == "tok/a" {
 			return []byte("s3cr3t-value"), nil
 		}
@@ -318,7 +318,7 @@ func TestApply_ManagedDriftNeedsForce(t *testing.T) {
 func TestApply_AMissingSecretFailsTheWholeApplyWithoutWrites(t *testing.T) {
 	eachKit(t, func(t *testing.T, w *world) {
 		k := w.k
-		w.e.Secrets = func(string) ([]byte, error) { return nil, errors.New("not in the store") }
+		w.e.Secrets = func(context.Context, string) ([]byte, error) { return nil, errors.New("not in the store") }
 		_, err := w.apply(t, Request{Snapshot: k.snap(t, "v1", harness.Managed, k.doc, k.sec)})
 		if !errors.Is(err, harness.ErrSecretUnavailable) {
 			t.Fatalf("err = %v", err)
@@ -478,4 +478,89 @@ func TestApply_ACedComponentIsKeptAndNeverDeletedLater(t *testing.T) {
 			t.Fatalf("ceded doc deleted: %q", got)
 		}
 	})
+}
+
+func TestApply_AComponentAlreadyAsTheWorkflowHasItIsAdoptedAndNextVersionIsNotDrift(t *testing.T) {
+	eachKit(t, func(t *testing.T, w *world) {
+		k := w.k
+		w.write(t, k.docOnHost, "doc v1\n")
+		if _, err := w.apply(t, Request{Snapshot: k.snap(t, "v1", harness.Managed, k.doc)}); err != nil {
+			t.Fatal(err)
+		}
+		if got := w.read(t, k.docOnHost); got != "doc v1\n" {
+			t.Fatalf("adoption changed the host: %q", got)
+		}
+		res, err := w.apply(t, Request{Snapshot: k.snap(t, "v2", harness.Managed, k.doc)})
+		if err != nil || !res.Applied {
+			t.Fatalf("v2 = %+v, %v", res, err)
+		}
+		if a := action(t, res.Plan, k.doc); a.Drift || a.Action != ActionWrite {
+			t.Fatalf("plan = %+v, want a write with no drift", a)
+		}
+		if got := w.read(t, k.docOnHost); got != "doc v2\n" {
+			t.Fatalf("doc = %q", got)
+		}
+	})
+}
+
+func TestPlan_ALocalComponentDriftsFromTheWorkflowEvenIfItWasNeverApplied(t *testing.T) {
+	eachKit(t, func(t *testing.T, w *world) {
+		k := w.k
+		other := map[string]string{"claude": `{"model":"mine"}`, "codex": "model = \"mine\"\n"}[k.name]
+		w.write(t, k.secOnHost, other)
+		res, err := w.apply(t, Request{Snapshot: k.snap(t, "v1", harness.Local, k.sec)})
+		if err != nil || res.Applied {
+			t.Fatalf("apply = %+v, %v", res, err)
+		}
+		if a := action(t, res.Plan, k.sec); !a.Drift || a.Action != ActionPreserve || a.Origin != OriginLocal {
+			t.Fatalf("plan = %+v", a)
+		}
+	})
+}
+
+func TestApply_AComponentCededToLocalStillReportsDriftFromTheWorkflow(t *testing.T) {
+	eachKit(t, func(t *testing.T, w *world) {
+		k := w.k
+		if _, err := w.apply(t, Request{Snapshot: k.snap(t, "v1", harness.Managed, k.sec)}); err != nil {
+			t.Fatal(err)
+		}
+		res, err := w.apply(t, Request{Snapshot: k.snap(t, "v2", harness.Local, k.sec)})
+		if err != nil || !res.Applied {
+			t.Fatalf("cede = %+v, %v", res, err)
+		}
+		if a := action(t, res.Plan, k.sec); !a.Drift || a.Action != ActionPreserve {
+			t.Fatalf("plan = %+v", a)
+		}
+		again, err := w.apply(t, Request{Snapshot: k.snap(t, "v2", harness.Local, k.sec)})
+		if err != nil || again.Applied {
+			t.Fatalf("again = %+v, %v", again, err)
+		}
+		if a := action(t, again.Plan, k.sec); !a.Drift {
+			t.Fatalf("plan after the cession = %+v, want drift", a)
+		}
+	})
+}
+
+func TestPlan_ALocalMCPServerDriftsFromTheWorkflowWithoutBeingApplied(t *testing.T) {
+	w := newWorld(t, kits[0])
+	w.write(t, ".claude.json", `{"mcpServers": {"x": {"command": "mine"}}}`)
+	want := []byte(`{"mcpServers": {"x": {"command": "team"}}}`)
+	files := []harness.File{{Path: claude.StateFile, Mode: 0o600, Content: want}}
+	d, err := harness.FilesDigest(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := harness.NativeSnapshot{Harness: claude.ID, SchemaVersion: claude.SchemaVersion, Components: []harness.Component{
+		{Name: claude.MCPComponent, Kind: harness.KindJSONSubset, Ownership: harness.Local, Files: files, Digest: d},
+	}}
+	res, err := w.apply(t, Request{Snapshot: snap})
+	if err != nil || res.Applied {
+		t.Fatalf("apply = %+v, %v", res, err)
+	}
+	if a := action(t, res.Plan, claude.MCPComponent); !a.Drift || a.Action != ActionPreserve {
+		t.Fatalf("plan = %+v", a)
+	}
+	if got := w.read(t, ".claude.json"); !strings.Contains(got, "mine") {
+		t.Fatalf(".claude.json = %q", got)
+	}
 }
