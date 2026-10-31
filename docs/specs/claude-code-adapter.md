@@ -2,7 +2,7 @@
 codename: codefabric
 title: Adapter de Claude Code
 type: task
-status: active
+status: shipped
 priority: P0
 size: L
 issue: 20
@@ -13,7 +13,7 @@ depends_on: [harness-adapter-framework]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 # Adapter de Claude Code
