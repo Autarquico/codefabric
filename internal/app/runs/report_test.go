@@ -58,6 +58,8 @@ func TestValidateEntry_EndReasonAndModel(t *testing.T) {
 		{"another end reason", exited(func(e *v1.RunReportEntry) { e.EndReason = domain.EndBudget }), false},
 		{"input_required of a lost wrapper", exited(func(e *v1.RunReportEntry) { e.EndReason, e.Cause = domain.EndInputRequired, v1.ExitCauseWrapperLost }), false},
 		{"a model too long", exited(func(e *v1.RunReportEntry) { e.Model = strings.Repeat("m", v1.MaxModelLen+1) }), false},
+		{"a model on a started", v1.RunReportEntry{Kind: v1.ReportStarted, LeaseEpoch: 1, At: time.Now(), Model: "m", Handle: &v1.RuntimeHandle{Runtime: "tmux", Ref: "r"}}, true},
+		{"a model too long on a started", v1.RunReportEntry{Kind: v1.ReportStarted, LeaseEpoch: 1, At: time.Now(), Model: strings.Repeat("m", v1.MaxModelLen+1), Handle: &v1.RuntimeHandle{Runtime: "tmux", Ref: "r"}}, false},
 		{"a model on a stopped", v1.RunReportEntry{Kind: v1.ReportStopped, LeaseEpoch: 1, At: time.Now(), Model: "m"}, false},
 	}
 	for _, c := range cases {

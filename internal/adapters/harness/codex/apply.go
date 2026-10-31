@@ -264,6 +264,9 @@ func readConfigTable(root string) (table, bool, error) {
 // config.toml it set, or the file or directory of the rest.
 func removeComponent(root, name string, paths [][]string) error {
 	if name != ConfigComponent {
+		if componentPath(root, name) == filepath.Clean(root) {
+			return fmt.Errorf("codex: apply: refusing to remove component %q", name)
+		}
 		if err := os.RemoveAll(componentPath(root, name)); err != nil {
 			return fmt.Errorf("codex: apply: %w", err)
 		}
@@ -299,6 +302,11 @@ func readApplied(root string) (applied, error) {
 	}
 	if a == nil {
 		a = applied{}
+	}
+	for name := range a {
+		if _, ok := layoutOf(name); !ok {
+			return nil, fmt.Errorf("codex: %s: unknown component %q", appliedFile, name)
+		}
 	}
 	return a, nil
 }

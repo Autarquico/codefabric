@@ -108,7 +108,7 @@ type RunReportEntry struct {
 	// EndReason (exited) is why the Worker ended the Run when it was not the
 	// exit alone: only domain.EndInputRequired, the harness waited for input.
 	EndReason domain.EndReason `json:"end_reason,omitempty"`
-	// Model (exited) is the model the harness said it ran with, if it did.
+	// Model (started, exited) is the model the harness said it ran with, if it did.
 	Model        string `json:"model,omitempty"`
 	NeverStarted bool   `json:"never_started,omitempty"` // stopped
 	// WasRunning: the process was alive when the stop of the Controller reached

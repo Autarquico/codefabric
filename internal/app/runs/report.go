@@ -212,7 +212,15 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		}
 		ev.Type, ev.Message = domain.EventRunStarted, "run started"
 		ev.Data["handle"] = e.Handle
-		apply = func() error { return tx.StartRun(ctx, run, e.At, string(raw)) }
+		if e.Model != "" {
+			ev.Data["model"] = e.Model
+		}
+		apply = func() error {
+			if err := tx.StartRun(ctx, run, e.At, string(raw)); err != nil {
+				return err
+			}
+			return tx.SetRunModel(ctx, run, e.Model)
+		}
 	case e.Kind == v1.ReportExited:
 		event, reason := domain.RunEventExitNonZero, domain.EndExitCode
 		if e.ExitCode != nil && *e.ExitCode == 0 && e.Cause != v1.ExitCauseWrapperLost {
@@ -502,8 +510,10 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		return input.Invalid("only publication_failed carries a phase")
 	case e.Kind != v1.ReportStarted && e.Handle != nil:
 		return input.Invalid("only started carries a handle")
-	case e.Kind != v1.ReportExited && (e.ExitCode != nil || e.Signal != "" || e.Cause != "" || e.EndReason != "" || e.Model != ""):
-		return input.Invalid("only exited carries an exit code, a signal, a cause, an end reason or a model")
+	case e.Kind != v1.ReportExited && (e.ExitCode != nil || e.Signal != "" || e.Cause != "" || e.EndReason != ""):
+		return input.Invalid("only exited carries an exit code, a signal, a cause or an end reason")
+	case e.Kind != v1.ReportExited && e.Kind != v1.ReportStarted && e.Model != "":
+		return input.Invalid("only started and exited carry a model")
 	case e.EndReason != "" && (e.EndReason != domain.EndInputRequired || e.Cause == v1.ExitCauseWrapperLost):
 		return input.Invalid("end_reason, when there is one, is input_required and not of a lost wrapper")
 	case len(e.Model) > v1.MaxModelLen || !domain.Printable(e.Model):

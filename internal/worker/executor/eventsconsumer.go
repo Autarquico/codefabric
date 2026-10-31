@@ -132,10 +132,11 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 		}
 	}
 	next.Consumed += uint64(len(data))
-	needsInput, message := false, ""
+	needsInput, message, sawInit := false, "", false
 	for _, ev := range events {
 		switch ev.Kind {
 		case harness.EventSessionStarted:
+			sawInit = true
 			if next.Model != "" {
 				break
 			}
@@ -156,6 +157,15 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 		if err := e.stopForInput(ctx, r, final, message); err != nil {
 			return false, err
 		}
+	}
+	if sawInit && !next.StartHeldAt.IsZero() {
+		// The init is what the held start waited for: it goes out with the model, and
+		// the cursor that says it is not held moves in the same write.
+		err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return e.releaseStart(ctx, tx, r.Key, next) })
+		if err == nil {
+			e.o.Journal.Notify()
+		}
+		return more, err
 	}
 	return more, e.saveCursor(ctx, next)
 }

@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -138,6 +139,25 @@ func eventSequences(t *testing.T, host config.Paths, run string, typ domain.Even
 	return seqs
 }
 
+// eventData is the data of the only event of a type about a Run.
+func eventData(t *testing.T, host config.Paths, run string, typ domain.EventType) map[string]any {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+host.DatabaseFile()+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var raw string
+	if err := db.QueryRowContext(t.Context(), `SELECT data FROM events WHERE run_id = ? AND type = ?`, run, string(typ)).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 // awaitPublished waits for the Run to be failed and published, and then for the
 // Controller to have every report of the Worker.
 func (s *claudeStack) awaitPublished(t *testing.T, id string) v1.Run {
@@ -167,6 +187,9 @@ func (s *claudeStack) assertInputRequired(t *testing.T, run v1.Run) {
 	}
 	if run.Model != "claude-opus-5-5" {
 		t.Errorf("model = %q", run.Model)
+	}
+	if got := eventData(t, s.host, run.ID, domain.EventRunStarted)["model"]; got != "claude-opus-5-5" {
+		t.Errorf("RunStarted.data.model = %v", got)
 	}
 	stopped := eventSequences(t, s.host, run.ID, domain.EventRunStopped)
 	sealed := eventSequences(t, s.host, run.ID, domain.EventRunSealed)

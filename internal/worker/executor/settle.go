@@ -308,9 +308,12 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 			if err := state.SetStarted(ctx, tx, r.Key, mustJSON(*e.runtimeHandle(r.Key)), f.started.StartedAt); err != nil {
 				return err
 			}
-			if err := e.report(ctx, tx, r.Key, v1.ReportStarted, f.started.StartedAt, func(en *v1.RunReportEntry) {
-				en.Handle = e.runtimeHandle(r.Key)
-			}); err != nil {
+			if err := e.reportStarted(ctx, tx, r.Key, f.started.StartedAt, f.model); err != nil {
+				return err
+			}
+		} else if !cur.StartHeldAt.IsZero() {
+			// A start still on hold goes out before the end, whatever ended the Run.
+			if err := e.releaseStart(ctx, tx, r.Key, cur); err != nil {
 				return err
 			}
 		}

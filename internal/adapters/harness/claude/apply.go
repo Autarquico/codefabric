@@ -326,7 +326,10 @@ func encodeValue(v any) ([]byte, error) {
 // removeComponent deletes what a managed apply wrote: the servers it set in
 // ~/.claude.json, or the file or directory of the rest.
 func removeComponent(host harness.Host, name string, servers []string) error {
-	l, _ := layoutOf(name)
+	l, ok := layoutOf(name)
+	if !ok || (name != MCPComponent && l.path == "") {
+		return fmt.Errorf("claude-code: apply: refusing to remove component %q", name)
+	}
 	root := l.root(host)
 	if name != MCPComponent {
 		if err := os.RemoveAll(filepath.Join(root, l.path)); err != nil {
@@ -358,6 +361,11 @@ func readApplied(root string) (applied, error) {
 	}
 	if a == nil {
 		a = applied{}
+	}
+	for name := range a {
+		if _, ok := layoutOf(name); !ok {
+			return nil, fmt.Errorf("claude-code: %s: unknown component %q", appliedFile, name)
+		}
 	}
 	return a, nil
 }

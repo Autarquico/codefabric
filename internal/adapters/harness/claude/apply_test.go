@@ -356,3 +356,21 @@ func mustPlain(t *testing.T) harness.NativeSnapshot {
 	h, _ := newHost(t, map[string]string{".claude/CLAUDE.md": "plain"})
 	return snapshot(t, h)
 }
+
+func TestGlobalApplyRefusesAnUnknownRecordedComponentAndTouchesNothing(t *testing.T) {
+	h, home := newHost(t, homeFiles())
+	rec := filepath.Join(home, ".claude", ".cf-applied.json")
+	if err := os.WriteFile(rec, []byte(`{"unknown":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := treeHash(t, home)
+	for _, dry := range []bool{true, false} {
+		_, err := claude.Adapter{}.ApplyConfig(t.Context(), h, harness.NativeSnapshot{Harness: claude.ID, SchemaVersion: 1}, harness.ApplyOptions{Target: harness.TargetGlobal{}, DryRun: dry})
+		if err == nil {
+			t.Errorf("dry=%v: applied with an unknown recorded component", dry)
+		}
+	}
+	if treeHash(t, home) != before {
+		t.Error("HOME changed")
+	}
+}

@@ -5,15 +5,16 @@ The adapter of Claude Code (Anthropic). A Run gets it when it asks for
 `docs/codefabric-spec.md` asks every adapter to. Verified against
 `2.1.314 (Claude Code)`.
 
-Not yet registered in the binaries (task A3).
+Registered in the binaries: `cmd/cf` and the Worker daemon
+(`internal/worker/daemon/run.go`) offer it next to `codex`.
 
 1. **Installation.** `Detect` looks for `claude` in the PATH of the host
    (`Host.LookPath`) and reports its path; not finding it is not installed,
    not an error. It says nothing of authentication, which `Diagnose` reports
    apart: the secret every Run needs and whether `~/.claude/.credentials.json`
    exists. `Version` runs `claude --version` and parses `X.Y.Z (Claude Code)`
-   to `X.Y.Z`. `Install` is unsupported and not declared (also under
-   `DryRun`): the user installs Claude Code.
+   to `X.Y.Z`. `Install` is unsupported and not declared, `DryRun` included, as in
+   `codex`: the user installs Claude Code.
 
 2. **Configuration paths detected.** `~/.claude/`: `settings.json`,
    `CLAUDE.md`, `commands/`, `agents/`, `skills/` and `output-styles/`; and
