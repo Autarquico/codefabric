@@ -75,10 +75,19 @@ func beginBackup(harnessDir string, paths []string) error {
 // the commit point and is atomic: once it is gone a leftover directory is only
 // garbage, so a crash while the rest is deleted cannot make a restore run
 // against a backup that is half gone.
-func commitBackup(harnessDir string) error {
+func commitBackup(harnessDir string) error { return dropBackup(harnessDir) }
+
+// dropBackup retires the journal, makes that durable and only then deletes the
+// copies. The journal is the only thing that makes a restore run, so no crash
+// can leave a journal next to copies that are half gone: a restore never
+// trusts a copy of unknown completeness.
+func dropBackup(harnessDir string) error {
 	dir := backupDir(harnessDir)
 	if err := os.Remove(filepath.Join(dir, journalName)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("globalapply: committing the backup: %w", err)
+		return fmt.Errorf("globalapply: retiring the journal: %w", err)
+	}
+	if err := atomicfile.SyncDir(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("globalapply: retiring the journal: %w", err)
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("globalapply: removing the backup: %w", err)
@@ -117,7 +126,7 @@ func restoreBackup(harnessDir string) (restored bool, err error) {
 	if len(errs) > 0 {
 		return false, errors.Join(append(errs, fmt.Errorf("globalapply: the backup is kept in %s", dir))...)
 	}
-	return true, os.RemoveAll(dir)
+	return true, dropBackup(harnessDir)
 }
 
 func restoreEntry(dir string, i int, e journalEntry) error {

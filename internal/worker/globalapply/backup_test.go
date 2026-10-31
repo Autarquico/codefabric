@@ -127,3 +127,30 @@ func TestRestoreBackup_ACrashBeforeTheJournalDropsTheBackupOnly(t *testing.T) {
 		t.Fatalf("a = %q", content(t, a))
 	}
 }
+
+func TestRestoreBackup_ACrashDuringTheCleanupAfterARestoreNeverRestoresFromAPartialCopy(t *testing.T) {
+	root := t.TempDir()
+	harnessDir, dir := filepath.Join(root, "data"), filepath.Join(root, "home", "d")
+	write(t, filepath.Join(dir, "x"), "x0")
+	write(t, filepath.Join(dir, "y"), "y0")
+	if err := beginBackup(harnessDir, []string{dir}); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "x"), "x1")
+	if restored, err := restoreBackup(harnessDir); err != nil || !restored {
+		t.Fatalf("restore = %v, %v", restored, err)
+	}
+	// The restore retired the journal first, so what a crash can leave is
+	// only copies, here a directory copy with a file already deleted.
+	copyDir := filepath.Join(backupDir(harnessDir), filesDirName, "0")
+	write(t, filepath.Join(copyDir, "x"), "x0")
+	if restored, err := restoreBackup(harnessDir); err != nil || restored {
+		t.Fatalf("second restore = %v, %v", restored, err)
+	}
+	if content(t, filepath.Join(dir, "x")) != "x0" || content(t, filepath.Join(dir, "y")) != "y0" {
+		t.Fatalf("the restored directory was damaged: x=%q y=%q", content(t, filepath.Join(dir, "x")), content(t, filepath.Join(dir, "y")))
+	}
+	if _, err := os.Lstat(backupDir(harnessDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("garbage left: %v", err)
+	}
+}

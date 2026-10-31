@@ -189,8 +189,10 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	ap := d.applier(ctx, o, eo.Host, c)
+	g, gctx := errgroup.WithContext(ctx)
+	takeApplies := d.takeApplies(gctx, g, ap)
 	d.onResponse = func(r v1.HeartbeatResponse) {
-		ap.Handle(ctx, r.WorkflowApplies)
+		takeApplies(r)
 		// A heartbeat taken is this daemon held as the current one: it may ask for grants.
 		ex.HeartbeatTaken()
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
@@ -206,17 +208,29 @@ func Run(ctx context.Context, o Options) error {
 		OnFence: func(state.Key) { ex.RequestReconcile() },
 	}
 
-	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return d.loop(gctx) })
 	g.Go(func() error { return ex.Run(gctx) })
 	g.Go(func() error { return broker.Run(gctx) })
 	g.Go(func() error { return sender.Run(gctx) })
-	g.Go(func() error { <-gctx.Done(); ap.Wait(); return nil })
 	shipper := outputship.New(outputship.Options{
 		DB: db, Uploader: c, Paths: o.Paths, Clock: d.clock, Log: d.log, Interval: o.OutputInterval,
 	})
 	g.Go(func() error { return shipper.Run(gctx) })
 	return g.Wait()
+}
+
+// orderTaker is the applier as the daemon sees it.
+type orderTaker interface {
+	Handle(ctx context.Context, orders []v1.WorkflowApplyOrder)
+	Wait()
+}
+
+// takeApplies hands the orders of a heartbeat to ap, under the context of the
+// group: when another component fails the applies in flight are cancelled with
+// it, and the daemon does not wait for them forever.
+func (d *daemon) takeApplies(gctx context.Context, g *errgroup.Group, ap orderTaker) func(v1.HeartbeatResponse) {
+	g.Go(func() error { <-gctx.Done(); ap.Wait(); return nil })
+	return func(r v1.HeartbeatResponse) { ap.Handle(gctx, r.WorkflowApplies) }
 }
 
 // applier is what applies the Workflows the Controller orders to the global

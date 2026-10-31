@@ -10,8 +10,8 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 )
 
-// ApplyWorkflow orders a Worker to apply a Workflow to a harness. A no-op
-// (the Worker already holds that digest) answers Noop with no Apply.
+// ApplyWorkflow orders a Worker to apply a Workflow to a harness. It always
+// creates an order: whether there is anything to do is decided by the Worker.
 func (c *Client) ApplyWorkflow(ctx context.Context, req v1.ApplyWorkflowRequest) (v1.ApplyWorkflowResponse, error) {
 	var out v1.ApplyWorkflowResponse
 	err := c.do(ctx, http.MethodPost, "/v1/workflow-applies", req, &out)

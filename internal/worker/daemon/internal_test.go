@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
@@ -105,5 +109,45 @@ func TestAWorkerThatCannotIdentifyItselfOffersNoHarness(t *testing.T) {
 	selfIdentity = func(int) (string, error) { return "", errors.New("no way") }
 	if _, launchers := d.runtimeAndHarnesses(t.Context(), Options{Runtime: unavailable{}}); len(launchers) != 0 {
 		t.Errorf("%d harnesses: its wrapper would start nothing", len(launchers))
+	}
+}
+
+// blockedApplier is an applier whose one order downloads a blob that only
+// ends when its context does.
+type blockedApplier struct {
+	wg      sync.WaitGroup
+	started chan struct{}
+}
+
+func (b *blockedApplier) Handle(ctx context.Context, _ []v1.WorkflowApplyOrder) {
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		close(b.started)
+		<-ctx.Done()
+	}()
+}
+
+func (b *blockedApplier) Wait() { b.wg.Wait() }
+
+func TestAnotherComponentFailingCancelsTheAppliesInFlight(t *testing.T) {
+	ap := &blockedApplier{started: make(chan struct{})}
+	parent := t.Context() // never cancelled by the test before the end
+	g, gctx := errgroup.WithContext(parent)
+	take := (&daemon{}).takeApplies(gctx, g, ap)
+	take(v1.HeartbeatResponse{WorkflowApplies: []v1.WorkflowApplyOrder{{ID: "a"}}})
+	<-ap.started
+	boom := errors.New("another component failed")
+	g.Go(func() error { return boom })
+
+	done := make(chan error, 1)
+	go func() { done <- g.Wait() }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, boom) {
+			t.Fatalf("Wait = %v, want %v", err, boom)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the daemon waits for an apply that nothing cancels")
 	}
 }
