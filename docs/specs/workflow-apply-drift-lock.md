@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: L
 issue: 22
-prs: []
+prs: [66]
 related_issues: [22]
 sub_issues: []
 depends_on:
@@ -16,7 +16,7 @@ depends_on:
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-31
 ---
 
 # Workflows: apply, drift y lock de configuración
