@@ -43,9 +43,28 @@ func (e *Executor) recordStart(ctx context.Context, tx *state.Tx, k state.Key, h
 }
 
 func (e *Executor) reportStarted(ctx context.Context, tx *state.Tx, k state.Key, at time.Time, model string) error {
+	digest := e.materializedDigest(ctx, tx, k)
 	return e.report(ctx, tx, k, v1.ReportStarted, at, func(en *v1.RunReportEntry) {
-		en.Handle, en.Model = e.runtimeHandle(k), model
+		en.Handle, en.Model, en.ConfigDigest = e.runtimeHandle(k), model, digest
 	})
+}
+
+// materializedDigest is the digest of the configuration materialised for a Run
+// that froze a Workflow, as the Worker stored it when it materialised it, before
+// the harness started (so it survives a restart of the daemon and is not
+// something the Run can rewrite); "" for a Run without a Workflow. It does not
+// stop a Run from starting: without it the report goes without the digest.
+func (e *Executor) materializedDigest(ctx context.Context, q state.Querier, k state.Key) string {
+	r, err := state.RunBy(ctx, q, k)
+	if err != nil || parseSpec(r.Spec).Workflow == "" {
+		return ""
+	}
+	digest, ok, err := state.ConfigDigestOf(ctx, q, k)
+	if err != nil || !ok {
+		e.log.WarnContext(ctx, "the configuration of a Run was materialised but its digest was not stored; it starts without a digest", "run", k.RunID, "err", err)
+		return ""
+	}
+	return digest
 }
 
 // releaseStart reports a held `started` and stores the cursor, which says it is

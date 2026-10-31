@@ -13,7 +13,10 @@ type specView struct {
 	Schema int    `json:"schema"`
 	Prompt string `json:"prompt"`
 	Mode   string `json:"mode"`
-	Source struct {
+	// Workflow is the version the Run froze, name@sha256:<digest>; empty for a
+	// Run without one.
+	Workflow string `json:"workflow"`
+	Source   struct {
 		Ref string `json:"ref"`
 	} `json:"source"`
 	Requirements struct {

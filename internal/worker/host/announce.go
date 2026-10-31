@@ -60,7 +60,8 @@ type Announcement struct {
 // Worker then announces harness:<id>, harness:<id>:mode:<m> for each of
 // those modes and harness:<id>:config-isolation if it has ConfigIsolation.
 // It always announces domain.RepoConfigCapability (it reads the repo
-// configuration of a Run), domain.EnvironmentHostCapability (it runs the prepare
+// configuration of a Run), domain.WorkflowConfigCapability (it fetches and
+// materialises the Workflow a Run froze), domain.EnvironmentHostCapability (it runs the prepare
 // and the services of an Environment) and domain.HarnessModesMarker: whatever harness it offers,
 // it offers with its modes.
 //
@@ -68,7 +69,7 @@ type Announcement struct {
 // next start. It waits for each Detect at most DetectTimeout, whether or not
 // the adapter honours its ctx.
 func Announce(ctx context.Context, host harness.Host, reg *harness.Registry, runtimeModes []domain.Mode) Announcement {
-	out := Announcement{Capabilities: []string{domain.HarnessModesMarker, domain.RepoConfigCapability, domain.EnvironmentHostCapability}}
+	out := Announcement{Capabilities: []string{domain.HarnessModesMarker, domain.RepoConfigCapability, domain.WorkflowConfigCapability, domain.EnvironmentHostCapability}}
 	for _, id := range reg.IDs() {
 		a, _ := reg.Get(id)
 		h := assess(ctx, host, a, runtimeModes)

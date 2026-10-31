@@ -64,11 +64,11 @@ func OpenReservation(ctx context.Context, q Querier, lease domain.ID) (bool, err
 // running, its runtime from none to active, with the handle the Worker keeps
 // for it. Like every change of a Run it is a compare-and-set on its state and
 // lease.
-func (t *Tx) StartRun(ctx context.Context, run Run, at time.Time, handle string) error {
+func (t *Tx) StartRun(ctx context.Context, run Run, at time.Time, handle, configDigest string) error {
 	res, err := t.Exec(ctx,
-		`UPDATE runs SET state = ?, runtime = ?, started_at = ?, runtime_handle = ?
+		`UPDATE runs SET state = ?, runtime = ?, started_at = ?, runtime_handle = ?, effective_config_digest = ?
 		 WHERE id = ? AND state = ? AND runtime = ? AND lease_id = ? AND lease_epoch = ?`,
-		string(domain.RunRunning), string(domain.RuntimeActive), at.UnixNano(), handle,
+		string(domain.RunRunning), string(domain.RuntimeActive), at.UnixNano(), handle, nullable(configDigest),
 		string(run.ID), string(run.State), string(domain.RuntimeNone), string(run.LeaseID), run.LeaseEpoch)
 	return changedOne(res, err, "starting run")
 }

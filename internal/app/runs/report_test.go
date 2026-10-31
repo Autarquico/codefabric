@@ -70,3 +70,32 @@ func TestValidateEntry_EndReasonAndModel(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateEntry_ConfigDigest(t *testing.T) {
+	started := func(digest string) v1.RunReportEntry {
+		return v1.RunReportEntry{
+			Kind: v1.ReportStarted, LeaseEpoch: 1, At: time.Now(), ConfigDigest: digest,
+			Handle: &v1.RuntimeHandle{Runtime: "tmux", Ref: "cf-x"},
+		}
+	}
+	good := "sha256:" + strings.Repeat("a", 64)
+	exited := v1.RunReportEntry{Kind: v1.ReportExited, Cause: v1.ExitCauseExit, LeaseEpoch: 1, At: time.Now(), ConfigDigest: good}
+	cases := []struct {
+		name  string
+		entry v1.RunReportEntry
+		valid bool
+	}{
+		{"a started without digest", started(""), true},
+		{"a started with a digest", started(good), true},
+		{"a digest that is not sha256:<hex>", started("sha256:xyz"), false},
+		{"a digest in upper case", started("sha256:" + strings.Repeat("A", 64)), false},
+		{"on a kind other than started", exited, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := validateEntry(c.entry, time.Now()); c.valid != (err == nil) {
+				t.Fatalf("validateEntry = %v, want valid=%v", err, c.valid)
+			}
+		})
+	}
+}

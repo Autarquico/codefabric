@@ -87,8 +87,11 @@ type Options struct {
 	// Harnesses has any.
 	Host harness.Host
 	// ConfigSource is the configuration a Run of an adapter with
-	// ConfigIsolation is materialised from; nil gives every Run an empty one.
+	// ConfigIsolation is materialised from. Nil gives a Run that froze a
+	// Workflow the components of it, fetched through Workflows, and every
+	// other Run an empty one.
 	ConfigSource ConfigSource
+	Workflows    WorkflowClient
 	Paths        config.Paths
 	Clock        clock.Clock
 	Log          *slog.Logger
@@ -138,8 +141,8 @@ type AuthSync interface {
 // ConfigSource is the configuration of the harness a Run is to be run with.
 type ConfigSource func(ctx context.Context, r state.Run, harnessID string) (harness.NativeSnapshot, error)
 
-// emptyConfig is the ConfigSource of a Worker that has no Workflows yet:
-// every Run gets a configuration of its own, and it is empty. An empty
+// emptyConfig is the configuration of a Run that froze no Workflow: its own,
+// and empty. An empty
 // snapshot needs no layout version (see [harness.NativeSnapshot]), so the
 // native configuration of the host is never read for it.
 func (e *Executor) emptyConfig(_ context.Context, _ state.Run, harnessID string) (harness.NativeSnapshot, error) {
@@ -296,7 +299,7 @@ func New(o Options) (*Executor, error) {
 		return nil, errors.New("executor: a Host is required to run harnesses")
 	}
 	if e.o.ConfigSource == nil {
-		e.o.ConfigSource = e.emptyConfig
+		e.o.ConfigSource = e.config
 	}
 	if e.o.Host != nil {
 		e.materializer = host.NewMaterializer(e.o.Host)

@@ -194,6 +194,14 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err != nil {
 		return err
 	}
+	if spec.Workflow != "" {
+		// Before the harness can write to the directory of the Run.
+		if err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+			return state.SetConfigDigest(ctx, tx, r.Key, mat.Digest, e.clock.Now())
+		}); err != nil {
+			return err
+		}
+	}
 	e.trackAuth(r.Key, adapter, mat)
 	configDir := mat.ConfigDir
 	run := harness.RunSpec{

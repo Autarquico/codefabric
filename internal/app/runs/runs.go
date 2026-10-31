@@ -377,6 +377,7 @@ func view(r store.Run, withSpec bool) v1.Run {
 		out.Environment = &v1.RunEnvironment{Name: r.Environment.ID, Version: r.Environment.Version, Digest: r.Environment.Digest}
 	}
 	out.EffectiveDigest, out.FailureCode = r.EffectiveDigest, domain.Code(r.FailureCode)
+	out.EffectiveConfigDigest = r.EffectiveConfigDigest
 	if withSpec {
 		out.Spec = json.RawMessage(r.Spec)
 	}

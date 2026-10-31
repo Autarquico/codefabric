@@ -215,8 +215,11 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		if e.Model != "" {
 			ev.Data["model"] = e.Model
 		}
+		if e.ConfigDigest != "" {
+			ev.Data["effective_config_digest"] = e.ConfigDigest
+		}
 		apply = func() error {
-			if err := tx.StartRun(ctx, run, e.At, string(raw)); err != nil {
+			if err := tx.StartRun(ctx, run, e.At, string(raw), e.ConfigDigest); err != nil {
 				return err
 			}
 			return tx.SetRunModel(ctx, run, e.Model)
@@ -512,6 +515,10 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		return input.Invalid("only started carries a handle")
 	case e.Kind != v1.ReportExited && (e.ExitCode != nil || e.Signal != "" || e.Cause != "" || e.EndReason != ""):
 		return input.Invalid("only exited carries an exit code, a signal, a cause or an end reason")
+	case e.Kind != v1.ReportStarted && e.ConfigDigest != "":
+		return input.Invalid("only started carries a configuration digest")
+	case e.ConfigDigest != "" && !effectiveDigestPattern.MatchString(e.ConfigDigest):
+		return input.Invalid("effective_config_digest must be sha256:<64 lower-case hex>")
 	case e.Kind != v1.ReportExited && e.Kind != v1.ReportStarted && e.Model != "":
 		return input.Invalid("only started and exited carry a model")
 	case e.EndReason != "" && (e.EndReason != domain.EndInputRequired || e.Cause == v1.ExitCauseWrapperLost):

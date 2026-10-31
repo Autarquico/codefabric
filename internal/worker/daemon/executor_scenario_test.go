@@ -176,7 +176,7 @@ func TestRun_OffersTheCommandHarnessWhenItHasARuntime(t *testing.T) {
 	w := c.eventually("box", "the harness to be offered", func(w v1.Worker) bool {
 		return w.State == domain.WorkerOnline && len(w.Capabilities) > 0
 	})
-	want := []string{"environment-host:v1", "harness-modes:v1", "harness:command", "harness:command:mode:headless", "harness:command:mode:interactive", "repo-config:v1"}
+	want := []string{"environment-host:v1", "harness-modes:v1", "harness:command", "harness:command:mode:headless", "harness:command:mode:interactive", "repo-config:v1", "workflow-config:v1"}
 	if !slices.Equal(slices.Sorted(slices.Values(w.Capabilities)), want) || w.Health.Status != v1.HealthOK {
 		t.Errorf("worker = %+v, want the capabilities %q", w, want)
 	}
@@ -207,7 +207,7 @@ func TestRun_OffersTheInjectedHarnessesThatAreInstalledWithTheirModes(t *testing
 	w := c.eventually("box", "the harness to be offered", func(w v1.Worker) bool {
 		return w.State == domain.WorkerOnline && len(w.Capabilities) > 0
 	})
-	want := []string{"environment-host:v1", "harness-modes:v1", "harness:fake", "harness:fake:config-isolation", "harness:fake:mode:headless", "repo-config:v1"}
+	want := []string{"environment-host:v1", "harness-modes:v1", "harness:fake", "harness:fake:config-isolation", "harness:fake:mode:headless", "repo-config:v1", "workflow-config:v1"}
 	if !slices.Equal(slices.Sorted(slices.Values(w.Capabilities)), want) {
 		t.Errorf("capabilities = %q, want %q", w.Capabilities, want)
 	}

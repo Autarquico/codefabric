@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -108,6 +109,32 @@ func (c *Client) PutBlob(ctx context.Context, digest string, r io.Reader, size i
 // OpenBlob streams the blob and its size; the caller closes the reader.
 func (c *Client) OpenBlob(ctx context.Context, digest string) (io.ReadCloser, int64, error) {
 	resp, err := c.sendOK(ctx, c.stream.Load(), http.MethodGet, blobPath(digest), nil, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	return resp.Body, resp.ContentLength, nil
+}
+
+func runWorkflowQuery(leaseEpoch uint64) url.Values {
+	return url.Values{"lease_epoch": {strconv.FormatUint(leaseEpoch, 10)}}
+}
+
+// RunWorkflow reads, with its manifest, the Workflow version a Run froze. It
+// is for clients opened with a Worker's credentials: the Controller answers
+// only the Worker that holds the Run under leaseEpoch, with the lease pending
+// or accepted.
+func (c *Client) RunWorkflow(ctx context.Context, run string, leaseEpoch uint64) (v1.WorkflowVersion, error) {
+	var out v1.WorkflowVersion
+	path := withQuery(refPath("runs", run, "workflow"), runWorkflowQuery(leaseEpoch))
+	err := c.doLimited(ctx, maxWorkflowResponse, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
+// OpenRunBlob streams a blob of the manifest of RunWorkflow and its size; the
+// caller closes the reader and verifies the content against the digest.
+func (c *Client) OpenRunBlob(ctx context.Context, run string, leaseEpoch uint64, digest string) (io.ReadCloser, int64, error) {
+	path := withQuery(refPath("runs", run, "blobs", digest), runWorkflowQuery(leaseEpoch))
+	resp, err := c.sendOK(ctx, c.stream.Load(), http.MethodGet, path, nil, 0)
 	if err != nil {
 		return nil, 0, err
 	}

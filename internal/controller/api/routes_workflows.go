@@ -16,8 +16,8 @@ import (
 const maxCommitBytes = 4 << 20
 
 // registerWorkflowRoutes adds the Workflow and blob endpoints. Only clients
-// call them: knowing a digest grants nothing, and Workers read what a Run
-// carries (#22), not the store.
+// call them: knowing a digest grants nothing. A Worker reads only the
+// Workflow its own Run froze, through the two routes under /v1/runs.
 func (s *Server) registerWorkflowRoutes() {
 	s.handle("GET /v1/workflows", clientsOnly, s.listWorkflows)
 	s.handle("GET /v1/workflows/{ref}", clientsOnly, s.showWorkflow)
@@ -27,6 +27,52 @@ func (s *Server) registerWorkflowRoutes() {
 	s.handle("PUT /v1/blobs/{digest}", clientsOnly, s.putBlob)
 	s.handle("HEAD /v1/blobs/{digest}", clientsOnly, s.headBlob)
 	s.handle("GET /v1/blobs/{digest}", clientsOnly, s.getBlob)
+
+	s.handle("GET /v1/runs/{ref}/workflow", workersOnly, s.runWorkflow)
+	s.handle("GET /v1/runs/{ref}/blobs/{digest}", workersOnly, s.runBlob)
+}
+
+// leaseEpochOf reads the lease epoch a Worker names in the query: the fence of
+// every download of a Run.
+func leaseEpochOf(r *http.Request) (uint64, error) {
+	n, err := strconv.ParseUint(r.URL.Query().Get("lease_epoch"), 10, 64)
+	if err != nil || n == 0 {
+		return 0, domain.NewError(domain.CodeInvalidRequest, "lease_epoch must be the epoch of the lease, at least 1", nil)
+	}
+	return n, nil
+}
+
+// runWorkflow is GET /v1/runs/{ref}/workflow?lease_epoch=N: the version the
+// Run froze, with its manifest, for the Worker that holds the Run.
+func (s *Server) runWorkflow(w http.ResponseWriter, r *http.Request, c caller) error {
+	epoch, err := leaseEpochOf(r)
+	if err != nil {
+		return err
+	}
+	v, err := s.work.Workflows.RunManifest(r.Context(), c.Session, r.PathValue("ref"), epoch)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, workflowVersion(v))
+	return nil
+}
+
+// runBlob is GET /v1/runs/{ref}/blobs/{digest}?lease_epoch=N: a blob of the
+// manifest of that version.
+func (s *Server) runBlob(w http.ResponseWriter, r *http.Request, c caller) error {
+	epoch, err := leaseEpochOf(r)
+	if err != nil {
+		return err
+	}
+	body, size, err := s.work.Workflows.OpenRunBlob(r.Context(), c.Session, r.PathValue("ref"), epoch, r.PathValue("digest"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = body.Close() }()
+	setBlobHeaders(w, size)
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
+	return nil
 }
 
 func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request, _ caller) error {

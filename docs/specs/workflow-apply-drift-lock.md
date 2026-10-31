@@ -32,6 +32,7 @@ Owner previsto en el bucle Develop: backend-eng.
 **Entra:**
 - `internal/app/workflows`: apply como operación durable, drift, explain, `configlock`
 - Migración `0203_workflow_state.sql`: `worker_workflow_state`, `config_locks(worker, harness, config_key, holders, apply_pending)`
+  - Nota: el número `0203` está ocupado (goose rechaza migraciones fuera de orden); la migración de estado toma el siguiente libre (>= 0207, la 0206 es `runs.effective_config_digest`).
 - Worker: mutex por harness; `ApplyConfig` respeta ownership (`managed` se sobrescribe, `local` nunca)
 - CLI: `cf workflow status|diff|apply|rollback|explain|sync` (sync solo a Workers online)
 
