@@ -60,11 +60,14 @@ const (
 	// not stop cleanly (§25: stopping is best effort, the reservation is released all the same).
 	EventEnvironmentStopFailed EventType = "EnvironmentStopFailed"
 
-	EventWorkflowAdopted       EventType = "WorkflowAdopted"
-	EventWorkflowCommitted     EventType = "WorkflowCommitted"
-	EventWorkflowConflict      EventType = "WorkflowConflict"
-	EventWorkflowApplied       EventType = "WorkflowApplied"
-	EventWorkflowDriftDetected EventType = "WorkflowDriftDetected"
+	EventWorkflowAdopted   EventType = "WorkflowAdopted"
+	EventWorkflowCommitted EventType = "WorkflowCommitted"
+	EventWorkflowConflict  EventType = "WorkflowConflict"
+	EventWorkflowApplied   EventType = "WorkflowApplied"
+	// EventWorkflowApplyRequested records the order to apply a Workflow to a Worker
+	// (or its replacement); WorkflowApplied is the Worker's reported outcome.
+	EventWorkflowApplyRequested EventType = "WorkflowApplyRequested"
+	EventWorkflowDriftDetected  EventType = "WorkflowDriftDetected"
 
 	EventModelUsageRecorded    EventType = "ModelUsageRecorded"
 	EventProviderStatusChanged EventType = "ProviderStatusChanged"

@@ -39,7 +39,11 @@ func (Adapter) ApplyConfig(_ context.Context, host harness.Host, snap harness.Na
 	case harness.TargetRun:
 		return applyRun(host, snap, t.Dir, opts)
 	case harness.TargetGlobal:
-		return applyGlobal(globalDir(host), snap, opts.DryRun)
+		sel, err := harness.ComponentSet(opts.Components, func(n string) bool { _, ok := layoutOf(n); return ok })
+		if err != nil {
+			return harness.ApplyResult{}, err
+		}
+		return applyGlobal(globalDir(host), snap, sel, opts.DryRun)
 	default:
 		return harness.ApplyResult{}, fmt.Errorf("codex: apply: unknown target %T", opts.Target)
 	}
@@ -121,8 +125,12 @@ func writeRootFile(r *os.Root, f harness.File) error {
 // applyGlobal writes the managed components of snap into root. It never
 // writes or deletes a local component, deletes the managed ones it wrote
 // before and snap lacks, and in config.toml sets only the settings snap has,
-// keeping the rest of the file.
-func applyGlobal(root string, snap harness.NativeSnapshot, dryRun bool) (harness.ApplyResult, error) {
+// keeping the rest of the file. A non-nil sel limits it to those components:
+// the others are neither written nor deleted, and keep their record.
+func applyGlobal(root string, snap harness.NativeSnapshot, sel map[string]bool, dryRun bool) (harness.ApplyResult, error) {
+	if sel != nil {
+		snap.Components = slices.DeleteFunc(slices.Clone(snap.Components), func(c harness.Component) bool { return !sel[c.Name] })
+	}
 	for _, c := range snap.Components {
 		for _, f := range c.Files {
 			if len(f.SecretRefs) > 0 {
@@ -136,7 +144,7 @@ func applyGlobal(root string, snap harness.NativeSnapshot, dryRun bool) (harness
 	}
 	var res harness.ApplyResult
 	for _, ch := range d.changes {
-		if !d.local[ch.Name] {
+		if !d.local[ch.Name] && (sel == nil || sel[ch.Name]) {
 			res.Changes = append(res.Changes, ch)
 		}
 	}
@@ -152,7 +160,7 @@ func applyGlobal(root string, snap harness.NativeSnapshot, dryRun bool) (harness
 		inSnap[c.Name] = true
 	}
 	for _, name := range slices.Sorted(mapKeys(rec)) {
-		if !inSnap[name] {
+		if !inSnap[name] && (sel == nil || sel[name]) {
 			if err := removeComponent(root, name, rec[name]); err != nil {
 				return harness.ApplyResult{}, err
 			}
@@ -236,7 +244,9 @@ func putConfig(root string, t table, perm fs.FileMode) error {
 		return fmt.Errorf("codex: apply: %w", err)
 	}
 	if fi, err := os.Stat(p); err == nil {
-		perm = fi.Mode().Perm()
+		// A kept looser mode would leave the rendered secrets readable by other
+		// users of the host.
+		perm = fi.Mode().Perm() &^ 0o077
 	}
 	if err := atomicfile.Write(p, b, perm); err != nil {
 		return fmt.Errorf("codex: apply: %w", err)

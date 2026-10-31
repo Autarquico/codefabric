@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"errors"
+	"time"
 	"unicode"
 
 	"github.com/oklog/ulid/v2"
@@ -85,11 +86,38 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 			if err := tx.RecordHeartbeat(ctx, w.ID, report, resources, req.Health, act.Now); err != nil {
 				return v1.HeartbeatResponse{}, err
 			}
+			orders, err := workflowOrders(ctx, tx, w.ID, act.Now)
+			if err != nil {
+				return v1.HeartbeatResponse{}, err
+			}
 			return v1.HeartbeatResponse{
-				State: w.State, MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, Allocatable: resources.Allocatable,
+				WorkflowApplies: orders,
+				State:           w.State, MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, Allocatable: resources.Allocatable,
 				ReconcileRequired: w.ReconciledEpoch != req.Epoch || w.ReconciledAt == nil || w.ReconciledAt.Before(s.started),
 			}, nil
 		})
+}
+
+// workflowOrders are the live orders to apply Workflow configuration to the
+// Worker (§8.6). Handing a pending one over makes it running; a running one
+// is handed again, until the Worker reports or a newer order supersedes it.
+func workflowOrders(ctx context.Context, tx *store.Tx, worker domain.ID, now time.Time) ([]v1.WorkflowApplyOrder, error) {
+	live, err := store.LiveWorkflowAppliesOf(ctx, tx, worker)
+	if err != nil || len(live) == 0 {
+		return nil, err
+	}
+	if err := tx.StartWorkflowApplies(ctx, worker, now); err != nil {
+		return nil, err
+	}
+	out := make([]v1.WorkflowApplyOrder, 0, len(live))
+	for _, a := range live {
+		out = append(out, v1.WorkflowApplyOrder{
+			ID: string(a.ID), Generation: a.Generation, Harness: a.Harness, Workflow: a.WorkflowName, Version: a.Version,
+			Digest: a.Digest, Components: a.Components, Mode: a.Mode, Force: a.Force, DryRun: a.DryRun,
+			ExpectedPreview: a.ExpectedPreview,
+		})
+	}
+	return out, nil
 }
 
 func (s *Service) applyHeartbeat(ctx context.Context, tx *store.Tx, act mutation.Act, w *store.Worker, req v1.HeartbeatRequest) error {
