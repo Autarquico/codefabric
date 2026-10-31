@@ -170,8 +170,8 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 		return sp, nil
 	}
 	// The secrets of the configuration are asked for with the rest. The
-	// Controller does not know them from the spec yet: it denies a ref the spec
-	// does not declare, which fails the prepare here, before anything is cloned.
+	// Controller grants the refs the spec declares and those of the frozen
+	// Workflow; any other fails the prepare here, before anything is cloned.
 	want := slices.Sorted(slices.Values(slices.Concat(spec.refs(), cfgRefs)))
 	want = slices.Compact(want)
 	if len(want) > 0 {
@@ -193,6 +193,14 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	mat, err := e.materialize(ctx, adapter, dir, snap)
 	if err != nil {
 		return err
+	}
+	if spec.Workflow != "" {
+		// Before the harness can write to the directory of the Run.
+		if err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+			return state.SetConfigDigest(ctx, tx, r.Key, mat.Digest, e.clock.Now())
+		}); err != nil {
+			return err
+		}
 	}
 	e.trackAuth(r.Key, adapter, mat)
 	configDir := mat.ConfigDir

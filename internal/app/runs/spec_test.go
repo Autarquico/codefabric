@@ -286,8 +286,12 @@ func TestPlacementOf_AWorkflowAddsItsCapability(t *testing.T) {
 		t.Fatalf("plain placement = %+v, %v", p.Capabilities, err)
 	}
 	p, err = PlacementOf([]byte(flow))
-	if err != nil || len(p.Capabilities) != 2 || p.Capabilities[1] != domain.WorkflowConfigCapability {
+	if err != nil || len(p.Capabilities) != 2 || !slices.Contains(p.Capabilities, domain.WorkflowConfigCapability) {
 		t.Fatalf("workflow placement = %+v, %v", p.Capabilities, err)
+	}
+	named, _ := digestOf(t, store.Task{Prompt: "x", Workflow: "review@sha256:" + strings.Repeat("a", 64), Requirements: v1.Requirements{Harness: "claude-code"}}, project, commit)
+	if p, err = PlacementOf([]byte(named)); err != nil || !slices.Contains(p.Capabilities, domain.HarnessConfigIsolationCapability("claude-code")) {
+		t.Fatalf("a Workflow Run must ask for the config isolation of its harness: %+v, %v", p.Capabilities, err)
 	}
 }
 

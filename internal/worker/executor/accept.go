@@ -199,6 +199,9 @@ func (e *Executor) evaluate(ctx context.Context, r state.Run, lim Limits, load s
 	case load.CPU+r.CPU > lim.CPU || load.MemoryMB+r.MemoryMB > lim.MemoryMB:
 		return verdict{domain.CodeWorkerCapacity, "the Run does not fit in what this Worker has left"}
 	}
+	if spec.Workflow != "" && !adapter.Capabilities().ConfigIsolation {
+		return verdict{domain.CodeHarnessUnavailable, fmt.Sprintf("the harness %q cannot isolate the configuration of a Workflow yet", spec.Requirements.Harness)}
+	}
 	if v := e.secretsVerdict(ctx, r, spec); v != (verdict{}) {
 		return v
 	}

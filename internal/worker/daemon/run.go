@@ -154,7 +154,7 @@ func Run(ctx context.Context, o Options) error {
 	jrn := journal.New(d.epoch, d.clock)
 	rt, adapters := d.runtimeAndHarnesses(ctx, o)
 	eo := executor.Options{
-		DB: db, Controller: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
+		DB: db, Controller: c, Workflows: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
 		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
 	}
 	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})

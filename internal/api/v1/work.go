@@ -237,6 +237,13 @@ type Run struct {
 	// gave.
 	EffectiveDigest string      `json:"effective_digest,omitempty"`
 	FailureCode     domain.Code `json:"failure_code,omitempty"`
+	// EffectiveConfigDigest is the digest of the configuration the Worker
+	// materialised for the Run from its Workflow, reported when the Run started;
+	// absent for a Run without a Workflow. It is the treedigest/v1 of the
+	// materialised tree without the auth of the host and with secret markers
+	// unrendered: it identifies what was materialised, not the version of the
+	// Workflow (see Workflow.Digest) nor what the harness found afterwards.
+	EffectiveConfigDigest string `json:"effective_config_digest,omitempty"`
 }
 
 // RunEnvironment is the Environment version a Run is pinned to.

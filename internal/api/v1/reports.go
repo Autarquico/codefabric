@@ -109,7 +109,11 @@ type RunReportEntry struct {
 	// exit alone: only domain.EndInputRequired, the harness waited for input.
 	EndReason domain.EndReason `json:"end_reason,omitempty"`
 	// Model (started, exited) is the model the harness said it ran with, if it did.
-	Model        string `json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
+	// ConfigDigest (started) is the digest of the configuration materialised
+	// from the Workflow of the Run (host.Materialization.Digest); empty for a
+	// Run without one.
+	ConfigDigest string `json:"effective_config_digest,omitempty"`
 	NeverStarted bool   `json:"never_started,omitempty"` // stopped
 	// WasRunning: the process was alive when the stop of the Controller reached
 	// the Worker (stopped, never with NeverStarted). On a Run that is lost, or

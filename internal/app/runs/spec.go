@@ -268,7 +268,7 @@ func (s runSpec) encode() (raw []byte, digest string, err error) {
 }
 
 // PlacementOf reads the placement out of a Run's stored spec: its requirements
-// (plus domain.WorkflowConfigCapability when it froze a Workflow,
+// (plus domain.WorkflowConfigCapability, and the config isolation of its harness, when it froze a Workflow,
 // domain.RepoConfigCapability for schema 4, and domain.EnvironmentHostCapability
 // with those the Environment requires when it froze one),
 // the mode the harness must run in and the secrets the Worker must hold. A spec
@@ -289,6 +289,11 @@ func PlacementOf(spec []byte) (domain.Placement, error) {
 	capabilities := r.Capabilities
 	if stored.Workflow != "" {
 		capabilities = append(slices.Clone(capabilities), domain.WorkflowConfigCapability)
+		if r.Harness != "" {
+			// Until the Worker can give a Workflow to a harness that reads the
+			// configuration of the host, only one that isolates its own gets it.
+			capabilities = append(capabilities, domain.HarnessConfigIsolationCapability(r.Harness))
+		}
 	}
 	if stored.Schema >= domain.RunSpecSchemaRepoConfig {
 		capabilities = append(slices.Clone(capabilities), domain.RepoConfigCapability)

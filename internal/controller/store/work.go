@@ -117,6 +117,10 @@ type Run struct {
 	EffectiveConfig string
 	EffectiveDigest string
 	FailureCode     string
+	// EffectiveConfigDigest is the digest of the configuration materialised
+	// from the frozen Workflow, reported with `started`; "" without a Workflow
+	// or before it.
+	EffectiveConfigDigest string
 }
 
 func scanErr(err error, what string) error {
@@ -434,7 +438,7 @@ const runColumns = `id, short_n, task_id, attempt, lineage_kind, spec, spec_dige
     exit_code, COALESCE(runtime_handle, ''), COALESCE(branch, ''), COALESCE(result_commit, ''), COALESCE(result_excluded, ''),
     COALESCE(lineage_parent_id, ''), harness_ran, COALESCE(workflow_id, ''), COALESCE(workflow_version, 0), COALESCE(workflow_digest, ''),
     COALESCE(environment_id, ''), COALESCE(environment_version, 0), COALESCE(environment_digest, ''),
-    COALESCE(effective_config, ''), COALESCE(effective_digest, ''), COALESCE(failure_code, ''), COALESCE(model, '')`
+    COALESCE(effective_config, ''), COALESCE(effective_digest, ''), COALESCE(failure_code, ''), COALESCE(model, ''), COALESCE(effective_config_digest, '')`
 
 func scanRun(row rowScanner) (Run, error) {
 	var (
@@ -456,7 +460,7 @@ func scanRun(row rowScanner) (Run, error) {
 		&r.Branch, &r.ResultCommit, &excluded, &parent, &harnessRan,
 		&workflow, &r.Workflow.Version, &r.Workflow.Digest,
 		&r.Environment.ID, &r.Environment.Version, &r.Environment.Digest,
-		&r.EffectiveConfig, &r.EffectiveDigest, &r.FailureCode, &r.Model); err != nil {
+		&r.EffectiveConfig, &r.EffectiveDigest, &r.FailureCode, &r.Model, &r.EffectiveConfigDigest); err != nil {
 		return Run{}, scanErr(err, "run")
 	}
 	if excluded != "" {

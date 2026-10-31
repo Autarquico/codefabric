@@ -290,7 +290,7 @@ func TestWorkflowStoreAdoptCommit_ConcurrentCommitsMakeOneChild(t *testing.T) {
 
 // Congelación: a Run created with name@latest keeps its version and digest
 // when v2 is committed, and with no Worker able to materialise the config
-// (workflow-config:v1, #22) it stays queued.
+// (its harness has no config isolation) it stays queued.
 func TestScenario_WorkflowStoreAdoptCommit_Congelacion_E2E(t *testing.T) {
 	host, _ := bringUpController(t)
 	home := codexHome(t, codexConfig)
@@ -318,8 +318,9 @@ func TestScenario_WorkflowStoreAdoptCommit_Congelacion_E2E(t *testing.T) {
 		}
 	})
 	soon(t, "the Worker to be online", func() bool { return showWorker(t, host, "alpha").State == domain.WorkerOnline })
-	if caps := strings.Join(showWorker(t, host, "alpha").Capabilities, " "); strings.Contains(caps, domain.WorkflowConfigCapability) {
-		t.Fatalf("the Worker offers %s: the premise of the test (#22 is not here) is gone", domain.WorkflowConfigCapability)
+	isolation := "harness:" + fakeharness.DefaultID + ":config-isolation"
+	if caps := strings.Join(showWorker(t, host, "alpha").Capabilities, " "); strings.Contains(caps, isolation) {
+		t.Fatalf("the Worker offers %s: the premise of the test is gone", isolation)
 	}
 
 	use(t, host)
@@ -351,7 +352,7 @@ func TestScenario_WorkflowStoreAdoptCommit_Congelacion_E2E(t *testing.T) {
 		t.Errorf("explanation = %+v", explained)
 	}
 	if len(explained.Workers) != 1 || len(explained.Workers[0].Failed) != 1 || explained.Workers[0].Failed[0].Filter != "capabilities" {
-		t.Errorf("the Worker should fail only on %s: %+v", domain.WorkflowConfigCapability, explained.Workers)
+		t.Errorf("the Worker should fail only on %s: %+v", isolation, explained.Workers)
 	}
 	// The scheduler has looked at the Run and left it queued with that reason:
 	// waiting on the fact, not on the clock.

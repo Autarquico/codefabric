@@ -2,7 +2,9 @@ package runs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -198,6 +200,14 @@ func refPolicy(ctx context.Context, q store.Querier, w store.Worker, r store.Run
 	if err != nil {
 		return nil, err
 	}
+	declared := placement.Secrets
+	if r.Workflow.Version != 0 {
+		fromWorkflow, err := workflowSecretRefs(ctx, q, r, placement.Harness)
+		if err != nil {
+			return nil, err
+		}
+		declared = append(slices.Clone(declared), fromWorkflow...)
+	}
 	allowed, err := store.ProjectAllowlist(ctx, q, project)
 	if err != nil {
 		return nil, err
@@ -213,7 +223,7 @@ func refPolicy(ctx context.Context, q store.Querier, w store.Worker, r store.Run
 	return func(ref string) string {
 		scope, holds := scopes[ref]
 		switch {
-		case !slices.Contains(placement.Secrets, ref):
+		case !slices.Contains(declared, ref):
 			return v1.SecretNotDeclared
 		case !slices.Contains(allowed, ref):
 			return v1.SecretNotAllowlisted
@@ -224,6 +234,31 @@ func refPolicy(ctx context.Context, q store.Querier, w store.Worker, r store.Run
 		}
 		return ""
 	}, nil
+}
+
+// workflowSecretRefs are the refs of the secret markers in the configuration the
+// Run's frozen Workflow gives its harness, as the manifest of that version
+// records them: the Run uses them although its spec does not bind them to a
+// variable. They are still subject to the allowlist and the Worker's scope.
+func workflowSecretRefs(ctx context.Context, q store.Querier, r store.Run, harness string) ([]string, error) {
+	v, err := store.WorkflowVersionByNumber(ctx, q, r.Workflow.ID, r.Workflow.Version)
+	if err != nil {
+		return nil, err
+	}
+	var m domain.Manifest
+	if err := json.Unmarshal(v.Manifest, &m); err != nil {
+		return nil, fmt.Errorf("runs: stored manifest of the Workflow of Run %s: %w", r.ID, err)
+	}
+	var refs []string
+	for _, c := range m.Components {
+		if c.Harness != harness {
+			continue
+		}
+		for _, f := range c.Files {
+			refs = append(refs, f.SecretRefs...)
+		}
+	}
+	return refs, nil
 }
 
 func sortedRefs(refs []string) []string {

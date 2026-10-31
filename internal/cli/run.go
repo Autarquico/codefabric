@@ -77,8 +77,12 @@ func newRunShowCmd() *cobra.Command {
 				if r.Environment != nil {
 					environment = fmt.Sprintf("%s v%d (%s)", r.Environment.Name, r.Environment.Version, r.Environment.Digest)
 				}
-				_, err := fmt.Fprintf(w, "ID           %s (%s)\nTask         %s\nAttempt      %d\nLineage      %s\nState        %s\nRuntime      %s\nCommit       %s\nBranch       %s\nModel        %s\nResult       %s\nPublication  %s\nSpec digest  %s\nEnvironment  %s\nEffective    %s\nFailure code %s\nCreated      %s\nSpec         %s\n",
-					r.ID, r.Short, r.TaskID, r.Attempt, lineage, r.State, r.Runtime, r.SourceCommit, dash(r.Branch), dash(r.Model), dash(r.ResultCommit), r.Publication, r.SpecDigest, environment, dash(r.EffectiveDigest), dash(string(r.FailureCode)), local(r.CreatedAt), spec)
+				workflow := "-"
+				if r.Workflow != nil {
+					workflow = fmt.Sprintf("v%d (%s)", r.Workflow.Version, r.Workflow.Digest)
+				}
+				_, err := fmt.Fprintf(w, "ID           %s (%s)\nTask         %s\nAttempt      %d\nLineage      %s\nState        %s\nRuntime      %s\nCommit       %s\nBranch       %s\nModel        %s\nResult       %s\nPublication  %s\nSpec digest  %s\nEnvironment  %s\nWorkflow     %s\nCfg digest   %s\nEffective    %s\nFailure code %s\nCreated      %s\nSpec         %s\n",
+					r.ID, r.Short, r.TaskID, r.Attempt, lineage, r.State, r.Runtime, r.SourceCommit, dash(r.Branch), dash(r.Model), dash(r.ResultCommit), r.Publication, r.SpecDigest, environment, workflow, dash(r.EffectiveConfigDigest), dash(r.EffectiveDigest), dash(string(r.FailureCode)), local(r.CreatedAt), spec)
 				return err
 			})
 		},
