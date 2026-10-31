@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
@@ -563,4 +565,81 @@ func TestPlan_ALocalMCPServerDriftsFromTheWorkflowWithoutBeingApplied(t *testing
 	if got := w.read(t, ".claude.json"); !strings.Contains(got, "mine") {
 		t.Fatalf(".claude.json = %q", got)
 	}
+}
+
+// stamp is what a write would change: the inode and mtime of a path.
+type stamp struct {
+	ino   uint64
+	mtime int64
+}
+
+func (w *world) stamp(t *testing.T, rel string) stamp {
+	t.Helper()
+	fi, err := os.Stat(filepath.Join(w.home, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stamp{fi.Sys().(*syscall.Stat_t).Ino, fi.ModTime().UnixNano()}
+}
+
+// Adopting what the host already has records ownership and baseline and writes
+// nothing: no file replaced, no directory deleted and recreated, secret
+// markers included.
+func TestApply_AdoptingAnIdenticalComponentWritesNothing(t *testing.T) {
+	eachKit(t, func(t *testing.T, w *world) {
+		k := w.k
+		old := time.Now().Add(-time.Hour).Truncate(time.Second)
+		onHost := map[string]string{k.docOnHost: "doc v1\n", k.dirOnHost(): "dir v1\n"}
+		names := []string{k.doc, k.dir}
+		// Claude reads settings.json back with generated marker refs, so a
+		// file carrying tok/a is never "identical" there; codex's config.toml is.
+		if k.name == "codex" {
+			onHost[k.secOnHost] = k.secContent("v1")
+			names = append(names, k.sec)
+		}
+		for rel, content := range onHost {
+			w.write(t, rel, content)
+			if err := os.Chtimes(filepath.Join(w.home, rel), old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+		dirRel := filepath.Dir(k.dirOnHost())
+		watched := []string{k.docOnHost, k.dirOnHost(), dirRel}
+		if len(names) == 3 {
+			watched = append(watched, k.secOnHost)
+		}
+		before := map[string]stamp{}
+		for _, rel := range watched {
+			before[rel] = w.stamp(t, rel)
+		}
+
+		res, err := w.apply(t, Request{Snapshot: k.snap(t, "v1", harness.Managed, names...), WorkflowID: "wf", Version: "1"})
+		if err != nil || !res.Applied {
+			t.Fatalf("adopt = %+v, %v", res, err)
+		}
+		for _, rel := range watched {
+			if got := w.stamp(t, rel); got != before[rel] {
+				t.Errorf("%s was written: %+v -> %+v", rel, before[rel], got)
+			}
+		}
+		for rel, content := range onHost {
+			if got := w.read(t, rel); got != content {
+				t.Errorf("%s = %q, want %q", rel, got, content)
+			}
+		}
+
+		// Adopted means owned with a baseline: the next version is a write, not drift.
+		res, err = w.apply(t, Request{Snapshot: k.snap(t, "v2", harness.Managed, names...), WorkflowID: "wf", Version: "2"})
+		if err != nil || !res.Applied {
+			t.Fatalf("v2 = %+v, %v", res, err)
+		}
+		for _, name := range names {
+			if a := action(t, res.Plan, name); a.Drift || a.Action != ActionWrite {
+				t.Errorf("%s: plan = %+v, want a write with no drift", name, a)
+			}
+		}
+		if got := w.read(t, k.docOnHost); got != "doc v2\n" {
+			t.Errorf("doc = %q", got)
+		}
+	})
 }

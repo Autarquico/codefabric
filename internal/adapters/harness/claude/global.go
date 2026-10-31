@@ -3,13 +3,19 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 )
 
-var _ harness.GlobalInspector = Adapter{}
+var (
+	_ harness.GlobalInspector = Adapter{}
+	_ harness.GlobalAdopter   = Adapter{}
+)
 
 func globalNames(names []string) ([]layout, error) {
 	sel, err := harness.ComponentSet(names, func(n string) bool { _, ok := layoutOf(n); return ok })
@@ -93,4 +99,33 @@ func recordedServers(root string, names []string) ([]harness.File, error) {
 		return nil, err
 	}
 	return []harness.File{{Path: StateFile, Content: b}}, nil
+}
+
+// AdoptGlobal records as applied the managed components of snap, without
+// touching any of them.
+func (Adapter) AdoptGlobal(host harness.Host, snap harness.NativeSnapshot) error {
+	root := globalDir(host)
+	rec, err := readApplied(root)
+	if err != nil {
+		return err
+	}
+	for _, c := range snap.Components {
+		if c.Ownership != harness.Managed {
+			continue
+		}
+		var servers []string
+		if c.Name == MCPComponent {
+			want, err := parseObject(c.Files[0].Content)
+			if err != nil {
+				return fmt.Errorf("claude-code: adopt: %w", err)
+			}
+			obj, _ := want[MCPComponent].(object)
+			servers = slices.Sorted(maps.Keys(obj))
+		}
+		rec[c.Name] = servers
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return fmt.Errorf("claude-code: adopt: %w", err)
+	}
+	return writeApplied(root, rec)
 }

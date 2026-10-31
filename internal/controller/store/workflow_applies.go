@@ -56,8 +56,8 @@ type WorkflowState struct {
 	AppliedDigest   string
 	Components      []string
 	PreviousVersion int
-	Drift           []byte // JSON array
-	Partial         bool   // the last apply skipped a selected component
+	Drift           []byte   // JSON array
+	Skipped         []string // components skipped for drift and not applied since; never nil from the store
 	UpdatedAt       time.Time
 }
 
@@ -232,7 +232,7 @@ func (t *Tx) FinishWorkflowApply(ctx context.Context, id domain.ID, generation i
 	return rowsChanged(r)
 }
 
-const stateColumns = `worker_id, harness, COALESCE(applied_workflow_id, ''), applied_version, applied_digest, components, previous_version, drift, partial, updated_at`
+const stateColumns = `worker_id, harness, COALESCE(applied_workflow_id, ''), applied_version, applied_digest, components, previous_version, drift, skipped, updated_at`
 
 func scanState(row rowScanner) (WorkflowState, error) {
 	var (
@@ -240,12 +240,19 @@ func scanState(row rowScanner) (WorkflowState, error) {
 		worker, wf string
 		components sql.NullString
 		drift      string
+		skipped    string
 		updated    int64
 	)
-	if err := row.Scan(&worker, &s.Harness, &wf, &s.AppliedVersion, &s.AppliedDigest, &components, &s.PreviousVersion, &drift, &s.Partial, &updated); err != nil {
+	if err := row.Scan(&worker, &s.Harness, &wf, &s.AppliedVersion, &s.AppliedDigest, &components, &s.PreviousVersion, &drift, &skipped, &updated); err != nil {
 		return WorkflowState{}, err
 	}
 	s.WorkerID, s.AppliedWorkflow, s.Drift, s.UpdatedAt = domain.ID(worker), domain.ID(wf), []byte(drift), time.Unix(0, updated).UTC()
+	if err := json.Unmarshal([]byte(skipped), &s.Skipped); err != nil {
+		return WorkflowState{}, fmt.Errorf("store: workflow state of %s has corrupt skipped components: %w", worker, err)
+	}
+	if s.Skipped == nil {
+		s.Skipped = []string{}
+	}
 	if components.Valid {
 		if err := json.Unmarshal([]byte(components.String), &s.Components); err != nil {
 			return WorkflowState{}, fmt.Errorf("store: workflow state of %s has corrupt components: %w", worker, err)
@@ -285,6 +292,10 @@ func (t *Tx) PutWorkflowState(ctx context.Context, s WorkflowState) error {
 	if err != nil {
 		return err
 	}
+	skipped, err := json.Marshal(append([]string{}, s.Skipped...))
+	if err != nil {
+		return err
+	}
 	drift := string(s.Drift)
 	if drift == "" {
 		drift = "[]"
@@ -295,13 +306,13 @@ func (t *Tx) PutWorkflowState(ctx context.Context, s WorkflowState) error {
 	}
 	if _, err := t.Exec(ctx,
 		`INSERT INTO worker_workflow_state (worker_id, harness, applied_workflow_id, applied_version, applied_digest, components,
-		     previous_version, drift, partial, updated_at)
+		     previous_version, drift, skipped, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (worker_id, harness) DO UPDATE SET
 		     applied_workflow_id = excluded.applied_workflow_id, applied_version = excluded.applied_version,
 		     applied_digest = excluded.applied_digest, components = excluded.components,
-		     previous_version = excluded.previous_version, drift = excluded.drift, partial = excluded.partial, updated_at = excluded.updated_at`,
-		string(s.WorkerID), s.Harness, wf, s.AppliedVersion, s.AppliedDigest, comps, s.PreviousVersion, drift, s.Partial, s.UpdatedAt.UnixNano()); err != nil {
+		     previous_version = excluded.previous_version, drift = excluded.drift, skipped = excluded.skipped, updated_at = excluded.updated_at`,
+		string(s.WorkerID), s.Harness, wf, s.AppliedVersion, s.AppliedDigest, comps, s.PreviousVersion, drift, string(skipped), s.UpdatedAt.UnixNano()); err != nil {
 		return fmt.Errorf("store: writing workflow state: %w", err)
 	}
 	return nil

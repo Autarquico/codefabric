@@ -23,6 +23,14 @@ type GlobalInspector interface {
 	GlobalFingerprint(ctx context.Context, host Host, components []string) (map[string]string, error)
 }
 
+// GlobalAdopter is implemented by an adapter that can take as its own,
+// without writing it, a managed component already on the host as the snapshot
+// has it: it records only the ownership (what a later apply may rewrite or
+// delete). Components that are not managed are ignored.
+type GlobalAdopter interface {
+	AdoptGlobal(host Host, snap NativeSnapshot) error
+}
+
 // ComponentSet is names as a set, or nil for every component when names is
 // empty. A name for which known is false is an error.
 func ComponentSet(names []string, known func(name string) bool) (map[string]bool, error) {

@@ -339,7 +339,7 @@ func (s *Service) Status(ctx context.Context, worker, harness string) ([]v1.Work
 		wfNames := map[domain.ID]string{}
 		for _, st := range states {
 			r := row(key{st.WorkerID, st.Harness})
-			r.Partial = st.Partial
+			r.Partial, r.Skipped = len(st.Skipped) > 0, st.Skipped
 			r.AppliedVersion, r.AppliedDigest, r.Components, r.PreviousVersion, r.UpdatedAt = st.AppliedVersion, st.AppliedDigest, st.Components, st.PreviousVersion, st.UpdatedAt
 			if st.AppliedWorkflow != "" {
 				wf, ok := wfNames[st.AppliedWorkflow]

@@ -2,13 +2,18 @@ package codex
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 )
 
-var _ harness.GlobalInspector = Adapter{}
+var (
+	_ harness.GlobalInspector = Adapter{}
+	_ harness.GlobalAdopter   = Adapter{}
+)
 
 func globalNames(names []string) ([]layout, error) {
 	sel, err := harness.ComponentSet(names, func(n string) bool { _, ok := layoutOf(n); return ok })
@@ -94,4 +99,32 @@ func recordedSettings(f harness.File, paths [][]string) ([]harness.File, error) 
 		return nil, err
 	}
 	return []harness.File{{Path: ConfigComponent, Content: b}}, nil
+}
+
+// AdoptGlobal records as applied the managed components of snap, without
+// touching any of them.
+func (Adapter) AdoptGlobal(host harness.Host, snap harness.NativeSnapshot) error {
+	root := globalDir(host)
+	rec, err := readApplied(root)
+	if err != nil {
+		return err
+	}
+	for _, c := range snap.Components {
+		if c.Ownership != harness.Managed {
+			continue
+		}
+		var paths [][]string
+		if c.Name == ConfigComponent {
+			want, err := parseTable(c.Files[0].Content)
+			if err != nil {
+				return fmt.Errorf("codex: adopt: %w", err)
+			}
+			paths = slices.DeleteFunc(leafPaths(want), isLocal)
+		}
+		rec[c.Name] = paths
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return fmt.Errorf("codex: adopt: %w", err)
+	}
+	return writeApplied(root, rec)
 }

@@ -146,7 +146,9 @@ type WorkflowState struct {
 	Drift           []DriftedComponent `json:"drift"`
 	// Partial: the last apply skipped a selected component for drift, so
 	// AppliedDigest is not fully what the Worker holds.
-	Partial   bool           `json:"partial"`
+	Partial bool `json:"partial"`
+	// Skipped names the components still not applied, skipped for drift.
+	Skipped   []string       `json:"skipped"`
 	Latest    *WorkflowApply `json:"latest,omitempty"`
 	UpdatedAt time.Time      `json:"updated_at"`
 }

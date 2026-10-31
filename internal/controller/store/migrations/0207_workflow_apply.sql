@@ -32,7 +32,8 @@ CREATE UNIQUE INDEX workflow_applies_live ON workflow_applies (worker_id, harnes
 -- What the Controller knows a Worker holds of a harness: the version last
 -- applied (not a dry-run), the one before it for rollback (0 = none), the
 -- components of that apply (NULL = all), the drift the Worker reported and
--- whether the apply skipped a selected component (partial).
+-- the components still not applied because they were skipped for drift (a
+-- JSON array; non-empty = partial).
 CREATE TABLE worker_workflow_state (
     worker_id           TEXT    NOT NULL REFERENCES workers (id),
     harness             TEXT    NOT NULL,
@@ -42,7 +43,7 @@ CREATE TABLE worker_workflow_state (
     components          TEXT    CHECK (components IS NULL OR (json_valid(components) AND json_type(components) = 'array')),
     previous_version    INTEGER NOT NULL DEFAULT 0 CHECK (previous_version >= 0),
     drift               TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(drift) AND json_type(drift) = 'array'),
-    partial             INTEGER NOT NULL DEFAULT 0 CHECK (partial IN (0, 1)),
+    skipped             TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(skipped) AND json_type(skipped) = 'array'),
     updated_at          INTEGER NOT NULL,
     PRIMARY KEY (worker_id, harness)
 ) STRICT, WITHOUT ROWID;

@@ -226,6 +226,27 @@ func mergedDrift(recorded []byte, reported []v1.DriftedComponent, inspected []st
 	return json.Marshal(append(out, reported...))
 }
 
+// mergedSkipped is the components still skipped: those the Worker skipped now,
+// plus the ones skipped before that it did not inspect (all of them when
+// inspected is nil).
+func mergedSkipped(recorded, skipped, inspected []string) []string {
+	out := []string{}
+	if inspected != nil {
+		for _, c := range recorded {
+			if !slices.Contains(inspected, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	for _, c := range skipped {
+		if !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 func validReport(req v1.ReportWorkflowApplyRequest) error {
 	checks := []error{}
 	if req.Generation < 1 {
@@ -267,7 +288,7 @@ func recordState(ctx context.Context, tx *store.Tx, a store.WorkflowApply, req v
 	}
 	st.PreviousVersion = previousAfter(st, a)
 	st.AppliedWorkflow, st.AppliedVersion, st.AppliedDigest, st.Components = a.WorkflowID, a.Version, a.Digest, a.Components
-	st.Drift, st.Partial, st.UpdatedAt = drift, len(req.Skipped) > 0, now
+	st.Drift, st.Skipped, st.UpdatedAt = drift, mergedSkipped(st.Skipped, req.Skipped, req.Inspected), now
 	return tx.PutWorkflowState(ctx, st)
 }
 

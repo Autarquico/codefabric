@@ -200,6 +200,31 @@ func TestWorkflowApply_ASkippedComponentMakesTheStatePartial(t *testing.T) {
 	}
 }
 
+func TestWorkflowApply_PartialIsTrackedPerComponent(t *testing.T) {
+	f := newApplyFixture(t)
+	f.commit(0, "claude-code/a=one", "claude-code/b=two")
+	report := func(inspected, skipped []string) {
+		f.apply("alpha", "team")
+		o := f.order(f.alpha)
+		_, err := f.alpha.ReportWorkflowApply(t.Context(), o.ID, v1.ReportWorkflowApplyRequest{Generation: o.Generation, Outcome: "applied", Inspected: inspected, Skipped: skipped})
+		must(t, err)
+	}
+	report(nil, []string{"a"})
+	if st := f.state("alpha"); !st.Partial || len(st.Skipped) != 1 || st.Skipped[0] != "a" {
+		t.Fatalf("state = %+v, want partial with a", st)
+	}
+	// A selective apply of another component says nothing about a.
+	report([]string{"b"}, nil)
+	if st := f.state("alpha"); !st.Partial || len(st.Skipped) != 1 || st.Skipped[0] != "a" {
+		t.Fatalf("after applying b: %+v, want still partial with a", st)
+	}
+	// Applying a (forced) clears it.
+	report([]string{"a"}, nil)
+	if st := f.state("alpha"); st.Partial || len(st.Skipped) != 0 {
+		t.Fatalf("after applying a: %+v, want complete", st)
+	}
+}
+
 func TestWorkflowApply_InspectedLimitsWhichDriftIsReplaced(t *testing.T) {
 	f := newApplyFixture(t)
 	f.commit(0, "claude-code/a=one", "claude-code/b=two")
@@ -518,5 +543,60 @@ func TestWorkflowApply_ExpectedPreviewTravelsOnTheOrder(t *testing.T) {
 	f.apply("alpha", "team", func(r *v1.ApplyWorkflowRequest) { r.ExpectedPreview = preview })
 	if o := f.order(f.alpha); o.ExpectedPreview != preview {
 		t.Fatalf("order = %+v", o)
+	}
+}
+
+func (f *applyFixture) count(table string) (n int) {
+	f.t.Helper()
+	must(f.t, f.db.Read(f.t.Context(), func(q store.Querier) error {
+		return q.QueryRow(f.t.Context(), `SELECT COUNT(*) FROM `+table).Scan(&n)
+	}))
+	return n
+}
+
+func (f *applyFixture) refuse(table string) {
+	f.t.Helper()
+	must(f.t, f.db.WithTx(f.t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(f.t.Context(), `CREATE TRIGGER refuse BEFORE INSERT ON `+table+` BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+		return err
+	}))
+}
+
+// The order, its event and the saved response of the request_id are one unit:
+// when the last step fails, none of them remains.
+func TestWorkflowApply_FailureSavingTheResponseRollsBackOrderEventAndKey(t *testing.T) {
+	f := newApplyFixture(t)
+	f.commit(0, "claude-code/a=one")
+	applies, events, keys := f.count("workflow_applies"), f.count("events"), f.count("idempotency_keys")
+	f.refuse("idempotency_keys")
+
+	_, err := f.tryApply("alpha", "team", func(r *v1.ApplyWorkflowRequest) { r.RequestID = "req-1" })
+	if err == nil {
+		t.Fatal("the apply succeeded")
+	}
+	if f.count("workflow_applies") != applies || f.count("events") != events || f.count("idempotency_keys") != keys {
+		t.Errorf("orders %d, events %d, keys %d survived the rollback", f.count("workflow_applies")-applies, f.count("events")-events, f.count("idempotency_keys")-keys)
+	}
+}
+
+// A report is one unit as well: when its last step (the audit entry) fails, the
+// order stays alive, no state is recorded and no event is appended. The report
+// has no request_id, so there is no idempotency key to roll back.
+func TestWorkflowApply_FailureInTheLastStepOfAReportRollsBackStateAndEvent(t *testing.T) {
+	f := newApplyFixture(t)
+	f.commit(0, "claude-code/a=one")
+	f.apply("alpha", "team")
+	o := f.order(f.alpha)
+	states, events := f.count("worker_workflow_state"), f.count("events")
+	f.refuse("audit_entries")
+
+	if _, err := f.alpha.ReportWorkflowApply(t.Context(), o.ID, v1.ReportWorkflowApplyRequest{Generation: o.Generation, Outcome: "applied"}); err == nil {
+		t.Fatal("the report succeeded")
+	}
+	if f.count("worker_workflow_state") != states || f.count("events") != events {
+		t.Errorf("state rows %d, events %d survived the rollback", f.count("worker_workflow_state")-states, f.count("events")-events)
+	}
+	if got, _ := f.owner.WorkflowApply(t.Context(), o.ID); got.State != "running" {
+		t.Errorf("order state = %s, want running", got.State)
 	}
 }

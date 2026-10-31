@@ -388,8 +388,9 @@ func (e *Engine) Apply(ctx context.Context, req Request) (Result, error) {
 
 	// What the adapter is told: the components that change, rendered. A secret
 	// that cannot be rendered stops here, before anything is written.
-	var names []string
+	var names, writes []string
 	snap := harness.NativeSnapshot{Harness: req.Snapshot.Harness, SchemaVersion: req.Snapshot.SchemaVersion}
+	adopted := harness.NativeSnapshot{Harness: req.Snapshot.Harness, SchemaVersion: req.Snapshot.SchemaVersion}
 	byName := map[string]harness.Component{}
 	for _, c := range req.Snapshot.Components {
 		byName[c.Name] = c
@@ -400,22 +401,36 @@ func (e *Engine) Apply(ctx context.Context, req Request) (Result, error) {
 		}
 		names = append(names, cp.Name)
 		if cp.Action == ActionDelete {
+			writes = append(writes, cp.Name)
 			continue
 		}
 		resolve := e.Secrets
 		if cp.Action == ActionPreserve {
-			// Ceded to the person: told to the adapter so it forgets it owned
-			// it, never written. Its markers become empty values.
+			// Adopted or ceded to the person: nothing of it is written, so its
+			// markers become empty values (only the shape of the content is used).
 			resolve = func(context.Context, string) ([]byte, error) { return nil, nil }
 		}
 		r, err := renderComponent(ctx, e.Adapter, resolve, byName[cp.Name])
 		if err != nil {
 			return Result{Plan: plan}, err
 		}
+		if cp.adopt {
+			adopted.Components = append(adopted.Components, r)
+			continue
+		}
+		writes = append(writes, cp.Name)
 		snap.Components = append(snap.Components, r)
 	}
 	if snap.Harness == "" {
 		snap.Harness = e.Adapter.ID()
+	}
+	if adopted.Harness == "" {
+		adopted.Harness = e.Adapter.ID()
+	}
+	if len(adopted.Components) > 0 {
+		if _, ok := e.Adapter.(harness.GlobalAdopter); !ok {
+			return Result{Plan: plan}, fmt.Errorf("globalapply: harness %s cannot adopt in place: %w", e.Adapter.ID(), harness.ErrUnsupported)
+		}
 	}
 	paths, err := in.GlobalPaths(e.Host, names)
 	if err != nil {
@@ -426,7 +441,7 @@ func (e *Engine) Apply(ctx context.Context, req Request) (Result, error) {
 		_, _ = restoreBackup(e.harnessDir())
 		return Result{Plan: plan}, err
 	}
-	if err := e.write(ctx, in, plan, snap, names, req); err != nil {
+	if err := e.write(ctx, in, plan, snap, adopted, writes, names, req); err != nil {
 		if _, rerr := restoreBackup(e.harnessDir()); rerr != nil {
 			return Result{Plan: plan}, errors.Join(err, rerr)
 		}
@@ -438,9 +453,16 @@ func (e *Engine) Apply(ctx context.Context, req Request) (Result, error) {
 	return Result{Plan: plan, Applied: true}, nil
 }
 
-func (e *Engine) write(ctx context.Context, in harness.GlobalInspector, plan Plan, snap harness.NativeSnapshot, names []string, req Request) error {
-	if _, err := e.Adapter.ApplyConfig(ctx, e.Host, snap, harness.ApplyOptions{Target: harness.TargetGlobal{}, Components: names}); err != nil {
-		return err
+func (e *Engine) write(ctx context.Context, in harness.GlobalInspector, plan Plan, snap, adopted harness.NativeSnapshot, writes, names []string, req Request) error {
+	if len(writes) > 0 { // no names would mean every component
+		if _, err := e.Adapter.ApplyConfig(ctx, e.Host, snap, harness.ApplyOptions{Target: harness.TargetGlobal{}, Components: writes}); err != nil {
+			return err
+		}
+	}
+	if len(adopted.Components) > 0 {
+		if err := e.Adapter.(harness.GlobalAdopter).AdoptGlobal(e.Host, adopted); err != nil {
+			return err
+		}
 	}
 	if e.hooks.afterApply != nil {
 		e.hooks.afterApply()
