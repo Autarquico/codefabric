@@ -1,6 +1,8 @@
 package host
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -8,6 +10,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/support/redact"
@@ -162,6 +165,24 @@ var escapes = map[harness.Escape]func(value []byte) ([]byte, error){
 	// The escape of the secrets that the redaction derives its forms from is
 	// the one they are rendered with.
 	harness.EscapeTOMLBasicString: redact.TOMLBasicString,
+	harness.EscapeJSONString:      jsonString,
+}
+
+// jsonString escapes value for the inside of a JSON string. Characters that a
+// JSON encoder may leave bare (<, >, &) are left bare: any form is valid JSON,
+// and the redaction knows every one of them (redact.NewEscapedSet).
+func jsonString(value []byte) ([]byte, error) {
+	if !utf8.Valid(value) {
+		return nil, errors.New("the value is not valid UTF-8, and a JSON string is")
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(string(value)); err != nil {
+		return nil, err
+	}
+	quoted := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+	return quoted[1 : len(quoted)-1], nil
 }
 
 // escapeValue is value as it is written inside a file of the given escape.

@@ -92,6 +92,18 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		return v1.Run{}, err
 	}
 	in, origins := InheritWithOrigins(task, project)
+	if in, err = withRequiredSecrets(in); err != nil {
+		return v1.Run{}, err
+	}
+	if len(domain.HarnessRequiredSecrets(in.Requirements.Harness)) > 0 {
+		allowlist, err := store.ProjectAllowlist(ctx, tx, project.ID)
+		if err != nil {
+			return v1.Run{}, err
+		}
+		if err := requireAllowed(in.Requirements.Harness, allowlist); err != nil {
+			return v1.Run{}, err
+		}
+	}
 	var pin domain.WorkflowRef
 	if in.Workflow != "" {
 		if pin, in.Workflow, err = pinWorkflow(ctx, tx, in.Workflow); err != nil {
@@ -353,7 +365,7 @@ func view(r store.Run, withSpec bool) v1.Run {
 		SpecDigest:    r.SpecDigest, SourceCommit: r.SourceCommit, Publication: r.Publication,
 		Evaluation: r.Evaluation, Runtime: r.Runtime, Mode: specMode(r.Spec), Promoted: r.Promoted, WorkerID: string(r.WorkerID),
 		CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
-		Branch: r.Branch, ResultCommit: r.ResultCommit, ResultExcluded: r.ResultExcluded, ResultExcludedTruncated: r.ResultExcludedTruncated,
+		Branch: r.Branch, Model: r.Model, ResultCommit: r.ResultCommit, ResultExcluded: r.ResultExcluded, ResultExcludedTruncated: r.ResultExcludedTruncated,
 	}
 	if r.LeaseID != "" {
 		out.Lease = &v1.RunLease{ID: string(r.LeaseID), Epoch: r.LeaseEpoch, State: r.LeaseState}

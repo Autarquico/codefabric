@@ -309,12 +309,7 @@ func (e *Executor) startSession(ctx context.Context, r state.Run) error {
 	now := e.clock.Now()
 	raw := mustJSON(v1.RuntimeHandle{Runtime: handle.Runtime, Ref: handle.Ref})
 	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
-		if err := state.SetRunning(ctx, tx, r.Key, raw, now); err != nil {
-			return err
-		}
-		return e.report(ctx, tx, r.Key, v1.ReportStarted, now, func(en *v1.RunReportEntry) {
-			en.Handle = &v1.RuntimeHandle{Runtime: handle.Runtime, Ref: handle.Ref}
-		})
+		return e.recordStart(ctx, tx, r.Key, raw, now)
 	})
 	if err != nil {
 		return err
@@ -358,6 +353,16 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 	}
 	if m.started != nil {
 		e.revokeOnce(ctx, r)
+	}
+	if m.exit == nil && m.started != nil {
+		e.consumeEvents(ctx, r)
+		// A stop ordered by what the harness said is the phase from here on.
+		if fresh, err := state.RunBy(ctx, e.o.DB.Reader(), r.Key); err == nil {
+			r = fresh
+		}
+	}
+	if m.exit == nil && r.Phase.Live() {
+		e.releaseStartIfDue(ctx, r)
 	}
 	if r.Phase == state.PhaseStopping && m.exit == nil && e.firstLook(r.Key) {
 		// A stop the previous daemon began: the signal may not have been sent.
@@ -549,10 +554,7 @@ func (e *Executor) adopt(ctx context.Context, r state.Run, m markers) (done bool
 	}
 	raw := mustJSON(*e.runtimeHandle(r.Key))
 	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
-		if err := state.SetRunning(ctx, tx, r.Key, raw, at); err != nil {
-			return err
-		}
-		return e.report(ctx, tx, r.Key, v1.ReportStarted, at, func(en *v1.RunReportEntry) { en.Handle = e.runtimeHandle(r.Key) })
+		return e.recordStart(ctx, tx, r.Key, raw, at)
 	})
 	if err != nil {
 		e.log.ErrorContext(ctx, "adopting a session", "run", r.RunID, "err", err)

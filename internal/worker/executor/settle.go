@@ -3,9 +3,13 @@ package executor
 import (
 	"cmp"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +32,12 @@ type facts struct {
 	// exitFirst: the harness had ended before the stop was ordered.
 	exitFirst bool
 	message   string
+	// warning: something the Worker could not do while settling, said with the exit.
+	warning string
+	// inputRequired: the Worker stopped the harness because it waited for input.
+	inputRequired bool
+	// model is what the harness said it ran with, "" if it did not say.
+	model string
 	// code is why the preparation failed, if it is one the Controller keeps
 	// (v1.PrepareFailureCodes).
 	code domain.Code
@@ -250,9 +260,33 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 			f.message = why
 		}
 	}
+	if f.started != nil {
+		// The harness is over: what it wrote last is read to the end, since a
+		// question it asked right before exiting makes the Run input_required.
+		if err := e.drainEventsToEOF(ctx, r); err != nil {
+			n, giveUp, noteErr := e.noteFinalFailure(ctx, r)
+			if noteErr != nil || !giveUp {
+				e.log.WarnContext(ctx, "consuming the last events of a Run failed; it will be tried again", "run", r.RunID, "err", err, "failures", n, "note", noteErr)
+				return false
+			}
+			// What was observed stands (an input_required already seen still wins).
+			f.warning = fmt.Sprintf("the last events of the harness could not be read after %d attempts (%v): the Run is settled with what was observed", n, err)
+			e.log.WarnContext(ctx, f.warning, "run", r.RunID)
+		}
+	}
 	order, orderErr := state.StopOrderOf(ctx, e.o.DB.Reader(), r.Key)
 	f.ordered = orderErr == nil && order.Reason != ""
 	f.exitFirst = orderErr == nil && order.ExitFirst
+	// A harness seen asking for input ends failed for input_required, whatever
+	// it did after and whatever its exit code; only a stop the Controller ordered
+	// first keeps its own reason.
+	cur, curErr := state.EventCursorOf(ctx, e.o.DB.Reader(), r.Key)
+	if curErr != nil {
+		e.log.WarnContext(ctx, "reading the event cursor of a Run failed; it will be tried again", "run", r.RunID, "err", curErr)
+		return false
+	}
+	f.model = cur.Model
+	f.inputRequired = cur.InputRequired && (errors.Is(orderErr, state.ErrNotFound) || order.Reason == ReasonInputRequired && order.Source == SourceWorker)
 	spawned := f.started != nil
 	reportedStart := r.StartedAt != nil || spawned
 	// A Run whose harness ran is to be sealed (§22.6). The intent, which is all that sealing depends
@@ -274,9 +308,12 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 			if err := state.SetStarted(ctx, tx, r.Key, mustJSON(*e.runtimeHandle(r.Key)), f.started.StartedAt); err != nil {
 				return err
 			}
-			if err := e.report(ctx, tx, r.Key, v1.ReportStarted, f.started.StartedAt, func(en *v1.RunReportEntry) {
-				en.Handle = e.runtimeHandle(r.Key)
-			}); err != nil {
+			if err := e.reportStarted(ctx, tx, r.Key, f.started.StartedAt, f.model); err != nil {
+				return err
+			}
+		} else if !cur.StartHeldAt.IsZero() {
+			// A start still on hold goes out before the end, whatever ended the Run.
+			if err := e.releaseStart(ctx, tx, r.Key, cur); err != nil {
 				return err
 			}
 		}
@@ -332,6 +369,7 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 // fillExit describes how the harness ended. A wrapper that was lost while a stop
 // was ordered is a stop that ended the Run, not a loss.
 func fillExit(en *v1.RunReportEntry, f facts) {
+	en.Model = f.model
 	switch {
 	case f.lost && f.ordered:
 		en.Cause, en.Message = v1.ExitCauseStop, f.message
@@ -346,6 +384,13 @@ func fillExit(en *v1.RunReportEntry, f facts) {
 		}
 	default:
 		en.Cause, en.Message = v1.ExitCauseExit, f.message
+	}
+	// The Controller refuses an input_required of a lost wrapper.
+	if f.inputRequired && en.Cause != v1.ExitCauseWrapperLost {
+		en.EndReason = domain.EndInputRequired
+	}
+	if f.warning != "" {
+		en.Message = strings.Join(nonEmpty(en.Message, f.warning), "; ")
 	}
 }
 
@@ -457,4 +502,8 @@ func authCopiesOf(runDir string) []string {
 		}
 	}
 	return rel
+}
+
+func nonEmpty(ss ...string) []string {
+	return slices.DeleteFunc(ss, func(s string) bool { return s == "" })
 }

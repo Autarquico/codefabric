@@ -45,7 +45,21 @@ const (
 	// string ("..."): the marker must stand between its quotes, never in a
 	// literal string, a multi-line string or a bare value.
 	EscapeTOMLBasicString Escape = "toml-basic-string"
+	// EscapeJSONString escapes the value for the inside of a JSON string
+	// ("..."): the marker must stand between its quotes, in a value and never
+	// in a key. Quote, backslash and control characters are escaped; the rest
+	// is written as it is. A value that is not UTF-8 cannot be rendered.
+	EscapeJSONString Escape = "json-string"
 )
+
+// SecretRequirer is implemented by an adapter whose Runs always need secrets
+// of their own, apart from those the spec of the Run declares: the harness
+// authenticates with them. The refs are what Start puts in Launch.SecretEnv;
+// declaring them here lets placement leave out a Worker that lacks one
+// (§16.7) before the Run is assigned, instead of failing it at launch.
+type SecretRequirer interface {
+	RequiredSecrets() []SecretEnv
+}
 
 // SecretEscaper is implemented by an adapter whose configuration files carry
 // markers: it says, for each file of its snapshots, how a value is escaped

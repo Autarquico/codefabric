@@ -562,3 +562,21 @@ func TestSnapshot_AValueLikeThePlaceholderIsKept(t *testing.T) {
 		t.Errorf("refs = %v:\n%s", f.SecretRefs, f.Content)
 	}
 }
+
+func TestApplyGlobal_RefusesAnUnknownRecordedComponentAndTouchesNothing(t *testing.T) {
+	h := homeWith(t, nil)
+	if err := os.MkdirAll(filepath.Join(h.Home(), ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.Home(), ".codex", ".cf-applied.json"), []byte(`{"unknown":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := dirDigest(t, h.Home())
+	_, err := codex.Adapter{}.ApplyConfig(t.Context(), h, harness.NativeSnapshot{Harness: codex.ID, SchemaVersion: 1}, harness.ApplyOptions{Target: harness.TargetGlobal{}})
+	if err == nil {
+		t.Error("applied with an unknown recorded component")
+	}
+	if dirDigest(t, h.Home()) != before {
+		t.Error("HOME changed")
+	}
+}

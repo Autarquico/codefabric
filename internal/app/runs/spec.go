@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/input"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -308,4 +309,52 @@ func PlacementOf(spec []byte) (domain.Placement, error) {
 		placement.Secrets = stored.Secrets.Refs
 	}
 	return placement, nil
+}
+
+// withRequiredSecrets adds to the Run's secrets those its harness always needs
+// (domain.HarnessRequiredSecrets), so that they are frozen, authorised and
+// placed like any other. A variable the Task already binds to the same ref is
+// kept once; one bound to another ref is a conflict.
+func withRequiredSecrets(in Inherited) (Inherited, error) {
+	required := domain.HarnessRequiredSecrets(in.Requirements.Harness)
+	if len(required) == 0 {
+		return in, nil
+	}
+	env := slices.Clone(in.Requirements.SecretEnv)
+	for _, r := range required {
+		i := slices.IndexFunc(env, func(e v1.SecretEnv) bool { return e.Name == r.Name })
+		switch {
+		case i < 0:
+			env = append(env, v1.SecretEnv(r))
+		case env[i].Ref != r.Ref:
+			return in, input.Invalid("requirements.secret_env: %s is the variable of %s for harness %s", r.Name, r.Ref, in.Requirements.Harness)
+		}
+	}
+	vars := make([]domain.SecretEnv, 0, len(env))
+	for _, e := range env {
+		vars = append(vars, domain.SecretEnv(e))
+	}
+	if err := domain.CheckSecretEnv(vars); err != nil {
+		return in, input.Invalid("requirements.secret_env: %s", strings.TrimPrefix(err.Error(), domain.ErrInvalidSecret.Error()+": "))
+	}
+	in.Requirements.SecretEnv = env
+	return in, nil
+}
+
+// requireAllowed fails when the Project's allowlist lacks a ref the harness
+// always needs: such a Run could never be placed, so it is not created.
+func requireAllowed(harness string, allowlist []string) error {
+	var missing []string
+	for _, r := range domain.HarnessRequiredSecrets(harness) {
+		if !slices.Contains(allowlist, r.Ref) {
+			missing = append(missing, r.Ref)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return domain.NewError(domain.CodePolicyDenied,
+		fmt.Sprintf("harness %s needs the secrets %s and the Project does not allow them: run `cf project secrets allow <project> %s`",
+			harness, strings.Join(missing, ", "), strings.Join(missing, " ")),
+		map[string]any{"not_allowed": missing})
 }

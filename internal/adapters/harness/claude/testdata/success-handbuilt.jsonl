@@ -1,0 +1,7 @@
+Starting...
+{"type":"system","subtype":"init","cwd":"/work","session_id":"5b0e1c1e-2f64-4d0e-9a33-6f1a7d0c9a11","model":"claude-opus-5-5","permissionMode":"bypassPermissions","tools":["Bash","Write"]}
+{"type":"assistant","message":{"model":"claude-opus-5-5","role":"assistant","content":[{"type":"text","text":"Creating hello.txt"}],"usage":{"input_tokens":3,"output_tokens":20}},"session_id":"5b0e1c1e-2f64-4d0e-9a33-6f1a7d0c9a11"}
+{"type":"assistant","message":{"model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Write","input":{"file_path":"hello.txt","content":"hi"}}]},"session_id":"5b0e1c1e-2f64-4d0e-9a33-6f1a7d0c9a11"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]},"session_id":"5b0e1c1e-2f64-4d0e-9a33-6f1a7d0c9a11"}
+{"type":"future_thing","x":1}
+{"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"Created hello.txt","session_id":"5b0e1c1e-2f64-4d0e-9a33-6f1a7d0c9a11","total_cost_usd":0.0123,"usage":{"input_tokens":5,"cache_read_input_tokens":7168,"cache_creation_input_tokens":0,"output_tokens":42},"modelUsage":{"claude-opus-5-5":{"inputTokens":5,"outputTokens":40,"cacheReadInputTokens":7168,"cacheCreationInputTokens":0,"costUSD":0.01,"contextWindow":200000},"claude-haiku-5":{"inputTokens":0,"outputTokens":2,"cacheReadInputTokens":300,"costUSD":0.0023}},"permission_denials":[]}

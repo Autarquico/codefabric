@@ -39,8 +39,14 @@ func (s *Service) lateEntry(ctx context.Context, tx *store.Tx, act mutation.Act,
 		}
 		ev.Type, ev.Message = domain.EventRunStarted, "run started after it ended"
 		ev.Data["handle"] = e.Handle
+		if e.Model != "" {
+			ev.Data["model"] = e.Model
+		}
 		return func() error {
 			if err := tx.NoteStart(ctx, run, e.At, string(raw)); err != nil {
+				return err
+			}
+			if err := tx.SetRunModel(ctx, run, e.Model); err != nil {
 				return err
 			}
 			run.Runtime = domain.RuntimeActive

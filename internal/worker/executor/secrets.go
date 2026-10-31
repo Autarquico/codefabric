@@ -388,17 +388,22 @@ func (p *secretPrepare) render(ctx context.Context, dir string, mat host.Materia
 }
 
 // launchSecretEnv is the secret environment of the harness: what the spec
-// declares and what the adapter asks for. A name in both is refused. extra
-// are the refs the adapter asks for that the spec does not declare: they go
-// to the Controller like any other, which is where a ref is denied.
+// declares and what the adapter asks for. A name in both is taken once when
+// both give it the same ref (the spec froze what the harness requires) and
+// refused when they differ. extra are the refs the adapter asks for that the
+// spec does not declare: they go to the Controller like any other, which is
+// where a ref is denied.
 func launchSecretEnv(spec specView, adapter []harness.SecretEnv) (env []execwrap.SecretEnv, extra []string, err error) {
 	declared := spec.refs()
-	names := map[string]bool{}
+	names := map[string]string{}
 	add := func(name, ref string) error {
-		if names[name] {
+		if prior, ok := names[name]; ok {
+			if prior == ref {
+				return nil
+			}
 			return fmt.Errorf("%s: the secret variable %q is set twice", domain.CodeInvalidRequest, name)
 		}
-		names[name] = true
+		names[name] = ref
 		env = append(env, execwrap.SecretEnv{Name: name, Ref: ref})
 		return nil
 	}

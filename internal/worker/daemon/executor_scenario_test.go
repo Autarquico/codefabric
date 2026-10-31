@@ -234,13 +234,15 @@ func TestRun_OffersNoHarnessWithoutAUsableGit(t *testing.T) {
 }
 
 // withoutCodex leaves out of the PATH of the test every directory with a
-// codex binary, so that what the Worker offers by default does not depend on
+// codex or claude binary, so that what the Worker offers by default does not depend on
 // the machine.
 func withoutCodex(t *testing.T) {
 	t.Helper()
 	var kept []string
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if _, err := os.Stat(filepath.Join(dir, "codex")); err != nil { //nolint:gosec // a directory of the PATH of the test
+		_, codex := os.Stat(filepath.Join(dir, "codex"))   //nolint:gosec // a directory of the PATH of the test
+		_, claude := os.Stat(filepath.Join(dir, "claude")) //nolint:gosec // a directory of the PATH of the test
+		if codex != nil && claude != nil {
 			kept = append(kept, dir)
 		}
 	}

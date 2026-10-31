@@ -6,6 +6,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 func stoppedWith(kind v1.RunReportKind, fs ...v1.StopFailure) v1.RunReportEntry {
@@ -36,6 +37,34 @@ func TestValidateEntry_StopFailures(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			err := validateEntry(c.entry, time.Now())
 			if c.valid != (err == nil) {
+				t.Fatalf("validateEntry = %v, want valid=%v", err, c.valid)
+			}
+		})
+	}
+}
+
+func TestValidateEntry_EndReasonAndModel(t *testing.T) {
+	exited := func(mutate func(*v1.RunReportEntry)) v1.RunReportEntry {
+		e := v1.RunReportEntry{Kind: v1.ReportExited, LeaseEpoch: 1, At: time.Now(), Cause: v1.ExitCauseStop}
+		mutate(&e)
+		return e
+	}
+	cases := []struct {
+		name  string
+		entry v1.RunReportEntry
+		valid bool
+	}{
+		{"input_required with a model", exited(func(e *v1.RunReportEntry) { e.EndReason, e.Model = domain.EndInputRequired, "m" }), true},
+		{"another end reason", exited(func(e *v1.RunReportEntry) { e.EndReason = domain.EndBudget }), false},
+		{"input_required of a lost wrapper", exited(func(e *v1.RunReportEntry) { e.EndReason, e.Cause = domain.EndInputRequired, v1.ExitCauseWrapperLost }), false},
+		{"a model too long", exited(func(e *v1.RunReportEntry) { e.Model = strings.Repeat("m", v1.MaxModelLen+1) }), false},
+		{"a model on a started", v1.RunReportEntry{Kind: v1.ReportStarted, LeaseEpoch: 1, At: time.Now(), Model: "m", Handle: &v1.RuntimeHandle{Runtime: "tmux", Ref: "r"}}, true},
+		{"a model too long on a started", v1.RunReportEntry{Kind: v1.ReportStarted, LeaseEpoch: 1, At: time.Now(), Model: strings.Repeat("m", v1.MaxModelLen+1), Handle: &v1.RuntimeHandle{Runtime: "tmux", Ref: "r"}}, false},
+		{"a model on a stopped", v1.RunReportEntry{Kind: v1.ReportStopped, LeaseEpoch: 1, At: time.Now(), Model: "m"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := validateEntry(c.entry, time.Now()); c.valid != (err == nil) {
 				t.Fatalf("validateEntry = %v, want valid=%v", err, c.valid)
 			}
 		})

@@ -125,6 +125,23 @@ func TestReport_StartedExitedStoppedInOneBatchLeaveTheRunFailedAndPublicationPen
 	}
 }
 
+func TestReport_AStartedWithAModelPutsItInRunStartedAndOnTheRun(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+
+	out := r.mustSend(r.entry(v1.ReportStarted, func(en *v1.RunReportEntry) { en.Model = "claude-opus-5-5" }))
+	if got := results(out); got != "applied" {
+		t.Fatalf("outcomes = %s", got)
+	}
+	if got := e.storedRun(r.run.ID).Model; got != "claude-opus-5-5" {
+		t.Errorf("model = %q", got)
+	}
+	evs := e.events(domain.EventRunStarted)
+	if len(evs) != 1 || evs[0].Data["model"] != "claude-opus-5-5" {
+		t.Errorf("RunStarted events = %+v", evs)
+	}
+}
+
 func TestReport_ExitZeroCompletesTheRunWithPublicationPending(t *testing.T) {
 	e := newEnv(t)
 	r := e.acceptedRun(e.joinWorker("alpha"), "x")
