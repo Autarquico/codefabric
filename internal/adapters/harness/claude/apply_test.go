@@ -374,3 +374,18 @@ func TestGlobalApplyRefusesAnUnknownRecordedComponentAndTouchesNothing(t *testin
 		t.Error("HOME changed")
 	}
 }
+
+func TestGlobalApplyTightensALooseStateMode(t *testing.T) {
+	h, home := newHost(t, map[string]string{
+		".claude.json":              `{"mcpServers": {"mine": {"command": "local"}}}`,
+		".claude/.credentials.json": "{}",
+	})
+	p := filepath.Join(home, ".claude.json")
+	if err := os.Chmod(p, 0o644); err != nil { //nolint:gosec // the test needs a loose mode
+		t.Fatal(err)
+	}
+	global(t, h, mcp(`{"team": {"command": "npx"}}`))
+	if info, err := os.Stat(p); err != nil || info.Mode().Perm()&0o077 != 0 {
+		t.Errorf("mode = %v, %v", info.Mode(), err)
+	}
+}

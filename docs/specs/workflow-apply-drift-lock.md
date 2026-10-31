@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: L
 issue: 22
-prs: [66]
+prs: [66, 68]
 related_issues: [22]
 sub_issues: []
 depends_on:
@@ -35,6 +35,8 @@ Owner previsto en el bucle Develop: backend-eng.
   - Nota: el número `0203` está ocupado (goose rechaza migraciones fuera de orden); la migración de estado toma el siguiente libre (>= 0207, la 0206 es `runs.effective_config_digest`).
 - Worker: mutex por harness; `ApplyConfig` respeta ownership (`managed` se sobrescribe, `local` nunca)
 - CLI: `cf workflow status|diff|apply|rollback|explain|sync` (sync solo a Workers online)
+
+**Entrega en tres PRs:** 22-A (#66: el Worker usa el Workflow congelado del Run), 22-B1 (apply global, drift, rollback, dry-run, no-op, explain, sync y CLI; scenarios Drift local, Dry-run, No-op y Explain) y 22-B2 (lock §8.12, `config_key`, apply con Runs activos y `--no-wait`; scenarios Apply con Runs activos y Lock).
 
 **No entra:**
 - Overlays, `merged`, sync offline (Fase 9)

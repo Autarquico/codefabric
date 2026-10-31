@@ -45,7 +45,11 @@ func (Adapter) ApplyConfig(_ context.Context, host harness.Host, snap harness.Na
 	case harness.TargetRun:
 		return applyRun(host, snap, t.Dir, opts)
 	case harness.TargetGlobal:
-		return applyGlobal(host, snap, opts.DryRun)
+		sel, err := harness.ComponentSet(opts.Components, func(n string) bool { _, ok := layoutOf(n); return ok })
+		if err != nil {
+			return harness.ApplyResult{}, err
+		}
+		return applyGlobal(host, snap, sel, opts.DryRun)
 	default:
 		return harness.ApplyResult{}, fmt.Errorf("claude-code: apply: unknown target %T", opts.Target)
 	}
@@ -149,8 +153,13 @@ func writeRootFile(r *os.Root, f harness.File) error {
 // applyGlobal writes the managed components of snap into the host. It never
 // writes or deletes a local component, deletes the managed ones it wrote
 // before and snap lacks, and in ~/.claude.json sets only the MCP servers snap
-// has, keeping every other field and server.
-func applyGlobal(host harness.Host, snap harness.NativeSnapshot, dryRun bool) (harness.ApplyResult, error) {
+// has, keeping every other field and server. A non-nil sel limits it to those
+// components: the others are neither written nor deleted, and keep their
+// record.
+func applyGlobal(host harness.Host, snap harness.NativeSnapshot, sel map[string]bool, dryRun bool) (harness.ApplyResult, error) {
+	if sel != nil {
+		snap.Components = slices.DeleteFunc(slices.Clone(snap.Components), func(c harness.Component) bool { return !sel[c.Name] })
+	}
 	for _, c := range snap.Components {
 		for _, f := range c.Files {
 			if len(f.SecretRefs) > 0 {
@@ -164,7 +173,7 @@ func applyGlobal(host harness.Host, snap harness.NativeSnapshot, dryRun bool) (h
 	}
 	var res harness.ApplyResult
 	for _, ch := range d.changes {
-		if !d.local[ch.Name] {
+		if !d.local[ch.Name] && (sel == nil || sel[ch.Name]) {
 			res.Changes = append(res.Changes, ch)
 		}
 	}
@@ -181,7 +190,7 @@ func applyGlobal(host harness.Host, snap harness.NativeSnapshot, dryRun bool) (h
 		inSnap[c.Name] = true
 	}
 	for _, name := range slices.Sorted(maps.Keys(rec)) {
-		if !inSnap[name] {
+		if !inSnap[name] && (sel == nil || sel[name]) {
 			if err := removeComponent(host, name, rec[name]); err != nil {
 				return harness.ApplyResult{}, err
 			}
@@ -304,7 +313,9 @@ func putState(root string, fields, servers map[string]json.RawMessage, perm fs.F
 		return err
 	}
 	if fi, err := os.Stat(p); err == nil {
-		perm = fi.Mode().Perm()
+		// A kept looser mode would leave the rendered secrets readable by other
+		// users of the host.
+		perm = fi.Mode().Perm() &^ 0o077
 	}
 	if err := atomicfile.Write(p, b, perm); err != nil {
 		return fmt.Errorf("claude-code: apply: %w", err)

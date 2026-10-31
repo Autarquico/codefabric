@@ -580,3 +580,18 @@ func TestApplyGlobal_RefusesAnUnknownRecordedComponentAndTouchesNothing(t *testi
 		t.Error("HOME changed")
 	}
 }
+
+func TestApplyGlobal_TightensALooseConfigMode(t *testing.T) {
+	s := snapshot(t, homeWith(t, map[string]string{"config.toml": "model = \"gpt-5\"\n"}))
+	dst := homeWith(t, map[string]string{"config.toml": "model = \"old\"\n"})
+	p := filepath.Join(codexDir(dst), "config.toml")
+	if err := os.Chmod(p, 0o644); err != nil { //nolint:gosec // the test needs a loose mode
+		t.Fatal(err)
+	}
+	if _, err := (codex.Adapter{}).ApplyConfig(t.Context(), dst, s, harness.ApplyOptions{Target: harness.TargetGlobal{}}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(p); err != nil || info.Mode().Perm()&0o077 != 0 {
+		t.Errorf("mode = %v, %v", info.Mode(), err)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/spf13/cobra"
@@ -40,6 +41,12 @@ type Options struct {
 
 	// workflowStore replaces the Controller client of the workflow commands in tests.
 	workflowStore func(*cobra.Command) (workflowStore, error)
+	// workflowApplyStore does the same for status, diff, apply, rollback, explain and sync.
+	workflowApplyStore func(*cobra.Command) (workflowApplyStore, error)
+	// applyTimer and applyPoll replace the timer and the polling interval of
+	// the wait for an order in tests.
+	applyTimer timerFunc
+	applyPoll  time.Duration
 	// environmentStore does the same for the environment commands.
 	environmentStore func(*cobra.Command) (environmentStore, error)
 }

@@ -30,6 +30,8 @@ func (s *Server) registerWorkflowRoutes() {
 
 	s.handle("GET /v1/runs/{ref}/workflow", workersOnly, s.runWorkflow)
 	s.handle("GET /v1/runs/{ref}/blobs/{digest}", workersOnly, s.runBlob)
+
+	s.registerWorkflowApplyRoutes()
 }
 
 // leaseEpochOf reads the lease epoch a Worker names in the query: the fence of

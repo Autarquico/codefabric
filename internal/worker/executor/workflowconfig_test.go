@@ -20,6 +20,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
 	"github.com/Autarquico/codefabric/internal/worker/host"
 	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codefabric/internal/worker/workflowfetch"
 )
 
 // fakeWorkflows serves one version, as the Controller does for the Run that
@@ -43,7 +44,7 @@ func newFakeWorkflows(t *testing.T, files map[string]string) *fakeWorkflows {
 	}
 	var hf []harness.File
 	for path, content := range files {
-		id := sha256Of([]byte(content))
+		id := workflowfetch.SHA256Of([]byte(content))
 		w.blobs[id] = content
 		comp.Files = append(comp.Files, domain.ManifestFile{Path: path, SHA256: id, SecretRefs: []string{}})
 		hf = append(hf, harness.File{Path: path, Mode: 0o600, Content: []byte(content)})
@@ -146,7 +147,7 @@ func TestARunWithAWorkflowIsMaterialisedFromItsFrozenVersionAndReportsTheDigest(
 	if n := w.opens(); n != 1 {
 		t.Errorf("%d downloads, want 1", n)
 	}
-	cached := filepath.Join(f.paths.WorkerDataDir(), blobCacheDir, strings.TrimPrefix(sha256Of([]byte(`{"theme":"dark"}`)), "sha256:"))
+	cached := filepath.Join(f.paths.WorkerDataDir(), workflowfetch.CacheDir, strings.TrimPrefix(workflowfetch.SHA256Of([]byte(`{"theme":"dark"}`)), "sha256:"))
 	if _, err := os.Stat(cached); err != nil {
 		t.Errorf("the blob is not in the cache: %v", err)
 	}
@@ -178,7 +179,7 @@ func TestACachedBlobIsNotDownloadedAgainButIsCheckedAgain(t *testing.T) {
 		t.Fatalf("downloads = %d, manifests = %d, want 1 and 2", w.opens(), w.manifest)
 	}
 	// What the cache holds is not trusted: a file that no longer hashes is fetched again.
-	cached := filepath.Join(f.paths.WorkerDataDir(), blobCacheDir, strings.TrimPrefix(sha256Of([]byte(content)), "sha256:"))
+	cached := filepath.Join(f.paths.WorkerDataDir(), workflowfetch.CacheDir, strings.TrimPrefix(workflowfetch.SHA256Of([]byte(content)), "sha256:"))
 	if err := os.WriteFile(cached, []byte("tampered"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +192,7 @@ func TestACachedBlobIsNotDownloadedAgainButIsCheckedAgain(t *testing.T) {
 func TestATamperedBlobIsRejectedAndNeverKept(t *testing.T) {
 	const content = `{"theme":"dark"}`
 	w := newFakeWorkflows(t, map[string]string{"settings.json": content})
-	w.tamper[sha256Of([]byte(content))] = `{"theme":"evil"}`
+	w.tamper[workflowfetch.SHA256Of([]byte(content))] = `{"theme":"evil"}`
 	f := workflowFixture(t, w)
 	k := f.acceptedSpec(w.spec("do it"))
 	if !f.e.step(t.Context(), k) {
@@ -204,7 +205,7 @@ func TestATamperedBlobIsRejectedAndNeverKept(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.runDir(k), "config")); err == nil {
 		t.Error("a configuration was materialised from a tampered blob")
 	}
-	entries, _ := os.ReadDir(filepath.Join(f.paths.WorkerDataDir(), blobCacheDir))
+	entries, _ := os.ReadDir(filepath.Join(f.paths.WorkerDataDir(), workflowfetch.CacheDir))
 	if len(entries) != 0 {
 		t.Errorf("the cache holds %d entries after a rejected download", len(entries))
 	}

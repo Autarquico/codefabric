@@ -28,6 +28,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/envutil"
+	"github.com/Autarquico/codefabric/internal/worker/applier"
 	"github.com/Autarquico/codefabric/internal/worker/authsync"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
@@ -187,7 +188,11 @@ func Run(ctx context.Context, o Options) error {
 			d.attachBinaries = map[string]string{name: path}
 		}
 	}
+	ap := d.applier(ctx, o, eo.Host, c)
+	g, gctx := errgroup.WithContext(ctx)
+	takeApplies := d.takeApplies(gctx, g, ap)
 	d.onResponse = func(r v1.HeartbeatResponse) {
+		takeApplies(r)
 		// A heartbeat taken is this daemon held as the current one: it may ask for grants.
 		ex.HeartbeatTaken()
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
@@ -203,7 +208,6 @@ func Run(ctx context.Context, o Options) error {
 		OnFence: func(state.Key) { ex.RequestReconcile() },
 	}
 
-	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return d.loop(gctx) })
 	g.Go(func() error { return ex.Run(gctx) })
 	g.Go(func() error { return broker.Run(gctx) })
@@ -213,6 +217,43 @@ func Run(ctx context.Context, o Options) error {
 	})
 	g.Go(func() error { return shipper.Run(gctx) })
 	return g.Wait()
+}
+
+// orderTaker is the applier as the daemon sees it.
+type orderTaker interface {
+	Handle(ctx context.Context, orders []v1.WorkflowApplyOrder)
+	Wait()
+}
+
+// takeApplies hands the orders of a heartbeat to ap, under the context of the
+// group: when another component fails the applies in flight are cancelled with
+// it, and the daemon does not wait for them forever.
+func (d *daemon) takeApplies(gctx context.Context, g *errgroup.Group, ap orderTaker) func(v1.HeartbeatResponse) {
+	g.Go(func() error { <-gctx.Done(); ap.Wait(); return nil })
+	return func(r v1.HeartbeatResponse) { ap.Handle(gctx, r.WorkflowApplies) }
+}
+
+// applier is what applies the Workflows the Controller orders to the global
+// configuration of the harnesses. It does not need a Runtime: a Worker that
+// offers no harness to the Runs still keeps its configuration. Creating it
+// recovers an apply a crash cut off, before any order is taken.
+func (d *daemon) applier(ctx context.Context, o Options, h harness.Host, c *client.Client) *applier.Applier {
+	if h == nil {
+		var err error
+		if h, err = d.host(); err != nil {
+			d.log.WarnContext(ctx, "the host of the harnesses cannot be built: this Worker applies no Workflow", "err", err)
+		}
+	}
+	adapters := o.Harnesses
+	if adapters == nil {
+		adapters = []harness.Adapter{codex.Adapter{}, claude.Adapter{}}
+	}
+	if h == nil {
+		adapters = nil
+	}
+	return applier.New(applier.Options{
+		Client: c, Adapters: adapters, Host: h, DataDir: o.Paths.WorkerDataDir(), Secrets: d.secrets, Log: d.log, Clock: d.clock,
+	})
 }
 
 // selfIdentity is how the daemon checks that a wrapper of this machine can
