@@ -40,6 +40,8 @@ type Options struct {
 
 	// workflowStore replaces the Controller client of the workflow commands in tests.
 	workflowStore func(*cobra.Command) (workflowStore, error)
+	// workflowApplyStore does the same for status, diff, apply, rollback, explain and sync.
+	workflowApplyStore func(*cobra.Command) (workflowApplyStore, error)
 	// environmentStore does the same for the environment commands.
 	environmentStore func(*cobra.Command) (environmentStore, error)
 }

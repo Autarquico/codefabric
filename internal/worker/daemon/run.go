@@ -28,6 +28,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/envutil"
+	"github.com/Autarquico/codefabric/internal/worker/applier"
 	"github.com/Autarquico/codefabric/internal/worker/authsync"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
@@ -187,7 +188,9 @@ func Run(ctx context.Context, o Options) error {
 			d.attachBinaries = map[string]string{name: path}
 		}
 	}
+	ap := d.applier(ctx, o, eo.Host, c)
 	d.onResponse = func(r v1.HeartbeatResponse) {
+		ap.Handle(ctx, r.WorkflowApplies)
 		// A heartbeat taken is this daemon held as the current one: it may ask for grants.
 		ex.HeartbeatTaken()
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
@@ -208,11 +211,35 @@ func Run(ctx context.Context, o Options) error {
 	g.Go(func() error { return ex.Run(gctx) })
 	g.Go(func() error { return broker.Run(gctx) })
 	g.Go(func() error { return sender.Run(gctx) })
+	g.Go(func() error { <-gctx.Done(); ap.Wait(); return nil })
 	shipper := outputship.New(outputship.Options{
 		DB: db, Uploader: c, Paths: o.Paths, Clock: d.clock, Log: d.log, Interval: o.OutputInterval,
 	})
 	g.Go(func() error { return shipper.Run(gctx) })
 	return g.Wait()
+}
+
+// applier is what applies the Workflows the Controller orders to the global
+// configuration of the harnesses. It does not need a Runtime: a Worker that
+// offers no harness to the Runs still keeps its configuration. Creating it
+// recovers an apply a crash cut off, before any order is taken.
+func (d *daemon) applier(ctx context.Context, o Options, h harness.Host, c *client.Client) *applier.Applier {
+	if h == nil {
+		var err error
+		if h, err = d.host(); err != nil {
+			d.log.WarnContext(ctx, "the host of the harnesses cannot be built: this Worker applies no Workflow", "err", err)
+		}
+	}
+	adapters := o.Harnesses
+	if adapters == nil {
+		adapters = []harness.Adapter{codex.Adapter{}, claude.Adapter{}}
+	}
+	if h == nil {
+		adapters = nil
+	}
+	return applier.New(applier.Options{
+		Client: c, Adapters: adapters, Host: h, DataDir: o.Paths.WorkerDataDir(), Secrets: d.secrets, Log: d.log,
+	})
 }
 
 // selfIdentity is how the daemon checks that a wrapper of this machine can

@@ -37,10 +37,17 @@
 //
 //   - [TargetRun] writes into an empty directory: the configuration of one
 //     Run, materialised from the snapshot alone (§8.12).
+//
 //   - [TargetGlobal] writes into the configuration of the Worker: it keeps
 //     every local component, deletes only managed ones, and in a json-subset
 //     component it replaces only the fields the snapshot carries and keeps
-//     the rest of the file.
+//     the rest of the file. [ApplyOptions].Components limits it to the named
+//     components: the others are neither written nor deleted.
+//
+//     A TargetGlobal never receives markers: the Worker renders them first
+//     (internal/worker/globalapply), and an adapter refuses a file that still
+//     has one. [GlobalInspector] tells that engine what an apply touches and
+//     what it left.
 //
 // # Secrets
 //

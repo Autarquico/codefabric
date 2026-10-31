@@ -1,0 +1,96 @@
+package claude
+
+import (
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"slices"
+
+	"github.com/Autarquico/codefabric/internal/adapters/harness"
+)
+
+var _ harness.GlobalInspector = Adapter{}
+
+func globalNames(names []string) ([]layout, error) {
+	sel, err := harness.ComponentSet(names, func(n string) bool { _, ok := layoutOf(n); return ok })
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(slices.Clone(layouts), func(l layout) bool { return sel != nil && !sel[l.name] }), nil
+}
+
+// GlobalPaths are the paths of the components under ~/.claude and
+// ~/.claude.json, and the record of what a global apply wrote.
+func (Adapter) GlobalPaths(host harness.Host, components []string) ([]string, error) {
+	ls, err := globalNames(components)
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{filepath.Join(globalDir(host), appliedFile)}
+	for _, l := range ls {
+		paths = append(paths, filepath.Join(l.root(host), filepath.FromSlash(l.path)))
+	}
+	return paths, nil
+}
+
+// GlobalFingerprint digests each component as it is on the host; in
+// ~/.claude.json, only the MCP servers a global apply recorded.
+func (Adapter) GlobalFingerprint(_ context.Context, host harness.Host, components []string) (map[string]string, error) {
+	ls, err := globalNames(components)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := readApplied(globalDir(host))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, l := range ls {
+		files, present, err := readFiles(l.root(host), l)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			continue
+		}
+		if l.name == MCPComponent {
+			sub, err := recordedServers(l.root(host), rec[MCPComponent])
+			if err != nil {
+				return nil, err
+			}
+			if sub == nil {
+				continue
+			}
+			files = sub
+		}
+		d, err := harness.FilesDigest(files)
+		if err != nil {
+			return nil, err
+		}
+		out[l.name] = d
+	}
+	return out, nil
+}
+
+// recordedServers is the servers of ~/.claude.json a global apply set, as one
+// canonical file, or nil when there are none to look at.
+func recordedServers(root string, names []string) ([]harness.File, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	_, servers, _, err := readState(root)
+	if err != nil {
+		return nil, err
+	}
+	sub := map[string]json.RawMessage{}
+	for _, n := range names {
+		if raw, ok := servers[n]; ok {
+			sub[n] = raw
+		}
+	}
+	b, err := encodeValue(sub)
+	if err != nil {
+		return nil, err
+	}
+	return []harness.File{{Path: StateFile, Content: b}}, nil
+}

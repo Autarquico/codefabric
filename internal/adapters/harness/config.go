@@ -94,6 +94,12 @@ type ApplyOptions struct {
 	LinkAuth bool
 	// DryRun returns what would change without writing.
 	DryRun bool
+	// Components limits a TargetGlobal apply to the named components: only
+	// they are written or deleted, and every other keeps its content, its
+	// ownership record and whatever the host has. Empty is every component.
+	// A name that is no component of the adapter is an error. A TargetRun
+	// apply ignores it.
+	Components []string
 }
 
 // Target is where ApplyConfig writes: a TargetRun or a TargetGlobal.

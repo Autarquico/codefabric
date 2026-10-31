@@ -51,8 +51,9 @@ type workflowStore interface {
 
 // workflowDeps are what the commands are composed with; tests replace them.
 type workflowDeps struct {
-	open    func(*cobra.Command) (workflowStore, error)
-	adopter WorkflowAdopterFactory
+	open      func(*cobra.Command) (workflowStore, error)
+	openApply func(*cobra.Command) (workflowApplyStore, error)
+	adopter   WorkflowAdopterFactory
 }
 
 func isTerminalWriter(w io.Writer) bool {
@@ -65,7 +66,11 @@ func workflowDepsOf(opts Options) workflowDeps {
 	if open == nil {
 		open = func(cmd *cobra.Command) (workflowStore, error) { return openClient(cmd) }
 	}
-	return workflowDeps{open: open, adopter: opts.Workflows}
+	openApply := opts.workflowApplyStore
+	if openApply == nil {
+		openApply = func(cmd *cobra.Command) (workflowApplyStore, error) { return openClient(cmd) }
+	}
+	return workflowDeps{open: open, openApply: openApply, adopter: opts.Workflows}
 }
 
 const (
@@ -82,6 +87,7 @@ func newWorkflowCmd(deps workflowDeps) *cobra.Command {
 	cmd := &cobra.Command{Use: "workflow", Short: "Adopt, version and inspect Workflows (native harness configuration)"}
 	cmd.AddCommand(newWorkflowListCmd(deps), newWorkflowShowCmd(deps), newWorkflowHistoryCmd(deps),
 		newWorkflowAdoptCmd(deps), newWorkflowCommitCmd(deps))
+	cmd.AddCommand(newWorkflowApplyCmds(deps)...)
 	return cmd
 }
 

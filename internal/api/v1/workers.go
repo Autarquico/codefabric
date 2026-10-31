@@ -87,6 +87,9 @@ type HeartbeatResponse struct {
 	// of this daemon epoch since it started (§27.3): the Worker reconciles, and
 	// takes no lease until it has.
 	ReconcileRequired bool `json:"reconcile_required,omitempty"`
+	// WorkflowApplies are the live orders to apply Workflow configuration to
+	// this Worker (§8.6); the Worker executes each once and reports its result.
+	WorkflowApplies []WorkflowApplyOrder `json:"workflow_applies,omitempty"`
 }
 
 // Worker is §3.5 as the API shows it. Compatible is the verdict of the upgrade
