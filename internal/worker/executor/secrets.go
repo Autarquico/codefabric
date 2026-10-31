@@ -144,8 +144,8 @@ func refList(refs []string) string {
 }
 
 // usesSecrets says whether the Run r has secrets on this Worker: the spec
-// declares them, or its configuration was rendered with some (the Controller
-// does not know the refs of the configuration yet, so the spec cannot say so).
+// declares them, or its configuration was rendered with some (refs of the
+// frozen Workflow, which the spec does not list).
 func (e *Executor) usesSecrets(r state.Run) bool {
 	return len(parseSpec(r.Spec).refs()) > 0 || secretjit.HasRendered(e.runDir(r.Key))
 }
@@ -193,10 +193,10 @@ func (e *Executor) configOf(ctx context.Context, r state.Run, adapter harness.Ad
 }
 
 // configSecretsVerdict is secretsVerdict for the secrets of the configuration
-// of the harness. The Controller cannot know them yet (the snapshot is the
-// Worker's), so this is where the Run is turned away before it is accepted,
-// for a secret this Worker cannot give it; the Controller still decides every
-// grant. A configuration that cannot be read now is the prepare's to report.
+// of the harness. Placement does not filter on them (the spec does not list
+// the refs of the frozen Workflow), so this is where the Run is turned away
+// before it is accepted, for a secret this Worker cannot give it; the
+// Controller still decides every grant. A configuration that cannot be read now is the prepare's to report.
 func (e *Executor) configSecretsVerdict(ctx context.Context, r state.Run, adapter harness.Adapter) verdict {
 	if !adapter.Capabilities().ConfigIsolation {
 		return verdict{}
