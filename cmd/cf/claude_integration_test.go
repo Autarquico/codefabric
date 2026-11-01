@@ -64,7 +64,32 @@ cat <<'STREAM'
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	loggedIn(t)
 	return pidFile, tokenFile
+}
+
+// loggedIn gives the machine a Claude login of its own, whatever the host has:
+// a HOME with the login files of Claude Code and Codex, and a `security` that finds the
+// Keychain item. The doctor would otherwise leave the Worker degraded where
+// nobody has logged in, as in CI.
+func loggedIn(t *testing.T) {
+	t.Helper()
+	home, bin := t.TempDir(), t.TempDir()
+	// codex too: a host that has it installed would be degraded for its login.
+	for _, login := range []string{".claude/.credentials.json", ".codex/auth.json"} {
+		path := filepath.Join(home, login)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(bin, "security"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // an executable of the test
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // claudeStack is a Controller, a Worker daemon in a process of its own that
