@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -41,7 +42,7 @@ func ParseThreshold(text string) (Threshold, error) {
 	text = strings.TrimSpace(text)
 	if digits, ok := strings.CutSuffix(text, "%"); ok {
 		p, err := strconv.ParseFloat(digits, 64)
-		if err != nil || p <= 0 || p >= 100 {
+		if err != nil || math.IsNaN(p) || p <= 0 || p >= 100 {
 			return Threshold{}, bad
 		}
 		return Threshold{Percent: p}, nil

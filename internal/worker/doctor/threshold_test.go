@@ -17,7 +17,7 @@ func TestParseThreshold(t *testing.T) {
 			t.Errorf("%q = %+v, %v; want %+v", text, got, err, want)
 		}
 	}
-	for _, text := range []string{"", "0%", "100%", "-5%", "abc", "50", "GiB", "0GiB", "5XB", "99999999999999TiB"} {
+	for _, text := range []string{"", "0%", "100%", "-5%", "abc", "50", "GiB", "0GiB", "5XB", "99999999999999TiB", "NaN%"} {
 		if _, err := doctor.ParseThreshold(text); err == nil {
 			t.Errorf("%q was accepted", text)
 		}

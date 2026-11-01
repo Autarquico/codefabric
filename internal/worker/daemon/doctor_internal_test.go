@@ -95,6 +95,26 @@ func TestWithComponents_WithoutADoctorChangesNothing(t *testing.T) {
 	}
 }
 
+func TestWithComponents_ABlockedCheckEndsAtTheDeadlineOfTheInjectedClock(t *testing.T) {
+	d := doctored(t, func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() })
+	done := make(chan v1.Health, 1)
+	go func() { done <- d.withComponents(t.Context(), v1.Health{Status: v1.HealthOK}) }()
+	waitCtx, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stop()
+	if err := d.clock.(*clock.Fake).BlockUntil(waitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
+	d.clock.(*clock.Fake).Advance(doctorTimeout)
+	select {
+	case h := <-done:
+		if h.Status != v1.HealthDegraded {
+			t.Errorf("health = %+v, want degraded by the check that timed out", h)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the doctor did not end at its deadline on the injected clock")
+	}
+}
+
 func TestWithDeadline_FollowsTheInjectedClock(t *testing.T) {
 	clk := clock.NewFake(time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC))
 	ctx, cancel := withDeadline(t.Context(), clk, 15*time.Second)

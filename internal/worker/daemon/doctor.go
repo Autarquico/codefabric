@@ -78,7 +78,7 @@ func (d *daemon) withComponents(ctx context.Context, health v1.Health) v1.Health
 		return health
 	}
 	if now := d.clock.Now(); d.components == nil || now.Sub(d.doctorAt) >= d.doctorEvery {
-		cctx, cancel := context.WithTimeout(ctx, doctorTimeout)
+		cctx, cancel := withDeadline(ctx, d.clock, doctorTimeout)
 		d.components, d.doctorAt = d.doctor.Check(cctx), now
 		cancel()
 	}
