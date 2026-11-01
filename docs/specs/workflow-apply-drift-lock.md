@@ -2,7 +2,7 @@
 codename: codefabric
 title: "Workflows: apply, drift y lock de configuración"
 type: task
-status: active
+status: shipped
 priority: P0
 size: L
 issue: 22
