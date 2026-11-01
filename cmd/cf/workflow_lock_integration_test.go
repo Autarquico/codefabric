@@ -134,6 +134,9 @@ func newLockFixture(t *testing.T, withWorkflow bool) *lockFixture {
 	} else {
 		ok[v1.Project](t, "project", "create", "backend")
 	}
+	// The default Run asks for 2 CPUs and the Worker offers the machine's: on a
+	// 3-CPU runner two Runs never fit, and the scenarios need several at once.
+	ok[v1.Project](t, "project", "set", "backend", "--cpu", "1", "--memory-mb", "256")
 	admin, err := client.Open(host.CredentialsDir())
 	if err != nil {
 		t.Fatal(err)
