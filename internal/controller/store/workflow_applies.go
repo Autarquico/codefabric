@@ -261,7 +261,7 @@ func (t *Tx) FailStuckWorkflowApplies(ctx context.Context, before time.Time, res
 	rows, err := collect(ctx, t, func(r rowScanner) (string, error) {
 		var id string
 		return id, r.Scan(&id)
-	}, `SELECT w.id FROM workflow_applies w LEFT JOIN config_locks l ON l.apply_pending_id = w.id
+	}, `SELECT w.id FROM workflow_applies w LEFT JOIN config_locks l ON l.worker_id = w.worker_id AND l.harness = w.harness
 	    WHERE w.dry_run = 0 AND w.state IN ('pending', 'running') AND COALESCE(l.holders, 0) = 0
 	      AND MAX(w.updated_at, COALESCE(l.updated_at, 0)) < ?
 	    ORDER BY w.created_at, w.id`, before.UnixNano())

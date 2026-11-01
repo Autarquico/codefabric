@@ -49,3 +49,14 @@ SELECT rs.worker_id, rs.config_harness, MIN(COALESCE(r.workflow_digest, '')), CO
 FROM reservations rs JOIN runs r ON r.id = rs.run_id
 WHERE rs.released_at IS NULL AND rs.config_harness IS NOT NULL
 GROUP BY rs.worker_id, rs.config_harness;
+
+-- The real order alive at upgrade time waits on the lock of its harness like
+-- one created now would: it gets the lock (with no holders if none was rebuilt
+-- above) so new leases of the harness stay out and the stuck sweep sees whose
+-- turn it is. A harness the Worker isolates takes no lock, as above.
+INSERT INTO config_locks (worker_id, harness, config_key, holders, apply_pending_id, updated_at)
+SELECT a.worker_id, a.harness, '', 0, a.id, CAST(strftime('%s', 'now') AS INTEGER) * 1000000000
+FROM workflow_applies a JOIN workers w ON w.id = a.worker_id
+WHERE a.dry_run = 0 AND a.state IN ('pending', 'running')
+  AND NOT EXISTS (SELECT 1 FROM json_each(w.capabilities) c WHERE c.value = 'harness:' || a.harness || ':config-isolation')
+ON CONFLICT (worker_id, harness) DO UPDATE SET apply_pending_id = excluded.apply_pending_id;

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -69,11 +70,82 @@ func TestMigration0208_RebuildsTheLocksOfTheReservationsOpenAtUpgrade(t *testing
 	}
 }
 
+// A real order alive at upgrade time with its harness's Runs in flight is
+// linked to the lock by the migration itself: the stuck sweep that runs before
+// any heartbeat leaves it alone, new leases of the harness stay out, and it is
+// still there, with the lock to itself, once the holders let go.
+func TestMigration0208_LinksTheLiveOrderOfAnUnisolatedHarnessToItsLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "controller.db")
+	order := func(id, worker, harness string, dry int) string {
+		return sqlf(`INSERT INTO workflow_applies (id, worker_id, harness, workflow_id, version, digest, mode, forced, dry_run, generation, state, created_at, updated_at)
+		             VALUES ('%s', '%s', '%s', 'wfl-1', 1, 'sha256:new', 'apply', 0, %d, %d, 'pending', 0, 0)`, id, worker, harness, dry, dry+1)
+	}
+	seedAt0207(t, path,
+		`INSERT INTO workflows (id, name, created_by, created_at) VALUES ('wfl-1', 'wf', 'x', 0)`,
+		order("app-real", "wrk-alpha", "codex", 0),
+		order("app-dry", "wrk-alpha", "codex", 1),
+		order("app-iso", "wrk-beta", "codex", 0),
+		order("app-idle", "wrk-beta", "claude-code", 0),
+		order("app-free", "wrk-alpha", "claude-code", 0))
+	db := reopen(t, path, Options{})
+	now := db.clock.Now()
+
+	var failed []domain.ID
+	if err := db.WithTx(t.Context(), func(tx *Tx) (err error) {
+		failed, err = tx.FailStuckWorkflowApplies(t.Context(), time.Now().Add(24*time.Hour), []byte(`{}`), now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range failed {
+		if id == "app-real" {
+			t.Fatalf("the order of alpha/codex, whose Runs hold the lock, was failed: %v", failed)
+		}
+	}
+	l, err := read(t, db, func(q Querier) (ConfigLock, error) { return ConfigLockOf(t.Context(), q, "wrk-alpha", "codex") })
+	if err != nil || l.ApplyPending != "app-real" || l.Holders != 2 {
+		t.Fatalf("lock = %+v, %v; want 2 holders and app-real pending", l, err)
+	}
+	if _, err := read(t, db, func(q Querier) (ConfigLock, error) { return ConfigLockOf(t.Context(), q, "wrk-beta", "codex") }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an isolated harness must take no lock: %v", err)
+	}
+	// No holders, nothing to wait for (app-free; app-iso is isolated and takes no
+	// lock): the sweep fails those. app-idle has a holder, so it stays.
+	if len(failed) != 2 || failed[0] != "app-free" || failed[1] != "app-iso" {
+		t.Fatalf("failed = %v, want app-free and app-iso only", failed)
+	}
+
+	acquire := func() error {
+		return db.WithTx(t.Context(), func(tx *Tx) error {
+			return tx.AcquireConfigLock(t.Context(), "wrk-alpha", ConfigClaim{Harness: "codex", Key: "sha256:one"}, now)
+		})
+	}
+	if err := acquire(); !errors.Is(err, ErrConfigLockHeld) {
+		t.Fatalf("a new lease of the harness must be kept out: %v", err)
+	}
+	for _, lease := range []domain.ID{"lse-1", "lse-2"} {
+		if err := db.WithTx(t.Context(), func(tx *Tx) error { return tx.ReleaseReservation(t.Context(), lease, "run_ended", now) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l, err = read(t, db, func(q Querier) (ConfigLock, error) { return ConfigLockOf(t.Context(), q, "wrk-alpha", "codex") })
+	if err != nil || l.Holders != 0 || l.ApplyPending != "app-real" {
+		t.Fatalf("after the holders let go: %+v, %v; want the lock kept for app-real", l, err)
+	}
+	live, err := read(t, db, func(q Querier) ([]WorkflowApply, error) { return LiveWorkflowAppliesOf(t.Context(), q, "wrk-alpha") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 2 {
+		t.Fatalf("live orders of alpha = %d, want its codex orders (real, dry-run) alive and the idle claude-code one swept", len(live))
+	}
+}
+
 // seedAt0207 builds a database at version 0207 with five open reservations:
 // two of codex on alpha (no isolation) with the same Workflow, one of codex on
 // beta (isolated), one of a Run that names no harness and one of claude-code on
 // beta (no isolation, no Workflow).
-func seedAt0207(t *testing.T, path string) {
+func seedAt0207(t *testing.T, path string, extra ...string) {
 	t.Helper()
 	pool, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -114,6 +186,7 @@ func seedAt0207(t *testing.T, path string) {
 			sqlf(`INSERT INTO reservations (lease_id, run_id, worker_id, cpu, memory_mb, disk_mb, created_at) VALUES ('lse-%d', '%s', '%s', 0, 0, 0, 0)`, n, r.id, r.worker),
 		)
 	}
+	stmts = append(stmts, extra...)
 	for _, s := range stmts {
 		if _, err := pool.ExecContext(t.Context(), s); err != nil {
 			t.Fatalf("%s: %v", s, err)
