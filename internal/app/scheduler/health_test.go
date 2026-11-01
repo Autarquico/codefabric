@@ -79,3 +79,22 @@ func TestFilters_HealthFailureNamesTheComponent(t *testing.T) {
 		t.Errorf("failures = %+v", f)
 	}
 }
+
+// An invalid configuration of one harness (a failing harness:<id>) keeps that
+// harness's Runs off the Worker and leaves the other harness eligible.
+func TestFilters_InvalidConfigOfOneHarnessLeavesTheOtherEligible(t *testing.T) {
+	w := worker("w", func(w *scheduler.Worker) {
+		w.State = domain.WorkerDegraded
+		w.Components = []v1.ComponentHealth{comp("harness:claude", v1.ComponentFail, "configuración con 1 problema(s)")}
+		w.Capabilities = []string{
+			domain.HarnessModesMarker, domain.HarnessCapability("claude"), domain.HarnessModeCapability("claude", domain.ModeHeadless),
+			domain.HarnessCapability("codex"), domain.HarnessModeCapability("codex", domain.ModeHeadless),
+		}
+	})
+	for harness, eligible := range map[string]bool{"claude": false, "codex": true} {
+		req := request(func(r *domain.Placement) { r.Harness, r.Mode = harness, domain.ModeHeadless })
+		if got := scheduler.Decide(req, []scheduler.Worker{w}, now).Chosen != nil; got != eligible {
+			t.Errorf("%s eligible = %v, want %v", harness, got, eligible)
+		}
+	}
+}

@@ -279,13 +279,32 @@ func TestCodexAuth(t *testing.T) {
 	}
 }
 
-func TestHarnessConfigIssuesWarn(t *testing.T) {
+// sharedClaude is claude-code without ConfigIsolation: it runs on the
+// configuration of the host.
+type sharedClaude struct{ claude.Adapter }
+
+func (a sharedClaude) Capabilities() harness.Capabilities {
+	c := a.Adapter.Capabilities()
+	c.ConfigIsolation = false
+	return c
+}
+
+func TestHarnessConfigIssuesFailOnlyWithoutIsolation(t *testing.T) {
 	h := newHost(t)
 	writeFile(t, filepath.Join(h.home, ".claude", "settings.json"), "{not json")
-	d, _ := newDoctor(t, h, claude.Adapter{})
+	d, _ := newDoctor(t, h, sharedClaude{})
 	cs := d.Check(t.Context())
-	if c := find(t, cs, "harness:claude-code"); c.Status != v1.ComponentWarn {
+	if c := find(t, cs, "harness:claude-code"); c.Status != v1.ComponentFail || c.Action == "" {
 		t.Errorf("harness = %+v", c)
+	}
+	if h := doctor.Health(cs); h.Status != v1.HealthDegraded {
+		t.Errorf("an invalid configuration must degrade the Worker: %+v", h)
+	}
+	// With ConfigIsolation each Run gets its own configuration: the host's is
+	// only worth a warning.
+	isolated, _ := newDoctor(t, h, claude.Adapter{})
+	if c := find(t, isolated.Check(t.Context()), "harness:claude-code"); c.Status != v1.ComponentWarn {
+		t.Errorf("isolated harness = %+v, want warn", c)
 	}
 	h2 := newHost(t)
 	d2, _ := newDoctor(t, h2, claude.Adapter{})
@@ -357,4 +376,59 @@ func TestClean(t *testing.T) {
 	if got := doctor.Clean(long); len(got) > doctor.MaxText || !utf8.ValidString(got) || !strings.HasSuffix(got, "…") {
 		t.Errorf("got %d bytes %q", len(got), got)
 	}
+}
+
+// unisolated is Claude Code as a harness that runs under the configuration of the host.
+type unisolated struct{ claude.Adapter }
+
+func (unisolated) Capabilities() harness.Capabilities { return harness.Capabilities{} }
+
+func TestBypassWithoutIsolationWarns(t *testing.T) {
+	h := newHost(t)
+	d, _ := newDoctor(t, h, unisolated{})
+	if _, ok := findOpt(d.Check(t.Context()), "isolation:claude-code"); ok {
+		t.Error("warned without a bypass")
+	}
+	writeFile(t, filepath.Join(h.home, ".claude", "settings.json"), `{"permissions":{"defaultMode":"bypassPermissions"}}`)
+	cs := d.Check(t.Context())
+	c, ok := findOpt(cs, "isolation:claude-code")
+	if !ok || c.Status != v1.ComponentWarn || c.Action == "" {
+		t.Fatalf("component = %+v, %v", c, ok)
+	}
+	writeFile(t, filepath.Join(h.home, ".claude", ".credentials.json"), "{}")
+	if n := doctor.Failing(d.Check(t.Context())); n != 0 {
+		t.Errorf("%d component(s) fail: the bypass is a warning", n)
+	}
+}
+
+func TestBypassIsOnlyAWarningForAHarnessThatIsolatesItsConfig(t *testing.T) {
+	h := newHost(t)
+	writeFile(t, filepath.Join(h.home, ".claude", "settings.json"), `{"permissions":{"defaultMode":"bypassPermissions"}}`)
+	d, _ := newDoctor(t, h, claude.Adapter{})
+	if _, ok := findOpt(d.Check(t.Context()), "isolation:claude-code"); ok {
+		t.Error("warned for a harness whose Runs do not read the host configuration")
+	}
+}
+
+func TestCodexBypassIsDetected(t *testing.T) {
+	for config, want := range map[string]bool{
+		"approval_policy = \"never\"\n":           true,
+		"sandbox_mode = \"danger-full-access\"\n": true,
+		"approval_policy = \"on-request\"\n":      false,
+	} {
+		h := newHost(t)
+		writeFile(t, filepath.Join(h.home, ".codex", "config.toml"), config)
+		if got, err := (codex.Adapter{}).BypassesPermissions(h); err != nil || got != want {
+			t.Errorf("%q: %v, %v; want %v", config, got, err, want)
+		}
+	}
+}
+
+func findOpt(cs []v1.ComponentHealth, name string) (v1.ComponentHealth, bool) {
+	for _, c := range cs {
+		if c.Name == name {
+			return c, true
+		}
+	}
+	return v1.ComponentHealth{}, false
 }

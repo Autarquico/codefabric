@@ -11,12 +11,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 type fakeDoctor struct {
@@ -53,8 +55,11 @@ func TestDoctor_WorkersWithComponentsAndSSH(t *testing.T) {
 		}}},
 		{Name: "gamma", State: domain.WorkerOnline},
 	}}
+	var mu sync.Mutex
 	var probed []string
 	probe := func(_ context.Context, target domain.SSHTarget) error {
+		mu.Lock()
+		defer mu.Unlock()
 		probed = append(probed, target.String())
 		if target.Host == "beta.lan" {
 			return errors.New("Permission denied (publickey)")
@@ -151,5 +156,26 @@ func TestDoctor_ProbesTheSSHTargetOverrideOfAttach(t *testing.T) {
 	slices.Sort(probed)
 	if want := []string{"10.0.0.5", "beta.lan", "gamma.vpn"}; !slices.Equal(probed, want) {
 		t.Errorf("probed %v, want %v", probed, want)
+	}
+}
+
+func TestDeadlineContext_ExpiresWhenTheFakeClockPassesIt(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC))
+	ctx, cancel := deadlineContext(t.Context(), fakeTimer(clk), 6*time.Second)
+	defer cancel()
+	waitCtx, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stop()
+	if err := clk.BlockUntil(waitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(5 * time.Second)
+	if ctx.Err() != nil {
+		t.Fatal("cancelled before its deadline")
+	}
+	clk.Advance(time.Second)
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("not cancelled after its deadline")
 	}
 }

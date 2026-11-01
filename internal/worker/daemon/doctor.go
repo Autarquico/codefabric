@@ -11,6 +11,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/doctor"
 )
 
@@ -21,6 +22,22 @@ const daemonComponent = "daemon"
 
 // doctorTimeout bounds one pass of the checks, which start processes.
 const doctorTimeout = 15 * time.Second
+
+// withDeadline is ctx cancelled once dur has passed on clk, so that the
+// deadline follows the injected clock and not the system's.
+func withDeadline(ctx context.Context, clk clock.Clock, dur time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	t := clk.NewTimer(dur)
+	go func() {
+		defer t.Stop()
+		select {
+		case <-t.C():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
 
 // startDoctor builds the doctor of this machine. A host that cannot be built
 // leaves the machine unchecked, as it leaves it without harnesses.

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -33,9 +35,18 @@ type DoctorResult struct {
 type DoctorOptions struct {
 	Paths       config.Paths
 	DiskMinFree string
+	// Controller is the host:port to reach instead of the stored one.
+	Controller string
+	// Clock measures the deadlines; nil is the system's.
+	Clock clock.Clock
 	// Doctor overrides the checks, for tests.
 	Doctor doctor.Options
+	// Probe replaces the authenticated call to the Controller, for tests.
+	Probe func(ctx context.Context) error
 }
+
+// controllerTimeout bounds the call to the Controller, which may not answer.
+const controllerTimeout = 5 * time.Second
 
 // RunDoctor runs the checks of this machine, with no daemon and no Controller.
 func RunDoctor(ctx context.Context, o DoctorOptions) ([]v1.ComponentHealth, error) {
@@ -69,9 +80,58 @@ func RunDoctor(ctx context.Context, o DoctorOptions) ([]v1.ComponentHealth, erro
 	if opts.MinFree == (doctor.Threshold{}) {
 		opts.MinFree = minFree
 	}
-	ctx, cancel := context.WithTimeout(ctx, doctorTimeout)
+	clk := o.Clock
+	if clk == nil {
+		clk = clock.Real{}
+	}
+	cctx, cancel := withDeadline(ctx, clk, doctorTimeout)
 	defer cancel()
-	return doctor.New(opts).Check(ctx), nil
+	components := doctor.New(opts).Check(cctx)
+	return append(components, controllerComponent(ctx, clk, o, opts.Worker)), nil
+}
+
+// controllerComponent says whether this Worker can talk to its Controller with
+// the credentials it has: an authenticated read that changes nothing. A machine
+// that has not joined only warns, since the checks of RunDoctor do not need it;
+// credentials the Controller refuses fail, as no Run could reach this Worker.
+func controllerComponent(ctx context.Context, clk clock.Clock, o DoctorOptions, worker string) v1.ComponentHealth {
+	probe := o.Probe
+	if probe == nil {
+		exists, err := client.CredentialsExist(o.Paths.WorkerCredentialsDir())
+		switch {
+		case err != nil:
+			return doctor.CleanComponent(v1.ComponentHealth{
+				Name: "controller", Status: v1.ComponentFail, Message: "no se pueden leer las credenciales: " + err.Error(),
+				Action: "revisa " + o.Paths.WorkerCredentialsDir() + " en " + worker,
+			})
+		case !exists:
+			return v1.ComponentHealth{
+				Name: "controller", Status: v1.ComponentWarn, Message: "este equipo no se ha unido a un Controller",
+				Action: "cf worker join <invitación> en " + worker,
+			}
+		}
+		opts := []client.Option{client.WithRecoveryHint(client.WorkerRecoveryHint)}
+		if o.Controller != "" {
+			opts = append(opts, client.WithController(o.Controller))
+		}
+		c, err := client.Open(o.Paths.WorkerCredentialsDir(), opts...)
+		if err != nil {
+			return doctor.CleanComponent(v1.ComponentHealth{
+				Name: "controller", Status: v1.ComponentFail, Message: "no se pueden abrir las credenciales: " + err.Error(),
+				Action: "cf worker join --force <invitación> en " + worker,
+			})
+		}
+		probe = func(ctx context.Context) error { _, err := c.Assignments(ctx, 0, 0, 1); return err }
+	}
+	cctx, cancel := withDeadline(ctx, clk, controllerTimeout)
+	defer cancel()
+	if err := probe(cctx); err != nil {
+		return doctor.CleanComponent(v1.ComponentHealth{
+			Name: "controller", Status: v1.ComponentFail, Message: "el Controller no acepta a este Worker: " + err.Error(),
+			Action: "revisa la red y las credenciales de " + worker + "; " + client.WorkerRecoveryHint,
+		})
+	}
+	return v1.ComponentHealth{Name: "controller", Status: v1.ComponentOK, Message: "el Controller responde y acepta las credenciales"}
 }
 
 func newDoctorCmd() *cobra.Command {
@@ -89,7 +149,8 @@ func newDoctorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			components, err := RunDoctor(cmd.Context(), DoctorOptions{Paths: paths, DiskMinFree: minFree})
+			controller, _ := cmd.Flags().GetString("controller")
+			components, err := RunDoctor(cmd.Context(), DoctorOptions{Paths: paths, DiskMinFree: minFree, Controller: controller})
 			if err != nil {
 				return err
 			}

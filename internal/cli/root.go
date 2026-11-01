@@ -52,6 +52,8 @@ type Options struct {
 	// doctorStore and sshProbe replace the Controller client and the ssh of `cf doctor` in tests.
 	doctorStore func(*cobra.Command) (doctorStore, error)
 	sshProbe    sshProbe
+	// doctorTimer replaces the timer of the deadline of the real ssh probe in tests.
+	doctorTimer timerFunc
 }
 
 // Execute runs the cf command tree, plus any extra top-level commands the

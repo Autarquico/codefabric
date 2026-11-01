@@ -86,6 +86,19 @@ func (c *controller) stopIt() { c.stop() }
 func machine(t *testing.T) config.Paths {
 	t.Helper()
 	root := t.TempDir()
+	// The configuration and the logins of the harnesses of the machine running the
+	// tests must not decide whether the Worker is healthy: this one has a login for each.
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
+	for _, login := range []string{".claude/.credentials.json", ".codex/auth.json"} {
+		path := filepath.Join(home, login)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return config.Paths{ConfigDir: filepath.Join(root, "config"), DataDir: filepath.Join(root, "data")}
 }
 

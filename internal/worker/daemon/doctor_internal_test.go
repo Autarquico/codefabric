@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/doctor"
 	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
@@ -91,5 +92,78 @@ func TestWithComponents_WithoutADoctorChangesNothing(t *testing.T) {
 	d := &daemon{clock: clock.Real{}}
 	if got := d.withComponents(t.Context(), in); got.Status != in.Status || got.Components != nil {
 		t.Errorf("health = %+v", got)
+	}
+}
+
+func TestWithDeadline_FollowsTheInjectedClock(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC))
+	ctx, cancel := withDeadline(t.Context(), clk, 15*time.Second)
+	defer cancel()
+	waitCtx, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stop()
+	if err := clk.BlockUntil(waitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(14 * time.Second)
+	if ctx.Err() != nil {
+		t.Fatal("cancelled before the deadline")
+	}
+	clk.Advance(time.Second)
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("not cancelled at the deadline")
+	}
+}
+
+func TestControllerComponent(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC))
+	cases := []struct {
+		name   string
+		probe  func(context.Context) error
+		status string
+	}{
+		{"not joined", nil, v1.ComponentWarn},
+		{"answers", func(context.Context) error { return nil }, v1.ComponentOK},
+		{"refuses", func(context.Context) error { return errors.New("certificate revoked") }, v1.ComponentFail},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("CF_CONFIG_DIR", t.TempDir())
+			t.Setenv("CF_DATA_DIR", t.TempDir())
+			paths, err := config.ResolveFromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := controllerComponent(t.Context(), clk, DoctorOptions{Paths: paths, Probe: c.probe}, "box")
+			if got.Name != "controller" || got.Status != c.status || (c.status != v1.ComponentOK && got.Action == "") {
+				t.Errorf("component = %+v, want %s", got, c.status)
+			}
+		})
+	}
+}
+
+func TestControllerComponent_AControllerThatDoesNotAnswerFailsAtTheDeadline(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC))
+	done := make(chan v1.ComponentHealth, 1)
+	go func() {
+		done <- controllerComponent(t.Context(), clk, DoctorOptions{Probe: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}}, "box")
+	}()
+	waitCtx, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stop()
+	if err := clk.BlockUntil(waitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(controllerTimeout)
+	select {
+	case got := <-done:
+		if got.Status != v1.ComponentFail {
+			t.Errorf("component = %+v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the probe was not cut at the deadline")
 	}
 }

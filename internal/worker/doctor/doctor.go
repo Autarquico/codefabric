@@ -200,6 +200,9 @@ func (d *Doctor) harness(ctx context.Context, a harness.Adapter) []v1.ComponentH
 		return nil
 	}
 	out := []v1.ComponentHealth{d.config(ctx, a)}
+	if c, warn := d.bypass(a); warn {
+		out = append(out, c)
+	}
 	if _, isAuth := a.(globalAuth); isAuth {
 		out = append(out, d.auth(ctx, a))
 	}
@@ -220,17 +223,43 @@ func (d *Doctor) config(ctx context.Context, a harness.Adapter) v1.ComponentHeal
 			Action: "revisa la configuración de " + a.ID() + " en " + d.o.Worker,
 		}
 	case len(val.Issues) > 0:
+		// A harness with ConfigIsolation runs on the configuration materialised
+		// for each Run, never on the host's: a problem there is only a warning.
+		// Without it, a configuration that does not work takes no Runs.
+		status := v1.ComponentWarn
+		if val.Blocking() && !a.Capabilities().ConfigIsolation {
+			status = v1.ComponentFail
+		}
 		issue := val.Issues[0]
 		msg := issue.Message
 		if issue.Component != "" {
 			msg = issue.Component + ": " + msg
 		}
 		return v1.ComponentHealth{
-			Name: name, Status: v1.ComponentWarn, Message: fmt.Sprintf("configuración con %d problema(s): %s", len(val.Issues), msg),
+			Name: name, Status: status, Message: fmt.Sprintf("configuración con %d problema(s): %s", len(val.Issues), msg),
 			Action: "revisa la configuración de " + a.ID() + " en " + d.o.Worker,
 		}
 	}
 	return ok(name, "instalado y con configuración válida")
+}
+
+// bypass warns of a harness that runs under the configuration of the host, with
+// no isolation of its own, when that configuration skips the permission prompts:
+// every Run would inherit it.
+func (d *Doctor) bypass(a harness.Adapter) (v1.ComponentHealth, bool) {
+	detector, ok := a.(harness.BypassDetector)
+	if !ok || a.Capabilities().ConfigIsolation {
+		return v1.ComponentHealth{}, false
+	}
+	bypasses, err := detector.BypassesPermissions(d.o.Host)
+	if err != nil || !bypasses {
+		return v1.ComponentHealth{}, false
+	}
+	return v1.ComponentHealth{
+		Name: "isolation:" + a.ID(), Status: v1.ComponentWarn,
+		Message: a.ID() + " no aísla su configuración y la del host salta los permisos (bypass)",
+		Action:  "quita el bypass de la configuración de " + a.ID() + " en " + d.o.Worker,
+	}, true
 }
 
 // auth says whether a login is there, never what it is.

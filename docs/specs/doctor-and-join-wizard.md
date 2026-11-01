@@ -36,6 +36,8 @@ Owner previsto en el bucle Develop: backend-eng y frontend-eng.
 - Salud por componente en el heartbeat; `degraded` por componente
 - CLI: `cf doctor`, `cf worker doctor`, `cf worker join` interactivo, `cf setup`
 
+**Entrega en dos PRs:** 25-A (#73: doctor del Worker, salud por componente en el heartbeat y en el scheduler, `cf worker doctor`, `cf doctor`; scenarios Login ausente, Disco, Verde y Sin SSH) y 25-B (`cf worker join` interactivo con instalación de harnesses y `cf setup`).
+
 **No entra:**
 - Nada fuera de lo indicado en la epic.
 

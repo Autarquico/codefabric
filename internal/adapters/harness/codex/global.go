@@ -2,10 +2,13 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+
+	toml "github.com/pelletier/go-toml/v2"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 )
@@ -13,7 +16,28 @@ import (
 var (
 	_ harness.GlobalInspector = Adapter{}
 	_ harness.GlobalAdopter   = Adapter{}
+	_ harness.BypassDetector  = Adapter{}
 )
+
+// BypassesPermissions is approval_policy "never" or sandbox_mode
+// "danger-full-access" in the config.toml of the host; no file is no bypass.
+func (Adapter) BypassesPermissions(host harness.Host) (bool, error) {
+	b, err := os.ReadFile(filepath.Join(globalDir(host), ConfigComponent))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var c struct {
+		ApprovalPolicy string `toml:"approval_policy"`
+		SandboxMode    string `toml:"sandbox_mode"`
+	}
+	if err := toml.Unmarshal(b, &c); err != nil {
+		return false, fmt.Errorf("codex: %s: %w", ConfigComponent, err)
+	}
+	return c.ApprovalPolicy == "never" || c.SandboxMode == "danger-full-access", nil
+}
 
 func globalNames(names []string) ([]layout, error) {
 	sel, err := harness.ComponentSet(names, func(n string) bool { _, ok := layoutOf(n); return ok })

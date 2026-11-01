@@ -38,7 +38,27 @@ func probeOf(opts Options) sshProbe {
 	if opts.sshProbe != nil {
 		return opts.sshProbe
 	}
-	return runSSHProbe
+	timer := opts.doctorTimer
+	if timer == nil {
+		timer = realTimer
+	}
+	return func(ctx context.Context, target domain.SSHTarget) error { return runSSHProbe(ctx, timer, target) }
+}
+
+// deadlineContext is ctx cancelled once d has passed on timer, so that the
+// deadline follows the clock the caller injected and not the system's.
+func deadlineContext(ctx context.Context, timer timerFunc, d time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	fired, stop := timer(d)
+	go func() {
+		defer stop()
+		select {
+		case <-fired:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
 }
 
 func openDoctorStore(opts Options) func(*cobra.Command) (doctorStore, error) {
@@ -193,8 +213,8 @@ func printDoctor(out io.Writer, rep DoctorReport) error {
 // runSSHProbe is the probe of the binary: `ssh -o BatchMode=yes
 // -o ConnectTimeout=5 [-p port] -- target true`. BatchMode makes ssh fail
 // instead of asking for a password or a passphrase.
-func runSSHProbe(ctx context.Context, target domain.SSHTarget) error {
-	ctx, cancel := context.WithTimeout(ctx, sshProbeTimeout+time.Second)
+func runSSHProbe(ctx context.Context, timer timerFunc, target domain.SSHTarget) error {
+	ctx, cancel := deadlineContext(ctx, timer, sshProbeTimeout+time.Second)
 	defer cancel()
 	// The probe only runs `true`, on a host a Worker chose: nothing of the
 	// user's ssh config may be forwarded to it.

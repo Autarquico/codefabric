@@ -42,9 +42,11 @@ type doctorWorldOptions struct {
 
 func newDoctorWorld(t *testing.T, o doctorWorldOptions) doctorWorld {
 	t.Helper()
+	home := os.Getenv("HOME") // the test may have set the one of its machine; machine would replace it
 	host, _ := bringUpController(t)
 	invite := workerInvite(t, host)
 	box := machine(t)
+	t.Setenv("HOME", home)
 	ok[map[string]any](t, "worker", "join", invite, "--name", "alpha", "--disk-min-free", o.diskMin)
 
 	opts := workerdaemon.Options{
