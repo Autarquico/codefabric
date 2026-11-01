@@ -15,6 +15,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -405,9 +406,65 @@ func TestBypassIsOnlyAWarningForAHarnessThatIsolatesItsConfig(t *testing.T) {
 	h := newHost(t)
 	writeFile(t, filepath.Join(h.home, ".claude", "settings.json"), `{"permissions":{"defaultMode":"bypassPermissions"}}`)
 	d, _ := newDoctor(t, h, claude.Adapter{})
-	if _, ok := findOpt(d.Check(t.Context()), "isolation:claude-code"); ok {
-		t.Error("warned for a harness whose Runs do not read the host configuration")
+	c, ok := findOpt(d.Check(t.Context()), "isolation:claude-code")
+	if !ok || strings.Contains(c.Message, "bypass)") {
+		t.Errorf("the host configuration is not read by its Runs: %+v, %v", c, ok)
 	}
+}
+
+func TestPreapprovedPermissionsOnTheHostWarn(t *testing.T) {
+	for _, a := range []harness.Adapter{claude.Adapter{}, codex.Adapter{}} {
+		h := newHost(t)
+		d, _ := newDoctor(t, h, a)
+		c, ok := findOpt(d.Check(t.Context()), "isolation:"+a.ID())
+		if !ok || c.Status != v1.ComponentWarn || c.Action == "" || !strings.Contains(c.Message, "preaprobados") {
+			t.Errorf("%s: component = %+v, %v", a.ID(), c, ok)
+		}
+	}
+}
+
+func TestCommandHarnessDoesNotWarnOfIsolation(t *testing.T) {
+	d, _ := newDoctor(t, newHost(t), command.Adapter{})
+	if c, ok := findOpt(d.Check(t.Context()), "isolation:command"); ok {
+		t.Errorf("warned: %+v", c)
+	}
+}
+
+func TestIsolatedRuntimeDoesNotWarn(t *testing.T) {
+	h := newHost(t)
+	for _, a := range []harness.Adapter{claude.Adapter{}, codex.Adapter{}} {
+		d := doctor.New(doctor.Options{
+			Host: h, Adapters: []harness.Adapter{a}, Worker: "box", DataDir: t.TempDir(),
+			Runtime: func(context.Context) error { return nil }, Disk: plenty, GOOS: "linux", RuntimeIsolated: true,
+			Applied: func(context.Context, harness.Adapter) ([]globalapply.Applied, error) { return nil, nil },
+		})
+		if c, ok := findOpt(d.Check(t.Context()), "isolation:"+a.ID()); ok {
+			t.Errorf("%s warned on an isolated runtime: %+v", a.ID(), c)
+		}
+	}
+}
+
+func TestHostBypassAndPreapprovedShareOneComponent(t *testing.T) {
+	h := newHost(t)
+	writeFile(t, filepath.Join(h.home, ".claude", "settings.json"), `{"permissions":{"defaultMode":"bypassPermissions"}}`)
+	d, _ := newDoctor(t, h, preapproved{})
+	n := 0
+	var msg string
+	for _, c := range d.Check(t.Context()) {
+		if c.Name == "isolation:claude-code" {
+			n, msg = n+1, c.Message
+		}
+	}
+	if n != 1 || !strings.Contains(msg, "preaprobados") || !strings.Contains(msg, "bypass)") {
+		t.Errorf("%d component(s), message %q", n, msg)
+	}
+}
+
+// preapproved is a harness that skips prompts and reads the host configuration.
+type preapproved struct{ claude.Adapter }
+
+func (preapproved) Capabilities() harness.Capabilities {
+	return harness.Capabilities{PreapprovedPermissions: true}
 }
 
 func TestCodexBypassIsDetected(t *testing.T) {

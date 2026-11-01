@@ -54,10 +54,11 @@ func (Adapter) ID() string { return ID }
 // directory per Run. Install is not declared.
 func (Adapter) Capabilities() harness.Capabilities {
 	return harness.Capabilities{
-		Modes:           []domain.Mode{domain.ModeHeadless, domain.ModeInteractive},
-		UsageEvents:     true,
-		ModelSelection:  true,
-		ConfigIsolation: true,
+		Modes:                  []domain.Mode{domain.ModeHeadless, domain.ModeInteractive},
+		UsageEvents:            true,
+		ModelSelection:         true,
+		ConfigIsolation:        true,
+		PreapprovedPermissions: true,
 	}
 }
 

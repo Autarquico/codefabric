@@ -57,6 +57,9 @@ type Options struct {
 	Applied func(ctx context.Context, a harness.Adapter) ([]globalapply.Applied, error)
 	// GOOS is the platform, for the checks that depend on it; empty is this one.
 	GOOS string
+	// RuntimeIsolated says the runtime confines the Runs (a container, a VM).
+	// The zero value is the host itself, which is what tmux and a process are.
+	RuntimeIsolated bool
 }
 
 // Doctor runs the checks. It remembers whether the disk was failing, which is
@@ -200,7 +203,7 @@ func (d *Doctor) harness(ctx context.Context, a harness.Adapter) []v1.ComponentH
 		return nil
 	}
 	out := []v1.ComponentHealth{d.config(ctx, a)}
-	if c, warn := d.bypass(a); warn {
+	if c, warn := d.isolation(a); warn {
 		out = append(out, c)
 	}
 	if _, isAuth := a.(globalAuth); isAuth {
@@ -243,23 +246,34 @@ func (d *Doctor) config(ctx context.Context, a harness.Adapter) v1.ComponentHeal
 	return ok(name, "instalado y con configuración válida")
 }
 
-// bypass warns of a harness that runs under the configuration of the host, with
-// no isolation of its own, when that configuration skips the permission prompts:
-// every Run would inherit it.
-func (d *Doctor) bypass(a harness.Adapter) (v1.ComponentHealth, bool) {
-	detector, ok := a.(harness.BypassDetector)
-	if !ok || a.Capabilities().ConfigIsolation {
-		return v1.ComponentHealth{}, false
+// isolation warns of a harness that would run with its permission prompts
+// skipped directly on the host: because it launches that way on a runtime that
+// does not confine it, or because the host configuration it reads says so.
+func (d *Doctor) isolation(a harness.Adapter) (v1.ComponentHealth, bool) {
+	var reasons []string
+	if a.Capabilities().PreapprovedPermissions && !d.o.RuntimeIsolated {
+		reasons = append(reasons, a.ID()+" se ejecuta con permisos preaprobados directamente en el host (sin aislamiento)")
 	}
-	bypasses, err := detector.BypassesPermissions(d.o.Host)
-	if err != nil || !bypasses {
+	if d.hostConfigBypasses(a) {
+		reasons = append(reasons, a.ID()+" no aísla su configuración y la del host salta los permisos (bypass)")
+	}
+	if len(reasons) == 0 {
 		return v1.ComponentHealth{}, false
 	}
 	return v1.ComponentHealth{
 		Name: "isolation:" + a.ID(), Status: v1.ComponentWarn,
-		Message: a.ID() + " no aísla su configuración y la del host salta los permisos (bypass)",
-		Action:  "quita el bypass de la configuración de " + a.ID() + " en " + d.o.Worker,
+		Message: strings.Join(reasons, "; "),
+		Action:  "usa un Worker dedicado o un runtime aislado para " + a.ID() + " en " + d.o.Worker,
 	}, true
+}
+
+func (d *Doctor) hostConfigBypasses(a harness.Adapter) bool {
+	detector, ok := a.(harness.BypassDetector)
+	if !ok || a.Capabilities().ConfigIsolation {
+		return false
+	}
+	bypasses, err := detector.BypassesPermissions(d.o.Host)
+	return err == nil && bypasses
 }
 
 // auth says whether a login is there, never what it is.

@@ -60,6 +60,7 @@ func (d *daemon) startDoctor(ctx context.Context, o Options) error {
 		Host: h, Adapters: adapters, Worker: doctor.WorkerName(o.Paths, workerName(hostname)), DataDir: o.Paths.WorkerDataDir(),
 		Secrets: d.secrets, MinFree: minFree, Git: o.GitPath,
 	}
+	// RuntimeIsolated stays false: tmux and the process runtime run the harness on the host.
 	if o.Runtime != nil { // an injected Runtime is its own verdict
 		opts.Runtime = func(context.Context) error { return nil }
 	}
