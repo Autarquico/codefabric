@@ -51,6 +51,8 @@ type Options struct {
 
 	// Runtime checks the session runtime; nil checks tmux.
 	Runtime func(ctx context.Context) error
+	// RuntimeName names the runtime in the verdict; empty is tmux.
+	RuntimeName string
 	// Disk measures the filesystem of dir; nil is sysinfo.DiskOf.
 	Disk func(dir string) (sysinfo.Disk, error)
 	// Applied says what was applied to a harness; nil reads the baseline.
@@ -75,6 +77,9 @@ type Doctor struct {
 func New(o Options) *Doctor {
 	if o.MinFree == (Threshold{}) {
 		o.MinFree, _ = ParseThreshold(DefaultMinFree)
+	}
+	if o.RuntimeName == "" {
+		o.RuntimeName = "tmux"
 	}
 	if o.Runtime == nil {
 		o.Runtime = func(ctx context.Context) error {
@@ -144,12 +149,16 @@ func ok(name, msg string) v1.ComponentHealth {
 
 func (d *Doctor) runtime(ctx context.Context) v1.ComponentHealth {
 	if err := d.o.Runtime(ctx); err != nil {
+		action := "revisa el runtime de sesiones en " + d.o.Worker
+		if d.o.RuntimeName == "tmux" {
+			action = "instala tmux 3.0 o posterior en " + d.o.Worker
+		}
 		return v1.ComponentHealth{
 			Name: "runtime", Status: v1.ComponentFail, Message: err.Error(),
-			Action: "instala tmux 3.0 o posterior en " + d.o.Worker,
+			Action: action,
 		}
 	}
-	return ok("runtime", "tmux disponible")
+	return ok("runtime", d.o.RuntimeName+" disponible")
 }
 
 func (d *Doctor) git(ctx context.Context) v1.ComponentHealth {

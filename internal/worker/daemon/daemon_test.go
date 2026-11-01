@@ -154,7 +154,9 @@ func run(t *testing.T, paths config.Paths, out *logs, rt ...cfruntime.Runtime) *
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	r := &running{cancel: cancel, done: make(chan struct{})}
-	opts := daemon.Options{Paths: paths, Interval: interval, Logger: slog.New(slog.NewTextHandler(out, nil))}
+	// Without a Runtime of its own the test gets a fake one: the verdict of the
+	// doctor must not depend on whether the machine has tmux.
+	opts := daemon.Options{Paths: paths, Interval: interval, Logger: slog.New(slog.NewTextHandler(out, nil)), Runtime: &recordingRuntime{}}
 	if len(rt) > 0 {
 		opts.Runtime = rt[0]
 	}
@@ -261,7 +263,7 @@ func runMeasuring(t *testing.T, paths config.Paths, broken *atomic.Bool) *runnin
 	go func() {
 		defer close(r.done)
 		r.err = daemon.Run(ctx, daemon.Options{
-			Paths: paths, Interval: interval, Logger: slog.New(slog.DiscardHandler),
+			Paths: paths, Interval: interval, Logger: slog.New(slog.DiscardHandler), Runtime: &recordingRuntime{},
 			Measure: func(dir string) (sysinfo.Info, error) {
 				if broken.Load() {
 					return sysinfo.Info{}, errors.New("statfs: input/output error")

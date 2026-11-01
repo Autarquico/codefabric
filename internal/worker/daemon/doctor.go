@@ -10,6 +10,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
+	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/doctor"
@@ -39,6 +40,16 @@ func withDeadline(ctx context.Context, clk clock.Clock, dur time.Duration) (cont
 	return ctx, cancel
 }
 
+// runtimeCheck is the check of a Runtime that is not tmux: its own Check if it
+// has one, and healthy if it has none.
+func runtimeCheck(rt cfruntime.Runtime) func(context.Context) error {
+	checker, ok := rt.(interface{ Check(context.Context) error })
+	if !ok {
+		return func(context.Context) error { return nil }
+	}
+	return checker.Check
+}
+
 // startDoctor builds the doctor of this machine. A host that cannot be built
 // leaves the machine unchecked, as it leaves it without harnesses.
 func (d *daemon) startDoctor(ctx context.Context, o Options) error {
@@ -61,8 +72,8 @@ func (d *daemon) startDoctor(ctx context.Context, o Options) error {
 		Secrets: d.secrets, MinFree: minFree, Git: o.GitPath,
 	}
 	// RuntimeIsolated stays false: tmux and the process runtime run the harness on the host.
-	if o.Runtime != nil { // an injected Runtime is its own verdict
-		opts.Runtime = func(context.Context) error { return nil }
+	if o.Runtime != nil { // the doctor checks the Runtime the daemon uses, not tmux
+		opts.Runtime, opts.RuntimeName = runtimeCheck(o.Runtime), "el runtime del daemon"
 	}
 	d.doctor, d.doctorEvery = doctor.New(opts), o.DoctorEvery
 	if d.doctorEvery <= 0 {
