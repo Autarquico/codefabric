@@ -224,6 +224,13 @@ func (s *Service) Remove(ctx context.Context, by pki.Session, ref string, req v1
 		if err := tx.Revoke(ctx, w.IdentityID, domain.KindWorker, act.Now); err != nil {
 			return err
 		}
+		// Nothing is left to run its orders or to hold its configuration.
+		if err := tx.SupersedeWorkerApplies(ctx, w.ID, act.Now); err != nil {
+			return err
+		}
+		if err := tx.DeleteWorkerConfigLocks(ctx, w.ID); err != nil {
+			return err
+		}
 		// Its fence stays: no late heartbeat of it brings them back.
 		if err := tx.DeleteWorkerSecrets(ctx, w.ID); err != nil {
 			return err

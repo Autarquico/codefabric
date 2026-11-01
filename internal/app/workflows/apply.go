@@ -33,6 +33,7 @@ type target struct {
 	force      bool
 	dryRun     bool
 	preview    string // plan digest the person saw, "" for none
+	noWait     bool   // fail with CF_WORKER_BUSY rather than wait for the configuration lock
 }
 
 // Apply orders the Worker to apply the Workflow the selector names.
@@ -59,7 +60,7 @@ func (s *Service) Apply(ctx context.Context, by pki.Session, req v1.ApplyWorkflo
 					return v1.ApplyWorkflowResponse{}, domain.NewError(domain.CodeInvalidRequest, "expected_preview must be the sha256:<hex> digest a dry run printed", nil)
 				}
 			}
-			t.preview = req.ExpectedPreview
+			t.preview, t.noWait = req.ExpectedPreview, req.NoWait
 			return s.order(ctx, tx, act, t)
 		})
 }
@@ -94,6 +95,7 @@ func (s *Service) Rollback(ctx context.Context, by pki.Session, req v1.RollbackW
 			if err != nil {
 				return v1.ApplyWorkflowResponse{}, err
 			}
+			t.noWait = req.NoWait
 			return s.order(ctx, tx, act, t)
 		})
 }
@@ -122,7 +124,16 @@ func (s *Service) Sync(ctx context.Context, by pki.Session, req v1.SyncWorkflowR
 				if err != nil {
 					return v1.SyncWorkflowResponse{}, err
 				}
+				t.noWait = req.NoWait
 				res, err := s.order(ctx, tx, act, t)
+				var busy *domain.Error
+				if errors.As(err, &busy) && busy.Code == domain.CodeWorkerBusy {
+					// The check runs before the order writes anything: the others still get theirs.
+					out.Results = append(out.Results, v1.SyncWorkflowResult{
+						Worker: w.Name, WorkerID: string(w.ID), Code: string(busy.Code), Result: v1.ApplyWorkflowResponse{Reason: busy.Message},
+					})
+					continue
+				}
 				if err != nil {
 					return v1.SyncWorkflowResponse{}, err
 				}
@@ -211,6 +222,12 @@ func selection(m domain.Manifest, harness string, asked []string) ([]string, err
 // the Worker plans afresh, writes nothing when nothing changes and reports it
 // (plan.noop), and that report refreshes the drift.
 func (s *Service) order(ctx context.Context, tx *store.Tx, act mutation.Act, t target) (v1.ApplyWorkflowResponse, error) {
+	underLock := !t.dryRun && !slices.Contains(t.worker.Report.Capabilities, domain.HarnessConfigIsolationCapability(t.harness))
+	if underLock && t.noWait {
+		if err := busyIfHeld(ctx, tx, t); err != nil {
+			return v1.ApplyWorkflowResponse{}, err
+		}
+	}
 	superseded, err := tx.SupersedeWorkflowApplies(ctx, t.worker.ID, t.harness, t.dryRun, act.Now)
 	if err != nil {
 		return v1.ApplyWorkflowResponse{}, err
@@ -226,6 +243,12 @@ func (s *Service) order(ctx context.Context, tx *store.Tx, act mutation.Act, t t
 	}
 	if err := tx.InsertWorkflowApply(ctx, a); err != nil {
 		return v1.ApplyWorkflowResponse{}, err
+	}
+	if underLock {
+		// The order waits for the Runs that hold the harness' global configuration (§8.12).
+		if err := tx.SetApplyPending(ctx, t.worker.ID, t.harness, a.ID, act.Now); err != nil {
+			return v1.ApplyWorkflowResponse{}, err
+		}
 	}
 	data := map[string]any{
 		"apply": string(a.ID), "generation": gen, "harness": t.harness, "workflow": t.name, "version": a.Version, "digest": a.Digest,
@@ -247,6 +270,21 @@ func (s *Service) order(ctx context.Context, tx *store.Tx, act mutation.Act, t t
 		return v1.ApplyWorkflowResponse{}, err
 	}
 	return v1.ApplyWorkflowResponse{Apply: &view}, nil
+}
+
+// busyIfHeld is CF_WORKER_BUSY when Runs hold the configuration lock of the
+// harness on the Worker: the order is not queued behind them.
+func busyIfHeld(ctx context.Context, q store.Querier, t target) error {
+	l, err := store.ConfigLockOf(ctx, q, t.worker.ID, t.harness)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && l.Holders == 0) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return domain.NewError(domain.CodeWorkerBusy,
+		fmt.Sprintf("worker %s has %d Runs holding the %s configuration: retry when they end, or apply without --no-wait to queue the order", t.worker.Name, l.Holders, t.harness),
+		map[string]any{"worker": t.worker.Name, "harness": t.harness, "holders": l.Holders})
 }
 
 // applyResult is what the result column holds: the error and the opaque detail
@@ -356,6 +394,14 @@ func (s *Service) Status(ctx context.Context, worker, harness string) ([]v1.Work
 			if err := json.Unmarshal(st.Drift, &r.Drift); err != nil {
 				return fmt.Errorf("workflows: drift of %s/%s: %w", st.WorkerID, st.Harness, err)
 			}
+		}
+		locks, err := store.ConfigLocks(ctx, q, wid)
+		if err != nil {
+			return err
+		}
+		for _, l := range locks {
+			r := row(key{l.WorkerID, l.Harness})
+			r.ConfigKey, r.Holders, r.ApplyPending = l.Key, l.Holders, string(l.ApplyPending)
 		}
 		for _, a := range latest {
 			r := row(key{a.WorkerID, a.Harness})

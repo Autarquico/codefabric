@@ -39,6 +39,7 @@ const (
 	flagPreview    = "preview"
 	flagTimeout    = "timeout"
 	flagValues     = "values"
+	flagNoWait     = "no-wait"
 
 	defaultApplyTimeout = 2 * time.Minute
 	actionSkipDrift     = "skip-drift"
@@ -50,6 +51,7 @@ type applyFlags struct {
 	components      []string
 	dryRun, force   bool
 	detach          bool
+	noWait          bool
 	preview         string
 	timeout         time.Duration
 	values          bool
@@ -69,6 +71,11 @@ func (f *applyFlags) bindWait(cmd *cobra.Command) {
 	fl := cmd.Flags()
 	fl.BoolVar(&f.detach, flagDetach, false, "return once the order is made, without waiting for the Worker to report it")
 	fl.DurationVar(&f.timeout, flagTimeout, defaultApplyTimeout, "how long to wait for the Worker (unless --detach)")
+}
+
+func (f *applyFlags) bindNoWait(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(&f.noWait, flagNoWait, false,
+		"fail with CF_WORKER_BUSY instead of queueing the order behind Runs that hold the harness configuration (a dry run never waits)")
 }
 
 func (f *applyFlags) bindDryRun(cmd *cobra.Command) {
@@ -133,6 +140,7 @@ func newWorkflowApplyVerbCmd(deps workflowDeps) *cobra.Command {
 	f.bindTarget(cmd, true)
 	f.bindDryRun(cmd)
 	cmd.Flags().StringVar(&f.preview, flagPreview, "", "plan digest printed by `cf workflow diff`: fail instead of applying if the plan has changed since")
+	f.bindNoWait(cmd)
 	f.bindWait(cmd)
 	f.bindValues(cmd)
 	return cmd
@@ -150,13 +158,14 @@ func newWorkflowRollbackCmd(deps workflowDeps) *cobra.Command {
 			}
 			return runApplyOne(cmd, deps, f, applyView{kind: viewApply, values: f.values}, func(ctx context.Context, st workflowApplyStore) (v1.ApplyWorkflowResponse, error) {
 				return st.RollbackWorkflow(ctx, v1.RollbackWorkflowRequest{
-					Worker: f.worker, Harness: f.harness, Components: f.components, Force: f.force, DryRun: f.dryRun,
+					Worker: f.worker, Harness: f.harness, Components: f.components, Force: f.force, DryRun: f.dryRun, NoWait: f.noWait,
 				})
 			})
 		},
 	}
 	f.bindTarget(cmd, true)
 	f.bindDryRun(cmd)
+	f.bindNoWait(cmd)
 	f.bindWait(cmd)
 	f.bindValues(cmd)
 	return cmd
@@ -221,6 +230,7 @@ func newWorkflowSyncCmd(deps workflowDeps) *cobra.Command {
 	}
 	f.bindTarget(cmd, false)
 	f.bindDryRun(cmd)
+	f.bindNoWait(cmd)
 	f.bindWait(cmd)
 	return cmd
 }
@@ -253,7 +263,7 @@ func newWorkflowStatusCmd(deps workflowDeps) *cobra.Command {
 func (f applyFlags) applyRequest(workflow string) v1.ApplyWorkflowRequest {
 	return v1.ApplyWorkflowRequest{
 		Worker: f.worker, Harness: f.harness, Workflow: workflow, Components: f.components, Force: f.force, DryRun: f.dryRun,
-		ExpectedPreview: f.preview,
+		ExpectedPreview: f.preview, NoWait: f.noWait,
 	}
 }
 
@@ -293,14 +303,18 @@ func runSync(cmd *cobra.Command, deps workflowDeps, f applyFlags, workflow strin
 		return err
 	}
 	resp, err := st.SyncWorkflow(cmd.Context(), v1.SyncWorkflowRequest{
-		Harness: f.harness, Workflow: workflow, Components: f.components, Force: f.force, DryRun: f.dryRun,
+		Harness: f.harness, Workflow: workflow, Components: f.components, Force: f.force, DryRun: f.dryRun, NoWait: f.noWait,
 	})
 	if err != nil {
 		return err
 	}
-	var failed []string
+	var failed, busy []string
 	for i := range resp.Results {
 		r := &resp.Results[i]
+		if r.Code == string(domain.CodeWorkerBusy) {
+			busy = append(busy, r.Worker)
+			continue
+		}
 		if r.Result.Apply != nil && !f.detach {
 			settled, err := deps.await(cmd.Context(), st, *r.Result.Apply, f.timeout)
 			if err != nil {
@@ -313,7 +327,7 @@ func runSync(cmd *cobra.Command, deps workflowDeps, f applyFlags, workflow strin
 		}
 	}
 	human := func(out io.Writer) error { return writeSync(out, resp) }
-	if len(failed) == 0 {
+	if len(failed)+len(busy) == 0 {
 		return emit(cmd, resp, human)
 	}
 	if on, _ := cmd.Flags().GetBool(flagJSON); !on {
@@ -321,8 +335,13 @@ func runSync(cmd *cobra.Command, deps workflowDeps, f applyFlags, workflow strin
 			return err
 		}
 	}
-	return domain.NewError(domain.CodeInternal, fmt.Sprintf("%d of %d Workers did not apply: %s", len(failed), len(resp.Results), strings.Join(failed, ", ")),
-		map[string]any{"failed": failed, "results": resp.Results})
+	code := domain.CodeInternal
+	if len(failed) == 0 {
+		code = domain.CodeWorkerBusy
+	}
+	not := append(slices.Clone(failed), busy...)
+	return domain.NewError(code, fmt.Sprintf("%d of %d Workers did not apply: %s", len(not), len(resp.Results), strings.Join(not, ", ")),
+		map[string]any{"failed": failed, "busy": busy, "results": resp.Results})
 }
 
 // await polls the order until the Worker closes it or the timeout runs out,
@@ -503,6 +522,9 @@ func writeSync(out io.Writer, r v1.SyncWorkflowResponse) error {
 	w := newTable(out, "WORKER\tSTATE\tORDER\tDETAIL")
 	for _, res := range r.Results {
 		state, order, detail := "no-op", "-", res.Result.Reason
+		if res.Code == string(domain.CodeWorkerBusy) {
+			state = "busy"
+		}
 		if a := res.Result.Apply; a != nil {
 			state, order, detail = a.State, a.ID, a.Error
 			if plan, ok := planOf(a); ok {
@@ -520,7 +542,7 @@ func writeSync(out io.Writer, r v1.SyncWorkflowResponse) error {
 }
 
 func writeStates(out io.Writer, states []v1.WorkflowState) error {
-	w := newTable(out, "WORKER\tHARNESS\tWORKFLOW\tAPPLIED\tDIGEST\tCOMPONENTS\tPREVIOUS\tDRIFT\tLATEST")
+	w := newTable(out, "WORKER\tHARNESS\tWORKFLOW\tAPPLIED\tDIGEST\tCOMPONENTS\tPREVIOUS\tDRIFT\tLOCK\tLATEST")
 	for _, s := range states {
 		applied, previous := "-", "-"
 		if s.AppliedVersion > 0 {
@@ -543,8 +565,8 @@ func writeStates(out io.Writer, states []v1.WorkflowState) error {
 				latest += " (dry run)"
 			}
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", printable(s.Worker), printable(s.Harness), printable(dash(s.Workflow)),
-			applied, dash(shortDigest(s.AppliedDigest)), printable(components), previous, len(s.Drift), printable(latest))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", printable(s.Worker), printable(s.Harness), printable(dash(s.Workflow)),
+			applied, dash(shortDigest(s.AppliedDigest)), printable(components), previous, len(s.Drift), lockCell(s), printable(latest))
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -555,4 +577,17 @@ func writeStates(out io.Writer, states []v1.WorkflowState) error {
 		}
 	}
 	return nil
+}
+
+// lockCell is the configuration lock (§8.12) of a row: the config_key its
+// holders share, how many there are and the order waiting for them.
+func lockCell(s v1.WorkflowState) string {
+	if s.Holders == 0 && s.ConfigKey == "" && s.ApplyPending == "" {
+		return "-"
+	}
+	cell := fmt.Sprintf("holders=%d key=%s", s.Holders, dash(shortDigest(s.ConfigKey)))
+	if s.ApplyPending != "" {
+		cell += " apply_pending=" + printable(s.ApplyPending)
+	}
+	return printable(cell)
 }

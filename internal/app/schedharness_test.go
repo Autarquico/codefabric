@@ -102,7 +102,7 @@ func (e *env) tryOffer(run string, w pki.Session) (store.Lease, error) {
 			if err != nil {
 				return store.Lease{}, err
 			}
-			return e.app.Leases.CreateIn(ctx, tx, act, r, task, worker, v1.Capacity{CPU: 2, MemoryMB: 4096})
+			return e.app.Leases.CreateIn(ctx, tx, act, r, task, worker, v1.Capacity{CPU: 2, MemoryMB: 4096}, store.ConfigClaim{})
 		})
 }
 

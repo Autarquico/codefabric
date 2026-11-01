@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: L
 issue: 22
-prs: [66, 68]
+prs: [66, 68, 70]
 related_issues: [22]
 sub_issues: []
 depends_on:
@@ -16,7 +16,7 @@ depends_on:
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 # Workflows: apply, drift y lock de configuración
@@ -79,6 +79,8 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+- Timeout de 15 min (`scheduler.StuckApplyAfter`): una orden real viva que el Worker no reporta en ese plazo (y que no espera a Runs) pasa a `failed`, con su evento y auditoría del sistema, y el harness vuelve a aceptar Runs; hay que repetir `apply` si sigue haciendo falta.
+- El timeout no confirma que la configuración global se haya mantenido intacta: el Worker pudo escribir parte o todo antes de callar. Comprobar con `cf workflow status` (drift) o volver a aplicar.
 
 ## Referencias
 

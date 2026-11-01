@@ -17,8 +17,10 @@ import (
 // of the Worker wakes with the commit and nothing of it exists without the
 // rest. The Run stays queued. run is as the caller read it in tx: every write
 // to it is a compare-and-set that fails, and rolls the transaction back, if it
-// changed.
-func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, run store.Run, task store.Task, w store.Worker, reserve v1.Capacity) (store.Lease, error) {
+// changed. claim is the configuration lock of the Worker's harness (§8.12) that
+// the reservation takes: store.ErrConfigLockHeld rolls everything back if the
+// lock is held by another configuration or waits for an apply.
+func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, run store.Run, task store.Task, w store.Worker, reserve v1.Capacity, claim store.ConfigClaim) (store.Lease, error) {
 	l := store.Lease{
 		ID: s.ids.New(domain.KindLease), RunID: run.ID, WorkerID: w.ID, Epoch: run.LeaseEpoch + 1,
 		State: domain.LeasePending, CreatedAt: act.Now, AcceptBy: act.Now.Add(domain.Defaults().LeaseAcceptBy),
@@ -29,8 +31,11 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if err := tx.AssignRun(ctx, run, l.ID, w.ID, l.Epoch); err != nil {
 		return store.Lease{}, err
 	}
+	if err := tx.AcquireConfigLock(ctx, w.ID, claim, act.Now); err != nil {
+		return store.Lease{}, err
+	}
 	err := tx.InsertReservation(ctx, store.Reservation{
-		LeaseID: l.ID, RunID: run.ID, WorkerID: w.ID, Amount: reserve, CreatedAt: act.Now,
+		LeaseID: l.ID, RunID: run.ID, WorkerID: w.ID, Amount: reserve, CreatedAt: act.Now, ConfigHarness: claim.Harness,
 	})
 	if err != nil {
 		return store.Lease{}, err

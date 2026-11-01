@@ -729,7 +729,7 @@ func (e *env) offerAll(w pki.Session, runs []string) {
 				if err != nil {
 					return 0, err
 				}
-				if _, err := e.app.Leases.CreateIn(ctx, tx, act, r, task, worker, v1.Capacity{CPU: 1, MemoryMB: 1}); err != nil {
+				if _, err := e.app.Leases.CreateIn(ctx, tx, act, r, task, worker, v1.Capacity{CPU: 1, MemoryMB: 1}, store.ConfigClaim{}); err != nil {
 					return 0, err
 				}
 			}

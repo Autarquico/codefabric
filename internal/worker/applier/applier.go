@@ -69,9 +69,19 @@ type Options struct {
 	Recover func(dataDir string) error
 }
 
+// RunWatcher tells the Applier whether the Worker has Runs of a harness that
+// the Controller may not know about (an orphan whose reservation it already
+// released). *executor.Executor implements it.
+type RunWatcher interface {
+	// HarnessBusy is true while a Run of the harness is assigned, accepted or alive.
+	HarnessBusy(ctx context.Context, harnessID string) (bool, error)
+}
+
 // Applier executes the orders of one Worker.
 type Applier struct {
 	o       Options
+	runs    RunWatcher
+	shared  map[string]bool // harnesses without configuration isolation
 	engines map[string]*globalapply.Engine
 	log     *slog.Logger
 	wg      sync.WaitGroup
@@ -102,7 +112,7 @@ type record struct {
 // logged, not fatal: the engine heals the journal again before its next apply.
 func New(o Options) *Applier {
 	a := &Applier{
-		o: o, log: o.Log, engines: map[string]*globalapply.Engine{},
+		o: o, log: o.Log, engines: map[string]*globalapply.Engine{}, shared: map[string]bool{},
 		locks: map[string]*sync.Mutex{}, latest: map[string]int{}, known: map[orderKey]*record{}, faults: map[orderKey]int{},
 	}
 	if a.log == nil {
@@ -122,6 +132,7 @@ func New(o Options) *Applier {
 		if _, ok := ad.(harness.GlobalInspector); !ok {
 			continue
 		}
+		a.shared[ad.ID()] = !ad.Capabilities().ConfigIsolation
 		a.engines[ad.ID()] = &globalapply.Engine{Adapter: ad, Host: o.Host, DataDir: o.DataDir, Secrets: a.resolve}
 	}
 	return a
@@ -154,8 +165,10 @@ func (a *Applier) resolve(ctx context.Context, ref string) ([]byte, error) {
 	return s.Value, nil
 }
 
-// lock takes the lock of harnessID and returns the function that releases it.
-func (a *Applier) lock(harnessID string) (unlock func()) {
+// Lock takes the lock of harnessID and returns the function that releases it.
+// A Run of a harness without configuration isolation is accepted and launched
+// under it, so it never overlaps an apply to the global configuration (§8.12).
+func (a *Applier) Lock(harnessID string) (unlock func()) {
 	a.mu.Lock()
 	m, ok := a.locks[harnessID]
 	if !ok {
@@ -165,6 +178,55 @@ func (a *Applier) lock(harnessID string) (unlock func()) {
 	a.mu.Unlock()
 	m.Lock()
 	return m.Unlock
+}
+
+// Holds says, with nil, that the global configuration of harnessID already is
+// snap, the harness-specific form of a Workflow: every component applied as the
+// Workflow has it, no managed component edited on the host, nothing that an
+// apply would write, delete or skip. A Run that froze that Workflow can then
+// use the global configuration as it is. Any other answer says why not. The
+// caller holds [Applier.Lock].
+func (a *Applier) Holds(ctx context.Context, harnessID string, snap harness.NativeSnapshot) error {
+	eng, ok := a.engines[harnessID]
+	if !ok {
+		return fmt.Errorf("this Worker cannot apply a Workflow globally to the harness %q", harnessID)
+	}
+	plan, err := eng.Plan(ctx, globalapply.Request{Snapshot: snap})
+	if err != nil {
+		return fmt.Errorf("reading the global configuration of %q: %w", harnessID, err)
+	}
+	for _, c := range plan.Components {
+		if c.Action == globalapply.ActionSkipDrift {
+			return fmt.Errorf("the component %q was edited on the host since the Workflow was applied", c.Name)
+		}
+	}
+	if !plan.NoOp {
+		return fmt.Errorf("the Workflow is not applied to the global configuration of %q", harnessID)
+	}
+	return nil
+}
+
+// WatchRuns makes real orders wait for the live Runs of a harness without
+// configuration isolation. The Controller already holds such an order back while
+// Runs hold the lock of the harness; this is the Worker's own check, for a Run it
+// still has that the Controller no longer counts. Call it before the first Handle.
+func (a *Applier) WatchRuns(w RunWatcher) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.runs = w
+}
+
+// busy says that a real order must wait: it would rewrite the global
+// configuration under Runs of the harness. A watcher that cannot answer is busy.
+func (a *Applier) busy(ctx context.Context, o v1.WorkflowApplyOrder) bool {
+	a.mu.Lock()
+	w := a.runs
+	a.mu.Unlock()
+	if w == nil || o.DryRun || !a.shared[o.Harness] {
+		return false
+	}
+	busy, err := w.HarnessBusy(ctx, o.Harness)
+	return busy || err != nil
 }
 
 // Wait returns when the orders in flight are done.
@@ -276,9 +338,15 @@ func lane(o v1.WorkflowApplyOrder) string {
 // Controller ignores its result), or the failure is the Controller's being
 // unreachable (the next delivery tries again).
 func (a *Applier) execute(ctx context.Context, o v1.WorkflowApplyOrder) *v1.ReportWorkflowApplyRequest {
-	unlock := a.lock(o.Harness)
+	unlock := a.Lock(o.Harness)
 	defer unlock()
 	if a.stale(o) || ctx.Err() != nil {
+		return nil
+	}
+	if a.busy(ctx, o) {
+		// Nothing is reported: the order is handed again with the next heartbeat, and
+		// the Controller fails it if the Runs never end.
+		a.log.Debug("workflow apply postponed: Runs of the harness are active on this Worker", "order", o.ID, "harness", o.Harness)
 		return nil
 	}
 	plan, inspected, drift, err := a.run(ctx, o)

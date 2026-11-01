@@ -368,11 +368,11 @@ func TestAnUnknownHarnessFailsTheOrder(t *testing.T) {
 
 func TestLockSerialisesTheHarnessAndLeavesOthersFree(t *testing.T) {
 	r := newRig(t, nil)
-	unlock := r.a.lock(codex.ID)
-	other := r.a.lock("claude")
+	unlock := r.a.Lock(codex.ID)
+	other := r.a.Lock("claude")
 	other()
 	got := make(chan struct{})
-	go func() { r.a.lock(codex.ID)(); close(got) }()
+	go func() { r.a.Lock(codex.ID)(); close(got) }()
 	select {
 	case <-got:
 		t.Fatal("the lock was taken twice")
@@ -549,5 +549,80 @@ func TestAControllerInternalFaultIsRetriedAFewTimesThenFailsTheOrder(t *testing.
 	r.handle(o)
 	if reps := r.c.reported(); len(reps) != 1 || reps[0].Outcome != v1.ApplyStateFailed {
 		t.Fatalf("reports = %+v", reps)
+	}
+}
+
+func (r *rig) snapshotOf(t *testing.T, id string) harness.NativeSnapshot {
+	t.Helper()
+	v, _ := r.c.ApplyManifest(context.Background(), id, 1)
+	f := workflowfetch.Fetcher{DataDir: t.TempDir(), Open: func(ctx context.Context, d string) (io.ReadCloser, int64, error) {
+		return r.c.OpenApplyBlob(ctx, id, 1, d)
+	}}
+	snap, err := f.Snapshot(context.Background(), v.Manifest, codex.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap
+}
+
+func TestHoldsIsNilOnlyWhenTheGlobalConfigurationIsTheWorkflowAsApplied(t *testing.T) {
+	r := newRig(t, nil)
+	d := r.c.serve(t, "op1", codex.AgentsComponent, map[string]string{"AGENTS.md": "team rules\n"})
+	snap := r.snapshotOf(t, "op1")
+	ctx := context.Background()
+	if err := r.a.Holds(ctx, codex.ID, snap); err == nil {
+		t.Error("nothing applied yet, and the Workflow is held")
+	}
+	r.handle(order("op1", 1, d))
+	if err := r.a.Holds(ctx, codex.ID, snap); err != nil {
+		t.Errorf("applied, and the Workflow is not held: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(r.home, agents), []byte("edited\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.Holds(ctx, codex.ID, snap); err == nil || !strings.Contains(err.Error(), "edited on the host") {
+		t.Errorf("edited on the host, err = %v", err)
+	}
+	if err := r.a.Holds(ctx, "nope", snap); err == nil {
+		t.Error("a harness the Worker cannot apply to holds a Workflow")
+	}
+}
+
+type fakeRuns struct {
+	busy bool
+	err  error
+}
+
+func (f fakeRuns) HarnessBusy(context.Context, string) (bool, error) { return f.busy, f.err }
+
+func TestARealOrderWaitsWhileTheWorkerHasRunsOfAHarnessWithoutIsolation(t *testing.T) {
+	r := newRig(t, nil)
+	r.a.shared[codex.ID] = true // the harness of the test stands for one with no isolation
+	d := r.c.serve(t, "op1", codex.AgentsComponent, map[string]string{"AGENTS.md": "team rules\n"})
+	o := order("op1", 1, d)
+
+	r.a.WatchRuns(fakeRuns{busy: true})
+	r.handle(o)
+	if got := r.read(t, agents); got != "<absent>" || len(r.c.reported()) != 0 {
+		t.Fatalf("applied under live Runs: AGENTS.md = %q, reports = %+v", got, r.c.reported())
+	}
+
+	r.a.WatchRuns(fakeRuns{})
+	r.handle(o) // the next delivery
+	if got := r.read(t, agents); got != "team rules\n" {
+		t.Errorf("AGENTS.md = %q once the Runs ended, want the order applied", got)
+	}
+}
+
+func TestADryRunDoesNotWaitForRuns(t *testing.T) {
+	r := newRig(t, nil)
+	r.a.shared[codex.ID] = true
+	r.a.WatchRuns(fakeRuns{busy: true})
+	d := r.c.serve(t, "op1", codex.AgentsComponent, map[string]string{"AGENTS.md": "team rules\n"})
+	o := order("op1", 1, d)
+	o.DryRun = true
+	r.handle(o)
+	if len(r.c.reported()) != 1 {
+		t.Errorf("reports = %+v, want the dry run reported", r.c.reported())
 	}
 }

@@ -289,8 +289,8 @@ func TestWorkflowStoreAdoptCommit_ConcurrentCommitsMakeOneChild(t *testing.T) {
 }
 
 // Congelación: a Run created with name@latest keeps its version and digest
-// when v2 is committed, and with no Worker able to materialise the config
-// (its harness has no config isolation) it stays queued.
+// when v2 is committed, and with no Worker whose harness has no config
+// isolation having applied that Workflow globally it stays queued (§8.12).
 func TestScenario_WorkflowStoreAdoptCommit_Congelacion_E2E(t *testing.T) {
 	host, _ := bringUpController(t)
 	home := codexHome(t, codexConfig)
@@ -346,13 +346,16 @@ func TestScenario_WorkflowStoreAdoptCommit_Congelacion_E2E(t *testing.T) {
 		t.Errorf("frozen spec = %s", shown.Spec)
 	}
 
-	// P2: queued, never handed to a Worker that cannot materialise the config.
+	// Queued: the Worker has no config isolation and has not applied the Workflow globally.
 	explained := ok[v1.RunExplanation](t, "run", "explain", run.Short)
 	if explained.Decision != v1.DecisionNoWorker || explained.Lease != nil || explained.Chosen != "" {
 		t.Errorf("explanation = %+v", explained)
 	}
-	if len(explained.Workers) != 1 || len(explained.Workers[0].Failed) != 1 || explained.Workers[0].Failed[0].Filter != "capabilities" {
-		t.Errorf("the Worker should fail only on %s: %+v", isolation, explained.Workers)
+	if len(explained.Workers) != 1 || len(explained.Workers[0].Failed) != 1 || explained.Workers[0].Failed[0].Filter != "config" {
+		t.Fatalf("the Worker should fail only on the config filter: %+v", explained.Workers)
+	}
+	if raw, _ := json.Marshal(explained.Workers[0].Failed[0].Details); !strings.Contains(string(raw), `"workflow_not_applied"`) {
+		t.Errorf("the config filter should say workflow_not_applied: %s", raw)
 	}
 	// The scheduler has looked at the Run and left it queued with that reason:
 	// waiting on the fact, not on the clock.

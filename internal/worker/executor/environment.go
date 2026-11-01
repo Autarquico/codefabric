@@ -115,7 +115,12 @@ func (e *Executor) beginOrEnvironment(ctx context.Context, r state.Run) (done bo
 }
 
 func (e *Executor) beginAborted(ctx context.Context, r state.Run) bool {
-	return errors.Is(e.begin(ctx, r), ErrAborted)
+	err := e.begin(ctx, r)
+	var refused *configRefused
+	if errors.As(err, &refused) {
+		return e.settleNeverRanWith(ctx, r.Key, facts{message: refused.Error(), code: domain.CodeHarnessUnavailable})
+	}
+	return errors.Is(err, ErrAborted)
 }
 
 // environmentStage is one step of bringing the Environment of an accepted Run up.

@@ -12,6 +12,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/app/runs"
+	"github.com/Autarquico/codefabric/internal/app/workflows"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -79,6 +80,9 @@ func (s *Service) Pass(ctx context.Context) (Result, error) {
 	if err != nil {
 		res.Problems = append(res.Problems, err) // one lease failing must not stop the rest of the pass
 	}
+	if err := s.failStuckApplies(ctx); err != nil {
+		res.Problems = append(res.Problems, err)
+	}
 	candidates, waiting, problems, err := s.plan(ctx)
 	if err != nil {
 		return res, err
@@ -118,6 +122,7 @@ func (s *Service) plan(ctx context.Context) (candidates, waiting []store.Run, pr
 		queue   []queuedRun
 		workers []store.Worker
 		misses  []store.Miss
+		configs map[domain.ID]map[string]store.WorkerConfig
 		held    map[domain.ID][]v1.SecretMeta
 	)
 	now := s.clock.Now()
@@ -132,7 +137,10 @@ func (s *Service) plan(ctx context.Context) (candidates, waiting []store.Run, pr
 		if workers, err = store.Workers(ctx, q, false); err != nil {
 			return err
 		}
-		misses, err = store.MissesSince(ctx, q, now.Add(-domain.LeaseMissBackoff))
+		if misses, err = store.MissesSince(ctx, q, now.Add(-domain.LeaseMissBackoff)); err != nil {
+			return err
+		}
+		configs, err = store.WorkerConfigs(ctx, q)
 		return err
 	})
 	if err != nil {
@@ -144,7 +152,7 @@ func (s *Service) plan(ctx context.Context) (candidates, waiting []store.Run, pr
 			waiting = append(waiting, queued.run)
 			continue
 		}
-		if Decide(queued.req, snapshot(workers, misses, queued.run.ID, nil, held, s.startedAt), now).Chosen != nil {
+		if Decide(queued.req, snapshot(workers, misses, configs, queued.run.ID, nil, held, s.startedAt), now).Chosen != nil {
 			candidates = append(candidates, queued.run)
 		} else {
 			waiting = append(waiting, queued.run)
@@ -182,7 +190,7 @@ func readRequests(ctx context.Context, q store.Querier, queue []store.Run) ([]qu
 		}
 	}
 	if len(projectOf) == 0 {
-		return out, nil, nil
+		return withWorkflows(out), nil, nil
 	}
 	allowlists, err := store.AllowlistsFor(ctx, q, slices.Compact(slices.Sorted(maps.Values(projectOf))))
 	if err != nil {
@@ -197,7 +205,15 @@ func readRequests(ctx context.Context, q store.Querier, queue []store.Run) ([]qu
 			out[i].req = NewRequest(out[i].req.Placement, project, allowlists[project])
 		}
 	}
-	return out, held, nil
+	return withWorkflows(out), held, nil
+}
+
+// withWorkflows sets, on every request, the digest of the Workflow its Run froze.
+func withWorkflows(queue []queuedRun) []queuedRun {
+	for i := range queue {
+		queue[i].req.WorkflowDigest = queue[i].run.Workflow.Digest
+	}
+	return queue
 }
 
 type outcome int
@@ -225,11 +241,16 @@ func decide(ctx context.Context, q store.Querier, run store.Run, project domain.
 	if err != nil {
 		return Decision{}, nil, err
 	}
+	configs, err := store.WorkerConfigs(ctx, q)
+	if err != nil {
+		return Decision{}, nil, err
+	}
 	req, held, err := requestOf(ctx, q, project, placement)
 	if err != nil {
 		return Decision{}, nil, err
 	}
-	return Decide(req, snapshot(workers, misses, run.ID, known, held, startedAt), now), workers, nil
+	req.WorkflowDigest = run.Workflow.Digest
+	return Decide(req, snapshot(workers, misses, configs, run.ID, known, held, startedAt), now), workers, nil
 }
 
 // requestOf is what the Run asks for. For a Run with secrets it reads the
@@ -285,7 +306,8 @@ func (s *Service) assign(ctx context.Context, queued store.Run) (outcome, error)
 		if i < 0 {
 			return fmt.Errorf("scheduler: chosen worker %s is not among the ones read", decision.Chosen.ID)
 		}
-		if _, err := s.leases.CreateIn(ctx, tx, mutation.Act{Actor: systemActor, Now: now}, run, task, workers[i], v1Capacity(placement.Resources)); err != nil {
+		claim := configClaim(placement.Harness, run.Workflow.Digest, workers[i])
+		if _, err := s.leases.CreateIn(ctx, tx, mutation.Act{Actor: systemActor, Now: now}, run, task, workers[i], v1Capacity(placement.Resources), claim); err != nil {
 			return err
 		}
 		result = assigned
@@ -371,7 +393,7 @@ func (s *Service) Run(ctx context.Context, tick time.Duration, log *slog.Logger)
 // are those of any Run; only the ones of this Run count. known is the set of
 // Workers that already accepted a Run of the Run's Project, and held the
 // secrets each Worker announced, each nil when it is not needed.
-func snapshot(workers []store.Worker, misses []store.Miss, run domain.ID, known map[domain.ID]bool, held map[domain.ID][]v1.SecretMeta, startedAt time.Time) []Worker {
+func snapshot(workers []store.Worker, misses []store.Miss, configs map[domain.ID]map[string]store.WorkerConfig, run domain.ID, known map[domain.ID]bool, held map[domain.ID][]v1.SecretMeta, startedAt time.Time) []Worker {
 	out := make([]Worker, 0, len(workers))
 	for _, w := range workers {
 		c := Worker{
@@ -380,6 +402,7 @@ func snapshot(workers []store.Worker, misses []store.Miss, run domain.ID, known 
 			MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, KnowsProject: known[w.ID],
 			Unreconciled: !startedAt.IsZero() && w.LiveLeases > 0 && !w.ReconciledSince(startedAt),
 			Secrets:      secretsOf(held[w.ID]),
+			Configs:      harnessConfigs(configs[w.ID]),
 		}
 		for _, m := range misses {
 			if m.RunID == run && m.WorkerID == w.ID {
@@ -410,4 +433,49 @@ func capacityOf(c v1.Capacity) domain.Capacity {
 
 func v1Capacity(c domain.Capacity) v1.Capacity {
 	return v1.Capacity{CPU: c.CPU, MemoryMB: c.MemoryMB, DiskMB: c.DiskMB}
+}
+
+// configClaim is the configuration lock a Run takes on the Worker (§8.12): that
+// of its harness when the Worker does not isolate the configuration of it, with
+// the digest of the Run's Workflow as key. Nothing otherwise.
+func configClaim(harness, workflowDigest string, w store.Worker) store.ConfigClaim {
+	if harness == "" || slices.Contains(w.Report.Capabilities, domain.HarnessConfigIsolationCapability(harness)) {
+		return store.ConfigClaim{}
+	}
+	return store.ConfigClaim{Harness: harness, Key: workflowDigest}
+}
+
+func harnessConfigs(in map[string]store.WorkerConfig) map[string]HarnessConfig {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]HarnessConfig, len(in))
+	for harness, c := range in {
+		h := HarnessConfig{ManagedDrift: c.ManagedDrift}
+		if c.Lock != nil {
+			h.Locked, h.Key, h.ApplyPending = c.Lock.Holders > 0, c.Lock.Key, c.Lock.ApplyPending != ""
+		}
+		if c.Applied != nil {
+			h.Applied, h.Partial = c.Applied.AppliedDigest, len(c.Applied.Skipped) > 0
+		}
+		out[harness] = h
+	}
+	return out
+}
+
+// StuckApplyAfter is how long a real apply order may stay alive without the
+// Worker reporting it once nothing holds it back (an order waiting for the Runs
+// of its harness is not stuck). Past it the order fails and the harness takes
+// leases again.
+const StuckApplyAfter = 15 * time.Minute
+
+// failStuckApplies is the sweep of orders a Worker gave up on or never answered
+// (§8.12): while one is alive its apply_pending shuts the harness to new leases.
+func (s *Service) failStuckApplies(ctx context.Context) error {
+	const reason = "the order was not reported in time (Worker offline, unreachable or still waiting for Runs); it was failed so the harness takes Runs again: apply again if it is still wanted"
+	return s.db.WithTx(ctx, func(tx *store.Tx) error {
+		now := s.clock.Now()
+		_, err := workflows.FailStuckApplies(ctx, tx, mutation.Act{Actor: systemActor, Now: now}, now.Add(-StuckApplyAfter), reason)
+		return err
+	})
 }
