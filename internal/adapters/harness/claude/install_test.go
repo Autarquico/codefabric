@@ -3,11 +3,14 @@ package claude
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 )
 
 type fakeHost struct {
@@ -35,7 +38,7 @@ func TestInstallPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Steps) != 1 || strings.Join(plan.Steps[0].Argv, "|") != "bash|-c|"+InstallScript {
+	if len(plan.Steps) != 1 || strings.Join(plan.Steps[0].Argv, "|") != "bash|-o|pipefail|-c|"+InstallScript {
 		t.Fatalf("plan = %+v", plan)
 	}
 	if len(h.ran) != 0 {
@@ -76,5 +79,22 @@ func TestInstallFailureSurfacesStderr(t *testing.T) {
 func TestInstallCapability(t *testing.T) {
 	if !(Adapter{}).Capabilities().Install {
 		t.Fatal("Install not declared")
+	}
+}
+
+// A failing download must fail the install: without pipefail the second bash
+// reads an empty script and the pipeline ends with 0.
+func TestInstallFailsWhenTheDownloadFails(t *testing.T) {
+	stubs := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stubs, "curl"), []byte("#!/bin/sh\necho 'curl: (22) 404' >&2\nexit 22\n"), 0o700); err != nil { //nolint:gosec // a stub of the test
+		t.Fatal(err)
+	}
+	h, err := localhost.New(localhost.Options{Home: t.TempDir(), Env: []string{"PATH=" + stubs + string(os.PathListSeparator) + os.Getenv("PATH")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Adapter{}.Install(context.Background(), h, harness.InstallOptions{})
+	if err == nil || !strings.Contains(err.Error(), "curl: (22) 404") {
+		t.Fatalf("a failed download was reported as installed: %v", err)
 	}
 }

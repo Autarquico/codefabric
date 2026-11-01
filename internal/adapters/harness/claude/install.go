@@ -10,7 +10,8 @@ import (
 // InstallScript is the official installer of Claude Code.
 const InstallScript = "curl --proto '=https' --tlsv1.2 -fsSL https://claude.ai/install.sh | bash"
 
-// Install runs the official installer through bash; it needs curl in the
+// Install runs the official installer through bash, with pipefail so that a
+// failed download is a failed install and not an empty script that "succeeds"; it needs curl in the
 // PATH. Under DryRun it only returns the plan. The binary may not be in the
 // PATH of this process until a new shell: run Detect again.
 func (a Adapter) Install(ctx context.Context, host harness.Host, opts harness.InstallOptions) (harness.InstallPlan, error) {
@@ -21,7 +22,7 @@ func (a Adapter) Install(ctx context.Context, host harness.Host, opts harness.In
 	}
 	plan := harness.InstallPlan{Steps: []harness.InstallStep{{
 		Summary: "Install Claude Code with the official installer",
-		Argv:    []string{"bash", "-c", InstallScript},
+		Argv:    []string{"bash", "-o", "pipefail", "-c", InstallScript},
 	}}}
 	if opts.DryRun {
 		return plan, nil

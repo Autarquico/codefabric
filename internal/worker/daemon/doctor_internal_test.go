@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
@@ -214,5 +215,41 @@ func TestWithComponents_ReportsSetupFailingWhileTheJoinIsPending(t *testing.T) {
 	d.clock.(*clock.Fake).Advance(time.Minute)
 	if got := d.withComponents(t.Context(), v1.Health{Status: v1.HealthOK}); got.Status != v1.HealthOK {
 		t.Fatalf("after the join: %+v", got)
+	}
+}
+
+func TestRunDoctor_SetupComponentIsInThePublicDoctorButNotInTheWizards(t *testing.T) {
+	paths := config.Paths{ConfigDir: t.TempDir(), DataDir: t.TempDir()}
+	if err := doctor.SaveSettings(paths, doctor.Settings{Name: "w1", SetupPending: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := localhost.New(localhost.Options{Home: t.TempDir(), Env: os.Environ()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(ignoreSetup bool) v1.ComponentHealth {
+		t.Helper()
+		components, err := RunDoctor(t.Context(), DoctorOptions{
+			Paths: paths, IgnoreSetup: ignoreSetup, Probe: func(context.Context) error { return nil },
+			Doctor: doctor.Options{
+				Host: h, Adapters: []harness.Adapter{}, Git: "true", Runtime: func(context.Context) error { return nil },
+				Disk: func(string) (sysinfo.Disk, error) { return sysinfo.Disk{FreeBytes: 50, TotalBytes: 100}, nil },
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range components {
+			if c.Name == doctor.SetupComponent {
+				return c
+			}
+		}
+		return v1.ComponentHealth{}
+	}
+	if c := check(false); c.Status != v1.ComponentFail || !strings.Contains(c.Action, "--resume") {
+		t.Errorf("the public doctor does not report the pending setup: %+v", c)
+	}
+	if c := check(true); c.Name != "" {
+		t.Errorf("the wizard's doctor waits for itself: %+v", c)
 	}
 }

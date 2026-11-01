@@ -131,7 +131,7 @@ func runCommand(ctx context.Context, from *cobra.Command, p *prompt.Prompter, pa
 		return err
 	}
 	sub.SetContext(ctx)
-	sub.SetIn(p.Reader())
+	sub.SetIn(p.Input())
 	sub.SetOut(from.OutOrStdout())
 	sub.SetErr(from.ErrOrStderr())
 	return sub.RunE(sub, []string{arg})

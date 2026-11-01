@@ -20,6 +20,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/envutil"
 	"github.com/Autarquico/codefabric/internal/support/prompt"
 	"github.com/Autarquico/codefabric/internal/worker/doctor"
@@ -28,10 +29,13 @@ import (
 )
 
 // What Progress.Step means: the last step of the wizard that finished. The
-// questions that precede the join are not steps: the join needs their answers,
-// and after it the invitation is spent, so a resume starts after it.
+// questions that precede the join are not steps: the join needs their answers.
+// The pending setup is written (stepJoining) before the invitation is redeemed,
+// so a crash after the redemption leaves a Worker that takes no Runs and that
+// --resume can finish.
 const (
-	stepJoined    = iota + 1 // joined; the setup is pending
+	stepJoining   = iota + 1 // the setup is pending and the invitation is about to be redeemed
+	stepJoined               // joined: the credentials are stored
 	stepHarnesses            // harnesses chosen and installed
 	stepWorkflow             // initial Workflow chosen and ordered
 )
@@ -39,6 +43,7 @@ const (
 const (
 	defaultApplyAttempts = 20
 	applyPollEvery       = 500 * time.Millisecond
+	defaultAvailability  = domain.AvailabilityAlways
 	resumeHint           = "cf worker join --resume"
 )
 
@@ -59,15 +64,18 @@ type wizardEnv struct {
 	NewHost func() (harness.Host, error)
 	Sysinfo func(dir string) (sysinfo.Info, error)
 	Join    func(ctx context.Context, o JoinOptions) (client.Connected, error)
+	// HasCredentials says whether this machine already holds Worker credentials.
+	HasCredentials func() (bool, error)
 	// Doctor runs the checks of the machine against diskMinFree, for the
-	// harnesses the person chose, without the "setup" component: the wizard is
-	// what clears it. A harness left out is not the wizard's to judge.
+	// harnesses the person chose, without the "setup" component (IgnoreSetup):
+	// the wizard is what clears it. A harness left out is not the wizard's to judge.
 	Doctor func(ctx context.Context, diskMinFree string, harnesses []string) ([]v1.ComponentHealth, error)
 	// Workflows returns the Controller client that lists and orders Workflows,
 	// or nil if this machine has no client credentials.
 	Workflows     func() (workflowAPI, error)
 	ApplyAttempts int
-	Sleep         func(time.Duration)
+	// Clock times the wait between polls of an order.
+	Clock clock.Clock
 }
 
 // JoinChoices are the answers the flags already gave: the wizard does not ask them.
@@ -93,8 +101,9 @@ func defaultWizardEnv(paths config.Paths, controller string) wizardEnv {
 			}
 			return localhost.New(localhost.Options{Home: home, Env: envutil.WithoutTmux(os.Environ())})
 		},
-		Sysinfo: sysinfo.Collect,
-		Join:    Join,
+		Sysinfo:        sysinfo.Collect,
+		Join:           Join,
+		HasCredentials: func() (bool, error) { return client.CredentialsExist(paths.WorkerCredentialsDir()) },
 		Doctor: func(ctx context.Context, minFree string, chosen []string) ([]v1.ComponentHealth, error) {
 			adapters := []harness.Adapter{command.Adapter{}}
 			for _, a := range []harness.Adapter{codex.Adapter{}, claude.Adapter{}} {
@@ -102,7 +111,7 @@ func defaultWizardEnv(paths config.Paths, controller string) wizardEnv {
 					adapters = append(adapters, a)
 				}
 			}
-			return RunDoctor(ctx, DoctorOptions{Paths: paths, DiskMinFree: minFree, Controller: controller, Doctor: doctor.Options{Adapters: adapters}})
+			return RunDoctor(ctx, DoctorOptions{Paths: paths, DiskMinFree: minFree, Controller: controller, IgnoreSetup: true, Doctor: doctor.Options{Adapters: adapters}})
 		},
 		Workflows: func() (workflowAPI, error) {
 			exists, err := client.CredentialsExist(paths.CredentialsDir())
@@ -115,7 +124,7 @@ func defaultWizardEnv(paths config.Paths, controller string) wizardEnv {
 			}
 			return client.Open(paths.CredentialsDir(), opts...)
 		},
-		ApplyAttempts: defaultApplyAttempts, Sleep: time.Sleep,
+		ApplyAttempts: defaultApplyAttempts, Clock: clock.Real{},
 	}
 }
 
@@ -157,6 +166,11 @@ func runWizard(ctx context.Context, env wizardEnv, p *prompt.Prompter, choices J
 func (w *wizard) say(format string, args ...any) { _, _ = fmt.Fprintf(w.out, format+"\n", args...) }
 
 func (w *wizard) steps(ctx context.Context) error {
+	if w.pr.Step == stepJoining {
+		if err := w.recoverJoin(); err != nil {
+			return err
+		}
+	}
 	if w.pr.Step < stepJoined {
 		if err := w.join(ctx); err != nil {
 			return err
@@ -186,6 +200,22 @@ func (w *wizard) steps(ctx context.Context) error {
 		return err
 	}
 	return w.finish(ctx)
+}
+
+// recoverJoin settles a join that was interrupted around the redemption: with
+// credentials stored the invitation is spent and the wizard goes on; without
+// them it starts again from the questions.
+func (w *wizard) recoverJoin() error {
+	stored, err := w.env.HasCredentials()
+	if err != nil {
+		return err
+	}
+	if !stored {
+		w.pr.Step = 0
+		return nil
+	}
+	w.say("La invitación ya se canjeó: se continúa tras el join.")
+	return w.save(stepJoined)
 }
 
 func (w *wizard) save(step int) error {
@@ -238,6 +268,11 @@ func (w *wizard) join(ctx context.Context) error {
 			settings.MemoryMaxMB = mb
 		}
 	}
+	if settings.Availability == "" {
+		if settings.Availability, err = askValid(w.p, w.out, "Disponibilidad (always, idle o manual)", string(defaultAvailability), parseAvailability); err != nil {
+			return err
+		}
+	}
 	minFree := c.DiskMinFree
 	if minFree == "" {
 		minFree, err = askValid(w.p, w.out, "Disco libre mínimo (p. ej. 20% o 50GiB)", doctor.DefaultMinFree,
@@ -247,15 +282,41 @@ func (w *wizard) join(ctx context.Context) error {
 		}
 	}
 
-	if _, err := w.env.Join(ctx, JoinOptions{Paths: w.env.Paths, Invitation: invitation, Name: name, Settings: settings, Force: c.Force}); err != nil {
+	return w.redeem(ctx, JoinOptions{Paths: w.env.Paths, Invitation: invitation, Name: name, Settings: settings, Force: c.Force}, minFree)
+}
+
+// redeem spends the invitation. The pending setup is written first: if the
+// process dies, or the write after the join fails, the Worker holds credentials
+// and takes no Runs until --resume finishes the wizard. A join that fails
+// without leaving credentials behind restores the config it found.
+func (w *wizard) redeem(ctx context.Context, o JoinOptions, minFree string) error {
+	before, err := doctor.LoadSettings(w.env.Paths)
+	if err != nil {
 		return err
 	}
-	// One write: the Worker is pending from the moment its config exists.
-	w.pr = setup.Progress{Step: stepJoined, Name: name, DiskMinFree: minFree}
-	if err := doctor.SaveSettings(w.env.Paths, doctor.Settings{Name: name, DiskMinFree: minFree, SetupPending: true, Wizard: &w.pr}); err != nil {
+	hadCredentials, err := w.env.HasCredentials()
+	if err != nil {
 		return err
 	}
-	w.say("Unido como Worker %s. No recibirá Runs hasta terminar este asistente.", name)
+	w.pr = setup.Progress{Step: stepJoining, Name: o.Name, DiskMinFree: minFree}
+	if err := doctor.SaveSettings(w.env.Paths, doctor.Settings{Name: o.Name, DiskMinFree: minFree, SetupPending: true, Wizard: &w.pr}); err != nil {
+		return err
+	}
+	if _, err := w.env.Join(ctx, o); err != nil {
+		if stored, checkErr := w.env.HasCredentials(); checkErr != nil || (stored && !hadCredentials) {
+			w.say("El join pudo canjear la invitación: continúa con `%s`.", resumeHint)
+			return err
+		}
+		if restoreErr := doctor.SaveSettings(w.env.Paths, before); restoreErr != nil {
+			return errors.Join(err, restoreErr)
+		}
+		return err
+	}
+	if err := w.save(stepJoined); err != nil {
+		w.say("Unido, pero no se pudo guardar el progreso: continúa con `%s`.", resumeHint)
+		return err
+	}
+	w.say("Unido como Worker %s. No recibirá Runs hasta terminar este asistente.", o.Name)
 	return nil
 }
 
@@ -386,22 +447,25 @@ func (w *wizard) initialWorkflow(ctx context.Context) error {
 	}
 	w.pr.InitialWorkflow = name
 	for _, id := range w.pr.Harnesses {
-		w.apply(ctx, api, name, id)
+		if err := w.apply(ctx, api, name, id); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // apply orders the Workflow for one harness and waits briefly: the Worker only
-// carries the order out once its daemon runs.
-func (w *wizard) apply(ctx context.Context, api workflowAPI, workflow, harnessID string) {
+// carries the order out once its daemon runs. An order that cannot be made, or
+// that ends failed or superseded, is an error: the step is not done and --resume
+// tries it again. An order still waiting is not: the daemon will carry it out.
+func (w *wizard) apply(ctx context.Context, api workflowAPI, workflow, harnessID string) error {
 	res, err := api.ApplyWorkflow(ctx, v1.ApplyWorkflowRequest{Worker: w.pr.Name, Harness: harnessID, Workflow: workflow})
 	switch {
 	case err != nil:
-		w.say("No se pudo pedir %s para %s: %s", workflow, harnessID, doctor.Clean(err.Error()))
-		return
+		return w.applyFailed(workflow, harnessID, doctor.Clean(err.Error()))
 	case res.Apply == nil:
 		w.say("%s en %s: nada que aplicar.", workflow, harnessID)
-		return
+		return nil
 	}
 	id := res.Apply.ID
 	for range w.env.ApplyAttempts {
@@ -412,14 +476,33 @@ func (w *wizard) apply(ctx context.Context, api workflowAPI, workflow, harnessID
 		switch order.State {
 		case v1.ApplyStateApplied:
 			w.say("%s aplicado a %s.", workflow, harnessID)
-			return
+			return nil
 		case v1.ApplyStateFailed, v1.ApplyStateSuperseded:
-			w.say("%s en %s: %s %s", workflow, harnessID, order.State, doctor.Clean(order.Error))
-			return
+			return w.applyFailed(workflow, harnessID, order.State+" "+doctor.Clean(order.Error))
 		}
-		w.env.Sleep(applyPollEvery)
+		if err := w.wait(ctx, applyPollEvery); err != nil {
+			return err
+		}
 	}
 	w.say("%s para %s queda pedido: se aplicará cuando arranque `cf worker run`.", workflow, harnessID)
+	return nil
+}
+
+func (w *wizard) applyFailed(workflow, harnessID, reason string) error {
+	w.say("%s en %s no se aplicó: %s. Continúa con `%s` para reintentarlo.", workflow, harnessID, reason, resumeHint)
+	return domain.NewError(domain.CodeInternal, fmt.Sprintf("workflow inicial %s sin aplicar en %s", workflow, harnessID), nil)
+}
+
+// wait sleeps on the injected clock, until ctx ends.
+func (w *wizard) wait(ctx context.Context, d time.Duration) error {
+	t := w.env.Clock.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // logins asks for the local login of each harness that lacks it, until it is there or the person skips it.
@@ -535,6 +618,14 @@ func parseMemory(text string) (int, error) {
 		return 0, errors.New("indica un tamaño como 512MB, 16GB o 2TB")
 	}
 	return mb, nil
+}
+
+func parseAvailability(text string) (domain.AvailabilityPolicy, error) {
+	switch p := domain.AvailabilityPolicy(strings.ToLower(text)); p {
+	case domain.AvailabilityAlways, domain.AvailabilityIdle, domain.AvailabilityManual:
+		return p, nil
+	}
+	return "", errors.New("elige always, idle o manual")
 }
 
 func parseCPUs(text string) (int, error) {

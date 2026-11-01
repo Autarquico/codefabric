@@ -14,6 +14,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/daemon"
 	"github.com/Autarquico/codefabric/internal/worker/doctor"
+	"github.com/Autarquico/codefabric/internal/worker/setup"
 )
 
 // doctorMachine is a machine whose PATH holds only the stubs given: no real
@@ -145,5 +146,26 @@ func TestWorkerJoin_KeepsTheDiskThresholdInTheWorkerConfig(t *testing.T) {
 	}
 	if s, err := doctor.LoadSettings(paths); err != nil || s.DiskMinFree != "50GiB" {
 		t.Errorf("settings = %+v, %v", s, err)
+	}
+}
+
+func TestWorkerDoctor_APendingSetupFailsTheSetupComponent(t *testing.T) {
+	doctorMachine(t, "tmux", "git")
+	paths, err := config.ResolveFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := doctor.SaveSettings(paths, doctor.Settings{Name: "w1", SetupPending: true}); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := cf(t, "worker", "doctor", "--disk-min-free", "1%")
+	if code == 0 || !strings.Contains(out, "setup") || !strings.Contains(out, "cf worker join --resume") {
+		t.Errorf("exit %d with the setup pending:\n%s", code, out)
+	}
+	if err := setup.MarkDone(paths); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ = cf(t, "worker", "doctor", "--disk-min-free", "1%"); code != 0 {
+		t.Errorf("exit %d once the setup is done:\n%s", code, out)
 	}
 }

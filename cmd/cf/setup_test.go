@@ -106,8 +106,8 @@ func TestSetup_WorkerRoleRunsTheWizardAndEndsTheSetup(t *testing.T) {
 	host, _ := bringUpController(t)
 	invite := workerInvite(t, host)
 	box := machine(t)
-	// invitation, name, cpus, memory, disk, then no harness offered.
-	code, out, errOut := cf(t, invite+"\nbox\n\n\n1MiB\nn\nn\n", "setup", "--role", "worker")
+	// invitation, name, cpus, memory, availability, disk, then no harness offered.
+	code, out, errOut := cf(t, invite+"\nbox\n\n\n\n1MiB\nn\nn\n", "setup", "--role", "worker")
 	if code != 0 {
 		t.Fatalf("setup --role worker: exit %d: %s\n%s", code, errOut, out)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +16,8 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
+	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/prompt"
 	"github.com/Autarquico/codefabric/internal/worker/doctor"
 	"github.com/Autarquico/codefabric/internal/worker/setup"
@@ -101,7 +104,13 @@ type session struct {
 	loginAfterChecks int
 	checks           int
 	workflow         *fakeWorkflows
+	clock            *clock.Fake
+	creds            bool // Worker credentials are stored
 	failDisk         bool
+	joinOptions      []JoinOptions
+	joinErr          error
+	credsOnJoinErr   bool   // the failed join had already stored the credentials
+	afterJoin        func() // runs inside the join, once the credentials are stored
 }
 
 func newSession(t *testing.T) *session {
@@ -109,7 +118,7 @@ func newSession(t *testing.T) *session {
 	home := t.TempDir()
 	s := &session{
 		claude: &fakeHarness{id: "claude", installed: true}, codex: &fakeHarness{id: "codex"}, loggedIn: true,
-		workflow: &fakeWorkflows{state: v1.ApplyStateApplied},
+		workflow: &fakeWorkflows{state: v1.ApplyStateApplied}, clock: clock.NewFake(time.Unix(0, 0)),
 	}
 	paths := config.Paths{ConfigDir: t.TempDir(), DataDir: t.TempDir()}
 	s.env = wizardEnv{
@@ -122,10 +131,20 @@ func newSession(t *testing.T) *session {
 		Sysinfo: func(string) (sysinfo.Info, error) {
 			return sysinfo.Info{OS: "linux", Arch: "amd64", CPU: 8, MemoryMB: 16 << 10, DiskMB: 500 << 10}, nil
 		},
-		Join: func(context.Context, JoinOptions) (client.Connected, error) {
+		Join: func(_ context.Context, o JoinOptions) (client.Connected, error) {
 			s.joins++
+			s.joinOptions = append(s.joinOptions, o)
+			if s.joinErr != nil {
+				s.creds = s.credsOnJoinErr
+				return client.Connected{}, s.joinErr
+			}
+			s.creds = true
+			if s.afterJoin != nil {
+				s.afterJoin()
+			}
 			return client.Connected{}, nil
 		},
+		HasCredentials: func() (bool, error) { return s.creds, nil },
 		Doctor: func(context.Context, string, []string) ([]v1.ComponentHealth, error) {
 			out := []v1.ComponentHealth{{Name: "git", Status: v1.ComponentOK}}
 			s.checks++
@@ -142,7 +161,7 @@ func newSession(t *testing.T) *session {
 			return out, nil
 		},
 		Workflows:     func() (workflowAPI, error) { return s.workflow, nil },
-		ApplyAttempts: 2, Sleep: func(time.Duration) {},
+		ApplyAttempts: 2, Clock: s.clock,
 	}
 	return s
 }
@@ -164,12 +183,12 @@ func (s *session) settings(t *testing.T) (doctor.Settings, bool) {
 }
 
 // answers, in order: invitation, name, cpus, memory, disk, offer claude, offer codex.
-const defaults = "cf://invite\n\n\n\n\n\n\n"
+const defaults = "cf://invite\n\n\n\n\n\n\n\n"
 
 func TestWizard_HappyPath(t *testing.T) {
 	s := newSession(t)
 	s.codex.installed = false
-	out, err := s.run(t, "cf://invite\n\n4\n8GB\n10%\n\ns\ns\n1\n", JoinChoices{}, false)
+	out, err := s.run(t, "cf://invite\n\n4\n8GB\nidle\n10%\n\ns\ns\n1\n", JoinChoices{}, false)
 	if err != nil {
 		t.Fatalf("wizard: %v\n%s", err, out)
 	}
@@ -210,7 +229,7 @@ func TestWizard_OrdersTheInitialWorkflowOnTheChosenHarnesses(t *testing.T) {
 
 func TestWizard_DecliningTheInstallDropsTheHarnessFromTheOfferedSet(t *testing.T) {
 	s := newSession(t)
-	out, err := s.run(t, "cf://invite\n\n\n\n\n\ns\n\n", JoinChoices{}, false) // offer codex, decline its install
+	out, err := s.run(t, "cf://invite\n\n\n\n\n\n\ns\n\n", JoinChoices{}, false) // offer codex, decline its install
 	if err != nil {
 		t.Fatalf("wizard: %v\n%s", err, out)
 	}
@@ -228,7 +247,7 @@ func TestWizard_DecliningTheInstallDropsTheHarnessFromTheOfferedSet(t *testing.T
 
 func TestWizard_YesInstallsWithoutAsking(t *testing.T) {
 	s := newSession(t)
-	out, err := s.run(t, "cf://invite\n\n\n\n\n\ns\n", JoinChoices{Yes: true}, false)
+	out, err := s.run(t, "cf://invite\n\n\n\n\n\n\ns\n", JoinChoices{Yes: true}, false)
 	if err != nil || s.codex.installs != 1 {
 		t.Fatalf("err=%v installs=%d\n%s", err, s.codex.installs, out)
 	}
@@ -237,7 +256,7 @@ func TestWizard_YesInstallsWithoutAsking(t *testing.T) {
 func TestWizard_AFailedInstallFailsTheDoctorAndKeepsTheSetupPending(t *testing.T) {
 	s := newSession(t)
 	s.codex.installErr = errors.New("npm: sin red")
-	out, err := s.run(t, "cf://invite\n\n\n\n\n\ns\ns\n", JoinChoices{}, false)
+	out, err := s.run(t, "cf://invite\n\n\n\n\n\n\ns\ns\n", JoinChoices{}, false)
 	if err == nil || !strings.Contains(out, "La instalación de codex falló") {
 		t.Fatalf("a chosen harness that is not installed must fail the doctor: err=%v\n%s", err, out)
 	}
@@ -295,7 +314,7 @@ func TestWizard_ResumeAsksAgainForASkippedLogin(t *testing.T) {
 func TestWizard_AbortedMidWayResumesWithoutJoiningAgain(t *testing.T) {
 	s := newSession(t)
 	// The input ends at the first harness question: joined, nothing else.
-	out, err := s.run(t, "cf://invite\nw1\n\n\n\n", JoinChoices{}, false)
+	out, err := s.run(t, "cf://invite\nw1\n\n\n\n\n", JoinChoices{}, false)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("err = %v\n%s", err, out)
 	}
@@ -320,7 +339,7 @@ func TestWizard_ResumeNeedsAPendingJoin(t *testing.T) {
 	if _, err := s.run(t, "", JoinChoices{}, true); err == nil {
 		t.Error("resume with nothing pending succeeded")
 	}
-	if _, err := s.run(t, "cf://invite\nw1\n\n\n\n", JoinChoices{}, false); !errors.Is(err, io.EOF) {
+	if _, err := s.run(t, "cf://invite\nw1\n\n\n\n\n", JoinChoices{}, false); !errors.Is(err, io.EOF) {
 		t.Fatal(err)
 	}
 	if _, err := s.run(t, defaults, JoinChoices{}, false); err == nil || !strings.Contains(err.Error(), "--resume") {
@@ -328,9 +347,198 @@ func TestWizard_ResumeNeedsAPendingJoin(t *testing.T) {
 	}
 }
 
+func TestWizard_AvailabilityIsAskedValidatedAndSentToTheJoin(t *testing.T) {
+	s := newSession(t)
+	out, err := s.run(t, "cf://invite\n\n\n\nsiempre\nIDLE\n\n\n\n", JoinChoices{}, false)
+	if err != nil || len(s.joinOptions) != 1 {
+		t.Fatalf("err=%v joins=%d\n%s", err, len(s.joinOptions), out)
+	}
+	if got := s.joinOptions[0].Settings.Availability; got != domain.AvailabilityIdle {
+		t.Errorf("availability = %q", got)
+	}
+	if !strings.Contains(out, "elige always, idle o manual") {
+		t.Errorf("a wrong answer is not corrected:\n%s", out)
+	}
+	s = newSession(t)
+	if out, err = s.run(t, defaults, JoinChoices{}, false); err != nil || s.joinOptions[0].Settings.Availability != domain.AvailabilityAlways {
+		t.Errorf("default: err=%v options=%+v\n%s", err, s.joinOptions, out)
+	}
+}
+
+func TestWizard_TheAvailabilityFlagIsNotAskedAndIsSent(t *testing.T) {
+	s := newSession(t)
+	choices := JoinChoices{Invitation: "cf://x", Name: "box", DiskMinFree: "5%", Settings: v1.WorkerSettings{CPUMax: 2, MemoryMaxMB: 1024, Availability: domain.AvailabilityManual}}
+	out, err := s.run(t, "\n\n\n", choices, false)
+	if err != nil || strings.Contains(out, "Disponibilidad") || s.joinOptions[0].Settings.Availability != domain.AvailabilityManual {
+		t.Errorf("err=%v options=%+v\n%s", err, s.joinOptions, out)
+	}
+}
+
+func TestWizard_ThePendingSetupIsWrittenBeforeTheInvitationIsRedeemed(t *testing.T) {
+	s := newSession(t)
+	s.env.Join = func(context.Context, JoinOptions) (client.Connected, error) {
+		pr, pending, err := setup.Load(s.env.Paths)
+		if err != nil || !pending || pr.Step != stepJoining || pr.Name != "w1" {
+			t.Errorf("at the join: %+v pending=%v err=%v", pr, pending, err)
+		}
+		return client.Connected{}, errors.New("red caída")
+	}
+	if _, err := s.run(t, "cf://invite\nw1\n\n\n\n\n", JoinChoices{}, false); err == nil {
+		t.Fatal("a failed join succeeded")
+	}
+}
+
+func TestWizard_AJoinThatFailsWithoutCredentialsLeavesNothingPending(t *testing.T) {
+	s := newSession(t)
+	s.joinErr = errors.New("invitación caducada")
+	if _, err := s.run(t, "cf://invite\nw1\n\n\n\n\n", JoinChoices{}, false); err == nil {
+		t.Fatal("a failed join succeeded")
+	}
+	if _, pending := s.settings(t); pending {
+		t.Error("a join that spent nothing blocks the Worker")
+	}
+	s.joinErr = nil // a plain retry is not refused with "--resume"
+	if out, err := s.run(t, defaults, JoinChoices{}, false); err != nil {
+		t.Fatalf("retry: %v\n%s", err, out)
+	}
+}
+
+func TestWizard_AnInterruptionAfterTheRedemptionIsRecoveredByResume(t *testing.T) {
+	s := newSession(t)
+	s.joinErr, s.credsOnJoinErr = errors.New("proceso interrumpido"), true // credentials stored, the wizard never heard
+	if _, err := s.run(t, "cf://invite\nw1\n\n\n\n\n", JoinChoices{}, false); err == nil {
+		t.Fatal("an interrupted join succeeded")
+	}
+	pr, pending, _ := setup.Load(s.env.Paths)
+	if !pending || pr.Step != stepJoining || !doctor.SetupPending(s.env.Paths) {
+		t.Fatalf("a Worker with credentials is not pending: %+v pending=%v", pr, pending)
+	}
+	s.joinErr = nil
+	out, err := s.run(t, "\n\n\n", JoinChoices{}, true)
+	if err != nil {
+		t.Fatalf("resume: %v\n%s", err, out)
+	}
+	if s.joins != 1 {
+		t.Errorf("the spent invitation was redeemed %d times", s.joins)
+	}
+	if st, pending := s.settings(t); pending || st.Name != "w1" {
+		t.Errorf("settings = %+v pending=%v", st, pending)
+	}
+}
+
+// readOnlyConfig makes the Worker config directory refuse writes.
+func readOnlyConfig(t *testing.T, s *session) (restore func()) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root writes anywhere")
+	}
+	dir := filepath.Dir(doctor.SettingsFile(s.env.Paths))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil { //nolint:gosec // a directory of the test
+		t.Fatal(err)
+	}
+	restore = func() { _ = os.Chmod(dir, 0o700) } //nolint:gosec // a directory of the test
+	t.Cleanup(restore)
+	return restore
+}
+
+func TestWizard_AFailedWriteBeforeTheJoinSpendsNothing(t *testing.T) {
+	s := newSession(t)
+	readOnlyConfig(t, s)
+	if _, err := s.run(t, "cf://invite\nw1\n\n\n\n\n", JoinChoices{}, false); err == nil {
+		t.Fatal("the wizard went on without being able to save its state")
+	}
+	if s.joins != 0 {
+		t.Errorf("the invitation was redeemed %d times with no state saved", s.joins)
+	}
+}
+
+func TestWizard_AFailedWriteAfterTheJoinKeepsTheWorkerPendingAndResumable(t *testing.T) {
+	s := newSession(t)
+	var restore func()
+	// The config turns read-only once the credentials are stored: the write that records the join fails.
+	s.afterJoin = func() { restore = readOnlyConfig(t, s) }
+	out, err := s.run(t, "cf://invite\nw1\n\n\n\n\n", JoinChoices{}, false)
+	if err == nil || !strings.Contains(out, resumeHint) {
+		t.Fatalf("err=%v\n%s", err, out)
+	}
+	restore()
+	pr, pending, _ := setup.Load(s.env.Paths)
+	if !pending || pr.Step != stepJoining {
+		t.Fatalf("progress = %+v pending=%v", pr, pending)
+	}
+	if out, err = s.run(t, "\n\n\n", JoinChoices{}, true); err != nil || s.joins != 1 {
+		t.Fatalf("resume: err=%v joins=%d\n%s", err, s.joins, out)
+	}
+}
+
+func TestWizard_AFailedInitialWorkflowIsRetriedByResume(t *testing.T) {
+	s := newSession(t)
+	s.workflow.list = []v1.WorkflowSummary{{Name: "default", Head: 2}}
+	s.workflow.state = v1.ApplyStateFailed
+	out, err := s.run(t, defaults+"1\n", JoinChoices{}, false)
+	if err == nil || !strings.Contains(out, resumeHint) {
+		t.Fatalf("a failed order completed the step: err=%v\n%s", err, out)
+	}
+	if pr, pending, _ := setup.Load(s.env.Paths); !pending || pr.Step != stepHarnesses {
+		t.Fatalf("progress = %+v pending=%v: the Workflow step must not be done", pr, pending)
+	}
+	s.workflow.state = v1.ApplyStateApplied
+	if out, err = s.run(t, "1\n", JoinChoices{}, true); err != nil {
+		t.Fatalf("resume: %v\n%s", err, out)
+	}
+	if len(s.workflow.ordered) != 2 || s.joins != 1 {
+		t.Errorf("orders = %d, joins = %d", len(s.workflow.ordered), s.joins)
+	}
+	if _, pending := s.settings(t); pending {
+		t.Error("still pending")
+	}
+}
+
+func TestWizard_WaitingForAnOrderFollowsTheClockAndTheContext(t *testing.T) {
+	s := newSession(t)
+	s.workflow.list = []v1.WorkflowSummary{{Name: "default", Head: 2}}
+	s.workflow.state = v1.ApplyStatePending
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var out strings.Builder
+	done := make(chan error, 1)
+	go func() {
+		done <- runWizard(ctx, s.env, prompt.New(strings.NewReader(defaults+"1\n"), &out), JoinChoices{}, false)
+	}()
+	for range 2 { // ApplyAttempts polls, each followed by a wait on the injected clock
+		if err := s.clock.BlockUntil(ctx, 1); err != nil {
+			t.Fatal(err)
+		}
+		s.clock.Advance(applyPollEvery)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("an order that waits for the daemon is not a failure: %v", err)
+	}
+	if !strings.Contains(out.String(), "queda pedido") {
+		t.Errorf("output:\n%s", out.String())
+	}
+
+	s = newSession(t)
+	s.workflow.list, s.workflow.state = []v1.WorkflowSummary{{Name: "default", Head: 2}}, v1.ApplyStatePending
+	ctx, cancel = context.WithCancel(t.Context())
+	go func() {
+		done <- runWizard(ctx, s.env, prompt.New(strings.NewReader(defaults+"1\n"), io.Discard), JoinChoices{}, false)
+	}()
+	if err := s.clock.BlockUntil(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled wizard kept waiting: %v", err)
+	}
+}
+
 func TestWizard_FlagsAnswerTheirQuestions(t *testing.T) {
 	s := newSession(t)
-	choices := JoinChoices{Invitation: "cf://x", Name: "box", DiskMinFree: "5%", Settings: v1.WorkerSettings{CPUMax: 2, MemoryMaxMB: 1024}}
+	choices := JoinChoices{Invitation: "cf://x", Name: "box", DiskMinFree: "5%", Settings: v1.WorkerSettings{CPUMax: 2, MemoryMaxMB: 1024, Availability: domain.AvailabilityManual}}
 	out, err := s.run(t, "\n\n\n", choices, false) // only the harness questions
 	if err != nil {
 		t.Fatalf("wizard: %v\n%s", err, out)
@@ -342,7 +550,7 @@ func TestWizard_FlagsAnswerTheirQuestions(t *testing.T) {
 
 func TestWizard_AnInvalidAnswerIsAskedAgain(t *testing.T) {
 	s := newSession(t)
-	out, err := s.run(t, "cf://invite\n\nmuchas\n4\nlots\n\nabc\n10%\n\n\n\n", JoinChoices{}, false)
+	out, err := s.run(t, "cf://invite\n\nmuchas\n4\nlots\n\n\nabc\n10%\n\n\n\n", JoinChoices{}, false)
 	if err != nil {
 		t.Fatalf("wizard: %v\n%s", err, out)
 	}

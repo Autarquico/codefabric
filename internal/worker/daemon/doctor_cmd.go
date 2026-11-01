@@ -41,6 +41,9 @@ type DoctorOptions struct {
 	Clock clock.Clock
 	// Doctor overrides the checks, for tests.
 	Doctor doctor.Options
+	// IgnoreSetup leaves the "setup" component out: the join wizard is what
+	// clears it, so it cannot wait for itself.
+	IgnoreSetup bool
 	// Probe replaces the authenticated call to the Controller, for tests.
 	Probe func(ctx context.Context) error
 }
@@ -79,6 +82,9 @@ func RunDoctor(ctx context.Context, o DoctorOptions) ([]v1.ComponentHealth, erro
 	}
 	if opts.MinFree == (doctor.Threshold{}) {
 		opts.MinFree = minFree
+	}
+	if opts.SetupPending == nil && !o.IgnoreSetup {
+		opts.SetupPending = func() bool { return doctor.SetupPending(o.Paths) }
 	}
 	clk := o.Clock
 	if clk == nil {
