@@ -111,7 +111,14 @@ func TestRelayAuth_EveryLinkOfTheChainIsCheckedOnEveryRequest(t *testing.T) {
 	wantCode(t, err, domain.CodePolicyDenied)
 
 	// A token that was tampered with, truncated, or made for nothing.
-	flipped := tok[:len(tok)-2] + "AA"
+	// Change a character in the middle of the signature: the last ones of
+	// base64 may carry padding bits, and changing them may not change it.
+	i := len(tok) - 10
+	c := byte('A')
+	if tok[i] == c {
+		c = 'B'
+	}
+	flipped := tok[:i] + string(c) + tok[i+1:]
 	for name, bad := range map[string]string{"tampered": flipped, "no signature": strings.Split(tok, ".")[0], "garbage": "x.y", "empty": ""} {
 		if _, err := e.authorize(r.w, project, false, bad); err == nil {
 			t.Errorf("%s: accepted", name)

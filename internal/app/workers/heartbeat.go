@@ -18,7 +18,10 @@ import (
 
 const (
 	maxCapabilities = 64
-	maxTextLen      = 256
+	maxTextLen      = v1.MaxHealthText
+	maxComponents   = 64
+
+	versionComponent = "version"
 
 	// Upper bounds on what a Worker may claim about itself or be given at join:
 	// far above any real machine, low enough that sums of them cannot overflow.
@@ -70,6 +73,7 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 			if verdict == fenceDowngraded {
 				req.Health = downgradedHealth(current.Generation)
 			}
+			req.Health = withVersionVerdict(req.Health, domain.WorkerVersionCompatible(s.version, req.DaemonVersion))
 			if err := s.applyHeartbeat(ctx, tx, act, &w, req); err != nil {
 				return v1.HeartbeatResponse{}, err
 			}
@@ -192,6 +196,28 @@ func doctorVerdict(compatible bool, health v1.Health) domain.WorkerEvent {
 	return domain.WorkerEventDoctorOK
 }
 
+// withVersionVerdict adds the "version" component, failed, to the components
+// of a daemon whose version is outside the upgrade policy: only the Controller
+// knows its own version, and the scheduler reads the components alone. A daemon
+// that sends none is an old one and is judged by its summary (§9.5).
+func withVersionVerdict(health v1.Health, compatible bool) v1.Health {
+	if compatible || len(health.Components) == 0 {
+		return health
+	}
+	components := make([]v1.ComponentHealth, 0, len(health.Components)+1)
+	for _, c := range health.Components {
+		if c.Name != versionComponent {
+			components = append(components, c)
+		}
+	}
+	health.Components = append(components, v1.ComponentHealth{
+		Name: versionComponent, Status: v1.ComponentFail,
+		Message: "the daemon version is outside the upgrade policy of the Controller", Action: "upgrade the Worker daemon",
+	})
+	health.Status = v1.HealthDegraded
+	return health
+}
+
 // emitRestart writes WorkerRestarted unless the Worker's previous one is less
 // than a heartbeat interval old: a daemon that keeps changing epoch would
 // otherwise write an event per heartbeat. The epoch is recorded either way.
@@ -249,6 +275,7 @@ func validateHeartbeat(req v1.HeartbeatRequest) error {
 	if req.Health.Status != v1.HealthOK && req.Health.Status != v1.HealthDegraded {
 		checks = append(checks, input.Invalid("health.status must be ok or degraded"))
 	}
+	checks = append(checks, validateComponents(req.Health.Components))
 	// Both end up in a command line of a client: nothing else than the grammar is kept.
 	if req.SSHTarget != "" && !domain.ValidSSHTarget(req.SSHTarget) {
 		checks = append(checks, input.Invalid("ssh_target must be [user@]host[:port], with an IPv6 address between brackets"))
@@ -267,6 +294,25 @@ func validateHeartbeat(req v1.HeartbeatRequest) error {
 	}
 	checks = append(checks, validateSecrets(req))
 	return input.First(checks...)
+}
+
+func validateComponents(components []v1.ComponentHealth) error {
+	if len(components) > maxComponents {
+		return input.Invalid("health.components has at most %d entries", maxComponents)
+	}
+	for _, c := range components {
+		if c.Name == "" {
+			return input.Invalid("health.components names cannot be empty")
+		}
+		if c.Status != v1.ComponentOK && c.Status != v1.ComponentWarn && c.Status != v1.ComponentFail {
+			return input.Invalid("health.components status must be ok, warn or fail")
+		}
+		if err := input.First(text("health.components.name", c.Name), text("health.components.message", c.Message),
+			text("health.components.action", c.Action)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // text accepts a short, printable value; everything a daemon says about itself

@@ -102,7 +102,7 @@ func TestHeartbeat_AnUnreadableCatalogIsReportedEmptyAndDegradesTheWorker(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(req.Secrets.Refs) != 0 || req.Health != (v1.Health{Status: v1.HealthDegraded, Message: catalogUnreadable}) {
+	if len(req.Secrets.Refs) != 0 || req.Health.Status != v1.HealthDegraded || req.Health.Message != catalogUnreadable {
 		t.Errorf("secrets %+v, health %+v", req.Secrets, req.Health)
 	}
 }

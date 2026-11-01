@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -23,12 +25,25 @@ func workerInvite(t *testing.T, host config.Paths) string {
 	return strings.TrimSpace(out)
 }
 
+// requireTmux skips the test of a Worker that needs tmux to be online, as the
+// integration tests do, unless CI demands it with CF_REQUIRE_TMUX=1.
+func requireTmux(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("tmux"); err != nil {
+		if os.Getenv("CF_REQUIRE_TMUX") == "1" {
+			t.Fatal("CF_REQUIRE_TMUX=1 and tmux is not installed")
+		}
+		t.Skip("tmux is not installed: the Worker would be degraded")
+	}
+}
+
 // startWorker runs `cf worker run` for the machine until stopWorker, and returns
 // once the Worker is online. The environment holds a machine at a time and the
 // command reads it as it starts, so the wait asks the Controller through the
 // SDK instead of through another `cf`.
 func startWorker(t *testing.T, host, machine config.Paths, ref string) (stopWorker func() int) {
 	t.Helper()
+	requireTmux(t)
 	use(t, machine)
 	ctx, interrupt := context.WithCancel(t.Context())
 	done := make(chan int, 1)

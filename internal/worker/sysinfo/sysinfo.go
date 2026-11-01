@@ -63,3 +63,23 @@ func existingAncestor(dir string) string {
 func megabytes(bytes uint64) int {
 	return int(min(bytes/bytesPerMB, math.MaxInt32)) //nolint:gosec // bounded by MaxInt32 on the line above
 }
+
+// Disk is the space of the filesystem that holds a directory.
+type Disk struct {
+	FreeBytes  uint64 // what a process that is not root can still write
+	TotalBytes uint64
+}
+
+// DiskOf measures the filesystem of dir, which need not exist yet.
+func DiskOf(dir string) (Disk, error) {
+	dir = existingAncestor(dir)
+	total, err := diskBytes(dir)
+	if err != nil {
+		return Disk{}, err
+	}
+	free, err := diskFreeBytes(dir)
+	if err != nil {
+		return Disk{}, err
+	}
+	return Disk{FreeBytes: free, TotalBytes: total}, nil
+}

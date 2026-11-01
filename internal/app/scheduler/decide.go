@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -38,6 +39,9 @@ type Worker struct {
 	// Configs is the global configuration of each harness the Worker does not
 	// isolate (§8.12), by harness: its lock and the Workflow it has applied.
 	Configs map[string]HarnessConfig
+	// Components are the doctor's verdicts of the last heartbeat; none for a
+	// daemon that predates it (§9.5).
+	Components []v1.ComponentHealth
 }
 
 // HarnessConfig is what the Worker holds of the global configuration of one

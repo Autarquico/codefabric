@@ -173,4 +173,24 @@ type ValidationIssue struct {
 	// Component is the one at fault; empty is the configuration as a whole.
 	Component string
 	Message   string
+	// Advisory marks a problem that does not stop the configuration from
+	// working; the zero value is one that invalidates it.
+	Advisory bool
+}
+
+// Blocking says whether some issue invalidates the configuration.
+func (v Validation) Blocking() bool {
+	for _, i := range v.Issues {
+		if !i.Advisory {
+			return true
+		}
+	}
+	return false
+}
+
+// BypassDetector is an Adapter that can say whether the configuration of the
+// host makes the harness skip its permission prompts. It matters for a harness
+// without ConfigIsolation, which runs under that configuration.
+type BypassDetector interface {
+	BypassesPermissions(host Host) (bool, error)
 }

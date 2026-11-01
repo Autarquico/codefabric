@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -136,12 +137,16 @@ func TestWorkers_RoundTripWithTheLastHeartbeat(t *testing.T) {
 	}
 	beat(report, v1.Health{Status: v1.HealthOK})
 	report.Epoch = "E2"
-	beat(report, v1.Health{Status: v1.HealthDegraded, Message: "disk"}) // replaces the first: only the last is kept
+	components := []v1.ComponentHealth{
+		{Name: "disk", Status: v1.ComponentFail, Message: "12% libre, umbral 20%", Action: "libera espacio"},
+		{Name: "auth:claude-code", Status: v1.ComponentOK},
+	}
+	beat(report, v1.Health{Status: v1.HealthDegraded, Message: "disk", Components: components}) // replaces the first: only the last is kept
 
 	got := f.read(w.ID)
 	resources.Free = resources.Allocatable // nothing is reserved: Free is read as what the Worker contributes
 	if got.Report.Epoch != "E2" || got.Report.Hostname != "alpha.lan" || !slices.Equal(got.Report.Capabilities, []string{"docker"}) ||
-		got.Resources != resources || got.Health != (v1.Health{Status: v1.HealthDegraded, Message: "disk"}) ||
+		got.Resources != resources || !reflect.DeepEqual(got.Health, v1.Health{Status: v1.HealthDegraded, Message: "disk", Components: components}) ||
 		got.LastHeartbeatAt == nil || !got.LastHeartbeatAt.Equal(epoch0) {
 		t.Errorf("after heartbeats: %+v", got)
 	}

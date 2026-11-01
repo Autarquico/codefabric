@@ -227,7 +227,9 @@ func TestRun_OffersNoHarnessWithoutAUsableGit(t *testing.T) {
 		})
 	}()
 	t.Cleanup(func() { cancel(); <-done })
-	w := c.eventually("box", "the Worker to be online", func(w v1.Worker) bool { return w.State == domain.WorkerOnline })
+	w := c.eventually("box", "the Worker to report git failing", func(w v1.Worker) bool {
+		return w.Health.Status == v1.HealthDegraded && componentStatus(w.Health, "git") == v1.ComponentFail
+	})
 	if len(w.Capabilities) != 0 {
 		t.Errorf("a Worker without git offers %v", w.Capabilities)
 	}
@@ -247,4 +249,13 @@ func withoutCodex(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", strings.Join(kept, string(os.PathListSeparator)))
+}
+
+func componentStatus(h v1.Health, name string) string {
+	for _, c := range h.Components {
+		if c.Name == name {
+			return c.Status
+		}
+	}
+	return ""
 }

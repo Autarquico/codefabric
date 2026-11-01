@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -15,7 +16,29 @@ import (
 var (
 	_ harness.GlobalInspector = Adapter{}
 	_ harness.GlobalAdopter   = Adapter{}
+	_ harness.BypassDetector  = Adapter{}
 )
+
+// BypassesPermissions is permissions.defaultMode == "bypassPermissions" in the
+// settings.json of the host; no file is no bypass.
+func (Adapter) BypassesPermissions(host harness.Host) (bool, error) {
+	b, err := os.ReadFile(filepath.Join(globalDir(host), SettingsComponent))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var s struct {
+		Permissions struct {
+			DefaultMode string `json:"defaultMode"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(b, &s); err != nil {
+		return false, fmt.Errorf("claude-code: %s: %w", SettingsComponent, err)
+	}
+	return s.Permissions.DefaultMode == "bypassPermissions", nil
+}
 
 func globalNames(names []string) ([]layout, error) {
 	sel, err := harness.ComponentSet(names, func(n string) bool { _, ok := layoutOf(n); return ok })

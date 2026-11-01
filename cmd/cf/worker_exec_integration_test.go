@@ -26,16 +26,6 @@ import (
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
-func requireTmux(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("tmux"); err != nil {
-		if os.Getenv("CF_REQUIRE_TMUX") == "1" {
-			t.Fatal("CF_REQUIRE_TMUX=1 and tmux is not installed")
-		}
-		t.Skip("tmux is not installed")
-	}
-}
-
 // daemonProcess is `cf worker run` in a process of its own.
 type daemonProcess struct {
 	t    *testing.T

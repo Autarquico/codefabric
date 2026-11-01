@@ -21,6 +21,7 @@ import (
 	controllerdaemon "github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/daemon"
+	"github.com/Autarquico/codefabric/internal/worker/doctor"
 	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
 )
 
@@ -85,6 +86,19 @@ func (c *controller) stopIt() { c.stop() }
 func machine(t *testing.T) config.Paths {
 	t.Helper()
 	root := t.TempDir()
+	// The configuration and the logins of the harnesses of the machine running the
+	// tests must not decide whether the Worker is healthy: this one has a login for each.
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
+	for _, login := range []string{".claude/.credentials.json", ".codex/auth.json"} {
+		path := filepath.Join(home, login)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return config.Paths{ConfigDir: filepath.Join(root, "config"), DataDir: filepath.Join(root, "data")}
 }
 
@@ -97,6 +111,10 @@ func (c *controller) join(name string, paths config.Paths) {
 	}
 	if _, err := daemon.Join(c.t.Context(), daemon.JoinOptions{Paths: paths, Invitation: res.Invite, Name: name}); err != nil {
 		c.t.Fatalf("Join: %v", err)
+	}
+	// The disk of the machine running the tests must not degrade the Worker.
+	if err := doctor.SaveSettings(paths, doctor.Settings{DiskMinFree: "1MiB"}); err != nil {
+		c.t.Fatal(err)
 	}
 }
 
@@ -136,7 +154,9 @@ func run(t *testing.T, paths config.Paths, out *logs, rt ...cfruntime.Runtime) *
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	r := &running{cancel: cancel, done: make(chan struct{})}
-	opts := daemon.Options{Paths: paths, Interval: interval, Logger: slog.New(slog.NewTextHandler(out, nil))}
+	// Without a Runtime of its own the test gets a fake one: the verdict of the
+	// doctor must not depend on whether the machine has tmux.
+	opts := daemon.Options{Paths: paths, Interval: interval, Logger: slog.New(slog.NewTextHandler(out, nil)), Runtime: &recordingRuntime{}}
 	if len(rt) > 0 {
 		opts.Runtime = rt[0]
 	}
@@ -243,7 +263,7 @@ func runMeasuring(t *testing.T, paths config.Paths, broken *atomic.Bool) *runnin
 	go func() {
 		defer close(r.done)
 		r.err = daemon.Run(ctx, daemon.Options{
-			Paths: paths, Interval: interval, Logger: slog.New(slog.DiscardHandler),
+			Paths: paths, Interval: interval, Logger: slog.New(slog.DiscardHandler), Runtime: &recordingRuntime{},
 			Measure: func(dir string) (sysinfo.Info, error) {
 				if broken.Load() {
 					return sysinfo.Info{}, errors.New("statfs: input/output error")

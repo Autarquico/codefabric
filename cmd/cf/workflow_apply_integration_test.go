@@ -41,6 +41,7 @@ func newApplyFixture(t *testing.T, adoptExtra ...string) *applyFixture {
 	boxMachine := machine(t)
 	ok[map[string]any](t, "worker", "join", invite, "--name", "alpha")
 	f.box = t.TempDir()
+	writeCodex(t, filepath.Join(f.box, ".codex"), "auth.json", `{"tokens":{"access_token":"`+authSecret+`"}}`) // logged in: the doctor says online
 	t.Setenv("HOME", f.box)
 	t.Setenv("CODEX_HOME", "")
 
@@ -49,7 +50,7 @@ func newApplyFixture(t *testing.T, adoptExtra ...string) *applyFixture {
 	go func() {
 		done <- workerdaemon.Run(ctx, workerdaemon.Options{
 			Paths: boxMachine, Interval: 100 * time.Millisecond, Logger: slog.New(slog.DiscardHandler), Runtime: &idleRuntime{},
-			Harnesses: []harness.Adapter{codex.Adapter{}},
+			Harnesses: []harness.Adapter{installedCodex{}},
 		})
 	}()
 	t.Cleanup(func() {
@@ -62,6 +63,17 @@ func newApplyFixture(t *testing.T, adoptExtra ...string) *applyFixture {
 	use(t, host)
 	return f
 }
+
+// installedCodex is the codex adapter on a machine that has codex: the doctor
+// of the Worker finds it installed whatever the machine running the tests has.
+// Detect and Version are answered without a binary.
+type installedCodex struct{ codex.Adapter }
+
+func (installedCodex) Detect(context.Context, harness.Host) (harness.Detection, error) {
+	return harness.Detection{Installed: true, Path: "/usr/bin/true"}, nil
+}
+
+func (installedCodex) Version(context.Context, harness.Host) (string, error) { return "0.0.0", nil }
 
 func (f *applyFixture) asSource(t *testing.T) { t.Helper(); t.Setenv("HOME", f.src) }
 
