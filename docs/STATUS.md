@@ -12,6 +12,7 @@
 - #19 Workflows: almacenamiento, adopt y commit
 - #20 Adapter de Claude Code
 - #21 Adapter de Codex CLI
+- #22 Workflows: apply, drift y lock de configuración
 - #23 Secrets locales al Worker
 - #24 Config del repo y Environment host
 - #47 codex-adapter: el executor no publica usage de los Runs
