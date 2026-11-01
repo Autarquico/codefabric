@@ -27,21 +27,22 @@ type fakeApplyStore struct {
 	synced  []v1.SyncWorkflowRequest
 	asked   [2]string
 	pollN   int
+	err     error // answers apply, rollback and sync when set
 }
 
 func (s *fakeApplyStore) ApplyWorkflow(_ context.Context, r v1.ApplyWorkflowRequest) (v1.ApplyWorkflowResponse, error) {
 	s.applied = append(s.applied, r)
-	return s.resp, nil
+	return s.resp, s.err
 }
 
 func (s *fakeApplyStore) RollbackWorkflow(_ context.Context, r v1.RollbackWorkflowRequest) (v1.ApplyWorkflowResponse, error) {
 	s.rolled = append(s.rolled, r)
-	return s.resp, nil
+	return s.resp, s.err
 }
 
 func (s *fakeApplyStore) SyncWorkflow(_ context.Context, r v1.SyncWorkflowRequest) (v1.SyncWorkflowResponse, error) {
 	s.synced = append(s.synced, r)
-	return s.sync, nil
+	return s.sync, s.err
 }
 
 func (s *fakeApplyStore) WorkflowApply(_ context.Context, id string) (v1.WorkflowApply, error) {
@@ -372,5 +373,69 @@ func fakeTimer(c *clock.Fake) timerFunc {
 	return func(d time.Duration) (<-chan time.Time, func()) {
 		t := c.NewTimer(d)
 		return t.C(), t.Stop
+	}
+}
+
+func busyError() error {
+	return domain.NewError(domain.CodeWorkerBusy, "worker w1 has 2 Runs holding the codex configuration: retry when they end",
+		map[string]any{"worker": "w1", "harness": "codex", "holders": 2})
+}
+
+func TestNoWaitTravelsInApplyRollbackAndSyncAndBusyIsPrinted(t *testing.T) {
+	st := &fakeApplyStore{err: busyError()}
+	for _, args := range [][]string{
+		{"workflow", "apply", "team", "--worker", "w1", "--harness", "codex", "--no-wait"},
+		{"workflow", "rollback", "--worker", "w1", "--harness", "codex", "--no-wait"},
+		{"workflow", "sync", "team", "--harness", "codex", "--no-wait"},
+	} {
+		code, _, errOut := runApply(t, st, args...)
+		if code == 0 || !strings.Contains(errOut, "CF_WORKER_BUSY") || !strings.Contains(errOut, "2 Runs") {
+			t.Errorf("%v: exit %d err %q", args, code, errOut)
+		}
+	}
+	if !st.applied[0].NoWait || !st.rolled[0].NoWait || !st.synced[0].NoWait {
+		t.Errorf("no_wait not sent: %+v %+v %+v", st.applied, st.rolled, st.synced)
+	}
+	o := order("applied", nil)
+	st = &fakeApplyStore{resp: v1.ApplyWorkflowResponse{Apply: &o}}
+	if code, _, _ := runApply(t, st, "workflow", "apply", "team", "--worker", "w1", "--harness", "codex"); code != 0 || st.applied[0].NoWait {
+		t.Errorf("without the flag no_wait must stay false: exit %d %+v", code, st.applied)
+	}
+}
+
+func TestSyncNoWaitListsTheBusyWorkersAndFails(t *testing.T) {
+	st := &fakeApplyStore{sync: v1.SyncWorkflowResponse{Results: []v1.SyncWorkflowResult{
+		{Worker: "w1", Result: v1.ApplyWorkflowResponse{Apply: ptr(order("applied", nil))}},
+		{Worker: "w2", Code: "CF_WORKER_BUSY", Result: v1.ApplyWorkflowResponse{Reason: "worker w2 has 3 Runs holding the codex configuration"}},
+	}}}
+	code, out, errOut := runApply(t, st, "workflow", "sync", "team", "--harness", "codex", "--no-wait")
+	if code == 0 || !strings.Contains(errOut, "CF_WORKER_BUSY") || !strings.Contains(errOut, "w2") {
+		t.Errorf("exit %d err %q", code, errOut)
+	}
+	for _, want := range []string{"w1", "applied", "w2", "busy", "3 Runs"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("sync table lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestStatusShowsTheConfigurationLock(t *testing.T) {
+	st := &fakeApplyStore{states: []v1.WorkflowState{
+		{Worker: "w1", Harness: "codex", ConfigKey: "sha256:" + strings.Repeat("a", 64), Holders: 2, ApplyPending: "operation_9"},
+		{Worker: "w2", Harness: "codex"},
+	}}
+	code, out, _ := runApply(t, st, "workflow", "status")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	for _, want := range []string{"LOCK", "holders=2", "key=sha256:aaaaaaaaaaaa", "apply_pending=operation_9"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	code, out, _ = runApply(t, st, "workflow", "status", "--json")
+	var got v1.WorkflowStateResponse
+	if err := json.Unmarshal([]byte(out), &got); err != nil || code != 0 || got.States[0].Holders != 2 || got.States[0].ApplyPending != "operation_9" || got.States[0].ConfigKey == "" {
+		t.Errorf("status json: %d %q %v", code, out, err)
 	}
 }

@@ -11,8 +11,7 @@ import (
 
 // The filters of §10.1 that apply to a Run today, in the order they are
 // evaluated. A Worker's verdict lists every one it fails, so the first is the
-// main reason. Environment, Workflow, isolation and the harness configuration
-// lock arrive with the milestones that define them.
+// main reason. Environment and isolation arrive with the milestones that define them.
 const (
 	FilterState        = "state"
 	FilterAvailability = "availability"
@@ -20,6 +19,7 @@ const (
 	FilterAvoid        = "avoid"
 	FilterCapabilities = "capabilities"
 	FilterHarness      = "harness"
+	FilterConfig       = "config"
 	FilterSecrets      = "secrets"
 	FilterResources    = "resources"
 	FilterConcurrency  = "concurrency"
@@ -48,6 +48,7 @@ var filters = []filter{
 	{FilterAvoid, checkAvoid},
 	{FilterCapabilities, checkCapabilities},
 	{FilterHarness, checkHarness},
+	{FilterConfig, checkConfig},
 	{FilterSecrets, checkSecrets},
 	{FilterResources, checkResources},
 	{FilterConcurrency, checkConcurrency},
@@ -168,6 +169,36 @@ func checkHarness(req Request, w Worker, _ time.Time) *Failure {
 		Code: domain.CodeHarnessUnavailable, Message: message,
 		Details: map[string]any{"harness": req.Harness, "mode": req.Mode, "modes": modes},
 	}
+}
+
+// checkConfig applies the configuration lock of §8.12 to a harness the Worker
+// does not isolate, where every Run reads the same global configuration: no
+// apply may wait for it, the Runs that hold it must need the same
+// configuration, and a Run with a Workflow needs the Worker to have applied
+// exactly that digest, whole and unedited. The reason says which one fails.
+func checkConfig(req Request, w Worker, _ time.Time) *Failure {
+	if req.Harness == "" || slices.Contains(w.Capabilities, domain.HarnessConfigIsolationCapability(req.Harness)) {
+		return nil
+	}
+	c := w.Configs[req.Harness]
+	switch {
+	case c.ApplyPending:
+		return &Failure{
+			Code: domain.CodeWorkerBusy, Message: fmt.Sprintf("an apply of the %s configuration waits for the Worker's Runs to end (apply_pending)", req.Harness),
+			Details: map[string]any{"reason": "apply_pending", "harness": req.Harness},
+		}
+	case c.Locked && c.Key != req.WorkflowDigest:
+		return &Failure{
+			Code: domain.CodeWorkerBusy, Message: fmt.Sprintf("the Worker's %s Runs hold another configuration (config_key mismatch)", req.Harness),
+			Details: map[string]any{"reason": "config_key", "harness": req.Harness, "held": c.Key, "wanted": req.WorkflowDigest},
+		}
+	case req.WorkflowDigest != "" && (c.Applied != req.WorkflowDigest || c.Partial || c.ManagedDrift):
+		return &Failure{
+			Code: domain.CodeNoEligibleWorker, Message: fmt.Sprintf("the Workflow of the Run is not applied globally for %s on the Worker", req.Harness),
+			Details: map[string]any{"reason": "workflow_not_applied", "harness": req.Harness, "applied": c.Applied, "wanted": req.WorkflowDigest, "partial": c.Partial, "drift": c.ManagedDrift},
+		}
+	}
+	return nil
 }
 
 // checkSecrets asks that every secret of the Run be allowed by its Project

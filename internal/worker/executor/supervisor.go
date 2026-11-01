@@ -282,6 +282,13 @@ func authID(k state.Key) string { return fmt.Sprintf("%s/%d", k.RunID, k.LeaseEp
 // started, in one transaction. It runs under the lock of the Run, so that a
 // stop is either before all of it or after all of it.
 func (e *Executor) begin(ctx context.Context, r state.Run) error {
+	// An apply may have come since the accept: the Run launches only with the
+	// global configuration it was accepted for, and the check and the launch go
+	// together under the lock of the harness. Nothing slow is under it: prepare is over.
+	return e.launchUnderGlobalConfig(ctx, r, func() error { return e.advanceAndStart(ctx, r) })
+}
+
+func (e *Executor) advanceAndStart(ctx context.Context, r state.Run) error {
 	now := e.clock.Now()
 	if err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 		return state.Advance(ctx, tx, r.Key, state.PhaseAccepted, state.PhaseStarting, now)

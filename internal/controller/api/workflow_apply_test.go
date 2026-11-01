@@ -600,3 +600,105 @@ func TestWorkflowApply_FailureInTheLastStepOfAReportRollsBackStateAndEvent(t *te
 		t.Errorf("order state = %s, want running", got.State)
 	}
 }
+
+// A real order on a harness the Worker does not isolate marks apply_pending in
+// the lock the status shows (§8.12); with no Run holding it the order is handed
+// over at once, and the mark is gone when the order closes. --no-wait travels
+// in the request and, with nobody holding the lock, changes nothing.
+func TestWorkflowApply_TheStatusShowsApplyPendingUntilTheOrderCloses(t *testing.T) {
+	f := newApplyFixture(t)
+	f.commit(0, "claude-code/a=one")
+
+	res := f.apply("alpha", "team", func(r *v1.ApplyWorkflowRequest) { r.NoWait = true })
+	if st := f.state("alpha"); st.ApplyPending != res.Apply.ID || st.Holders != 0 {
+		t.Fatalf("state = %+v, want apply_pending %s with no holders", st, res.Apply.ID)
+	}
+	o := f.order(f.alpha)
+	f.report(f.alpha, o)
+	if st := f.state("alpha"); st.ApplyPending != "" || st.ConfigKey != "" || st.Holders != 0 {
+		t.Fatalf("state after the order closed = %+v", st)
+	}
+}
+
+// holdConfig makes it as if a Run held the claude-code configuration of the
+// Worker: the lock is what --no-wait looks at.
+func (f *applyFixture) holdConfig(worker string, holders int) {
+	f.t.Helper()
+	id := f.state(worker).WorkerID
+	must(f.t, f.db.WithTx(f.t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(f.t.Context(),
+			`INSERT INTO config_locks (worker_id, harness, config_key, holders, updated_at) VALUES (?, 'claude-code', '', ?, 0)`, id, holders)
+		return err
+	}))
+}
+
+func TestWorkflowApply_RollbackNoWaitIsBusyWhileRunsHoldTheConfiguration(t *testing.T) {
+	f := newApplyFixture(t)
+	f.commit(0, "claude-code/a=one")
+	f.commit(1, "claude-code/a=uno")
+	f.apply("alpha", "team@1")
+	f.report(f.alpha, f.order(f.alpha))
+	f.apply("alpha", "team@2")
+	f.report(f.alpha, f.order(f.alpha))
+	f.holdConfig("alpha", 2)
+	orders := f.count("workflow_applies")
+
+	_, err := f.owner.RollbackWorkflow(t.Context(), v1.RollbackWorkflowRequest{Worker: "alpha", Harness: "claude-code", NoWait: true})
+	if codeOf(err) != domain.CodeWorkerBusy || !strings.Contains(err.Error(), "2 Runs") {
+		t.Fatalf("rollback --no-wait: %v", err)
+	}
+	if f.count("workflow_applies") != orders {
+		t.Error("a busy rollback made an order")
+	}
+	res, err := f.owner.RollbackWorkflow(t.Context(), v1.RollbackWorkflowRequest{Worker: "alpha", Harness: "claude-code"})
+	must(t, err)
+	if res.Apply == nil || res.Apply.Mode != "rollback" || res.Apply.Version != 1 {
+		t.Fatalf("rollback without --no-wait must queue: %+v", res)
+	}
+}
+
+func TestWorkflowSync_NoWaitSkipsTheBusyWorkersAndOrdersTheRest(t *testing.T) {
+	f := newApplyFixture(t)
+	f.commit(0, "claude-code/a=one")
+	f.apply("alpha", "team", func(r *v1.ApplyWorkflowRequest) { r.DryRun = true })
+	f.apply("beta", "team", func(r *v1.ApplyWorkflowRequest) { r.DryRun = true })
+	f.holdConfig("alpha", 3)
+	before := f.count("workflow_applies")
+
+	out, err := f.owner.SyncWorkflow(t.Context(), v1.SyncWorkflowRequest{Harness: "claude-code", Workflow: "team", NoWait: true})
+	must(t, err)
+	if len(out.Results) != 2 {
+		t.Fatalf("results = %+v", out.Results)
+	}
+	byWorker := map[string]v1.SyncWorkflowResult{}
+	for _, r := range out.Results {
+		byWorker[r.Worker] = r
+	}
+	if a := byWorker["alpha"]; a.Code != string(domain.CodeWorkerBusy) || a.Result.Apply != nil || !strings.Contains(a.Result.Reason, "3 Runs") {
+		t.Errorf("alpha = %+v, want busy with the holders", a)
+	}
+	if b := byWorker["beta"]; b.Code != "" || b.Result.Apply == nil || b.Result.Apply.State != "pending" {
+		t.Errorf("beta = %+v, want an order", b)
+	}
+	if n := f.count("workflow_applies"); n != before+1 {
+		t.Errorf("orders %d -> %d, want one more (beta's)", before, n)
+	}
+}
+
+func TestWorkerRemove_ClosesItsPendingOrdersAndDropsItsConfigLocks(t *testing.T) {
+	f := newApplyFixture(t)
+	f.commit(0, "claude-code/a=one")
+	res := f.apply("alpha", "team")
+	if f.state("alpha").ApplyPending != res.Apply.ID || f.count("config_locks") != 1 {
+		t.Fatalf("setup: state %+v, locks %d", f.state("alpha"), f.count("config_locks"))
+	}
+
+	_, err := f.owner.RemoveWorker(t.Context(), "alpha")
+	must(t, err)
+	if n := f.count("config_locks"); n != 0 {
+		t.Errorf("%d config locks survive the removal", n)
+	}
+	if got, _ := f.owner.WorkflowApply(t.Context(), res.Apply.ID); got.State != "superseded" {
+		t.Errorf("order state = %s, want superseded", got.State)
+	}
+}

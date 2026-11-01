@@ -77,6 +77,10 @@ type ApplyWorkflowRequest struct {
 	// ExpectedPreview is the plan Digest of a previous dry run (see
 	// WorkflowApplyOrder.ExpectedPreview).
 	ExpectedPreview string `json:"expected_preview,omitempty"`
+	// NoWait: fail with CF_WORKER_BUSY, creating no order, if Runs hold the
+	// configuration lock of a harness the Worker does not isolate (§8.12),
+	// instead of leaving the order waiting for them. A dry run never waits.
+	NoWait bool `json:"no_wait,omitempty"`
 }
 
 // RollbackWorkflowRequest is POST /v1/workflow-applies/rollback: reapply the
@@ -89,6 +93,10 @@ type RollbackWorkflowRequest struct {
 	Components []string `json:"components,omitempty"`
 	Force      bool     `json:"force,omitempty"`
 	DryRun     bool     `json:"dry_run,omitempty"`
+	// NoWait: fail with CF_WORKER_BUSY, creating no order, if Runs hold the
+	// configuration lock of a harness the Worker does not isolate (§8.12),
+	// instead of leaving the order waiting for them. A dry run never waits.
+	NoWait bool `json:"no_wait,omitempty"`
 }
 
 // SyncWorkflowRequest is POST /v1/workflow-applies/sync: apply Workflow
@@ -100,12 +108,18 @@ type SyncWorkflowRequest struct {
 	Components []string `json:"components,omitempty"`
 	Force      bool     `json:"force,omitempty"`
 	DryRun     bool     `json:"dry_run,omitempty"`
+	// NoWait: do not leave the order waiting for the Runs that hold the
+	// configuration lock of a harness the Worker does not isolate (§8.12): that
+	// Worker gets no order and its result carries CF_WORKER_BUSY; the others get
+	// theirs. A dry run never waits.
+	NoWait bool `json:"no_wait,omitempty"`
 }
 
 // ApplyWorkflowResponse answers an apply or rollback. The Controller always
 // makes an order (Apply is set): whether it changes anything is for the Worker
-// to say, from a fresh plan, in the plan of the result (noop). Noop and Reason
-// are kept for compatibility and are always empty.
+// to say, from a fresh plan, in the plan of the result (noop). Noop is kept for
+// compatibility and is always false; Reason is set only on the result of a
+// --no-wait sync for a busy Worker.
 type ApplyWorkflowResponse struct {
 	Noop   bool           `json:"noop"`
 	Reason string         `json:"reason,omitempty"`
@@ -117,6 +131,9 @@ type SyncWorkflowResult struct {
 	Worker   string                `json:"worker"`
 	WorkerID string                `json:"worker_id"`
 	Result   ApplyWorkflowResponse `json:"result"`
+	// Code is CF_WORKER_BUSY when a --no-wait sync skipped this Worker because
+	// Runs hold its configuration (Result.Reason says how many); empty otherwise.
+	Code string `json:"code,omitempty"`
 }
 
 // SyncWorkflowResponse is the answer to a sync, by Worker.
@@ -148,9 +165,16 @@ type WorkflowState struct {
 	// AppliedDigest is not fully what the Worker holds.
 	Partial bool `json:"partial"`
 	// Skipped names the components still not applied, skipped for drift.
-	Skipped   []string       `json:"skipped"`
-	Latest    *WorkflowApply `json:"latest,omitempty"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	Skipped []string `json:"skipped"`
+	// ConfigKey, Holders and ApplyPending are the configuration lock (§8.12) of
+	// a harness the Worker does not isolate: the digest of the Workflow the
+	// Runs holding it need ("" for none), how many hold it, and the real
+	// order waiting for them to end ("" for none). Zero for an isolated harness.
+	ConfigKey    string         `json:"config_key,omitempty"`
+	Holders      int            `json:"holders,omitempty"`
+	ApplyPending string         `json:"apply_pending,omitempty"`
+	Latest       *WorkflowApply `json:"latest,omitempty"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // WorkflowStateResponse is GET /v1/workflow-state.

@@ -92,6 +92,10 @@ type Options struct {
 	// other Run an empty one.
 	ConfigSource ConfigSource
 	Workflows    WorkflowClient
+	// GlobalConfig is the global configuration of the harnesses without
+	// ConfigIsolation. Nil gives a Worker that refuses a Run that froze a
+	// Workflow for one.
+	GlobalConfig GlobalConfig
 	Paths        config.Paths
 	Clock        clock.Clock
 	Log          *slog.Logger

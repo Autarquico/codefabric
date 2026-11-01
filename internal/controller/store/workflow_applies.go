@@ -139,12 +139,25 @@ func (t *Tx) SupersedeWorkflowApplies(ctx context.Context, worker domain.ID, har
 			ApplySuperseded, at.UnixNano(), string(live.ID)); err != nil {
 			return nil, fmt.Errorf("store: superseding workflow apply: %w", err)
 		}
+		if err := t.clearApplyPending(ctx, live.ID, at); err != nil {
+			return nil, err
+		}
 		live.State, live.UpdatedAt = ApplySuperseded, at
 		if out == nil {
 			out = &live
 		}
 	}
 	return out, nil
+}
+
+// SupersedeWorkerApplies closes every order still alive on a Worker that leaves
+// for good: nobody is left to run or report them.
+func (t *Tx) SupersedeWorkerApplies(ctx context.Context, worker domain.ID, at time.Time) error {
+	if _, err := t.Exec(ctx, `UPDATE workflow_applies SET state = ?, updated_at = ? WHERE worker_id = ? AND state IN ('pending', 'running')`,
+		ApplySuperseded, at.UnixNano(), string(worker)); err != nil {
+		return fmt.Errorf("store: superseding the workflow applies of a Worker: %w", err)
+	}
+	return nil
 }
 
 type lane struct{ dryRun, pendingOnly bool }
@@ -204,12 +217,14 @@ func LiveWorkflowAppliesOf(ctx context.Context, q Querier, worker domain.ID) ([]
 		applySelect+` WHERE a.worker_id = ? AND a.state IN ('pending', 'running') ORDER BY a.created_at, a.id`, string(worker))
 }
 
-// StartWorkflowApplies marks the pending orders of the Worker as running: the
-// Worker has been handed them.
-func (t *Tx) StartWorkflowApplies(ctx context.Context, worker domain.ID, at time.Time) error {
-	if _, err := t.Exec(ctx, `UPDATE workflow_applies SET state = ?, updated_at = ? WHERE worker_id = ? AND state = ?`,
-		ApplyRunning, at.UnixNano(), string(worker), ApplyPending); err != nil {
-		return fmt.Errorf("store: starting workflow applies: %w", err)
+// StartWorkflowApplies marks the given pending orders as running: the Worker
+// has been handed them.
+func (t *Tx) StartWorkflowApplies(ctx context.Context, ids []domain.ID, at time.Time) error {
+	for _, id := range ids {
+		if _, err := t.Exec(ctx, `UPDATE workflow_applies SET state = ?, updated_at = ? WHERE id = ? AND state = ?`,
+			ApplyRunning, at.UnixNano(), string(id), ApplyPending); err != nil {
+			return fmt.Errorf("store: starting workflow apply: %w", err)
+		}
 	}
 	return nil
 }
@@ -229,7 +244,42 @@ func (t *Tx) FinishWorkflowApply(ctx context.Context, id domain.ID, generation i
 	if err != nil {
 		return false, fmt.Errorf("store: finishing workflow apply: %w", err)
 	}
-	return rowsChanged(r)
+	changed, err := rowsChanged(r)
+	if err != nil || !changed {
+		return changed, err
+	}
+	return true, t.clearApplyPending(ctx, id, at)
+}
+
+// FailStuckWorkflowApplies fails the real orders still alive that have not moved
+// since before, with result as their outcome, and clears the apply_pending they
+// held: a Worker that never reports must not keep its harness shut for good. An
+// order held back for the Runs of its lock is waiting, not stuck: it is never
+// failed while they hold it, and its time counts from when the last let go. It
+// returns the orders it failed.
+func (t *Tx) FailStuckWorkflowApplies(ctx context.Context, before time.Time, result []byte, at time.Time) ([]domain.ID, error) {
+	rows, err := collect(ctx, t, func(r rowScanner) (string, error) {
+		var id string
+		return id, r.Scan(&id)
+	}, `SELECT w.id FROM workflow_applies w LEFT JOIN config_locks l ON l.apply_pending_id = w.id
+	    WHERE w.dry_run = 0 AND w.state IN ('pending', 'running') AND COALESCE(l.holders, 0) = 0
+	      AND MAX(w.updated_at, COALESCE(l.updated_at, 0)) < ?
+	    ORDER BY w.created_at, w.id`, before.UnixNano())
+	if err != nil {
+		return nil, err
+	}
+	failed := make([]domain.ID, 0, len(rows))
+	for _, id := range rows {
+		if _, err := t.Exec(ctx, `UPDATE workflow_applies SET state = ?, result = ?, updated_at = ? WHERE id = ?`,
+			ApplyFailed, string(result), at.UnixNano(), id); err != nil {
+			return nil, fmt.Errorf("store: failing a stuck workflow apply: %w", err)
+		}
+		if err := t.clearApplyPending(ctx, domain.ID(id), at); err != nil {
+			return nil, err
+		}
+		failed = append(failed, domain.ID(id))
+	}
+	return failed, nil
 }
 
 const stateColumns = `worker_id, harness, COALESCE(applied_workflow_id, ''), applied_version, applied_digest, components, previous_version, drift, skipped, updated_at`

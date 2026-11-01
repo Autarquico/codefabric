@@ -188,24 +188,41 @@ type Reservation struct {
 	CreatedAt     time.Time
 	ReleasedAt    *time.Time
 	ReleaseReason string
+	// ConfigHarness is the harness whose configuration lock (§8.12) the
+	// reservation holds on its Worker, "" for none.
+	ConfigHarness string
 }
 
 // InsertReservation opens the reservation of a lease.
 func (t *Tx) InsertReservation(ctx context.Context, r Reservation) error {
 	_, err := t.Exec(ctx,
-		`INSERT INTO reservations (lease_id, run_id, worker_id, cpu, memory_mb, disk_mb, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		string(r.LeaseID), string(r.RunID), string(r.WorkerID), r.Amount.CPU, r.Amount.MemoryMB, r.Amount.DiskMB, r.CreatedAt.UnixNano())
+		`INSERT INTO reservations (lease_id, run_id, worker_id, cpu, memory_mb, disk_mb, created_at, config_harness)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		string(r.LeaseID), string(r.RunID), string(r.WorkerID), r.Amount.CPU, r.Amount.MemoryMB, r.Amount.DiskMB, r.CreatedAt.UnixNano(),
+		nullable(r.ConfigHarness))
 	if err != nil {
 		return fmt.Errorf("store: inserting reservation: %w", err)
 	}
 	return nil
 }
 
-// ReleaseReservation closes the open reservation of a lease.
+// ReleaseReservation closes the open reservation of a lease and gives back the
+// configuration lock it held, if any (§8.12). Every path that frees a
+// reservation goes through here, so the lock cannot outlive it.
 func (t *Tx) ReleaseReservation(ctx context.Context, lease domain.ID, reason string, at time.Time) error {
 	res, err := t.Exec(ctx,
 		`UPDATE reservations SET released_at = ?, release_reason = ? WHERE lease_id = ? AND released_at IS NULL`,
 		at.UnixNano(), reason, string(lease))
-	return changedOne(res, err, "releasing reservation")
+	if err := changedOne(res, err, "releasing reservation"); err != nil {
+		return err
+	}
+	var worker string
+	var harness sql.NullString
+	if err := t.QueryRow(ctx, `SELECT worker_id, config_harness FROM reservations WHERE lease_id = ?`, string(lease)).Scan(&worker, &harness); err != nil {
+		return fmt.Errorf("store: reading released reservation: %w", err)
+	}
+	if !harness.Valid {
+		return nil
+	}
+	return t.releaseConfigLock(ctx, domain.ID(worker), harness.String, at)
 }

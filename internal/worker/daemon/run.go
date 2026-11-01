@@ -179,16 +179,18 @@ func Run(ctx context.Context, o Options) error {
 			return err
 		}
 	}
+	ap := d.applier(ctx, o, eo.Host, c)
+	eo.GlobalConfig = ap
 	ex, err := executor.New(eo)
 	if err != nil {
 		return err
 	}
+	ap.WatchRuns(ex)
 	if p, ok := eo.Runtime.(cfruntime.AttachBinaryProvider); ok {
 		if name, path := p.AttachBinary(); name != "" {
 			d.attachBinaries = map[string]string{name: path}
 		}
 	}
-	ap := d.applier(ctx, o, eo.Host, c)
 	g, gctx := errgroup.WithContext(ctx)
 	takeApplies := d.takeApplies(gctx, g, ap)
 	d.onResponse = func(r v1.HeartbeatResponse) {

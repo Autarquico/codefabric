@@ -101,23 +101,46 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 // workflowOrders are the live orders to apply Workflow configuration to the
 // Worker (§8.6). Handing a pending one over makes it running; a running one
 // is handed again, until the Worker reports or a newer order supersedes it.
+// A real order that waits for the configuration lock of its harness (§8.12)
+// is held back while Runs still hold the lock, and handed over once none does.
 func workflowOrders(ctx context.Context, tx *store.Tx, worker domain.ID, now time.Time) ([]v1.WorkflowApplyOrder, error) {
 	live, err := store.LiveWorkflowAppliesOf(ctx, tx, worker)
 	if err != nil || len(live) == 0 {
 		return nil, err
 	}
-	if err := tx.StartWorkflowApplies(ctx, worker, now); err != nil {
+	locks, err := store.ConfigLocks(ctx, tx, worker)
+	if err != nil {
 		return nil, err
 	}
+	holders := map[string]store.ConfigLock{}
+	for _, l := range locks {
+		if l.Holders > 0 {
+			holders[l.Harness] = l
+		}
+	}
 	out := make([]v1.WorkflowApplyOrder, 0, len(live))
+	var started []domain.ID
 	for _, a := range live {
+		// No real order goes to a harness whose lock Runs still hold, whether or not
+		// the lock names it: it would rewrite the configuration under them.
+		if l, busy := holders[a.Harness]; busy && !a.DryRun {
+			if l.ApplyPending == "" {
+				if err := tx.SetApplyPending(ctx, worker, a.Harness, a.ID, now); err != nil {
+					return nil, err
+				}
+				l.ApplyPending = a.ID
+				holders[a.Harness] = l
+			}
+			continue
+		}
+		started = append(started, a.ID)
 		out = append(out, v1.WorkflowApplyOrder{
 			ID: string(a.ID), Generation: a.Generation, Harness: a.Harness, Workflow: a.WorkflowName, Version: a.Version,
 			Digest: a.Digest, Components: a.Components, Mode: a.Mode, Force: a.Force, DryRun: a.DryRun,
 			ExpectedPreview: a.ExpectedPreview,
 		})
 	}
-	return out, nil
+	return out, tx.StartWorkflowApplies(ctx, started, now)
 }
 
 func (s *Service) applyHeartbeat(ctx context.Context, tx *store.Tx, act mutation.Act, w *store.Worker, req v1.HeartbeatRequest) error {

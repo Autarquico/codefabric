@@ -35,6 +35,23 @@ type Worker struct {
 	// Secrets are the refs the Worker last announced, each with the Projects
 	// it holds the ref for (none: any Project). Only refs, never values.
 	Secrets map[string][]string
+	// Configs is the global configuration of each harness the Worker does not
+	// isolate (§8.12), by harness: its lock and the Workflow it has applied.
+	Configs map[string]HarnessConfig
+}
+
+// HarnessConfig is what the Worker holds of the global configuration of one
+// harness. Locked says that Runs hold the lock, for the configuration Key (the
+// digest of their Workflow, "" for none); ApplyPending that an apply waits for
+// it. Applied is the digest of the Workflow applied, Partial that components
+// were skipped for drift and ManagedDrift that a managed component was edited.
+type HarnessConfig struct {
+	Locked       bool
+	Key          string
+	ApplyPending bool
+	Applied      string
+	Partial      bool
+	ManagedDrift bool
 }
 
 // Request is what a Run asks of the Worker that takes it: its placement and,
@@ -44,6 +61,9 @@ type Request struct {
 	domain.Placement
 	Project    domain.ID
 	NotAllowed []string
+	// WorkflowDigest is the digest of the Workflow the Run froze, "" for none:
+	// it is the Run's configuration key (§8.12).
+	WorkflowDigest string
 }
 
 // NewRequest judges the Run's secrets against the allowlist of its Project,
