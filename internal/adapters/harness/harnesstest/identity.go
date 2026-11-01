@@ -95,8 +95,14 @@ func checkInstall(t *testing.T, f Fixture) {
 		isUnsupported(t, "Install", plan, err)
 		return
 	}
-	if err != nil {
+	if errors.Is(err, harness.ErrUnsupported) {
 		t.Fatalf("Install with DryRun, declared: %v", err)
+	}
+	if err != nil { // the bare host may lack the installer's tools: no plan, a reason
+		if len(plan.Steps) != 0 {
+			t.Errorf("Install with DryRun failed with %d steps planned: %v", len(plan.Steps), err)
+		}
+		return
 	}
 	if len(plan.Steps) == 0 {
 		t.Error("Install with DryRun planned no step")

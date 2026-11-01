@@ -65,7 +65,7 @@ func RunDoctor(ctx context.Context, o DoctorOptions) ([]v1.ComponentHealth, erro
 		}
 	}
 	if opts.Adapters == nil {
-		opts.Adapters = []harness.Adapter{command.Adapter{}, codex.Adapter{}, claude.Adapter{}}
+		opts.Adapters = doctor.Offered(o.Paths, []harness.Adapter{command.Adapter{}, codex.Adapter{}, claude.Adapter{}})
 	}
 	if opts.Worker == "" {
 		hostname, _ := os.Hostname()

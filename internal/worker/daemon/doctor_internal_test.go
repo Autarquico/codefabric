@@ -187,3 +187,32 @@ func TestControllerComponent_AControllerThatDoesNotAnswerFailsAtTheDeadline(t *t
 		t.Fatal("the probe was not cut at the deadline")
 	}
 }
+
+func TestWithComponents_ReportsSetupFailingWhileTheJoinIsPending(t *testing.T) {
+	pending := true
+	d := doctored(t, func(context.Context) error { return nil })
+	h, err := localhost.New(localhost.Options{Home: t.TempDir(), Env: os.Environ()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.doctor = doctor.New(doctor.Options{
+		Host: h, DataDir: t.TempDir(), Git: "true", Runtime: func(context.Context) error { return nil },
+		Disk:         func(string) (sysinfo.Disk, error) { return sysinfo.Disk{FreeBytes: 50, TotalBytes: 100}, nil },
+		SetupPending: func() bool { return pending },
+	})
+	got := d.withComponents(t.Context(), v1.Health{Status: v1.HealthOK})
+	var setup *v1.ComponentHealth
+	for i, c := range got.Components {
+		if c.Name == "setup" {
+			setup = &got.Components[i]
+		}
+	}
+	if got.Status != v1.HealthDegraded || setup == nil || setup.Status != v1.ComponentFail || setup.Action != "cf worker join --resume" {
+		t.Fatalf("health = %+v", got)
+	}
+	pending = false
+	d.clock.(*clock.Fake).Advance(time.Minute)
+	if got := d.withComponents(t.Context(), v1.Health{Status: v1.HealthOK}); got.Status != v1.HealthOK {
+		t.Fatalf("after the join: %+v", got)
+	}
+}

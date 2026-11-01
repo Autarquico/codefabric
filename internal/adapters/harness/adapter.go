@@ -107,6 +107,9 @@ type Detection struct {
 type InstallOptions struct {
 	// DryRun returns the plan without running it or changing the host.
 	DryRun bool
+	// Out receives what the steps print, stdout then stderr of each step once
+	// it ends (Host.Run is not streaming). Nil discards it.
+	Out io.Writer
 }
 
 // InstallPlan is the steps of an install, in order.
