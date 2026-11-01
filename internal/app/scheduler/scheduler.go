@@ -403,6 +403,7 @@ func snapshot(workers []store.Worker, misses []store.Miss, configs map[domain.ID
 			Unreconciled: !startedAt.IsZero() && w.LiveLeases > 0 && !w.ReconciledSince(startedAt),
 			Secrets:      secretsOf(held[w.ID]),
 			Configs:      harnessConfigs(configs[w.ID]),
+			Components:   w.Health.Components,
 		}
 		for _, m := range misses {
 			if m.RunID == run && m.WorkerID == w.ID {

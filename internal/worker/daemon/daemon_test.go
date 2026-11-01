@@ -21,6 +21,7 @@ import (
 	controllerdaemon "github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/daemon"
+	"github.com/Autarquico/codefabric/internal/worker/doctor"
 	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
 )
 
@@ -97,6 +98,10 @@ func (c *controller) join(name string, paths config.Paths) {
 	}
 	if _, err := daemon.Join(c.t.Context(), daemon.JoinOptions{Paths: paths, Invitation: res.Invite, Name: name}); err != nil {
 		c.t.Fatalf("Join: %v", err)
+	}
+	// The disk of the machine running the tests must not degrade the Worker.
+	if err := doctor.SaveSettings(paths, doctor.Settings{DiskMinFree: "1MiB"}); err != nil {
+		c.t.Fatal(err)
 	}
 }
 

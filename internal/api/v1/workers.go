@@ -38,10 +38,37 @@ const (
 	HealthDegraded = "degraded"
 )
 
-// Health is the daemon's own verdict on its machine.
+// Component health statuses (§9.4).
+const (
+	ComponentOK   = "ok"
+	ComponentWarn = "warn"
+	ComponentFail = "fail"
+)
+
+// Health is the daemon's own verdict on its machine. Status is the summary:
+// degraded when any component fails. Components is the doctor's verdict per
+// component; a daemon that predates it sends none, and then Status alone
+// decides (§9.5).
 type Health struct {
+	Status     string            `json:"status"`
+	Message    string            `json:"message,omitempty"`
+	Components []ComponentHealth `json:"components,omitempty"`
+}
+
+// MaxHealthText is the longest Name, Message or Action of a component, and
+// Message of a Health, in bytes, that the Controller accepts in a heartbeat.
+const MaxHealthText = 256
+
+// ComponentHealth is one check of the doctor. Name is "controller", "runtime",
+// "git", "disk", "version" (global: a failure keeps every Run off the Worker)
+// or "harness:<id>", "auth:<id>", "workflow:<id>" (a failure keeps off only
+// the Runs of harness <id>). Action is what a person does to fix it, never a
+// secret.
+type ComponentHealth struct {
+	Name    string `json:"name"`
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
+	Action  string `json:"action,omitempty"`
 }
 
 // HeartbeatRequest is POST /v1/worker/heartbeat (§5.3). It carries no Worker

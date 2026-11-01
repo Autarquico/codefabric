@@ -238,7 +238,8 @@ func (c *Cluster) joinWorker(name string) *Worker {
 	c.t.Helper()
 	w := &Worker{Name: name, Box: c.H.Box(name)}
 	invite := strings.TrimSpace(c.mustCF(c.Ctl, "controller", "token", "create", "--worker").Stdout)
-	join := []string{"worker", "join", invite, "--name", name}
+	// A small --disk-min-free: the disk of the CI machine must not degrade a Worker.
+	join := []string{"worker", "join", invite, "--name", name, "--disk-min-free", "1MiB"}
 	if c.Opts.MaxConcurrent > 0 {
 		join = append(join, "--max-concurrent", strconv.Itoa(c.Opts.MaxConcurrent))
 	}

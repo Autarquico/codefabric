@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -29,7 +30,14 @@ func cf(t *testing.T, stdin string, args ...string) (code int, stdout, stderr st
 	return code, out.String(), errOut.String()
 }
 
+// testDiskMinFree is the disk a test Worker needs free: little, so that the
+// disk of the machine running the tests cannot make a Worker degraded.
+const testDiskMinFree = "1MiB"
+
 func cliRun(stdout, stderr io.Writer, stdin string, args []string) int {
+	if len(args) > 1 && args[0] == "worker" && args[1] == "join" && !slices.Contains(args, "--disk-min-free") {
+		args = append(slices.Clone(args), "--disk-min-free", testDiskMinFree)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	return cli.RunContextWith(ctx, options(), args, strings.NewReader(stdin), stdout, stderr, daemon.Command(), workerdaemon.Command())

@@ -47,3 +47,13 @@ func TestMemTotalBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestDiskOfReportsFreeSpaceWithinTheTotal(t *testing.T) {
+	d, err := DiskOf(filepath.Join(t.TempDir(), "not", "yet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.TotalBytes == 0 || d.FreeBytes == 0 || d.FreeBytes > d.TotalBytes {
+		t.Errorf("implausible disk: %+v", d)
+	}
+}

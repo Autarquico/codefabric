@@ -8,13 +8,13 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
@@ -28,19 +28,13 @@ import (
 // premise of §8.12. fakeharness cannot carry the Workflow these scenarios
 // need: `cf workflow adopt` only reads codex and claude. Detect and Version
 // are answered without a binary, and the holdRuntime never launches one.
-type sharedHarness struct{ codex.Adapter }
+type sharedHarness struct{ installedCodex }
 
 func (sharedHarness) Capabilities() harness.Capabilities {
-	c := codex.Adapter{}.Capabilities()
+	c := installedCodex{}.Capabilities()
 	c.ConfigIsolation = false
 	return c
 }
-
-func (sharedHarness) Detect(context.Context, harness.Host) (harness.Detection, error) {
-	return harness.Detection{Installed: true, Path: "/usr/bin/true"}, nil
-}
-
-func (sharedHarness) Version(context.Context, harness.Host) (string, error) { return "0.0.0", nil }
 
 func (sharedHarness) Start(_ context.Context, _ harness.Host, _ harness.RunSpec) (harness.Launch, error) {
 	return harness.Launch{Argv: []string{"/usr/bin/true"}}, nil
@@ -103,6 +97,7 @@ func newLockFixture(t *testing.T, withWorkflow bool) *lockFixture {
 	boxMachine := machine(t)
 	ok[map[string]any](t, "worker", "join", invite, "--name", "alpha")
 	f.box = t.TempDir()
+	writeCodex(t, filepath.Join(f.box, ".codex"), "auth.json", `{"tokens":{"access_token":"`+authSecret+`"}}`) // logged in: the doctor says online
 	t.Setenv("HOME", f.box)
 	t.Setenv("CODEX_HOME", "")
 

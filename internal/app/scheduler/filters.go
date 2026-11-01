@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -14,6 +15,7 @@ import (
 // main reason. Environment and isolation arrive with the milestones that define them.
 const (
 	FilterState        = "state"
+	FilterHealth       = "health"
 	FilterAvailability = "availability"
 	FilterRequire      = "require"
 	FilterAvoid        = "avoid"
@@ -43,6 +45,7 @@ type filter struct {
 
 var filters = []filter{
 	{FilterState, checkState},
+	{FilterHealth, checkHealth},
 	{FilterAvailability, checkAvailability},
 	{FilterRequire, checkRequire},
 	{FilterAvoid, checkAvoid},
@@ -80,8 +83,12 @@ func failures(req Request, w Worker, now time.Time) []Failure {
 	return failed
 }
 
+// checkState lets an online Worker through, and a degraded one whose doctor
+// reported a failing component: checkHealth then decides whether that failure
+// concerns the Run (§9.5). Degraded without a reported failure (an old daemon,
+// a version out of policy it cannot name) takes no Runs.
 func checkState(_ Request, w Worker, _ time.Time) *Failure {
-	if w.State == domain.WorkerOnline {
+	if w.State == domain.WorkerOnline || w.State == domain.WorkerDegraded && failingComponent(w.Components, func(string) bool { return true }) != nil {
 		return nil
 	}
 	code := domain.CodeNoEligibleWorker
@@ -92,6 +99,41 @@ func checkState(_ Request, w Worker, _ time.Time) *Failure {
 		Code: code, Message: fmt.Sprintf("worker is %s: only an online Worker takes Runs", w.State),
 		Details: map[string]any{"state": string(w.State)},
 	}
+}
+
+// checkHealth keeps a Run off a Worker with a failing component that concerns
+// it: any global one (controller, runtime, git, disk, version, daemon) or one of the
+// Run's harness (harness:<id>, auth:<id>, workflow:<id>). Those of other
+// harnesses are no reason.
+func checkHealth(req Request, w Worker, _ time.Time) *Failure {
+	c := failingComponent(w.Components, func(name string) bool { return concerns(name, req.Harness) })
+	if c == nil {
+		return nil
+	}
+	return &Failure{
+		Code: domain.CodeNoEligibleWorker, Message: c.Name + ": " + c.Message,
+		Details: map[string]any{"component": c.Name, "action": c.Action},
+	}
+}
+
+func failingComponent(components []v1.ComponentHealth, concerning func(string) bool) *v1.ComponentHealth {
+	for i, c := range components {
+		if c.Status == v1.ComponentFail && concerning(c.Name) {
+			return &components[i]
+		}
+	}
+	return nil
+}
+
+// concerns says whether the component named affects the Runs of harness: the
+// per-harness ones only those of their harness, every other one all Runs.
+func concerns(name, harness string) bool {
+	for _, prefix := range []string{"harness:", "auth:", "workflow:"} {
+		if id, ok := strings.CutPrefix(name, prefix); ok {
+			return id == harness
+		}
+	}
+	return true
 }
 
 // checkAvailability: a manual Worker takes only the Runs that name it, and

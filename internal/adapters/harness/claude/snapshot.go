@@ -182,7 +182,7 @@ func readFiles(root string, l layout) ([]harness.File, bool, error) {
 			return err
 		}
 		if !d.Type().IsRegular() {
-			return fmt.Errorf("%s is not a regular file", p)
+			return fmt.Errorf("%q is not a regular file", p)
 		}
 		info, err := d.Info()
 		if err != nil {

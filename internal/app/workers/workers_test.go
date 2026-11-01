@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -303,7 +304,7 @@ func TestHealth_ADaemonThatReportsItselfDegradedIsDegraded(t *testing.T) {
 	if got := e.beat(w, request(epoch, sick)); got != domain.WorkerDegraded {
 		t.Errorf("registered sick: %s", got)
 	}
-	if got := e.worker("box").Health; got != (v1.Health{Status: v1.HealthDegraded, Message: "disk full"}) {
+	if got := e.worker("box").Health; !reflect.DeepEqual(got, v1.Health{Status: v1.HealthDegraded, Message: "disk full"}) {
 		t.Errorf("health = %+v", got)
 	}
 	if got := e.beat(w, request(epoch)); got != domain.WorkerOnline {
@@ -397,9 +398,14 @@ func TestHeartbeat_Validation(t *testing.T) {
 		"empty capability":        func(r *v1.HeartbeatRequest) { r.Capabilities = []string{""} },
 		"capability with a space": func(r *v1.HeartbeatRequest) { r.Capabilities = []string{"docker compose"} },
 		"too many capabilities":   func(r *v1.HeartbeatRequest) { r.Capabilities = make([]string, 65) },
-		"too many cpus":           func(r *v1.HeartbeatRequest) { r.Total.CPU = 4097 },
-		"too much memory":         func(r *v1.HeartbeatRequest) { r.Total.MemoryMB = 1<<40 + 1 },
-		"too much disk":           func(r *v1.HeartbeatRequest) { r.Total.DiskMB = 1<<40 + 1 },
+		"unnamed component":       func(r *v1.HeartbeatRequest) { r.Health.Components = []v1.ComponentHealth{{Status: v1.ComponentOK}} },
+		"unknown component state": func(r *v1.HeartbeatRequest) {
+			r.Health.Components = []v1.ComponentHealth{{Name: "disk", Status: "bad"}}
+		},
+		"too many components": func(r *v1.HeartbeatRequest) { r.Health.Components = make([]v1.ComponentHealth, 65) },
+		"too many cpus":       func(r *v1.HeartbeatRequest) { r.Total.CPU = 4097 },
+		"too much memory":     func(r *v1.HeartbeatRequest) { r.Total.MemoryMB = 1<<40 + 1 },
+		"too much disk":       func(r *v1.HeartbeatRequest) { r.Total.DiskMB = 1<<40 + 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := e.svc.Heartbeat(t.Context(), w, request(newEpoch(), mutate))
@@ -909,4 +915,34 @@ func TestRunSweeper_EndsWithItsContext(t *testing.T) {
 	e := newEnv(t, controllerVersion)
 	stop := e.startSweeper()
 	stop() // returns only if RunSweeper does
+}
+
+func TestHeartbeat_AnIncompatibleDaemonWithComponentsGetsTheVersionComponentFailed(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	w := e.join("box")
+	components := func(r *v1.HeartbeatRequest) {
+		r.Health.Components = []v1.ComponentHealth{{Name: "disk", Status: v1.ComponentOK}, {Name: "version", Status: v1.ComponentOK}}
+	}
+	if got := e.beat(w, request(newEpoch(), withVersion("v0.1.0"), components)); got != domain.WorkerDegraded {
+		t.Fatalf("state = %s", got)
+	}
+	var version []v1.ComponentHealth
+	for _, c := range e.worker("box").Health.Components {
+		if c.Name == "version" {
+			version = append(version, c)
+		}
+	}
+	if len(version) != 1 || version[0].Status != v1.ComponentFail {
+		t.Errorf("version components = %+v", version)
+	}
+
+	// A compatible daemon keeps what it said; an old one, with none, stays without.
+	e.beat(w, request(newEpoch(), components))
+	if got := e.worker("box").Health.Components; len(got) != 2 || got[1].Status != v1.ComponentOK {
+		t.Errorf("components = %+v", got)
+	}
+	e.beat(w, request(newEpoch(), withVersion("v0.1.0")))
+	if got := e.worker("box").Health.Components; len(got) != 0 {
+		t.Errorf("an old daemon got components: %+v", got)
+	}
 }

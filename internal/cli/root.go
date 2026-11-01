@@ -49,6 +49,9 @@ type Options struct {
 	applyPoll  time.Duration
 	// environmentStore does the same for the environment commands.
 	environmentStore func(*cobra.Command) (environmentStore, error)
+	// doctorStore and sshProbe replace the Controller client and the ssh of `cf doctor` in tests.
+	doctorStore func(*cobra.Command) (doctorStore, error)
+	sshProbe    sshProbe
 }
 
 // Execute runs the cf command tree, plus any extra top-level commands the
@@ -182,7 +185,8 @@ func newRootCmd(opts Options) *cobra.Command {
 	root.AddCommand(newVersionCmd(), newStatusCmd(), newConnectCmd(), newClientCmd(), newConfigCmd(),
 		newProjectCmd(), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd(),
 		newAttachCmd(opts.Terminal), newPsCmd(), newEventsCmd(), newLogsCmd(),
-		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)))
+		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)),
+		newDoctorCmd(openDoctorStore(opts), probeOf(opts)))
 	return root
 }
 

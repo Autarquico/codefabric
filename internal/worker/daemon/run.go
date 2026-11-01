@@ -30,6 +30,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/support/envutil"
 	"github.com/Autarquico/codefabric/internal/worker/applier"
 	"github.com/Autarquico/codefabric/internal/worker/authsync"
+	"github.com/Autarquico/codefabric/internal/worker/doctor"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/host"
@@ -74,6 +75,11 @@ type Options struct {
 	// Harnesses replace the adapters this Worker offers, for tests; nil is
 	// the default set, which is `command`.
 	Harnesses []harness.Adapter
+	// DiskMinFree is the free disk below which this Worker fails (20% or 50GiB);
+	// empty reads the Worker config, then 20%.
+	DiskMinFree string
+	// DoctorEvery replaces the minute between runs of the doctor, for tests.
+	DoctorEvery time.Duration
 }
 
 // runtimeModes are the modes the Runtime runs a harness in: tmux gives an
@@ -178,6 +184,9 @@ func Run(ctx context.Context, o Options) error {
 		if eo.Harnesses, eo.Withheld, d.capabilities, err = d.announce(ctx, eo.Host, adapters); err != nil {
 			return err
 		}
+	}
+	if err := d.startDoctor(ctx, o); err != nil {
+		return err
 	}
 	ap := d.applier(ctx, o, eo.Host, c)
 	eo.GlobalConfig = ap
@@ -343,6 +352,11 @@ type daemon struct {
 	stateDB    *state.DB
 	secrets    secrets.Store
 
+	doctor      *doctor.Doctor // nil: the machine is not checked
+	doctorEvery time.Duration
+	doctorAt    time.Time
+	components  []v1.ComponentHealth
+
 	capabilities   []string
 	sshTarget      string            // what clients attach through; "" announces none
 	defaultSSH     bool              // announce <user>@<hostname>
@@ -417,6 +431,7 @@ func (d *daemon) heartbeat(ctx context.Context) (v1.HeartbeatRequest, error) {
 	if problem != "" && health.Status == v1.HealthOK {
 		health = v1.Health{Status: v1.HealthDegraded, Message: problem}
 	}
+	health = d.withComponents(ctx, health)
 	return v1.HeartbeatRequest{
 		Epoch: d.epoch, Generation: d.generation, DaemonVersion: d.version,
 		Hostname: info.Hostname, OS: info.OS, Arch: info.Arch,

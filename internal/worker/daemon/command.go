@@ -20,6 +20,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/support/svcunit"
+	"github.com/Autarquico/codefabric/internal/worker/doctor"
 	"github.com/Autarquico/codefabric/internal/worker/envwrap"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
@@ -30,15 +31,15 @@ import (
 // CLI merges it with the administration commands of the same name.
 func Command() *cobra.Command {
 	cmd := &cobra.Command{Use: "worker"}
-	cmd.AddCommand(newJoinCmd(), newRunCmd(), newExecCmd(), newRedactPipeCmd(), newInstallServiceCmd(), newUninstallServiceCmd(), newSecretsCmd())
+	cmd.AddCommand(newJoinCmd(), newRunCmd(), newExecCmd(), newRedactPipeCmd(), newInstallServiceCmd(), newUninstallServiceCmd(), newSecretsCmd(), newDoctorCmd())
 	return cmd
 }
 
 func newJoinCmd() *cobra.Command {
 	var (
-		name, memoryMax, diskMax, availability string
-		settings                               v1.WorkerSettings
-		force                                  bool
+		name, memoryMax, diskMax, availability, diskMinFree string
+		settings                                            v1.WorkerSettings
+		force                                               bool
 	)
 	cmd := &cobra.Command{
 		Use:   "join <invitation | ->",
@@ -59,6 +60,11 @@ func newJoinCmd() *cobra.Command {
 				return err
 			}
 			settings.Availability = domain.AvailabilityPolicy(availability)
+			if diskMinFree != "" {
+				if _, err = doctor.ParseThreshold(diskMinFree); err != nil {
+					return err
+				}
+			}
 			paths, err := config.ResolveFromEnv()
 			if err != nil {
 				return err
@@ -71,6 +77,10 @@ func newJoinCmd() *cobra.Command {
 				Paths: paths, Invitation: invitation, Name: name, Settings: settings, Force: force,
 			})
 			if err != nil {
+				return err
+			}
+			// Every join rewrites the config: a re-join does not inherit the threshold of the last one.
+			if err := doctor.SaveSettings(paths, doctor.Settings{Name: name, DiskMinFree: diskMinFree}); err != nil {
 				return err
 			}
 			if jsonOutput(cmd) {
@@ -91,6 +101,7 @@ func newJoinCmd() *cobra.Command {
 	f.StringVar(&diskMax, "disk-max", "", "disk to contribute, e.g. 100GB (default: all)")
 	f.IntVar(&settings.MaxConcurrentRuns, "max-concurrent", 0, "Runs at the same time (default: "+strconv.Itoa(domain.Defaults().WorkerMaxConcurrentRuns)+")")
 	f.StringVar(&availability, "availability", "", "when to accept Runs: always, idle or manual (default: always)")
+	f.StringVar(&diskMinFree, "disk-min-free", "", "fail below this free disk, e.g. 20% or 50GiB; kept in the Worker config (default: 20%)")
 	f.BoolVar(&force, "force", false, "replace the Worker credentials already stored on this machine")
 	return cmd
 }
@@ -99,6 +110,7 @@ func newRunCmd() *cobra.Command {
 	var (
 		interval  time.Duration
 		sshTarget string
+		minFree   string
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -113,7 +125,7 @@ func newRunCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return Run(ctx, Options{
-				Paths: paths, Controller: controller, Interval: interval, SSHTarget: sshTarget,
+				Paths: paths, Controller: controller, Interval: interval, SSHTarget: sshTarget, DiskMinFree: minFree,
 				Logger: slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil)),
 			})
 		},
@@ -121,6 +133,7 @@ func newRunCmd() *cobra.Command {
 	// Tests of a run_lost_timeout of seconds need heartbeats closer than Appendix A's.
 	cmd.Flags().StringVar(&sshTarget, "ssh-target", "",
 		"how clients reach this machine to attach to a Run, [user@]host[:port] (default: <user>@<hostname>; none: attach is not offered)")
+	cmd.Flags().StringVar(&minFree, "disk-min-free", "", "fail below this free disk, 20% or 50GiB (default: the Worker config, then 20%)")
 	cmd.Flags().DurationVar(&interval, "heartbeat-interval", 0, "time between heartbeats (default: that of Appendix A)")
 	_ = cmd.Flags().MarkHidden("heartbeat-interval")
 	return cmd
