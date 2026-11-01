@@ -259,6 +259,7 @@ func (d *daemon) applier(ctx context.Context, o Options, h harness.Host, c *clie
 	if adapters == nil {
 		adapters = []harness.Adapter{codex.Adapter{}, claude.Adapter{}}
 	}
+	adapters = doctor.Offered(o.Paths, adapters)
 	if h == nil {
 		adapters = nil
 	}
@@ -292,10 +293,11 @@ func (d *daemon) runtimeAndHarnesses(ctx context.Context, o Options) (cfruntime.
 		}
 		rt = t
 	}
-	if o.Harnesses != nil {
-		return rt, o.Harnesses
+	adapters := o.Harnesses
+	if adapters == nil {
+		adapters = []harness.Adapter{command.Adapter{}, codex.Adapter{}, claude.Adapter{}}
 	}
-	return rt, []harness.Adapter{command.Adapter{}, codex.Adapter{}, claude.Adapter{}}
+	return rt, doctor.Offered(o.Paths, adapters)
 }
 
 // host is the machine the harnesses run on: this one, with the home and the

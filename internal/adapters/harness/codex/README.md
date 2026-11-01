@@ -8,8 +8,11 @@ The adapter of the Codex CLI (OpenAI). A Run gets it when it asks for
 1. **Installation.** `Detect` looks for `codex` in the PATH of the host
    (`Host.LookPath`) and reports its path; not finding it is not installed,
    not an error. `Version` runs `codex --version` and parses
-   `codex-cli X.Y.Z` to `X.Y.Z`. `Install` is unsupported and not declared:
-   the user installs Codex.
+   `codex-cli X.Y.Z` to `X.Y.Z`. `Install` runs `npm install -g @openai/codex` if `npm`
+   is in the PATH, else on macOS `brew install codex` if `brew` is, else it
+   fails with the manual instructions; `DryRun` only returns the plan. The
+   binary may not be in the PATH of the process until a new shell: run
+   `Detect` again.
 
 2. **Configuration paths detected.** `~/.codex/`: `config.toml`,
    `AGENTS.md`, `prompts/` and `skills/`. Never `auth.json`, the sessions or

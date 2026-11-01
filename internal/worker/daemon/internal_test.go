@@ -10,9 +10,12 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/worker/doctor"
 )
 
 func TestBackoffGrowsFromATenthOfTheIntervalToTheInterval(t *testing.T) {
@@ -149,5 +152,21 @@ func TestAnotherComponentFailingCancelsTheAppliesInFlight(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the daemon waits for an apply that nothing cancels")
+	}
+}
+
+func TestAHarnessTheWorkerDidNotChooseIsNotOffered(t *testing.T) {
+	paths := config.Paths{ConfigDir: t.TempDir()}
+	if err := doctor.SaveSettings(paths, doctor.Settings{Harnesses: []string{claude.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	d := &daemon{log: slog.New(slog.DiscardHandler)}
+	_, adapters := d.runtimeAndHarnesses(t.Context(), Options{Runtime: unavailable{}, Paths: paths})
+	var ids []string
+	for _, a := range adapters {
+		ids = append(ids, a.ID())
+	}
+	if len(ids) != 2 || ids[0] != "command" || ids[1] != claude.ID {
+		t.Errorf("offered %v", ids)
 	}
 }

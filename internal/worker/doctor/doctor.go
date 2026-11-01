@@ -27,6 +27,9 @@ import (
 // ClaudeKeychainItem is where Claude Code keeps its login on macOS.
 const ClaudeKeychainItem = "Claude Code-credentials"
 
+// SetupComponent is the global component of a Worker whose join is unfinished.
+const SetupComponent = "setup"
+
 // loginCommands is what a person runs, on the Worker, to log in to a harness.
 var loginCommands = map[string]string{claude.ID: "claude login", "codex": "codex login"}
 
@@ -62,6 +65,9 @@ type Options struct {
 	// RuntimeIsolated says the runtime confines the Runs (a container, a VM).
 	// The zero value is the host itself, which is what tmux and a process are.
 	RuntimeIsolated bool
+	// SetupPending says the join has not finished, asked at every pass; nil is
+	// a Worker with nothing pending.
+	SetupPending func() bool
 }
 
 // Doctor runs the checks. It remembers whether the disk was failing, which is
@@ -113,6 +119,12 @@ func (d *Doctor) Check(ctx context.Context) []v1.ComponentHealth {
 	out := []v1.ComponentHealth{d.runtime(ctx), d.git(ctx), d.disk()}
 	for _, a := range d.o.Adapters {
 		out = append(out, d.harness(ctx, a)...)
+	}
+	if d.o.SetupPending != nil && d.o.SetupPending() {
+		out = append(out, v1.ComponentHealth{
+			Name: SetupComponent, Status: v1.ComponentFail, Message: "join sin terminar",
+			Action: "cf worker join --resume",
+		})
 	}
 	for i := range out {
 		out[i] = CleanComponent(out[i])

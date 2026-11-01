@@ -102,7 +102,7 @@ func checkState(_ Request, w Worker, _ time.Time) *Failure {
 }
 
 // checkHealth keeps a Run off a Worker with a failing component that concerns
-// it: any global one (controller, runtime, git, disk, version, daemon) or one of the
+// it: any global one (controller, runtime, git, disk, version, daemon, setup) or one of the
 // Run's harness (harness:<id>, auth:<id>, workflow:<id>). Those of other
 // harnesses are no reason.
 func checkHealth(req Request, w Worker, _ time.Time) *Failure {

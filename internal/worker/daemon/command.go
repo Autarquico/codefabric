@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/prompt"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/support/svcunit"
 	"github.com/Autarquico/codefabric/internal/worker/doctor"
@@ -39,19 +41,36 @@ func newJoinCmd() *cobra.Command {
 	var (
 		name, memoryMax, diskMax, availability, diskMinFree string
 		settings                                            v1.WorkerSettings
-		force                                               bool
+		force, resume, yes, nonInteractive                  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "join <invitation | ->",
 		Short: "Enrol this machine as a Worker using an invitation",
 		Long: "Enrol this machine as a Worker. The invitation is an argument or `-` to read it from\n" +
 			"stdin, which keeps the token out of shell history. The Worker's credentials are kept\n" +
-			"apart from the client's, so one machine can be both.",
-		Args: cobra.ExactArgs(1),
+			"apart from the client's, so one machine can be both.\n\n" +
+			"In a terminal it is a wizard: it asks for what the flags do not give, offers to install the\n" +
+			"harnesses that are missing and runs the doctor; until that is green the Worker takes no\n" +
+			"Runs. An interrupted wizard goes on with --resume. Without a terminal, or with\n" +
+			"--non-interactive, it only enrols with the flags.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			invitation, err := readInvitation(cmd.InOrStdin(), args[0])
-			if err != nil {
-				return err
+			if resume && nonInteractive {
+				return domain.NewError(domain.CodeInvalidRequest, "--resume and --non-interactive cannot go together", nil)
+			}
+			wizard := useWizard(resume, wizardContext{
+				Terminal: isTerminalReader(cmd.InOrStdin()), NonInteractive: nonInteractive, JSON: jsonOutput(cmd),
+				Complete: len(args) == 1 && name != "" && settings.CPUMax > 0 && memoryMax != "" && diskMinFree != "",
+			})
+			if len(args) == 0 && !wizard {
+				return domain.NewError(domain.CodeInvalidRequest, "an invitation is needed: pass it, or `-` to read it from stdin", nil)
+			}
+			invitation := ""
+			var err error
+			if len(args) == 1 {
+				if invitation, err = readInvitation(cmd.InOrStdin(), args[0]); err != nil {
+					return err
+				}
 			}
 			if settings.MemoryMaxMB, err = parseSizeMB("--memory-max", memoryMax); err != nil {
 				return err
@@ -68,6 +87,11 @@ func newJoinCmd() *cobra.Command {
 			paths, err := config.ResolveFromEnv()
 			if err != nil {
 				return err
+			}
+			if wizard {
+				controller, _ := cmd.Flags().GetString("controller")
+				choices := JoinChoices{Invitation: invitation, Name: name, DiskMinFree: diskMinFree, Settings: settings, Force: force, Yes: yes}
+				return runWizard(cmd.Context(), defaultWizardEnv(paths, controller), prompt.New(cmd.InOrStdin(), cmd.OutOrStdout()), choices, resume)
 			}
 			if name == "" {
 				hostname, _ := os.Hostname()
@@ -103,7 +127,20 @@ func newJoinCmd() *cobra.Command {
 	f.StringVar(&availability, "availability", "", "when to accept Runs: always, idle or manual (default: always)")
 	f.StringVar(&diskMinFree, "disk-min-free", "", "fail below this free disk, e.g. 20% or 50GiB; kept in the Worker config (default: 20%)")
 	f.BoolVar(&force, "force", false, "replace the Worker credentials already stored on this machine")
+	f.BoolVar(&resume, "resume", false, "go on with the wizard of a join that was interrupted or did not pass the doctor")
+	f.BoolVar(&yes, "yes", false, "accept every installation the wizard offers, without asking")
+	f.BoolVar(&nonInteractive, "non-interactive", false, "only enrol with the flags, even in a terminal")
 	return cmd
+}
+
+// JoinWizard runs the join wizard over p, even if its input is not a terminal.
+// `cf setup` calls it; interrupted, it resumes with `cf worker join --resume`.
+func JoinWizard(ctx context.Context, controller string, p *prompt.Prompter, invitation string) error {
+	paths, err := config.ResolveFromEnv()
+	if err != nil {
+		return err
+	}
+	return runWizard(ctx, defaultWizardEnv(paths, controller), p, JoinChoices{Invitation: invitation}, false)
 }
 
 func newRunCmd() *cobra.Command {
@@ -287,6 +324,20 @@ func printService(cmd *cobra.Command, res ServiceResult, changed, unchanged stri
 
 // jsonOutput reads the root command's persistent --json (internal/cli owns
 // it; this package cannot import the CLI).
+// wizardContext is what decides whether `cf worker join` asks questions.
+type wizardContext struct {
+	Terminal, NonInteractive, JSON bool
+	// Complete says the invitation and every answer the wizard would ask came as flags.
+	Complete bool
+}
+
+// useWizard says whether join runs the wizard: always on --resume, otherwise
+// only in a terminal, when nothing asks for plain output and the flags leave
+// something to ask. Anything else enrols as it always did.
+func useWizard(resume bool, c wizardContext) bool {
+	return resume || c.Terminal && !c.NonInteractive && !c.JSON && !c.Complete
+}
+
 func jsonOutput(cmd *cobra.Command) bool {
 	on, _ := cmd.Flags().GetBool("json")
 	return on

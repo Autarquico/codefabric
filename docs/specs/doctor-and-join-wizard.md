@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: M
 issue: 25
-prs: [73]
+prs: [73, 75]
 related_issues: [25]
 sub_issues: []
 depends_on:
@@ -40,6 +40,7 @@ Owner previsto en el bucle Develop: backend-eng y frontend-eng.
 
 **No entra:**
 - Nada fuera de lo indicado en la epic.
+- El rol Controller no forma parte de `cf setup` (D9): `cf setup` lo remite a `cf controller init`.
 
 ## Criterios de aceptación
 

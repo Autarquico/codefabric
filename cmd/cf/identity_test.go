@@ -40,13 +40,13 @@ func cliRun(stdout, stderr io.Writer, stdin string, args []string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	return cli.RunContextWith(ctx, options(), args, strings.NewReader(stdin), stdout, stderr, daemon.Command(), workerdaemon.Command())
+	return cli.RunContextWith(ctx, options(), args, strings.NewReader(stdin), stdout, stderr, daemon.Command(), workerdaemon.Command(), newSetupCmd(binarySetupSteps()))
 }
 
 // cfContext is cf under a context that ends commands which run until interrupted.
 func cfContext(ctx context.Context, args ...string) (code int, stderr string) {
 	var out, errOut bytes.Buffer
-	code = cli.RunContextWith(ctx, options(), args, strings.NewReader(""), &out, &errOut, daemon.Command(), workerdaemon.Command())
+	code = cli.RunContextWith(ctx, options(), args, strings.NewReader(""), &out, &errOut, daemon.Command(), workerdaemon.Command(), newSetupCmd(binarySetupSteps()))
 	return code, errOut.String()
 }
 
