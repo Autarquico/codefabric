@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: M
 issue: 25
-prs: []
+prs: [73]
 related_issues: [25]
 sub_issues: []
 depends_on:
@@ -18,7 +18,7 @@ depends_on:
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-01
 ---
 
 # Doctor y wizard de join
