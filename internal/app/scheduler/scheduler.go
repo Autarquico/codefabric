@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -13,6 +12,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/app/runs"
+	"github.com/Autarquico/codefabric/internal/app/workflows"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -472,13 +472,10 @@ const StuckApplyAfter = 15 * time.Minute
 // failStuckApplies is the sweep of orders a Worker gave up on or never answered
 // (§8.12): while one is alive its apply_pending shuts the harness to new leases.
 func (s *Service) failStuckApplies(ctx context.Context) error {
-	result, err := json.Marshal(map[string]string{"error": "the order was not reported in time (Worker offline, unreachable or still waiting for Runs); it was failed so the harness takes Runs again: apply again if it is still wanted"})
-	if err != nil {
-		return err
-	}
+	const reason = "the order was not reported in time (Worker offline, unreachable or still waiting for Runs); it was failed so the harness takes Runs again: apply again if it is still wanted"
 	return s.db.WithTx(ctx, func(tx *store.Tx) error {
 		now := s.clock.Now()
-		_, err := tx.FailStuckWorkflowApplies(ctx, now.Add(-StuckApplyAfter), result, now)
+		_, err := workflows.FailStuckApplies(ctx, tx, mutation.Act{Actor: systemActor, Now: now}, now.Add(-StuckApplyAfter), reason)
 		return err
 	})
 }

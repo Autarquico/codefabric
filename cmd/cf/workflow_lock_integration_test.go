@@ -304,6 +304,20 @@ func TestScenario_WorkflowApplyDriftLockB_Lock(t *testing.T) {
 	}
 
 	// A Run of the same key shares the lock.
+	ok[v1.Project](t, "project", "set", "backend", "--workflow", "daily@1")
+	sibling := runOf(t, "sibling")
+	if sibling.Workflow == nil || sibling.Workflow.Digest != f.v1.Digest {
+		t.Fatalf("sibling = %+v, want the v1 Workflow", sibling.Workflow)
+	}
+	soon(t, "the Run of the same key to take the lock with the holder", func() bool {
+		return leased(t, sibling.Short) && workflowState(t).Holders == 2
+	})
+	if st := workflowState(t); st.ConfigKey != f.v1.Digest {
+		t.Errorf("config_key = %q after sharing, want %s", st.ConfigKey, f.v1.Digest)
+	}
+	if r := showRun(t, other.Short); r.State != domain.RunQueued || r.Lease != nil {
+		t.Errorf("the Run of another key = %+v, want it still queued", r)
+	}
 }
 
 // A Run with a Workflow is placed on a Worker without isolation only once that

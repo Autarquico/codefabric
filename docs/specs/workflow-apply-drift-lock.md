@@ -79,6 +79,8 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+- Timeout de 15 min (`scheduler.StuckApplyAfter`): una orden real viva que el Worker no reporta en ese plazo (y que no espera a Runs) pasa a `failed`, con su evento y auditoría del sistema, y el harness vuelve a aceptar Runs; hay que repetir `apply` si sigue haciendo falta.
+- El timeout no confirma que la configuración global se haya mantenido intacta: el Worker pudo escribir parte o todo antes de callar. Comprobar con `cf workflow status` (drift) o volver a aplicar.
 
 ## Referencias
 

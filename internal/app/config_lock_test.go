@@ -455,12 +455,48 @@ func TestConfigLock_AnOrderTheWorkerNeverReportsFailsAndFreesTheHarness(t *testi
 	if r := e.pass(); r.Assigned != 0 {
 		t.Fatalf("pass = %+v: the order is pending", r)
 	}
+	events, audits := e.count("events"), e.count("audit_entries")
 	e.clock.Advance(scheduler.StuckApplyAfter + time.Second)
 	if r := e.pass(); r.Assigned == 0 {
 		t.Errorf("pass = %+v: the harness must take Runs once the order failed", r)
 	}
 	if st, _ := e.app.Workflows.GetApply(t.Context(), res.Apply.ID); st.State != store.ApplyFailed {
 		t.Errorf("order is %s, want failed", st.State)
+	}
+	if n := e.countWhere("events", "type = 'WorkflowApplied' AND level = 'error'"); n != 1 {
+		t.Errorf("failure events = %d, want 1 for the order closed by the sweep", n)
+	}
+	if n := e.countWhere("audit_entries", "action = 'workflow.apply.failed' AND actor_kind = 'system'"); n != 1 {
+		t.Errorf("failure audit entries by the system = %d, want 1 (events %d -> %d, audits %d -> %d)",
+			n, events, e.count("events"), audits, e.count("audit_entries"))
+	}
+}
+
+// The sweep is one unit with the closing event and its audit entry: when the
+// last step fails, the order stays alive and the harness stays shut.
+func TestConfigLock_AFailureClosingAStuckOrderRollsBackItsStateAndItsLockRelease(t *testing.T) {
+	e, w, digest := newLockEnv(t)
+	e.applied(w, digest)
+	res, err := e.apply(v1.ApplyWorkflowRequest{Worker: "alpha"})
+	must(t, err)
+	e.orders(w)
+	e.clock.Advance(scheduler.StuckApplyAfter + time.Second)
+	must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(t.Context(), `CREATE TRIGGER refuse BEFORE INSERT ON audit_entries WHEN NEW.action = 'workflow.apply.failed' BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+		return err
+	}))
+
+	if r := e.pass(); len(r.Problems) == 0 {
+		t.Fatalf("pass = %+v, want the sweep to report its failure", r)
+	}
+	if st, _ := e.app.Workflows.GetApply(t.Context(), res.Apply.ID); st.State != "running" {
+		t.Errorf("order is %s, want running", st.State)
+	}
+	if l, ok := e.lock(w); !ok || l.ApplyPending != domain.ID(res.Apply.ID) {
+		t.Errorf("lock = %+v (exists %v), want apply_pending %s kept", l, ok, res.Apply.ID)
+	}
+	if n := e.countWhere("events", "type = 'WorkflowApplied' AND level = 'error'"); n != 0 {
+		t.Errorf("%d failure events survived the rollback", n)
 	}
 }
 
@@ -482,4 +518,11 @@ func TestConfigLock_AnOrderWaitingForItsRunsIsNotStuck(t *testing.T) {
 	if l, _ := e.lock(w); l.ApplyPending != domain.ID(res.Apply.ID) {
 		t.Errorf("apply_pending = %q, want %s", l.ApplyPending, res.Apply.ID)
 	}
+}
+
+func (e *wfEnv) countWhere(table, where string) int {
+	e.t.Helper()
+	var n int
+	must(e.t, e.db.Reader().QueryRowContext(e.t.Context(), `SELECT COUNT(*) FROM `+table+` WHERE `+where).Scan(&n)) //nolint:gosec // test constants
+	return n
 }
