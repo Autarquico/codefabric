@@ -16,6 +16,7 @@
 - #23 Secrets locales al Worker
 - #24 Config del repo y Environment host
 - #25 Doctor y wizard de join
+- #26 E2E v0.2
 - #47 codex-adapter: el executor no publica usage de los Runs
 - #48 authsync: límites residuales del broker de auth.json
 - #49 codex-adapter: minors de las reviews de #45
