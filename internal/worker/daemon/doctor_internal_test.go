@@ -263,7 +263,15 @@ func TestRestartNeeded_ADaemonThatStartedWhileTheJoinWasPendingAsksForARestart(t
 		}
 	}
 	save(doctor.Settings{Name: "w1", SetupPending: true, Harnesses: []string{"codex", "claude-code"}})
-	d := &daemon{}
+	started := func() *daemon {
+		t.Helper()
+		s, err := doctor.LoadSettings(paths)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &daemon{settings: s} // what Run reads once, before choosing its harnesses
+	}
+	d := started()
 	needed := d.restartNeeded(Options{Paths: paths})
 	if needed() {
 		t.Fatal("a restart is needed before anything changed")
@@ -272,7 +280,7 @@ func TestRestartNeeded_ADaemonThatStartedWhileTheJoinWasPendingAsksForARestart(t
 	if !needed() {
 		t.Fatal("the daemon still announces what it started with, and does not ask for a restart")
 	}
-	restarted := (&daemon{}).restartNeeded(Options{Paths: paths})
+	restarted := started().restartNeeded(Options{Paths: paths})
 	if restarted() {
 		t.Error("a daemon started with the final configuration asks for a restart")
 	}

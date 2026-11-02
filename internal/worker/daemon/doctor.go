@@ -66,7 +66,7 @@ func (d *daemon) startDoctor(ctx context.Context, o Options) error {
 	if adapters == nil {
 		adapters = []harness.Adapter{command.Adapter{}, codex.Adapter{}, claude.Adapter{}}
 	}
-	adapters = doctor.Offered(o.Paths, adapters)
+	adapters = d.settings.Offered(adapters)
 	restartNeeded := d.restartNeeded(o)
 	hostname, _ := os.Hostname()
 	opts := doctor.Options{
@@ -89,11 +89,7 @@ func (d *daemon) startDoctor(ctx context.Context, o Options) error {
 // computed its harnesses at start, does not follow: the join finished after it
 // started pending, or the offered harnesses are not those it started with.
 func (d *daemon) restartNeeded(o Options) func() bool {
-	s, err := doctor.LoadSettings(o.Paths)
-	if err != nil {
-		return nil
-	}
-	startedPending, started := s.SetupPending, slices.Clone(s.Harnesses)
+	startedPending, started := d.settings.SetupPending, slices.Clone(d.settings.Harnesses)
 	return func() bool {
 		now, err := doctor.LoadSettings(o.Paths)
 		if err != nil {

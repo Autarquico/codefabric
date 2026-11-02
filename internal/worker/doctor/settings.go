@@ -115,7 +115,15 @@ func WorkerName(p config.Paths, fallback string) string {
 // adapter is never left out. A config that cannot be read leaves them all.
 func Offered(p config.Paths, adapters []harness.Adapter) []harness.Adapter {
 	s, err := LoadSettings(p)
-	if err != nil || s.Harnesses == nil {
+	if err != nil {
+		return adapters
+	}
+	return s.Offered(adapters)
+}
+
+// Offered is [Offered] for these settings.
+func (s Settings) Offered(adapters []harness.Adapter) []harness.Adapter {
+	if s.Harnesses == nil {
 		return adapters
 	}
 	var out []harness.Adapter

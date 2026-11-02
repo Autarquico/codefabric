@@ -160,7 +160,11 @@ func TestAHarnessTheWorkerDidNotChooseIsNotOffered(t *testing.T) {
 	if err := doctor.SaveSettings(paths, doctor.Settings{Harnesses: []string{claude.ID}}); err != nil {
 		t.Fatal(err)
 	}
-	d := &daemon{log: slog.New(slog.DiscardHandler)}
+	settings, err := doctor.LoadSettings(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &daemon{log: slog.New(slog.DiscardHandler), settings: settings}
 	_, adapters := d.runtimeAndHarnesses(t.Context(), Options{Runtime: unavailable{}, Paths: paths})
 	var ids []string
 	for _, a := range adapters {
