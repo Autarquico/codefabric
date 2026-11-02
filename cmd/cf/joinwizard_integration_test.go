@@ -5,13 +5,16 @@ package main
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
 )
@@ -31,21 +34,7 @@ func TestScenario_DoctorAndJoinWizard_SetupPendiente(t *testing.T) {
 		t.Fatalf("an interrupted wizard: exit %d\n%s", code, out)
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- workerdaemon.Run(ctx, workerdaemon.Options{
-			Paths: box, Interval: 200 * time.Millisecond, DoctorEvery: 200 * time.Millisecond,
-			Logger: slog.New(slog.DiscardHandler), Harnesses: []harness.Adapter{command.Adapter{}}, SSHTarget: workerdaemon.NoSSHTarget,
-		})
-	}()
-	t.Cleanup(func() {
-		cancel()
-		if err := <-done; err != nil {
-			t.Errorf("worker daemon: %v", err)
-		}
-		stopWorkerRuns(t, box)
-	})
+	stop := startJoinDaemon(t, box, command.Adapter{})
 	use(t, host)
 	newOrigin(t).clone(t)
 	ok[v1.Project](t, "project", "create", "backend")
@@ -80,8 +69,82 @@ func TestScenario_DoctorAndJoinWizard_SetupPendiente(t *testing.T) {
 	}
 	use(t, host)
 
+	// The daemon that started with the setup pending keeps saying so until it restarts.
+	soon(t, "the running daemon to ask for a restart", func() bool {
+		c, found := component(showWorker(t, host, "alpha").Health, "setup")
+		return found && c.Status == v1.ComponentFail && strings.Contains(c.Action, "reinicia el daemon")
+	})
+	if r := ok[v1.Run](t, "run", "show", created.Run.Short); r.State != domain.RunQueued {
+		t.Errorf("Run %s on a daemon that has not restarted", r.State)
+	}
+	stop()
+	startJoinDaemon(t, box, command.Adapter{})
+	use(t, host)
+
 	soon(t, "the Run to be running once the setup is done", func() bool {
 		return ok[v1.Run](t, "run", "show", created.Run.Short).State == domain.RunRunning
 	})
 	soon(t, "the Worker to be online", func() bool { return showWorker(t, host, "alpha").State == domain.WorkerOnline })
+}
+
+// startJoinDaemon runs the daemon of box over harnesses until the test ends or
+// the returned stop is called; stop waits for it.
+func startJoinDaemon(t *testing.T, box config.Paths, harnesses ...harness.Adapter) (stop func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- workerdaemon.Run(ctx, workerdaemon.Options{
+			Paths: box, Interval: 200 * time.Millisecond, DoctorEvery: 200 * time.Millisecond,
+			Logger: slog.New(slog.DiscardHandler), Harnesses: harnesses, SSHTarget: workerdaemon.NoSSHTarget,
+		})
+	}()
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Errorf("worker daemon: %v", err)
+			}
+		})
+	}
+	t.Cleanup(func() {
+		stop()
+		stopWorkerRuns(t, box)
+	})
+	return stop
+}
+
+// A harness that is installed but the person declined in the wizard is announced
+// by a daemon that started before the wizard finished, and not after a restart.
+func TestScenario_DoctorAndJoinWizard_HarnessRechazadoTrasReinicio(t *testing.T) {
+	requireTmux(t)
+	host, _ := bringUpController(t)
+	invite := workerInvite(t, host)
+	box := machine(t)
+	codexCap := domain.HarnessCapability("codex")
+
+	code, out, _ := cf(t, invite+"\nalpha\n\n\n\n"+lowDisk+"\n", "setup", "--role", "worker")
+	if code == 0 {
+		t.Fatalf("an interrupted wizard: exit %d\n%s", code, out)
+	}
+	stop := startJoinDaemon(t, box, command.Adapter{}, installedCodex{})
+	soon(t, "the pending daemon to announce the installed codex", func() bool {
+		return slices.Contains(showWorker(t, host, "alpha").Capabilities, codexCap)
+	})
+
+	use(t, box)
+	if code, out, errOut := cf(t, "n\nn\n", "worker", "join", "--resume"); code != 0 {
+		t.Fatalf("resume: exit %d\n%s%s", code, out, errOut)
+	}
+	stop()
+	startJoinDaemon(t, box, command.Adapter{}, installedCodex{})
+	soon(t, "the restarted Worker to be online without codex", func() bool {
+		w := showWorker(t, host, "alpha")
+		_, pending := component(w.Health, "setup")
+		return w.State == domain.WorkerOnline && !pending && slices.Contains(w.Capabilities, "harness:command")
+	})
+	if slices.Contains(showWorker(t, host, "alpha").Capabilities, codexCap) {
+		t.Error("the declined codex is still announced after the restart")
+	}
 }

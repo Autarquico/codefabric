@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -64,8 +66,9 @@ type wizardEnv struct {
 	NewHost func() (harness.Host, error)
 	Sysinfo func(dir string) (sysinfo.Info, error)
 	Join    func(ctx context.Context, o JoinOptions) (client.Connected, error)
-	// HasCredentials says whether this machine already holds Worker credentials.
-	HasCredentials func() (bool, error)
+	// Identity is a non-secret fingerprint of the Worker credentials this machine
+	// holds; empty if it holds none.
+	Identity func() (string, error)
 	// Doctor runs the checks of the machine against diskMinFree, for the
 	// harnesses the person chose, without the "setup" component (IgnoreSetup):
 	// the wizard is what clears it. A harness left out is not the wizard's to judge.
@@ -101,9 +104,9 @@ func defaultWizardEnv(paths config.Paths, controller string) wizardEnv {
 			}
 			return localhost.New(localhost.Options{Home: home, Env: envutil.WithoutTmux(os.Environ())})
 		},
-		Sysinfo:        sysinfo.Collect,
-		Join:           Join,
-		HasCredentials: func() (bool, error) { return client.CredentialsExist(paths.WorkerCredentialsDir()) },
+		Sysinfo:  sysinfo.Collect,
+		Join:     Join,
+		Identity: func() (string, error) { return credentialsIdentity(paths.WorkerCredentialsDir()) },
 		Doctor: func(ctx context.Context, minFree string, chosen []string) ([]v1.ComponentHealth, error) {
 			adapters := []harness.Adapter{command.Adapter{}}
 			for _, a := range []harness.Adapter{codex.Adapter{}, claude.Adapter{}} {
@@ -126,6 +129,21 @@ func defaultWizardEnv(paths config.Paths, controller string) wizardEnv {
 		},
 		ApplyAttempts: defaultApplyAttempts, Clock: clock.Real{},
 	}
+}
+
+// credentialsIdentity fingerprints the certificate (public) of the credentials
+// in dir; empty if there are none.
+func credentialsIdentity(dir string) (string, error) {
+	exists, err := client.CredentialsExist(dir)
+	if err != nil || !exists {
+		return "", err
+	}
+	c, err := client.LoadCredentials(dir)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(c.CertPEM)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 type wizard struct {
@@ -202,20 +220,31 @@ func (w *wizard) steps(ctx context.Context) error {
 	return w.finish(ctx)
 }
 
-// recoverJoin settles a join that was interrupted around the redemption: with
-// credentials stored the invitation is spent and the wizard goes on; without
-// them it starts again from the questions.
+// recoverJoin settles a join that was interrupted around the redemption. Only
+// credentials that differ from those held before it prove the invitation was
+// spent. With none, the wizard starts again from the questions. With the same
+// ones as before (a --force that never got to redeem), or with no record of
+// them, nothing proves it: the setup stays pending and the person is asked for a
+// new invitation.
 func (w *wizard) recoverJoin() error {
-	stored, err := w.env.HasCredentials()
+	current, err := w.env.Identity()
 	if err != nil {
 		return err
 	}
-	if !stored {
+	previous := w.pr.PreviousIdentity
+	switch {
+	case current == "":
 		w.pr.Step = 0
 		return nil
+	case previous != "" && current != previous:
+		w.say("La invitación ya se canjeó: se continúa tras el join.")
+		return w.save(stepJoined)
 	}
-	w.say("La invitación ya se canjeó: se continúa tras el join.")
-	return w.save(stepJoined)
+	w.say("No consta que la invitación se canjeara: las credenciales siguen siendo las de antes. Hace falta una invitación nueva para reintentar el canje.")
+	w.pr.Step = 0
+	// Credentials the person already chose to replace, with --force, are replaced again.
+	w.choices.Force = w.choices.Force || previous == current
+	return nil
 }
 
 func (w *wizard) save(step int) error {
@@ -294,16 +323,19 @@ func (w *wizard) redeem(ctx context.Context, o JoinOptions, minFree string) erro
 	if err != nil {
 		return err
 	}
-	hadCredentials, err := w.env.HasCredentials()
+	previous, err := w.env.Identity()
 	if err != nil {
 		return err
 	}
-	w.pr = setup.Progress{Step: stepJoining, Name: o.Name, DiskMinFree: minFree}
+	w.pr = setup.Progress{Step: stepJoining, Name: o.Name, DiskMinFree: minFree, PreviousIdentity: doctor.NoIdentity}
+	if previous != "" {
+		w.pr.PreviousIdentity = previous
+	}
 	if err := doctor.SaveSettings(w.env.Paths, doctor.Settings{Name: o.Name, DiskMinFree: minFree, SetupPending: true, Wizard: &w.pr}); err != nil {
 		return err
 	}
 	if _, err := w.env.Join(ctx, o); err != nil {
-		if stored, checkErr := w.env.HasCredentials(); checkErr != nil || (stored && !hadCredentials) {
+		if current, checkErr := w.env.Identity(); checkErr != nil || (current != "" && current != previous) {
 			w.say("El join pudo canjear la invitación: continúa con `%s`.", resumeHint)
 			return err
 		}
@@ -587,6 +619,8 @@ func (w *wizard) finish(ctx context.Context) error {
 		return err
 	}
 	w.say("\nListo: el Worker %s está preparado. Arráncalo con `cf worker run` (o `cf worker install-service`).", w.pr.Name)
+	w.say("Si su daemon ya estaba en marcha, reinícialo para que anuncie los harnesses elegidos: hasta entonces seguirá reportando `setup` en fallo " +
+		"(`cf worker run` de nuevo; si es un servicio, `systemctl --user restart cf-worker` o `launchctl kickstart -k gui/$(id -u)/com.codefabric.worker`).")
 	return nil
 }
 

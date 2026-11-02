@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -105,7 +106,8 @@ type session struct {
 	checks           int
 	workflow         *fakeWorkflows
 	clock            *clock.Fake
-	creds            bool // Worker credentials are stored
+	identity         string // fingerprint of the stored Worker credentials; empty: none
+	joinedAs         int
 	failDisk         bool
 	joinOptions      []JoinOptions
 	joinErr          error
@@ -135,16 +137,18 @@ func newSession(t *testing.T) *session {
 			s.joins++
 			s.joinOptions = append(s.joinOptions, o)
 			if s.joinErr != nil {
-				s.creds = s.credsOnJoinErr
+				if s.credsOnJoinErr {
+					s.storeNewIdentity()
+				}
 				return client.Connected{}, s.joinErr
 			}
-			s.creds = true
+			s.storeNewIdentity()
 			if s.afterJoin != nil {
 				s.afterJoin()
 			}
 			return client.Connected{}, nil
 		},
-		HasCredentials: func() (bool, error) { return s.creds, nil },
+		Identity: func() (string, error) { return s.identity, nil },
 		Doctor: func(context.Context, string, []string) ([]v1.ComponentHealth, error) {
 			out := []v1.ComponentHealth{{Name: "git", Status: v1.ComponentOK}}
 			s.checks++
@@ -164,6 +168,11 @@ func newSession(t *testing.T) *session {
 		ApplyAttempts: 2, Clock: s.clock,
 	}
 	return s
+}
+
+func (s *session) storeNewIdentity() {
+	s.joinedAs++
+	s.identity = fmt.Sprintf("identity-%d", s.joinedAs)
 }
 
 func (s *session) run(t *testing.T, input string, choices JoinChoices, resume bool) (string, error) {
@@ -424,6 +433,91 @@ func TestWizard_AnInterruptionAfterTheRedemptionIsRecoveredByResume(t *testing.T
 	if st, pending := s.settings(t); pending || st.Name != "w1" {
 		t.Errorf("settings = %+v pending=%v", st, pending)
 	}
+}
+
+// crashedJoin leaves what a process killed around the redemption leaves: the
+// pending setup at stepJoining, naming the identity held before it.
+func crashedJoin(t *testing.T, s *session, previous string) {
+	t.Helper()
+	pr := setup.Progress{Step: stepJoining, Name: "w1", DiskMinFree: "10%", PreviousIdentity: previous}
+	if err := setup.SaveProgress(s.env.Paths, pr); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWizard_RecoveryBeforeTheRedemptionWithoutCredentialsStartsAgain(t *testing.T) {
+	s := newSession(t)
+	crashedJoin(t, s, doctor.NoIdentity)
+	if out, err := s.run(t, defaults, JoinChoices{}, true); err != nil || s.joins != 1 {
+		t.Fatalf("err=%v joins=%d\n%s", err, s.joins, out)
+	}
+}
+
+func TestWizard_RecoveryAfterARedemptionWithoutPreviousCredentialsGoesOn(t *testing.T) {
+	s := newSession(t)
+	crashedJoin(t, s, doctor.NoIdentity)
+	s.storeNewIdentity()
+	if out, err := s.run(t, "\n\n\n", JoinChoices{}, true); err != nil || s.joins != 0 {
+		t.Fatalf("err=%v joins=%d\n%s", err, s.joins, out)
+	}
+}
+
+func TestWizard_RecoveryBeforeARedemptionOverPreviousCredentialsAsksForANewInvitation(t *testing.T) {
+	s := newSession(t)
+	s.storeNewIdentity() // the identity the --force was replacing
+	crashedJoin(t, s, s.identity)
+	out, err := s.run(t, defaults, JoinChoices{}, true)
+	if err != nil || s.joins != 1 {
+		t.Fatalf("err=%v joins=%d\n%s", err, s.joins, out)
+	}
+	if !strings.Contains(out, "invitación nueva") || !s.joinOptions[0].Force || s.joinOptions[0].Invitation != "cf://invite" {
+		t.Errorf("the redemption was not retried with a new invitation and --force: %+v\n%s", s.joinOptions, out)
+	}
+}
+
+func TestWizard_RecoveryBeforeARedemptionKeepsTheSetupPendingIfNoInvitationIsGiven(t *testing.T) {
+	s := newSession(t)
+	s.storeNewIdentity()
+	crashedJoin(t, s, s.identity)
+	if _, err := s.run(t, "", JoinChoices{}, true); err == nil || s.joins != 0 {
+		t.Fatalf("err=%v joins=%d", err, s.joins)
+	}
+	if _, pending := s.settings(t); !pending {
+		t.Error("the setup is no longer pending")
+	}
+}
+
+func TestWizard_RecoveryAfterARedemptionOverPreviousCredentialsGoesOn(t *testing.T) {
+	s := newSession(t)
+	s.storeNewIdentity()
+	crashedJoin(t, s, s.identity)
+	s.storeNewIdentity() // the redemption replaced them
+	if out, err := s.run(t, "\n\n\n", JoinChoices{}, true); err != nil || s.joins != 0 {
+		t.Fatalf("err=%v joins=%d\n%s", err, s.joins, out)
+	}
+}
+
+func TestWizard_RecoveryWithoutARecordOfThePreviousIdentityDoesNotTrustTheCredentials(t *testing.T) {
+	s := newSession(t)
+	s.storeNewIdentity()
+	crashedJoin(t, s, "")
+	_, _ = s.run(t, defaults, JoinChoices{}, true)
+	if s.joins != 1 || s.joinOptions[0].Force {
+		t.Fatalf("joins=%d options=%+v: the old credentials would be replaced without --force", s.joins, s.joinOptions)
+	}
+}
+
+func TestWizard_TheRedemptionRecordsThePreviousIdentity(t *testing.T) {
+	s := newSession(t)
+	s.storeNewIdentity()
+	prev := s.identity
+	s.env.Join = func(context.Context, JoinOptions) (client.Connected, error) {
+		if pr, _, _ := setup.Load(s.env.Paths); pr.PreviousIdentity != prev {
+			t.Errorf("recorded %q, held %q", pr.PreviousIdentity, prev)
+		}
+		return client.Connected{}, errors.New("caído")
+	}
+	_, _ = s.run(t, "cf://invite\nw1\n\n\n\n\n", JoinChoices{Force: true}, false)
 }
 
 // readOnlyConfig makes the Worker config directory refuse writes.

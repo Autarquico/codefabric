@@ -253,3 +253,48 @@ func TestRunDoctor_SetupComponentIsInThePublicDoctorButNotInTheWizards(t *testin
 		t.Errorf("the wizard's doctor waits for itself: %+v", c)
 	}
 }
+
+func TestRestartNeeded_ADaemonThatStartedWhileTheJoinWasPendingAsksForARestart(t *testing.T) {
+	paths := config.Paths{ConfigDir: t.TempDir(), DataDir: t.TempDir()}
+	save := func(s doctor.Settings) {
+		t.Helper()
+		if err := doctor.SaveSettings(paths, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save(doctor.Settings{Name: "w1", SetupPending: true, Harnesses: []string{"codex", "claude-code"}})
+	d := &daemon{}
+	needed := d.restartNeeded(Options{Paths: paths})
+	if needed() {
+		t.Fatal("a restart is needed before anything changed")
+	}
+	save(doctor.Settings{Name: "w1", Harnesses: []string{"codex"}}) // the wizard finished and left claude-code out
+	if !needed() {
+		t.Fatal("the daemon still announces what it started with, and does not ask for a restart")
+	}
+	restarted := (&daemon{}).restartNeeded(Options{Paths: paths})
+	if restarted() {
+		t.Error("a daemon started with the final configuration asks for a restart")
+	}
+}
+
+func TestDoctor_RestartNeededFailsTheSetupComponent(t *testing.T) {
+	h, err := localhost.New(localhost.Options{Home: t.TempDir(), Env: os.Environ()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := doctor.New(doctor.Options{
+		Host: h, DataDir: t.TempDir(), Git: "true", Runtime: func(context.Context) error { return nil },
+		Disk:          func(string) (sysinfo.Disk, error) { return sysinfo.Disk{FreeBytes: 50, TotalBytes: 100}, nil },
+		RestartNeeded: func() bool { return true },
+	})
+	for _, c := range d.Check(t.Context()) {
+		if c.Name == doctor.SetupComponent {
+			if c.Status != v1.ComponentFail || !strings.Contains(c.Action, "reinicia") {
+				t.Fatalf("setup = %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatal("no setup component while a restart is needed")
+}

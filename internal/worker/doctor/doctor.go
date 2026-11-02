@@ -68,6 +68,10 @@ type Options struct {
 	// SetupPending says the join has not finished, asked at every pass; nil is
 	// a Worker with nothing pending.
 	SetupPending func() bool
+	// RestartNeeded says the join finished (or the offered harnesses changed)
+	// after this daemon started: what it announces is stale until it restarts.
+	// nil is a daemon that never needs it.
+	RestartNeeded func() bool
 }
 
 // Doctor runs the checks. It remembers whether the disk was failing, which is
@@ -120,10 +124,17 @@ func (d *Doctor) Check(ctx context.Context) []v1.ComponentHealth {
 	for _, a := range d.o.Adapters {
 		out = append(out, d.harness(ctx, a)...)
 	}
-	if d.o.SetupPending != nil && d.o.SetupPending() {
+	switch {
+	case d.o.SetupPending != nil && d.o.SetupPending():
 		out = append(out, v1.ComponentHealth{
 			Name: SetupComponent, Status: v1.ComponentFail, Message: "join sin terminar",
 			Action: "cf worker join --resume",
+		})
+	case d.o.RestartNeeded != nil && d.o.RestartNeeded():
+		out = append(out, v1.ComponentHealth{
+			Name: SetupComponent, Status: v1.ComponentFail,
+			Message: "join terminado: el daemon anuncia la configuración con la que arrancó",
+			Action:  "reinicia el daemon del Worker (cf worker run o su servicio)",
 		})
 	}
 	for i := range out {

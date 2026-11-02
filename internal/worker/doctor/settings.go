@@ -40,7 +40,14 @@ type Progress struct {
 	DiskMinFree     string   `json:"disk_min_free,omitempty"`
 	Harnesses       []string `json:"harnesses,omitempty"`
 	InitialWorkflow string   `json:"initial_workflow,omitempty"`
+	// PreviousIdentity is a non-secret fingerprint of the credentials the machine
+	// held before the invitation was redeemed (NoIdentity if none), so that a
+	// recovery can tell the new enrolment from the old one.
+	PreviousIdentity string `json:"previous_identity,omitempty"`
 }
+
+// NoIdentity is the PreviousIdentity of a machine that held no credentials.
+const NoIdentity = "none"
 
 // SettingsFile is the Worker's config, next to its credentials.
 func SettingsFile(p config.Paths) string {
@@ -118,6 +125,18 @@ func Offered(p config.Paths, adapters []harness.Adapter) []harness.Adapter {
 		}
 	}
 	return out
+}
+
+// SameHarnesses says whether two Settings.Harnesses choose the same: absent
+// (every installed one) is not the same as an empty choice.
+func SameHarnesses(a, b []string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(x, y)
 }
 
 // SetupPending says whether the join of this Worker is unfinished. A config
