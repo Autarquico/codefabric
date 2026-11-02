@@ -196,7 +196,7 @@ func (p *phase2) persisted() map[string]string {
 	for _, w := range []*Worker{p.a, p.b} {
 		data := w.Box.Paths.WorkerDataDir()
 		if _, err := os.Stat(data); err != nil {
-			continue
+			p.t.Fatalf("the data of %s cannot be scanned: %v", w.Name, err)
 		}
 		read(data, func(path string, d fs.DirEntry) bool {
 			runDir := filepath.Dir(path)
