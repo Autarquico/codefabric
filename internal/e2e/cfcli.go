@@ -42,7 +42,13 @@ func hideInvites(s string) string { return inviteURL.ReplaceAllString(s, redacte
 // returns how it ended. A command that does not end in time fails the test.
 func (c *Cluster) CF(b *Box, args ...string) Result {
 	c.t.Helper()
-	p := c.cfProc(b, args...)
+	return c.CFInput(b, "", args...)
+}
+
+// CFInput is CF with stdin on the standard input of cf.
+func (c *Cluster) CFInput(b *Box, stdin string, args ...string) Result {
+	c.t.Helper()
+	p := c.cfProc(b, stdin, args...)
 	ctx, cancel := context.WithTimeout(c.H.Context(), Scaled(cfLimit))
 	defer cancel()
 	err := p.Wait(ctx)
@@ -76,7 +82,7 @@ func (c *Cluster) mustCF(b *Box, args ...string) Result {
 var unsafeName = regexp.MustCompile(`[^a-z0-9-]+`)
 
 // cfProc starts cf in b as a client process with a log of its own.
-func (c *Cluster) cfProc(b *Box, args ...string) *Proc {
+func (c *Cluster) cfProc(b *Box, stdin string, args ...string) *Proc {
 	c.t.Helper()
 	verb := "cf"
 	if len(args) > 0 {
@@ -88,7 +94,7 @@ func (c *Cluster) cfProc(b *Box, args ...string) *Proc {
 	}
 	return b.add(&Proc{
 		box: b, role: RoleClient, name: fmt.Sprintf("cf%03d-%s", c.cfN.Add(1), verb),
-		argv: append([]string{binary}, args...), dir: dir, splitStderr: true,
+		argv: append([]string{binary}, args...), dir: dir, splitStderr: true, stdin: stdin,
 	})
 }
 
@@ -198,14 +204,14 @@ func (c *Cluster) Events(b *Box, filters ...string) []v1.Event {
 // until it is killed or the output ends; what it shows is its Log.
 func (c *Cluster) FollowLogs(b *Box, run string) *Proc {
 	c.t.Helper()
-	return c.cfProc(b, "logs", "--run", run, "--follow")
+	return c.cfProc(b, "", "logs", "--run", run, "--follow")
 }
 
 // FollowEvents is `cf events --follow --json` in b, as a process that goes on
 // until it is killed; its Log is JSON Lines, read with FollowedEvents.
 func (c *Cluster) FollowEvents(b *Box, filters ...string) *Proc {
 	c.t.Helper()
-	return c.cfProc(b, append([]string{"events", "--follow", "--json"}, filters...)...)
+	return c.cfProc(b, "", append([]string{"events", "--follow", "--json"}, filters...)...)
 }
 
 // FollowedEvents are the events a FollowEvents process has written so far; a

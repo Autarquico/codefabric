@@ -138,6 +138,8 @@ func (h *Harness) OnTeardown(f func()) {
 // boxDirs are the directories a box gives its processes.
 type boxDirs struct {
 	config, data, home, tmp, tmux, logs string
+	// bin heads the PATH of the box (see ownPath).
+	bin string
 }
 
 // Box is one machine: its configuration and data, a HOME of its own and a
@@ -170,17 +172,19 @@ func (h *Harness) Box(name string) *Box {
 		tmp:    filepath.Join(dir, "tmp"),
 		tmux:   filepath.Join(dir, "tmux"),
 		logs:   filepath.Join(dir, "logs"),
+		bin:    filepath.Join(dir, "bin"),
 	}
 	// $TMUX_TMPDIR/tmux-<uid>/cf-<12 hex>, as the Worker names its server.
 	if n := len(d.tmux) + len("/tmux-"+strconv.Itoa(os.Getuid())+"/cf-") + 12; n > maxSocketPath {
 		h.t.Fatalf("e2e: a tmux socket under %s would be %d bytes long; set %s to a shorter directory", d.tmux, n, envRoot)
 	}
-	for _, sub := range []string{d.config, d.data, d.home, d.tmp, d.tmux, d.logs} {
+	for _, sub := range []string{d.config, d.data, d.home, d.tmp, d.tmux, d.logs, d.bin} {
 		if err := os.MkdirAll(sub, 0o700); err != nil {
 			h.t.Fatal(err)
 		}
 	}
 	b := &Box{h: h, Name: name, Dir: dir, Paths: config.Paths{ConfigDir: d.config, DataDir: d.data}, dirs: d}
+	b.linkTools()
 	h.mu.Lock()
 	h.boxes = append(h.boxes, b)
 	h.mu.Unlock()
@@ -230,6 +234,8 @@ type Proc struct {
 	// stderr of a start goes to <name>.<n>.stderr.log, not to its log.
 	dir         string
 	splitStderr bool
+	// stdin is what every start reads on its standard input; empty is none.
+	stdin string
 
 	mu     sync.Mutex
 	n      int
@@ -272,6 +278,9 @@ func (p *Proc) start() {
 	cmd.Dir = cmp.Or(p.dir, p.box.Dir)
 	cmd.Env = p.box.Env()
 	cmd.Stdout, cmd.Stderr = logFile, errFile
+	if p.stdin != "" {
+		cmd.Stdin = strings.NewReader(p.stdin)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
