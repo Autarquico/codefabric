@@ -93,7 +93,7 @@ func build(dir string, withRace bool) (string, error) {
 
 // childEnv is the whole environment of a process of the cluster, built from
 // nothing: what the developer's shell holds (CF_*, XDG_*, TMUX, a real HOME)
-// never reaches it. dirs are the box's.
+// never reaches it, nor what its PATH holds but git and tmux. dirs are the box's.
 func childEnv(dirs boxDirs, extra ...string) []string {
 	env := map[string]string{}
 	for _, kv := range gittest.Env(dirs.home) {
@@ -101,7 +101,7 @@ func childEnv(dirs boxDirs, extra ...string) []string {
 		env[k] = v
 	}
 	set := func(k, v string) { env[k] = v }
-	set("PATH", os.Getenv("PATH"))
+	set("PATH", dirs.bin+string(os.PathListSeparator)+systemPath)
 	set("TMPDIR", dirs.tmp)
 	set("LANG", "C")
 	set("LC_ALL", "C")

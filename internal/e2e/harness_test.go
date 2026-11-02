@@ -50,7 +50,7 @@ func TestHarness_ChildrenGetOnlyTheAllowedEnvironment(t *testing.T) {
 	want := map[string]string{
 		"HOME": b.Home(), "TMPDIR": filepath.Join(b.Dir, "tmp"), "TMUX_TMPDIR": b.TmuxDir(),
 		"CF_CONFIG_DIR": b.Paths.ConfigDir, "CF_DATA_DIR": b.Paths.DataDir,
-		"LANG": "C", "LC_ALL": "C", "PATH": os.Getenv("PATH"), "TERM": "xterm-256color",
+		"LANG": "C", "LC_ALL": "C", "PATH": filepath.Join(b.Dir, "bin") + ":" + systemPath, "TERM": "xterm-256color",
 		"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0",
 	}
 	if race {

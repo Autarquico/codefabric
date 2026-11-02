@@ -77,6 +77,9 @@ type Opts struct {
 	LostTimeout time.Duration
 	// MaxConcurrent is `worker join --max-concurrent`; zero leaves the product's default.
 	MaxConcurrent int
+	// Prepare, if set, readies the machine of each Worker before it joins:
+	// its PATH, its HOME, its harnesses.
+	Prepare func(name string, b *Box)
 }
 
 func (o Opts) withDefaults() Opts {
@@ -237,6 +240,9 @@ func (c *Cluster) untilAnswers(ctx context.Context) error {
 func (c *Cluster) joinWorker(name string) *Worker {
 	c.t.Helper()
 	w := &Worker{Name: name, Box: c.H.Box(name)}
+	if c.Opts.Prepare != nil {
+		c.Opts.Prepare(name, w.Box)
+	}
 	invite := strings.TrimSpace(c.mustCF(c.Ctl, "controller", "token", "create", "--worker").Stdout)
 	// A small --disk-min-free: the disk of the CI machine must not degrade a Worker.
 	join := []string{"worker", "join", invite, "--name", name, "--disk-min-free", "1MiB"}
@@ -298,9 +304,15 @@ func (c *Cluster) Bypasses() int64 {
 
 func (c *Cluster) connectObserver() {
 	c.t.Helper()
-	invite := strings.TrimSpace(c.mustCF(c.Ctl, "controller", "token", "create", "--client").Stdout)
 	c.Observer = c.H.Box("obs")
-	c.mustCF(c.Observer, "connect", invite, "--name", "observer")
+	c.Connect(c.Observer, "observer")
+}
+
+// Connect makes b a client of the Controller named name, with an invite of the owner.
+func (c *Cluster) Connect(b *Box, name string) {
+	c.t.Helper()
+	invite := strings.TrimSpace(c.mustCF(c.Ctl, "controller", "token", "create", "--client").Stdout)
+	c.mustCF(b, "connect", invite, "--name", name)
 }
 
 // makeProject makes a bare origin with one commit on main, the owner's clone
