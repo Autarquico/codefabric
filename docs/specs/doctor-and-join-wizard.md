@@ -2,7 +2,7 @@
 codename: codefabric
 title: Doctor y wizard de join
 type: task
-status: active
+status: shipped
 priority: P0
 size: M
 issue: 25
@@ -18,7 +18,7 @@ depends_on:
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows]
 created: 2026-10-10
-updated: 2026-11-01
+updated: 2026-11-02
 ---
 
 # Doctor y wizard de join
