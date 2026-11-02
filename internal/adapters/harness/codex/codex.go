@@ -24,10 +24,11 @@ const Binary = "codex"
 // directory: the ConfigDir of the Run.
 const ConfigHomeEnv = "CODEX_HOME"
 
-// Adapter is the harness `codex`: all of §7.2 but Install, which is not
-// declared and stays unsupported.
+// Adapter is the harness `codex`: all of §7.2.
 type Adapter struct {
 	harness.Unsupported
+	// GOOS overrides runtime.GOOS in tests; empty is the real one.
+	GOOS string
 }
 
 var _ harness.Adapter = Adapter{}
@@ -36,7 +37,7 @@ var _ harness.Adapter = Adapter{}
 func (Adapter) ID() string { return ID }
 
 // Capabilities are both modes, usage, model selection and a configuration
-// directory per Run. Install is not declared.
+// directory per Run, and Install.
 func (Adapter) Capabilities() harness.Capabilities {
 	return harness.Capabilities{
 		Modes:                  []domain.Mode{domain.ModeHeadless, domain.ModeInteractive},
@@ -44,6 +45,7 @@ func (Adapter) Capabilities() harness.Capabilities {
 		ModelSelection:         true,
 		ConfigIsolation:        true,
 		PreapprovedPermissions: true,
+		Install:                true,
 	}
 }
 

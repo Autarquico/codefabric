@@ -66,10 +66,13 @@ func (d *daemon) startDoctor(ctx context.Context, o Options) error {
 	if adapters == nil {
 		adapters = []harness.Adapter{command.Adapter{}, codex.Adapter{}, claude.Adapter{}}
 	}
+	adapters = d.settings.Offered(adapters)
+	restartNeeded := d.restartNeeded(o)
 	hostname, _ := os.Hostname()
 	opts := doctor.Options{
 		Host: h, Adapters: adapters, Worker: doctor.WorkerName(o.Paths, workerName(hostname)), DataDir: o.Paths.WorkerDataDir(),
 		Secrets: d.secrets, MinFree: minFree, Git: o.GitPath,
+		SetupPending: func() bool { return doctor.SetupPending(o.Paths) }, RestartNeeded: restartNeeded,
 	}
 	// RuntimeIsolated stays false: tmux and the process runtime run the harness on the host.
 	if o.Runtime != nil { // the doctor checks the Runtime the daemon uses, not tmux
@@ -80,6 +83,20 @@ func (d *daemon) startDoctor(ctx context.Context, o Options) error {
 		d.doctorEvery = doctor.Every
 	}
 	return nil
+}
+
+// restartNeeded says whether the config changed in a way this daemon, which
+// computed its harnesses at start, does not follow: the join finished after it
+// started pending, or the offered harnesses are not those it started with.
+func (d *daemon) restartNeeded(o Options) func() bool {
+	startedPending, started := d.settings.SetupPending, slices.Clone(d.settings.Harnesses)
+	return func() bool {
+		now, err := doctor.LoadSettings(o.Paths)
+		if err != nil {
+			return false
+		}
+		return startedPending && !now.SetupPending || !doctor.SameHarnesses(started, now.Harnesses)
+	}
 }
 
 // withComponents adds the verdict of the doctor to health, running it if

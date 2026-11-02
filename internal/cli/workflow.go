@@ -298,7 +298,7 @@ func startSession(cmd *cobra.Command, deps workflowDeps, f adoptFlags) (*session
 	}
 	s := &session{cmd: cmd, flags: f}
 	if isTerminal(cmd.InOrStdin()) && isTerminalWriter(cmd.OutOrStdout()) {
-		s.ui = &prompter{in: bufio.NewReader(cmd.InOrStdin()), out: cmd.ErrOrStderr()}
+		s.ui = &prompter{in: bufferedInput(cmd.InOrStdin()), out: cmd.ErrOrStderr()}
 	} else if !f.yes {
 		return nil, usageError(errors.New("without a terminal there is nobody to confirm: pass --" + flagYes))
 	}

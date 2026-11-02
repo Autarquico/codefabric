@@ -13,8 +13,10 @@ Registered in the binaries: `cmd/cf` and the Worker daemon
    not an error. It says nothing of authentication, which `Diagnose` reports
    apart: the secret every Run needs and whether `~/.claude/.credentials.json`
    exists. `Version` runs `claude --version` and parses `X.Y.Z (Claude Code)`
-   to `X.Y.Z`. `Install` is unsupported and not declared, `DryRun` included, as in
-   `codex`: the user installs Claude Code.
+   to `X.Y.Z`. `Install` runs `bash -c 'curl -fsSL https://claude.ai/install.sh | bash'`
+   (needs `curl` and `bash` in the PATH; `DryRun` only returns the plan). The
+   binary may not be in the PATH of the process until a new shell: run
+   `Detect` again.
 
 2. **Configuration paths detected.** `~/.claude/`: `settings.json`,
    `CLAUDE.md`, `commands/`, `agents/`, `skills/` and `output-styles/`; and
@@ -105,7 +107,7 @@ Registered in the binaries: `cmd/cf` and the Worker daemon
    (`--disallowedTools`): when the agent needs input the Run ends as
    `input_required`. It refuses an empty prompt, an empty ConfigDir, a
    model that starts with `-` and a mode that is not declared. `Resume`,
-   `SendInput`, `Stop` and `Install` are unsupported: the only stop is the
+   `SendInput` and `Stop` are unsupported: the only stop is the
    signal to the process group.
 
 6. **Event format.** The stream-json of `claude -p`, one JSON object per line;

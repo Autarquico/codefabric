@@ -1,7 +1,6 @@
 package claude_test
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,15 +36,8 @@ func TestIdentityAndCapabilities(t *testing.T) {
 		t.Error(err)
 	}
 	c := a.Capabilities()
-	if !c.ConfigIsolation || c.Install || !slices.Equal(c.Modes, []domain.Mode{domain.ModeHeadless, domain.ModeInteractive}) {
+	if !c.ConfigIsolation || !c.Install || !slices.Equal(c.Modes, []domain.Mode{domain.ModeHeadless, domain.ModeInteractive}) {
 		t.Errorf("capabilities = %+v", c)
-	}
-}
-
-func TestInstallIsUnsupported(t *testing.T) {
-	_, err := claude.Adapter{}.Install(t.Context(), hostWithBinary(t, ""), harness.InstallOptions{DryRun: true})
-	if !errors.Is(err, harness.ErrUnsupported) {
-		t.Errorf("Install: %v", err)
 	}
 }
 

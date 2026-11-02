@@ -123,11 +123,8 @@ func TestCapabilitiesAndUnsupported(t *testing.T) {
 	a := codex.Adapter{}
 	c := a.Capabilities()
 	if a.ID() != "codex" || !c.Supports(domain.ModeHeadless) || !c.Supports(domain.ModeInteractive) ||
-		!c.UsageEvents || !c.ModelSelection || !c.ConfigIsolation || c.Install || c.Resume {
+		!c.UsageEvents || !c.ModelSelection || !c.ConfigIsolation || !c.Install || c.Resume {
 		t.Errorf("%s %+v", a.ID(), c)
-	}
-	if _, err := a.Install(t.Context(), nil, harness.InstallOptions{}); !errors.Is(err, harness.ErrUnsupported) {
-		t.Errorf("install: %v", err)
 	}
 }
 

@@ -159,6 +159,13 @@ func Run(ctx context.Context, o Options) error {
 	}
 	d.stateDB, d.secrets = db, secretsfile.New(o.Paths.WorkerSecretsFile(), d.clock)
 	jrn := journal.New(d.epoch, d.clock)
+	// One reading of the config decides what this run of the daemon offers, and
+	// is what a later change is compared with (restartNeeded): the wizard may
+	// write it at any time.
+	if d.settings, err = doctor.LoadSettings(o.Paths); err != nil {
+		d.log.WarnContext(ctx, "the Worker config cannot be read: every harness is offered", "err", err)
+		d.settings = doctor.Settings{}
+	}
 	rt, adapters := d.runtimeAndHarnesses(ctx, o)
 	eo := executor.Options{
 		DB: db, Controller: c, Workflows: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
@@ -259,6 +266,7 @@ func (d *daemon) applier(ctx context.Context, o Options, h harness.Host, c *clie
 	if adapters == nil {
 		adapters = []harness.Adapter{codex.Adapter{}, claude.Adapter{}}
 	}
+	adapters = d.settings.Offered(adapters)
 	if h == nil {
 		adapters = nil
 	}
@@ -292,10 +300,11 @@ func (d *daemon) runtimeAndHarnesses(ctx context.Context, o Options) (cfruntime.
 		}
 		rt = t
 	}
-	if o.Harnesses != nil {
-		return rt, o.Harnesses
+	adapters := o.Harnesses
+	if adapters == nil {
+		adapters = []harness.Adapter{command.Adapter{}, codex.Adapter{}, claude.Adapter{}}
 	}
-	return rt, []harness.Adapter{command.Adapter{}, codex.Adapter{}, claude.Adapter{}}
+	return rt, d.settings.Offered(adapters)
 }
 
 // host is the machine the harnesses run on: this one, with the home and the
@@ -336,6 +345,8 @@ func (d *daemon) announce(ctx context.Context, h harness.Host, adapters []harnes
 }
 
 type daemon struct {
+	// settings is the Worker config as this run of the daemon read it at start.
+	settings doctor.Settings
 	client   *client.Client
 	dataDir  string
 	epoch    string

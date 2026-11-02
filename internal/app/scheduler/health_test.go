@@ -31,6 +31,7 @@ func TestFilters_Health(t *testing.T) {
 		{"global failure: disk", domain.WorkerDegraded, []v1.ComponentHealth{comp("disk", fail, "12% libre, umbral 20%")}, "claude", false, "disk: 12% libre, umbral 20%"},
 		{"global failure: runtime", domain.WorkerDegraded, []v1.ComponentHealth{comp("runtime", fail, "no tmux")}, "claude", false, "runtime: no tmux"},
 		{"global failure: version", domain.WorkerDegraded, []v1.ComponentHealth{comp("version", fail, "out of policy")}, "claude", false, "version: out of policy"},
+		{"global failure: setup", domain.WorkerDegraded, []v1.ComponentHealth{comp("setup", fail, "join sin terminar")}, "claude", false, "setup: join sin terminar"},
 		{"auth of the Run's harness", domain.WorkerDegraded, []v1.ComponentHealth{comp("auth:claude", fail, "no login")}, "claude", false, "auth:claude: no login"},
 		{"harness of the Run's harness", domain.WorkerDegraded, []v1.ComponentHealth{comp("harness:claude", fail, "missing")}, "claude", false, "harness:claude: missing"},
 		{"workflow of the Run's harness", domain.WorkerDegraded, []v1.ComponentHealth{comp("workflow:claude", fail, "drift")}, "claude", false, "workflow:claude: drift"},
