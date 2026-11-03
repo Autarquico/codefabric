@@ -2,7 +2,7 @@
 codename: codefabric
 title: Fase 2 — Claude/Codex y Workflows
 type: epic
-status: active
+status: shipped
 priority: P0
 size: XL
 issue: 17
@@ -13,7 +13,7 @@ depends_on: [phase-1-workers]
 supersedes: []
 related_specs: [codefabric-spec]
 created: 2026-10-10
-updated: 2026-10-16
+updated: 2026-11-03
 ---
 
 # Fase 2 — Claude/Codex y Workflows

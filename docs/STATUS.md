@@ -9,6 +9,7 @@
 ## Done esta semana
 
 <!-- pm-sync:done-this-week -->
+- #17 Fase 2 — Claude/Codex y Workflows
 - #19 Workflows: almacenamiento, adopt y commit
 - #20 Adapter de Claude Code
 - #21 Adapter de Codex CLI
