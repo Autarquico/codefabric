@@ -109,6 +109,15 @@ func RunContextWith(ctx context.Context, opts Options, args []string, stdin io.R
 	return 0
 }
 
+// CommandTree builds a fresh cf command tree. Nothing is shared between two
+// trees, so a caller that runs a command from one cannot leak flag or context
+// state into the next; the action registry checks its descriptors against it.
+func CommandTree(opts Options, extra ...*cobra.Command) *cobra.Command {
+	root := newRootCmd(opts)
+	addCommands(root, extra)
+	return root
+}
+
 // jsonRequested also looks at the raw arguments: a usage error can stop flag
 // parsing before --json was read, and its report must still be JSON.
 func jsonRequested(root *cobra.Command, args []string) bool {

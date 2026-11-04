@@ -57,6 +57,22 @@ func (c *Client) Events(ctx context.Context, q EventQuery) (v1.EventPage, error)
 	return out, err
 }
 
+// TaskTimeline reads a page of the timeline of a Task: its events and those of
+// its Runs, oldest first. after is a cursor from an earlier page; limit 0 is the
+// default page. project narrows a Task name more than one Project has.
+func (c *Client) TaskTimeline(ctx context.Context, ref, project, after string, limit int) (v1.TaskTimeline, error) {
+	q := scope(project)
+	if after != "" {
+		q.Set("after", after)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out v1.TaskTimeline
+	err := c.do(ctx, http.MethodGet, withQuery(refPath("tasks", ref, "timeline"), q), nil, &out)
+	return out, err
+}
+
 // FollowEvents delivers the events that happen from q.After on (from now if it
 // is empty), one at a time, until ctx ends or fn returns an error or the
 // Controller says that following would fail again (revoked credentials, a
