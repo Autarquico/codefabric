@@ -116,6 +116,22 @@ func settled(runDir string) error {
 // theirs, and Load still returns every value, until Release. Without a
 // delivery there is nothing to revoke.
 func (m *Manager) Revoke(runDir string, consumer Consumer, refs []string) error {
+	return m.revoke(runDir, consumer, 0, refs)
+}
+
+// RevokeAttempt is Revoke fenced by attempt: it revokes only in the delivery
+// of that prepare attempt. Another one in place is ErrStale and is left as it
+// is, so the late callback of an older attempt never takes access from a newer
+// delivery.
+func (m *Manager) RevokeAttempt(runDir string, attempt uint64, consumer Consumer, refs []string) error {
+	if attempt == 0 {
+		return fmt.Errorf("secretjit: revoking needs an attempt")
+	}
+	return m.revoke(runDir, consumer, attempt, refs)
+}
+
+// revoke is Revoke; a non-zero attempt fences it.
+func (m *Manager) revoke(runDir string, consumer Consumer, attempt uint64, refs []string) error {
 	unlock, err := lock(runDir)
 	if err != nil {
 		return err
@@ -130,6 +146,9 @@ func (m *Manager) Revoke(runDir string, consumer Consumer, refs []string) error 
 	}
 	man := d.m
 	d.close()
+	if attempt != 0 && man.Attempt != attempt {
+		return fmt.Errorf("%w: attempt %d, and %d is in place", ErrStale, attempt, man.Attempt)
+	}
 	for i, e := range man.Refs {
 		if refs == nil || slices.Contains(refs, e.Ref) {
 			man.Refs[i].Access = slices.DeleteFunc(slices.Clone(e.Access), func(c Consumer) bool { return c == consumer })

@@ -273,3 +273,22 @@ func TestBindRefusesWhatIsNotAFrame(t *testing.T) {
 		t.Errorf("a ref not delivered: %v", err)
 	}
 }
+
+func TestRevokeAttempt_ALateRevokeOfAnOlderAttemptLeavesTheNewerDelivery(t *testing.T) {
+	dir := runDir(t)
+	deliverFor(t, dir, 1, askpassOnly, origin)
+	deliverFor(t, dir, 2, askpassOnly, origin)
+
+	if err := New().RevokeAttempt(dir, 1, Askpass, nil); !errors.Is(err, ErrStale) {
+		t.Fatalf("revoke of attempt 1 with 2 in place: %v", err)
+	}
+	if _, err := AskpassReader(dir)(origin.Ref); err != nil {
+		t.Fatalf("the newer delivery lost its access: %v", err)
+	}
+	if err := New().RevokeAttempt(dir, 2, Askpass, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AskpassReader(dir)(origin.Ref); !errors.Is(err, ErrNoAccess) {
+		t.Fatalf("askpass after the revoke of its own attempt: %v", err)
+	}
+}
