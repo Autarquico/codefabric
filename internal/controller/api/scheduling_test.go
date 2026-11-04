@@ -29,6 +29,12 @@ func newSchedulingFixture(t *testing.T) *schedulingFixture {
 	t.Helper()
 	f := &schedulingFixture{}
 	f.testController = newController(t, time.Now(), func(c *api.Config) { f.work = c.Work })
+	return f.start()
+}
+
+// start enrolls the Workers and assigns the Run, once testController is set.
+func (f *schedulingFixture) start() *schedulingFixture {
+	t := f.t
 	ctx := t.Context()
 	f.alpha, f.alphaD = f.enrollRealWorker("alpha")
 	f.beta, f.betaD = f.enrollRealWorker("beta")

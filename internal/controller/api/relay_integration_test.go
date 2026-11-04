@@ -37,7 +37,7 @@ func newRelayFixture(t *testing.T) *relayFixture {
 	})
 	must(t, err)
 	f := &relayFixture{schedulingFixture: &schedulingFixture{}}
-	f.testController = buildController(t, time.Now(), nil, rel, func(c *api.Config) { f.schedulingFixture.work = c.Work })
+	f.testController = buildController(t, time.Now(), nil, rel, nil, func(c *api.Config) { f.schedulingFixture.work = c.Work })
 	ctx := t.Context()
 	f.alpha, f.alphaD = f.enrollRealWorker("alpha")
 	f.beta, f.betaD = f.enrollRealWorker("beta")

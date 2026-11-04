@@ -401,7 +401,7 @@ func (f *OutputFollower) Run(ctx context.Context, sink OutputSink) error {
 			l, err = f.look(ctx, r)
 			return err
 		}); err != nil {
-			return err
+			return outputError(err)
 		}
 		if l.chunk != nil {
 			if err := sink.Chunk(*l.chunk); err != nil {
