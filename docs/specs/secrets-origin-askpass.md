@@ -6,7 +6,7 @@ status: active
 priority: P0
 size: M
 issue: 83
-prs: [85]
+prs: [85, 90]
 related_issues: [83]
 sub_issues: []
 depends_on: [secrets-local]
