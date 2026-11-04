@@ -16,6 +16,11 @@ const WorkerHealthUnknown = "unknown"
 // sequence of that snapshot: following the events from it misses nothing the
 // counters already include, and repeats nothing they do not.
 //
+// The counters and the tail are one consistent snapshot, but a later snapshot
+// may already include events that the stream has not delivered yet: a client
+// that refetches must keep following the events by their sequence, not by the
+// Cursor of the latest snapshot.
+//
 // Tasks leaves out the archived ones. NeedsInput counts the Tasks waiting for
 // input. Runs counts the Runs that have not ended. Workers leaves out the
 // removed ones; WorkerHealth counts them by the status of their last heartbeat.
