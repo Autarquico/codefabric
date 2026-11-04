@@ -114,7 +114,7 @@ func scopeVerdict(project string, refs []string, catalog []secrets.Metadata) (do
 	for _, ref := range refs {
 		m, ok := byRef[ref]
 		switch {
-		case !ok || m.Backend != secrets.BackendFile:
+		case !ok || (m.Backend != secrets.BackendFile && m.Backend != secrets.BackendKeyring):
 			missing = append(missing, ref)
 		case len(m.Projects) > 0 && !slices.Contains(m.Projects, project):
 			outOfScope = append(outOfScope, ref)
@@ -319,6 +319,24 @@ func (p *secretPrepare) current(ctx context.Context) error {
 	return nil
 }
 
+// readFailure is a Get that failed at prepare, as the coded failure the
+// Controller keeps (CF_SECRET_UNAVAILABLE) with a diagnostic that tells a ref
+// the Worker no longer holds from a backend it cannot reach: never a value, and
+// not the error of the backend either. A ctx that ended is no diagnosis of the
+// secret and stays an error of its own.
+func readFailure(ctx context.Context, ref string, err error) error {
+	switch {
+	case ctx.Err() != nil:
+		return fmt.Errorf("reading the secret %q: %w", ref, err)
+	case errors.Is(err, secrets.ErrNotFound):
+		return &codedFailure{domain.CodeSecretUnavailable, fmt.Sprintf("this Worker no longer holds the secret %q: its entry is missing; set it again with `cf worker secrets set`", ref)}
+	case errors.Is(err, secrets.ErrUnavailable):
+		return &codedFailure{domain.CodeSecretUnavailable, fmt.Sprintf("the secret %q is in the keyring of this machine, which cannot be reached "+
+			"(locked, not running or access denied); unlock it on the Worker and run again", ref)}
+	}
+	return &codedFailure{domain.CodeSecretUnavailable, fmt.Sprintf("the secret %q cannot be read from its backend", ref)}
+}
+
 // deliver reads the values of the granted refs and puts them in the run
 // directory, fenced by the phase and the attempt. Nothing is delivered that
 // the output could not be redacted of: values too short, or too many, stop
@@ -337,11 +355,8 @@ func (p *secretPrepare) deliver(ctx context.Context, dir string) (map[string][]b
 	needles := make([]redact.Needle, 0, len(refs))
 	for _, ref := range refs {
 		s, err := p.e.o.Secrets.Get(ctx, ref)
-		if errors.Is(err, secrets.ErrNotFound) {
-			return nil, fmt.Errorf("%s: this Worker no longer holds the secret %q", domain.CodeSecretUnavailable, ref)
-		}
 		if err != nil {
-			return nil, fmt.Errorf("%s: the secret %q cannot be read: %w", domain.CodeSecretUnavailable, ref, err)
+			return nil, readFailure(ctx, ref, err)
 		}
 		held = append(held, s.Metadata)
 		needles = append(needles, redact.Needle{Ref: ref, Value: s.Value})

@@ -60,6 +60,10 @@ e2e: seed 0x825251f7b3c67c1b; to run it again: CF_E2E_SEED=0x825251f7b3c67c1b CF
 
 The line carries `CF_E2E_SCALE` and `CF_E2E_RACE=1` (with `-race`) when the failing run used them. A seed repeats the program of actions, not the OS interleaving; use `CF_E2E_REPEAT` to run it several times. A seed that fails because of the product goes into `seeds.txt`.
 
+### Keyring (`internal/adapters/secrets/keyring`)
+
+The tests against the real OS keyring (`TestKeyring_*`, build tag `integration`, Linux and macOS) write to the keyring of the user running them, so they are skipped unless `CF_REQUIRE_KEYRING=1`. CI sets it in the `service-units` job, on an isolated keyring: a `gnome-keyring-daemon` with its own data dir on Linux, a temporary default keychain on macOS. To run them locally on macOS, make a temporary keychain the default one first (`security create-keychain`, `unlock-keychain`, `default-keychain -s`) and restore the login keychain afterwards; do not run them against your login keychain.
+
 ### Property tests of the secrets
 
 `TestProperty_SecretsDecide` (`internal/app/scheduler`), `TestProperty_SecretsController` (`internal/app`), `TestProperty_SecretsWorker` (`internal/worker/executor`) and `TestProperty_SecretsDelivery` (`internal/worker/secretjit`) run in `make test` with few seeds (200, 3, 3 and 20), because CI runs them under `-race`. Each seed is logged with the command that replays it.

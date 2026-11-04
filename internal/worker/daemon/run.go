@@ -20,7 +20,6 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/client"
@@ -78,6 +77,9 @@ type Options struct {
 	// DiskMinFree is the free disk below which this Worker fails (20% or 50GiB);
 	// empty reads the Worker config, then 20%.
 	DiskMinFree string
+	// Secrets replaces the store of the secrets of this Worker (the catalog
+	// with the OS keyring), for tests.
+	Secrets secrets.Store
 	// DoctorEvery replaces the minute between runs of the doctor, for tests.
 	DoctorEvery time.Duration
 }
@@ -157,7 +159,10 @@ func Run(ctx context.Context, o Options) error {
 	if d.generation, err = db.StartGeneration(ctx); err != nil {
 		return err
 	}
-	d.stateDB, d.secrets = db, secretsfile.New(o.Paths.WorkerSecretsFile(), d.clock)
+	d.stateDB, d.secrets = db, o.Secrets
+	if d.secrets == nil {
+		d.secrets = newSecretStore(o.Paths, d.clock)
+	}
 	jrn := journal.New(d.epoch, d.clock)
 	// One reading of the config decides what this run of the daemon offers, and
 	// is what a later change is compared with (restartNeeded): the wizard may
@@ -362,6 +367,7 @@ type daemon struct {
 	seq        uint64
 	stateDB    *state.DB
 	secrets    secrets.Store
+	health     secretHealth // the last Check of the keyring entries
 
 	doctor      *doctor.Doctor // nil: the machine is not checked
 	doctorEvery time.Duration

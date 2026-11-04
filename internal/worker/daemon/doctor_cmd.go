@@ -16,7 +16,6 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
-	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
@@ -78,7 +77,7 @@ func RunDoctor(ctx context.Context, o DoctorOptions) ([]v1.ComponentHealth, erro
 		opts.DataDir = o.Paths.WorkerDataDir()
 	}
 	if opts.Secrets == nil {
-		opts.Secrets = secretsfile.New(o.Paths.WorkerSecretsFile(), clock.Real{})
+		opts.Secrets = newSecretStore(o.Paths, clock.Real{})
 	}
 	if opts.MinFree == (doctor.Threshold{}) {
 		opts.MinFree = minFree

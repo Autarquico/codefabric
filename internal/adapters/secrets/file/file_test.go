@@ -43,7 +43,7 @@ func newStore(t *testing.T) (*Store, *clock.Fake, string) {
 
 func mustSet(t *testing.T, s *Store, ref string, v []byte, projects ...string) {
 	t.Helper()
-	if err := s.Set(context.Background(), ref, v, projects); err != nil {
+	if err := s.Set(context.Background(), ref, v, projects, secrets.BackendFile); err != nil {
 		t.Fatalf("Set(%q): %v", ref, err)
 	}
 }
@@ -172,7 +172,7 @@ func TestStore_SetRefusesWhatIsNotValidAndWritesNothing(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, _, path := newStore(t)
-			err := s.Set(context.Background(), tc.ref, tc.value, tc.projects)
+			err := s.Set(context.Background(), tc.ref, tc.value, tc.projects, secrets.BackendFile)
 			if !errors.Is(err, domain.ErrInvalidSecret) {
 				t.Fatalf("Set = %v, want ErrInvalidSecret", err)
 			}
@@ -199,7 +199,7 @@ func TestStore_ACatalogHoldsAtMost256Refs(t *testing.T) {
 	for i := range domain.MaxWorkerSecrets {
 		mustSet(t, s, "tok"+strconv.Itoa(i), sentinel)
 	}
-	if err := s.Set(context.Background(), "one-more", sentinel, nil); !errors.Is(err, secrets.ErrFull) {
+	if err := s.Set(context.Background(), "one-more", sentinel, nil, secrets.BackendFile); !errors.Is(err, secrets.ErrFull) {
 		t.Fatalf("Set beyond the limit = %v, want ErrFull", err)
 	}
 	mustSet(t, s, "tok0", []byte("replaced-value")) // replacing adds no ref
@@ -242,7 +242,7 @@ func TestStore_RefusesACatalogOthersCouldReadOrReplace(t *testing.T) {
 			if _, err := s.Get(ctx, "tok"); !errors.Is(err, secrets.ErrUnsafe) {
 				t.Errorf("Get = %v, want ErrUnsafe", err)
 			}
-			if err := s.Set(ctx, "other", sentinel, nil); !errors.Is(err, secrets.ErrUnsafe) {
+			if err := s.Set(ctx, "other", sentinel, nil, secrets.BackendFile); !errors.Is(err, secrets.ErrUnsafe) {
 				t.Errorf("Set = %v, want ErrUnsafe", err)
 			}
 		})
@@ -288,7 +288,7 @@ func TestStore_ACatalogThatIsNotValidIsRefusedWithoutQuotingIt(t *testing.T) {
 				t.Fatalf("List = %v, want ErrCorrupt", err)
 			}
 			assertNoValue(t, err.Error())
-			if err := s.Set(context.Background(), "other", []byte("other-value"), nil); !errors.Is(err, secrets.ErrCorrupt) {
+			if err := s.Set(context.Background(), "other", []byte("other-value"), nil, secrets.BackendFile); !errors.Is(err, secrets.ErrCorrupt) {
 				t.Errorf("Set over it = %v, want ErrCorrupt", err)
 			}
 		})
@@ -305,9 +305,9 @@ func TestStore_ASyntaxErrorSaysWhereItIs(t *testing.T) {
 
 func TestStore_ListsASecretOfAnotherBackendAndCannotReadIt(t *testing.T) {
 	s, _, path := newStore(t)
-	writeCatalog(t, path, `{"schema":1,"catalog_id":"x","generation":3,"secrets":{"kr":{"backend":"keyring","created_at":"2026-10-16T12:00:00Z","updated_at":"2026-10-16T12:00:00Z"}}}`)
+	writeCatalog(t, path, `{"schema":1,"catalog_id":"x","generation":3,"secrets":{"kr":{"backend":"central","created_at":"2026-10-16T12:00:00Z","updated_at":"2026-10-16T12:00:00Z"}}}`)
 	metas, err := s.List(context.Background())
-	if err != nil || len(metas) != 1 || metas[0].Backend != "keyring" {
+	if err != nil || len(metas) != 1 || metas[0].Backend != "central" {
 		t.Fatalf("List = %v, %v", metas, err)
 	}
 	if _, err := s.Get(context.Background(), "kr"); !errors.Is(err, secrets.ErrUnsupportedBackend) {
@@ -326,9 +326,9 @@ func TestStore_NoValueReachesAnErrorAListingOrALog(t *testing.T) {
 
 	var said []string
 	errs := []error{
-		s.Set(ctx, "bad ref", sentinel, nil),
-		s.Set(ctx, "tok", append(slices.Clone(sentinel), bytes.Repeat([]byte{'x'}, domain.MaxSecretValueLen)...), nil),
-		s.Set(ctx, "tok", sentinel, []string{"not-a-project"}),
+		s.Set(ctx, "bad ref", sentinel, nil, secrets.BackendFile),
+		s.Set(ctx, "tok", append(slices.Clone(sentinel), bytes.Repeat([]byte{'x'}, domain.MaxSecretValueLen)...), nil, secrets.BackendFile),
+		s.Set(ctx, "tok", sentinel, []string{"not-a-project"}, secrets.BackendFile),
 		s.Delete(ctx, "missing"),
 	}
 	_, getErr := s.Get(ctx, "missing")
@@ -393,7 +393,7 @@ func TestStore_ConcurrentSetsInOneProcessLoseNothing(t *testing.T) {
 		wg.Go(func() {
 			// Two Stores, two descriptors: flock serializes them as it does processes.
 			other := New(path, clock.Real{})
-			if err := other.Set(context.Background(), "tok"+strconv.Itoa(i), sentinel, nil); err != nil {
+			if err := other.Set(context.Background(), "tok"+strconv.Itoa(i), sentinel, nil, secrets.BackendFile); err != nil {
 				t.Error(err)
 			}
 		})
@@ -418,7 +418,7 @@ func TestHelperProcess(t *testing.T) {
 	path, prefix, _ := strings.Cut(spec, "|")
 	s := New(path, clock.Real{})
 	for i := range 10 {
-		if err := s.Set(context.Background(), prefix+strconv.Itoa(i), sentinel, nil); err != nil {
+		if err := s.Set(context.Background(), prefix+strconv.Itoa(i), sentinel, nil, secrets.BackendFile); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -466,7 +466,7 @@ func TestStore_ASetWaitsForTheLockOnlyAsLongAsItsContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if err := s.Set(ctx, "other", sentinel, nil); !errors.Is(err, context.DeadlineExceeded) {
+	if err := s.Set(ctx, "other", sentinel, nil, secrets.BackendFile); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Set under a held lock = %v, want DeadlineExceeded", err)
 	}
 	if _, err := s.Get(context.Background(), "tok"); err != nil {

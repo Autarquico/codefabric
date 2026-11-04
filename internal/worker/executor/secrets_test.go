@@ -91,10 +91,10 @@ func (s *fakeStore) Get(_ context.Context, ref string) (secrets.Secret, error) {
 	}, nil
 }
 
-func (s *fakeStore) Set(_ context.Context, ref string, value []byte, projects []string) error {
+func (s *fakeStore) Set(_ context.Context, ref string, value []byte, projects []string, backend string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries[ref] = fakeSecret{value: bytes.Clone(value), projects: projects, backend: secrets.BackendFile}
+	s.entries[ref] = fakeSecret{value: bytes.Clone(value), projects: projects, backend: backend}
 	return nil
 }
 
@@ -225,7 +225,7 @@ func TestEvaluateRejectsWhatTheWorkerCannotHandOut(t *testing.T) {
 		{
 			name: "a ref of a backend this Worker cannot read", store: func() *fakeStore {
 				s := newFakeStore(nil)
-				s.entries["github.personal"] = fakeSecret{value: []byte(ghValue), backend: "keyring"}
+				s.entries["github.personal"] = fakeSecret{value: []byte(ghValue), backend: "central"}
 				return s
 			},
 			spec: secretSpec("x", "headless", map[string]string{"GH": "github.personal"}), code: domain.CodeSecretUnavailable, says: `"github.personal"`,
@@ -520,7 +520,7 @@ func TestTheCatalogChangingDuringThePrepareFailsIt(t *testing.T) {
 		{"the ref was scoped to another Project", func(s *fakeStore) { s.scope("github.personal", "project_9") }, domain.CodePolicyDenied},
 		{"a value for another Project replaced it as it was read", func(s *fakeStore) {
 			s.onGet = func(ref string) {
-				_ = s.Set(context.Background(), ref, []byte(ghValue+"-of-project-9"), []string{"project_9"})
+				_ = s.Set(context.Background(), ref, []byte(ghValue+"-of-project-9"), []string{"project_9"}, secrets.BackendFile)
 			}
 		}, domain.CodePolicyDenied},
 	}
@@ -537,7 +537,8 @@ func TestTheCatalogChangingDuringThePrepareFailsIt(t *testing.T) {
 				t.Fatal("the Run did not end")
 			}
 			reports := f.reports(k)
-			if len(reports) == 0 || reports[0].Kind != v1.ReportPrepareFailed || !strings.Contains(reports[0].Message, string(tc.code)) {
+			if len(reports) == 0 || reports[0].Kind != v1.ReportPrepareFailed ||
+				(reports[0].Code != tc.code && !strings.Contains(reports[0].Message, string(tc.code))) {
 				t.Errorf("reports = %+v", reports)
 			}
 			if f.rt.startCount() != 0 {
@@ -700,3 +701,5 @@ func TestTheHarnessLosesItsAccessToTheSecretsOnceItStarted(t *testing.T) {
 		t.Errorf("what the output is redacted of went with the access: %v", err)
 	}
 }
+
+func (s *fakeStore) Check(context.Context) ([]secrets.Status, error) { return nil, nil }

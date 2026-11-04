@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -46,7 +47,7 @@ func TestHeartbeat_CarriesTheMetadataOfTheCatalogAndNoValue(t *testing.T) {
 	d := beating(t, path)
 	sentinel := []byte("Zq8v-sentinel-7Hc2LmP0xR4tW9yB")
 	project := "project_01J00000000000000000000000"
-	if err := d.secrets.Set(t.Context(), "gh/token", sentinel, []string{project}); err != nil {
+	if err := d.secrets.Set(t.Context(), "gh/token", sentinel, []string{project}, secrets.BackendFile); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +92,7 @@ func TestHeartbeat_AnEmptyOrMissingCatalogIsAnEmptyReport(t *testing.T) {
 func TestHeartbeat_AnUnreadableCatalogIsReportedEmptyAndDegradesTheWorker(t *testing.T) {
 	path := catalogPath(t)
 	d := beating(t, path)
-	if err := d.secrets.Set(t.Context(), "gh/token", []byte("long-enough-value"), nil); err != nil {
+	if err := d.secrets.Set(t.Context(), "gh/token", []byte("long-enough-value"), nil, secrets.BackendFile); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(path, 0o644); err != nil { //nolint:gosec // the point of the test

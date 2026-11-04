@@ -158,8 +158,8 @@ func validateSecretMeta(m v1.SecretMeta) error {
 	if !domain.ValidSecretRef(m.Ref) {
 		return input.Invalid("a secret ref is a letter or digit followed by letters, digits, '.', '_', '/' or '-', up to %d", domain.MaxSecretRefLen)
 	}
-	if m.Backend != v1.SecretBackendFile {
-		return input.Invalid("secret %q has a backend this Controller does not know; it knows %q", m.Ref, v1.SecretBackendFile)
+	if m.Backend != v1.SecretBackendFile && m.Backend != v1.SecretBackendKeyring {
+		return input.Invalid("secret %q has a backend this Controller does not know; it knows %q and %q", m.Ref, v1.SecretBackendFile, v1.SecretBackendKeyring)
 	}
 	if m.UpdatedAt.IsZero() {
 		return input.Invalid("secret %q has no updated_at", m.Ref)

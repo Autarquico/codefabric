@@ -160,6 +160,9 @@ func (a *Applier) resolve(ctx context.Context, ref string) ([]byte, error) {
 		if errors.Is(err, secrets.ErrNotFound) {
 			return nil, errors.New("this Worker does not hold it")
 		}
+		if errors.Is(err, secrets.ErrUnavailable) {
+			return nil, errors.New("the keyring of this Worker cannot be reached (locked, not running or access denied)")
+		}
 		return nil, errors.New("the secret store of this Worker cannot be read")
 	}
 	return s.Value, nil

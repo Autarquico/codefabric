@@ -263,7 +263,7 @@ func TestCLI_WorkerSecretsSetListRm(t *testing.T) {
 		t.Errorf("list --json = %+v", listed)
 	}
 	code, out, _ := cf(t, "", "worker", "secrets", "list")
-	if code != 0 || leaks(out) || !strings.Contains(out, "REF") || !strings.Contains(out, "any Project") || !strings.Contains(out, project) {
+	if code != 0 || leaks(out) || !strings.Contains(out, "REF") || !strings.Contains(out, "STATUS") || !strings.Contains(out, "any Project") || !strings.Contains(out, project) {
 		t.Errorf("list: exit %d:\n%s", code, out)
 	}
 	if raw, _ := json.Marshal(listed); leaks(string(raw)) {

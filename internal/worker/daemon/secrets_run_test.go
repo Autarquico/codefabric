@@ -7,10 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
+	"github.com/Autarquico/codefabric/internal/adapters/secrets/secretstest"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/worker/daemon"
 )
 
 func secretRefs(w v1.Worker) []string {
@@ -27,7 +30,7 @@ func TestRun_TheHeartbeatPublishesTheCatalogAndNeverAValue(t *testing.T) {
 	c.join("box", paths)
 	catalog := secretsfile.New(paths.WorkerSecretsFile(), clock.Real{})
 	const value = "sentinel-0d1c3a7f-value-never-leaves"
-	if err := catalog.Set(t.Context(), "gh/token", []byte(value), nil); err != nil {
+	if err := catalog.Set(t.Context(), "gh/token", []byte(value), nil, secrets.BackendFile); err != nil {
 		t.Fatal(err)
 	}
 	run(t, paths, &logs{})
@@ -36,7 +39,7 @@ func TestRun_TheHeartbeatPublishesTheCatalogAndNeverAValue(t *testing.T) {
 		return w.State == domain.WorkerOnline && slices.Equal(secretRefs(w), []string{"gh/token"})
 	})
 	// Set talks to no one: the next heartbeat carries it.
-	if err := catalog.Set(t.Context(), "npm/token", []byte(value+"-2"), nil); err != nil {
+	if err := catalog.Set(t.Context(), "npm/token", []byte(value+"-2"), nil, secrets.BackendFile); err != nil {
 		t.Fatal(err)
 	}
 	w := c.eventually("box", "the second secret to be reported", func(w v1.Worker) bool {
@@ -48,6 +51,27 @@ func TestRun_TheHeartbeatPublishesTheCatalogAndNeverAValue(t *testing.T) {
 	}
 	if strings.Contains(string(shown), "sentinel") {
 		t.Errorf("the value reached the Controller: %s", shown)
+	}
+}
+
+// TestRun_TheHeartbeatAnnouncesAKeyringSecret runs the whole daemon over a
+// store with a fake keyring (Options.Secrets).
+func TestRun_TheHeartbeatAnnouncesAKeyringSecret(t *testing.T) {
+	c := newController(t)
+	paths := machine(t)
+	c.join("box", paths)
+	vault := secretstest.New()
+	store := secretsfile.New(paths.WorkerSecretsFile(), clock.Real{}, secretsfile.WithVault(vault))
+	if err := store.Set(t.Context(), "gh/token", []byte("sentinel-keyring-value-0d1c3a"), nil, secrets.BackendKeyring); err != nil {
+		t.Fatal(err)
+	}
+	runMutated(t, paths, &logs{}, func(o *daemon.Options) { o.Secrets = store })
+
+	w := c.eventually("box", "the keyring secret to be reported", func(w v1.Worker) bool {
+		return slices.Equal(secretRefs(w), []string{"gh/token"})
+	})
+	if w.Secrets[0].Backend != v1.SecretBackendKeyring {
+		t.Errorf("backend = %q", w.Secrets[0].Backend)
 	}
 }
 

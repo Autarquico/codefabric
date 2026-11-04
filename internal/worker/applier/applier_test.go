@@ -626,3 +626,22 @@ func TestADryRunDoesNotWaitForRuns(t *testing.T) {
 		t.Errorf("reports = %+v, want the dry run reported", r.c.reported())
 	}
 }
+
+// lockedSecrets is a store whose keyring cannot be reached.
+type lockedSecrets struct{ secrets.Store }
+
+func (lockedSecrets) Get(context.Context, string) (secrets.Secret, error) {
+	return secrets.Secret{}, secrets.ErrUnavailable
+}
+
+func TestAnUnreachableKeyringIsSaidApartFromOtherReadFailures(t *testing.T) {
+	a := New(Options{Secrets: lockedSecrets{}, Clock: clock.NewFake(time.Unix(0, 0)), Recover: func(string) error { return nil }})
+	_, err := a.resolve(context.Background(), "tok/a")
+	if err == nil || !strings.Contains(err.Error(), "keyring") || strings.Contains(err.Error(), "tok/a") {
+		t.Errorf("err = %v", err)
+	}
+	_, err = New(Options{Secrets: fakeSecrets{}, Clock: clock.NewFake(time.Unix(0, 0)), Recover: func(string) error { return nil }}).resolve(context.Background(), "tok/a")
+	if err == nil || strings.Contains(err.Error(), "keyring") {
+		t.Errorf("a missing ref: %v", err)
+	}
+}
