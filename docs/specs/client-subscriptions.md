@@ -2,11 +2,11 @@
 codename: codefabric
 title: Suscripciones del Client SDK
 type: task
-status: active
+status: shipped
 priority: P1
 size: S
 issue: 94
-prs: []
+prs: [103]
 related_issues: [94]
 sub_issues: []
 depends_on: [observe-attach-events]

@@ -23,6 +23,8 @@
 - #50 e2e: flakes de cmd/cf bajo carga
 - #82 Backend keyring de secrets
 - #83 Credencial de origin vía GIT_ASKPASS
+- #94 Suscripciones del Client SDK
+- #95 TUI: shell y home
 <!-- /pm-sync:done-this-week -->
 
 ---

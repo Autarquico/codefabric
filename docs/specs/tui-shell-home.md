@@ -2,11 +2,11 @@
 codename: codefabric
 title: "TUI: shell y home"
 type: task
-status: active
+status: shipped
 priority: P1
 size: M
 issue: 95
-prs: []
+prs: [105]
 related_issues: [95]
 sub_issues: []
 depends_on: [client-subscriptions]
