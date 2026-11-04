@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,9 +23,11 @@ type fakeBackend struct {
 	setBlock       chan struct{}
 	setStarted     chan struct{}
 	set            chan string
+	calls          atomic.Int32
 }
 
 func (f *fakeBackend) Get(string, string) (string, error) {
+	f.calls.Add(1)
 	if f.block != nil {
 		<-f.block
 	}
@@ -33,6 +36,7 @@ func (f *fakeBackend) Get(string, string) (string, error) {
 
 func (f *fakeBackend) Set(_, _, p string) error {
 	f.setCalls++
+	f.calls.Add(1)
 	if f.setStarted != nil {
 		close(f.setStarted)
 	}
@@ -44,7 +48,11 @@ func (f *fakeBackend) Set(_, _, p string) error {
 	}
 	return f.setErr
 }
-func (f *fakeBackend) Delete(string, string) error { return f.setErr }
+
+func (f *fakeBackend) Delete(string, string) error {
+	f.calls.Add(1)
+	return f.setErr
+}
 
 func TestErrorMapping(t *testing.T) {
 	leak := "s3ntinel-VALUE"
@@ -58,7 +66,7 @@ func TestErrorMapping(t *testing.T) {
 		{"locked", fmt.Errorf("exit status 36 %s", leak), secrets.ErrUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			v := Vault{b: &fakeBackend{getErr: tc.err}}
+			v := NewWith(&fakeBackend{getErr: tc.err}, 0)
 			_, err := v.Get(t.Context(), "a")
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("got %v, want %v", err, tc.want)
@@ -72,7 +80,7 @@ func TestErrorMapping(t *testing.T) {
 
 func TestSetRefusesOversizedBeforeTouchingTheKeyring(t *testing.T) {
 	b := &fakeBackend{}
-	v := Vault{b: b}
+	v := NewWith(b, 0)
 	err := v.Set(t.Context(), "a", bytes.Repeat([]byte("x"), MaxValueLen+1))
 	if !errors.Is(err, domain.ErrInvalidSecret) || b.setCalls != 0 {
 		t.Fatalf("err=%v setCalls=%d", err, b.setCalls)
@@ -87,7 +95,7 @@ func TestBlockedKeyringIsUnavailableOnTimeout(t *testing.T) {
 	defer close(b.block)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := (Vault{b: b}).Get(ctx, "a"); !errors.Is(err, secrets.ErrUnavailable) {
+	if _, err := NewWith(b, 0).Get(ctx, "a"); !errors.Is(err, secrets.ErrUnavailable) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -133,18 +141,61 @@ func TestCancelledSetKeepsItsOwnCopyOfTheValue(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 	clear(value)
-	if !v.Writing("acc") {
-		t.Error("the abandoned Set is not reported as writing")
-	}
 	close(b.setBlock)
 	if got := <-b.set; got != "s3ntinel-VALUE" {
 		t.Fatalf("the keyring got %q", got)
 	}
+}
+
+func TestACancelledContextReachesNoBackendAndLeavesNothingBehind(t *testing.T) {
+	b := &fakeBackend{}
+	v := NewWith(b, time.Minute)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := v.Set(ctx, "acc", []byte("value")); !errors.Is(err, secrets.ErrUnavailable) {
+		t.Fatalf("Set = %v", err)
+	}
+	if _, err := v.Get(ctx, "acc"); !errors.Is(err, secrets.ErrUnavailable) {
+		t.Fatalf("Get = %v", err)
+	}
+	if n := b.calls.Load(); n != 0 {
+		t.Fatalf("%d backend calls", n)
+	}
+	if len(v.slot) != 0 {
+		t.Fatal("the slot is held")
+	}
+}
+
+// A keyring that never answers holds one operation, not one per attempt; the
+// next ones are refused at once, and the slot frees when the operation ends.
+func TestAStuckOperationLetsNoSecondOneStart(t *testing.T) {
+	b := &fakeBackend{block: make(chan struct{})}
+	v := NewWith(b, 20*time.Millisecond)
+	if _, err := v.Get(t.Context(), "a"); !errors.Is(err, secrets.ErrUnavailable) {
+		t.Fatalf("first Get = %v", err)
+	}
+	start := time.Now()
+	for range 5 {
+		if err := v.Delete(t.Context(), "a"); !errors.Is(err, secrets.ErrUnavailable) {
+			t.Fatalf("Delete while stuck = %v", err)
+		}
+	}
+	if d := time.Since(start); d > 10*time.Millisecond {
+		t.Fatalf("refusals took %s: they should not wait", d)
+	}
+	if n := b.calls.Load(); n != 1 {
+		t.Fatalf("%d backend calls, want the one stuck", n)
+	}
+
+	close(b.block)
 	deadline := time.Now().Add(5 * time.Second)
-	for v.Writing("acc") {
+	for len(v.slot) != 0 {
 		if time.Now().After(deadline) {
-			t.Fatal("still writing")
+			t.Fatal("the slot was never freed")
 		}
 		time.Sleep(time.Millisecond)
+	}
+	if err := v.Delete(t.Context(), "a"); err != nil {
+		t.Fatalf("Delete after the slot freed = %v", err)
 	}
 }

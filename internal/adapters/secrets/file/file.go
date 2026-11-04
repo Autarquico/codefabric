@@ -53,6 +53,13 @@ const (
 	// pendingGrace is how long an item being written is left alone before a
 	// sweep treats it as the leftover of a crashed Set.
 	pendingGrace = 10 * time.Minute
+	// pendingForget is how long, from its creation, the record of an item being
+	// written is kept. A sweep deletes the item (idempotent) but keeps the
+	// record, so a write that lands late, from this or any other process, is
+	// deleted by a later sweep. Far beyond any bounded keyring operation; the
+	// residual risk is a write completing more than this late, which leaves an
+	// orphan item.
+	pendingForget = 24 * time.Hour
 
 	// maxCatalogBytes bounds what a read loads: every secret at its largest,
 	// base64-encoded, with room to spare.
@@ -437,8 +444,8 @@ func (s *Store) sweep(ctx context.Context) {
 	now := s.clock.Now()
 	var gone []string
 	for _, r := range c.Retired {
-		if r.Pending && (now.Sub(r.At) < pendingGrace || s.writing(account(c.CatalogID, r.Ref, r.Item))) {
-			continue // being written, or abandoned by a Set whose write may still land
+		if r.Pending && now.Sub(r.At) < pendingGrace {
+			continue // being written
 		}
 		if e := c.Secrets[r.Ref]; e.Item == r.Item {
 			gone = append(gone, r.Item) // pointed to after all: only the record is stale
@@ -447,6 +454,9 @@ func (s *Store) sweep(ctx context.Context) {
 		err := s.vault.Delete(ctx, account(c.CatalogID, r.Ref, r.Item))
 		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
 			break
+		}
+		if r.Pending && now.Sub(r.At) < pendingForget {
+			continue // deleted, but the write may still land: the next sweep deletes it again
 		}
 		gone = append(gone, r.Item)
 	}
@@ -457,18 +467,6 @@ func (s *Store) sweep(ctx context.Context) {
 		c.Retired = slices.DeleteFunc(c.Retired, func(r retiredItem) bool { return slices.Contains(gone, r.Item) })
 		return nil
 	})
-}
-
-// writeTracker is a Vault that knows of the writes it abandoned and that have
-// not ended yet.
-type writeTracker interface{ Writing(account string) bool }
-
-// writing says whether a write of account may still complete. Only then is its
-// pending record kept: a sweep that forgot it would leave the item, when it
-// landed, with nothing to delete it.
-func (s *Store) writing(account string) bool {
-	t, ok := s.vault.(writeTracker)
-	return ok && t.Writing(account)
 }
 
 // update applies change to the catalog under the lock of its writers and

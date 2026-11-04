@@ -13,7 +13,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	zk "github.com/zalando/go-keyring"
@@ -54,7 +53,7 @@ func (system) Delete(s, u string) error        { return zk.Delete(s, u) }
 type Vault struct {
 	b       Backend
 	timeout time.Duration // OpTimeout when zero
-	writing *writes       // nil: not tracked
+	slot    chan struct{} // one token: at most one operation in flight
 }
 
 var _ secrets.Vault = Vault{}
@@ -64,53 +63,12 @@ func New() Vault { return NewWith(system{}, OpTimeout) }
 
 // NewWith is a Vault over b whose operations give up after timeout.
 func NewWith(b Backend, timeout time.Duration) Vault {
-	return Vault{b: b, timeout: timeout, writing: &writes{}}
-}
-
-// writes counts, by account, the Sets whose goroutine has not returned: one
-// abandoned by its caller still ends by writing the item.
-type writes struct {
-	mu sync.Mutex
-	n  map[string]int
-}
-
-func (w *writes) begin(account string) {
-	if w == nil {
-		return
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.n == nil {
-		w.n = map[string]int{}
-	}
-	w.n[account]++
-}
-
-func (w *writes) end(account string) {
-	if w == nil {
-		return
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.n[account]--; w.n[account] <= 0 {
-		delete(w.n, account)
-	}
-}
-
-// Writing says whether a Set of account may still complete, though its caller
-// has stopped waiting for it.
-func (v Vault) Writing(account string) bool {
-	if v.writing == nil {
-		return false
-	}
-	v.writing.mu.Lock()
-	defer v.writing.mu.Unlock()
-	return v.writing.n[account] > 0
+	return Vault{b: b, timeout: timeout, slot: make(chan struct{}, 1)}
 }
 
 // Get implements secrets.Vault.
 func (v Vault) Get(ctx context.Context, account string) ([]byte, error) {
-	s, err := call(ctx, v.timeout, func() (string, error) { return v.b.Get(Service, account) })
+	s, err := call(ctx, v.slot, v.timeout, func() (string, error) { return v.b.Get(Service, account) })
 	if err != nil {
 		return nil, classify(err)
 	}
@@ -127,9 +85,7 @@ func (v Vault) Set(ctx context.Context, account string, value []byte) error {
 			domain.ErrInvalidSecret, MaxValueLen, len(value))
 	}
 	password := string(value)
-	v.writing.begin(account)
-	_, err := call(ctx, v.timeout, func() (struct{}, error) {
-		defer v.writing.end(account)
+	_, err := call(ctx, v.slot, v.timeout, func() (struct{}, error) {
 		return struct{}{}, v.b.Set(Service, account, password)
 	})
 	return classify(err)
@@ -137,7 +93,7 @@ func (v Vault) Set(ctx context.Context, account string, value []byte) error {
 
 // Delete implements secrets.Vault.
 func (v Vault) Delete(ctx context.Context, account string) error {
-	_, err := call(ctx, v.timeout, func() (struct{}, error) { return struct{}{}, v.b.Delete(Service, account) })
+	_, err := call(ctx, v.slot, v.timeout, func() (struct{}, error) { return struct{}{}, v.b.Delete(Service, account) })
 	return classify(err)
 }
 
@@ -145,16 +101,27 @@ func (v Vault) Delete(ctx context.Context, account string) error {
 // waited, as opposed to a caller that gave up.
 var errTimeout = errors.New("the keyring did not answer in time")
 
+// errBusy is an operation refused because an earlier one, abandoned by its
+// caller, has not finished.
+var errBusy = errors.New("the keyring is still busy with an earlier operation")
+
 // call runs f, giving up when ctx ends or after timeout: the library has no
 // context, and a locked keyring may wait for an unlock prompt. The abandoned
-// call finishes in its goroutine.
-func call[T any](ctx context.Context, timeout time.Duration, f func() (T, error)) (T, error) {
+// call finishes in its goroutine, which holds the slot until then: while it
+// does, call refuses to launch another, so a keyring that never answers costs
+// one goroutine, not one per attempt.
+func call[T any](ctx context.Context, slot chan struct{}, timeout time.Duration, f func() (T, error)) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
 	if timeout <= 0 {
 		timeout = OpTimeout
+	}
+	select {
+	case slot <- struct{}{}:
+	default:
+		return zero, errBusy
 	}
 	type result struct {
 		v   T
@@ -163,6 +130,7 @@ func call[T any](ctx context.Context, timeout time.Duration, f func() (T, error)
 	done := make(chan result, 1)
 	go func() {
 		v, err := f()
+		<-slot
 		done <- result{v, err}
 	}()
 	timer := time.NewTimer(timeout)
@@ -187,6 +155,8 @@ func classify(err error) error {
 		return secrets.ErrNotFound
 	case errors.Is(err, zk.ErrSetDataTooBig):
 		return fmt.Errorf("%w: the keyring refused a value that large", domain.ErrInvalidSecret)
+	case errors.Is(err, errBusy):
+		return fmt.Errorf("%w: the keyring is still busy with an earlier operation", secrets.ErrUnavailable)
 	case errors.Is(err, errTimeout):
 		return fmt.Errorf("%w: the keyring did not answer in time", secrets.ErrUnavailable)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

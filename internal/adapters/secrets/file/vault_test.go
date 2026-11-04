@@ -237,8 +237,14 @@ func TestCrashBetweenTheVaultWriteAndTheSwapLeavesTheOldVersionAndASweepableItem
 	}
 	c.Advance(pendingGrace + time.Second)
 	setKeyring(t, s, "another", []byte("another-value-1234"))
-	if cat := readCatalog(t, path); len(cat.Retired) != 0 || v.count() != 3 {
+	// Swept, but the record stays: a write of the crashed Set may land late.
+	if cat := readCatalog(t, path); len(cat.Retired) != 1 || v.count() != 3 {
 		t.Fatalf("vault holds %d items (want 3: one per ref); retired %+v", v.count(), cat.Retired)
+	}
+	c.Advance(pendingForget)
+	setKeyring(t, s, "yet-another", []byte("another-value-1234"))
+	if cat := readCatalog(t, path); len(cat.Retired) != 0 {
+		t.Fatalf("retired %+v: the record outlived pendingForget", cat.Retired)
 	}
 }
 
@@ -549,61 +555,57 @@ func TestFileSetOverAKeyringEntryRetiresItsItem(t *testing.T) {
 }
 
 // abandoningVault is a Vault whose Set gives up at once, as one cut by its
-// context does, while the write goes on: until land, Writing says so.
+// context does, while the write goes on: land makes it reach the shared backend.
 type abandoningVault struct {
 	*fakeVault
-	mu      sync.Mutex
 	account string
 	value   []byte
-	landed  bool
 }
 
 func (a *abandoningVault) Set(_ context.Context, account string, value []byte) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.account, a.value = account, bytes.Clone(value)
 	return secrets.ErrUnavailable
-}
-
-func (a *abandoningVault) Writing(string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.account != "" && !a.landed
 }
 
 func (a *abandoningVault) land() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.landed = true
-	a.fakeVault.mu.Lock()
 	a.items[a.account] = a.value
-	a.fakeVault.mu.Unlock()
 }
 
-// A sweep must not forget the pending record of a Set abandoned by its caller
-// while its write can still land: when it lands, the next sweep deletes it.
-func TestASweepKeepsThePendingRecordOfAnAbandonedSetUntilItsWriteEnds(t *testing.T) {
+// A Set abandoned by its caller may still land. Another Store, over the same
+// backend and catalog, sweeps before it does and finds nothing to delete: it
+// must keep the record, so that a later sweep deletes the late item.
+func TestASweepOfAnotherStoreStillCleansAnAbandonedSetThatLandsLate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "worker", "secrets.json")
 	c := clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC))
-	v := &abandoningVault{fakeVault: newFakeVault()}
-	s := New(path, c, WithVault(v))
+	backend := newFakeVault()
+	writer := New(path, c, WithVault(&abandoningVault{fakeVault: backend}))
+	v := writer.vault.(*abandoningVault)
+	other := New(path, c, WithVault(backend))
 	ctx := context.Background()
 
-	if err := s.Set(ctx, "gh/token", []byte("first-value-1234"), nil, secrets.BackendKeyring); !errors.Is(err, secrets.ErrUnavailable) {
+	if err := writer.Set(ctx, "gh/token", []byte("first-value-1234"), nil, secrets.BackendKeyring); !errors.Is(err, secrets.ErrUnavailable) {
 		t.Fatalf("Set = %v", err)
 	}
 	c.Advance(pendingGrace + time.Minute)
-	s.sweep(ctx)
+	other.sweep(ctx)
 	if cat := readCatalog(t, path); len(cat.Retired) != 1 || !cat.Retired[0].Pending {
 		t.Fatalf("retired = %+v: forgotten while the write may land", cat.Retired)
 	}
 
 	v.land()
-	if v.count() != 1 {
-		t.Fatalf("the vault holds %d items after the late write", v.count())
+	if backend.count() != 1 {
+		t.Fatalf("the vault holds %d items after the late write", backend.count())
 	}
-	s.sweep(ctx)
-	if cat := readCatalog(t, path); len(cat.Retired) != 0 || v.count() != 0 {
-		t.Fatalf("the late item was left: %d items, retired %+v", v.count(), cat.Retired)
+	other.sweep(ctx)
+	if cat := readCatalog(t, path); backend.count() != 0 || len(cat.Retired) != 1 {
+		t.Fatalf("the late item was left: %d items, retired %+v", backend.count(), cat.Retired)
+	}
+
+	c.Advance(pendingForget)
+	writer.sweep(ctx)
+	if cat := readCatalog(t, path); len(cat.Retired) != 0 {
+		t.Fatalf("retired = %+v: not forgotten after pendingForget", cat.Retired)
 	}
 }
