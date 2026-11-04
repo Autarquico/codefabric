@@ -8,7 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"unicode"
 
+	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -108,11 +111,28 @@ func settled(runDir string) error {
 	return nil
 }
 
-// Revoke takes from the harness the access to refs (to every ref, if refs is
-// nil) of the delivery in runDir, for good: Resolver no longer returns them,
-// and a Deliver of the same attempt keeps them revoked. Load still does, until
-// Release. Without a delivery there is nothing to revoke.
-func (m *Manager) Revoke(runDir string, refs []string) error {
+// Revoke takes from consumer the access to refs (to every ref, if refs is nil)
+// of the delivery in runDir, for good: its reader no longer returns them, and
+// a Deliver of the same attempt keeps them revoked. The other consumers keep
+// theirs, and Load still returns every value, until Release. Without a
+// delivery there is nothing to revoke.
+func (m *Manager) Revoke(runDir string, consumer Consumer, refs []string) error {
+	return m.revoke(runDir, consumer, 0, refs)
+}
+
+// RevokeAttempt is Revoke fenced by attempt: it revokes only in the delivery
+// of that prepare attempt. Another one in place is ErrStale and is left as it
+// is, so the late callback of an older attempt never takes access from a newer
+// delivery.
+func (m *Manager) RevokeAttempt(runDir string, attempt uint64, consumer Consumer, refs []string) error {
+	if attempt == 0 {
+		return fmt.Errorf("secretjit: revoking needs an attempt")
+	}
+	return m.revoke(runDir, consumer, attempt, refs)
+}
+
+// revoke is Revoke; a non-zero attempt fences it.
+func (m *Manager) revoke(runDir string, consumer Consumer, attempt uint64, refs []string) error {
 	unlock, err := lock(runDir)
 	if err != nil {
 		return err
@@ -127,16 +147,76 @@ func (m *Manager) Revoke(runDir string, refs []string) error {
 	}
 	man := d.m
 	d.close()
+	if attempt != 0 && man.Attempt != attempt {
+		return fmt.Errorf("%w: attempt %d, and %d is in place", ErrStale, attempt, man.Attempt)
+	}
 	for i, e := range man.Refs {
 		if refs == nil || slices.Contains(refs, e.Ref) {
-			man.Refs[i].Harness = false
+			man.Refs[i].Access = slices.DeleteFunc(slices.Clone(e.Access), func(c Consumer) bool { return c == consumer })
 		}
 	}
+	return m.replaceManifest(filepath.Join(runDir, liveName), man)
+}
+
+// Binding is where a ref may be sent and as whom.
+type Binding struct {
+	Origin string // the URL of the repository
+	User   string
+}
+
+const maxBindingLen = 2048
+
+// Bind records on ref, already delivered in runDir, the destination it is
+// authorized for and the user it is sent with, for AskpassGrant and for the
+// redaction of the user:value forms. Binding again replaces the record. The
+// user is valid by secrets.CheckUser, the rule `secrets set` applies too, and
+// is not empty.
+func (m *Manager) Bind(runDir, ref string, b Binding) error {
+	if b.Origin == "" || len(b.Origin) > maxBindingLen || b.User == "" || secrets.CheckUser(b.User) != nil ||
+		strings.ContainsFunc(b.Origin, unicode.IsControl) {
+		return errors.New("secretjit: the origin or the user of a binding is not valid")
+	}
+	unlock, err := lock(runDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	d, err := openDelivery(runDir)
+	if err != nil {
+		return err
+	}
+	man := d.m
+	i := slices.IndexFunc(man.Refs, func(e entry) bool { return e.Ref == ref })
+	if i < 0 {
+		d.close()
+		return fmt.Errorf("%w: %q is not in the delivery", ErrNotDelivered, ref)
+	}
+	// Another user for the same value keeps the old pairing redactable.
+	if old := man.Refs[i].User; old != "" && old != b.User {
+		v, err := d.value(man.Refs[i])
+		if err != nil {
+			d.close()
+			return err
+		}
+		man.Retained = append(slices.Clone(man.Retained), retained{Ref: ref, File: retainedFile(len(man.Retained)), User: old})
+		d.close()
+		if err := m.writeSynced(filepath.Join(runDir, liveName, man.Retained[len(man.Retained)-1].File), v); err != nil {
+			return fmt.Errorf("secretjit: writing a retained value of %q: %w", ref, err)
+		}
+	} else {
+		d.close()
+	}
+	man.Refs = slices.Clone(man.Refs)
+	man.Refs[i].Origin, man.Refs[i].User = b.Origin, b.User
+	return m.replaceManifest(filepath.Join(runDir, liveName), man)
+}
+
+// replaceManifest atomically replaces the manifest of the delivery in live.
+func (m *Manager) replaceManifest(live string, man manifest) error {
 	data, err := json.Marshal(man)
 	if err != nil {
 		return fmt.Errorf("secretjit: %w", err)
 	}
-	live := filepath.Join(runDir, liveName)
 	tmp, final := filepath.Join(live, manifestTemp), filepath.Join(live, manifestName)
 	if err := m.remove(tmp); err != nil {
 		return err

@@ -40,6 +40,8 @@ type fakeGit struct {
 	blobs    map[string]string
 	blobsErr error
 	ensure   error
+	// onEnsure, if set, runs inside EnsureSource, as the fetch would.
+	onEnsure func(s gitops.SourceSpec) error
 	calls    []string
 }
 
@@ -55,8 +57,13 @@ func (g *fakeGit) callList() []string {
 	return slices.Clone(g.calls)
 }
 
-func (g *fakeGit) EnsureSource(context.Context, gitops.SourceSpec) error {
+func (g *fakeGit) EnsureSource(_ context.Context, s gitops.SourceSpec) error {
 	g.called("ensure")
+	if g.onEnsure != nil {
+		if err := g.onEnsure(s); err != nil {
+			return err
+		}
+	}
 	return g.ensure
 }
 

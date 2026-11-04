@@ -1,10 +1,12 @@
 package secretjit
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/Autarquico/codefabric/internal/support/redact"
@@ -43,9 +45,23 @@ func sweepAll(dir string) error {
 }
 
 var recoveries = []recovery{
-	{name: "deliver again", do: func(dir string) error { return New().Deliver(dir, 2, v2, allow) }, want: v2},
+	{name: "deliver again", do: deliverAgain, want: v2},
 	{name: "release", do: func(dir string) error { return New().Release(dir, allow) }},
 	{name: "sweep", do: sweepAll},
+}
+
+// deliverAgain delivers; a damaged delivery in place is not replaced, so it is
+// released first, as the caller does, and then delivered again.
+func deliverAgain(dir string) error {
+	m := New()
+	err := m.Deliver(dir, 2, v2, allow)
+	if errors.Is(err, ErrCorrupt) || errors.Is(err, ErrUnsafe) {
+		if err := m.Release(dir, allow); err != nil {
+			return err
+		}
+		err = m.Deliver(dir, 2, v2, allow)
+	}
+	return err
 }
 
 // converges checks that rec, after whatever a fault left, ends in its state.
@@ -59,7 +75,19 @@ func converges(t *testing.T, dir string, rec recovery) {
 		return
 	}
 	wantOnly(t, dir, liveName)
-	wantLoad(t, dir, rec.want)
+	// A delivery that replaced an earlier one also retains its values.
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, w := range rec.want {
+		if !slices.ContainsFunc(got, func(n redact.Needle) bool { return n.Ref == w.Ref && bytes.Equal(n.Value, w.Value) }) {
+			t.Fatalf("Load = %q, lacks %q", got, w.Ref)
+		}
+	}
+	if len(got) > len(rec.want)+len(v1) {
+		t.Fatalf("Load = %q, more than the delivery and what it retains", got)
+	}
 	wantPrivate(t, dir)
 }
 
@@ -115,7 +143,7 @@ func TestDeliver_FaultAtEveryStepLeavesNoHalfDeliveryAndRecovers(t *testing.T) {
 			case errors.Is(err, ErrNotDelivered):
 			case err != nil:
 				t.Fatalf("after the fault, secrets/ is not a whole delivery: %v", err)
-			case !sameNeedles(got, v2) && (s.name == "fresh" || !sameNeedles(got, v1)):
+			case !sameNeedles(got, v2) && (s.name == "fresh" || (!sameNeedles(got, v1) && !sameNeedles(got, slices.Concat(v2, v1)))):
 				t.Fatalf("after the fault, Load = %q", got)
 			}
 		})
@@ -158,7 +186,7 @@ func TestRelease_FaultAtEveryStepIsPendingAndRecovers(t *testing.T) {
 
 func TestRevoke_FaultAtEveryStepLeavesAccessWholeOrRevokedAndRecovers(t *testing.T) {
 	s := setup{name: "delivered", prep: func(t *testing.T, dir string) { deliver(t, dir, 1, v1) }}
-	op := func(m *Manager, dir string) error { return m.Revoke(dir, nil) }
+	op := func(m *Manager, dir string) error { return m.Revoke(dir, Harness, nil) }
 	eachFault(t, s, op, func(t *testing.T, dir string, _ bool, _ error) {
 		wantLoad(t, dir, v1)
 		resolve := Resolver(dir)
@@ -171,7 +199,7 @@ func TestRevoke_FaultAtEveryStepLeavesAccessWholeOrRevokedAndRecovers(t *testing
 			t.Fatalf("resolve = %v", err0)
 		}
 		// Revoking again finishes it.
-		if err := New().Revoke(dir, nil); err != nil {
+		if err := New().Revoke(dir, Harness, nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := resolve(v1[0].Ref); !errors.Is(err, ErrNoAccess) {
@@ -216,4 +244,50 @@ func TestRelease_RemovesWhatTheHarnessMadeUnwritable(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantOnly(t, dir)
+}
+
+// A publish cut short between retiring secrets/ and renaming the staging into
+// place leaves secrets/ absent with the old values in secrets.deleting. A newer
+// attempt must not take that for a delivery that never was: it stops, and after
+// Release (which removes what was left) the delivery starts from nothing.
+func TestDeliver_ANewerAttemptAfterACrashBetweenRetiringAndPublishingDoesNotLoseTheEarlierValues(t *testing.T) {
+	dir := runDir(t)
+	deliver(t, dir, 1, v1)
+	op := func(m *Manager) error { return m.Deliver(dir, 2, v2, allow) }
+
+	// Find the step that retires secrets/ and crash just after it.
+	probe := &faults{}
+	if err := op(probe.manager()); err != nil {
+		t.Fatal(err)
+	}
+	at := slices.Index(probe.steps, "rename secrets secrets.deleting") + 1
+	if at == 0 {
+		t.Fatalf("no retire step in %q", probe.steps)
+	}
+	dir = runDir(t)
+	deliver(t, dir, 1, v1)
+	crashed, _ := run(func() error {
+		return (&faults{at: at, mode: mode{after: true, crash: true}}).manager().Deliver(dir, 2, v2, allow)
+	})
+	if !crashed {
+		t.Fatal("the fault did not strike")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, liveName)); !os.IsNotExist(err) {
+		t.Fatalf("secrets/ is in place after the crash: %v", err)
+	}
+
+	err := New().Deliver(dir, 3, v2, allow)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("Deliver after the crash = %v, want ErrCorrupt", err)
+	}
+	if _, err := Load(dir); !errors.Is(err, ErrNotDelivered) {
+		t.Fatalf("Load = %v: nothing may have been published without the earlier values", err)
+	}
+	if err := New().Release(dir, allow); err != nil {
+		t.Fatal(err)
+	}
+	wantOnly(t, dir)
+	if err := New().Deliver(dir, 3, v2, allow); err != nil {
+		t.Fatalf("Deliver after Release: %v", err)
+	}
 }

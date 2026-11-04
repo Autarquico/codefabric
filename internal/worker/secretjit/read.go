@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -23,6 +24,53 @@ const noFollow = unix.O_NOFOLLOW
 // directory is runDir: the value of ref, if the harness may read it. It is
 // what the wrapper resolves the secret environment with. It only reads.
 func Resolver(runDir string) func(ref string) (string, error) {
+	return reader(runDir, Harness)
+}
+
+// AskpassReader is the askpass helper's access to the delivery of runDir: the
+// value of ref, if askpass may read it. A ref delivered only to the harness is
+// ErrNoAccess here, as one delivered only to askpass is for Resolver. It only
+// reads.
+func AskpassReader(runDir string) func(ref string) (string, error) {
+	return reader(runDir, Askpass)
+}
+
+// Grant is what the askpass helper answers git with: the value of a ref and
+// where, and as whom, it may be sent.
+type Grant struct {
+	Ref    string
+	Origin string // the URL of the repository the ref is authorized for
+	User   string
+	Value  string
+}
+
+// AskpassGrant is the credential askpass may use in the delivery of runDir:
+// the one ref that askpass can still read and that was bound to an origin
+// (see Bind). Nothing of the kind, or more than one, is ErrNoAccess. It only
+// reads.
+func AskpassGrant(runDir string) (Grant, error) {
+	d, err := readDelivery(runDir)
+	if err != nil {
+		return Grant{}, err
+	}
+	defer d.close()
+	var found []entry
+	for _, e := range d.m.Refs {
+		if e.canAccess(Askpass) && e.Origin != "" && e.User != "" {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		return Grant{}, fmt.Errorf("%w: %d origin credentials for askpass", ErrNoAccess, len(found))
+	}
+	value, err := d.value(found[0])
+	if err != nil {
+		return Grant{}, err
+	}
+	return Grant{Ref: found[0].Ref, Origin: found[0].Origin, User: found[0].User, Value: string(value)}, nil
+}
+
+func reader(runDir string, c Consumer) func(ref string) (string, error) {
 	return func(ref string) (string, error) {
 		d, err := readDelivery(runDir)
 		if err != nil {
@@ -30,7 +78,7 @@ func Resolver(runDir string) func(ref string) (string, error) {
 		}
 		defer d.close()
 		e, ok := d.find(ref)
-		if !ok || !e.Harness {
+		if !ok || !e.canAccess(c) {
 			return "", fmt.Errorf("%w: %q", ErrNoAccess, ref)
 		}
 		value, err := d.value(e)
@@ -127,6 +175,11 @@ func (d *delivery) load() error {
 	if err := dec.Decode(&d.m); err != nil {
 		return fmt.Errorf("%w: %s is not valid (offset %d)", ErrCorrupt, manifestName, dec.InputOffset())
 	}
+	for i := range d.m.Refs {
+		if err := d.m.Refs[i].normalize(); err != nil {
+			return err
+		}
+	}
 	return d.m.check()
 }
 
@@ -144,6 +197,11 @@ func (m manifest) check() error {
 	for _, e := range m.Refs {
 		if e.File != fileName(e.Ref) {
 			return fmt.Errorf("%w: %s names the wrong file for %q", ErrCorrupt, manifestName, e.Ref)
+		}
+	}
+	for i, r := range m.Retained {
+		if r.File != retainedFile(i) || domain.CheckSecretRefs([]string{r.Ref}, 1) != nil {
+			return fmt.Errorf("%w: %s has a bad retained entry %d", ErrCorrupt, manifestName, i)
 		}
 	}
 	return nil
@@ -167,13 +225,23 @@ func (d *delivery) value(e entry) ([]byte, error) {
 }
 
 func (d *delivery) needles() ([]redact.Needle, error) {
-	out := make([]redact.Needle, 0, len(d.m.Refs))
+	out := make([]redact.Needle, 0, len(d.m.Refs)+len(d.m.Retained))
 	for _, e := range d.m.Refs {
 		v, err := d.value(e)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, redact.Needle{Ref: e.Ref, Value: v})
+		out = append(out, redact.Needle{Ref: e.Ref, Value: v, User: e.User})
+	}
+	for _, r := range d.m.Retained {
+		v, err := d.value(entry{Ref: r.Ref, File: r.File})
+		if err != nil {
+			return nil, err
+		}
+		// What a ref holds now is not repeated as retained.
+		if !slices.ContainsFunc(out, func(n redact.Needle) bool { return n.Ref == r.Ref && n.User == r.User && bytes.Equal(n.Value, v) }) {
+			out = append(out, redact.Needle{Ref: r.Ref, Value: v, User: r.User})
+		}
 	}
 	return out, nil
 }

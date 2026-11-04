@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/user"
+	"slices"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -61,6 +62,8 @@ type Options struct {
 	WrapperArgv []string
 	// RedactPipeArgv replaces `<this binary> worker redact-pipe`, for tests.
 	RedactPipeArgv []string
+	// AskpassArgv replaces `<this binary> worker git-askpass`, for tests.
+	AskpassArgv []string
 	// StopGrace replaces stop.grace (Appendix A), for tests.
 	StopGrace time.Duration
 	// GitPath replaces the git found on the PATH, for tests.
@@ -176,6 +179,7 @@ func Run(ctx context.Context, o Options) error {
 		DB: db, Controller: c, Workflows: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
 		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
 	}
+	eo.AskpassScript = d.writeAskpassScript(ctx, o)
 	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})
 	eo.AuthSync = broker
 	// Publishing the result of a Run needs git: without it this Worker offers no harness.
@@ -196,6 +200,8 @@ func Run(ctx context.Context, o Options) error {
 		if eo.Harnesses, eo.Withheld, d.capabilities, err = d.announce(ctx, eo.Host, adapters); err != nil {
 			return err
 		}
+		// Here git is usable (gitops.New checked its version) and the Worker offers harnesses.
+		d.capabilities = withOriginAskpass(d.capabilities, eo.AskpassScript)
 	}
 	if err := d.startDoctor(ctx, o); err != nil {
 		return err
@@ -529,4 +535,35 @@ func (d *daemon) sleep(ctx context.Context, wait time.Duration) bool {
 	case <-timer.C():
 		return true
 	}
+}
+
+// withOriginAskpass adds domain.OriginAskpassCapability to caps when the
+// askpass script exists: only then can this Worker fetch the origin of a Run
+// with its credential, and placement relies on the capability saying so.
+func withOriginAskpass(caps []string, script string) []string {
+	if script == "" {
+		return caps
+	}
+	return slices.Sorted(slices.Values(append(slices.Clone(caps), domain.OriginAskpassCapability)))
+}
+
+// writeAskpassScript keeps the GIT_ASKPASS script of the Worker (AskpassScriptPath)
+// up to date. Without it a Run whose origin has a credential cannot be prepared,
+// which is said when that Run is, not by stopping the daemon.
+func (d *daemon) writeAskpassScript(ctx context.Context, o Options) string {
+	argv := o.AskpassArgv
+	if len(argv) == 0 {
+		self, err := os.Executable()
+		if err != nil {
+			d.log.WarnContext(ctx, "the askpass script cannot be written: this binary cannot be located", "err", err)
+			return ""
+		}
+		argv = []string{self, "worker", "git-askpass"}
+	}
+	path, err := EnsureAskpassScript(o.Paths, argv)
+	if err != nil {
+		d.log.WarnContext(ctx, "the askpass script cannot be written", "err", err)
+		return ""
+	}
+	return path
 }

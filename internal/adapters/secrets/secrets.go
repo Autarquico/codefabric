@@ -10,7 +10,12 @@ package secrets
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
+	"unicode"
+
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 // Backends: where a Store keeps the value of a secret. Backend names the one
@@ -100,11 +105,59 @@ type Vault interface {
 // heartbeat reports. Projects scope it (sorted Project IDs); empty means any
 // Project.
 type Metadata struct {
-	Ref       string
-	Backend   string
-	Projects  []string
+	Ref      string
+	Backend  string
+	Projects []string
+	// User is the Basic-auth username the value is sent with, for a secret
+	// that is a credential of git; empty means DefaultUser, which the consumer
+	// applies. It stays on this machine: the heartbeat does not carry it.
+	User      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// DefaultUser is the username of a credential that has none: the one GitHub
+// and GitLab take for a token.
+const DefaultUser = "x-access-token"
+
+// MaxUserLen is the longest username.
+const MaxUserLen = 256
+
+// CheckUser is an error, wrapping domain.ErrInvalidSecret, unless user can be
+// the username of a Basic-auth credential: at most MaxUserLen bytes, without
+// ':', '@', '/', '%', white space or a control character, which would break the
+// line git is answered with, the "user:token" pair or the URL the user is
+// matched in. Empty is valid: it is DefaultUser. It is the one rule of the
+// user: `secrets set` applies it, and so does the binding of a prepare. The
+// error does not quote user.
+func CheckUser(user string) error {
+	if len(user) > MaxUserLen {
+		return fmt.Errorf("%w: the user has more than %d bytes", domain.ErrInvalidSecret, MaxUserLen)
+	}
+	if strings.ContainsAny(user, ":@/%") || strings.ContainsFunc(user, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) {
+		return fmt.Errorf("%w: the user has a control character, white space, ':', '@', '/' or '%%'", domain.ErrInvalidSecret)
+	}
+	return nil
+}
+
+// SetOptions are the optional properties of a secret that Set stores.
+type SetOptions struct {
+	User string
+}
+
+// SetOption sets one of SetOptions.
+type SetOption func(*SetOptions)
+
+// WithUser sets the Basic-auth username of the secret (see Metadata.User).
+func WithUser(user string) SetOption { return func(o *SetOptions) { o.User = user } }
+
+// ApplySetOptions is the SetOptions that opts make.
+func ApplySetOptions(opts []SetOption) SetOptions {
+	var o SetOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
 }
 
 // Secret is a value with the metadata it was stored with, read together: the
@@ -122,10 +175,11 @@ type Store interface {
 	// Get is the value of ref with its metadata, or ErrNotFound.
 	Get(ctx context.Context, ref string) (Secret, error)
 	// Set stores value under ref in backend, scoped to projects, replacing
-	// what ref held. A ref, value or project that is not valid is an error
-	// wrapping domain.ErrInvalidSecret; a backend this Store cannot reach,
+	// what ref held, options included: one not given is cleared. A ref, value,
+	// project or user that is not valid is an error wrapping
+	// domain.ErrInvalidSecret; a backend this Store cannot reach,
 	// ErrUnsupportedBackend.
-	Set(ctx context.Context, ref string, value []byte, projects []string, backend string) error
+	Set(ctx context.Context, ref string, value []byte, projects []string, backend string, opts ...SetOption) error
 	// Delete forgets ref, or is ErrNotFound. A value its backend no longer
 	// holds is no obstacle.
 	Delete(ctx context.Context, ref string) error

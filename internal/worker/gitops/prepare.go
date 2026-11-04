@@ -24,6 +24,8 @@ type PrepareSpec struct {
 	// RunDir is the directory of the Run under this lease epoch. If its wrapper
 	// has written wrapper.json the harness was launched, and the worktree is evidence.
 	RunDir string
+	// Auth, if set, makes the fetches from Repo authenticated (see OriginAuth).
+	Auth *OriginAuth
 }
 
 // SourceSpec is what the source commit of a Run is fetched from.
@@ -33,10 +35,12 @@ type SourceSpec struct {
 	Repo         string
 	SourceRef    string
 	SourceCommit string
+	// Auth, if set, makes the fetches from Repo authenticated (see OriginAuth).
+	Auth *OriginAuth
 }
 
 func (s PrepareSpec) source() SourceSpec {
-	return SourceSpec{Project: s.Project, Run: s.Run, Repo: s.Repo, SourceRef: s.SourceRef, SourceCommit: s.SourceCommit}
+	return SourceSpec{Project: s.Project, Run: s.Run, Repo: s.Repo, SourceRef: s.SourceRef, SourceCommit: s.SourceCommit, Auth: s.Auth}
 }
 
 // WrapperFile is the marker the wrapper of the harness writes first (execwrap).
@@ -162,7 +166,7 @@ func validateSource(s SourceSpec) error {
 	case !domain.ValidSourceRef(s.SourceRef):
 		return errors.New("gitops: the source ref is not a plain ref")
 	}
-	return nil
+	return s.Auth.check(s.Repo)
 }
 
 func launched(runDir string) bool {
@@ -202,24 +206,42 @@ func (g *Git) fetchCommit(ctx context.Context, bare string, s SourceSpec) error 
 	if g.hasCommit(ctx, bare, s.SourceCommit) {
 		return nil
 	}
+	var refs string
+	if s.Auth != nil {
+		var err error
+		if refs, err = g.refSnapshot(ctx, bare); err != nil {
+			return err
+		}
+	}
+	f, err := g.originFetch(bare, s.Auth, refs)
+	if err != nil {
+		return err
+	}
+	defer f.cleanup()
+	var lastFailure string
 	for _, refspec := range []string{s.SourceRef, s.SourceCommit} {
-		if err := g.fetch(ctx, bare, s.Repo, refspec); err != nil {
-			g.log.WarnContext(ctx, "fetching the source of a Run failed", "run", s.Run, "err", err)
+		if err := g.fetch(ctx, bare, s.Repo, refspec, f); err != nil {
+			msg := redacted(err.Error(), f.values)
+			lastFailure = clean(msg, nil)
+			g.log.WarnContext(ctx, "fetching the source of a Run failed", "run", s.Run, "err", msg)
 			continue
 		}
 		if g.hasCommit(ctx, bare, s.SourceCommit) {
 			return nil
 		}
 	}
+	if lastFailure != "" {
+		return fmt.Errorf("gitops: the source commit %s is not available from the repository of the Project (the branch may have moved or been rewritten): %s", s.SourceCommit[:12], lastFailure)
+	}
 	return fmt.Errorf("gitops: the source commit %s is not available from the repository of the Project (the branch may have moved or been rewritten)", s.SourceCommit[:12])
 }
 
-func (g *Git) fetch(ctx context.Context, bare, repo, refspec string) (err error) {
+func (g *Git) fetch(ctx context.Context, bare, repo, refspec string, f originFetch) (err error) {
 	delay := time.Second
 	for attempt := 1; attempt <= fetchAttempts; attempt++ {
 		_, err = g.ok(ctx, cmd{
-			dir: bare, env: userEnv(), timeout: fetchTimeout,
-			args: []string{"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repo, refspec},
+			dir: bare, env: f.env, values: f.values, timeout: fetchTimeout,
+			args: []string{"fetch", "--quiet", "--no-tags", "--no-auto-maintenance", "--no-write-fetch-head", "--end-of-options", repo, refspec},
 		})
 		if err == nil || ctx.Err() != nil {
 			return err

@@ -47,6 +47,7 @@ type fakeSecret struct {
 	value    []byte
 	projects []string
 	backend  string
+	user     string
 }
 
 func newFakeStore(values map[string]string) *fakeStore {
@@ -86,12 +87,12 @@ func (s *fakeStore) Get(_ context.Context, ref string) (secrets.Secret, error) {
 		return secrets.Secret{}, secrets.ErrNotFound
 	}
 	return secrets.Secret{
-		Metadata: secrets.Metadata{Ref: ref, Backend: e.backend, Projects: e.projects},
+		Metadata: secrets.Metadata{Ref: ref, Backend: e.backend, Projects: e.projects, User: e.user},
 		Value:    bytes.Clone(e.value),
 	}, nil
 }
 
-func (s *fakeStore) Set(_ context.Context, ref string, value []byte, projects []string, backend string) error {
+func (s *fakeStore) Set(_ context.Context, ref string, value []byte, projects []string, backend string, _ ...secrets.SetOption) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[ref] = fakeSecret{value: bytes.Clone(value), projects: projects, backend: backend}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
 	"github.com/Autarquico/codefabric/internal/worker/envwrap"
@@ -23,6 +24,10 @@ const asWrapper = "CF_TEST_AS_CF"
 // testing package reads its flags.
 func TestMain(m *testing.M) {
 	fakeharness.RunIfRequested()
+	if os.Getenv(asWrapper) == "1" && len(os.Args) == 4 && os.Args[1] == "worker" && os.Args[2] == "git-askpass" && AskpassMain != nil {
+		// `cf worker git-askpass <prompt>`, as the script of the Worker execs it.
+		os.Exit(AskpassMain(os.Args[3:]))
+	}
 	if os.Getenv(asWrapper) == "1" && len(os.Args) == 6 && os.Args[1] == "worker" && os.Args[2] == "exec" && os.Args[3] == "env" && os.Args[4] == "--run-dir" {
 		// The supervisor of the Environment of a Run (`worker exec env`).
 		dir := os.Args[5]
@@ -65,3 +70,11 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv(asWrapper, "1") // inherited by the tmux server, and so by the panes
 	os.Exit(m.Run())
 }
+
+// The hooks of origin_hooks_integration_test.go (package executor_test, which
+// may import the daemon, as this package may not): the real askpass command
+// and the real script of the Worker.
+var (
+	AskpassMain         func(args []string) int
+	EnsureAskpassScript func(paths config.Paths, argv []string) (string, error)
+)

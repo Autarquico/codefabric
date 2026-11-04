@@ -61,7 +61,7 @@ func newSecretsCmd() *cobra.Command {
 
 func newSecretsSetCmd() *cobra.Command {
 	var projects []string
-	var backend string
+	var backend, user string
 	cmd := &cobra.Command{
 		Use:   "set <ref>",
 		Short: "Store a secret under ref, reading its value from stdin or a prompt",
@@ -70,9 +70,12 @@ func newSecretsSetCmd() *cobra.Command {
 			"has " + fmt.Sprint(domain.MinSecretValueLen) + " to " + fmt.Sprint(domain.MaxSecretValueLen) +
 			" bytes: a shorter one could not be redacted from the output of\na Run. --project limits it to the Runs of those Projects. --backend keyring keeps the value\n" +
 			"in the keyring of this machine (macOS Keychain, Secret Service on Linux) and only a pointer to it\n" +
-			"in the catalog; it has at most " + fmt.Sprint(keyring.MaxValueLen) + " bytes there.",
+			"in the catalog; it has at most " + fmt.Sprint(keyring.MaxValueLen) + " bytes there. --user is the Basic-auth\n" +
+			"username of a git credential (the origin_secret of a Project); without it, " + secrets.DefaultUser + ". It stays on\n" +
+			"this machine.",
 		Example: "  printf %s \"$TOKEN\" | cf worker secrets set github/token\n  cf worker secrets set npm/token --project project_01J...\n" +
-			"  printf %s \"$TOKEN\" | cf worker secrets set github/token --backend keyring",
+			"  printf %s \"$TOKEN\" | cf worker secrets set github/token --backend keyring\n" +
+			"  printf %s \"$TOKEN\" | cf worker secrets set gitlab/token --user deploy-bot",
 		// The arguments are checked in RunE, to explain a value given as one.
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -105,7 +108,7 @@ func newSecretsSetCmd() *cobra.Command {
 			if err := cmd.Context().Err(); err != nil {
 				return cancelled()
 			}
-			if err := store.Set(cmd.Context(), ref, value, projects, backend); err != nil {
+			if err := store.Set(cmd.Context(), ref, value, projects, backend, secrets.WithUser(user)); err != nil {
 				return secretsError(err)
 			}
 			meta, err := secretMeta(cmd.Context(), store, ref)
@@ -121,6 +124,7 @@ func newSecretsSetCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&backend, "backend", secrets.BackendFile, "where the value is kept: file (the catalog) or keyring (the OS keyring)")
+	f.StringVar(&user, "user", "", "Basic-auth username of a git credential (default: "+secrets.DefaultUser+")")
 	f.StringArrayVar(&projects, "project", nil, "only Runs of this Project may use it, by Project ID; repeatable (default: any Project)")
 	f.String(valueFlag, "", "")
 	f.Lookup(valueFlag).NoOptDefVal = " "

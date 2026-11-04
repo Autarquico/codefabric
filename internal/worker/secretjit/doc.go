@@ -3,15 +3,16 @@
 //
 // A delivery lives in <run dir>/secrets/ (0700, owned by the Worker's user):
 // manifest.json (0600) lists each ref with the file that holds its value and
-// whether the harness may read it; each value is in its own 0600 file, named
+// the consumers that may read it (the harness, the askpass helper); each value is in its own 0600 file, named
 // by the first 32 hex digits of the SHA-256 of its ref. The manifest never
 // holds a value.
 //
 // Two kinds of reader see a delivery, and they are kept apart:
 //
 //   - access: Resolver is what the wrapper uses to put a secret in the
-//     harness's environment. It returns only refs the harness may read, and
-//     Revoke takes that away for good;
+//     harness's environment, and AskpassReader what the git askpass helper
+//     answers with. Each returns only the refs its consumer may read, and
+//     Revoke takes that away, for one consumer, for good;
 //   - retention: Load is what the redaction of the output and the publication
 //     guard use. It returns every value, revoked or not, until Release.
 //
@@ -28,6 +29,9 @@
 //     secrets.deleting/ first. secrets/ is therefore either absent or a
 //     complete delivery; it is never half written. A delivery records the
 //     attempt that made it, and an older attempt cannot replace a newer one.
+//     A delivery of the attempt already in place is merged into it in place
+//     (new value files first, then an atomic swap of the manifest): what was
+//     delivered, with its value and its access, is never lost or widened.
 //
 //   - Release removes secrets.staging/ and secrets.deleting/, and then, if the
 //     caller verifies that the Run may let its secrets go, renames secrets/ to

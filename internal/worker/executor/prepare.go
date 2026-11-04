@@ -39,7 +39,7 @@ type Git interface {
 type RelayTLS struct{ Cert, Key, CA string }
 
 // makeWorktree prepares the directory a Run executes in.
-func (e *Executor) makeWorktree(ctx context.Context, r state.Run, spec specView, worktree string) error {
+func (e *Executor) makeWorktree(ctx context.Context, r state.Run, spec specView, worktree string, og *originAccess) error {
 	if e.o.Git == nil {
 		if err := os.MkdirAll(worktree, 0o700); err != nil {
 			return fmt.Errorf("making the worktree of %s: %w", r.RunID, err)
@@ -49,9 +49,13 @@ func (e *Executor) makeWorktree(ctx context.Context, r state.Run, spec specView,
 	if r.Repo == "" || r.Branch == "" {
 		return fmt.Errorf("this assignment was made before the Controller sent the repository and the branch of the Run: it cannot be prepared")
 	}
+	auth, err := og.credential(ctx)
+	if err != nil {
+		return err
+	}
 	return e.o.Git.Prepare(ctx, gitops.PrepareSpec{
 		Project: r.ProjectID, Run: r.RunID, LeaseEpoch: r.LeaseEpoch, Repo: r.Repo, SourceRef: spec.Source.Ref,
-		SourceCommit: r.SourceCommit, Branch: r.Branch, RunDir: e.runDir(r.Key),
+		SourceCommit: r.SourceCommit, Branch: r.Branch, RunDir: e.runDir(r.Key), Auth: auth,
 	}, worktree)
 }
 
@@ -78,7 +82,8 @@ func (e *Executor) preparing(ctx context.Context, r state.Run) error {
 	if err != nil && pctx.Err() != nil && !errors.Is(err, errPrepareLater) {
 		err = fmt.Errorf("%w: the prepare was cut short: %w", errPrepareLater, err)
 	}
-	return err
+	// The report of a failed prepare and the log carry no value the Run holds.
+	return e.scrub(r, err)
 }
 
 // cancelPrepare cuts short the prepare of a Run in progress, if any, and

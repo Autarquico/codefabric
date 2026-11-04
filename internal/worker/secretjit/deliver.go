@@ -6,32 +6,64 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 )
 
+// item is a secret on its way into a delivery, with who may read it.
+type item struct {
+	ref    string
+	value  []byte
+	access []Consumer
+}
+
+func needlesOf(items []item) []redact.Needle {
+	out := make([]redact.Needle, len(items))
+	for i, it := range items {
+		out[i] = redact.Needle{Ref: it.ref, Value: it.value}
+	}
+	return out
+}
+
 // Deliver puts secrets in the run directory runDir as attempt, the prepare
-// attempt that was granted them, and lets the harness read all of them.
+// attempt that was granted them, and lets the harness read all of them. It is
+// DeliverFor with the harness as the only consumer.
+func (m *Manager) Deliver(runDir string, attempt uint64, secrets []redact.Needle, verify func() error) error {
+	return m.DeliverFor(runDir, attempt, []Consumer{Harness}, secrets, verify)
+}
+
+// DeliverFor puts secrets in the run directory runDir as attempt, the prepare
+// attempt that was granted them, and lets the consumers in access read them.
 //
-// verify is the caller's fence: Deliver calls it under the lock before it
+// verify is the caller's fence: DeliverFor calls it under the lock before it
 // changes anything and again just before it publishes the delivery, and stops
 // with its error if it fails. The caller makes it fail once the Run can no
 // longer receive secrets (it stopped, or another attempt took over); since
 // Release holds the same lock, a delivery cannot come back after a release
 // that the caller fenced. verify must not wait on this package.
 //
-// It is idempotent: a delivery of the same attempt with the same values is
-// left as it is, including what was revoked; an older one, or one that is
-// corrupt or unsafe, is replaced; a newer one is ErrStale. A crash at any
-// point leaves secrets/ absent, or complete with the old or the new values,
-// and calling Deliver or Release again converges.
+// A delivery of the attempt already in place is merged into it, never
+// replaced: the refs already there keep their values, their access and what
+// was revoked of it (a ref granted again is not widened, and is not repeated),
+// and the new refs are added with access. A ref already there with another
+// value is ErrConflict. A delivery that adds nothing is left as it is. An
+// older attempt in place is replaced, keeping its values to be redacted; a
+// newer one is ErrStale. A delivery in place that is corrupt, unsafe or
+// unreadable (its manifest, a current value or a retained one) is never
+// replaced, whatever the attempt: DeliverFor fails with the error, and only
+// Release removes it. Only a confirmed absence, with no staging or retired delivery left by a publish
+// that did not end, starts a delivery from nothing. A crash at any point leaves secrets/
+// absent, or complete with the old or the merged values, and calling
+// DeliverFor or Release again converges.
 //
 // secrets must be 1 to domain.MaxRunSecrets distinct, valid refs, each with a
-// value redact.NewSet accepts: a delivery is never something the output
-// cannot be redacted of.
-func (m *Manager) Deliver(runDir string, attempt uint64, secrets []redact.Needle, verify func() error) error {
-	if err := checkSecrets(attempt, secrets); err != nil {
+// value redact.NewSet accepts, and so must the merged delivery: a delivery is
+// never something the output cannot be redacted of.
+func (m *Manager) DeliverFor(runDir string, attempt uint64, access []Consumer, secrets []redact.Needle, verify func() error) error {
+	access, err := checkSecrets(attempt, access, secrets)
+	if err != nil {
 		return err
 	}
 	unlock, err := lock(runDir)
@@ -42,30 +74,99 @@ func (m *Manager) Deliver(runDir string, attempt uint64, secrets []redact.Needle
 	if err := verify(); err != nil {
 		return err
 	}
-	if d, err := openDelivery(runDir); err == nil {
-		current := d.m.Attempt
-		same := current == attempt && d.holds(secrets)
-		d.close()
-		switch {
-		case current > attempt:
-			return fmt.Errorf("%w: attempt %d, and %d is in place", ErrStale, attempt, current)
-		case same:
-			return m.tidy(runDir)
-		}
+	items := make([]item, len(secrets))
+	for i, s := range secrets {
+		items[i] = item{ref: s.Ref, value: s.Value, access: access}
 	}
-	return m.publish(runDir, attempt, secrets, verify)
+	d, err := openDelivery(runDir)
+	switch {
+	case errors.Is(err, ErrNotDelivered):
+		// Confirmed absent: the only case a delivery starts from nothing. What an
+		// earlier publish left (a retired delivery, a staging) means it was cut
+		// short and secrets/ may have held values that this one would not carry.
+		if err := leftovers(runDir); err != nil {
+			return err
+		}
+		return m.publish(runDir, attempt, items, nil, verify)
+	case err != nil:
+		// A delivery is in place but cannot be read whole: replacing it would drop
+		// the values it holds, and with them their redaction. Release removes it.
+		return err
+	default:
+		current := d.m.Attempt
+		if current > attempt {
+			d.close()
+			return fmt.Errorf("%w: attempt %d, and %d is in place", ErrStale, attempt, current)
+		}
+		if current == attempt {
+			held := d.m
+			merged, kept, err := d.merge(items)
+			d.close()
+			switch {
+			case err != nil:
+				// Replacing the delivery would drop the refs it holds, and with them
+				// their redaction: fail, and the prepare is made again from nothing.
+				return err
+			case len(merged) == kept:
+				return m.tidy(runDir)
+			default:
+				if err := checkSet(needlesOf(merged)); err != nil {
+					return err
+				}
+				return m.extend(runDir, held, merged[kept:], verify)
+			}
+		}
+		// A newer attempt replaces the access, never the retention: whatever
+		// the delivery in place held stays redactable until Release. A delivery
+		// whose values cannot be read is not replaced.
+		kept, err := d.needles()
+		d.close()
+		if err != nil {
+			return err
+		}
+		return m.publish(runDir, attempt, items, kept, verify)
+	}
 }
 
-func checkSecrets(attempt uint64, secrets []redact.Needle) error {
-	if attempt == 0 || len(secrets) == 0 {
-		return fmt.Errorf("secretjit: nothing to deliver: attempt %d with %d secrets", attempt, len(secrets))
+// leftovers is an ErrCorrupt if a previous publish left its staging or the
+// retired delivery behind with secrets/ absent. Release or Sweep removes them.
+func leftovers(runDir string) error {
+	for _, name := range []string{deletingName, stagingName} {
+		ok, err := present(filepath.Join(runDir, name))
+		switch {
+		case err != nil:
+			return fmt.Errorf("secretjit: %w", err)
+		case ok:
+			return fmt.Errorf("%w: %s was left by a publish that did not end", ErrCorrupt, name)
+		}
 	}
+	return nil
+}
+
+// checkSecrets validates the arguments of a delivery and returns access
+// sorted and without repeats.
+func checkSecrets(attempt uint64, access []Consumer, secrets []redact.Needle) ([]Consumer, error) {
+	if attempt == 0 || len(secrets) == 0 {
+		return nil, fmt.Errorf("secretjit: nothing to deliver: attempt %d with %d secrets", attempt, len(secrets))
+	}
+	if len(access) == 0 || slices.ContainsFunc(access, func(c Consumer) bool { return !c.valid() }) {
+		return nil, fmt.Errorf("secretjit: a delivery needs at least one known consumer, and has %d", len(access))
+	}
+	access = slices.Compact(slices.Sorted(slices.Values(access)))
+	for _, s := range secrets {
+		if err := domain.CheckSecretValue(s.Value); err != nil {
+			return nil, fmt.Errorf("secret %q: %w", s.Ref, err)
+		}
+	}
+	return access, checkSet(secrets)
+}
+
+// checkSet is an error unless secrets are valid, distinct refs that the
+// output can be redacted of.
+func checkSet(secrets []redact.Needle) error {
 	refs := make([]string, len(secrets))
 	for i, s := range secrets {
 		refs[i] = s.Ref
-		if err := domain.CheckSecretValue(s.Value); err != nil {
-			return fmt.Errorf("secret %q: %w", s.Ref, err)
-		}
 	}
 	if err := domain.CheckSecretRefs(refs, domain.MaxRunSecrets); err != nil {
 		return fmt.Errorf("secretjit: %w", err)
@@ -76,26 +177,83 @@ func checkSecrets(attempt uint64, secrets []redact.Needle) error {
 	return nil
 }
 
-// holds reports whether the delivery has exactly secrets, value for value.
-func (d *delivery) holds(secrets []redact.Needle) bool {
-	if len(d.m.Refs) != len(secrets) {
-		return false
-	}
-	for _, s := range secrets {
-		e, ok := d.find(s.Ref)
-		if !ok {
-			return false
-		}
+// merge is the items of the delivery followed by those of items it does not
+// hold, and how many of the first it holds. The refs it holds keep their value
+// and their access. An item with the ref of one it holds but another value is
+// ErrConflict.
+func (d *delivery) merge(items []item) (merged []item, kept int, err error) {
+	for _, e := range d.m.Refs {
 		v, err := d.value(e)
-		if err != nil || !bytes.Equal(v, s.Value) {
-			return false
+		if err != nil {
+			return nil, 0, err
+		}
+		merged = append(merged, item{ref: e.Ref, value: v, access: e.Access})
+	}
+	kept = len(merged)
+	for _, it := range items {
+		i := slices.IndexFunc(merged[:kept], func(h item) bool { return h.ref == it.ref })
+		switch {
+		case i < 0:
+			merged = append(merged, it)
+		case !bytes.Equal(merged[i].value, it.value):
+			return nil, 0, fmt.Errorf("%w: %q", ErrConflict, it.ref)
 		}
 	}
-	return true
+	return merged, kept, nil
+}
+
+// extend adds added to the delivery in place, whose manifest is held. The
+// delivery never goes away: the new value files are written first, where
+// nothing names them, and the manifest that does is replaced atomically, so a
+// crash leaves the delivery as it was or with all of added. A file a crash
+// left unnamed is rewritten by the next try, or removed with the delivery.
+func (m *Manager) extend(runDir string, held manifest, added []item, verify func() error) error {
+	live := filepath.Join(runDir, liveName)
+	man := manifest{Schema: held.Schema, Attempt: held.Attempt, Refs: slices.Clone(held.Refs), Retained: held.Retained}
+	for _, it := range added {
+		e := entry{Ref: it.ref, File: fileName(it.ref), Access: it.access}
+		path := filepath.Join(live, e.File)
+		if err := m.remove(path); err != nil {
+			return err
+		}
+		if err := m.writeSynced(path, it.value); err != nil {
+			return fmt.Errorf("secretjit: writing secret %q: %w", it.ref, err)
+		}
+		man.Refs = append(man.Refs, e)
+	}
+	if err := m.fs.sync(live); err != nil {
+		return fmt.Errorf("secretjit: syncing %s: %w", live, err)
+	}
+	if err := verify(); err != nil {
+		return err
+	}
+	if err := m.replaceManifest(live, man); err != nil {
+		return err
+	}
+	return m.tidy(runDir)
 }
 
 // publish builds the delivery in staging and renames it into place.
-func (m *Manager) publish(runDir string, attempt uint64, secrets []redact.Needle, verify func() error) error {
+// kept are the values of the delivery it replaces: they stay in the new one
+// only to be redacted, and Load returns them with the rest.
+func (m *Manager) publish(runDir string, attempt uint64, items []item, kept []redact.Needle, verify func() error) error {
+	man := manifest{Schema: manifestSchema, Attempt: attempt}
+	var held []redact.Needle
+	for _, k := range kept {
+		if k.User == "" && slices.ContainsFunc(items, func(it item) bool { return it.ref == k.Ref && bytes.Equal(it.value, k.Value) }) {
+			continue
+		}
+		if slices.ContainsFunc(held, func(h redact.Needle) bool { return h.Ref == k.Ref && h.User == k.User && bytes.Equal(h.Value, k.Value) }) {
+			continue
+		}
+		man.Retained = append(man.Retained, retained{Ref: k.Ref, File: retainedFile(len(held)), User: k.User})
+		held = append(held, k)
+	}
+	if len(held) > 0 {
+		if _, err := redact.NewEscapedSet(append(needlesOf(items), held...)); err != nil {
+			return fmt.Errorf("secretjit: the output could not be redacted: %w", err)
+		}
+	}
 	staging := filepath.Join(runDir, stagingName)
 	if err := m.remove(staging); err != nil {
 		return err
@@ -103,13 +261,17 @@ func (m *Manager) publish(runDir string, attempt uint64, secrets []redact.Needle
 	if err := m.fs.mkdir(staging); err != nil {
 		return m.abandon(staging, fmt.Errorf("secretjit: creating %s: %w", staging, err))
 	}
-	man := manifest{Schema: manifestSchema, Attempt: attempt}
-	for _, s := range secrets {
-		e := entry{Ref: s.Ref, File: fileName(s.Ref), Harness: true}
-		if err := m.writeSynced(filepath.Join(staging, e.File), s.Value); err != nil {
-			return m.abandon(staging, fmt.Errorf("secretjit: writing secret %q: %w", s.Ref, err))
+	for _, it := range items {
+		e := entry{Ref: it.ref, File: fileName(it.ref), Access: it.access}
+		if err := m.writeSynced(filepath.Join(staging, e.File), it.value); err != nil {
+			return m.abandon(staging, fmt.Errorf("secretjit: writing secret %q: %w", it.ref, err))
 		}
 		man.Refs = append(man.Refs, e)
+	}
+	for i, h := range held {
+		if err := m.writeSynced(filepath.Join(staging, man.Retained[i].File), h.Value); err != nil {
+			return m.abandon(staging, fmt.Errorf("secretjit: writing a retained value of %q: %w", h.Ref, err))
+		}
 	}
 	data, err := json.Marshal(man)
 	if err != nil {

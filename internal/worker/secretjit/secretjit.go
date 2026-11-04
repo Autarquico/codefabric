@@ -4,17 +4,22 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 )
 
 // Errors of the package. None of them carries a value.
 var (
 	// ErrNotDelivered is a run directory without a delivery.
 	ErrNotDelivered = errors.New("secretjit: no secrets delivered")
-	// ErrNoAccess is a ref the harness may not read: it was not delivered,
-	// or it was revoked.
-	ErrNoAccess = errors.New("secretjit: secret not available to the harness")
+	// ErrNoAccess is a ref the consumer may not read: it was not delivered,
+	// it was never granted to that consumer, or it was revoked.
+	ErrNoAccess = errors.New("secretjit: secret not available to the consumer")
+	// ErrConflict is a delivery that disagrees with the one in place for the
+	// same attempt: a ref that is already there with another value.
+	ErrConflict = errors.New("secretjit: ref already delivered with another value")
 	// ErrUnsafe is an entry that is not a private directory or regular file
 	// of this user: a symlink, another type, group or other permissions, or
 	// another owner.
@@ -47,12 +52,65 @@ type manifest struct {
 	Schema  int     `json:"schema"`
 	Attempt uint64  `json:"attempt"`
 	Refs    []entry `json:"refs"`
+	// Retained are the values an earlier attempt of the Run delivered that
+	// this one no longer holds as a ref (or holds with another value or user):
+	// nobody may read them, but Load returns them, so the redaction and the
+	// guard of publication cover every value the Run used until Release.
+	Retained []retained `json:"retained,omitempty"`
 }
 
+// retained is a value kept only to be redacted. Its file is retainedFile(i).
+type retained struct {
+	Ref  string `json:"ref"`
+	File string `json:"file"`
+	User string `json:"user,omitempty"`
+}
+
+func retainedFile(i int) string { return fmt.Sprintf("retained-%d", i) }
+
 type entry struct {
-	Ref     string `json:"ref"`
-	File    string `json:"file"`
-	Harness bool   `json:"harness"`
+	Ref    string     `json:"ref"`
+	File   string     `json:"file"`
+	Access []Consumer `json:"access,omitempty"`
+	// Origin and User are the destination the ref is authorized for and the
+	// user it is sent with (see Bind). Neither is a secret.
+	Origin string `json:"origin,omitempty"`
+	User   string `json:"user,omitempty"`
+	// Harness is the single flag of the manifests written before Access:
+	// true is the access set {harness}. normalize folds it into Access, and
+	// it is never written.
+	Harness bool `json:"harness,omitempty"`
+}
+
+// Consumer is a reader of the delivery that is granted refs one by one.
+type Consumer string
+
+const (
+	// Harness is the wrapper that puts secrets in the harness's environment.
+	Harness Consumer = "harness"
+	// Askpass is the GIT_ASKPASS helper that answers git's credential prompt.
+	Askpass Consumer = "askpass"
+)
+
+func (c Consumer) valid() bool { return c == Harness || c == Askpass }
+
+// canAccess reports whether e is readable by c.
+func (e entry) canAccess(c Consumer) bool { return slices.Contains(e.Access, c) }
+
+// normalize folds the legacy flag into Access and sorts and deduplicates it.
+func (e *entry) normalize() error {
+	if e.Harness {
+		e.Access = append(e.Access, Harness)
+		e.Harness = false
+	}
+	for _, c := range e.Access {
+		if !c.valid() {
+			return fmt.Errorf("%w: %s grants %q an unknown consumer", ErrCorrupt, manifestName, e.Ref)
+		}
+	}
+	slices.Sort(e.Access)
+	e.Access = slices.Compact(e.Access)
+	return nil
 }
 
 // fileName is the file that holds the value of ref.

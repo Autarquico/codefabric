@@ -29,6 +29,10 @@ var (
 type Needle struct {
 	Ref   string
 	Value []byte
+	// User, when not empty, is the Basic-auth username the value is sent with:
+	// NewEscapedSet then also redacts base64("User:Value"), the credential of
+	// an Authorization header. NewSet ignores it.
+	User string
 }
 
 // Set is the immutable matcher of a group of secrets: an Aho-Corasick

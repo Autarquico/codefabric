@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
@@ -70,5 +72,34 @@ func TestTheExecutorKeepsEveryAdapterAndWithholdsThoseNotOffered(t *testing.T) {
 	}
 	if slices.ContainsFunc(capabilities, func(c string) bool { return strings.Contains(c, "broken") || strings.Contains(c, "absent") }) {
 		t.Errorf("capabilities = %v", capabilities)
+	}
+}
+
+func TestOriginAskpassIsAnnouncedOnlyWithAScriptToServeIt(t *testing.T) {
+	d := &daemon{log: slog.New(slog.DiscardHandler)}
+	caps := []string{"harness:fake"}
+
+	root := t.TempDir()
+	blocker := filepath.Join(root, "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	broken := Options{Paths: config.Paths{ConfigDir: blocker, DataDir: blocker}, AskpassArgv: []string{"/cf", "worker", "git-askpass"}}
+	script := d.writeAskpassScript(t.Context(), broken)
+	if script != "" {
+		t.Fatalf("the script was written under a file: %q", script)
+	}
+	if got := withOriginAskpass(caps, script); slices.Contains(got, domain.OriginAskpassCapability) {
+		t.Errorf("announced without a script: %v", got)
+	}
+
+	ok := Options{Paths: config.Paths{ConfigDir: filepath.Join(root, "cfg"), DataDir: filepath.Join(root, "data")}, AskpassArgv: []string{"/cf", "worker", "git-askpass"}}
+	script = d.writeAskpassScript(t.Context(), ok)
+	if script == "" {
+		t.Fatal("the script was not written")
+	}
+	got := withOriginAskpass(caps, script)
+	if !slices.Contains(got, domain.OriginAskpassCapability) || !slices.Contains(got, "harness:fake") {
+		t.Errorf("capabilities = %v", got)
 	}
 }

@@ -101,14 +101,14 @@ func TestDeliver_IsFencedByAttempt(t *testing.T) {
 	}
 
 	deliver(t, dir, 3, v2)
-	wantLoad(t, dir, v2)
+	wantLoad(t, dir, append(slices.Clone(v2), v1...))
 	wantOnly(t, dir, liveName)
 }
 
 func TestDeliver_SameAttemptKeepsWhatWasRevoked(t *testing.T) {
 	dir := runDir(t)
 	deliver(t, dir, 1, v1)
-	if err := New().Revoke(dir, nil); err != nil {
+	if err := New().Revoke(dir, Harness, nil); err != nil {
 		t.Fatal(err)
 	}
 	deliver(t, dir, 1, v1)
@@ -198,7 +198,7 @@ func TestResolver_GivesTheHarnessOnlyWhatItMayRead(t *testing.T) {
 		t.Fatalf("an undelivered ref: %v", err)
 	}
 
-	if err := New().Revoke(dir, []string{v1[0].Ref, "unknown"}); err != nil {
+	if err := New().Revoke(dir, Harness, []string{v1[0].Ref, "unknown"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := resolve(v1[0].Ref); !errors.Is(err, ErrNoAccess) {
@@ -217,7 +217,7 @@ func TestResolver_GivesTheHarnessOnlyWhatItMayRead(t *testing.T) {
 	if _, err := Load(dir); !errors.Is(err, ErrNotDelivered) {
 		t.Fatalf("Load after release: %v", err)
 	}
-	if err := New().Revoke(dir, nil); err != nil {
+	if err := New().Revoke(dir, Harness, nil); err != nil {
 		t.Fatalf("Revoke with nothing delivered: %v", err)
 	}
 }
@@ -440,7 +440,7 @@ func TestConcurrentDeliverReleaseAndLoadNeverShowAHalfDelivery(t *testing.T) {
 				t.Errorf("Load: %v", err)
 				return
 			}
-			if !sameNeedles(got, v1) && !sameNeedles(got, v2) {
+			if !sameNeedles(got, v1) && !sameNeedles(got, v2) && !sameNeedles(got, slices.Concat(v1, v2)) && !sameNeedles(got, slices.Concat(v2, v1)) {
 				t.Errorf("Load = %q", got)
 				return
 			}

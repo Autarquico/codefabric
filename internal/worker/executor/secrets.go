@@ -79,7 +79,13 @@ func (e *Executor) secretsVerdict(ctx context.Context, r state.Run, spec specVie
 	if err := checkSpecSecrets(spec); err != nil {
 		return verdict{domain.CodeVersionIncompatible, "the secrets of the spec cannot be read: " + err.Error()}
 	}
-	refs := spec.refs()
+	if code, err := checkSpecOrigin(spec, r.Repo); err != nil {
+		return verdict{code, err.Error()}
+	}
+	refs := slices.Clone(spec.refs())
+	if spec.Origin != nil {
+		refs = append(refs, spec.Origin.Secret)
+	}
 	if len(refs) == 0 {
 		return verdict{}
 	}
@@ -144,10 +150,11 @@ func refList(refs []string) string {
 }
 
 // usesSecrets says whether the Run r has secrets on this Worker: the spec
-// declares them, or its configuration was rendered with some (refs of the
-// frozen Workflow, which the spec does not list).
+// declares them, it has an origin credential, or its configuration was
+// rendered with some (refs of the frozen Workflow, which the spec does not list).
 func (e *Executor) usesSecrets(r state.Run) bool {
-	return len(parseSpec(r.Spec).refs()) > 0 || secretjit.HasRendered(e.runDir(r.Key))
+	spec := parseSpec(r.Spec)
+	return len(spec.refs()) > 0 || spec.Origin != nil || secretjit.HasRendered(e.runDir(r.Key))
 }
 
 // snapshotRefs are the refs of the markers of the files of snap, sorted and
@@ -241,11 +248,21 @@ func (e *Executor) beginSecrets(ctx context.Context, r state.Run) (*secretPrepar
 	return &secretPrepare{e: e, r: r, attempt: attempt}, nil
 }
 
-// grant asks the Controller for refs, in this attempt.
+// grant asks the Controller for refs, in this attempt, for the harness: they
+// are delivered with deliver.
 func (p *secretPrepare) grant(ctx context.Context, refs []string) error {
 	if len(refs) == 0 {
 		return nil
 	}
+	if err := p.request(ctx, refs); err != nil {
+		return err
+	}
+	p.granted = append(p.granted, refs...)
+	return nil
+}
+
+// request asks the Controller for refs, in this attempt.
+func (p *secretPrepare) request(ctx context.Context, refs []string) error {
 	if !p.e.heartbeatTaken.Load() {
 		// The Controller would refuse it as a daemon it has retired, and fence the Run.
 		return fmt.Errorf("%w: the Controller has not taken a heartbeat of this daemon yet", errPrepareLater)
@@ -264,7 +281,6 @@ func (p *secretPrepare) grant(ctx context.Context, refs []string) error {
 			return fmt.Errorf("%s: the Controller answered the grant without the secret %q", domain.CodeSecretUnavailable, ref)
 		}
 	}
-	p.granted = append(p.granted, refs...)
 	return nil
 }
 
@@ -367,20 +383,14 @@ func (p *secretPrepare) deliver(ctx context.Context, dir string) (map[string][]b
 	if _, err := redact.NewEscapedSet(needles); err != nil {
 		return nil, fmt.Errorf("%s: the output could not be redacted of the secrets: %w", domain.CodeSecretUnavailable, err)
 	}
-	err := p.e.jit.Deliver(dir, p.attempt, needles, func() error { return p.current(ctx) })
-	switch {
-	case err == nil:
-		values := make(map[string][]byte, len(needles))
-		for _, n := range needles {
-			values[n.Ref] = n.Value
-		}
-		return values, nil
-	case errors.Is(err, errPrepareLater):
+	if err := deliveryError(p.e.jit.Deliver(dir, p.attempt, needles, func() error { return p.current(ctx) })); err != nil {
 		return nil, err
-	case errors.Is(err, secretjit.ErrStale):
-		return nil, fmt.Errorf("%w: %w", errPrepareLater, err)
 	}
-	return nil, fmt.Errorf("%s: delivering the secrets: %w", domain.CodeSecretUnavailable, err)
+	values := make(map[string][]byte, len(needles))
+	for _, n := range needles {
+		values[n.Ref] = n.Value
+	}
+	return values, nil
 }
 
 // render writes the values into the files of the configuration that carry
@@ -453,7 +463,7 @@ func (e *Executor) revokeOnce(ctx context.Context, r state.Run) {
 	if done {
 		return
 	}
-	if err := e.jit.Revoke(e.runDir(r.Key), nil); err != nil {
+	if err := e.jit.Revoke(e.runDir(r.Key), secretjit.Harness, nil); err != nil {
 		e.log.WarnContext(ctx, "taking the secrets back from a harness that started failed; it is tried again", "run", r.RunID, "err", err)
 		return
 	}
