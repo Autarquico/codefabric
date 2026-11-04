@@ -86,7 +86,7 @@ func realStore(t *testing.T) (*file.Store, string, keyring.Vault) {
 	requireKeyring(t)
 	v := keyring.New()
 	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // the catalog directory is 0700, as in production
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "secrets.json")
