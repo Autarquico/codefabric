@@ -5,7 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -24,8 +26,24 @@ import (
 	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
 )
 
+// commandTerminal hands out a process and keeps the request it was built for.
+type commandTerminal struct {
+	spyTerminal
+	req cli.AttachRequest
+}
+
+func (c *commandTerminal) Command(_ context.Context, req cli.AttachRequest) (*exec.Cmd, error) {
+	c.req = req
+	return c.spyTerminal.Command(context.Background(), req)
+}
+
 // spyTerminal records that it was reached.
 type spyTerminal struct{ calls atomic.Int32 }
+
+func (s *spyTerminal) Command(context.Context, cli.AttachRequest) (*exec.Cmd, error) {
+	s.calls.Add(1)
+	return exec.CommandContext(context.Background(), "true"), nil
+}
 
 func (s *spyTerminal) Attach(context.Context, cli.AttachRequest, cli.TerminalIO) (int, error) {
 	s.calls.Add(1)
@@ -240,8 +258,35 @@ func TestObserveAttachEvents_AttachChecksTheTargetTheOverrideAndTheTerminalBefor
 	if spy.calls.Load() != 0 {
 		t.Fatalf("the Terminal was reached %d times without a terminal", spy.calls.Load())
 	}
+	// The seam of the TUI: the same checks and the same override, and a process instead of a session.
+	term := &commandTerminal{}
+	session, err := cli.PrepareAttach(t.Context(), term, cli.AttachParams{Ref: "auth-race", ReadOnly: true})
+	if err != nil || session.Cmd == nil || term.req.Target.Host != "trusted" || term.req.RunID != r.run.ID || !term.req.ReadOnly {
+		t.Fatalf("PrepareAttach = %+v, %v; request %+v", session, err, term.req)
+	}
+	if _, err := cli.PrepareAttach(t.Context(), term, cli.AttachParams{Ref: "auth-race", SSHTarget: "-oProxyCommand=x"}); !isCode(err, domain.CodeRunNotAttachable) {
+		t.Fatalf("a bad override: %v", err)
+	}
+	if _, err := cli.PrepareAttach(t.Context(), nil, cli.AttachParams{Ref: "auth-race"}); !isCode(err, domain.CodeNotImplemented) {
+		t.Fatalf("no Terminal: %v", err)
+	}
+	if _, err := cli.PrepareAttach(t.Context(), term, cli.AttachParams{Ref: "run-99"}); !isCode(err, domain.CodeNotFound) {
+		t.Fatalf("another Run: %v", err)
+	}
+	if err := session.Finish(t.Context(), nil); err != nil {
+		t.Fatalf("detached: %v", err)
+	}
+	sshDown := exec.CommandContext(t.Context(), "sh", "-c", "exit 255").Run()
+	if err := session.Finish(t.Context(), sshDown); !isCode(err, domain.CodeRunNotAttachable) {
+		t.Fatalf("ssh failed (255): %v", err)
+	}
 	// A Run that is not the one asked for.
 	fails(t, 3, domain.CodeNotFound, "attach", "run-99")
+}
+
+func isCode(err error, code domain.Code) bool {
+	var coded *domain.Error
+	return errors.As(err, &coded) && coded.Code == code
 }
 
 func TestScenario_ObserveAttachEvents_Ps(t *testing.T) {

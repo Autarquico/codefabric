@@ -3,6 +3,7 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,7 @@ func TestProjectsTasksRunsApi_WorkRoutesAreForClientsOnly(t *testing.T) {
 		{"GET", "/v1/tasks"},
 		{"GET", "/v1/tasks/x"},
 		{"PATCH", "/v1/tasks/x"},
+		{"GET", "/v1/tasks/x/timeline"},
 		{"POST", "/v1/tasks/x/cancel"},
 		{"POST", "/v1/tasks/x/complete"},
 		{"POST", "/v1/tasks/x/archive"},
@@ -264,5 +266,55 @@ func clientID(t *testing.T, c *client.Client) string {
 func TestNew_RequiresTheWorkUseCases(t *testing.T) {
 	if _, err := api.New(api.Config{}); err == nil {
 		t.Fatal("a server with no Projects, Tasks and Runs use cases was built")
+	}
+}
+
+func TestScenario_TuiViewsActions_Timeline(t *testing.T) {
+	tc := newController(t, time.Now())
+	ctx := t.Context()
+	makeTasks(t, tc, "other")
+	created, err := tc.owner.CreateTask(ctx, v1.CreateTaskRequest{Project: "backend", Name: "subject", Prompt: "x", ResolvedRef: "main", SourceCommit: commitA})
+	must(t, err)
+	if _, err := tc.owner.CancelTask(ctx, "subject", created.Task.ProjectID); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := tc.owner.Events(ctx, client.EventQuery{})
+	must(t, err)
+	var want []uint64
+	for _, e := range all.Events {
+		if e.TaskID == created.Task.ID || (created.Run != nil && e.RunID == created.Run.ID) {
+			want = append(want, e.Sequence)
+		}
+	}
+	if len(want) < 3 {
+		t.Fatalf("the Task has only %d events: %v", len(want), want)
+	}
+	hasRun := false
+	for _, e := range all.Events {
+		hasRun = hasRun || (e.RunID != "" && e.TaskID == created.Task.ID)
+	}
+	if !hasRun {
+		t.Fatal("no event of the Run names the Task: the timeline would miss them")
+	}
+
+	var got []uint64
+	cursor := ""
+	for range 10 {
+		page, err := tc.owner.TaskTimeline(ctx, "subject", created.Task.ProjectID, cursor, 2)
+		must(t, err)
+		for _, e := range page.Events {
+			got = append(got, e.Sequence)
+		}
+		cursor = page.Cursor
+		if !page.HasMore {
+			break
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("timeline = %v, events of the Task = %v", got, want)
+	}
+	if _, err := tc.owner.TaskTimeline(ctx, "nowhere", "", "", 0); err == nil {
+		t.Fatal("the timeline of an unknown Task must fail")
 	}
 }

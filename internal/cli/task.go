@@ -18,7 +18,7 @@ func newTaskCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "task", Short: "Create and manage Tasks"}
 	cmd.AddCommand(
 		newCreateTaskCmd("new", "Create a Task and, unless --no-start, its first Run"),
-		newTaskListCmd(), newTaskShowCmd(), newTaskSetCmd(),
+		newTaskListCmd(), newTaskShowCmd(), newTaskTimelineCmd(), newTaskSetCmd(),
 		newTaskActionCmd("cancel", "Cancel a Task and its live Runs", (*client.Client).CancelTask),
 		newTaskActionCmd("complete", "Mark a Task completed by hand", (*client.Client).CompleteTask),
 		newTaskActionCmd("archive", "Archive a Task, which frees its name", (*client.Client).ArchiveTask),
@@ -134,6 +134,38 @@ func newTaskListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&project, flagProject, "", "only the Tasks of this Project")
 	cmd.Flags().StringSliceVar(&states, "state", nil, "only Tasks in these states")
 	cmd.Flags().BoolVar(&all, "all", false, "include archived Tasks")
+	return cmd
+}
+
+func newTaskTimelineCmd() *cobra.Command {
+	var (
+		after string
+		limit int
+	)
+	cmd := &cobra.Command{
+		Use:   "timeline <task>",
+		Short: "Show the events of a Task and of its Runs, oldest first",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := openClient(cmd)
+			if err != nil {
+				return err
+			}
+			page, err := c.TaskTimeline(cmd.Context(), args[0], refScope(cmd, c), after, limit)
+			if err != nil {
+				return err
+			}
+			return emit(cmd, page, func(w io.Writer) error {
+				for _, e := range page.Events {
+					printEvent(w, e)
+				}
+				return nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&after, "after", "", "start after this cursor")
+	cmd.Flags().IntVar(&limit, "limit", 0, "how many events (default: one page)")
+	addProjectFlag(cmd, "Project that narrows a name more than one Project has (default: the one of this directory)")
 	return cmd
 }
 

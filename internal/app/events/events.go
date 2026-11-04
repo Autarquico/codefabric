@@ -152,6 +152,14 @@ func (s *Service) List(ctx context.Context, by pki.Session, q Query) (v1.EventPa
 	return page, err
 }
 
+// Timeline answers GET /v1/tasks/{ref}/timeline: the events of the Task and of
+// its Runs, oldest first, from a cursor. It is the event stream filtered by the
+// Task, so it can never disagree with GET /v1/events.
+func (s *Service) Timeline(ctx context.Context, by pki.Session, ref, project string, after uint64, limit int) (v1.TaskTimeline, error) {
+	page, err := s.List(ctx, by, Query{Task: ref, Project: project, After: after, Limit: limit})
+	return v1.TaskTimeline{EventPage: page}, err
+}
+
 func pageLimit(limit int) int {
 	if limit <= 0 {
 		return v1.EventsDefaultLimit

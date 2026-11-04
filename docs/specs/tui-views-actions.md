@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: L
 issue: 96
-prs: []
+prs: [106]
 related_issues: [96]
 sub_issues: []
 depends_on: [tui-shell-home]

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -27,14 +28,21 @@ func addProjectFlag(cmd *cobra.Command, usage string) {
 // refScope is the Project that narrows a name more than one Project has
 // (§3.13): --project, else the Project of the working directory if it has one.
 func refScope(cmd *cobra.Command, c *client.Client) string {
-	if project, _ := cmd.Flags().GetString(flagProject); project != "" {
+	project, _ := cmd.Flags().GetString(flagProject)
+	return scopeOf(cmd.Context(), c, project)
+}
+
+// scopeOf is refScope for a caller that has no command: project, else the
+// Project of the working directory if it has one.
+func scopeOf(ctx context.Context, c *client.Client, project string) string {
+	if project != "" {
 		return project
 	}
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
-	if p, err := c.ProjectForDir(cmd.Context(), dir); err == nil {
+	if p, err := c.ProjectForDir(ctx, dir); err == nil {
 		return p.ID
 	}
 	return ""

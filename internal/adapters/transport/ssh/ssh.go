@@ -88,6 +88,21 @@ func Argv(target domain.SSHTarget, remote []string) ([]string, error) {
 	return append(args, "--", target.SSHArg(), command), nil
 }
 
+// Process is the ssh process for the target and the remote argv, not started and
+// without a terminal wired: whoever runs it (Attach, or a TUI that suspends
+// itself for it) owns its standard streams. The arguments are what Argv checked.
+func Process(o Options, target domain.SSHTarget, remote []string) (*exec.Cmd, error) {
+	args, err := Argv(target, remote)
+	if err != nil {
+		return nil, err
+	}
+	bin := o.Binary
+	if bin == "" {
+		bin = "ssh"
+	}
+	return exec.Command(bin, args...), nil //nolint:gosec,noctx // the arguments are what Argv checked; ctx must not end an attached terminal
+}
+
 // Attach runs the remote argv on the target in a terminal and returns the exit
 // status of ssh: 0 when the person detached, 255 when ssh itself failed (it has
 // said why on stderr), and whatever the remote command exited with otherwise. An
@@ -100,18 +115,13 @@ func Argv(target domain.SSHTarget, remote []string) ([]string, error) {
 // same interrupt, and the session must outlive the person's Ctrl-C of the local
 // process; closing the window or detaching is what ends it.
 func Attach(ctx context.Context, o Options, target domain.SSHTarget, remote []string, io Stdio) (int, error) {
-	args, err := Argv(target, remote)
+	cmd, err := Process(o, target, remote)
 	if err != nil {
 		return 0, err
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	bin := o.Binary
-	if bin == "" {
-		bin = "ssh"
-	}
-	cmd := exec.Command(bin, args...) //nolint:gosec,noctx // the arguments are what Argv checked; ctx must not end an attached terminal
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = io.In, io.Out, io.Err
 	err = cmd.Run()
 	var exit *exec.ExitError
@@ -119,10 +129,16 @@ func Attach(ctx context.Context, o Options, target domain.SSHTarget, remote []st
 	case err == nil:
 		return 0, nil
 	case errors.As(err, &exit):
-		if code := exit.ExitCode(); code >= 0 {
-			return code, nil
-		}
-		return 255, nil // ended by a signal
+		return exitStatus(exit), nil
 	}
-	return 0, fmt.Errorf("ssh: starting %s: %w", bin, err)
+	return 0, fmt.Errorf("ssh: starting %s: %w", cmd.Path, err)
+}
+
+// exitStatus is the status Attach reports for a finished ssh: its own exit
+// code, or 255 when a signal ended it.
+func exitStatus(exit *exec.ExitError) int {
+	if code := exit.ExitCode(); code >= 0 {
+		return code
+	}
+	return 255
 }

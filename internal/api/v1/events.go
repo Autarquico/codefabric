@@ -46,6 +46,12 @@ type EventPage struct {
 	HasMore bool    `json:"has_more"`
 }
 
+// TaskTimeline is GET /v1/tasks/{ref}/timeline: the events of a Task and of its
+// Runs, oldest first, paged like GET /v1/events (pass Cursor back as `after`).
+type TaskTimeline struct {
+	EventPage
+}
+
 // Limits of the event reads.
 const (
 	EventsDefaultLimit = 100

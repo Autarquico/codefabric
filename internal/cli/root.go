@@ -91,8 +91,7 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 
 // RunContextWith is RunContext with the composition of the binary.
 func RunContextWith(ctx context.Context, opts Options, args []string, stdin io.Reader, stdout, stderr io.Writer, extra ...*cobra.Command) int {
-	root := newRootCmd(opts)
-	addCommands(root, extra)
+	root := CommandTree(opts, extra...)
 	root.SetArgs(args)
 	root.SetIn(stdin)
 	root.SetOut(stdout)
@@ -107,6 +106,15 @@ func RunContextWith(ctx context.Context, opts Options, args []string, stdin io.R
 		return report(stdout, stderr, err, jsonRequested(root, args), debug)
 	}
 	return 0
+}
+
+// CommandTree builds a fresh cf command tree. Nothing is shared between two
+// trees, so a caller that runs a command from one cannot leak flag or context
+// state into the next. The parity test of the action registry walks it.
+func CommandTree(opts Options, extra ...*cobra.Command) *cobra.Command {
+	root := newRootCmd(opts)
+	addCommands(root, extra)
+	return root
 }
 
 // jsonRequested also looks at the raw arguments: a usage error can stop flag

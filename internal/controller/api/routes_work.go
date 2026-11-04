@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/events"
 	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/tasks"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
@@ -30,6 +31,7 @@ func (s *Server) registerWorkRoutes() {
 	s.handle("GET /v1/tasks", clientsOnly, s.listTasks)
 	s.handle("GET /v1/tasks/{ref}", clientsOnly, s.getTask)
 	s.handle("PATCH /v1/tasks/{ref}", clientsOnly, s.setTask)
+	s.handle("GET /v1/tasks/{ref}/timeline", clientsOnly, s.taskTimeline)
 	s.handle("POST /v1/tasks/{ref}/cancel", clientsOnly, taskAction(s.work.Tasks.Cancel))
 	s.handle("POST /v1/tasks/{ref}/complete", clientsOnly, taskAction(s.work.Tasks.Complete))
 	s.handle("POST /v1/tasks/{ref}/archive", clientsOnly, taskAction(s.work.Tasks.Archive))
@@ -157,6 +159,24 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request, _ caller) error
 		return err
 	}
 	writeJSON(w, http.StatusOK, t)
+	return nil
+}
+
+func (s *Server) taskTimeline(w http.ResponseWriter, r *http.Request, c caller) error {
+	v := r.URL.Query()
+	after, err := events.ParseCursor(v.Get("after"))
+	if err != nil {
+		return err
+	}
+	limit, err := queryNumber(v.Get("limit"), 0, "limit")
+	if err != nil {
+		return err
+	}
+	out, err := s.work.Events.Timeline(r.Context(), c.Session, r.PathValue("ref"), v.Get("project"), after, int(min(limit, 1<<20)))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
 	return nil
 }
 

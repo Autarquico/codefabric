@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os/exec"
 
 	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 	"github.com/Autarquico/codefabric/internal/adapters/runtime/remote"
@@ -18,24 +19,56 @@ import (
 // the ssh transport. This is the one place that knows both.
 type sshTerminal struct{}
 
-func (sshTerminal) Attach(ctx context.Context, req cli.AttachRequest, stdio cli.TerminalIO) (int, error) {
+// remoteArgv is the command to run on the Worker for the session of req.
+func remoteArgv(req cli.AttachRequest) ([]string, error) {
 	argv, err := remote.AttachArgv(cfruntime.Handle{Runtime: req.Handle.Runtime, Ref: req.Handle.Ref}, req.Binary, req.RunID, req.LeaseEpoch, req.ReadOnly)
 	switch {
 	case errors.Is(err, tmux.ErrNotAttachable):
-		return 0, domain.NewError(domain.CodeRunNotAttachable, "the Worker's handle is not the session of this Run: nothing was run",
+		return nil, domain.NewError(domain.CodeRunNotAttachable, "the Worker's handle is not the session of this Run: nothing was run",
 			map[string]any{"reason": "target_mismatch"})
 	case err != nil:
-		return 0, domain.NewError(domain.CodeRunNotAttachable, "this runtime cannot be attached from here",
+		return nil, domain.NewError(domain.CodeRunNotAttachable, "this runtime cannot be attached from here",
 			map[string]any{"reason": v1.NotAttachableRuntimeUnsupported})
+	}
+	return argv, nil
+}
+
+func errRejectedTarget() error {
+	return domain.NewError(domain.CodeRunNotAttachable, "the target was refused before anything was run",
+		map[string]any{"reason": "invalid_ssh_target"})
+}
+
+func (sshTerminal) Attach(ctx context.Context, req cli.AttachRequest, stdio cli.TerminalIO) (int, error) {
+	argv, err := remoteArgv(req)
+	if err != nil {
+		return 0, err
 	}
 	code, err := ssh.Attach(ctx, ssh.Options{}, req.Target, argv, ssh.Stdio{In: stdio.In, Out: stdio.Out, Err: stdio.Err})
 	switch {
 	case errors.Is(err, ssh.ErrRejected):
-		return 0, domain.NewError(domain.CodeRunNotAttachable, "the target was refused before anything was run",
-			map[string]any{"reason": "invalid_ssh_target"})
+		return 0, errRejectedTarget()
 	case err != nil:
 		return 0, domain.NewError(domain.CodeRunNotAttachable, "ssh could not be started on this machine",
 			map[string]any{"reason": v1.NotAttachableSSHFailed})
 	}
 	return code, nil
+}
+
+func (sshTerminal) Command(ctx context.Context, req cli.AttachRequest) (*exec.Cmd, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	argv, err := remoteArgv(req)
+	if err != nil {
+		return nil, err
+	}
+	cmd, err := ssh.Process(ssh.Options{}, req.Target, argv)
+	if err != nil {
+		if errors.Is(err, ssh.ErrRejected) {
+			return nil, errRejectedTarget()
+		}
+		return nil, domain.NewError(domain.CodeRunNotAttachable, "ssh could not be prepared on this machine",
+			map[string]any{"reason": v1.NotAttachableSSHFailed})
+	}
+	return cmd, nil
 }
