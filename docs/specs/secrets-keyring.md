@@ -2,18 +2,18 @@
 codename: codefabric
 title: Backend keyring de secrets
 type: task
-status: draft
+status: active
 priority: P0
 size: M
 issue: null
 prs: []
-related_issues: []
+related_issues: [82]
 sub_issues: []
 depends_on: [secrets-local]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows, secrets-local]
 created: 2026-10-16
-updated: 2026-10-16
+updated: 2026-11-04
 ---
 
 # Backend keyring de secrets
