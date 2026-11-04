@@ -173,6 +173,7 @@ func New(c Config) (*Server, error) {
 	}
 	if s.work.Events != nil {
 		s.registerEventRoutes()
+		s.registerOverviewRoutes()
 	}
 	s.registerOutputRoutes()
 	s.registerObserveRoutes()

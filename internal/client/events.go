@@ -64,7 +64,6 @@ func (c *Client) Events(ctx context.Context, q EventQuery) (v1.EventPage, error)
 // reopened where the last event that fn took left off, so nothing is delivered
 // twice and nothing is skipped; an event counts as taken when fn returns nil.
 func (c *Client) FollowEvents(ctx context.Context, q EventQuery, fn func(v1.Event) error) error {
-	q.Tail, q.Limit = 0, 0
 	resume := q.After
 	if resume == "" {
 		// "From now" has to be a place, or a reconnection before the first event would lose what happened meanwhile.
@@ -74,8 +73,15 @@ func (c *Client) FollowEvents(ctx context.Context, q EventQuery, fn func(v1.Even
 		}
 		resume = now.Cursor
 	}
-	q.After = ""
-	return c.follow(ctx, streamSpec{
+	return c.follow(ctx, eventStream(q, resume, fn))
+}
+
+// eventStream is the stream of the events that match q after resume, handing
+// each to fn. Following and subscribing share it, so there is one copy of how
+// an event travels.
+func eventStream(q EventQuery, resume string, fn func(v1.Event) error) streamSpec {
+	q.After, q.Tail, q.Limit = "", 0, 0
+	return streamSpec{
 		resumeAt: resume,
 		request: func(lastID string) (string, http.Header) {
 			h := http.Header{}
@@ -94,5 +100,5 @@ func (c *Client) FollowEvents(ctx context.Context, q EventQuery, fn func(v1.Even
 			}
 			return false, "", fn(e)
 		},
-	})
+	}
 }

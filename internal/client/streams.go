@@ -29,10 +29,13 @@ var errEventTooLarge = errors.New("client: a stream event is larger than any the
 // the backoff between connections. Tests shorten it.
 type streamTiming struct {
 	header, idle, backoffInitial, backoffMax time.Duration
+	// minRefetch is the least time between two reads of a subscription's snapshot.
+	minRefetch time.Duration
 }
 
 var defaultStreamTiming = streamTiming{
 	header: 30 * time.Second, idle: 45 * time.Second, backoffInitial: 500 * time.Millisecond, backoffMax: 10 * time.Second,
+	minRefetch: time.Second,
 }
 
 // sseEvent is one server-sent event as it came. A comment is not one.
@@ -107,6 +110,9 @@ type streamSpec struct {
 	resumeAt string
 	// onOpen is called when a connection opens (headers received).
 	onOpen func()
+	// onDown is told why a connection failed, before the backoff; a clean end
+	// of the stream, which is reopened at once, is not a failure.
+	onDown func(err error)
 }
 
 // follow keeps a stream open: it reconnects, with a backoff of 0.5 s to 10 s and
@@ -124,6 +130,9 @@ func (c *Client) follow(ctx context.Context, spec streamSpec) error {
 			return ctx.Err()
 		case err != nil && !retryable(err):
 			return err
+		}
+		if err != nil && spec.onDown != nil {
+			spec.onDown(err)
 		}
 		if got {
 			delay = c.timing.backoffInitial // it worked for a while: the next failure starts the backoff over
