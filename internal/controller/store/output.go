@@ -27,24 +27,26 @@ var (
 )
 
 // Output is what the store holds of the output of a Run under a lease epoch:
-// the bytes [Start, End), at most v1.OutputTailBytes of them. FinalOffset is
-// where the Worker says it ends, when Closed.
+// the bytes [Start, End). [Start, Sealed) are in immutable segments (logs_index)
+// and [Sealed, End) in the hot tail. FinalOffset is where the Worker says it
+// ends, when Closed.
 type Output struct {
 	RunID       domain.ID
 	Epoch       uint64
 	Start, End  uint64
+	Sealed      uint64
 	Closed      bool
 	FinalOffset uint64
 	Note        string
 	UpdatedAt   time.Time
 }
 
-const outputColumns = `start_offset, end_offset, closed_at IS NOT NULL, COALESCE(final_offset, 0), COALESCE(note, ''), updated_at`
+const outputColumns = `start_offset, end_offset, sealed_offset, closed_at IS NOT NULL, COALESCE(final_offset, 0), COALESCE(note, ''), updated_at`
 
 func scanOutput(run domain.ID, epoch uint64, row rowScanner) (Output, error) {
 	o := Output{RunID: run, Epoch: epoch}
 	var updated int64
-	if err := row.Scan(&o.Start, &o.End, &o.Closed, &o.FinalOffset, &o.Note, &updated); err != nil {
+	if err := row.Scan(&o.Start, &o.End, &o.Sealed, &o.Closed, &o.FinalOffset, &o.Note, &updated); err != nil {
 		return Output{}, scanErr(err, "run output")
 	}
 	o.UpdatedAt = time.Unix(0, updated).UTC()
@@ -67,13 +69,9 @@ func LatestOutputEpoch(ctx context.Context, q Querier, run domain.ID) (epoch uin
 	return uint64(max(n.Int64, 0)), n.Valid, nil //nolint:gosec // a lease epoch is >= 1 by the table's check
 }
 
-// OutputRange returns the bytes [from, to) of the output, which must lie inside
-// what it holds.
-func OutputRange(ctx context.Context, q Querier, run domain.ID, epoch, from, to uint64) ([]byte, error) {
-	if to < from {
-		return nil, fmt.Errorf("%w: [%d, %d)", ErrOutputInvalid, from, to)
-	}
-	out := make([]byte, 0, to-from)
+// hotRange appends to out the bytes [from, to) of the hot chunks, which must
+// lie inside the hot tail.
+func hotRange(ctx context.Context, q Querier, out []byte, run domain.ID, epoch, from, to uint64) ([]byte, error) {
 	rows, err := q.Query(ctx,
 		`SELECT chunk_offset, data FROM run_output_chunks
 		 WHERE run_id = ? AND lease_epoch = ? AND chunk_offset >= ? AND chunk_offset < ? AND chunk_offset + length(data) > ?
@@ -122,8 +120,10 @@ func (t *Tx) MarkOutput() { t.output = true }
 //   - offset > End leaves a hole the Worker skipped: what was held is dropped and
 //     the output restarts at offset.
 //
-// After it, at most v1.OutputTailBytes remain: the oldest bytes go, a chunk cut
-// in two if it crosses the boundary, so the sum of the chunks never passes it.
+// Whenever the hot tail holds a whole segment (SegmentBytes) it is sealed into
+// an immutable gzip segment, in this same transaction and before the hot chunks
+// are retired: no byte is dropped before it is durable. Bytes are never trimmed
+// away; a hole the Worker skipped seals what was held and restarts at offset.
 func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint64, data []byte, at time.Time) (Output, error) {
 	switch {
 	case epoch < 1, len(data) == 0, len(data) > v1.OutputChunkBytes,
@@ -133,10 +133,10 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 	o, err := OutputOf(ctx, t, run, epoch)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		o = Output{RunID: run, Epoch: epoch, Start: offset, End: offset}
+		o = Output{RunID: run, Epoch: epoch, Start: offset, End: offset, Sealed: offset}
 		if _, err := t.Exec(ctx,
-			`INSERT INTO run_output (run_id, lease_epoch, start_offset, end_offset, updated_at) VALUES (?, ?, ?, ?, ?)`,
-			string(run), epoch, offset, offset, at.UnixNano()); err != nil {
+			`INSERT INTO run_output (run_id, lease_epoch, start_offset, end_offset, sealed_offset, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			string(run), epoch, offset, offset, offset, at.UnixNano()); err != nil {
 			return Output{}, fmt.Errorf("store: starting output: %w", err)
 		}
 	case err != nil:
@@ -148,10 +148,10 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 	end := offset + uint64(len(data))
 	switch {
 	case offset > o.End:
-		if _, err := t.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = ? AND lease_epoch = ?`, string(run), epoch); err != nil {
-			return Output{}, fmt.Errorf("store: dropping skipped output: %w", err)
+		if err := t.sealOutput(ctx, &o, o.End); err != nil {
+			return Output{}, err
 		}
-		o.Start, o.End = offset, offset
+		o.Start, o.End, o.Sealed = offset, offset, offset
 	case offset < o.End:
 		if err := t.checkOverlap(ctx, o, offset, data); err != nil {
 			return Output{}, err
@@ -166,15 +166,12 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 		return Output{}, err
 	}
 	o.End = offset + uint64(len(data))
-	if o.End-o.Start > v1.OutputTailBytes {
-		o.Start = o.End - v1.OutputTailBytes
-		if err := t.trimOutput(ctx, run, epoch, o.Start); err != nil {
-			return Output{}, err
-		}
+	if err := t.sealFull(ctx, &o); err != nil {
+		return Output{}, err
 	}
 	if _, err := t.Exec(ctx,
-		`UPDATE run_output SET start_offset = ?, end_offset = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ?`,
-		o.Start, o.End, at.UnixNano(), string(run), epoch); err != nil {
+		`UPDATE run_output SET start_offset = ?, end_offset = ?, sealed_offset = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ?`,
+		o.Start, o.End, o.Sealed, at.UnixNano(), string(run), epoch); err != nil {
 		return Output{}, fmt.Errorf("store: updating output: %w", err)
 	}
 	o.UpdatedAt = at
@@ -222,13 +219,13 @@ func (t *Tx) appendChunks(ctx context.Context, run domain.ID, epoch, offset uint
 }
 
 // checkOverlap compares the bytes sent for [offset, End) with the ones held.
-// Those below Start are gone and cannot be compared.
+// Those below Start were skipped by the Worker and are not compared.
 func (t *Tx) checkOverlap(ctx context.Context, o Output, offset uint64, data []byte) error {
 	from, to := max(offset, o.Start), min(offset+uint64(len(data)), o.End)
 	if from >= to {
 		return nil
 	}
-	held, err := OutputRange(ctx, t, o.RunID, o.Epoch, from, to)
+	held, err := t.db.OutputRange(ctx, t, o.RunID, o.Epoch, from, to)
 	if err != nil {
 		return err
 	}
@@ -239,7 +236,8 @@ func (t *Tx) checkOverlap(ctx context.Context, o Output, offset uint64, data []b
 }
 
 // trimOutput drops everything below newStart: the chunks that end before it, and
-// the part of the chunk that crosses it.
+// the part of the chunk that crosses it. It is only called with the bytes below
+// newStart already sealed.
 func (t *Tx) trimOutput(ctx context.Context, run domain.ID, epoch, newStart uint64) error {
 	if _, err := t.Exec(ctx,
 		`DELETE FROM run_output_chunks WHERE run_id = ? AND lease_epoch = ? AND chunk_offset < ? AND chunk_offset + length(data) <= ?`,
@@ -267,10 +265,10 @@ func (t *Tx) CloseOutput(ctx context.Context, run domain.ID, epoch, final uint64
 	o, err := OutputOf(ctx, t, run, epoch)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		o = Output{RunID: run, Epoch: epoch, Start: final, End: final}
+		o = Output{RunID: run, Epoch: epoch, Start: final, End: final, Sealed: final}
 		if _, err := t.Exec(ctx,
-			`INSERT INTO run_output (run_id, lease_epoch, start_offset, end_offset, updated_at) VALUES (?, ?, ?, ?, ?)`,
-			string(run), epoch, final, final, at.UnixNano()); err != nil {
+			`INSERT INTO run_output (run_id, lease_epoch, start_offset, end_offset, sealed_offset, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			string(run), epoch, final, final, final, at.UnixNano()); err != nil {
 			return Output{}, fmt.Errorf("store: starting output: %w", err)
 		}
 	case err != nil:
@@ -284,9 +282,13 @@ func (t *Tx) CloseOutput(ctx context.Context, run domain.ID, epoch, final uint64
 	case o.End > final:
 		return Output{}, fmt.Errorf("%w: holds up to %d, closed at %d", ErrOutputConflict, o.End, final)
 	}
+	// The close seals what is left hot: a closed output lives wholly in segments.
+	if err := t.sealOutput(ctx, &o, o.End); err != nil {
+		return Output{}, err
+	}
 	if _, err := t.Exec(ctx,
-		`UPDATE run_output SET closed_at = ?, final_offset = ?, note = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ?`,
-		at.UnixNano(), final, nullable(note), at.UnixNano(), string(run), epoch); err != nil {
+		`UPDATE run_output SET closed_at = ?, final_offset = ?, note = ?, sealed_offset = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ?`,
+		at.UnixNano(), final, nullable(note), o.Sealed, at.UnixNano(), string(run), epoch); err != nil {
 		return Output{}, fmt.Errorf("store: closing output: %w", err)
 	}
 	o.Closed, o.FinalOffset, o.Note, o.UpdatedAt = true, final, note, at

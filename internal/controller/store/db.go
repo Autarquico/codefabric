@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" driver
 
+	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/controller/eventbus"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -36,6 +38,10 @@ type Options struct {
 	// Logger gets the debug line of a transaction that held the writer for
 	// long (see WithTx); it defaults to slog.Default().
 	Logger *slog.Logger
+	// Blobs is where the sealed segments of the output of Runs are written. It
+	// defaults to the content-addressed store in the directory of the database,
+	// which is where the Controller keeps its own.
+	Blobs *blob.Store
 
 	goMigrations []*goose.Migration // tests only: Go migrations to run after the embedded SQL
 }
@@ -43,13 +49,17 @@ type Options struct {
 // DB is the Controller's SQLite store: one serialised writer and a pool of
 // query-only readers over the same WAL database.
 type DB struct {
-	path     string
-	writer   *sql.DB
-	reader   *sql.DB
-	clock    clock.Clock
-	log      *slog.Logger
-	ids      *domain.IDGenerator
-	notifier *eventbus.Notifier
+	path   string
+	writer *sql.DB
+	reader *sql.DB
+	clock  clock.Clock
+	// blobs is Options.Blobs, or the store of the directory of the database, opened by segments().
+	blobs     *blob.Store
+	blobsOnce sync.Once
+	blobsErr  error
+	log       *slog.Logger
+	ids       *domain.IDGenerator
+	notifier  *eventbus.Notifier
 	// output wakes the readers that follow the output of a Run. It carries a
 	// counter of this process: output has no sequence of its own.
 	output    *eventbus.Notifier
@@ -80,6 +90,7 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	if db.ids == nil {
 		db.ids = domain.NewIDGenerator(db.clock.Now, rand.Reader)
 	}
+	db.blobs = opts.Blobs
 	readerConns := opts.ReaderConns
 	if readerConns <= 0 {
 		readerConns = defaultReaderConns
@@ -97,6 +108,10 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 		return nil, fmt.Errorf("store: opening reader: %w", err)
 	}
 	if err := db.loadState(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := db.SealOutputs(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

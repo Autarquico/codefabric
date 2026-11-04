@@ -5,6 +5,8 @@
 package blob
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -179,6 +181,48 @@ func (s *Store) Put(ctx context.Context, r io.Reader, want Digest) (_ Digest, _ 
 	}
 	return got, size, nil
 }
+
+// PutGzip compresses raw with gzip and stores the compressed bytes: the digest
+// and the size it returns are those of the stored (compressed) content, so the
+// blob verifies like any other. The fastest level is used on purpose: segments
+// are written on the Controller's single-writer path, where time matters more
+// than ratio. The same raw bytes give the same blob.
+func (s *Store) PutGzip(ctx context.Context, raw []byte) (Digest, int64, error) {
+	var packed bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&packed, gzip.BestSpeed)
+	if err != nil {
+		return "", 0, fmt.Errorf("blob: preparing gzip: %w", err)
+	}
+	if _, err := zw.Write(raw); err != nil {
+		return "", 0, fmt.Errorf("blob: compressing: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return "", 0, fmt.Errorf("blob: compressing: %w", err)
+	}
+	return s.Put(ctx, &packed, "")
+}
+
+// OpenGzip returns a reader of the decompressed content of a blob stored by
+// PutGzip. It streams: callers bound how much they read from it.
+func (s *Store) OpenGzip(d Digest) (io.ReadCloser, error) {
+	f, err := s.Open(d)
+	if err != nil {
+		return nil, err
+	}
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: %s is not gzip: %w", ErrCorruptBlob, d, err)
+	}
+	return &gzipBlob{Reader: zr, file: f}, nil
+}
+
+type gzipBlob struct {
+	*gzip.Reader
+	file io.Closer
+}
+
+func (g *gzipBlob) Close() error { return errors.Join(g.Reader.Close(), g.file.Close()) }
 
 // install links tmp at the final path. os.Link fails with EEXIST instead of
 // replacing, which closes the race between two Puts of the same digest.

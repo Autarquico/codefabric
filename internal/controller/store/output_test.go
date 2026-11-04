@@ -3,7 +3,6 @@ package store
 import (
 	"bytes"
 	"errors"
-	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -48,48 +47,13 @@ func (f *leaseFixture) held(run domain.ID, epoch uint64) (Output, []byte) {
 		if o, err = OutputOf(f.t.Context(), q, run, epoch); err != nil {
 			return err
 		}
-		data, err = OutputRange(f.t.Context(), q, run, epoch, o.Start, o.End)
+		data, err = f.db.OutputRange(f.t.Context(), q, run, epoch, o.Start, o.End)
 		return err
 	})
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	return o, data
-}
-
-// checkRing states the invariants of the ring: the chunks are contiguous from
-// Start to End, none lies outside, and the bytes kept are at most 1 MiB.
-func (f *leaseFixture) checkRing(run domain.ID, epoch uint64) {
-	f.t.Helper()
-	o, _ := f.held(run, epoch)
-	if o.End-o.Start > v1.OutputTailBytes {
-		f.t.Fatalf("holds %d bytes, over the ring", o.End-o.Start)
-	}
-	rows, err := f.db.Reader().QueryContext(f.t.Context(),
-		`SELECT chunk_offset, length(data) FROM run_output_chunks WHERE run_id = ? AND lease_epoch = ? ORDER BY chunk_offset`, string(run), epoch)
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	defer func() { _ = rows.Close() }()
-	next, total := o.Start, uint64(0)
-	defer func() {
-		if err := rows.Err(); err != nil {
-			f.t.Fatal(err)
-		}
-	}()
-	for rows.Next() {
-		var off, n uint64
-		if err := rows.Scan(&off, &n); err != nil {
-			f.t.Fatal(err)
-		}
-		if off != next {
-			f.t.Fatalf("chunk at %d, want %d (start %d, end %d)", off, next, o.Start, o.End)
-		}
-		next, total = off+n, total+n
-	}
-	if next != o.End || total != o.End-o.Start || total > v1.OutputTailBytes {
-		f.t.Fatalf("chunks end at %d for %d bytes; output is [%d, %d)", next, total, o.Start, o.End)
-	}
 }
 
 func TestAppendOutput_AppendsAndIsIdempotent(t *testing.T) {
@@ -121,7 +85,7 @@ func TestAppendOutput_AppendsAndIsIdempotent(t *testing.T) {
 	if o, data := f.held(run, 1); string(data) != "hello world!!" || o.Start != 0 {
 		t.Fatalf("held %q from %d", data, o.Start)
 	}
-	f.checkRing(run, 1)
+	f.checkStorage(run, 1)
 }
 
 func TestAppendOutput_ADifferentOverlapIsAConflictAndStoresNothing(t *testing.T) {
@@ -149,45 +113,11 @@ func TestAppendOutput_AHoleRestartsTheOutput(t *testing.T) {
 	if _, data := f.held(run, 1); string(data) != "xyz" {
 		t.Fatalf("held %q", data)
 	}
-	f.checkRing(run, 1)
+	f.checkStorage(run, 1)
 
 	// The first thing ever received may start anywhere: the Worker skipped what came before.
 	if o, err = f.append(run, 2, 5000, []byte("q")); err != nil || o.Start != 5000 || o.End != 5001 {
 		t.Fatalf("first append of an epoch = %+v, %v", o, err)
-	}
-}
-
-func TestAppendOutput_TheRingKeepsAMebibyteAndCutsTheChunkOnTheBoundary(t *testing.T) {
-	f, run := outputFixture(t)
-	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // reproducible test data
-	var all []byte
-	for len(all) < 3*v1.OutputTailBytes+12345 {
-		n := 1 + rng.IntN(v1.OutputChunkBytes)
-		chunk := make([]byte, n)
-		for i := range chunk {
-			chunk[i] = byte(rng.UintN(256)) //nolint:gosec // below 256
-		}
-		if _, err := f.append(run, 1, uint64(len(all)), chunk); err != nil {
-			t.Fatal(err)
-		}
-		all = append(all, chunk...)
-		f.checkRing(run, 1)
-	}
-	o, data := f.held(run, 1)
-	if o.End != uint64(len(all)) || o.End-o.Start != v1.OutputTailBytes || !bytes.Equal(data, all[o.Start:]) {
-		t.Fatalf("held [%d, %d) of %d, %d bytes", o.Start, o.End, len(all), len(data))
-	}
-	// A read of any part of it is the same bytes.
-	var part []byte
-	if err := f.db.Read(t.Context(), func(q Querier) (err error) {
-		part, err = OutputRange(t.Context(), q, run, 1, o.Start+777, o.Start+777+200000)
-		return err
-	}); err != nil || !bytes.Equal(part, all[o.Start+777:o.Start+777+200000]) {
-		t.Fatalf("OutputRange: %v", err)
-	}
-	// Bytes below Start are not compared, only dropped.
-	if got, err := f.append(run, 1, 0, []byte("old")); err != nil || got.End != o.End {
-		t.Fatalf("resending dropped bytes = %+v, %v", got, err)
 	}
 }
 
@@ -315,13 +245,13 @@ func TestAppendOutput_ByteAtATimeAppendsFillTheLastChunk(t *testing.T) {
 	if o, data := f.held(run, 1); o.End != n || !bytes.Equal(data, want) {
 		t.Fatalf("held %d bytes, end %d: the content is not what was sent", len(data), o.End)
 	}
-	f.checkRing(run, 1)
+	f.checkStorage(run, 1)
 	// Mixed sizes keep the invariant, and a chunk that fills spills into the next.
 	big := bytes.Repeat([]byte("z"), 60000)
 	for i := range 2 {
 		if o, err := f.append(run, 1, uint64(n+i*60000), big); err != nil || o.End != uint64(n+(i+1)*60000) { //nolint:gosec // small
 			t.Fatalf("append = %+v, %v", o, err)
 		}
-		f.checkRing(run, 1)
+		f.checkStorage(run, 1)
 	}
 }

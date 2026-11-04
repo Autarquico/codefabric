@@ -265,7 +265,7 @@ func (s *Service) ReadOutput(ctx context.Context, by pki.Session, q OutputRead) 
 		to := min(from+limit, o.End)
 		out.Offset = from
 		if to > from {
-			if out.Data, err = store.OutputRange(ctx, r, run.ID, epoch, from, to); err != nil {
+			if out.Data, err = s.db.OutputRange(ctx, r, run.ID, epoch, from, to); err != nil {
 				return err
 			}
 		}
@@ -421,7 +421,7 @@ func (f *OutputFollower) look(ctx context.Context, r store.Querier) (outputLook,
 	}
 	if f.pos < o.End {
 		to := min(f.pos+v1.OutputPageBytes, o.End)
-		data, err := store.OutputRange(ctx, r, f.run, f.epoch, f.pos, to)
+		data, err := f.s.db.OutputRange(ctx, r, f.run, f.epoch, f.pos, to)
 		if err != nil {
 			return l, err
 		}
