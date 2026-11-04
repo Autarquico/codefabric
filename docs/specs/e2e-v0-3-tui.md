@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "E2E del TUI"
+title: E2E del TUI
 type: task
-status: draft
+status: active
 priority: P1
 size: S
-issue: null
+issue: 99
 prs: []
-related_issues: []
+related_issues: [99]
 sub_issues: []
 depends_on: [needs-input-inbox, palette-search-notify]
 supersedes: []
 related_specs: [codefabric-spec, phase-3-tui]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-04
 ---
 
 # E2E del TUI
