@@ -234,7 +234,7 @@ func (g *Git) fetch(ctx context.Context, bare, repo, refspec string, f originFet
 	for attempt := 1; attempt <= fetchAttempts; attempt++ {
 		_, err = g.ok(ctx, cmd{
 			dir: bare, env: f.env, values: f.values, timeout: fetchTimeout,
-			args: []string{"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repo, refspec},
+			args: []string{"fetch", "--quiet", "--no-tags", "--no-auto-maintenance", "--no-write-fetch-head", "--end-of-options", repo, refspec},
 		})
 		if err == nil || ctx.Err() != nil {
 			return err

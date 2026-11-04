@@ -169,7 +169,8 @@ func deliveryError(err error) error {
 // scrubbed is an error whose text has been redacted of the secrets of the
 // Run. It keeps the identity of the original: errors.Is answers as the
 // original does (errPrepareLater and the like still match), and errors.As
-// finds the original chain, with a coded failure replaced by its redacted copy.
+// finds the redacted coded failure if the chain has one, and the original
+// chain otherwise.
 type scrubbed struct {
 	msg    string
 	err    error // the original

@@ -81,11 +81,13 @@ func (g *Git) originFetch(bare string, a *OriginAuth) (originFetch, error) {
 		{"credential.useHttpPath", "true"},
 		{"http.followRedirects", "false"},
 		{"http.sslVerify", "true"},
+		{"gc.auto", "0"},
+		{"maintenance.auto", "false"},
 	}
 	if g.trustCA != "" { // tests only
 		config = append(config, [2]string{"http.sslCAInfo", g.trustCA})
 	}
-	scratch, err := scratchRepo(a.RunDir, bare)
+	scratch, err := scratchRepo(a.RunDir)
 	if err != nil {
 		return f, err
 	}
@@ -105,21 +107,24 @@ func (g *Git) originFetch(bare string, a *OriginAuth) (originFetch, error) {
 }
 
 // scratchRepo makes the repository an authenticated fetch runs in: its own
-// minimal config, and the refs of bare (a symlink, read for negotiating only:
-// the fetches write none) so that git still sends what it has. Git reads the
-// configuration of a repository from its own config file, and a URL-scoped
-// key there (http.<url>.sslVerify, sslCAInfo, proxy, extraHeader,
-// curloptResolve, an include, an insteadOf) beats the command-line setting
-// for the same URL. The config of bare is shared by all the Runs of the
-// Project, so it is not read at all; the objects are written to bare's.
-func scratchRepo(runDir, bare string) (string, error) {
+// minimal config and its own, empty refs. Git reads the configuration of a
+// repository from its own config file, and a URL-scoped key there
+// (http.<url>.sslVerify, sslCAInfo, proxy, extraHeader, curloptResolve, an
+// include, an insteadOf) beats the command-line setting for the same URL. The
+// config of bare is shared by all the Runs of the Project, so it is not read at
+// all. Only the objects go to bare's store; no ref, reflog or worktree of bare
+// is reachable from here, and the scratch turns off every automatic
+// maintenance (gc, pack-refs, prune), which would otherwise run against the
+// shared store with a partial view of what is reachable. The refs of bare are
+// the daemon's to write, with update-ref in bare, under the project lock.
+func scratchRepo(runDir string) (string, error) {
 	dir, err := os.MkdirTemp(runDir, "fetch-")
 	if err != nil {
 		return "", fmt.Errorf("gitops: making the repository of a fetch: %w", err)
 	}
 	files := map[string]string{
 		"HEAD":   "ref: refs/heads/main\n",
-		"config": "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
+		"config": "[core]\n\trepositoryformatversion = 0\n\tbare = true\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n",
 	}
 	for name, content := range files {
 		if err = os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
@@ -127,12 +132,7 @@ func scratchRepo(runDir, bare string) (string, error) {
 		}
 	}
 	if err == nil {
-		err = os.Symlink(filepath.Join(bare, "refs"), filepath.Join(dir, "refs"))
-	}
-	if err == nil {
-		if _, statErr := os.Lstat(filepath.Join(bare, "packed-refs")); statErr == nil {
-			err = os.Symlink(filepath.Join(bare, "packed-refs"), filepath.Join(dir, "packed-refs"))
-		}
+		err = os.Mkdir(filepath.Join(dir, "refs"), 0o700)
 	}
 	if err != nil {
 		_ = os.RemoveAll(dir)

@@ -310,3 +310,24 @@ func TestBind_RefusesExactlyTheUsersSecretsSetRefuses(t *testing.T) {
 		}
 	}
 }
+
+func TestDeliver_ADeliveryThatCannotBeReadInPlaceFailsAndIsNotReplaced(t *testing.T) {
+	dir := runDir(t)
+	deliver(t, dir, 1, v1)
+	if err := os.Remove(filepath.Join(dir, liveName, fileName(v1[0].Ref))); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, liveName, manifestName)) //nolint:gosec // a test
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = New().DeliverFor(dir, 1, askpassOnly, []redact.Needle{origin}, allow)
+	if err == nil {
+		t.Fatal("a delivery that cannot be read was merged into")
+	}
+	noValue(t, err)
+	after, rerr := os.ReadFile(filepath.Join(dir, liveName, manifestName)) //nolint:gosec // a test
+	if rerr != nil || string(after) != string(before) {
+		t.Fatalf("the manifest changed: %v\n%s\n%s", rerr, before, after)
+	}
+}

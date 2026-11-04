@@ -68,12 +68,13 @@ func TestOriginFetchEnvIsControlled(t *testing.T) {
 	}
 	for k, want := range map[string]string{
 		"credential.helper": "", "credential.useHttpPath": "true", "http.followRedirects": "false", "http.sslVerify": "true",
+		"gc.auto": "0", "maintenance.auto": "false",
 	} {
 		if v, ok := config[k]; !ok || v != want {
 			t.Errorf("config %s = %q (set %v), want %q", k, v, ok, want)
 		}
 	}
-	if got["GIT_CONFIG_COUNT"] != "5" || len(config) != 5 {
+	if got["GIT_CONFIG_COUNT"] != "7" || len(config) != 7 {
 		t.Errorf("config count = %s, keys %v", got["GIT_CONFIG_COUNT"], config)
 	}
 	if slices.ContainsFunc(env, func(kv string) bool { return strings.Contains(kv, "tok-0123456789") }) {

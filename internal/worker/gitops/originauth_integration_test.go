@@ -12,9 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/support/gittest"
@@ -362,5 +364,76 @@ exec '%s' "$@"
 		t.Error("EnsureSource of an unknown commit worked")
 	} else {
 		r.noLeak(err)
+	}
+}
+
+// packs counts the packs of the bare's store.
+func packs(t *testing.T, bare string) int {
+	t.Helper()
+	m, err := filepath.Glob(filepath.Join(bare, "objects", "pack", "*.pack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(m)
+}
+
+// An authenticated fetch must not run maintenance against the shared bare:
+// with every limit forced to its lowest, it leaves the refs, the worktree
+// HEADs and the packs as they were, and nothing outlives it.
+func TestOriginAuth_FetchDoesNotMaintainTheSharedBare(t *testing.T) {
+	r := newAskpassRig(t, true)
+	bare := r.paths.WorkerRepoDir(project)
+	{
+		init := exec.CommandContext(t.Context(), "git", "init", "--bare", "--quiet", bare) //nolint:gosec // a test
+		if out, err := init.CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+	}
+	// Make the bare look like it needs gc: more packs than gc.autoPackLimit.
+	work := t.TempDir() // unrelated to the origin: the fetch has to run
+	gittest.Run(t, work, "init", "--quiet", "--initial-branch=main")
+	for i := range 55 { // more than the default gc.autoPackLimit (50)
+		gittest.Commit(t, work, "f", fmt.Sprintf("v%d", i), fmt.Sprintf("c%d", i))
+		pack := exec.CommandContext(t.Context(), "git", "-C", work, "pack-objects", "--quiet", "--revs", filepath.Join(bare, "objects", "pack", "pack")) //nolint:gosec // a test
+		pack.Stdin = strings.NewReader("HEAD\n")
+		if out, err := pack.CombinedOutput(); err != nil {
+			t.Fatalf("pack-objects: %v\n%s", err, out)
+		}
+	}
+	for i := range 4 {
+		gittest.Run(t, bare, "update-ref", "refs/heads/b"+strconv.Itoa(i), gittest.Run(t, work, "rev-parse", "HEAD~"+strconv.Itoa(i)))
+	}
+	gittest.Run(t, bare, "config", "gc.auto", "6700")
+	gittest.Run(t, bare, "update-ref", "refs/cf/run1", "refs/heads/b0")
+	other := filepath.Join(t.TempDir(), "other-wt")
+	gittest.Run(t, bare, "worktree", "add", "--quiet", "--detach", other, "refs/heads/b1")
+	wtHead := func() string {
+		return gittest.Run(t, bare, "rev-parse", "refs/heads/b1") + gittest.Run(t, other, "rev-parse", "HEAD")
+	}
+	headsBefore := wtHead()
+	before := gittest.Run(t, bare, "for-each-ref")
+	nPacks := packs(t, bare)
+	if nPacks <= 50 {
+		t.Fatalf("only %d packs: the test would prove nothing", nPacks)
+	}
+	if err := r.prepare(r.url("org/repo.git")); err != nil {
+		t.Fatalf("Prepare: %v\n%s", err, r.logs)
+	}
+	time.Sleep(2 * time.Second) // a detached maintenance would have run by now
+	after := gittest.Run(t, bare, "for-each-ref")
+	// Prepare adds its own private source ref; nothing else may differ.
+	for _, line := range strings.Split(before, "\n") {
+		if !strings.Contains(after, line) {
+			t.Errorf("a ref of the bare changed or went away: %q\nafter:\n%s", line, after)
+		}
+	}
+	if got := wtHead(); got != headsBefore {
+		t.Errorf("the HEADs changed: %s, was %s", got, headsBefore)
+	}
+	if got := packs(t, bare); got < nPacks {
+		t.Errorf("the packs of the bare shrank from %d to %d: something repacked it", nPacks, got)
+	}
+	if out, _ := exec.CommandContext(t.Context(), "pgrep", "-f", "maintenance run|gc --auto").Output(); strings.TrimSpace(string(out)) != "" { //nolint:gosec // a test
+		t.Errorf("a maintenance process is running: %s", out)
 	}
 }
