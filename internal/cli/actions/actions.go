@@ -102,6 +102,10 @@ var descriptors = []Descriptor{
 		ID: "task.move", Title: "Move task to another worker", Target: Task, Path: []string{"task", "move"},
 		Args: with(projectFlag, Arg{Name: "worker", Required: true}),
 	},
+	{
+		ID: "task.respond", Title: "Answer task", Target: Task, Path: []string{"task", "respond"},
+		Args: flags("prompt", "allow", "deny", "text", "request-id", "project"),
+	},
 	{ID: "task.timeline", Title: "Task timeline", Target: Task, Path: []string{"task", "timeline"}, Args: flags("after", "limit", "project")},
 
 	{ID: "run.attach", Title: "Attach to run", Target: Run, Path: []string{"attach"}, Terminal: true, Args: flags("read-only", "ssh-target", "project")},

@@ -54,13 +54,20 @@ const (
 	// that is not the live one, is in the relay (refs/cf/orphans/<run>-e<epoch>).
 	// It is the only report taken under a stale epoch.
 	ReportOrphanPreserved RunReportKind = "orphan_preserved"
+	// ReportInputRequested: the harness waits for a person (a permission, a
+	// question, text). Only taken from a Worker that announces
+	// domain.StructuredInputCapability for the harness of the Run.
+	ReportInputRequested RunReportKind = "input_requested"
+	// ReportInputDelivered: the answer of a prompt reached the harness. Gated
+	// like ReportInputRequested.
+	ReportInputDelivered RunReportKind = "input_delivered"
 )
 
 // IsValid reports whether k is a kind the Controller knows.
 func (k RunReportKind) IsValid() bool {
 	switch k {
 	case ReportStarted, ReportExited, ReportPrepareFailed, ReportStopped, ReportSealed, ReportPublished, ReportPublicationFailed,
-		ReportOrphanPreserved, ReportConfigResolved:
+		ReportOrphanPreserved, ReportConfigResolved, ReportInputRequested, ReportInputDelivered:
 		return true
 	}
 	return false
@@ -136,6 +143,14 @@ type RunReportEntry struct {
 	Effective       json.RawMessage `json:"effective,omitempty"`
 	EffectiveDigest string          `json:"effective_digest,omitempty"`
 	Code            domain.Code     `json:"code,omitempty"`
+
+	// PromptID names the prompt (input_requested, input_delivered), unique within
+	// the Run and the lease epoch. PromptKind, Summary and Options describe it
+	// (input_requested only).
+	PromptID   string            `json:"prompt_id,omitempty"`
+	PromptKind domain.PromptKind `json:"prompt_kind,omitempty"`
+	Summary    string            `json:"summary,omitempty"`
+	Options    []string          `json:"options,omitempty"`
 }
 
 // StopFailure is a service of an Environment that did not stop cleanly. Error

@@ -185,6 +185,7 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 	var (
 		apply   func() error
 		noEvent bool // the entry says what the Controller knows already: applied, with nothing to tell
+		plan    inputPlan
 	)
 	same := false
 	if e.Kind == v1.ReportExited {
@@ -342,6 +343,19 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		if apply, err = s.publicationEntry(ctx, tx, act, &ev, run, task, l, e); err != nil {
 			return outcome(""), err
 		}
+	case e.Kind == v1.ReportInputRequested || e.Kind == v1.ReportInputDelivered:
+		if err := requireStructuredInput(w, run); err != nil {
+			return outcome(""), err
+		}
+		if e.Kind == v1.ReportInputRequested {
+			plan, err = inputRequested(ctx, tx, act, &ev, task, run, e)
+		} else {
+			plan, err = inputDelivered(ctx, tx, run, e)
+		}
+		if err != nil {
+			return outcome(""), err
+		}
+		apply, noEvent = plan.apply, plan.quiet
 	default:
 		return outcome(""), input.Invalid("unknown report kind %q", e.Kind)
 	}
@@ -368,6 +382,11 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		}
 	}
 	if noEvent {
+		if plan.moves {
+			if err := s.rederive(ctx, tx, act, task.ID); err != nil {
+				return outcome(""), internalError{err}
+			}
+		}
 		return outcome(v1.ReportApplied), nil
 	}
 	if _, dup, err := tx.AppendEvent(ctx, ev); err != nil || dup {
@@ -375,6 +394,11 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 			err = errors.New("runs: a report that was not stored is stored")
 		}
 		return outcome(""), internalError{err}
+	}
+	if plan.followUp != nil {
+		if _, _, err := tx.AppendEvent(ctx, *plan.followUp); err != nil {
+			return outcome(""), internalError{err}
+		}
 	}
 	if err := s.rederive(ctx, tx, act, task.ID); err != nil {
 		return outcome(""), internalError{err}
@@ -500,7 +524,7 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 	case e.LeaseEpoch == 0 || e.LeaseEpoch > maxSeq:
 		return input.Invalid("lease_epoch must be between 1 and %d", maxSeq)
 	case !e.Kind.IsValid():
-		return input.Invalid("kind must be started, exited, prepare_failed, config_resolved, stopped, sealed, published, publication_failed or orphan_preserved")
+		return input.Invalid("kind must be started, exited, prepare_failed, config_resolved, stopped, sealed, published, publication_failed, orphan_preserved, input_requested or input_delivered")
 	case e.At.Before(earliestAt) || e.At.After(now.Add(maxAhead)):
 		return input.Invalid("at must be after the year 2000 and at most %s ahead of the Controller", maxAhead)
 	case len(e.Message) > v1.MaxReportMessageLen || !domain.Printable(e.Message):
@@ -533,12 +557,20 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		return input.Invalid("only prepare_failed carries a code")
 	case e.WasRunning && (e.Kind != v1.ReportStopped || e.NeverStarted):
 		return input.Invalid("only a stopped of a Run that started says was_running")
+	case e.Kind != v1.ReportInputRequested && e.Kind != v1.ReportInputDelivered && e.PromptID != "":
+		return input.Invalid("only input_requested and input_delivered carry a prompt_id")
+	case e.Kind != v1.ReportInputRequested && (e.PromptKind != "" || e.Summary != "" || len(e.Options) > 0):
+		return input.Invalid("only input_requested carries a prompt kind, a summary or options")
 	case e.Kind != v1.ReportStopped && len(e.StopFailures) > 0:
 		return input.Invalid("only stopped carries stop failures")
 	case !validStopFailures(e.StopFailures):
 		return input.Invalid("stop_failures must be at most %d, each with a service and a printable error of at most %d characters", v1.MaxStopFailures, v1.MaxReportMessageLen)
 	}
 	switch e.Kind {
+	case v1.ReportInputRequested, v1.ReportInputDelivered:
+		if err := validatePrompt(e); err != nil {
+			return err
+		}
 	case v1.ReportConfigResolved:
 		if err := validateEffective(e); err != nil {
 			return err
@@ -591,6 +623,32 @@ func validateEffective(e v1.RunReportEntry) error {
 	}
 	if !effectiveDigestPattern.MatchString(e.EffectiveDigest) {
 		return input.Invalid("effective_digest must be sha256:<64 lower-case hex>")
+	}
+	return nil
+}
+
+// validatePrompt bounds an input_requested or an input_delivered: the prompt is
+// named, and a request says what it is and what can be answered.
+func validatePrompt(e v1.RunReportEntry) error {
+	if !promptIDPattern.MatchString(e.PromptID) {
+		return input.Invalid("prompt_id must be 1 to %d letters, digits, '.', '_' or '-'", v1.MaxPromptIDLen)
+	}
+	if e.Kind == v1.ReportInputDelivered {
+		return nil
+	}
+	if !e.PromptKind.IsValid() {
+		return input.Invalid("prompt_kind must be permission, question or text")
+	}
+	if e.Summary == "" || len(e.Summary) > v1.MaxReportMessageLen || !domain.Printable(e.Summary) {
+		return input.Invalid("summary must be printable text of 1 to %d characters", v1.MaxReportMessageLen)
+	}
+	if len(e.Options) > v1.MaxPromptOption {
+		return input.Invalid("a prompt has at most %d options", v1.MaxPromptOption)
+	}
+	for _, o := range e.Options {
+		if o == "" || len(o) > v1.MaxOptionLen || !domain.Printable(o) {
+			return input.Invalid("an option is printable text of 1 to %d bytes", v1.MaxOptionLen)
+		}
 	}
 	return nil
 }

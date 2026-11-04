@@ -25,7 +25,7 @@ var notActions = map[string]string{
 	"cf client list": "read", "cf config paths": "read", "cf config show": "read", "cf doctor": "read",
 	"cf environment list": "read", "cf environment show": "read", "cf events": "read", "cf logs": "read",
 	"cf project explain": "read", "cf project list": "read", "cf project secrets list": "read", "cf project show": "read",
-	"cf ps": "read", "cf run explain": "read", "cf run list": "read", "cf run show": "read", "cf status": "read",
+	"cf inbox": "read", "cf ps": "read", "cf run explain": "read", "cf run list": "read", "cf run show": "read", "cf status": "read",
 	"cf task list": "read", "cf task show": "read", "cf version": "read", "cf worker list": "read", "cf worker show": "read",
 	"cf workflow diff": "read", "cf workflow explain": "read", "cf workflow history": "read", "cf workflow list": "read",
 	"cf workflow show": "read", "cf workflow status": "read",
