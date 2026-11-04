@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -10,12 +9,15 @@ import (
 
 const margin = " "
 
+// inner is the width between the margins.
+func (c RenderContext) inner() int { return max(c.Width-2*len(margin), 0) }
+
 // header is the title on the left and the health of the system on the right.
 func header(c RenderContext) string {
 	dot, label := healthDot(c)
 	right := dot.Render("● " + label)
 	title := c.Theme.Title.Render("CODEFABRIC")
-	gap := max(c.Width-2*len(margin)-lipgloss.Width(title)-lipgloss.Width(right), 1)
+	gap := max(c.inner()-lipgloss.Width(title)-lipgloss.Width(right), 1)
 	return margin + title + strings.Repeat(" ", gap) + right
 }
 
@@ -24,10 +26,12 @@ func healthDot(c RenderContext) (lipgloss.Style, string) {
 	switch {
 	case c.State.Connection == Disconnected:
 		return c.Theme.Danger, "unreachable"
-	case c.State.Connection == Connecting:
+	case !c.State.Loaded:
 		return c.Theme.Faint, "connecting"
 	case c.State.degraded():
 		return c.Theme.Warning, "degraded"
+	case c.State.workersTotal() == 0:
+		return c.Theme.Faint, "no workers"
 	}
 	return c.Theme.Success, "healthy"
 }
@@ -71,20 +75,21 @@ func columns(total, width int, cols ...column) string {
 }
 
 // counter is a number with its label: "3 running".
-func counter(c RenderContext, n int, label string, hue lipgloss.Style) string {
-	return hue.Bold(true).Render(strconv.Itoa(n)) + c.Theme.Text.Render(" "+label)
+func counter(c RenderContext, value, label string, hue lipgloss.Style) string {
+	return hue.Bold(true).Render(value) + c.Theme.Text.Render(" "+label)
 }
 
 // rule is a hairline across the screen, optionally carrying a title.
 func rule(c RenderContext, title string) string {
-	width := max(c.Width-2*len(margin), 0)
+	width := c.inner()
 	if title == "" {
-		return margin + c.Theme.Faint.Render(strings.Repeat("─", width))
+		return margin + c.Theme.Rule.Render(strings.Repeat("─", width))
 	}
 	const lead = 16
 	label := " " + title + " "
-	tail := max(width-lead-len(label), 0)
-	return margin + c.Theme.Faint.Render(strings.Repeat("─", lead)+label+strings.Repeat("─", tail))
+	tail := max(width-lead-ansi.StringWidth(label), 0)
+	return margin + c.Theme.Rule.Render(strings.Repeat("─", lead)) + c.Theme.Faint.Render(label) +
+		c.Theme.Rule.Render(strings.Repeat("─", tail))
 }
 
 // footer is the key help; keys that open nothing yet are faint. A row of
@@ -103,7 +108,7 @@ func footer(c RenderContext) string {
 		if i == len(bindings)-1 {
 			cells = append(cells, c.Theme.Accent.Render("[q]")+" "+c.Theme.Text.Render("Quit"))
 		}
-		lines = append(lines, flow(cells, c.Width-2*len(margin))...)
+		lines = append(lines, flow(cells, c.inner())...)
 	}
 	return strings.Join(lines, "\n")
 }

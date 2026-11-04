@@ -243,10 +243,86 @@ func TestHome_HealthDotFollowsTheWorkers(t *testing.T) {
 	}
 }
 
-func TestHome_ShowsTheStateBeforeTheFirstWord(t *testing.T) {
-	got := frame(shell(t))
-	if !strings.Contains(got, "connecting") || !strings.Contains(got, "No activity yet") {
-		t.Errorf("the empty home is not explicit:\n%s", got)
+func TestHome_BeforeTheFirstSnapshotItIsConnectingNotZero(t *testing.T) {
+	m := shell(t)
+	got := frame(m)
+	if !strings.Contains(got, "connecting") || !strings.Contains(got, "Connecting to the Controller…") {
+		t.Errorf("the home does not say that it is connecting:\n%s", got)
+	}
+	for _, zero := range []string{"0 running", "0 needs you", "0/0 online", "No activity yet"} {
+		if strings.Contains(got, zero) {
+			t.Errorf("the home claims %q before it knows anything:\n%s", zero, got)
+		}
+	}
+	compareGolden(t, "home-loading.golden", got)
+
+	connect(m)
+	if got := frame(m); strings.Contains(got, "0 needs you") {
+		t.Errorf("a connection without a snapshot is not a state:\n%s", got)
+	}
+}
+
+func TestHome_AnEmptyFabricIsNotHealthy(t *testing.T) {
+	m := shell(t)
+	connect(m)
+	send(m, client.UpdateSnapshot, v1.Overview{})
+
+	got := frame(m)
+	if !strings.Contains(got, "no workers") || strings.Contains(got, "healthy") || !strings.Contains(got, "No activity yet") {
+		t.Errorf("an empty fabric:\n%s", got)
+	}
+}
+
+func TestHome_TheFrameFitsAShortTerminalWithTheControllerDown(t *testing.T) {
+	m := shell(t)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
+	m.Update(updateMsg(OverviewUpdate{Kind: client.UpdateDisconnected, Err: errors.New("down")}))
+	send(m, client.UpdateSnapshot, fixture())
+
+	lines := strings.Split(frame(m), "\n")
+	if len(lines) > 12 || !strings.Contains(lines[0], "CODEFABRIC") {
+		t.Errorf("%d lines in a terminal of 12, first %q", len(lines), lines[0])
+	}
+}
+
+func TestScenario_TuiShellHome_Activity_SubjectsAndWordsAreHuman(t *testing.T) {
+	const ulid = "01JC8Q3VZ4N5R6S7T8V9W0X1Y2"
+	at := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	m := shell(t)
+	connect(m)
+	send(m, client.UpdateSnapshot, v1.Overview{
+		Workers: map[domain.WorkerState]int{domain.WorkerOnline: 1},
+		Activity: []v1.Event{
+			{
+				Sequence: 1, ReceivedAt: at, Type: domain.EventTaskStateChanged, TaskID: "task_" + ulid, Message: "task pending -> running",
+				Data: map[string]any{"short_id": "task-12", "to": "running"},
+			},
+			{Sequence: 2, ReceivedAt: at, Type: domain.EventWorkerJoined, WorkerID: "worker_" + ulid, Data: map[string]any{"worker_name": "linux"}},
+			{Sequence: 3, ReceivedAt: at, Type: domain.EventRunPublicationFailed, RunID: "run_" + ulid},
+			{Sequence: 4, ReceivedAt: at, Type: domain.EventTaskCreated, ProjectID: "project_" + ulid, Message: "evil\u202etxt"},
+		},
+	})
+
+	got := frame(m)
+	compareGolden(t, "home-activity-fallbacks.golden", got)
+	for _, bad := range []string{ulid, ulid[:10], "TaskStateChanged", "RunPublicationFailed", "\u202e"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("the activity shows %q:\n%s", bad, got)
+		}
+	}
+	for _, want := range []string{"task-12", "task → running", "linux", "run…X1Y2", "run publication failed"} {
+		if want == "run…X1Y2" {
+			want = "run…" + ulid[len(ulid)-6:]
+		}
+		if !strings.Contains(got, want) {
+			t.Errorf("the activity lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestPrintable_DropsControlAndFormatCharacters(t *testing.T) {
+	if got := printable("a\x1b[2Jb\u202ec\u200bd"); got != "a[2Jbcd" {
+		t.Errorf("printable = %q", got)
 	}
 }
 

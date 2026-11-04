@@ -7,17 +7,12 @@ import (
 )
 
 // Options compose the shell. The zero value is a working shell on a dark
-// terminal with colour, the wall clock and the local time zone.
+// terminal, the wall clock and the local time zone.
 type Options struct {
 	// Clock is the only source of "now" (injectable, like every clock here).
 	Clock func() time.Time
 	// Location is the time zone that times are shown in.
 	Location *time.Location
-	// Mono drops the hues (NO_COLOR); weight stays.
-	Mono bool
-	// Light starts with the palette of a light background, until the terminal
-	// says which it has.
-	Light bool
 }
 
 type (
@@ -33,9 +28,9 @@ type Model struct {
 	state  State
 	router *Router
 	theme  Theme
-	dark   bool
 	width  int
 	height int
+	status string // one line of feedback for the last key, cleared by the next
 	fatal  error
 }
 
@@ -47,12 +42,8 @@ func New(opts Options) *Model {
 	if opts.Location == nil {
 		opts.Location = time.Local
 	}
-	m := &Model{opts: opts, router: NewRouter(Home{}), dark: !opts.Light}
-	m.theme = m.newTheme()
-	return m
+	return &Model{opts: opts, router: NewRouter(Home{}), theme: NewTheme(true)}
 }
-
-func (m *Model) newTheme() Theme { return NewTheme(Palette{Dark: m.dark, Color: !m.opts.Mono}) }
 
 // Router is the stack of screens, for the milestones that add some.
 func (m *Model) Router() *Router { return m.router }
@@ -64,8 +55,17 @@ func (m *Model) Err() error { return m.fatal }
 func (m *Model) Init() tea.Cmd { return tea.RequestBackgroundColor }
 
 // Update handles one message.
+//
+// The screen in view sees every message. A key press is offered to it before
+// the global keys, so a view that takes text input keeps "q" and "t".
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		m.status = ""
+		if cmd, handled := m.router.Update(msg); handled {
+			return m, cmd
+		}
+		return m.press(msg.String())
 	case updateMsg:
 		m.state.apply(OverviewUpdate(msg))
 	case fatalMsg:
@@ -74,12 +74,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case tea.BackgroundColorMsg:
-		m.dark = msg.IsDark()
-		m.theme = m.newTheme()
-	case tea.KeyPressMsg:
-		return m.press(msg.String())
+		m.theme = NewTheme(msg.IsDark())
 	}
-	return m, nil
+	cmd, _ := m.router.Update(msg)
+	return m, cmd
 }
 
 func (m *Model) press(key string) (tea.Model, tea.Cmd) {
@@ -90,7 +88,11 @@ func (m *Model) press(key string) (tea.Model, tea.Cmd) {
 	case ActionBack:
 		m.router.Back()
 	case ActionOpen:
-		m.router.Open(route)
+		if m.router.Has(route) {
+			m.router.Open(route)
+		} else {
+			m.status = labelOf(route) + " is not available yet"
+		}
 	}
 	return m, nil
 }
@@ -106,6 +108,6 @@ func (m *Model) View() tea.View {
 func (m *Model) Frame() string {
 	return m.router.Top().Render(RenderContext{
 		State: &m.state, Theme: m.theme, Router: m.router,
-		Width: m.width, Height: m.height, Now: m.opts.Clock(), Loc: m.opts.Location,
+		Width: m.width, Height: m.height, Status: m.status, Now: m.opts.Clock(), Loc: m.opts.Location,
 	})
 }

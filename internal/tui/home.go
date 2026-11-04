@@ -2,8 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -20,8 +22,15 @@ const (
 	timeWidth     = 6
 )
 
-// Banner texts.
-const bannerUnreachable = "Controller unreachable — reconnecting…"
+// Banner and placeholder texts.
+const (
+	bannerUnreachable = "Controller unreachable — reconnecting…"
+	connectingText    = "Connecting to the Controller…"
+	noValue           = "—" // a counter that has not been measured yet
+)
+
+// Update does nothing: the home takes no input of its own, so every key goes to the shell.
+func (h Home) Update(tea.Msg) (Screen, tea.Cmd, bool) { return h, nil, false }
 
 // Render draws the home in the width and height of the terminal.
 func (Home) Render(c RenderContext) string {
@@ -39,21 +48,30 @@ func (Home) Render(c RenderContext) string {
 	}
 	top = append(top, "", panels(c), "", rule(c, "Activity"))
 	bottom := []string{rule(c, ""), footer(c)}
+	if c.Status != "" {
+		bottom = append([]string{margin + c.Theme.Warning.Render(printable(c.Status))}, bottom...)
+	}
 
 	taken := len(strings.Split(strings.Join(append(top, bottom...), "\n"), "\n"))
-	lines := append(top, activityRows(c, max(c.Height-taken, 3))...)
+	lines := append(top, activityRows(c, max(c.Height-taken, 0))...)
 	return strings.Join(append(lines, bottom...), "\n")
 }
 
 // panels are the counters side by side: TASKS, WORKERS, MODELS.
 func panels(c RenderContext) string {
 	s := c.State
-	col := (c.Width - 2*len(margin)) / 3
+	col := c.inner() / 3
+	// Until the first snapshot nothing is known, and a zero would claim that
+	// no Task needs the user.
+	running, needs, online := noValue, noValue, noValue+"/"+noValue
+	if s.Loaded {
+		running, needs = strconv.Itoa(s.running()), strconv.Itoa(s.Overview.NeedsInput)
+		online = fmt.Sprintf("%d/%d", s.workersOnline(), s.workersTotal())
+	}
 	tasks := panel(c, "TASKS",
-		counter(c, s.running(), "running", c.Theme.Title),
-		counter(c, s.Overview.NeedsInput, "needs you", needsYou(c)))
-	workers := panel(c, "WORKERS",
-		c.Theme.Title.Render(fmt.Sprintf("%d/%d", s.workersOnline(), s.workersTotal()))+c.Theme.Text.Render(" online"))
+		counter(c, running, "running", c.Theme.Title),
+		counter(c, needs, "needs you", needsYou(c)))
+	workers := panel(c, "WORKERS", c.Theme.Title.Render(online)+c.Theme.Text.Render(" online"))
 	// Usage is attributed per Run from the usage-attribution milestone on;
 	// until then no provider reports a quota, and an estimate would pass for one.
 	models := panel(c, "MODELS", c.Theme.Faint.Render("usage not reported"))
@@ -61,7 +79,7 @@ func panels(c RenderContext) string {
 }
 
 func needsYou(c RenderContext) lipgloss.Style {
-	if c.State.Overview.NeedsInput > 0 {
+	if c.State.Loaded && c.State.Overview.NeedsInput > 0 {
 		return c.Theme.Warning
 	}
 	return c.Theme.Title
@@ -71,14 +89,23 @@ func needsYou(c RenderContext) lipgloss.Style {
 func activityRows(c RenderContext, n int) []string {
 	events := c.State.Activity.latest(n)
 	if len(events) == 0 {
-		return []string{margin + c.Theme.Faint.Render("No activity yet")}
+		text := "No activity yet"
+		if !c.State.Loaded {
+			text = connectingText
+		}
+		return []string{margin + c.Theme.Faint.Render(text)}
 	}
-	messageWidth := max(c.Width-2*len(margin)-timeWidth-subjectWidth-4, 8)
+	messageWidth := max(c.inner()-timeWidth-subjectWidth-4, 8)
 	rows := make([]string, len(events))
 	for i, e := range events {
+		subject, named := activitySubject(e)
+		subjectStyle := c.Theme.Text
+		if !named {
+			subjectStyle = c.Theme.Faint
+		}
 		rows[i] = margin +
 			c.Theme.Faint.Render(fit(activityTime(e.ReceivedAt, c.Now, c.Loc), timeWidth)) + "  " +
-			c.Theme.Text.Render(fit(activitySubject(e), subjectWidth)) + "  " +
+			subjectStyle.Render(fit(subject, subjectWidth)) + "  " +
 			levelStyle(c, e.Level).Render(ansi.Truncate(activityMessage(e), messageWidth, "…"))
 	}
 	return rows

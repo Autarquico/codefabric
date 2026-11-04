@@ -74,3 +74,15 @@ func resolve(key string) (Action, Route) {
 	}
 	return ActionNone, ""
 }
+
+// labelOf is the name that the key help gives a route.
+func labelOf(route Route) string {
+	for _, row := range bindings {
+		for _, b := range row {
+			if b.Route == route {
+				return b.Label
+			}
+		}
+	}
+	return string(route)
+}

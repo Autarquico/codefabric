@@ -10,11 +10,29 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/Autarquico/codefabric/internal/client"
 )
 
 type stubScreen string
 
 func (s stubScreen) Render(RenderContext) string { return string(s) }
+
+func (s stubScreen) Update(tea.Msg) (Screen, tea.Cmd, bool) { return s, nil, false }
+
+// inputScreen is a view with a text input: it consumes every character, and
+// leaves esc to the shell.
+type inputScreen struct{ typed string }
+
+func (inputScreen) Render(RenderContext) string { return "INPUT" }
+
+func (s inputScreen) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
+	if k, ok := msg.(tea.KeyPressMsg); ok && k.Text != "" {
+		s.typed += k.Text
+		return s, nil, true
+	}
+	return s, nil, false
+}
 
 func TestRouter_StackAndBack(t *testing.T) {
 	r := NewRouter(stubScreen("home"))
@@ -29,6 +47,10 @@ func TestRouter_StackAndBack(t *testing.T) {
 	}
 	if r.Open(RouteTasks) || r.Depth() != 2 {
 		t.Error("the screen on top was pushed again")
+	}
+	r.Open(RouteRuns)
+	if !r.Open(RouteTasks) || r.Depth() != 2 || r.Top() != Screen(stubScreen("tasks")) {
+		t.Error("opening a route already in the stack must go back to it, not stack it twice")
 	}
 	r.Open(RouteRuns)
 	if r.Depth() != 3 || !r.Back() || r.Top() != Screen(stubScreen("tasks")) {
@@ -94,6 +116,40 @@ func TestModel_KeysDriveTheRouterAndQuit(t *testing.T) {
 	}
 }
 
+func TestModel_AScreenThatTakesTextKeepsTheKeysTheShellWouldTake(t *testing.T) {
+	m := shell(t)
+	m.Router().Register(RouteSearch, func() Screen { return inputScreen{} })
+	m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+
+	for _, k := range "qtw" {
+		if _, cmd := m.Update(tea.KeyPressMsg{Code: k, Text: string(k)}); cmd != nil {
+			t.Fatalf("%q reached the shell while the input had the keyboard", k)
+		}
+	}
+	if m.Router().Depth() != 2 {
+		t.Errorf("the router moved while typing: depth %d", m.Router().Depth())
+	}
+	if got := m.Router().Top().(inputScreen).typed; got != "qtw" {
+		t.Errorf("the input received %q, want qtw", got)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.Router().Depth() != 1 {
+		t.Error("esc, which the screen leaves alone, did not go back")
+	}
+}
+
+func TestModel_APressOnAScreenThatDoesNotExistYetSaysSo(t *testing.T) {
+	m := shell(t)
+	m.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
+	if got := frame(m); !strings.Contains(got, "Tasks is not available yet") {
+		t.Errorf("no feedback for a key that opens nothing:\n%s", got)
+	}
+	m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if got := frame(m); strings.Contains(got, "not available yet") {
+		t.Errorf("the feedback outlives the next key:\n%s", got)
+	}
+}
+
 func TestFooter_OnlyWhatOpensSomethingIsAnAccent(t *testing.T) {
 	m := shell(t)
 	m.Router().Register(RouteTasks, func() Screen { return stubScreen("") })
@@ -107,20 +163,17 @@ func TestFooter_OnlyWhatOpensSomethingIsAnAccent(t *testing.T) {
 	}
 }
 
-func TestTheme_AdaptsToTheBackgroundAndToNoColor(t *testing.T) {
-	render := func(p Palette) string { return NewTheme(p).Success.Render("ok") }
-	dark, light, mono := render(Palette{Dark: true, Color: true}), render(Palette{Color: true}), render(Palette{Dark: true})
+func TestTheme_AdaptsToTheBackground(t *testing.T) {
+	render := func(dark bool) string { return NewTheme(dark).Success.Render("ok") }
+	dark, light := render(true), render(false)
 	if dark == light {
 		t.Error("the same colour on a dark and on a light background")
 	}
-	if ansi.Strip(dark) != "ok" || ansi.Strip(mono) != "ok" {
+	if ansi.Strip(dark) != "ok" {
 		t.Error("styling changed the text")
 	}
-	if mono != "ok" {
-		t.Errorf("NO_COLOR still emits styling: %q", mono)
-	}
-	if !strings.Contains(NewTheme(Palette{}).Title.Render("x"), "\x1b[1") {
-		t.Error("the title lost its weight without colour")
+	if !strings.Contains(NewTheme(true).Title.Render("x"), "\x1b[1") {
+		t.Error("the title lost its weight")
 	}
 }
 
@@ -140,7 +193,7 @@ func (lightBackground) RGBA() (r, g, b, a uint32) { return 0xffff, 0xffff, 0xfff
 func TestRun_QuitsOnQAndStopsTheSource(t *testing.T) {
 	stopped := make(chan struct{})
 	source := func(ctx context.Context, handle func(OverviewUpdate)) error {
-		handle(OverviewUpdate{Kind: 3})
+		handle(OverviewUpdate{Kind: client.UpdateConnected})
 		<-ctx.Done()
 		close(stopped)
 		return ctx.Err()
@@ -163,5 +216,36 @@ func TestRun_ASubscriptionThatGivesUpEndsTheTUIWithItsError(t *testing.T) {
 		tea.WithInput(nil), tea.WithOutput(io.Discard), tea.WithWindowSize(72, 24))
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("run = %v, want the error of the subscription", err)
+	}
+}
+
+func TestRun_ControllerDownAtLaunchKeepsTheTUIUpAndRecovers(t *testing.T) {
+	signalled := make(chan struct{})
+	source := func(ctx context.Context, handle func(OverviewUpdate)) error {
+		handle(OverviewUpdate{Kind: client.UpdateDisconnected, Err: errors.New("connection refused")})
+		handle(OverviewUpdate{Kind: client.UpdateSnapshot, State: fixture()})
+		handle(OverviewUpdate{Kind: client.UpdateConnected})
+		close(signalled)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	in, keys := io.Pipe()
+	go func() {
+		<-signalled
+		_, _ = keys.Write([]byte("q"))
+	}()
+	err := run(context.Background(), source, Options{Clock: func() time.Time { return now }},
+		tea.WithInput(in), tea.WithOutput(io.Discard), tea.WithWindowSize(72, 24))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+func TestRun_APanicInTheSourceEndsTheTUIWithAnError(t *testing.T) {
+	source := func(context.Context, func(OverviewUpdate)) error { panic("boom") }
+	err := run(context.Background(), source, Options{},
+		tea.WithInput(nil), tea.WithOutput(io.Discard), tea.WithWindowSize(72, 24))
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("run = %v, want the panic as an error", err)
 	}
 }

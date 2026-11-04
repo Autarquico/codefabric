@@ -2,11 +2,11 @@
  ! Controller unreachable — reconnecting…
 
  TASKS                  WORKERS                MODELS
- 0 running              0/0 online             usage not reported
- 0 needs you
+ — running              —/— online             usage not reported
+ — needs you
 
  ──────────────── Activity ────────────────────────────────────────────
- No activity yet
+ Connecting to the Controller…
  ──────────────────────────────────────────────────────────────────────
  [t] Tasks [w] Workers [m] Models [r] Runs [f] Workflows
  [p] Projects [a] Activity [l] Logs [/] Search [q] Quit
