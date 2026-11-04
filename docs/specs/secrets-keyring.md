@@ -56,6 +56,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ## Notas técnicas / riesgos
 
 - Los tests reales del llavero van gated (como `CF_REQUIRE_LAUNCHD`); en CI se usan dobles.
+- Llavero bloqueado (decisión del usuario, 2026-11-04): el secret se sigue anunciando y el Run falla en prepare con `CF_SECRET_UNAVAILABLE`; solo una entrada huérfana (sin valor en el llavero) deja de anunciarse.
 
 ## Referencias
 
