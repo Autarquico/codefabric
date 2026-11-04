@@ -2,18 +2,18 @@
 codename: codefabric
 title: "TUI: shell y home"
 type: task
-status: draft
+status: active
 priority: P1
 size: M
-issue: null
+issue: 95
 prs: []
-related_issues: []
+related_issues: [95]
 sub_issues: []
 depends_on: [client-subscriptions]
 supersedes: []
 related_specs: [codefabric-spec, phase-3-tui]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-04
 ---
 
 # TUI: shell y home
