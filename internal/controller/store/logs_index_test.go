@@ -538,6 +538,119 @@ func TestSealer_ATransientFailureIsRetriedWithoutNewAppends(t *testing.T) {
 	f.checkStorage(run, 1)
 }
 
+// A failing output waits out its backoff whatever wakes the sealer: appends and
+// the Worker's retries after ErrOutputBusy keep arriving, and none of them makes
+// the sealer read and compress the segment again before it is due. The other
+// outputs keep sealing meanwhile, and a success clears the state.
+func TestSealer_AWakeDoesNotCutShortTheBackoffOfAFailingOutput(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not stop root")
+	}
+	root := t.TempDir()
+	blobs, err := blob.New(root, clock.NewFake(epoch0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newLeaseFixtureWith(t, newWorkerFixtureWith(t, Options{Blobs: blobs, manualSeal: true}))
+	clk := f.clk
+	bad, good := f.queuedRun(1).ID, f.queuedRun(2).ID
+	chunk := func(b byte) []byte { return bytes.Repeat([]byte{b}, v1.OutputChunkBytes) }
+	appendTo := func(run domain.ID, b byte, off int) {
+		t.Helper()
+		if _, err := f.appendNoSeal(run, 1, uint64(off), chunk(b)); err != nil { //nolint:gosec // small
+			t.Fatal(err)
+		}
+	}
+	for off := 0; off < SegmentBytes; off += v1.OutputChunkBytes {
+		appendTo(bad, 'x', off)
+	}
+
+	// The segment of bad is already in the store, damaged: writing it fails
+	// (and only that output's), without touching the store for the others.
+	digest, _, err := blobs.PutGzip(t.Context(), bytes.Repeat([]byte("x"), SegmentBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hexDigest := strings.TrimPrefix(string(digest), "sha256:")
+	segment := filepath.Join(root, "blobs", "sha256", hexDigest[0:2], hexDigest[2:4], hexDigest)
+	intact, err := os.ReadFile(segment) //nolint:gosec // a path of the test
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(segment, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(segment, []byte("damaged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pass := func() error {
+		t.Helper()
+		_, err := f.db.sealer.pass1(t.Context())
+		return err
+	}
+	goodOff := 0
+	activity := func() { // a healthy output that fills a segment, and a retry of bad
+		t.Helper()
+		for end := goodOff + SegmentBytes; goodOff < end; goodOff += v1.OutputChunkBytes {
+			appendTo(good, 'y', goodOff)
+		}
+		f.db.sealer.add(outputKey{string(bad), 1})
+	}
+	activity()
+	if err := pass(); err == nil {
+		t.Fatal("the damaged segment was written")
+	}
+	if got, want := f.sealedOffset(good), uint64(SegmentBytes); got != want {
+		t.Fatalf("the healthy output sealed %d beside a failing one, want %d", got, want)
+	}
+	if in, ok := f.db.sealer.untilRetry(); !ok || in != sealRetryMin {
+		t.Fatalf("retry armed in %v, %v; want %v", in, ok, sealRetryMin)
+	}
+
+	// Until the backoff is over, a pass is not an attempt (it would fail again)
+	// however many wakes there are, and the healthy output keeps going.
+	for i := 1; i <= 5; i++ {
+		activity()
+		clk.Advance(sealRetryMin / 6)
+		if err := pass(); err != nil {
+			t.Fatalf("bad was attempted again before its time (wake %d): %v", i, err)
+		}
+		if got, want := f.sealedOffset(good), uint64(i+1)*SegmentBytes; got != want {
+			t.Fatalf("the healthy output sealed %d, want %d", got, want)
+		}
+	}
+	clk.Advance(sealRetryMin)
+	if err := pass(); err == nil {
+		t.Fatal("bad was not attempted when its backoff was over")
+	}
+
+	// The wait doubled: a second is no longer enough.
+	activity()
+	clk.Advance(sealRetryMin)
+	if err := pass(); err != nil {
+		t.Fatalf("bad was attempted again before its doubled backoff: %v", err)
+	}
+	if in, ok := f.db.sealer.untilRetry(); !ok || in != sealRetryMin {
+		t.Fatalf("retry armed in %v, %v; want %v", in, ok, sealRetryMin)
+	}
+
+	// The store recovers: the next due attempt seals it and clears the state.
+	if err := os.WriteFile(segment, intact, 0o600); err != nil { //nolint:gosec // a path of the test
+		t.Fatal(err)
+	}
+	clk.Advance(sealRetryMin)
+	if err := pass(); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.sealedOffset(bad); got != SegmentBytes {
+		t.Fatalf("bad sealed %d after the store recovered", got)
+	}
+	if _, ok := f.db.sealer.untilRetry(); ok {
+		t.Fatal("a retry is still armed after the success")
+	}
+}
+
 // A hole is not taken while the hot tail is over its bound: dropping it would
 // lose bytes that were accepted and are only waiting to be sealed.
 func TestAppendOutput_AHoleIsRefusedWhileTheOutputIsBusy(t *testing.T) {

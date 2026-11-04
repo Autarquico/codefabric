@@ -68,15 +68,16 @@ func (t *Tx) markSealDue(o Output) {
 type sealer struct {
 	db     *DB
 	pass   sync.Mutex // one pass at a time, whoever runs it
-	mu     sync.Mutex // guards due
+	mu     sync.Mutex // guards due and failing
 	due    map[outputKey]struct{}
+	failed map[outputKey]sealFailure
 	wake   chan struct{}
 	cancel context.CancelFunc
 	done   chan struct{}
 }
 
 func newSealer(db *DB) *sealer {
-	return &sealer{db: db, due: map[outputKey]struct{}{}, wake: make(chan struct{}, 1)}
+	return &sealer{db: db, due: map[outputKey]struct{}{}, failed: map[outputKey]sealFailure{}, wake: make(chan struct{}, 1)}
 }
 
 // seed finds the outputs that have something to seal: a ring written before
@@ -127,12 +128,69 @@ func (s *sealer) take() []outputKey {
 	return keys
 }
 
-// Between two attempts after a failed seal the sealer waits sealRetryMin, then
-// twice as long each time, up to sealRetryMax, on the DB's clock.
+// Between two attempts after a failed seal of an output the sealer waits
+// sealRetryMin, then twice as long each time, up to sealRetryMax, on the DB's
+// clock. The wait belongs to the output: activity (a wake) does not shorten it,
+// and does not hold back the other outputs.
 const (
 	sealRetryMin = time.Second
 	sealRetryMax = 30 * time.Second
 )
+
+// sealFailure is when a failing output may be tried again, and the wait that
+// follows if that attempt fails too.
+type sealFailure struct {
+	next    time.Time
+	backoff time.Duration
+}
+
+// fail records a failed attempt on k.
+func (s *sealer) fail(k outputKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.failed[k]
+	if !ok {
+		f.backoff = sealRetryMin
+	}
+	s.failed[k] = sealFailure{next: s.db.clock.Now().Add(f.backoff), backoff: min(2*f.backoff, sealRetryMax)}
+	s.due[k] = struct{}{}
+}
+
+// forgive clears the failure state of k.
+func (s *sealer) forgive(k outputKey) {
+	s.mu.Lock()
+	delete(s.failed, k)
+	s.mu.Unlock()
+}
+
+// waiting reports whether k is in backoff; if so it goes back into due, without
+// waking the sealer.
+func (s *sealer) waiting(k outputKey) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.failed[k]
+	if !ok || !s.db.clock.Now().Before(f.next) {
+		return false
+	}
+	s.due[k] = struct{}{}
+	return true
+}
+
+// untilRetry is how long until the earliest output in backoff may be tried.
+func (s *sealer) untilRetry() (time.Duration, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var (
+		earliest time.Time
+		found    bool
+	)
+	for _, f := range s.failed {
+		if !found || f.next.Before(earliest) {
+			earliest, found = f.next, true
+		}
+	}
+	return max(earliest.Sub(s.db.clock.Now()), 0), found
+}
 
 func (s *sealer) start() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -142,7 +200,6 @@ func (s *sealer) start() {
 		var (
 			retry   clock.Timer
 			retryAt <-chan time.Time
-			backoff = sealRetryMin
 		)
 		disarm := func() {
 			if retry != nil {
@@ -160,14 +217,15 @@ func (s *sealer) start() {
 			}
 			disarm()
 			_, err := s.pass1(ctx)
-			switch {
-			case err == nil:
-				backoff = sealRetryMin
-			case ctx.Err() == nil:
-				s.db.log.Warn("store: sealing output failed; it will be tried again", "err", err, "in", backoff)
-				retry = s.db.clock.NewTimer(backoff)
+			if ctx.Err() != nil {
+				continue
+			}
+			if in, ok := s.untilRetry(); ok {
+				if err != nil {
+					s.db.log.Warn("store: sealing output failed; it will be tried again", "err", err, "in", in)
+				}
+				retry = s.db.clock.NewTimer(in)
 				retryAt = retry.C()
-				backoff = min(2*backoff, sealRetryMax)
 			}
 		}
 	}()
@@ -193,8 +251,10 @@ func (s *sealer) drain(ctx context.Context) error {
 // pass1 is one round-robin pass: it seals at most ONE segment of each due
 // output, so a fast output cannot hold the sealer while the others sit at
 // MaxUnsealedBytes. An output that still has something to seal goes back into
-// due and wakes the sealer; one whose seal fails stays due, and the background
-// sealer tries again after a backoff. It reports whether any segment was sealed.
+// due and wakes the sealer; one whose seal fails stays due but is skipped by
+// every pass, whoever runs it and whatever woke it, until its backoff is over;
+// the background sealer arms its timer for the earliest. It reports whether any
+// segment was sealed.
 func (s *sealer) pass1(ctx context.Context) (bool, error) {
 	s.pass.Lock()
 	defer s.pass.Unlock()
@@ -203,16 +263,20 @@ func (s *sealer) pass1(ctx context.Context) (bool, error) {
 		progressed bool
 	)
 	for _, k := range s.take() {
+		if s.waiting(k) {
+			continue
+		}
 		more, sealed, err := s.sealOne(ctx, k)
 		progressed = progressed || sealed
 		switch {
 		case err != nil:
 			errs = append(errs, fmt.Errorf("the output of %s: %w", k.run, err))
-			s.mu.Lock()
-			s.due[k] = struct{}{}
-			s.mu.Unlock()
+			s.fail(k)
 		case more:
+			s.forgive(k)
 			s.add(k)
+		default:
+			s.forgive(k)
 		}
 	}
 	return progressed, errors.Join(errs...)
