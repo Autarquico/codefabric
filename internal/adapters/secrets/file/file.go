@@ -28,6 +28,8 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -86,8 +88,9 @@ func New(path string, c clock.Clock, opts ...Option) *Store {
 type catalog struct {
 	Schema    int    `json:"schema"`
 	CatalogID string `json:"catalog_id"`
-	// Origin is the identity (device and inode) of the directory the catalog
-	// was first written in. A catalog found where that is not true was copied:
+	// Origin is the inode of the directory the catalog was first written in
+	// (the device is not kept: it can change across reboots). A catalog found
+	// where that is not true was copied:
 	// its keyring items belong to the original too, so it never deletes them.
 	Origin     string           `json:"origin,omitempty"`
 	Generation uint64           `json:"generation"`
@@ -508,8 +511,9 @@ func holdsKeyring(c catalog) bool {
 	return false
 }
 
-// dirIdentity is "device:inode" of dir, or "" if it cannot be told. A moved
-// directory keeps it; a copy or a restore does not.
+// dirIdentity is the inode of dir, or "" if it cannot be told. A moved
+// directory keeps it; a copy or a restore does not. The device is left out on
+// purpose: LVM, btrfs, ZFS and external volumes renumber it across reboots.
 func dirIdentity(dir string) string {
 	info, err := os.Lstat(dir) //nolint:gosec // the path of the catalog is the caller's
 	if err != nil {
@@ -519,7 +523,7 @@ func dirIdentity(dir string) string {
 	if !ok {
 		return ""
 	}
-	return fmt.Sprintf("%d:%d", st.Dev, st.Ino)
+	return strconv.FormatUint(uint64(st.Ino), 10)
 }
 
 // lock takes the lock of the writers of the catalog, waiting for it until ctx
@@ -568,10 +572,24 @@ func (s *Store) load() (catalog, error) {
 	if err != nil {
 		return catalog{}, fmt.Errorf("%s: %w", s.path, err)
 	}
-	if id := dirIdentity(filepath.Dir(s.path)); c.Origin != "" && id != "" && c.Origin != id {
+	if id := dirIdentity(filepath.Dir(s.path)); c.Origin != "" && id != "" && inodeOf(c.Origin) != id {
 		c.copied = true
 	}
 	return c, nil
+}
+
+// inodeOf is the inode of an origin; an origin written as "device:inode"
+// by an earlier version counts by its inode alone.
+func inodeOf(origin string) string {
+	_, inode, _ := cutLast(origin, ":")
+	return inode
+}
+
+func cutLast(s, sep string) (before, after string, found bool) {
+	if i := strings.LastIndex(s, sep); i >= 0 {
+		return s[:i], s[i+len(sep):], true
+	}
+	return "", s, false
 }
 
 // decode parses and checks a catalog. Its errors name refs, sizes and byte

@@ -3,6 +3,7 @@ package file
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -465,6 +466,56 @@ func TestAMovedCatalogIsNotACopy(t *testing.T) {
 	setKeyring(t, s, "gh/token", []byte("second-value-1234"))
 	if v.count() != 1 {
 		t.Fatalf("the vault holds %d items, want 1: the old one swept", v.count())
+	}
+}
+
+// rewriteCatalog changes the catalog at path as edit says, keeping its mode.
+func rewriteCatalog(t *testing.T, path string, edit func(*catalog)) {
+	t.Helper()
+	c := readCatalog(t, path)
+	edit(&c)
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // a path of the test
+		t.Fatal(err)
+	}
+}
+
+func TestACatalogWhoseRecordedDeviceDiffersIsNotACopy(t *testing.T) {
+	ctx := context.Background()
+	s, v, _, path := newKeyringStore(t)
+	setKeyring(t, s, "gh/token", []byte("first-value-1234"))
+	rewriteCatalog(t, path, func(c *catalog) { c.Origin = "424242:" + inodeOf(c.Origin) })
+
+	if c, err := s.load(); err != nil || c.copied {
+		t.Fatalf("load: copied = %v, err = %v; a renumbered device must not make a copy", c.copied, err)
+	}
+	setKeyring(t, s, "gh/token", []byte("second-value-1234"))
+	if err := s.Delete(ctx, "gh/token"); err != nil {
+		t.Fatal(err)
+	}
+	setKeyring(t, s, "other", []byte("other-value-1234")) // sweeps
+	if v.count() != 1 {
+		t.Fatalf("the vault holds %d items, want 1: the retired ones swept", v.count())
+	}
+}
+
+func TestACatalogWithKeyringEntriesAndNoOriginIsStampedNotFlagged(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, path := newKeyringStore(t)
+	setKeyring(t, s, "gh/token", []byte("first-value-1234"))
+	rewriteCatalog(t, path, func(c *catalog) { c.Origin = "" })
+
+	if c, err := s.load(); err != nil || c.copied {
+		t.Fatalf("load: copied = %v, err = %v", c.copied, err)
+	}
+	if err := s.Set(ctx, "gh/token", []byte("second-value-1234"), nil, secrets.BackendKeyring); err != nil {
+		t.Fatalf("keyring Set on a catalog with no origin: %v", err)
+	}
+	if got := readCatalog(t, path); got.Origin == "" || got.Origin != dirIdentity(filepath.Dir(path)) {
+		t.Fatalf("origin = %q, want the directory's identity", got.Origin)
 	}
 }
 
