@@ -61,6 +61,8 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
 
+- MODELS (decisión del usuario, 2026-11-04): hasta la Fase 6 (usage-attribution) el panel muestra «usage not reported», nunca porcentajes.
+
 ## Referencias
 
 - `docs/codefabric-spec.md` §19.1–19.3

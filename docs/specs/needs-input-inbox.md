@@ -69,6 +69,11 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
 
+- Permisos de Claude headless (decisión del usuario, 2026-11-04): opt-in por Task/Workflow con `permissions: ask`; por defecto se mantiene `bypassPermissions`. AskUserQuestion se habilita siempre que el Worker anuncie `structured-input:v1`.
+- Los permisos se responden como resultado de la herramienta MCP `mcp__cf__approve` (`--mcp-config`); preguntas y texto libre como mensajes stream-json por stdin (FIFO).
+- Codex: spike de 1 h sobre `codex app-server` (decisión del usuario, 2026-11-04); si es viable, spec aparte. En esta fase `StructuredInput=false`.
+- Inbox en esta fase: peticiones de input y fallos que requieren decisión; aprobaciones, conflictos de workflow y avisos de presupuesto quedan diferidos (sin productores).
+
 ## Referencias
 
 - `docs/codefabric-spec.md` §11.6, §19.5, §20.1

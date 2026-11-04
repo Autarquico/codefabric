@@ -63,6 +63,8 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
 
+- Búsqueda sobre las entidades con API hoy (projects, tasks, runs, workers, workflows); plans y artifacts diferidos.
+
 ## Referencias
 
 - `docs/codefabric-spec.md` §19.6, §37, §26

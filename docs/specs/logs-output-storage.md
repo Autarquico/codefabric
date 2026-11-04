@@ -61,6 +61,8 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
 
+- Las migraciones de esta milestone se numeran en la secuencia común asignada al mergear (el store rechaza migraciones fuera de orden).
+
 ## Referencias
 
 - `docs/codefabric-spec.md` §3.12, §20.3, §20.5, §34
