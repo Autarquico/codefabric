@@ -4,8 +4,6 @@ import (
 	"context"
 	"os/exec"
 
-	tea "charm.land/bubbletea/v2"
-
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli"
 	"github.com/Autarquico/codefabric/internal/cli/actions"
@@ -21,7 +19,15 @@ type Backend interface {
 	// Attach prepares an action that takes over the terminal.
 	Attach(id string, in actions.Input) (Attachment, *actions.Failure)
 	// Timeline is the latest events of a Task and its Runs, oldest first.
-	Timeline(taskID string) ([]v1.Event, error)
+	Timeline(taskID string) (Timeline, error)
+}
+
+// Timeline is what the detail of a Task shows of its history.
+type Timeline struct {
+	Events []v1.Event
+	// Capped says the history was too long to be read to its end: Events are
+	// the newest of those read, and newer ones exist.
+	Capped bool
 }
 
 // Attachment is a verified attach that the TUI runs with tea.ExecProcess.
@@ -35,22 +41,9 @@ type Attachment interface {
 // stack and ends when ctx does; like Source it returns when trying again would
 // fail the same. A nil feed leaves its view with whatever the tests send it.
 type Feeds struct {
-	Tasks   func(ctx context.Context, handle func(client.Update[[]v1.Task])) error
-	Runs    func(ctx context.Context, handle func(client.Update[[]v1.Run])) error
-	Workers func(ctx context.Context, handle func(client.Update[[]v1.Worker])) error
-}
-
-// runner is how to follow the list behind route, or nil when there is none.
-func (f Feeds) runner(route Route, send func(tea.Msg)) func(ctx context.Context) error {
-	switch {
-	case route == RouteTasks && f.Tasks != nil:
-		return func(ctx context.Context) error { return f.Tasks(ctx, func(u tasksMsg) { send(u) }) }
-	case route == RouteRuns && f.Runs != nil:
-		return func(ctx context.Context) error { return f.Runs(ctx, func(u runsMsg) { send(u) }) }
-	case route == RouteWorkers && f.Workers != nil:
-		return func(ctx context.Context) error { return f.Workers(ctx, func(u workersMsg) { send(u) }) }
-	}
-	return nil
+	Tasks   FeedSource[v1.Task]
+	Runs    FeedSource[v1.Run]
+	Workers FeedSource[v1.Worker]
 }
 
 // SubscribeFeeds are the Feeds that follow the Controller.
@@ -71,14 +64,19 @@ func SubscribeFeeds(c *client.Client) Feeds {
 // Timeline limits: a Task's history is read from the start in pages and only
 // the newest events are kept, which are the ones the detail pane has room for.
 const (
-	timelinePage = 100
-	timelineKeep = 50
-	timelinePags = 20 // pages read at most; beyond them the newest of those read is shown
+	timelinePage     = 100
+	timelineKeep     = 50
+	timelineMaxPages = 20 // pages read at most; beyond them the history is Capped
 )
+
+// timelineReader is the part of the Client SDK that the timeline needs.
+type timelineReader interface {
+	TaskTimeline(ctx context.Context, ref, project, after string, limit int) (v1.TaskTimeline, error)
+}
 
 type sdkBackend struct {
 	ctx    context.Context
-	client *client.Client
+	client timelineReader
 	runner actions.Runner
 }
 
@@ -101,24 +99,24 @@ func (b sdkBackend) Attach(id string, in actions.Input) (Attachment, *actions.Fa
 	return sdkAttachment{ctx: b.ctx, session: session}, nil
 }
 
-func (b sdkBackend) Timeline(taskID string) ([]v1.Event, error) {
+func (b sdkBackend) Timeline(taskID string) (Timeline, error) {
 	var events []v1.Event
 	after := ""
-	for range timelinePags {
+	for range timelineMaxPages {
 		page, err := b.client.TaskTimeline(b.ctx, taskID, "", after, timelinePage)
 		if err != nil {
-			return nil, err
+			return Timeline{}, err
 		}
 		events = append(events, page.Events...)
 		if len(events) > timelineKeep {
 			events = events[len(events)-timelineKeep:]
 		}
 		if !page.HasMore || page.Cursor == "" {
-			break
+			return Timeline{Events: events}, nil
 		}
 		after = page.Cursor
 	}
-	return events, nil
+	return Timeline{Events: events, Capped: true}, nil
 }
 
 type sdkAttachment struct {

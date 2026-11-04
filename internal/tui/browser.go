@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"strconv"
@@ -9,7 +10,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli/actions"
 )
 
@@ -29,18 +29,27 @@ type feedInfo struct {
 	Err    error
 }
 
+// viewSpec is a view as the browser and the shell use it. It is made by
+// viewDef.spec(); the list behind it is reached only through these functions.
 type viewSpec struct {
 	route     Route
 	title     string
 	kind      actions.Kind
 	columns   []Column
 	empty     string
-	feed      func(s *State) feedInfo
-	rows      func(c RenderContext) []Row
-	detail    func(c RenderContext, id string) []Field
 	shortcuts []shortcut
 	skip      func(actions.Descriptor) bool // keeps an action out of the menu
 	timeline  bool                          // the detail carries the Task's timeline
+	needs     []Route                       // lists of other views that are followed with this one
+
+	feed   func(s *State) feedInfo
+	rows   func(c RenderContext) []Row
+	detail func(c RenderContext, id string) []Field
+	// follow is how to follow the list, or nil when there is no source for it.
+	follow func(feeds Feeds, send func(tea.Msg)) func(ctx context.Context) error
+	reset  func(s *State)
+	fail   func(s *State, err error)
+	apply  func(s *State, update any)
 }
 
 // Messages of the actions in flight.
@@ -55,6 +64,13 @@ type (
 		session Attachment
 		failure *actions.Failure
 	}
+	// attachEndedMsg is the process of an attach ending; the answer of `cf
+	// attach` to it may need the Controller, so it is asked for in a command.
+	attachEndedMsg struct {
+		target  Row
+		session Attachment
+		runErr  error // how the process ended
+	}
 	attachExitMsg struct {
 		target    Row
 		runErr    error // how the process ended
@@ -62,16 +78,16 @@ type (
 	}
 	timelineMsg struct {
 		task, stamp string
-		events      []v1.Event
+		timeline    Timeline
 		err         error
 	}
 )
 
 type timeline struct {
 	task, stamp string
-	events      []v1.Event
-	err         error
-	loading     bool
+	Timeline
+	err     error
+	loading bool
 }
 
 type browser struct {
@@ -99,14 +115,24 @@ func (b *browser) Sync(c RenderContext) tea.Cmd {
 		return nil
 	}
 	row, ok := b.list.selected(b.rows)
-	if !ok || (b.tl.task == row.ID && b.tl.stamp == row.Stamp) {
+	if !ok {
 		return nil
 	}
-	b.tl = timeline{task: row.ID, stamp: row.Stamp, loading: true}
-	backend, id, stamp := b.backend, row.ID, row.Stamp
+	// The timeline is read again when the Task changes and when the activity
+	// of the shell brings an event about it, so it follows a running Task.
+	stamp := row.Stamp + "/" + strconv.FormatUint(c.State.Activity.newestFor(row.ID), 10)
+	if b.tl.task == row.ID && b.tl.stamp == stamp {
+		return nil
+	}
+	previous := b.tl
+	b.tl = timeline{task: row.ID, stamp: stamp, loading: true}
+	if previous.task == row.ID {
+		b.tl.Timeline, b.tl.loading = previous.Timeline, false // keep what is shown until the new read answers
+	}
+	backend, id := b.backend, row.ID
 	return func() tea.Msg {
-		events, err := backend.Timeline(id)
-		return timelineMsg{task: id, stamp: stamp, events: events, err: err}
+		read, err := backend.Timeline(id)
+		return timelineMsg{task: id, stamp: stamp, timeline: read, err: err}
 	}
 }
 
@@ -117,7 +143,7 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 	case actionDoneMsg:
 		b.busy = ""
 		if f := msg.result.Failure; f != nil {
-			b.notice = &Notice{Title: msg.action.Title + " failed", Failure: f}
+			b.notice = &Notice{Title: msg.action.Title + " failed · " + msg.target.Label, Failure: f}
 		} else {
 			b.flash = "✓ " + msg.action.Title + " · " + msg.target.Label
 		}
@@ -127,8 +153,14 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 			b.notice = &Notice{Title: "Attach failed", Failure: msg.failure}
 			return b, nil, false
 		}
-		return b, tea.ExecProcess(msg.session.Cmd(), attachExit(msg.target, msg.session)), false
+		return b, tea.ExecProcess(msg.session.Cmd(), attachEnded(msg.target, msg.session)), false
+	case attachEndedMsg:
+		b.busy = "Checking the attach…"
+		return b, func() tea.Msg {
+			return attachExitMsg{target: msg.target, runErr: msg.runErr, finishErr: msg.session.Finish(msg.runErr)}
+		}, false
 	case attachExitMsg:
+		b.busy = ""
 		if msg.finishErr != nil {
 			b.notice = &Notice{Title: "Attach ended with an error", Failure: actions.FailureOf(msg.finishErr), Detail: exitDetail(msg.runErr)}
 		} else {
@@ -136,16 +168,18 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 		}
 	case timelineMsg:
 		if msg.task == b.tl.task && msg.stamp == b.tl.stamp {
-			b.tl.events, b.tl.err, b.tl.loading = msg.events, msg.err, false
+			b.tl.Timeline, b.tl.err, b.tl.loading = msg.timeline, msg.err, false
 		}
 	}
 	return b, nil, false
 }
 
-// attachExit is what the shell hears when the process of an attach ends.
-func attachExit(target Row, session Attachment) func(error) tea.Msg {
+// attachEnded is what the shell hears when the process of an attach ends. It
+// only carries the exit: the callback runs on the event loop, which must not
+// wait for the network.
+func attachEnded(target Row, session Attachment) func(error) tea.Msg {
 	return func(runErr error) tea.Msg {
-		return attachExitMsg{target: target, runErr: runErr, finishErr: session.Finish(runErr)}
+		return attachEndedMsg{target: target, session: session, runErr: runErr}
 	}
 }
 
@@ -183,7 +217,11 @@ func (b *browser) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 			b.menu = nil
 		}
 		if chosen != nil {
-			row, _ := b.list.selected(b.rows)
+			row, ok := b.list.selected(b.rows)
+			if !ok {
+				b.flash = "The item is gone"
+				return b, nil, true
+			}
 			return b, b.invoke(*chosen, row), true
 		}
 		return b, nil, true
@@ -197,7 +235,10 @@ func (b *browser) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 	}
 	for _, s := range b.spec.shortcuts {
 		if s.Key == key {
-			d, _ := actions.Lookup(s.Action)
+			d, found := actions.Lookup(s.Action)
+			if !found {
+				return b, nil, true
+			}
 			return b, b.invoke(d, row), true
 		}
 	}
@@ -262,23 +303,50 @@ func (b *browser) Render(c RenderContext) string {
 	case info.Down:
 		top = append(top, banner(c, bannerUnreachable))
 	}
-	bottom := []string{b.statusLine(c), rule(c, "")}
-	bottom = append(bottom, flow(b.footer(c), c.inner())...)
+	bottom := b.bottom(c, len(top))
 
 	mid := c.Height - len(top) - len(bottom)
 	lines := top
+	filterLine := 0
+	if b.list.typing || b.list.filter != "" {
+		filterLine = 1
+	}
 	wantList := len(b.list.visible(rows)) + 2
-	if mid < 5 {
-		lines = append(lines, b.list.render(c, b.spec.columns, rows, max(mid, 0), b.emptyText(info))...)
-	} else {
+	switch {
+	case mid >= 5:
 		listH := min(max(wantList, 3), (mid-1)/2)
 		lines = append(lines, padTo(b.list.render(c, b.spec.columns, rows, listH, b.emptyText(info)), listH)...)
 		lines = append(lines, rule(c, "Detail"))
 		lines = append(lines, clip(b.pane(c, rows, mid-listH-1), mid-listH-1)...)
+	case b.modal():
+		// No room for both: the dialog the person has to answer wins.
+		lines = append(lines, clip(b.pane(c, rows, mid), mid)...)
+	default:
+		// At least the headings and the selected row, so that the person sees
+		// what the keys act on.
+		lines = append(lines, b.list.render(c, b.spec.columns, rows, max(mid, 2+filterLine), b.emptyText(info))...)
 	}
 	lines = append(lines, bottom...)
 	return strings.Join(clip(lines, c.Height), "\n")
 }
+
+// bottom is the status line, the rule and the key help; on a terminal too short
+// for them next to a list, only the keys that matter, in one line.
+func (b *browser) bottom(c RenderContext, topLines int) []string {
+	full := []string{b.statusLine(c), rule(c, "")}
+	full = append(full, flow(b.footer(c, false), c.inner())...)
+	if c.Height-topLines-len(full) >= 5 {
+		return full
+	}
+	var compact []string
+	if status := b.statusLine(c); status != "" {
+		compact = append(compact, status)
+	}
+	return append(compact, flow(b.footer(c, true), c.inner())...)
+}
+
+// modal says whether a menu, a dialog or an error is open over the detail.
+func (b *browser) modal() bool { return b.notice != nil || b.confirm != nil || b.menu != nil }
 
 func padTo(lines []string, n int) []string {
 	for len(lines) < n {
@@ -319,7 +387,7 @@ func (b *browser) statusLine(c RenderContext) string {
 	return ""
 }
 
-func (b *browser) footer(c RenderContext) []string {
+func (b *browser) footer(c RenderContext, compact bool) []string {
 	var hints []Hint
 	switch {
 	case b.notice != nil:
@@ -330,6 +398,8 @@ func (b *browser) footer(c RenderContext) []string {
 		hints = []Hint{{"↑↓", "Move"}, {"enter", "Run"}, {"esc", "Close"}}
 	case b.list.typing:
 		hints = []Hint{{"enter", "Keep filter"}, {"esc", "Clear"}}
+	case compact:
+		hints = []Hint{{"enter", "Actions"}, {"esc", "Back"}, {"q", "Quit"}}
 	default:
 		hints = []Hint{{"↑↓", "Move"}, {"/", "Filter"}, {"enter", "Actions"}}
 		for _, s := range b.spec.shortcuts {
@@ -365,19 +435,23 @@ func (b *browser) timelineLines(c RenderContext, room int) []string {
 	if room < 2 {
 		return nil
 	}
-	head := margin + c.Theme.Faint.Render("Timeline")
+	title := "Timeline"
+	if b.tl.Capped {
+		title += " · the history is long: the newest events are not shown"
+	}
+	head := margin + c.Theme.Faint.Render(ansi.Truncate(title, c.inner(), "…"))
 	switch {
 	case b.tl.loading:
 		return []string{head, margin + c.Theme.Faint.Render("Loading…")}
 	case b.tl.err != nil:
 		f := actions.FailureOf(b.tl.err)
 		return []string{head, margin + c.Theme.Danger.Render(ansi.Truncate("! "+string(f.Code)+" "+printable(f.Message), c.inner(), "…"))}
-	case len(b.tl.events) == 0:
+	case len(b.tl.Events) == 0:
 		return []string{head, margin + c.Theme.Faint.Render("No events yet")}
 	}
-	lines := make([]string, len(b.tl.events))
+	lines := make([]string, len(b.tl.Events))
 	messageWidth := max(c.inner()-timeWidth-2, 8)
-	for i, e := range b.tl.events {
+	for i, e := range b.tl.Events {
 		lines[i] = margin + c.Theme.Faint.Render(fit(activityTime(e.ReceivedAt, c.Now, c.Loc), timeWidth)) + "  " +
 			levelStyle(c, e.Level).Render(ansi.Truncate(activityMessage(e), messageWidth, "…"))
 	}

@@ -6,9 +6,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client"
 )
 
 // Options compose the shell. The zero value is a working shell on a dark
@@ -29,15 +26,6 @@ type (
 	updateMsg OverviewUpdate
 	// fatalMsg is the subscription giving up: trying again would fail the same.
 	fatalMsg struct{ err error }
-
-	tasksMsg   = client.Update[[]v1.Task]
-	runsMsg    = client.Update[[]v1.Run]
-	workersMsg = client.Update[[]v1.Worker]
-	// feedFailedMsg is the feed of a view giving up: the shell goes on.
-	feedFailedMsg struct {
-		route Route
-		err   error
-	}
 )
 
 // Model is the root of the shell: it owns the state, the router and the theme,
@@ -52,6 +40,7 @@ type Model struct {
 	status string // one line of feedback for the last key, cleared by the next
 	fatal  error
 
+	views   map[Route]viewSpec
 	ctx     context.Context
 	send    func(tea.Msg)
 	feeding map[Route]context.CancelFunc
@@ -65,9 +54,9 @@ func New(opts Options) *Model {
 	if opts.Location == nil {
 		opts.Location = time.Local
 	}
-	m := &Model{opts: opts, router: NewRouter(Home{}), theme: NewTheme(true), ctx: context.Background(), feeding: map[Route]context.CancelFunc{}}
+	m := &Model{opts: opts, router: NewRouter(Home{}), theme: NewTheme(true), views: specs(), ctx: context.Background(), feeding: map[Route]context.CancelFunc{}}
 	if opts.Backend != nil {
-		for route, spec := range specs() {
+		for route, spec := range m.views {
 			m.router.Register(route, func() Screen { return newBrowser(spec, opts.Backend) })
 		}
 	}
@@ -100,8 +89,7 @@ func (m *Model) Init() tea.Cmd { return tea.RequestBackgroundColor }
 // The screen in view sees every message. A key press is offered to it before
 // the global keys, so a view that takes text input keeps "q" and "t".
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	_, cmd := m.update(msg)
-	return m, tea.Batch(cmd, m.settle())
+	return m, tea.Batch(m.update(msg), m.settle())
 }
 
 // settle follows the feeds of the screens in the stack and lets the screen in
@@ -116,41 +104,41 @@ func (m *Model) settle() tea.Cmd {
 	return nil
 }
 
-func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		m.status = ""
 		if cmd, handled := m.router.Update(msg); handled {
-			return m, cmd
+			return cmd
 		}
 		return m.press(msg.String())
 	case updateMsg:
 		m.state.apply(OverviewUpdate(msg))
-	case tasksMsg:
-		m.state.Tasks.apply(msg)
-	case runsMsg:
-		m.state.Runs.apply(msg)
-	case workersMsg:
-		m.state.Workers.apply(msg)
+	case feedMsg:
+		if spec, ok := m.views[msg.route]; ok {
+			spec.apply(&m.state, msg.update)
+		}
 	case feedFailedMsg:
-		m.state.failFeed(msg.route, msg.err)
+		if spec, ok := m.views[msg.route]; ok {
+			spec.fail(&m.state, msg.err)
+		}
 	case fatalMsg:
 		m.fatal = msg.err
-		return m, tea.Quit
+		return tea.Quit
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case tea.BackgroundColorMsg:
 		m.theme = NewTheme(msg.IsDark())
 	}
 	cmd, _ := m.router.Update(msg)
-	return m, cmd
+	return cmd
 }
 
-func (m *Model) press(key string) (tea.Model, tea.Cmd) {
+func (m *Model) press(key string) tea.Cmd {
 	action, route := resolve(key)
 	switch action {
 	case ActionQuit:
-		return m, tea.Quit
+		return tea.Quit
 	case ActionBack:
 		m.router.Back()
 	case ActionOpen:
@@ -160,7 +148,7 @@ func (m *Model) press(key string) (tea.Model, tea.Cmd) {
 			m.status = labelOf(route) + " is not available yet"
 		}
 	}
-	return m, nil
+	return nil
 }
 
 // View draws the screen in view.
@@ -186,6 +174,9 @@ func (m *Model) syncFeeds() {
 	want := map[Route]bool{}
 	for _, route := range m.router.Routes() {
 		want[route] = true
+		for _, needed := range m.views[route].needs {
+			want[needed] = true
+		}
 	}
 	for route, cancel := range m.feeding {
 		if !want[route] {
@@ -204,11 +195,15 @@ func (m *Model) follow(route Route) {
 	if m.send == nil {
 		return
 	}
-	run := m.opts.Feeds.runner(route, m.send)
+	spec, ok := m.views[route]
+	if !ok {
+		return
+	}
+	run := spec.follow(m.opts.Feeds, m.send)
 	if run == nil {
 		return
 	}
-	m.state.resetFeed(route)
+	spec.reset(&m.state)
 	ctx, cancel := context.WithCancel(m.ctx)
 	m.feeding[route] = cancel
 	send := m.send

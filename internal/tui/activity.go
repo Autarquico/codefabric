@@ -41,6 +41,17 @@ func (l *activityLog) reset(events ...v1.Event) {
 	l.merge(events...)
 }
 
+// newestFor is the sequence of the newest event about a Task, 0 when the log
+// holds none.
+func (l *activityLog) newestFor(taskID string) uint64 {
+	for _, e := range l.events {
+		if e.TaskID == taskID {
+			return e.Sequence
+		}
+	}
+	return 0
+}
+
 // latest is at most n of the newest events.
 func (l *activityLog) latest(n int) []v1.Event {
 	return l.events[:min(n, len(l.events))]

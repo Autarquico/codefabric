@@ -238,7 +238,7 @@ func TestScenario_TuiViewsActions_DestructiveActionsAreFlagged(t *testing.T) {
 			got = append(got, d.ID)
 		}
 	}
-	want := "[task.cancel task.archive worker.remove workflow.rollback environment.apply]"
+	want := "[task.cancel task.archive run.publish worker.remove workflow.rollback environment.apply]"
 	if fmt.Sprint(got) != want {
 		t.Errorf("destructive actions: %v, want %s", got, want)
 	}

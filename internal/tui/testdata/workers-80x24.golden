@@ -13,7 +13,7 @@
  Runs          1 active of 2, 1 reserved
  Host          macbook.local darwin/arm64
  Daemon        0.3.0
- disk          fail 2% free free some space
+ disk          fail · 2% free · free some space
 
  ──────────────────────────────────────────────────────────────────────────────
  [↑↓] Move [/] Filter [enter] Actions [d] Drain [u] Undrain [x] Remove

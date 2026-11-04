@@ -4,13 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli"
@@ -48,7 +53,8 @@ type fakeBackend struct {
 	failure  *actions.Failure
 	term     *fakeTerminal
 	timeline map[string][]v1.Event
-	asked    []string // Timeline calls
+	asked    []string   // Timeline calls
+	session  Attachment // given instead of the fake ssh, when set
 }
 
 func (f *fakeBackend) Run(id string, in actions.Input) actions.Result {
@@ -62,9 +68,14 @@ func (f *fakeBackend) Run(id string, in actions.Input) actions.Result {
 }
 
 func (f *fakeBackend) Attach(id string, in actions.Input) (Attachment, *actions.Failure) {
+	f.mu.Lock()
 	f.attached = append(f.attached, id+" "+in.Target)
+	f.mu.Unlock()
 	if f.failure != nil {
 		return nil, f.failure
+	}
+	if f.session != nil {
+		return f.session, nil
 	}
 	cmd, err := f.term.Command(context.Background(), cli.AttachRequest{RunID: in.Target})
 	if err != nil {
@@ -73,11 +84,11 @@ func (f *fakeBackend) Attach(id string, in actions.Input) (Attachment, *actions.
 	return session{&cli.AttachSession{Cmd: cmd}}, nil
 }
 
-func (f *fakeBackend) Timeline(taskID string) ([]v1.Event, error) {
+func (f *fakeBackend) Timeline(taskID string) (Timeline, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.asked = append(f.asked, taskID)
-	return f.timeline[taskID], nil
+	return Timeline{Events: f.timeline[taskID]}, nil
 }
 
 func newBackend() *fakeBackend {
@@ -111,9 +122,9 @@ func runsFixture() []v1.Run {
 	yes, no := true, false
 	code := 1
 	return []v1.Run{
-		{ID: "run_1", Short: "r-7d3a", TaskID: "tsk_01HZX3K9M2Q8V4N6B1C5D7E9F2", Attempt: 1, State: domain.RunRunning, Runtime: domain.RuntimeActive, WorkerID: "wrk_01HZX3K9M2Q8V4N6B1C5D7E9F3", WorkerReachable: &yes, Branch: "cf/auth-refactor", Model: "claude-opus", StartedAt: ptr(at("12:30")), CreatedAt: at("12:30")},
-		{ID: "run_2", Short: "r-1b8e", TaskID: "tsk_01HZX3K9M2Q8V4N6B1C5D7E9F4", Attempt: 2, State: domain.RunFailed, EndReason: "harness_error", ExitCode: &code, Runtime: domain.RuntimeStopped, WorkerID: "wrk_01HZX3K9M2Q8V4N6B1C5D7E9F5", WorkerReachable: &no, StartedAt: ptr(at("11:05")), CreatedAt: at("11:04")},
-		{ID: "run_3", Short: "r-5f0c", TaskID: "tsk_01HZX3K9M2Q8V4N6B1C5D7E9F6", Attempt: 1, State: domain.RunQueued, Runtime: domain.RuntimeNone, CreatedAt: at("12:50")},
+		{ID: "run_1", Short: "r-7d3a", TaskID: "tsk_1", Attempt: 1, State: domain.RunRunning, Runtime: domain.RuntimeActive, WorkerID: "wrk_1", WorkerReachable: &yes, Branch: "cf/auth-refactor", Model: "claude-opus", StartedAt: ptr(at("12:30")), CreatedAt: at("12:30")},
+		{ID: "run_2", Short: "r-1b8e", TaskID: "tsk_4", Attempt: 2, State: domain.RunFailed, EndReason: "harness_error", ExitCode: &code, Runtime: domain.RuntimeStopped, WorkerID: "wrk_2", WorkerReachable: &no, StartedAt: ptr(at("11:05")), CreatedAt: at("11:04")},
+		{ID: "run_3", Short: "r-5f0c", TaskID: "tsk_2", Attempt: 1, State: domain.RunQueued, Runtime: domain.RuntimeNone, CreatedAt: at("12:50")},
 	}
 }
 
@@ -148,8 +159,8 @@ func viewShellWith(t *testing.T, be Backend, key string) *Model {
 func openTasks(t *testing.T, be Backend) *Model {
 	t.Helper()
 	m := viewShellWith(t, be, "t")
-	feed(t, m, tasksMsg{Kind: client.UpdateSnapshot, State: tasksFixture()})
-	feed(t, m, tasksMsg{Kind: client.UpdateConnected})
+	feed(t, m, feedMsg{RouteTasks, client.Update[[]v1.Task]{Kind: client.UpdateSnapshot, State: tasksFixture()}})
+	feed(t, m, feedMsg{RouteTasks, client.Update[[]v1.Task]{Kind: client.UpdateConnected}})
 	return m
 }
 
@@ -177,7 +188,8 @@ func press(t *testing.T, m *Model, s string) (execs int) {
 }
 
 // drive runs a command like the program would and gives its messages to the
-// shell. A process to run (tea.ExecProcess) is counted, not run.
+// shell. An attach that is ready to run (tea.ExecProcess) is counted, and its
+// process is not run: TestScenario_TuiViewsActions_Attach runs it for real.
 func drive(t *testing.T, m *Model, cmd tea.Cmd) (execs int) {
 	t.Helper()
 	if cmd == nil {
@@ -190,8 +202,8 @@ func drive(t *testing.T, m *Model, cmd tea.Cmd) (execs int) {
 			execs += drive(t, m, c)
 		}
 	default:
-		if fmt.Sprintf("%T", msg) == "tea.execMsg" {
-			return 1
+		if ready, ok := msg.(attachReadyMsg); ok && ready.failure == nil {
+			execs++
 		}
 		_, next := m.Update(msg)
 		execs += drive(t, m, next)
@@ -206,15 +218,17 @@ func TestScenario_TuiViewsActions_Tasks(t *testing.T) {
 
 func TestScenario_TuiViewsActions_Runs(t *testing.T) {
 	m := viewShellWith(t, newBackend(), "r")
-	m.Update(runsMsg{Kind: client.UpdateSnapshot, State: runsFixture()})
-	m.Update(runsMsg{Kind: client.UpdateConnected})
+	m.Update(feedMsg{RouteTasks, client.Update[[]v1.Task]{Kind: client.UpdateSnapshot, State: tasksFixture()}})
+	m.Update(feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateSnapshot, State: workersFixture()}})
+	m.Update(feedMsg{RouteRuns, client.Update[[]v1.Run]{Kind: client.UpdateSnapshot, State: runsFixture()}})
+	m.Update(feedMsg{RouteRuns, client.Update[[]v1.Run]{Kind: client.UpdateConnected}})
 	compareGolden(t, "runs-80x24.golden", frame(m))
 }
 
 func TestScenario_TuiViewsActions_Workers(t *testing.T) {
 	m := viewShellWith(t, newBackend(), "w")
-	m.Update(workersMsg{Kind: client.UpdateSnapshot, State: workersFixture()})
-	m.Update(workersMsg{Kind: client.UpdateConnected})
+	m.Update(feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateSnapshot, State: workersFixture()}})
+	m.Update(feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateConnected}})
 	press(t, m, "down")
 	compareGolden(t, "workers-80x24.golden", frame(m))
 }
@@ -233,7 +247,7 @@ func TestScenario_TuiViewsActions_Tasks_ShowsTheTimelineOfTheSelectedTask(t *tes
 		t.Errorf("moving to the second Task asked for the timeline of %q", last)
 	}
 	asked := len(be.asked)
-	feed(t, m, tasksMsg{Kind: client.UpdateSnapshot, State: tasksFixture()})
+	feed(t, m, feedMsg{RouteTasks, client.Update[[]v1.Task]{Kind: client.UpdateSnapshot, State: tasksFixture()}})
 	if len(be.asked) != asked {
 		t.Error("a snapshot that changes nothing for the selected Task read its timeline again")
 	}
@@ -307,7 +321,7 @@ func TestScenario_TuiViewsActions_Confirm_ASafeActionRunsAtOnce(t *testing.T) {
 func TestScenario_TuiViewsActions_Workers_RemoveAsksFirst(t *testing.T) {
 	be := newBackend()
 	m := viewShellWith(t, be, "w")
-	m.Update(workersMsg{Kind: client.UpdateSnapshot, State: workersFixture()})
+	m.Update(feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateSnapshot, State: workersFixture()}})
 
 	press(t, m, "d")
 	press(t, m, "down")
@@ -346,12 +360,12 @@ func TestScenario_TuiViewsActions_Menu_IsBuiltFromTheRegistry(t *testing.T) {
 		t.Errorf("task menu: %v", tasks)
 	}
 	runs := viewShellWith(t, newBackend(), "r")
-	runs.Update(runsMsg{Kind: client.UpdateSnapshot, State: runsFixture()})
+	runs.Update(feedMsg{RouteRuns, client.Update[[]v1.Run]{Kind: client.UpdateSnapshot, State: runsFixture()}})
 	if got := titles(runs); fmt.Sprint(got) != "[run.attach run.publish]" {
 		t.Errorf("run menu: %v", got)
 	}
 	workers := viewShellWith(t, newBackend(), "w")
-	workers.Update(workersMsg{Kind: client.UpdateSnapshot, State: workersFixture()})
+	workers.Update(feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateSnapshot, State: workersFixture()}})
 	if got := titles(workers); fmt.Sprint(got) != "[worker.drain worker.undrain worker.remove]" {
 		t.Errorf("worker menu: %v", got)
 	}
@@ -400,30 +414,159 @@ func TestScenario_TuiViewsActions_Errores(t *testing.T) {
 	}
 }
 
+// ranAttach is an Attachment over a real process (sh), with the answer of `cf
+// attach` for its exit that needs no Controller (0 and 255).
+type ranAttach struct {
+	cmd      *exec.Cmd
+	finished chan error // the exit Finish was given
+}
+
+func (a ranAttach) Cmd() *exec.Cmd { return a.cmd }
+
+func (a ranAttach) Finish(runErr error) error {
+	a.finished <- runErr
+	return (&cli.AttachSession{}).Finish(context.Background(), runErr)
+}
+
+// watched is the shell as a program model that keeps the last frame it drew,
+// read from the event loop, so a test can wait for a screen without racing it.
+type watched struct {
+	*Model
+	last *atomic.Value
+}
+
+func (w watched) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	_, cmd := w.Model.Update(msg)
+	w.last.Store(ansi.Strip(w.Frame()))
+	return w, cmd
+}
+
+// TestScenario_TuiViewsActions_Attach drives the real program: the key opens
+// the session, the TUI hands the terminal to the process, runs it, and when it
+// ends it comes back to the view with how it ended.
 func TestScenario_TuiViewsActions_Attach(t *testing.T) {
-	be := newBackend()
-	m := openTasks(t, be)
+	for _, tc := range []struct {
+		name  string
+		shell string
+		want  []string
+	}{
+		{"exit 0", "touch ran; exit 0", []string{"Back from auth-refactor (t-4k2m) · ssh exited 0", "Tasks · 4"}},
+		{"exit 255", "touch ran; exit 255", []string{"! Attach ended with an error", string(domain.CodeRunNotAttachable), "ssh exited 255"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cmd := exec.CommandContext(context.Background(), "sh", "-c", tc.shell) //nolint:gosec // the shell line is a literal of this test
+			cmd.Dir = dir
+			cmd.Stdin = strings.NewReader("") // the program's own input is a pipe that never ends
+			session := ranAttach{cmd: cmd, finished: make(chan error, 1)}
+			be := newBackend()
+			be.session = session
 
-	execs := press(t, m, "a")
-	if execs != 1 {
-		t.Fatalf("attach asked the program for %d processes, want 1 (tea.ExecProcess)", execs)
-	}
-	if len(be.attached) != 1 || be.attached[0] != "run.attach tsk_1" {
-		t.Errorf("attached %v", be.attached)
-	}
-	b := m.Router().Top().(*browser)
+			loaded := make(chan struct{})
+			m := New(Options{Clock: func() time.Time { return now }, Location: time.UTC, Backend: be, Feeds: Feeds{
+				Tasks: func(ctx context.Context, handle func(client.Update[[]v1.Task])) error {
+					handle(client.Update[[]v1.Task]{Kind: client.UpdateSnapshot, State: tasksFixture()})
+					close(loaded)
+					<-ctx.Done()
+					return ctx.Err()
+				},
+			}})
+			last := &atomic.Value{}
+			last.Store("")
+			input, keys := io.Pipe()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			p := tea.NewProgram(watched{m, last}, tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(io.Discard), tea.WithWindowSize(80, 24))
+			m.bind(ctx, p.Send)
+			done := make(chan error, 1)
+			go func() { _, err := p.Run(); done <- err }()
+			t.Cleanup(func() { p.Quit(); _ = keys.Close(); <-done })
 
-	// ssh exits 0: the screen is the view again, with the exit shown.
+			waitFrame := func(want string) string {
+				t.Helper()
+				for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+					if got := last.Load().(string); strings.Contains(got, want) {
+						return got
+					}
+				}
+				t.Fatalf("the screen never showed %q:\n%s", want, last.Load())
+				return ""
+			}
+
+			_, _ = keys.Write([]byte("t"))
+			waitFrame("Tasks · ")
+			<-loaded
+			waitFrame("auth-refactor")
+			_, _ = keys.Write([]byte("a"))
+
+			select {
+			case runErr := <-session.finished:
+				if code := exitCode(runErr); (tc.name == "exit 0") != (code == 0) {
+					t.Errorf("Finish was given exit %d for %s", code, tc.name)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("the process of the attach never ended; screen:\n%s", last.Load())
+			}
+			if _, err := os.Stat(filepath.Join(dir, "ran")); err != nil {
+				t.Errorf("the process did not run: %v", err)
+			}
+			if len(be.attached) != 1 || be.attached[0] != "run.attach tsk_1" {
+				t.Errorf("attached %v", be.attached)
+			}
+			for _, want := range tc.want {
+				waitFrame(want)
+			}
+			if got := last.Load().(string); !strings.Contains(got, "Tasks · 4") {
+				t.Errorf("the view did not come back:\n%s", got)
+			}
+		})
+	}
+}
+
+func exitCode(err error) int {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	return 0
+}
+
+// The end of an attach asks the Controller, so it must not run on the event
+// loop: the callback of the process only reports the exit.
+func TestScenario_TuiViewsActions_Attach_TheCallbackDoesNotAskTheController(t *testing.T) {
+	asked := make(chan struct{})
+	release := make(chan struct{})
+	b := newBrowser(tasksDef().spec(), newBackend())
 	target := Row{ID: "tsk_1", Label: "auth-refactor (t-4k2m)"}
-	sess, _ := be.Attach("run.attach", actions.Input{Target: "tsk_1"})
-	m.Update(attachExit(target, sess)(nil))
-	got := frame(m)
-	if m.Router().Top() != Screen(b) || !strings.Contains(got, "Tasks · 4") || !strings.Contains(got, "auth-refactor") {
-		t.Errorf("the view did not come back:\n%s", got)
+	slow := slowAttach{asked: asked, release: release}
+
+	msg := attachEnded(target, slow)(nil)
+	select {
+	case <-asked:
+		t.Fatal("the exit callback called Finish on the event loop")
+	default:
 	}
-	if !strings.Contains(got, "Back from auth-refactor (t-4k2m) · ssh exited 0") {
-		t.Errorf("the exit is not shown:\n%s", got)
+	_, cmd, _ := b.Update(msg)
+	if cmd == nil || b.busy == "" {
+		t.Fatal("the exit did not start a command or say it is checking")
 	}
+	got := make(chan tea.Msg, 1)
+	go func() { got <- cmd() }()
+	<-asked
+	close(release)
+	if _, ok := (<-got).(attachExitMsg); !ok {
+		t.Error("the command did not answer with the exit")
+	}
+}
+
+type slowAttach struct{ asked, release chan struct{} }
+
+func (slowAttach) Cmd() *exec.Cmd { return nil }
+
+func (s slowAttach) Finish(error) error {
+	close(s.asked)
+	<-s.release
+	return nil
 }
 
 func TestScenario_TuiViewsActions_Attach_ExitCodesReachTheErrorPanel(t *testing.T) {
@@ -431,9 +574,10 @@ func TestScenario_TuiViewsActions_Attach_ExitCodesReachTheErrorPanel(t *testing.
 	m := openTasks(t, be)
 	target := Row{ID: "tsk_1", Label: "auth-refactor (t-4k2m)"}
 	sess, _ := be.Attach("run.attach", actions.Input{Target: "tsk_1"})
+	end := func(runErr error) { feed(t, m, attachEnded(target, sess)(runErr)) }
 
 	exit255 := exec.CommandContext(context.Background(), "sh", "-c", "exit 255").Run()
-	m.Update(attachExit(target, sess)(exit255))
+	end(exit255)
 	got := frame(m)
 	for _, want := range []string{
 		"! Attach ended with an error", string(domain.CodeRunNotAttachable), "ssh exited 255",
@@ -446,7 +590,7 @@ func TestScenario_TuiViewsActions_Attach_ExitCodesReachTheErrorPanel(t *testing.
 	compareGolden(t, "tasks-attach-255-80x24.golden", got)
 
 	press(t, m, "esc")
-	m.Update(attachExit(target, sess)(errors.New("fork/exec ssh: not found")))
+	end(errors.New("fork/exec ssh: not found"))
 	if got := frame(m); !strings.Contains(got, "ssh could not start") {
 		t.Errorf("a process that did not start is not shown:\n%s", got)
 	}
@@ -470,13 +614,38 @@ func TestScenario_TuiViewsActions_Attach_ARefusedAttachShowsItsHint(t *testing.T
 func TestScenario_TuiViewsActions_Runs_AttachAndPublish(t *testing.T) {
 	be := newBackend()
 	m := viewShellWith(t, be, "r")
-	m.Update(runsMsg{Kind: client.UpdateSnapshot, State: runsFixture()})
+	m.Update(feedMsg{RouteRuns, client.Update[[]v1.Run]{Kind: client.UpdateSnapshot, State: runsFixture()}})
 	if press(t, m, "a") != 1 || be.attached[0] != "run.attach run_1" {
 		t.Errorf("attached %v", be.attached)
 	}
-	press(t, m, "p")
+
+	press(t, m, "p") // the key of Projects on the home: nothing happens here
+	if len(be.ran) != 0 {
+		t.Fatalf("p published a Run: %v", be.ran)
+	}
+	press(t, m, "P")
+	if len(be.ran) != 0 || !strings.Contains(frame(m), "Publish run?") {
+		t.Fatalf("publishing did not ask first (ran %v):\n%s", be.ran, frame(m))
+	}
+	press(t, m, "y")
 	if len(be.ran) != 1 || be.ran[0] != "run.publish run_1" {
 		t.Errorf("ran %v", be.ran)
+	}
+}
+
+func TestScenario_TuiViewsActions_Runs_NameTheirTaskAndWorker(t *testing.T) {
+	m := viewShellWith(t, newBackend(), "r")
+	m.Update(feedMsg{RouteTasks, client.Update[[]v1.Task]{Kind: client.UpdateSnapshot, State: tasksFixture()}})
+	m.Update(feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateSnapshot, State: workersFixture()}})
+	m.Update(feedMsg{RouteRuns, client.Update[[]v1.Run]{Kind: client.UpdateSnapshot, State: runsFixture()}})
+	got := frame(m)
+	for _, want := range []string{"auth-refactor", "linux"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the Run does not name %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "tsk…") || strings.Contains(got, "wrk…") {
+		t.Errorf("a Run is named by the tail of an ID:\n%s", got)
 	}
 }
 
@@ -497,8 +666,14 @@ func TestScenario_TuiViewsActions_Feeds_FollowWhileTheViewIsOpen(t *testing.T) {
 	m.bind(context.Background(), func(msg tea.Msg) { mu.Lock(); sent = append(sent, msg); mu.Unlock() })
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 
-	press(t, m, "r") // no feed for Runs: nothing starts, nothing breaks
+	press(t, m, "r") // no feed for Runs, but its rows draw names from the Tasks
+	named := <-started
 	press(t, m, "esc")
+	select {
+	case <-named.Done():
+	case <-time.After(time.Second):
+		t.Fatal("leaving Runs did not end the feed that it brought along")
+	}
 	press(t, m, "t")
 	ctx := <-started
 	if ctx.Err() != nil {
@@ -518,14 +693,40 @@ func TestScenario_TuiViewsActions_Feeds_FollowWhileTheViewIsOpen(t *testing.T) {
 }
 
 func TestViews_FitTheTerminal(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {60, 16}, {48, 12}, {40, 8}} {
+	long := strings.Repeat("a-very-long-task-name-", 4) // 88 columns
+	for _, size := range [][2]int{{80, 24}, {60, 16}, {48, 12}, {40, 8}, {40, 6}} {
+		tasks := tasksFixture()
+		tasks[0].Name = long
 		m := openTasks(t, newBackend())
+		feed(t, m, feedMsg{RouteTasks, client.Update[[]v1.Task]{Kind: client.UpdateSnapshot, State: tasks}})
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+
+		// The person always sees the row that the keys act on.
+		if got := frame(m); !strings.Contains(got, "t-4k2m") {
+			t.Errorf("%dx%d does not show the selected row:\n%s", size[0], size[1], got)
+		}
+		assertFits(t, frame(m), size[0], size[1])
 		press(t, m, "enter")
 		assertFits(t, frame(m), size[0], size[1])
 		press(t, m, "esc")
 		press(t, m, "x")
 		assertFits(t, frame(m), size[0], size[1])
+		if got := frame(m); !strings.Contains(got, "[y]") {
+			t.Errorf("%dx%d hides the answer to the dialog:\n%s", size[0], size[1], got)
+		}
+	}
+}
+
+func TestViews_ConfirmWrapsALongTarget(t *testing.T) {
+	tasks := tasksFixture()
+	tasks[0].Name = strings.Repeat("a-very-long-task-name-", 4)
+	m := openTasks(t, newBackend())
+	feed(t, m, feedMsg{RouteTasks, client.Update[[]v1.Task]{Kind: client.UpdateSnapshot, State: tasks}})
+	press(t, m, "x")
+	got := frame(m)
+	assertFits(t, got, 80, 24)
+	if !strings.Contains(got, "cf task archive tsk_1") || !strings.Contains(got, "t-4k2m)") {
+		t.Errorf("the dialog lost the end of the target or the command:\n%s", got)
 	}
 }
 
@@ -535,16 +736,84 @@ func TestViews_BeforeTheFirstSnapshotTheyAreConnecting(t *testing.T) {
 	if !strings.Contains(got, connectingText) || strings.Contains(got, "No workers yet") {
 		t.Errorf("an unloaded list claims to be empty:\n%s", got)
 	}
-	m.Update(workersMsg{Kind: client.UpdateSnapshot})
+	m.Update(feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateSnapshot}})
 	if !strings.Contains(frame(m), "No workers yet") {
 		t.Error("an empty list does not say so")
 	}
-	m.Update(workersMsg{Kind: client.UpdateDisconnected})
+	m.Update(feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateDisconnected}})
 	if !strings.Contains(frame(m), bannerUnreachable) {
 		t.Error("a feed that lost the Controller does not say so")
 	}
 	m.Update(feedFailedMsg{route: RouteWorkers, err: errors.New("revoked")})
 	if !strings.Contains(frame(m), "revoked") {
 		t.Error("a feed that gave up does not say why")
+	}
+}
+
+func TestScenario_TuiViewsActions_Tasks_TimelineFollowsTheActivityOfTheSelectedTask(t *testing.T) {
+	be := newBackend()
+	m := openTasks(t, be)
+	asked := len(be.asked)
+
+	about := event(9, "12:50", "auth-refactor", "tests passed")
+	about.TaskID = "tsk_1"
+	be.timeline["tsk_1"] = append(be.timeline["tsk_1"], about)
+	feed(t, m, updateMsg(OverviewUpdate{Kind: client.UpdateEvent, Event: about}))
+	if len(be.asked) != asked+1 {
+		t.Fatalf("an event about the selected Task did not read its timeline again (%d reads)", len(be.asked)-asked)
+	}
+	if got := frame(m); !strings.Contains(got, "tests passed") || strings.Contains(got, "Loading") {
+		t.Errorf("the live event is not shown, or the pane blinked to Loading:\n%s", got)
+	}
+
+	other := event(10, "12:51", "infra", "something else")
+	other.TaskID = "tsk_2"
+	feed(t, m, updateMsg(OverviewUpdate{Kind: client.UpdateEvent, Event: other}))
+	if len(be.asked) != asked+1 {
+		t.Error("an event about another Task read the timeline")
+	}
+}
+
+func TestScenario_TuiViewsActions_Tasks_TimelineSaysWhenItIsCapped(t *testing.T) {
+	b := newBrowser(tasksDef().spec(), newBackend())
+	b.tl = timeline{task: "tsk_1", Timeline: Timeline{Events: []v1.Event{event(1, "12:29", "x", "task created")}, Capped: true}}
+	c := RenderContext{Theme: NewTheme(true), Width: 80, Height: 24, Now: now, Loc: time.UTC}
+	if got := ansi.Strip(strings.Join(b.timelineLines(c, 6), "\n")); !strings.Contains(got, "newest events are not shown") {
+		t.Errorf("a window that is not the newest passes for it:\n%s", got)
+	}
+}
+
+// Every shortcut of a view is an action of the registry on the kind of the
+// view, that runs without asking for inputs.
+func TestViews_ShortcutsResolveInTheRegistry(t *testing.T) {
+	for route, spec := range specs() {
+		seen := map[string]bool{}
+		for _, s := range spec.shortcuts {
+			d, ok := actions.Lookup(s.Action)
+			switch {
+			case !ok:
+				t.Errorf("%s: %q is not an action of the registry", route, s.Action)
+			case d.Target != spec.kind && !d.Terminal:
+				t.Errorf("%s: %s acts on %q", route, s.Action, d.Target)
+			case needsInput(d):
+				t.Errorf("%s: %s needs inputs a key cannot give", route, s.Action)
+			case seen[s.Key]:
+				t.Errorf("%s: key %q is used twice", route, s.Key)
+			}
+			seen[s.Key] = true
+		}
+	}
+}
+
+// A key that means a screen on the home must not publish, cancel or remove
+// something in a view.
+func TestViews_DestructiveShortcutsDoNotReuseANavigationKey(t *testing.T) {
+	for route, spec := range specs() {
+		for _, s := range spec.shortcuts {
+			d, _ := actions.Lookup(s.Action)
+			if _, to := resolve(s.Key); to != "" && d.Destructive {
+				t.Errorf("%s: %q is %s on the home and %s here", route, s.Key, to, s.Action)
+			}
+		}
 	}
 }

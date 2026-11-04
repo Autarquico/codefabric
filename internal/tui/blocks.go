@@ -330,7 +330,7 @@ func (m *Menu) press(key string) (chosen *actions.Descriptor, closed bool) {
 }
 
 func (m *Menu) render(c RenderContext, label string) []string {
-	lines := []string{margin + c.Theme.Faint.Render("Actions on ") + c.Theme.Title.Render(printable(label))}
+	lines := []string{margin + ansi.Truncate(c.Theme.Faint.Render("Actions on ")+c.Theme.Title.Render(printable(label)), c.inner(), "…")}
 	if len(m.items) == 0 {
 		return append(lines, margin+c.Theme.Faint.Render("Nothing to do from here"))
 	}
@@ -364,11 +364,9 @@ type Confirm struct {
 }
 
 func (cf Confirm) render(c RenderContext) []string {
-	return []string{
-		margin + c.Theme.Warning.Render(cf.Action.Title+"?"),
-		margin + c.Theme.Faint.Render(fit("On", labelWidth)) + "  " + c.Theme.Text.Render(printable(cf.Target.Label)),
-		margin + c.Theme.Faint.Render(fit("Runs", labelWidth)) + "  " + c.Theme.Text.Render(commandOf(cf.Action)+" "+printable(cf.Target.ID)),
-	}
+	lines := []string{margin + ansi.Truncate(c.Theme.Warning.Render(printable(cf.Action.Title)+"?"), c.inner(), "…")}
+	lines = append(lines, wrapped(c, "On", cf.Target.Label, c.Theme.Text)...)
+	return append(lines, wrapped(c, "Command", commandOf(cf.Action)+" "+cf.Target.ID, c.Theme.Text)...)
 }
 
 // Notice is an error ready to read: what failed, its code, what happened and

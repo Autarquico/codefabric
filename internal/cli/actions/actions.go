@@ -110,7 +110,7 @@ var descriptors = []Descriptor{
 	{ID: "run.attach", Title: "Attach to run", Target: Run, Path: []string{"attach"}, Terminal: true, Args: flags("read-only", "ssh-target", "project")},
 	{ID: "run.fork", Title: "Fork run", Target: Run, Path: []string{"run", "fork"}},
 	{ID: "run.promote", Title: "Promote run", Target: Run, Path: []string{"run", "promote"}},
-	{ID: "run.publish", Title: "Publish run", Target: Run, Path: []string{"run", "publish"}},
+	{ID: "run.publish", Destructive: true, Title: "Publish run", Target: Run, Path: []string{"run", "publish"}},
 
 	{ID: "worker.drain", Title: "Drain worker", Target: Worker, Path: []string{"worker", "drain"}},
 	{ID: "worker.undrain", Title: "Undrain worker", Target: Worker, Path: []string{"worker", "undrain"}},

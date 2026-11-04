@@ -103,25 +103,3 @@ func (s *State) degraded() bool {
 
 // OverviewUpdate is what the Source tells the shell.
 type OverviewUpdate = client.Update[v1.Overview]
-
-func (s *State) resetFeed(route Route) {
-	switch route {
-	case RouteTasks:
-		s.Tasks = Feed[v1.Task]{}
-	case RouteRuns:
-		s.Runs = Feed[v1.Run]{}
-	case RouteWorkers:
-		s.Workers = Feed[v1.Worker]{}
-	}
-}
-
-func (s *State) failFeed(route Route, err error) {
-	switch route {
-	case RouteTasks:
-		s.Tasks.Err = err
-	case RouteRuns:
-		s.Runs.Err = err
-	case RouteWorkers:
-		s.Workers.Err = err
-	}
-}

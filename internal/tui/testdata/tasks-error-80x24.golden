@@ -7,7 +7,7 @@
    t-8h3w    failed               09:40    frontend
 
  ──────────────── Detail ──────────────────────────────────────────────────────
- ! Complete task failed
+ ! Complete task failed · auth-refactor (t-4k2m)
  Code          CF_INVALID_REQUEST  exit 2
  What          there is no action no.such.action
  Try           Check the values you gave and try again.
