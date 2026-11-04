@@ -49,7 +49,11 @@ type Options struct {
 	// and its baselines say what was applied.
 	DataDir string
 	Secrets secrets.Store
-	MinFree Threshold // zero is DefaultMinFree
+	// SecretState is how the keyring entry m stood at the last Check, or false
+	// if none has seen it. A daemon sets it so that the doctor, which runs on
+	// the heartbeat, never reads the keyring; nil asks the Store (a CLI run).
+	SecretState func(m secrets.Metadata) (secrets.State, bool)
+	MinFree     Threshold // zero is DefaultMinFree
 	// Git is the git binary; empty is the one in the PATH.
 	Git string
 
@@ -339,7 +343,7 @@ func (d *Doctor) auth(ctx context.Context, a harness.Adapter) v1.ComponentHealth
 // note for the message when its keyring entry is not as it should be. A broken
 // entry (its value gone from the keyring) is not a login; a locked keyring is
 // one that cannot be read now, not one that is gone. Only the entries of the
-// keyring cost a Check; no value leaves it.
+// keyring cost a Check (or the state a daemon already has); no value leaves it.
 func (d *Doctor) secretState(ctx context.Context, ref string) (held bool, note string) {
 	if d.o.Secrets == nil {
 		return false, ""
@@ -355,22 +359,34 @@ func (d *Doctor) secretState(ctx context.Context, ref string) (held bool, note s
 	if list[i].Backend != secrets.BackendKeyring {
 		return true, ""
 	}
-	statuses, err := d.o.Secrets.Check(ctx)
-	if err != nil {
+	state, known := d.keyringState(ctx, list[i])
+	if !known {
 		return true, ""
 	}
-	for _, st := range statuses {
-		if st.Ref != ref {
-			continue
-		}
-		switch st.State {
-		case secrets.StateBroken:
-			return false, fmt.Sprintf(" (el secret %q está roto: su valor ya no está en el llavero; vuelve a guardarlo con `cf worker secrets set`)", ref)
-		case secrets.StateUnavailable:
-			return true, fmt.Sprintf(" (el llavero no responde ahora: el secret %q puede estar bloqueado)", ref)
-		}
+	switch state {
+	case secrets.StateBroken:
+		return false, fmt.Sprintf(" (el secret %q está roto: su valor ya no está en el llavero; vuelve a guardarlo con `cf worker secrets set`)", ref)
+	case secrets.StateUnavailable:
+		return true, fmt.Sprintf(" (el llavero no responde ahora: el secret %q puede estar bloqueado)", ref)
 	}
 	return true, ""
+}
+
+// keyringState is how the keyring entry m stands, or false if it is not known.
+func (d *Doctor) keyringState(ctx context.Context, m secrets.Metadata) (secrets.State, bool) {
+	if d.o.SecretState != nil {
+		return d.o.SecretState(m)
+	}
+	statuses, err := d.o.Secrets.Check(ctx)
+	if err != nil {
+		return "", false
+	}
+	for _, st := range statuses {
+		if st.Ref == m.Ref {
+			return st.State, true
+		}
+	}
+	return "", false
 }
 
 // hasKeychainLogin asks the macOS Keychain whether the item exists. Without -w

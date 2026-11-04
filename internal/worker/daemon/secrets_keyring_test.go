@@ -15,11 +15,15 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
+	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	"github.com/Autarquico/codefabric/internal/adapters/secrets/secretstest"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/worker/doctor"
 	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
 )
 
@@ -150,7 +154,7 @@ func TestScenario_SecretsKeyring_EntradaHuerfana(t *testing.T) {
 		t.Errorf("announced after the value left the keyring = %v, want only npm/token", got)
 	}
 	out, err := cf(t, "", "list")
-	if err != nil || !regexpRow(out, "gh/token", "keyring", "broken") || !regexpRow(out, "npm/token", "file", "ok") {
+	if err != nil || !hasRow(out, "gh/token", "keyring", "broken") || !hasRow(out, "npm/token", "file", "ok") {
 		t.Errorf("list (%v):\n%s", err, out)
 	}
 	out, err = cf(t, "", "list", "--json")
@@ -189,10 +193,10 @@ func TestScenario_SecretsKeyring_EntradaHuerfana(t *testing.T) {
 	}
 }
 
-// regexpRow says whether a row of the table has these cells in order.
-func regexpRow(table string, cells ...string) bool {
+// hasRow says whether a row of the table has these cells in order.
+func hasRow(table string, cells ...string) bool {
 	for _, line := range strings.Split(table, "\n") {
-		if fields := strings.Fields(line); len(fields) >= len(cells) && slices.Equal(fields[:2], []string{cells[0], cells[1]}) && fields[2] == cells[2] {
+		if fields := strings.Fields(line); len(fields) >= len(cells) && slices.Equal(fields[:len(cells)], cells) {
 			return true
 		}
 	}
@@ -210,7 +214,7 @@ func TestHeartbeat_ALockedKeyringKeepsAnnouncingItsSecrets(t *testing.T) {
 		t.Errorf("announced = %v, want both: a locked keyring is not an orphan", got)
 	}
 	out, err := cf(t, "", "list")
-	if err != nil || !regexpRow(out, "gh/token", "keyring", "unavailable") {
+	if err != nil || !hasRow(out, "gh/token", "keyring", "unavailable") {
 		t.Errorf("list (%v):\n%s", err, out)
 	}
 }
@@ -237,6 +241,34 @@ func TestHeartbeat_NeverWaitsForTheKeyringAndAsksOnceUntilTheStatusExpires(t *te
 	}
 }
 
+func TestHeartbeat_TheDoctorNeverReadsTheKeyringOnTheBeat(t *testing.T) {
+	w := newKeyringWorker(t)
+	w.set(t, claude.OAuthTokenRef, secrets.BackendKeyring)
+	h, err := localhost.New(localhost.Options{Home: t.TempDir(), Env: os.Environ()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.d.doctorEvery = time.Minute
+	w.d.doctor = doctor.New(doctor.Options{
+		Host: h, Adapters: []harness.Adapter{claude.Adapter{}}, DataDir: t.TempDir(), Git: "true", GOOS: "linux",
+		Runtime: func(context.Context) error { return nil },
+		Disk:    func(string) (sysinfo.Disk, error) { return sysinfo.Disk{FreeBytes: 50, TotalBytes: 100}, nil },
+		Secrets: w.store, SecretState: w.d.health.stateOf,
+	})
+	w.vault.hold.Store(true)
+
+	done := make(chan struct{})
+	go func() { w.announced(t); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the heartbeat waited for the keyring through the doctor")
+	}
+	if n := w.vault.gets.Load(); n > 2 { // the background Check reads each keyring entry once
+		t.Errorf("the keyring was asked %d times: the doctor must not Check it", n)
+	}
+}
+
 func TestHeartbeat_TheCheckIsKeptUntilItExpires(t *testing.T) {
 	w := newKeyringWorker(t)
 	w.announced(t)
@@ -251,6 +283,17 @@ func TestHeartbeat_TheCheckIsKeptUntilItExpires(t *testing.T) {
 	w.recheck(t)
 	if got := w.vault.gets.Load(); got != asked+1 {
 		t.Errorf("after expiring: %d asks, want %d", got, asked+1)
+	}
+}
+
+func TestSecretsSet_AnOversizedKeyringValueNamesTheCap(t *testing.T) {
+	w := newKeyringWorker(t)
+	out, err := cf(t, strings.Repeat("x", 2049), "set", "big/token", "--backend", "keyring")
+	if err == nil || !strings.Contains(err.Error(), "2048") {
+		t.Fatalf("set = %v, %s", err, out)
+	}
+	if _, gerr := w.store.Get(t.Context(), "big/token"); !errors.Is(gerr, secrets.ErrNotFound) {
+		t.Errorf("the oversized secret was stored: %v", gerr)
 	}
 }
 

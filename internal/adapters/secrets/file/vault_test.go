@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
+	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
@@ -21,7 +22,9 @@ type fakeVault struct {
 	items map[string][]byte
 	// locked makes every call ErrUnavailable; failDelete only Delete.
 	locked, failDelete bool
-	gets               int
+	// setErr, if set, is what Set refuses with before writing.
+	setErr error
+	gets   int
 	// beforeGet and afterSet, if set, run outside the lock.
 	beforeGet func(account string)
 	afterSet  func(account string)
@@ -52,6 +55,10 @@ func (v *fakeVault) Get(_ context.Context, account string) ([]byte, error) {
 
 func (v *fakeVault) Set(_ context.Context, account string, value []byte) error {
 	v.mu.Lock()
+	if v.setErr != nil {
+		v.mu.Unlock()
+		return v.setErr
+	}
 	if v.locked {
 		v.mu.Unlock()
 		return secrets.ErrUnavailable
@@ -344,6 +351,120 @@ func TestFailedVaultWriteChangesNothing(t *testing.T) {
 	}
 	if len(readCatalog(t, path).Retired) != 1 {
 		t.Fatal("the unwritten item should be pending for a sweep")
+	}
+}
+
+func TestASetTheKeyringRefusedOutrightLeavesNoPendingRecord(t *testing.T) {
+	s, v, _, path := newKeyringStore(t)
+	v.setErr = domain.ErrInvalidSecret
+	if err := s.Set(context.Background(), "gh/token", sentinel, nil, secrets.BackendKeyring); !errors.Is(err, domain.ErrInvalidSecret) {
+		t.Fatalf("Set = %v", err)
+	}
+	if n := len(readCatalog(t, path).Retired); n != 0 {
+		t.Fatalf("%d retired records after a Set nothing was written for", n)
+	}
+}
+
+// A Set whose keyring write outlives pendingGrace must lose to the sweep that
+// deletes its item: never an entry pointing to a deleted item.
+func TestASetThatOutlivesTheGraceNeverCommitsAPointerToASweptItem(t *testing.T) {
+	for name, sweepFirst := range map[string]bool{"swept before the swap": true, "grace passed, not swept yet": false} {
+		t.Run(name, func(t *testing.T) {
+			s, v, c, _ := newKeyringStore(t)
+			setKeyring(t, s, "gh/token", []byte("first-value-1234"))
+			v.afterSet = func(string) {
+				c.Advance(pendingGrace)
+				if sweepFirst {
+					s.sweep(context.Background())
+				}
+			}
+			err := s.Set(context.Background(), "gh/token", []byte("second-value-1234"), nil, secrets.BackendKeyring)
+			v.afterSet = nil
+			if err == nil {
+				t.Fatal("the late Set should fail")
+			}
+			got, gerr := s.Get(context.Background(), "gh/token")
+			if gerr != nil || string(got.Value) != "first-value-1234" {
+				t.Fatalf("Get = %q, %v: the old version should be intact", got.Value, gerr)
+			}
+			if v.count() != 1 {
+				t.Fatalf("the vault holds %d items, want only the old one", v.count())
+			}
+		})
+	}
+}
+
+// copyCatalog copies the directory of the catalog at path, as a restore or a
+// cloned setup would.
+func copyCatalog(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path) //nolint:gosec // a path of the test
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "worker")
+	if err := os.Mkdir(dir, 0o700); err != nil { //nolint:gosec // the catalog directory is 0700, as in production
+		t.Fatal(err)
+	}
+	copied := filepath.Join(dir, "secrets.json")
+	if err := os.WriteFile(copied, data, 0o600); err != nil { //nolint:gosec // a path of the test
+		t.Fatal(err)
+	}
+	return copied
+}
+
+func TestACopiedCatalogReadsButNeverWritesOrDeletesTheKeyringItemsOfTheOriginal(t *testing.T) {
+	ctx := context.Background()
+	s, v, c, path := newKeyringStore(t)
+	setKeyring(t, s, "gh/token", []byte("first-value-1234"))
+	setKeyring(t, s, "gh/other", []byte("other-value-1234"))
+	clone := New(copyCatalog(t, path), c, WithVault(v))
+
+	if got, err := clone.Get(ctx, "gh/token"); err != nil || string(got.Value) != "first-value-1234" {
+		t.Fatalf("Get on the copy = %q, %v", got.Value, err)
+	}
+	if err := clone.Set(ctx, "gh/token", []byte("changed-value-1234"), nil, secrets.BackendKeyring); !errors.Is(err, secrets.ErrCopied) {
+		t.Fatalf("keyring Set on the copy = %v, want ErrCopied", err)
+	}
+	if err := clone.Set(ctx, "gh/token", []byte("changed-value-1234"), nil, secrets.BackendFile); err != nil {
+		t.Fatalf("file Set over a keyring entry on the copy: %v", err)
+	}
+	if err := clone.Delete(ctx, "gh/other"); err != nil {
+		t.Fatalf("Delete on the copy: %v", err)
+	}
+	c.Advance(pendingGrace)
+	if _, err := clone.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if v.count() != 2 {
+		t.Fatalf("the vault holds %d items, want the 2 of the original", v.count())
+	}
+	for _, ref := range []string{"gh/token", "gh/other"} {
+		if got, err := s.Get(ctx, ref); err != nil || len(got.Value) == 0 {
+			t.Fatalf("the original lost %q: %v", ref, err)
+		}
+	}
+
+	// With no keyring entry left, nothing is shared: the copy keeps a namespace of its own.
+	if err := clone.Set(ctx, "own/token", []byte("own-value-123456"), nil, secrets.BackendKeyring); err != nil {
+		t.Fatalf("keyring Set on a copy that shares nothing: %v", err)
+	}
+	if v.count() != 3 || readCatalog(t, clone.path).CatalogID == readCatalog(t, path).CatalogID {
+		t.Fatalf("the copy should have a catalog id of its own; vault holds %d", v.count())
+	}
+}
+
+func TestAMovedCatalogIsNotACopy(t *testing.T) {
+	s, v, c, path := newKeyringStore(t)
+	setKeyring(t, s, "gh/token", []byte("first-value-1234"))
+	moved := filepath.Join(t.TempDir(), "moved")
+	if err := os.Rename(filepath.Dir(path), moved); err != nil {
+		t.Fatal(err)
+	}
+	s = New(filepath.Join(moved, "secrets.json"), c, WithVault(v))
+	setKeyring(t, s, "gh/token", []byte("second-value-1234"))
+	if v.count() != 1 {
+		t.Fatalf("the vault holds %d items, want 1: the old one swept", v.count())
 	}
 }
 

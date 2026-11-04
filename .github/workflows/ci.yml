@@ -120,10 +120,14 @@ jobs:
           security list-keychains -d user -s "${keychain}" "${HOME}/Library/Keychains/login.keychain-db"
           security default-keychain -d user -s "${keychain}"
       - name: Keyring tests
+        shell: bash
         run: |
+          set -o pipefail
           CGO_ENABLED=1 go test -race -tags integration -count=1 -v -run 'TestKeyring_' ./internal/adapters/secrets/keyring/ | tee keyring-tests.txt
           # a selection that matches nothing, or tests that skipped, would pass quietly
-          grep -q -e '--- PASS: TestKeyring_StoreKeepsTheValueOnlyInTheRealKeyring' keyring-tests.txt
+          passed="$(grep -c -e '^--- PASS: TestKeyring_' keyring-tests.txt || true)"
+          expected="$(grep -c -e '^func TestKeyring_' internal/adapters/secrets/keyring/keyring_integration_test.go | awk -F: '{n+=$2} END {print n}')"
+          if [ "${passed}" -eq 0 ] || [ "${passed}" -ne "${expected}" ]; then echo "keyring tests passed: ${passed} of ${expected}" >&2; exit 1; fi
           if grep -q -e '--- SKIP' keyring-tests.txt; then echo 'a keyring test skipped' >&2; exit 1; fi
         env:
           CF_REQUIRE_KEYRING: "1"

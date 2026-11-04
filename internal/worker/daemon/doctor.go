@@ -71,7 +71,7 @@ func (d *daemon) startDoctor(ctx context.Context, o Options) error {
 	hostname, _ := os.Hostname()
 	opts := doctor.Options{
 		Host: h, Adapters: adapters, Worker: doctor.WorkerName(o.Paths, workerName(hostname)), DataDir: o.Paths.WorkerDataDir(),
-		Secrets: d.secrets, MinFree: minFree, Git: o.GitPath,
+		Secrets: d.secrets, SecretState: d.health.stateOf, MinFree: minFree, Git: o.GitPath,
 		SetupPending: func() bool { return doctor.SetupPending(o.Paths) }, RestartNeeded: restartNeeded,
 	}
 	// RuntimeIsolated stays false: tmux and the process runtime run the harness on the host.

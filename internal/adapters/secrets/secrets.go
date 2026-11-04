@@ -37,6 +37,11 @@ var (
 	// ErrUnsupportedBackend is a secret whose value lives in a backend this
 	// Store cannot reach: it is listed, and cannot be read.
 	ErrUnsupportedBackend = errors.New("secrets: backend not supported")
+	// ErrCopied is a keyring secret that cannot be set because the catalog was
+	// copied from somewhere else: the copy shares its keyring items with the
+	// original, so it may read them but never write or delete them.
+	ErrCopied = errors.New("secrets: this catalog is a copy and shares its keyring items with the original; " +
+		"delete its keyring secrets with `cf worker secrets rm` and set them again with `cf worker secrets set`")
 	// ErrUnavailable is a backend that cannot be reached right now: a locked
 	// keyring, no keyring service, access denied or a timeout. The secret may
 	// well exist; it is not ErrNotFound.

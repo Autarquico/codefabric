@@ -84,11 +84,17 @@ func New(path string, c clock.Clock, opts ...Option) *Store {
 
 // catalog is secrets.json.
 type catalog struct {
-	Schema     int              `json:"schema"`
-	CatalogID  string           `json:"catalog_id"`
+	Schema    int    `json:"schema"`
+	CatalogID string `json:"catalog_id"`
+	// Origin is the identity (device and inode) of the directory the catalog
+	// was first written in. A catalog found where that is not true was copied:
+	// its keyring items belong to the original too, so it never deletes them.
+	Origin     string           `json:"origin,omitempty"`
 	Generation uint64           `json:"generation"`
 	Secrets    map[string]entry `json:"secrets"`
 	Retired    []retiredItem    `json:"retired,omitempty"`
+
+	copied bool // set by load: Origin is not the directory the catalog is in
 }
 
 // retiredItem is a vault item no entry points to: one a Set replaced or a
@@ -218,7 +224,7 @@ func (s *Store) Set(ctx context.Context, ref string, v []byte, projects []string
 	}
 	switch {
 	case backend == secrets.BackendFile:
-		return s.update(ctx, func(c *catalog, now time.Time) error {
+		err := s.update(ctx, func(c *catalog, now time.Time) error {
 			if err := checkRoom(c, ref); err != nil {
 				return err
 			}
@@ -233,6 +239,11 @@ func (s *Store) Set(ctx context.Context, ref string, v []byte, projects []string
 			}
 			return nil
 		})
+		if err != nil {
+			return err
+		}
+		s.sweep(ctx)
+		return nil
 	case backend == secrets.BackendKeyring && s.vault != nil:
 		return s.setKeyring(ctx, ref, v, projects)
 	}
@@ -247,8 +258,9 @@ func checkRoom(c *catalog, ref string) error {
 }
 
 // retire records the vault item of e, if it has one, to be deleted.
+// A copied catalog retires nothing: the item is not only its own.
 func retire(c *catalog, ref string, e entry, now time.Time) {
-	if e.Backend == secrets.BackendKeyring {
+	if e.Backend == secrets.BackendKeyring && !c.copied {
 		c.Retired = append(c.Retired, retiredItem{Ref: ref, Item: e.Item, At: now})
 	}
 }
@@ -264,6 +276,9 @@ func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects [
 		if err := checkRoom(c, ref); err != nil {
 			return err
 		}
+		if c.copied {
+			return secrets.ErrCopied
+		}
 		namespace = c.CatalogID
 		c.Retired = append(c.Retired, retiredItem{Ref: ref, Item: item, At: now, Pending: true})
 		return nil
@@ -272,12 +287,17 @@ func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects [
 		return err
 	}
 	if err := s.vault.Set(ctx, account(namespace, ref, item), v); err != nil {
+		if errors.Is(err, domain.ErrInvalidSecret) { // refused before the keyring was touched
+			s.forget(ctx, item)
+		}
 		return fmt.Errorf("secret %q: %w", ref, err)
 	}
 	err = s.update(ctx, func(c *catalog, now time.Time) error {
+		// A sweep deletes a pending item once it is pendingGrace old, whatever
+		// it saw before: a swap later than that must not win against it.
 		pending := slices.IndexFunc(c.Retired, func(r retiredItem) bool { return r.Item == item && r.Pending })
-		if c.CatalogID != namespace || pending < 0 {
-			return fmt.Errorf("secret %q: the catalog changed while the keyring was written; try again", ref)
+		if c.CatalogID != namespace || c.copied || pending < 0 || now.Sub(c.Retired[pending].At) >= pendingGrace {
+			return fmt.Errorf("%w: secret %q: the catalog changed while the keyring was written; try again", errStale, ref)
 		}
 		if err := checkRoom(c, ref); err != nil {
 			return err
@@ -294,11 +314,32 @@ func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects [
 		}
 		return nil
 	})
+	if errors.Is(err, errStale) {
+		// The item will never be pointed to, and no catalog record is left to
+		// have it swept: remove it here, best effort.
+		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), checkTimeout)
+		defer cancel()
+		_ = s.vault.Delete(bounded, account(namespace, ref, item))
+	}
 	if err != nil {
 		return err
 	}
 	s.sweep(ctx)
 	return nil
+}
+
+// errStale is a Set whose pending record is gone or too old to be swapped in.
+var errStale = errors.New("secrets: stale set")
+
+// forget drops the pending record of item, best effort: the item was never
+// written, so nothing is left to sweep.
+func (s *Store) forget(ctx context.Context, item string) {
+	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), checkTimeout)
+	defer cancel()
+	_ = s.update(bounded, func(c *catalog, _ time.Time) error {
+		c.Retired = slices.DeleteFunc(c.Retired, func(r retiredItem) bool { return r.Item == item && r.Pending })
+		return nil
+	})
 }
 
 // Delete implements secrets.Store.
@@ -387,7 +428,7 @@ func (s *Store) sweep(ctx context.Context) {
 		return
 	}
 	c, err := s.load()
-	if err != nil || len(c.Retired) == 0 {
+	if err != nil || c.copied || len(c.Retired) == 0 {
 		return
 	}
 	now := s.clock.Now()
@@ -437,8 +478,15 @@ func (s *Store) update(ctx context.Context, change func(*catalog, time.Time) err
 		return err
 	}
 	now := s.clock.Now().UTC()
+	if c.copied && !holdsKeyring(c) {
+		// Nothing is shared with the original any more: start a namespace of its own.
+		c.CatalogID, c.Retired, c.Origin, c.copied = "", nil, "", false
+	}
 	if c.CatalogID == "" {
 		c.CatalogID = ulid.MustNew(ulid.Timestamp(now), rand.Reader).String()
+	}
+	if c.Origin == "" {
+		c.Origin = dirIdentity(dir)
 	}
 	if err := change(&c, now); err != nil {
 		return err
@@ -449,6 +497,29 @@ func (s *Store) update(ctx context.Context, change func(*catalog, time.Time) err
 		return fmt.Errorf("secrets: encoding the catalog: %w", err)
 	}
 	return atomicfile.Write(s.path, data, filePerm)
+}
+
+func holdsKeyring(c catalog) bool {
+	for _, e := range c.Secrets {
+		if e.Backend == secrets.BackendKeyring {
+			return true
+		}
+	}
+	return false
+}
+
+// dirIdentity is "device:inode" of dir, or "" if it cannot be told. A moved
+// directory keeps it; a copy or a restore does not.
+func dirIdentity(dir string) string {
+	info, err := os.Lstat(dir) //nolint:gosec // the path of the catalog is the caller's
+	if err != nil {
+		return ""
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", st.Dev, st.Ino)
 }
 
 // lock takes the lock of the writers of the catalog, waiting for it until ctx
@@ -496,6 +567,9 @@ func (s *Store) load() (catalog, error) {
 	c, err := decode(data)
 	if err != nil {
 		return catalog{}, fmt.Errorf("%s: %w", s.path, err)
+	}
+	if id := dirIdentity(filepath.Dir(s.path)); c.Origin != "" && id != "" && c.Origin != id {
+		c.copied = true
 	}
 	return c, nil
 }

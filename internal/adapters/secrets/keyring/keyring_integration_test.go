@@ -3,12 +3,14 @@
 package keyring_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	"github.com/Autarquico/codefabric/internal/adapters/secrets/file"
@@ -29,8 +31,20 @@ func requireKeyring(t *testing.T) {
 func uniqueAccount(t *testing.T, v keyring.Vault) string {
 	t.Helper()
 	account := "cf-test/" + strings.ReplaceAll(t.Name(), "/", "_") + "/" + filepath.Base(t.TempDir())
-	t.Cleanup(func() { _ = v.Delete(t.Context(), account) })
+	t.Cleanup(func() { deleteLeftover(t, v, account) })
 	return account
+}
+
+// deleteLeftover removes an item at the end of a test. It cannot use t.Context(),
+// which is cancelled before the cleanups run, and it reports an item it could not
+// remove: a leak in the keyring of whoever runs the tests.
+func deleteLeftover(t *testing.T, v keyring.Vault, account string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := v.Delete(ctx, account); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+		t.Errorf("removing %q from the keyring: %v", account, err)
+	}
 }
 
 func TestKeyring_SetGetReplaceAndDeleteOnTheRealKeyring(t *testing.T) {
@@ -93,7 +107,7 @@ func realStore(t *testing.T) (*file.Store, string, keyring.Vault) {
 	s := file.New(path, clock.Real{}, file.WithVault(v))
 	t.Cleanup(func() {
 		for _, account := range accounts(t, path) {
-			_ = v.Delete(t.Context(), account)
+			deleteLeftover(t, v, account)
 		}
 	})
 	return s, path, v

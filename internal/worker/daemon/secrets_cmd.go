@@ -99,6 +99,9 @@ func newSecretsSetCmd() *cobra.Command {
 				return err
 			}
 			defer clear(value)
+			if backend == secrets.BackendKeyring && len(value) > keyring.MaxValueLen {
+				return invalid(fmt.Sprintf("the keyring takes values of at most %d bytes; use --backend file for a larger one. Nothing was stored", keyring.MaxValueLen))
+			}
 			if err := cmd.Context().Err(); err != nil {
 				return cancelled()
 			}
