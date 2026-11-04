@@ -45,10 +45,19 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		return store.Lease{}, err
 	}
 	branch := domain.RunBranch(run.Branch, task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: run.Short})
+	origin, err := originOf(run.Spec)
+	if err != nil {
+		return store.Lease{}, err
+	}
+	repo := project.Repo
+	if origin.URL != "" {
+		repo = origin.URL
+	}
 	payload, err := json.Marshal(v1.AssignCommand{
 		LeaseID: string(l.ID), RunID: string(run.ID), RunShort: domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(),
 		TaskID: string(run.TaskID), ProjectID: string(task.ProjectID), Epoch: l.Epoch, AcceptBy: l.AcceptBy,
-		SourceCommit: run.SourceCommit, Branch: branch, Repo: project.Repo, Resources: reserve, Spec: json.RawMessage(run.Spec),
+		SourceCommit: run.SourceCommit, Branch: branch, Repo: repo, Resources: reserve, Spec: json.RawMessage(run.Spec),
+		OriginSecret: origin.Secret, OriginURL: origin.URL,
 	})
 	if err != nil {
 		return store.Lease{}, fmt.Errorf("leases: encoding the assign order: %w", err)
@@ -67,4 +76,23 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		return store.Lease{}, err
 	}
 	return l, nil
+}
+
+// origin is the credential of the origin a Run froze and the URL it is for.
+type origin struct {
+	Secret string `json:"secret"`
+	URL    string `json:"url"`
+}
+
+// originOf reads what the spec froze for the origin; the zero value if it
+// froze none. The order carries it so that the Worker never has to take the
+// repo to authenticate from anything but what the Run was created with.
+func originOf(spec []byte) (origin, error) {
+	var stored struct {
+		Origin origin `json:"origin"`
+	}
+	if err := json.Unmarshal(spec, &stored); err != nil {
+		return origin{}, fmt.Errorf("leases: reading the origin of a spec: %w", err)
+	}
+	return stored.Origin, nil
 }

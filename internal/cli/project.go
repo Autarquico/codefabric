@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -13,9 +14,21 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-func newProjectCmd() *cobra.Command {
+// projectUpdater is the part of *client.Client that `project set` uses.
+type projectUpdater interface {
+	UpdateProject(ctx context.Context, ref string, req v1.UpdateProjectRequest) (v1.Project, error)
+}
+
+func openProjectUpdater(opts Options) func(*cobra.Command) (projectUpdater, error) {
+	if opts.projectUpdater != nil {
+		return opts.projectUpdater
+	}
+	return func(cmd *cobra.Command) (projectUpdater, error) { return openClient(cmd) }
+}
+
+func newProjectCmd(open func(*cobra.Command) (projectUpdater, error)) *cobra.Command {
 	cmd := &cobra.Command{Use: "project", Short: "Manage Projects"}
-	cmd.AddCommand(newProjectCreateCmd(), newProjectListCmd(), newProjectShowCmd(), newProjectSetCmd(), newProjectSecretsCmd(), newProjectExplainCmd())
+	cmd.AddCommand(newProjectCreateCmd(), newProjectListCmd(), newProjectShowCmd(), newProjectSetCmd(open), newProjectSecretsCmd(), newProjectExplainCmd())
 	return cmd
 }
 
@@ -113,8 +126,8 @@ func newProjectShowCmd() *cobra.Command {
 
 func printProject(w io.Writer, p v1.Project) error {
 	d := p.Defaults
-	_, err := fmt.Fprintf(w, "ID           %s (%s)\nName         %s\nRepo         %s\n%sBranch       %s\nWorkflow     %s\nEnvironment  %s\nRepo config  %s\nMode         %s\nCompletion   %s\nResources    %s\nRetry        %s\nCreated      %s\n",
-		p.ID, p.Short, p.Name, p.Repo, aliasLines(p.RepoAliases), p.DefaultBranch, dash(p.DefaultWorkflow), dash(p.DefaultEnvironment), dash(string(p.RepoConfig)),
+	_, err := fmt.Fprintf(w, "ID           %s (%s)\nName         %s\nRepo         %s\n%sBranch       %s\nWorkflow     %s\nEnvironment  %s\nRepo config  %s\nOrigin auth  %s\nMode         %s\nCompletion   %s\nResources    %s\nRetry        %s\nCreated      %s\n",
+		p.ID, p.Short, p.Name, p.Repo, aliasLines(p.RepoAliases), p.DefaultBranch, dash(p.DefaultWorkflow), dash(p.DefaultEnvironment), dash(string(p.RepoConfig)), dash(p.OriginSecret),
 		dash(string(d.Mode)), dash(string(d.Completion)), resourcesLabel(d.Resources), retryLabel(d.Retry), local(p.CreatedAt))
 	return err
 }
@@ -141,10 +154,11 @@ func retryLabel(r *v1.Retry) string {
 	return fmt.Sprintf("on_failed=%s on_lost=%s max_attempts=%d", r.OnFailed, r.OnLost, r.MaxAttempts)
 }
 
-func newProjectSetCmd() *cobra.Command {
+func newProjectSetCmd(open func(*cobra.Command) (projectUpdater, error)) *cobra.Command {
 	var (
 		branch, workflow, environment string
 		mode, completion, repoConfig  string
+		originSecret                  string
 		cpu, memoryMB                 int
 		addRepos, removeRepos         []string
 	)
@@ -168,6 +182,9 @@ func newProjectSetCmd() *cobra.Command {
 				rc := domain.RepoConfig(repoConfig)
 				req.RepoConfig = &rc
 			}
+			if f.Changed("origin-secret") {
+				req.OriginSecret = &originSecret
+			}
 			if f.Changed("mode") {
 				m := domain.Mode(mode)
 				req.Mode = &m
@@ -182,7 +199,7 @@ func newProjectSetCmd() *cobra.Command {
 				}
 				req.Resources = &v1.Resources{CPU: cpu, MemoryMB: memoryMB}
 			}
-			c, err := openClient(cmd)
+			c, err := open(cmd)
 			if err != nil {
 				return err
 			}
@@ -198,6 +215,7 @@ func newProjectSetCmd() *cobra.Command {
 	f.StringVar(&workflow, "workflow", "", "default Workflow (empty clears it)")
 	f.StringVar(&environment, "environment", "", "default Environment (empty clears it)")
 	f.StringVar(&repoConfig, "repo-config", "", "whether the repo may carry .codefabric/project.yaml: allow or deny")
+	f.StringVar(&originSecret, "origin-secret", "", "ref of the secret that authenticates the origin (empty clears it; https only; the Project must allow it)")
 	f.StringVar(&mode, "mode", "", "default mode: headless or interactive")
 	f.StringVar(&completion, "completion", "", "default completion: first_success, promote or manual")
 	f.StringArrayVar(&addRepos, "add-repo", nil, "another URL of the repository; repeatable. A working copy belongs to the Project if its origin is exactly one of its URLs")

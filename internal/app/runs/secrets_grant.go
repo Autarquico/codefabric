@@ -202,7 +202,7 @@ func refPolicy(ctx context.Context, q store.Querier, w store.Worker, r store.Run
 	}
 	declared := placement.Secrets
 	if r.Workflow.Version != 0 {
-		fromWorkflow, err := workflowSecretRefs(ctx, q, r, placement.Harness)
+		fromWorkflow, err := workflowSecretRefs(ctx, q, r.Workflow, placement.Harness)
 		if err != nil {
 			return nil, err
 		}
@@ -240,14 +240,14 @@ func refPolicy(ctx context.Context, q store.Querier, w store.Worker, r store.Run
 // Run's frozen Workflow gives its harness, as the manifest of that version
 // records them: the Run uses them although its spec does not bind them to a
 // variable. They are still subject to the allowlist and the Worker's scope.
-func workflowSecretRefs(ctx context.Context, q store.Querier, r store.Run, harness string) ([]string, error) {
-	v, err := store.WorkflowVersionByNumber(ctx, q, r.Workflow.ID, r.Workflow.Version)
+func workflowSecretRefs(ctx context.Context, q store.Querier, pin domain.WorkflowRef, harness string) ([]string, error) {
+	v, err := store.WorkflowVersionByNumber(ctx, q, pin.ID, pin.Version)
 	if err != nil {
 		return nil, err
 	}
 	var m domain.Manifest
 	if err := json.Unmarshal(v.Manifest, &m); err != nil {
-		return nil, fmt.Errorf("runs: stored manifest of the Workflow of Run %s: %w", r.ID, err)
+		return nil, fmt.Errorf("runs: stored manifest of Workflow %s v%d: %w", pin.ID, pin.Version, err)
 	}
 	var refs []string
 	for _, c := range m.Components {

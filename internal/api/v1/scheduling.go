@@ -65,6 +65,11 @@ type AssignCommand struct {
 	Repo         string          `json:"repo"`
 	Resources    Capacity        `json:"resources"`
 	Spec         json.RawMessage `json:"spec"`
+	// OriginSecret and OriginURL are what the Run froze to authenticate the
+	// fetch of its origin; empty for a Run without an origin secret, and Repo
+	// equals OriginURL otherwise.
+	OriginSecret string `json:"origin_secret,omitempty"`
+	OriginURL    string `json:"origin_url,omitempty"`
 }
 
 // PublishCommand asks the Worker to push the sealed result of a Run again, under

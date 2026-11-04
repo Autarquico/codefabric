@@ -113,5 +113,8 @@ type Project struct {
 	DefaultEnvironment string
 	Defaults           InheritedDefaults
 	RepoConfig         RepoConfig
-	CreatedAt          time.Time
+	// OriginSecret is the ref of the secret that authenticates the fetch of
+	// the origin; "" if the repo is fetched without credentials.
+	OriginSecret string
+	CreatedAt    time.Time
 }
