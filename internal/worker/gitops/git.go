@@ -64,6 +64,10 @@ type Git struct {
 	// excludes is the global ignore file of the user, resolved when the daemon starts.
 	excludes string
 
+	// trustCA is a CA that authenticated fetches trust besides the system's.
+	// Only tests set it (export_test.go); there is no production way to.
+	trustCA string
+
 	mu       sync.Mutex
 	projects map[string]*sync.Mutex
 }

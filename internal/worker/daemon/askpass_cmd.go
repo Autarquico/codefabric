@@ -20,7 +20,7 @@ import (
 // askpassRunDirEnv names the run directory whose origin delivery the askpass
 // helper answers from. The script of the Worker does not carry it: git passes
 // the environment of the fetch down to its helper.
-const askpassRunDirEnv = "CF_ASKPASS_RUN_DIR"
+const askpassRunDirEnv = "CF_ASKPASS_RUN_DIR" //nolint:gosec // the name of a variable, not a credential
 
 // errNoAnswer is all the helper ever says: why it did not answer is not
 // something git's output, which a Run may print, should explain.
