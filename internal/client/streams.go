@@ -107,6 +107,9 @@ type streamSpec struct {
 	resumeAt string
 	// onOpen is called when a connection opens (headers received).
 	onOpen func()
+	// onDown is told why a connection failed, before the backoff; a clean end
+	// of the stream, which is reopened at once, is not a failure.
+	onDown func(err error)
 }
 
 // follow keeps a stream open: it reconnects, with a backoff of 0.5 s to 10 s and
@@ -124,6 +127,9 @@ func (c *Client) follow(ctx context.Context, spec streamSpec) error {
 			return ctx.Err()
 		case err != nil && !retryable(err):
 			return err
+		}
+		if err != nil && spec.onDown != nil {
+			spec.onDown(err)
 		}
 		if got {
 			delay = c.timing.backoffInitial // it worked for a while: the next failure starts the backoff over
