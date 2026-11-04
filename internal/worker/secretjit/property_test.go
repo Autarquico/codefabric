@@ -235,6 +235,12 @@ func (w *jitWorld) step() {
 			} else {
 				w.settleTo(before, fresh, jitModel{})
 			}
+		case before.corrupt:
+			// a damaged delivery is never replaced, whatever the attempt or the
+			// caller: it fails and stays until Release
+			if err == nil {
+				w.fail("a corrupt delivery was replaced by attempt %d", attempt)
+			}
 		case refuse:
 			if err == nil {
 				w.fail("a delivery its caller refused went through")

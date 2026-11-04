@@ -45,9 +45,23 @@ func sweepAll(dir string) error {
 }
 
 var recoveries = []recovery{
-	{name: "deliver again", do: func(dir string) error { return New().Deliver(dir, 2, v2, allow) }, want: v2},
+	{name: "deliver again", do: deliverAgain, want: v2},
 	{name: "release", do: func(dir string) error { return New().Release(dir, allow) }},
 	{name: "sweep", do: sweepAll},
+}
+
+// deliverAgain delivers; a damaged delivery in place is not replaced, so it is
+// released first, as the caller does, and then delivered again.
+func deliverAgain(dir string) error {
+	m := New()
+	err := m.Deliver(dir, 2, v2, allow)
+	if errors.Is(err, ErrCorrupt) || errors.Is(err, ErrUnsafe) {
+		if err := m.Release(dir, allow); err != nil {
+			return err
+		}
+		err = m.Deliver(dir, 2, v2, allow)
+	}
+	return err
 }
 
 // converges checks that rec, after whatever a fault left, ends in its state.

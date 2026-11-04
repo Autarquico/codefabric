@@ -49,8 +49,11 @@ func (m *Manager) Deliver(runDir string, attempt uint64, secrets []redact.Needle
 // was revoked of it (a ref granted again is not widened, and is not repeated),
 // and the new refs are added with access. A ref already there with another
 // value is ErrConflict. A delivery that adds nothing is left as it is. An
-// older attempt in place, or a delivery that is corrupt or unsafe, is
-// replaced; a newer one is ErrStale. A crash at any point leaves secrets/
+// older attempt in place is replaced, keeping its values to be redacted; a
+// newer one is ErrStale. A delivery in place that is corrupt, unsafe or
+// unreadable (its manifest, a current value or a retained one) is never
+// replaced, whatever the attempt: DeliverFor fails with the error, and only
+// Release removes it. Only a confirmed absence starts a delivery from nothing. A crash at any point leaves secrets/
 // absent, or complete with the old or the merged values, and calling
 // DeliverFor or Release again converges.
 //
@@ -74,8 +77,16 @@ func (m *Manager) DeliverFor(runDir string, attempt uint64, access []Consumer, s
 	for i, s := range secrets {
 		items[i] = item{ref: s.Ref, value: s.Value, access: access}
 	}
-	var kept []redact.Needle
-	if d, err := openDelivery(runDir); err == nil {
+	d, err := openDelivery(runDir)
+	switch {
+	case errors.Is(err, ErrNotDelivered):
+		// Confirmed absent: the only case a delivery starts from nothing.
+		return m.publish(runDir, attempt, items, nil, verify)
+	case err != nil:
+		// A delivery is in place but cannot be read whole: replacing it would drop
+		// the values it holds, and with them their redaction. Release removes it.
+		return err
+	default:
 		current := d.m.Attempt
 		if current > attempt {
 			d.close()
@@ -101,12 +112,14 @@ func (m *Manager) DeliverFor(runDir string, attempt uint64, access []Consumer, s
 		}
 		// A newer attempt replaces the access, never the retention: whatever
 		// the delivery in place held stays redactable until Release. A delivery
-		// whose values cannot be read is replaced all the same.
-		old, _ := d.needles()
+		// whose values cannot be read is not replaced.
+		kept, err := d.needles()
 		d.close()
-		kept = old
+		if err != nil {
+			return err
+		}
+		return m.publish(runDir, attempt, items, kept, verify)
 	}
-	return m.publish(runDir, attempt, items, kept, verify)
 }
 
 // checkSecrets validates the arguments of a delivery and returns access

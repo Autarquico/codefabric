@@ -70,8 +70,8 @@ func answerAskpass(out io.Writer, runDir, prompt string) error {
 //	Password for 'https://user@host[:port]/path':
 //
 // Only https, only the host:port and path of the grant (canonicalised: host
-// in lower case, port 443 implicit, a trailing ".git" or "/" of the path not
-// significant), and, for the password, only the user of the grant.
+// in lower case, port 443 implicit, the path compared exactly: ".git" and
+// slashes are significant), and, for the password, only the user of the grant.
 func askpassAnswer(prompt string, g secretjit.Grant) (string, bool) {
 	p, ok := parsePrompt(prompt)
 	if !ok {

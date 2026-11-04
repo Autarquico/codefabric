@@ -3,9 +3,11 @@
 package executor
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/secretjit"
@@ -389,5 +392,40 @@ func TestAnOriginOnlyRunCannotPublishItsCredentialAndTheNeedlesGoWithTheRelease(
 	}
 	if _, err := secretjit.Load(f.runDir(k)); !errors.Is(err, secretjit.ErrNotDelivered) {
 		t.Errorf("Load after the release = %v", err)
+	}
+}
+
+// After the token and the user rotate between attempts, what the publication
+// is checked against holds both versions, so the guard blocks either.
+func TestThePublicationGuardCoversBothVersionsOfARotatedOriginCredential(t *testing.T) {
+	store := newFakeStore(map[string]string{originRef: originValue})
+	f := secretFixture(t, store)
+	k := f.assign(originSpec(4, originURL), func(a *v1.AssignCommand) { a.Repo = originURL })
+	dir := f.runDir(k)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := secretjit.New()
+	allow := func() error { return nil }
+	versions := []struct{ token, user string }{{"first-origin-token-aaaa", "x-access-token"}, {"second-origin-token-bbb", "deploy-bot"}}
+	for i, v := range versions {
+		if err := m.DeliverFor(dir, uint64(i+1), []secretjit.Consumer{secretjit.Askpass}, []redact.Needle{{Ref: originRef, Value: []byte(v.token)}}, allow); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Bind(dir, originRef, secretjit.Binding{Origin: originURL, User: v.user}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	forbidden, err := f.e.forbidden(f.run(k))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range versions {
+		basic := base64.StdEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(v.user + ":" + v.token))
+		for _, leak := range []string{v.token, basic} {
+			if got := forbidden.Redact("remote: " + leak); strings.Contains(got, leak) {
+				t.Errorf("%q passes the guard of the publication", leak)
+			}
+		}
 	}
 }

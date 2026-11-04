@@ -388,3 +388,57 @@ func TestDeliver_ANewerAttemptRetainsTheRotatedTokenAndUser(t *testing.T) {
 		t.Fatalf("Load after Release = %v", err)
 	}
 }
+
+// A delivery in place that cannot be read whole is never replaced by a newer
+// attempt: that would drop the values it holds and their redaction. Only a
+// confirmed absence starts from nothing; Release is the way out.
+func TestDeliver_ANewerAttemptDoesNotReplaceADeliveryWithAMissingFile(t *testing.T) {
+	second := redact.Needle{Ref: "other/token", Value: []byte("second-token-value-bbb")}
+	for name, c := range map[string]struct {
+		prep func(t *testing.T, dir string) // leaves attempt 1 in place
+		file func(dir string) string        // the file that goes missing
+	}{
+		"a current value": {
+			prep: func(t *testing.T, dir string) { deliverFor(t, dir, 1, askpassOnly, origin) },
+			file: func(string) string { return fileName(origin.Ref) },
+		},
+		"a retained value": {
+			prep: func(t *testing.T, dir string) {
+				deliverFor(t, dir, 1, askpassOnly, origin)
+				deliverFor(t, dir, 2, askpassOnly, second)
+			},
+			file: func(string) string { return retainedFile(0) },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := runDir(t)
+			c.prep(t, dir)
+			live := filepath.Join(dir, liveName)
+			if err := os.Remove(filepath.Join(live, c.file(dir))); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(filepath.Join(live, manifestName)) //nolint:gosec // a test
+			if err != nil {
+				t.Fatal(err)
+			}
+			attempt := uint64(3)
+			if err := New().DeliverFor(dir, attempt, askpassOnly, []redact.Needle{{Ref: "third/token", Value: []byte("third-token-value-cccc")}}, allow); !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("DeliverFor = %v, want ErrCorrupt", err)
+			}
+			after, err := os.ReadFile(filepath.Join(live, manifestName)) //nolint:gosec // a test
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("the delivery was replaced: %v\n%s\n%s", err, before, after)
+			}
+			if _, err := Load(dir); err == nil {
+				t.Fatal("Load returned a partial set")
+			}
+			wantOnly(t, dir, liveName)
+
+			// Release is the recovery: after it a delivery starts from nothing.
+			if err := New().Release(dir, allow); err != nil {
+				t.Fatal(err)
+			}
+			deliverFor(t, dir, attempt, askpassOnly, second)
+		})
+	}
+}
