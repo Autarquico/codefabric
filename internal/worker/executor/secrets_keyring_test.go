@@ -8,9 +8,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
+	secretskeyring "github.com/Autarquico/codefabric/internal/adapters/secrets/keyring"
 	"github.com/Autarquico/codefabric/internal/adapters/secrets/secretstest"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -115,6 +117,46 @@ func TestScenario_SecretsKeyring_LlaveroBloqueado(t *testing.T) {
 	}
 	if !slices.Contains(v1.PrepareFailureCodes, r.Code) {
 		t.Errorf("%s is not a code the Controller keeps", r.Code)
+	}
+}
+
+// hungKeyring takes writes and never answers a read, as a keyring waiting for
+// an unlock prompt nobody answers.
+type hungKeyring struct{ release chan struct{} }
+
+func (hungKeyring) Set(string, string, string) error { return nil }
+func (hungKeyring) Delete(string, string) error      { return nil }
+func (h hungKeyring) Get(string, string) (string, error) {
+	<-h.release
+	return "", nil
+}
+
+// TestPrepare_AKeyringThatNeverAnswersFailsWithSecretUnavailableWithinItsBound:
+// the prepare has no deadline of its own and is not cancelled, yet it ends,
+// coded, and not as a cut-short prepare to be tried again.
+func TestPrepare_AKeyringThatNeverAnswersFailsWithSecretUnavailableWithinItsBound(t *testing.T) {
+	hung := hungKeyring{release: make(chan struct{})}
+	t.Cleanup(func() { close(hung.release) })
+	dir := filepath.Join(t.TempDir(), "worker")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := secretsfile.New(filepath.Join(dir, "secrets.json"), clock.NewFake(t0),
+		secretsfile.WithVault(secretskeyring.NewWith(hung, 50*time.Millisecond)))
+	if err := store.Set(t.Context(), "github.personal", []byte(ghValue), nil, secrets.BackendKeyring); err != nil {
+		t.Fatal(err)
+	}
+	f := keyringFixture(t, store)
+
+	done := make(chan v1.RunReportEntry, 1)
+	go func() { done <- prepareFailure(t, f) }()
+	select {
+	case r := <-done:
+		if r.Code != domain.CodeSecretUnavailable || !strings.Contains(r.Message, "cannot be reached") {
+			t.Errorf("report = %+v", r)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the prepare hung on a keyring that never answers")
 	}
 }
 

@@ -52,25 +52,25 @@ func (h *secretHealth) stateOf(m secrets.Metadata) (secrets.State, bool) {
 	return st, ok
 }
 
-// due says whether a Check must run: a keyring entry no Check has seen, or the
-// last one too old. It marks the Check as running when it says so.
+// due says whether a Check must run: the last one too old, or a keyring entry
+// no Check has seen. Staleness alone is enough, with no keyring entry left: a
+// Check also sweeps the keyring items the catalog retired, and those of the
+// last entry removed while the keyring was locked still need their retry. It
+// marks the Check as running when it says so.
 func (h *secretHealth) due(metas []secrets.Metadata, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.running {
 		return false
 	}
-	stale := now.Sub(h.checkedAt) >= secretRecheck
+	due := now.Sub(h.checkedAt) >= secretRecheck
 	for _, m := range metas {
-		if m.Backend != secrets.BackendKeyring {
-			continue
-		}
-		if _, seen := h.states[secretKey{m.Ref, m.UpdatedAt}]; stale || !seen {
-			h.running = true
-			return true
+		if _, seen := h.states[secretKey{m.Ref, m.UpdatedAt}]; !due && m.Backend == secrets.BackendKeyring && !seen {
+			due = true
 		}
 	}
-	return false
+	h.running = due
+	return due
 }
 
 // record stores the statuses of a Check made while metas was the catalog. A

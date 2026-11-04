@@ -19,6 +19,9 @@ type fakeBackend struct {
 	getErr, setErr error
 	setCalls       int
 	block          chan struct{}
+	setBlock       chan struct{}
+	setStarted     chan struct{}
+	set            chan string
 }
 
 func (f *fakeBackend) Get(string, string) (string, error) {
@@ -28,8 +31,20 @@ func (f *fakeBackend) Get(string, string) (string, error) {
 	return "", f.getErr
 }
 
-func (f *fakeBackend) Set(string, string, string) error { f.setCalls++; return f.setErr }
-func (f *fakeBackend) Delete(string, string) error      { return f.setErr }
+func (f *fakeBackend) Set(_, _, p string) error {
+	f.setCalls++
+	if f.setStarted != nil {
+		close(f.setStarted)
+	}
+	if f.setBlock != nil {
+		<-f.setBlock
+	}
+	if f.set != nil {
+		f.set <- p
+	}
+	return f.setErr
+}
+func (f *fakeBackend) Delete(string, string) error { return f.setErr }
 
 func TestErrorMapping(t *testing.T) {
 	leak := "s3ntinel-VALUE"
@@ -87,5 +102,49 @@ func TestLargestItemFitsTheMacOSCommand(t *testing.T) {
 	cmd := frame + 2*(len(Service)+len(account)) + len("go-keyring-base64:") + b64
 	if cmd > 4096 {
 		t.Fatalf("command of %d bytes", cmd)
+	}
+}
+
+func TestAnOperationThatNeverAnswersIsUnavailableAfterItsBound(t *testing.T) {
+	b := &fakeBackend{block: make(chan struct{})}
+	defer close(b.block)
+	start := time.Now()
+	_, err := NewWith(b, 20*time.Millisecond).Get(t.Context(), "a") // ctx without deadline
+	if !errors.Is(err, secrets.ErrUnavailable) || errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("took %s", d)
+	}
+}
+
+// The goroutine of a Set cancelled midway reads a copy: the caller clears its
+// buffer as Set returns (run with -race).
+func TestCancelledSetKeepsItsOwnCopyOfTheValue(t *testing.T) {
+	b := &fakeBackend{setBlock: make(chan struct{}), setStarted: make(chan struct{}), set: make(chan string, 1)}
+	v := NewWith(b, time.Minute)
+	ctx, cancel := context.WithCancel(t.Context())
+	value := []byte("s3ntinel-VALUE")
+	errc := make(chan error, 1)
+	go func() { errc <- v.Set(ctx, "acc", value) }()
+	<-b.setStarted
+	cancel()
+	if err := <-errc; !errors.Is(err, secrets.ErrUnavailable) {
+		t.Fatalf("got %v", err)
+	}
+	clear(value)
+	if !v.Writing("acc") {
+		t.Error("the abandoned Set is not reported as writing")
+	}
+	close(b.setBlock)
+	if got := <-b.set; got != "s3ntinel-VALUE" {
+		t.Fatalf("the keyring got %q", got)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for v.Writing("acc") {
+		if time.Now().After(deadline) {
+			t.Fatal("still writing")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

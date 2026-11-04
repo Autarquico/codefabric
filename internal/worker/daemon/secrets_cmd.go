@@ -135,7 +135,10 @@ func newSecretsListCmd() *cobra.Command {
 		Long: "List the secrets of this Worker: refs and metadata, never values. STATUS is ok; broken, a\n" +
 			"keyring entry whose value the keyring no longer has (the Worker does not announce it:\n" +
 			"set it again, or remove it with `rm`); or unavailable, a keyring that could not be asked\n" +
-			"(locked), whose secret the Worker still announces.",
+			"(locked), whose secret the Worker still announces.\n\n" +
+			"STATUS is the state now, asked of the keyring when you run this. The running daemon\n" +
+			"checks every minute or so and announces what it saw, so it may go on announcing a\n" +
+			"secret that is broken, or stop announcing one you just fixed, until its next check.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			store, err := openSecrets()

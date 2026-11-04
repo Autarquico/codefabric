@@ -547,3 +547,63 @@ func TestFileSetOverAKeyringEntryRetiresItsItem(t *testing.T) {
 		t.Fatalf("vault holds %d items", v.count())
 	}
 }
+
+// abandoningVault is a Vault whose Set gives up at once, as one cut by its
+// context does, while the write goes on: until land, Writing says so.
+type abandoningVault struct {
+	*fakeVault
+	mu      sync.Mutex
+	account string
+	value   []byte
+	landed  bool
+}
+
+func (a *abandoningVault) Set(_ context.Context, account string, value []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.account, a.value = account, bytes.Clone(value)
+	return secrets.ErrUnavailable
+}
+
+func (a *abandoningVault) Writing(string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.account != "" && !a.landed
+}
+
+func (a *abandoningVault) land() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.landed = true
+	a.fakeVault.mu.Lock()
+	a.items[a.account] = a.value
+	a.fakeVault.mu.Unlock()
+}
+
+// A sweep must not forget the pending record of a Set abandoned by its caller
+// while its write can still land: when it lands, the next sweep deletes it.
+func TestASweepKeepsThePendingRecordOfAnAbandonedSetUntilItsWriteEnds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker", "secrets.json")
+	c := clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC))
+	v := &abandoningVault{fakeVault: newFakeVault()}
+	s := New(path, c, WithVault(v))
+	ctx := context.Background()
+
+	if err := s.Set(ctx, "gh/token", []byte("first-value-1234"), nil, secrets.BackendKeyring); !errors.Is(err, secrets.ErrUnavailable) {
+		t.Fatalf("Set = %v", err)
+	}
+	c.Advance(pendingGrace + time.Minute)
+	s.sweep(ctx)
+	if cat := readCatalog(t, path); len(cat.Retired) != 1 || !cat.Retired[0].Pending {
+		t.Fatalf("retired = %+v: forgotten while the write may land", cat.Retired)
+	}
+
+	v.land()
+	if v.count() != 1 {
+		t.Fatalf("the vault holds %d items after the late write", v.count())
+	}
+	s.sweep(ctx)
+	if cat := readCatalog(t, path); len(cat.Retired) != 0 || v.count() != 0 {
+		t.Fatalf("the late item was left: %d items, retired %+v", v.count(), cat.Retired)
+	}
+}

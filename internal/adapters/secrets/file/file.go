@@ -437,8 +437,8 @@ func (s *Store) sweep(ctx context.Context) {
 	now := s.clock.Now()
 	var gone []string
 	for _, r := range c.Retired {
-		if r.Pending && now.Sub(r.At) < pendingGrace {
-			continue
+		if r.Pending && (now.Sub(r.At) < pendingGrace || s.writing(account(c.CatalogID, r.Ref, r.Item))) {
+			continue // being written, or abandoned by a Set whose write may still land
 		}
 		if e := c.Secrets[r.Ref]; e.Item == r.Item {
 			gone = append(gone, r.Item) // pointed to after all: only the record is stale
@@ -457,6 +457,18 @@ func (s *Store) sweep(ctx context.Context) {
 		c.Retired = slices.DeleteFunc(c.Retired, func(r retiredItem) bool { return slices.Contains(gone, r.Item) })
 		return nil
 	})
+}
+
+// writeTracker is a Vault that knows of the writes it abandoned and that have
+// not ended yet.
+type writeTracker interface{ Writing(account string) bool }
+
+// writing says whether a write of account may still complete. Only then is its
+// pending record kept: a sweep that forgot it would leave the item, when it
+// landed, with nothing to delete it.
+func (s *Store) writing(account string) bool {
+	t, ok := s.vault.(writeTracker)
+	return ok && t.Writing(account)
 }
 
 // update applies change to the catalog under the lock of its writers and

@@ -368,7 +368,22 @@ func TestHeartbeat_TheStatusOfARefIsNotTheStatusOfItsNextVersion(t *testing.T) {
 		t.Error("two Checks at once")
 	}
 	h.record([]secrets.Metadata{m}, nil, errors.New("boom"), at)
-	if h.due([]secrets.Metadata{{Ref: "f", Backend: secrets.BackendFile}}, at.Add(time.Hour)) {
-		t.Error("a catalog of files needs no Check")
+	if !h.due([]secrets.Metadata{{Ref: "f", Backend: secrets.BackendFile}}, at.Add(time.Hour)) {
+		t.Error("a stale Check is due even for a catalog of files: retired keyring items are swept by it")
+	}
+}
+
+func TestSecretHealthChecksPeriodicallyEvenWithNoKeyringEntry(t *testing.T) {
+	var h secretHealth
+	now := time.Unix(1_000_000, 0)
+	if !h.due(nil, now) {
+		t.Fatal("the first beat does not check")
+	}
+	h.record(nil, nil, nil, now)
+	if h.due(nil, now.Add(secretRecheck-time.Second)) {
+		t.Error("checked again before the recheck")
+	}
+	if !h.due([]secrets.Metadata{{Ref: "f", Backend: secrets.BackendFile}}, now.Add(secretRecheck)) {
+		t.Error("retired items of the keyring are never retried once no keyring entry is left")
 	}
 }
