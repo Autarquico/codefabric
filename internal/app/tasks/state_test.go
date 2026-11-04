@@ -101,6 +101,11 @@ func TestRederive_MaterialisesRows6To8OfTheTable(t *testing.T) {
 			if len(events) != 1 || events[0].Data["from"] != "blocked" || events[0].Data["to"] != string(c.wantState) ||
 				events[0].Data["waiting_reason"] != string(c.wantReason) {
 				t.Errorf("events = %+v", events)
+				return
+			}
+			// The TUI names the Task from the event alone (§19.3).
+			if wantShort := shortID(got.Short); events[0].Data["short_id"] != wantShort || events[0].Data["name"] != fmt.Sprintf("t%d", i) {
+				t.Errorf("event data short_id=%v name=%v, want %s and t%d", events[0].Data["short_id"], events[0].Data["name"], wantShort, i)
 			}
 		})
 	}

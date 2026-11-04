@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: M
 issue: 95
-prs: []
+prs: [105]
 related_issues: [95]
 sub_issues: []
 depends_on: [client-subscriptions]
