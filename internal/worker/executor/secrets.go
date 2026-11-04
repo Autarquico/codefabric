@@ -453,7 +453,7 @@ func (e *Executor) revokeOnce(ctx context.Context, r state.Run) {
 	if done {
 		return
 	}
-	if err := e.jit.Revoke(e.runDir(r.Key), nil); err != nil {
+	if err := e.jit.Revoke(e.runDir(r.Key), secretjit.Harness, nil); err != nil {
 		e.log.WarnContext(ctx, "taking the secrets back from a harness that started failed; it is tried again", "run", r.RunID, "err", err)
 		return
 	}

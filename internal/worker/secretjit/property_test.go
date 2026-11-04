@@ -242,7 +242,7 @@ func (w *jitWorld) step() {
 		}
 	case 2:
 		w.log = append(w.log, fmt.Sprintf("revoke fault=%v", f != nil))
-		crashed, err := run(func() error { return m.Revoke(w.dir, nil) })
+		crashed, err := run(func() error { return m.Revoke(w.dir, Harness, nil) })
 		noValue(w.t, err)
 		switch {
 		case before.corrupt:

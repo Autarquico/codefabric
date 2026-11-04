@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -59,8 +60,44 @@ func withEscapes(secrets []Needle) ([]Needle, error) {
 				}
 			}
 		}
+		for _, form := range urlForms(n) {
+			if err := add(form); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return all, nil
+}
+
+// urlForms are the forms in which an HTTP client prints a credential: the value
+// percent-encoded as git encodes the userinfo of a URL (everything but the RFC
+// 3986 unreserved bytes, in upper and in lower case hex, and with "+" for a
+// space as a form encoder does), and, if the needle has a User, base64 of
+// "User:Value" in the standard and the URL alphabets. They are unpadded: the
+// padded form only adds "=" after them, which the unpadded needle leaves.
+func urlForms(n Needle) []string {
+	upper, lower := percentEncode(n.Value, "0123456789ABCDEF"), percentEncode(n.Value, "0123456789abcdef")
+	forms := []string{upper, lower, strings.ReplaceAll(upper, "%20", "+"), strings.ReplaceAll(lower, "%20", "+")}
+	if n.User != "" {
+		basic := []byte(n.User + ":" + string(n.Value))
+		forms = append(forms, base64.RawStdEncoding.EncodeToString(basic), base64.RawURLEncoding.EncodeToString(basic))
+	}
+	return forms
+}
+
+func percentEncode(value []byte, hex string) string {
+	var b strings.Builder
+	for _, c := range value {
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', c == '-', c == '.', c == '_', c == '~':
+			b.WriteByte(c)
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&0xf])
+		}
+	}
+	return b.String()
 }
 
 // TOMLBasicString escapes value for the inside of a TOML basic string: the

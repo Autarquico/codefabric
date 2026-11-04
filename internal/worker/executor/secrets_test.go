@@ -91,7 +91,7 @@ func (s *fakeStore) Get(_ context.Context, ref string) (secrets.Secret, error) {
 	}, nil
 }
 
-func (s *fakeStore) Set(_ context.Context, ref string, value []byte, projects []string, backend string) error {
+func (s *fakeStore) Set(_ context.Context, ref string, value []byte, projects []string, backend string, _ ...secrets.SetOption) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[ref] = fakeSecret{value: bytes.Clone(value), projects: projects, backend: backend}

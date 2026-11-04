@@ -181,11 +181,11 @@ func TestNothingRunsWithoutTheSecrets(t *testing.T) {
 	}{
 		"revoked from the harness": {
 			prepare: func(t *testing.T, dir string) {
-				if err := secretjit.New().Revoke(dir, []string{apiRef}); err != nil {
+				if err := secretjit.New().Revoke(dir, secretjit.Harness, []string{apiRef}); err != nil {
 					t.Fatal(err)
 				}
 			},
-			delivery: "1", why: "not available to the harness",
+			delivery: "1", why: "not available to the consumer",
 		},
 		"not delivered":                {delivery: "1", why: "no secrets delivered"},
 		"retention unreadable":         {delivery: "broken", why: "the output cannot be redacted"},

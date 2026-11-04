@@ -158,7 +158,7 @@ func TestRelease_FaultAtEveryStepIsPendingAndRecovers(t *testing.T) {
 
 func TestRevoke_FaultAtEveryStepLeavesAccessWholeOrRevokedAndRecovers(t *testing.T) {
 	s := setup{name: "delivered", prep: func(t *testing.T, dir string) { deliver(t, dir, 1, v1) }}
-	op := func(m *Manager, dir string) error { return m.Revoke(dir, nil) }
+	op := func(m *Manager, dir string) error { return m.Revoke(dir, Harness, nil) }
 	eachFault(t, s, op, func(t *testing.T, dir string, _ bool, _ error) {
 		wantLoad(t, dir, v1)
 		resolve := Resolver(dir)
@@ -171,7 +171,7 @@ func TestRevoke_FaultAtEveryStepLeavesAccessWholeOrRevokedAndRecovers(t *testing
 			t.Fatalf("resolve = %v", err0)
 		}
 		// Revoking again finishes it.
-		if err := New().Revoke(dir, nil); err != nil {
+		if err := New().Revoke(dir, Harness, nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := resolve(v1[0].Ref); !errors.Is(err, ErrNoAccess) {

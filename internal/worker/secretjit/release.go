@@ -108,11 +108,12 @@ func settled(runDir string) error {
 	return nil
 }
 
-// Revoke takes from the harness the access to refs (to every ref, if refs is
-// nil) of the delivery in runDir, for good: Resolver no longer returns them,
-// and a Deliver of the same attempt keeps them revoked. Load still does, until
-// Release. Without a delivery there is nothing to revoke.
-func (m *Manager) Revoke(runDir string, refs []string) error {
+// Revoke takes from consumer the access to refs (to every ref, if refs is nil)
+// of the delivery in runDir, for good: its reader no longer returns them, and
+// a Deliver of the same attempt keeps them revoked. The other consumers keep
+// theirs, and Load still returns every value, until Release. Without a
+// delivery there is nothing to revoke.
+func (m *Manager) Revoke(runDir string, consumer Consumer, refs []string) error {
 	unlock, err := lock(runDir)
 	if err != nil {
 		return err
@@ -129,14 +130,18 @@ func (m *Manager) Revoke(runDir string, refs []string) error {
 	d.close()
 	for i, e := range man.Refs {
 		if refs == nil || slices.Contains(refs, e.Ref) {
-			man.Refs[i].Harness = false
+			man.Refs[i].Access = slices.DeleteFunc(slices.Clone(e.Access), func(c Consumer) bool { return c == consumer })
 		}
 	}
+	return m.replaceManifest(filepath.Join(runDir, liveName), man)
+}
+
+// replaceManifest atomically replaces the manifest of the delivery in live.
+func (m *Manager) replaceManifest(live string, man manifest) error {
 	data, err := json.Marshal(man)
 	if err != nil {
 		return fmt.Errorf("secretjit: %w", err)
 	}
-	live := filepath.Join(runDir, liveName)
 	tmp, final := filepath.Join(live, manifestTemp), filepath.Join(live, manifestName)
 	if err := m.remove(tmp); err != nil {
 		return err

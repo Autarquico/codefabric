@@ -3,6 +3,7 @@
 package gitops
 
 import (
+	"cmp"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -55,5 +56,94 @@ func TestAValueAtACutOfTheStderrOfGitLeavesNoFragment(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// scriptGit is a Git whose git is the shell script body.
+func scriptGit(t *testing.T, body string) *Git {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil { //nolint:gosec // an executable of the test
+		t.Fatal(err)
+	}
+	return &Git{git: bin, log: slog.New(slog.DiscardHandler)}
+}
+
+func cutSet(t *testing.T) *redact.Set {
+	t.Helper()
+	set, err := redact.NewSet([]redact.Needle{{Ref: "github.personal", Value: []byte(cutValue)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return set
+}
+
+// noFragment fails if text holds any MinSecretLen bytes of the value.
+func noFragment(t *testing.T, what, text string) {
+	t.Helper()
+	for i := 0; i+redact.MinSecretLen <= len(cutValue); i++ {
+		if strings.Contains(text, cutValue[i:i+redact.MinSecretLen]) {
+			t.Fatalf("%s holds part of the value: %q", what, text[max(0, len(text)-200):])
+		}
+	}
+}
+
+func TestTheStdoutOfGitIsRedactedToo(t *testing.T) {
+	g := scriptGit(t, "echo 'remote: "+cutValue+"'")
+	res, err := g.run(t.Context(), cmd{dir: t.TempDir(), timeout: time.Minute, args: []string{"fetch"}, values: cutSet(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(res.stdout); got != "remote: [REDACTED:github.personal]" {
+		t.Fatalf("stdout = %q", got)
+	}
+}
+
+// The cap of the stdout cuts the value in the middle; the redaction came first.
+func TestAValueAtTheCapOfTheStdoutOfGitLeavesNoFragment(t *testing.T) {
+	g := scriptGit(t, "printf 'yyyyyyyy"+cutValue+"\\n'")
+	for _, room := range []int{9, 20, 8 + len(cutValue)/2, 8 + len(cutValue) - 1} {
+		res, err := g.run(t.Context(), cmd{dir: t.TempDir(), timeout: time.Minute, args: []string{"fetch"}, values: cutSet(t), maxOut: room})
+		if err != nil {
+			t.Fatal(err)
+		}
+		noFragment(t, "stdout", res.stdout)
+	}
+}
+
+// Whatever the end of the child, the start of a value the redaction holds
+// back is written as a marker and never as the fragment.
+func TestWhatTheRedactionHoldsBackIsFlushedOnEveryEnd(t *testing.T) {
+	half := cutValue[:len(cutValue)/2]
+	for name, tc := range map[string]struct {
+		body    string
+		timeout time.Duration
+		wantErr bool
+		exit    int
+	}{
+		"success":      {body: "printf '" + half + "'; printf '" + half + "' >&2"},
+		"non-zero":     {body: "printf '" + half + "'; printf '" + half + "' >&2; exit 3", exit: 3},
+		"cancellation": {body: "printf '" + half + "'; printf '" + half + "' >&2; sleep 30", timeout: 500 * time.Millisecond, wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			timeout := cmp.Or(tc.timeout, time.Minute)
+			res, err := scriptGit(t, tc.body).run(t.Context(), cmd{dir: t.TempDir(), timeout: timeout, args: []string{"fetch"}, values: cutSet(t)})
+			if (err != nil) != tc.wantErr || res.exit != tc.exit {
+				t.Fatalf("err = %v, exit = %d", err, res.exit)
+			}
+			noFragment(t, "stdout", res.stdout)
+			noFragment(t, "stderr", res.stderr)
+			if !strings.Contains(res.stdout, redact.PartialMarker) || !strings.Contains(res.stderr, redact.PartialMarker) {
+				t.Fatalf("the held-back start of the value was lost: stdout %q, stderr %q", res.stdout, res.stderr)
+			}
+		})
+	}
+}
+
+func TestAGitThatCannotStartLeavesNothingHeld(t *testing.T) {
+	g := &Git{git: filepath.Join(t.TempDir(), "no-such-git"), log: slog.New(slog.DiscardHandler)}
+	res, err := g.run(t.Context(), cmd{dir: t.TempDir(), timeout: time.Minute, args: []string{"fetch"}, values: cutSet(t)})
+	if err == nil || res.stdout != "" || res.stderr != "" {
+		t.Fatalf("res = %+v, err = %v", res, err)
 	}
 }

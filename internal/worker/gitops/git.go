@@ -173,15 +173,23 @@ func (g *Git) run(ctx context.Context, c cmd) (result, error) {
 		stdout = &cappedWriter{w: &out, room: c.maxOut}
 	}
 	errOut := &boundedBuffer{max: stderrBytes}
+	// What the child prints is redacted of the values before it reaches a
+	// buffer that cuts it: a cut inside a value would leave a fragment that no
+	// later redaction matches.
+	stdout, stdoutDone := redactingSink(stdout, c.values)
+	stderr, stderrDone := redactingSink(errOut, c.values)
 	if c.stdin != "" {
 		p.Stdin = strings.NewReader(c.stdin)
 	}
 	child, err := procgroup.Start(ctx, p, procgroup.Options{
-		Stdout: stdout, Stderr: errOut, Drain: killDelay,
+		Stdout: stdout, Stderr: stderr, Drain: killDelay,
 	})
 	if err == nil {
-		err = child.Wait()
+		err = child.Wait() // the pipes are drained: nothing writes to the sinks any more
 	}
+	// Whatever the child did, success or not, killed or never started, what
+	// the sinks hold back is written before anything reads the buffers.
+	flushErr := errors.Join(stdoutDone(), stderrDone())
 	res := result{stdout: out.String(), stderr: errOut.text()}
 	var exit *exec.ExitError
 	switch {
@@ -194,8 +202,22 @@ func (g *Git) run(ctx context.Context, c cmd) (result, error) {
 	default:
 		return res, fmt.Errorf("gitops: starting git %s: %w", c.args[0], err)
 	}
-	res.stderr = clean(redacted(res.stderr, c.values), c.secrets)
+	if flushErr != nil {
+		return res, fmt.Errorf("gitops: redacting git %s: %w", c.args[0], flushErr)
+	}
+	res.stderr = clean(res.stderr, c.secrets)
 	return res, nil
+}
+
+// redactingSink is w behind the redaction of set, and the function that
+// writes what the redaction still holds back; both are w itself and a no-op
+// without a set.
+func redactingSink(w io.Writer, set *redact.Set) (io.Writer, func() error) {
+	if set == nil {
+		return w, func() error { return nil }
+	}
+	rw := redact.NewWriter(w, set)
+	return rw, rw.Close
 }
 
 // ok runs a child that must succeed and returns its trimmed stdout; a failure is

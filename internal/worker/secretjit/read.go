@@ -23,6 +23,18 @@ const noFollow = unix.O_NOFOLLOW
 // directory is runDir: the value of ref, if the harness may read it. It is
 // what the wrapper resolves the secret environment with. It only reads.
 func Resolver(runDir string) func(ref string) (string, error) {
+	return reader(runDir, Harness)
+}
+
+// AskpassReader is the askpass helper's access to the delivery of runDir: the
+// value of ref, if askpass may read it. A ref delivered only to the harness is
+// ErrNoAccess here, as one delivered only to askpass is for Resolver. It only
+// reads.
+func AskpassReader(runDir string) func(ref string) (string, error) {
+	return reader(runDir, Askpass)
+}
+
+func reader(runDir string, c Consumer) func(ref string) (string, error) {
 	return func(ref string) (string, error) {
 		d, err := readDelivery(runDir)
 		if err != nil {
@@ -30,7 +42,7 @@ func Resolver(runDir string) func(ref string) (string, error) {
 		}
 		defer d.close()
 		e, ok := d.find(ref)
-		if !ok || !e.Harness {
+		if !ok || !e.canAccess(c) {
 			return "", fmt.Errorf("%w: %q", ErrNoAccess, ref)
 		}
 		value, err := d.value(e)
@@ -126,6 +138,11 @@ func (d *delivery) load() error {
 	// encoding/json may quote the input in its errors: say only where.
 	if err := dec.Decode(&d.m); err != nil {
 		return fmt.Errorf("%w: %s is not valid (offset %d)", ErrCorrupt, manifestName, dec.InputOffset())
+	}
+	for i := range d.m.Refs {
+		if err := d.m.Refs[i].normalize(); err != nil {
+			return err
+		}
 	}
 	return d.m.check()
 }
