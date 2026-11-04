@@ -259,8 +259,9 @@ func TestScenario_ClientSubscriptions_Carga(t *testing.T) {
 	from := lastSequence(t, tc)
 	emittedAt := map[uint64]time.Time{}
 	for i := range emitted {
+		before := time.Now() // taken before the mutation: the latency can only be overstated
 		makeTasks(t, tc, fmt.Sprintf("load-%d", i))
-		emittedAt[lastSequence(t, tc)] = time.Now()
+		emittedAt[lastSequence(t, tc)] = before
 	}
 
 	var latencies []time.Duration
@@ -278,13 +279,13 @@ func TestScenario_ClientSubscriptions_Carga(t *testing.T) {
 		w.mu.Lock()
 		for seq, at := range emittedAt {
 			if seq > from {
-				latencies = append(latencies, max(0, w.seen[seq].Sub(at)))
+				latencies = append(latencies, w.seen[seq].Sub(at))
 			}
 		}
 		w.mu.Unlock()
 	}
 	slices.Sort(latencies)
-	if p95 := latencies[len(latencies)*95/100]; p95 > 2*time.Second {
+	if p95 := latencies[len(latencies)*95/100]; p95 >= 2*time.Second {
 		t.Fatalf("p95 latency %s over %d deliveries, want under 2s", p95, len(latencies))
 	}
 }

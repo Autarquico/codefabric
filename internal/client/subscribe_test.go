@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sync"
@@ -303,6 +304,11 @@ func TestSubscribe_ABurstOfEventsReadsTheSnapshotAtMostOncePerMinimumInterval(t 
 	r := &recorder{}
 	run(t, c, counting("0", &calls), r)
 
+	eventually(t, "the first burst", func() bool { return slices.Contains(r.sequences(), 3) })
+	if err := fake.BlockUntil(t.Context(), 2); err != nil { // the first burst waits out the interval since the first read
+		t.Fatal(err)
+	}
+	fake.Advance(time.Second)
 	eventually(t, "the refetch of the first burst", func() bool { return calls.Load() == 2 })
 	close(second)
 	eventually(t, "the second burst", func() bool { return slices.Contains(r.sequences(), 13) })
@@ -320,6 +326,127 @@ func TestSubscribe_ABurstOfEventsReadsTheSnapshotAtMostOncePerMinimumInterval(t 
 	defer cancel()
 	if err := fake.BlockUntil(ctx, 2); err == nil {
 		t.Errorf("another read is waiting after %d", calls.Load())
+	}
+}
+
+// The minimum interval holds against every read, not only the refetches: an
+// event right after the first snapshot waits out the interval too.
+func TestSubscribe_AnEventRightAfterTheFirstSnapshotWaitsTheMinimumInterval(t *testing.T) {
+	c := testClient(t, streamOf(eventFrame(1)))
+	fake := clock.NewFake(time.Unix(0, 0))
+	c.clock = fake
+	c.timing.idle = time.Hour
+	c.timing.minRefetch = time.Second
+	var calls atomic.Int32
+	r := &recorder{}
+	run(t, c, counting("0", &calls), r)
+
+	eventually(t, "the event", func() bool { return slices.Contains(r.sequences(), 1) })
+	if err := fake.BlockUntil(t.Context(), 2); err != nil { // the idle timer of the stream, and the wait
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("the snapshot was read %d times inside the minimum interval, want 1", got)
+	}
+	fake.Advance(time.Second)
+	eventually(t, "the refetch", func() bool { return calls.Load() == 2 })
+}
+
+// A refetch that is still reading when the Controller loses the cursor ends
+// before the resync is told, so the resync is the last word on the state.
+func TestSubscribe_ACursorLostDuringARefetchResyncsAfterIt(t *testing.T) {
+	var opens atomic.Int32
+	var lastIDs sync.Map
+	endFirstStream := make(chan struct{})
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := opens.Add(1)
+		lastIDs.Store(n, r.Header.Get("Last-Event-ID"))
+		switch n {
+		case 1:
+			w.Header().Set("Content-Type", "text/event-stream")
+			sseWrite(w, eventFrame(1))
+			select {
+			case <-endFirstStream:
+			case <-r.Context().Done():
+			}
+		case 2:
+			status(http.StatusConflict, domain.CodeCursorExpired)(w)
+		default:
+			streamOf(eventFrame(11)).ServeHTTP(w, r)
+		}
+	}))
+	refetching := make(chan struct{})
+	finishRefetch := make(chan struct{})
+	var calls atomic.Int32
+	view := View[int]{
+		Snapshot: func(context.Context, *Client) (int, string, error) {
+			n := calls.Add(1)
+			if n == 2 {
+				close(refetching)
+				<-finishRefetch
+			}
+			return int(n), map[int32]string{1: "0", 2: "1", 3: "10"}[n], nil
+		},
+		Invalidates: func(e v1.Event) bool { return e.Sequence == 1 },
+	}
+	r := &recorder{}
+	run(t, c, view, r)
+
+	select {
+	case <-refetching:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refetch never started")
+	}
+	close(endFirstStream) // the stream drops, the Controller no longer holds the cursor
+	eventually(t, "the second open", func() bool { return opens.Load() >= 2 })
+	time.Sleep(50 * time.Millisecond)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("the resync read the snapshot (%d reads) while the refetch was still reading", got)
+	}
+	close(finishRefetch)
+
+	eventually(t, "the event after the resync", func() bool { return slices.Contains(r.sequences(), 11) })
+	var states []string
+	for _, u := range r.all() {
+		switch u.Kind {
+		case UpdateSnapshot:
+			states = append(states, fmt.Sprintf("snapshot %d", u.State))
+		case UpdateResync:
+			states = append(states, fmt.Sprintf("resync %d", u.State))
+		}
+	}
+	if want := []string{"snapshot 1", "snapshot 2", "resync 3"}; !slices.Equal(states, want) {
+		t.Fatalf("states = %v, want %v", states, want)
+	}
+	if got, _ := lastIDs.Load(int32(3)); got != "10" {
+		t.Errorf("resumed from %q, want the cursor of the resync", got)
+	}
+}
+
+// A refresher that gives up ends the subscription although the stream is fine.
+func TestSubscribe_APermanentRefreshErrorEndsItWhileTheStreamIsOpen(t *testing.T) {
+	c := testClient(t, streamOf(eventFrame(1)))
+	var calls atomic.Int32
+	view := View[int]{Snapshot: func(context.Context, *Client) (int, string, error) {
+		if calls.Add(1) == 1 {
+			return 1, "0", nil
+		}
+		return 0, "", domain.NewError(domain.CodeUnauthenticated, "revoked", nil)
+	}}
+	done := make(chan error, 1)
+	r := &recorder{}
+	go func() { done <- Subscribe(t.Context(), c, view, r.handle) }()
+
+	select {
+	case err := <-done:
+		if !isCode(err, domain.CodeUnauthenticated) {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the subscription went on with a refresher that had given up")
+	}
+	if !slices.Contains(r.kinds(), UpdateConnected) {
+		t.Errorf("the stream was never open: %v", r.kinds())
 	}
 }
 

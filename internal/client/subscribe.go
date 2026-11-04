@@ -93,6 +93,7 @@ type subscription[S any] struct {
 	applied    uint64     // the stream position: the highest sequence told to the handler, or the cursor of the first or resync snapshot
 	positioned bool       // the first snapshot has set applied
 	connected  *bool      // nil before the first word
+	lastRead   time.Time  // when any path (first, refetch, resync) last began reading the snapshot
 	dirty      chan struct{}
 }
 
@@ -196,6 +197,9 @@ func (s *subscription[S]) setConnected(up bool, err error) {
 func (s *subscription[S]) fetch(ctx context.Context, kind UpdateKind) error {
 	s.fetchMu.Lock()
 	defer s.fetchMu.Unlock()
+	s.mu.Lock()
+	s.lastRead = s.c.clock.Now()
+	s.mu.Unlock()
 	state, cursor, err := s.view.Snapshot(ctx, s.c)
 	if err != nil {
 		return err
@@ -241,7 +245,6 @@ func (s *subscription[S]) snapshotWithRetry(ctx context.Context, kind UpdateKind
 // minRefetch apart, so a burst of events cannot flood the Controller.
 func (s *subscription[S]) refresher(ctx context.Context) error {
 	delay := s.c.timing.backoffInitial
-	var last time.Time // when the snapshot was last read
 	for {
 		var tick <-chan time.Time
 		stop := func() {}
@@ -258,7 +261,7 @@ func (s *subscription[S]) refresher(ctx context.Context) error {
 		}
 		stop()
 		// Events that come meanwhile merge into the one pending read.
-		if wait := s.c.timing.minRefetch - s.c.clock.Now().Sub(last); wait > 0 && !last.IsZero() {
+		if wait := s.minRefetchWait(); wait > 0 {
 			if err := s.c.sleep(ctx, wait); err != nil {
 				return nil
 			}
@@ -267,7 +270,6 @@ func (s *subscription[S]) refresher(ctx context.Context) error {
 			default:
 			}
 		}
-		last = s.c.clock.Now()
 		switch err := s.fetch(ctx, UpdateSnapshot); {
 		case err == nil:
 			delay = s.c.timing.backoffInitial
@@ -283,6 +285,17 @@ func (s *subscription[S]) refresher(ctx context.Context) error {
 			delay = min(delay*2, s.c.timing.backoffMax)
 		}
 	}
+}
+
+// minRefetchWait is how long until minRefetch has passed since the snapshot was
+// last read by any path, the first read and resyncs included.
+func (s *subscription[S]) minRefetchWait() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastRead.IsZero() {
+		return 0
+	}
+	return s.c.timing.minRefetch - s.c.clock.Now().Sub(s.lastRead)
 }
 
 // eventCursor is the cursor to snapshot a list from: taken before the list is
