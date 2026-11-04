@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Almacenamiento de logs y output"
+title: Almacenamiento de logs y output
 type: task
-status: draft
+status: active
 priority: P1
 size: M
-issue: null
+issue: 100
 prs: []
-related_issues: []
+related_issues: [100]
 sub_issues: []
 depends_on: [observe-attach-events]
 supersedes: []
 related_specs: [codefabric-spec, phase-4-recovery]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-04
 ---
 
 # Almacenamiento de logs y output
