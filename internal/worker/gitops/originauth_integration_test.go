@@ -7,22 +7,17 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"net/http/cgi" //nolint:gosec // the origin of the tests runs git http-backend; Go is far past 1.6.3
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/gittest"
 	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codefabric/internal/testutil/gitorigin"
 	"github.com/Autarquico/codefabric/internal/worker/daemon"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/secretjit"
@@ -50,98 +45,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// noWait is a clock whose backoffs are over at once: the failures under test
-// are retried without the seconds.
-type noWait struct{ clock.Real }
-
-type fired struct{ c chan time.Time }
-
-func (f fired) C() <-chan time.Time { return f.c }
-func (fired) Stop()                 {}
-
-func (noWait) NewTimer(time.Duration) clock.Timer {
-	c := make(chan time.Time, 1)
-	c <- time.Now()
-	return fired{c}
-}
-
-type seen struct {
-	Path       string
-	Authorized bool
-}
-
-// origin is a smart-HTTP TLS server with Basic auth over bare repositories.
-type origin struct {
-	srv      *httptest.Server
-	ca       string
-	mu       sync.Mutex
-	requests []seen
-	redirect string // after the auth, the answer is a redirect to this base URL
-}
-
-func newOrigin(t *testing.T, repos map[string]string) *origin {
-	t.Helper()
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := t.TempDir()
-	for name, src := range repos {
-		dst := filepath.Join(root, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		gittest.Run(t, root, "clone", "--bare", "--quiet", src, dst)
-	}
-	backend := &cgi.Handler{
-		Path: gitPath, Args: []string{"http-backend"},
-		Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1", "HOME=" + root, "GIT_CONFIG_NOSYSTEM=1"},
-	}
-	o := &origin{}
-	o.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		user, pass, ok := req.BasicAuth()
-		authorized := ok && user == originUser && pass == originToken
-		o.mu.Lock()
-		o.requests = append(o.requests, seen{Path: req.URL.Path, Authorized: authorized})
-		redirect := o.redirect
-		o.mu.Unlock()
-		switch {
-		case !authorized:
-			w.Header().Set("WWW-Authenticate", `Basic realm="origin"`)
-			http.Error(w, "authentication needed", http.StatusUnauthorized)
-		case redirect != "":
-			http.Redirect(w, req, redirect+req.URL.RequestURI(), http.StatusTemporaryRedirect) //nolint:gosec // the redirect under test
-		default:
-			backend.ServeHTTP(w, req)
-		}
-	}))
-	t.Cleanup(o.srv.Close)
-	o.ca = writePEM(t, filepath.Join(t.TempDir(), "ca.pem"), "CERTIFICATE", o.srv.Certificate().Raw)
-	return o
-}
-
-func (o *origin) saw() []seen {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return append([]seen(nil), o.requests...)
-}
-
-func (o *origin) authorizedFor(path string) int {
-	n := 0
-	for _, r := range o.saw() {
-		if r.Authorized && strings.HasPrefix(r.Path, path) {
-			n++
-		}
-	}
-	return n
-}
-
 // askpassRig prepares Runs of one Project from an origin that wants a credential.
 type askpassRig struct {
 	t      *testing.T
 	paths  config.Paths
 	home   string
-	origin *origin
+	origin *gitorigin.Origin
 	commit string
 	auth   *gitops.OriginAuth
 	g      *gitops.Git
@@ -161,7 +70,7 @@ func newAskpassRig(t *testing.T, trust bool) *askpassRig {
 	src := gittest.InitRepo(t)
 	other := gittest.InitRepo(t)
 	r := &askpassRig{t: t, home: home, logs: &bytes.Buffer{}, commit: gittest.Run(t, src, "rev-parse", "HEAD")}
-	r.origin = newOrigin(t, map[string]string{"org/repo.git": src, "org/other.git": other})
+	r.origin = gitorigin.New(t, map[string]string{"org/repo.git": src, "org/other.git": other}, originUser, originToken)
 	// Everything of the Worker is under a path with spaces and a quote.
 	r.paths = config.Paths{ConfigDir: t.TempDir(), DataDir: filepath.Join(t.TempDir(), "data dir, it's here")}
 	self, err := os.Executable()
@@ -185,17 +94,17 @@ func newAskpassRig(t *testing.T, trust bool) *askpassRig {
 		t.Fatal(err)
 	}
 	r.auth = &gitops.OriginAuth{Askpass: script, RunDir: runDir, Needles: []redact.Needle{needle}}
-	r.g, err = gitops.New(t.Context(), gitops.Options{Paths: r.paths, Clock: noWait{}, Log: slog.New(slog.NewTextHandler(r.logs, nil))})
+	r.g, err = gitops.New(t.Context(), gitops.Options{Paths: r.paths, Clock: gitorigin.NoWait{}, Log: slog.New(slog.NewTextHandler(r.logs, nil))})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if trust {
-		gitops.TrustCA(r.g, r.origin.ca)
+		gitops.TrustCA(r.g, r.origin.CA)
 	}
 	return r
 }
 
-func (r *askpassRig) url(path string) string { return r.origin.srv.URL + "/" + path }
+func (r *askpassRig) url(path string) string { return r.origin.URL + "/" + path }
 
 func (r *askpassRig) spec(repo string) gitops.PrepareSpec {
 	return gitops.PrepareSpec{
@@ -228,35 +137,7 @@ func (r *askpassRig) noLeak(err error) {
 func TestScenario_OriginAskpass_RepoPrivado(t *testing.T) {
 	r := newAskpassRig(t, true)
 	// The hostile configuration of the user must change nothing.
-	record := filepath.Join(t.TempDir(), "helper-calls")
-	hostile := fmt.Sprintf("[credential]\n\thelper = \"!f() { echo called >> '%s'; echo username=x; echo password=y; }; f\"\n"+
-		"[url \"https://evil.invalid/\"]\n\tinsteadOf = %s/\n[http]\n\tsslVerify = false\n"+
-		"[http \"%s/\"]\n\tsslVerify = false\n\textraHeader = X-Hostile: 1\n[core]\n\taskPass = /bin/false\n",
-		record, r.origin.srv.URL, r.origin.srv.URL)
-	if err := os.WriteFile(filepath.Join(r.home, ".gitconfig"), []byte(hostile), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(r.home, ".config", "git"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(r.home, ".config", "git", "config"), []byte(hostile), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	// Control: the same hostile configuration does bite a git that is not isolated.
-	ctl := exec.CommandContext(t.Context(), "git", "ls-remote", r.url("org/repo.git")) //nolint:gosec // a test
-	helperOnly := filepath.Join(t.TempDir(), "helper-only")
-	if err := os.WriteFile(helperOnly, []byte(strings.SplitN(hostile, "[url", 2)[0]), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ctl.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + r.home, "GIT_CONFIG_GLOBAL=" + helperOnly, "GIT_TERMINAL_PROMPT=0", "GIT_SSL_CAINFO=" + r.origin.ca}
-	_ = ctl.Run()
-	if _, err := os.Stat(record); err != nil {
-		t.Fatalf("the recording helper is not invoked by an unisolated git: %v", err)
-	}
-	if err := os.Remove(record); err != nil {
-		t.Fatal(err)
-	}
+	record := gitorigin.HostileHome(t, r.home, r.origin)
 
 	if err := r.prepare(r.url("org/repo.git")); err != nil {
 		t.Fatalf("Prepare: %v\n%s", err, r.logs)
@@ -264,8 +145,8 @@ func TestScenario_OriginAskpass_RepoPrivado(t *testing.T) {
 	if got := gittest.Run(t, r.paths.WorkerWorktreeDir(run, 1), "rev-parse", "HEAD"); got != r.commit {
 		t.Errorf("HEAD = %s, want %s", got, r.commit)
 	}
-	if n := r.origin.authorizedFor("/org/repo.git"); n == 0 {
-		t.Errorf("origin saw no authorized request: %v", r.origin.saw())
+	if n := r.origin.AuthorizedFor("/org/repo.git"); n == 0 {
+		t.Errorf("origin saw no authorized request: %v", r.origin.Saw())
 	}
 	if _, err := os.Stat(record); err == nil {
 		t.Error("a credential helper was invoked")
@@ -281,7 +162,7 @@ func TestScenario_OriginAskpass_RepoPrivado(t *testing.T) {
 
 func TestScenario_OriginAskpass_HostileConfigDoesNotDisableTLSVerification(t *testing.T) {
 	r := newAskpassRig(t, false) // the CA of the server is not trusted
-	hostile := fmt.Sprintf("[http]\n\tsslVerify = false\n[http \"%s/\"]\n\tsslVerify = false\n", r.origin.srv.URL)
+	hostile := fmt.Sprintf("[http]\n\tsslVerify = false\n[http \"%s/\"]\n\tsslVerify = false\n", r.origin.URL)
 	if err := os.WriteFile(filepath.Join(r.home, ".gitconfig"), []byte(hostile), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +170,7 @@ func TestScenario_OriginAskpass_HostileConfigDoesNotDisableTLSVerification(t *te
 	if err == nil {
 		t.Fatal("Prepare worked against a server nobody trusts")
 	}
-	if n := r.origin.authorizedFor("/"); n != 0 {
+	if n := r.origin.AuthorizedFor("/"); n != 0 {
 		t.Errorf("the credential reached an untrusted server %d times", n)
 	}
 	r.noLeak(err)
@@ -298,15 +179,13 @@ func TestScenario_OriginAskpass_HostileConfigDoesNotDisableTLSVerification(t *te
 func TestScenario_OriginAskpass_DestinoNoAutorizado(t *testing.T) {
 	t.Run("a redirect to another host", func(t *testing.T) {
 		r := newAskpassRig(t, true)
-		elsewhere := newOrigin(t, map[string]string{"org/repo.git": gittest.InitRepo(t)})
-		r.origin.mu.Lock()
-		r.origin.redirect = elsewhere.srv.URL
-		r.origin.mu.Unlock()
+		elsewhere := gitorigin.New(t, map[string]string{"org/repo.git": gittest.InitRepo(t)}, originUser, originToken)
+		r.origin.RedirectTo(elsewhere.URL)
 		err := r.prepare(r.url("org/repo.git"))
 		if err == nil {
 			t.Fatal("Prepare followed a redirect")
 		}
-		if got := elsewhere.saw(); len(got) != 0 {
+		if got := elsewhere.Saw(); len(got) != 0 {
 			t.Errorf("the other host was reached: %v", got)
 		}
 		r.noLeak(err)
@@ -317,7 +196,7 @@ func TestScenario_OriginAskpass_DestinoNoAutorizado(t *testing.T) {
 		if err == nil {
 			t.Fatal("Prepare fetched a repository the credential is not for")
 		}
-		if n := r.origin.authorizedFor("/org/other.git"); n != 0 {
+		if n := r.origin.AuthorizedFor("/org/other.git"); n != 0 {
 			t.Errorf("the credential reached another repository %d times", n)
 		}
 		r.noLeak(err)
@@ -328,7 +207,7 @@ func TestScenario_OriginAskpass_DestinoNoAutorizado(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), originToken) {
 			t.Fatalf("Prepare of an http repository: %v", err)
 		}
-		if got := r.origin.saw(); len(got) != 0 {
+		if got := r.origin.Saw(); len(got) != 0 {
 			t.Errorf("git ran against an http repository: %v", got)
 		}
 	})
@@ -341,7 +220,7 @@ func TestScenario_OriginAskpass_DestinoNoAutorizado(t *testing.T) {
 		if err == nil {
 			t.Fatal("Prepare worked with the credential revoked")
 		}
-		if n := r.origin.authorizedFor("/"); n != 0 {
+		if n := r.origin.AuthorizedFor("/"); n != 0 {
 			t.Errorf("the credential was used after it was revoked: %d", n)
 		}
 		r.noLeak(err)
@@ -371,7 +250,7 @@ exec '%s' "$@"
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil { //nolint:gosec // a fake git of the test
 		t.Fatal(err)
 	}
-	g, err := gitops.New(t.Context(), gitops.Options{Paths: r.paths, Clock: noWait{}, Log: slog.New(slog.NewTextHandler(r.logs, nil)), GitPath: script})
+	g, err := gitops.New(t.Context(), gitops.Options{Paths: r.paths, Clock: gitorigin.NoWait{}, Log: slog.New(slog.NewTextHandler(r.logs, nil)), GitPath: script})
 	if err != nil {
 		t.Fatal(err)
 	}
