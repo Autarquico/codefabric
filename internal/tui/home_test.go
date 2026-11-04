@@ -337,3 +337,79 @@ func TestHome_ActivityDatesEventsOfOtherDays(t *testing.T) {
 		t.Errorf("an event of two days ago has no date:\n%s", got)
 	}
 }
+
+// assertFits fails when the frame passes the terminal in lines or in cells.
+func assertFits(t *testing.T, got string, width, height int) {
+	t.Helper()
+	lines := strings.Split(got, "\n")
+	if len(lines) > height {
+		t.Errorf("%d lines in a terminal of %d:\n%s", len(lines), height, got)
+	}
+	for _, line := range lines {
+		if w := ansi.StringWidth(line); w > width {
+			t.Errorf("line of %d cells in a terminal of %d: %q", w, width, line)
+		}
+	}
+}
+
+func TestHome_AShortTerminalNeverPassesItsHeight(t *testing.T) {
+	down := func(m *Model) {
+		m.Update(updateMsg(OverviewUpdate{Kind: client.UpdateDisconnected, Err: errors.New("down")}))
+	}
+	cases := []struct {
+		name  string
+		setup func(m *Model)
+		want  string
+	}{
+		{"with activity", func(m *Model) { connect(m); send(m, client.UpdateSnapshot, fixture()) }, "tests failed"},
+		{"without activity", func(m *Model) { connect(m); send(m, client.UpdateSnapshot, v1.Overview{}) }, "No activity yet"},
+		{"disconnected", func(m *Model) { down(m); send(m, client.UpdateSnapshot, fixture()) }, "unreachable"},
+		{"connecting", func(*Model) {}, "Connecting to the Controller…"},
+	}
+	for _, tc := range cases {
+		for height := 1; height <= 14; height++ {
+			t.Run(tc.name, func(t *testing.T) {
+				m := shell(t)
+				m.Update(tea.WindowSizeMsg{Width: 48, Height: height})
+				tc.setup(m)
+				assertFits(t, frame(m), 48, height)
+			})
+		}
+		t.Run(tc.name+" at 48x12", func(t *testing.T) {
+			m := shell(t)
+			m.Update(tea.WindowSizeMsg{Width: 48, Height: 12})
+			tc.setup(m)
+			got := frame(m)
+			if !strings.Contains(got, "CODEFABRIC") || !strings.Contains(got, "[q] Quit") || !strings.Contains(got, tc.want) {
+				t.Errorf("the compact home lacks the header, the quit key or %q:\n%s", tc.want, got)
+			}
+			compareGolden(t, "home-48x12-"+strings.ReplaceAll(tc.name, " ", "-")+".golden", got)
+		})
+	}
+}
+
+func TestHome_AnEmptyBudgetIsNotAnEmptyHistory(t *testing.T) {
+	m := shell(t)
+	m.Update(tea.WindowSizeMsg{Width: 48, Height: 8})
+	connect(m)
+	send(m, client.UpdateSnapshot, fixture())
+	got := frame(m)
+	assertFits(t, got, 48, 8)
+	if strings.Contains(got, "No activity yet") || !strings.Contains(got, "more") {
+		t.Errorf("a home with activity and little room must say there is more:\n%s", got)
+	}
+}
+
+func TestHome_BelowTheMinimumWidthItSaysTheTerminalIsTooSmall(t *testing.T) {
+	for _, width := range []int{1, 8, 20, 32, 39} {
+		m := shell(t)
+		m.Update(tea.WindowSizeMsg{Width: width, Height: 10})
+		connect(m)
+		send(m, client.UpdateSnapshot, fixture())
+		got := frame(m)
+		assertFits(t, got, width, 10)
+		if width >= 20 && !strings.Contains(got, "too small") {
+			t.Errorf("width %d: no notice:\n%s", width, got)
+		}
+	}
+}

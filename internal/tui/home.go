@@ -32,29 +32,81 @@ const (
 // Update does nothing: the home takes no input of its own, so every key goes to the shell.
 func (h Home) Update(tea.Msg) (Screen, tea.Cmd, bool) { return h, nil, false }
 
-// Render draws the home in the width and height of the terminal.
+// Render draws the home in the width and height of the terminal; it never
+// draws more lines than the height nor more cells than the width.
 func (Home) Render(c RenderContext) string {
 	if c.Width <= 0 {
 		c.Width = defaultWidth
 	}
-	c.Width = max(c.Width, minWidth)
 	if c.Height <= 0 {
 		c.Height = defaultHeight
 	}
+	if c.Width < minWidth {
+		return tooSmall(c)
+	}
 
+	lines, room := layout(c, false)
+	if len(lines) > c.Height || room < 1 {
+		lines, _ = layout(c, true)
+	}
+	if len(lines) > c.Height {
+		// Not even the compact structure fits: keep the top and the last line.
+		lines = append(lines[:c.Height-1], lines[len(lines)-1])
+	}
+	return strings.Join(lines, "\n")
+}
+
+// tooSmall is the notice for a terminal narrower than the home can draw.
+func tooSmall(c RenderContext) string {
+	notice := []string{c.Theme.Title.Render("CODEFABRIC"), c.Theme.Faint.Render("terminal too small")}
+	lines := make([]string, 0, len(notice))
+	for _, line := range notice[:min(len(notice), c.Height)] {
+		lines = append(lines, ansi.Truncate(line, c.Width, ""))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// layout is the screen as lines. Compact drops the blank lines and the closing
+// rule and shrinks the panels and the key help to one line each.
+func layout(c RenderContext, compact bool) (lines []string, room int) {
 	top := []string{header(c)}
 	if c.State.Connection == Disconnected {
 		top = append(top, banner(c, bannerUnreachable))
 	}
-	top = append(top, "", panels(c), "", rule(c, "Activity"))
-	bottom := []string{rule(c, ""), footer(c)}
+	if compact {
+		top = append(top, summary(c), rule(c, "Activity"))
+	} else {
+		top = append(top, "", panels(c), "", rule(c, "Activity"))
+	}
+	var bottom []string
+	if compact {
+		bottom = []string{margin + c.Theme.Accent.Render("[q]") + " " + c.Theme.Text.Render("Quit")}
+	} else {
+		bottom = []string{rule(c, ""), footer(c)}
+	}
 	if c.Status != "" {
-		bottom = append([]string{margin + c.Theme.Warning.Render(printable(c.Status))}, bottom...)
+		bottom = append([]string{ansi.Truncate(margin+c.Theme.Warning.Render(printable(c.Status)), c.Width, "…")}, bottom...)
 	}
 
-	taken := len(strings.Split(strings.Join(append(top, bottom...), "\n"), "\n"))
-	lines := append(top, activityRows(c, max(c.Height-taken, 0))...)
-	return strings.Join(append(lines, bottom...), "\n")
+	fixed := len(strings.Split(strings.Join(append(top, bottom...), "\n"), "\n"))
+	room = c.Height - fixed
+	lines = strings.Split(strings.Join(top, "\n"), "\n")
+	lines = append(lines, activityRows(c, room)...)
+	return append(lines, strings.Split(strings.Join(bottom, "\n"), "\n")...), room
+}
+
+// summary is the panels in one line, for a terminal too short for them.
+func summary(c RenderContext) string {
+	s := c.State
+	running, needs, online := noValue, noValue, noValue+"/"+noValue
+	if s.Loaded {
+		running, needs = strconv.Itoa(s.running()), strconv.Itoa(s.Overview.NeedsInput)
+		online = fmt.Sprintf("%d/%d", s.workersOnline(), s.workersTotal())
+	}
+	line := counter(c, running, "running", c.Theme.Title) + c.Theme.Faint.Render(" · ") +
+		counter(c, needs, "needs you", needsYou(c)) + c.Theme.Faint.Render(" · ") +
+		counter(c, online, "workers", c.Theme.Title)
+	return margin + ansi.Truncate(line, c.inner(), "…")
 }
 
 // panels are the counters side by side: TASKS, WORKERS, MODELS.
@@ -87,8 +139,17 @@ func needsYou(c RenderContext) lipgloss.Style {
 
 // activityRows are the newest events, one line each: when, about what, what.
 func activityRows(c RenderContext, n int) []string {
+	total := len(c.State.Activity.events)
+	if n <= 0 {
+		return nil // no room is not the same as no activity
+	}
+	more := 0
+	if total > n && n >= 2 {
+		more = total - (n - 1)
+		n--
+	}
 	events := c.State.Activity.latest(n)
-	if len(events) == 0 {
+	if total == 0 {
 		text := "No activity yet"
 		if !c.State.Loaded {
 			text = connectingText
@@ -107,6 +168,9 @@ func activityRows(c RenderContext, n int) []string {
 			c.Theme.Faint.Render(fit(activityTime(e.ReceivedAt, c.Now, c.Loc), timeWidth)) + "  " +
 			subjectStyle.Render(fit(subject, subjectWidth)) + "  " +
 			levelStyle(c, e.Level).Render(ansi.Truncate(activityMessage(e), messageWidth, "…"))
+	}
+	if more > 0 {
+		rows = append(rows, margin+c.Theme.Faint.Render(fmt.Sprintf("+%d more", more)))
 	}
 	return rows
 }

@@ -1,0 +1,12 @@
+ CODEFABRIC                       ● unreachable
+ ! Controller unreachable — reconnecting…
+ 3 running · 1 needs you · 3/3 workers
+ ──────────────── Activity ────────────────────
+ 12:44   auth-refactor     tests failed
+ 12:44   auth-refactor     agent analyzing fai…
+ 12:43   payments          ✓ completed
+ 12:41   frontend          moved macbook → lin…
+ 12:38   linux             worker joined
+ 12:32   personal@28       synced → proxmox
+ 12:29   infra             needs your input
+ [q] Quit
