@@ -8,7 +8,7 @@ size: XL
 issue: 93
 prs: []
 related_issues: [93]
-sub_issues: []
+sub_issues: [94, 95, 96, 97, 98, 99]
 depends_on: [phase-2-harnesses-workflows]
 supersedes: []
 related_specs: [codefabric-spec]
