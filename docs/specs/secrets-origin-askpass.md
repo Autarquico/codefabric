@@ -2,18 +2,18 @@
 codename: codefabric
 title: Credencial de origin vía GIT_ASKPASS
 type: task
-status: draft
+status: active
 priority: P0
 size: M
 issue: null
 prs: []
-related_issues: []
+related_issues: [83]
 sub_issues: []
 depends_on: [secrets-local]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows, secrets-local]
 created: 2026-10-16
-updated: 2026-10-16
+updated: 2026-11-04
 ---
 
 # Credencial de origin vía GIT_ASKPASS
