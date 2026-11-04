@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"unicode"
 
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -133,6 +135,44 @@ func (m *Manager) Revoke(runDir string, consumer Consumer, refs []string) error 
 			man.Refs[i].Access = slices.DeleteFunc(slices.Clone(e.Access), func(c Consumer) bool { return c == consumer })
 		}
 	}
+	return m.replaceManifest(filepath.Join(runDir, liveName), man)
+}
+
+// Binding is where a ref may be sent and as whom.
+type Binding struct {
+	Origin string // the URL of the repository
+	User   string
+}
+
+const maxBindingLen = 2048
+
+// Bind records on ref, already delivered in runDir, the destination it is
+// authorized for and the user it is sent with, for AskpassGrant and for the
+// redaction of the user:value forms. Binding again replaces the record. The
+// user has no ':' (the Basic framing), '@', '/', '%' or control character.
+func (m *Manager) Bind(runDir, ref string, b Binding) error {
+	if b.Origin == "" || len(b.Origin) > maxBindingLen || b.User == "" || len(b.User) > maxBindingLen ||
+		strings.ContainsFunc(b.Origin, unicode.IsControl) ||
+		strings.ContainsAny(b.User, ":@/%") || strings.ContainsFunc(b.User, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) {
+		return errors.New("secretjit: the origin or the user of a binding is not valid")
+	}
+	unlock, err := lock(runDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	d, err := openDelivery(runDir)
+	if err != nil {
+		return err
+	}
+	man := d.m
+	d.close()
+	i := slices.IndexFunc(man.Refs, func(e entry) bool { return e.Ref == ref })
+	if i < 0 {
+		return fmt.Errorf("%w: %q is not in the delivery", ErrNotDelivered, ref)
+	}
+	man.Refs = slices.Clone(man.Refs)
+	man.Refs[i].Origin, man.Refs[i].User = b.Origin, b.User
 	return m.replaceManifest(filepath.Join(runDir, liveName), man)
 }
 

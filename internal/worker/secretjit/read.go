@@ -34,6 +34,41 @@ func AskpassReader(runDir string) func(ref string) (string, error) {
 	return reader(runDir, Askpass)
 }
 
+// Grant is what the askpass helper answers git with: the value of a ref and
+// where, and as whom, it may be sent.
+type Grant struct {
+	Ref    string
+	Origin string // the URL of the repository the ref is authorized for
+	User   string
+	Value  string
+}
+
+// AskpassGrant is the credential askpass may use in the delivery of runDir:
+// the one ref that askpass can still read and that was bound to an origin
+// (see Bind). Nothing of the kind, or more than one, is ErrNoAccess. It only
+// reads.
+func AskpassGrant(runDir string) (Grant, error) {
+	d, err := readDelivery(runDir)
+	if err != nil {
+		return Grant{}, err
+	}
+	defer d.close()
+	var found []entry
+	for _, e := range d.m.Refs {
+		if e.canAccess(Askpass) && e.Origin != "" && e.User != "" {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		return Grant{}, fmt.Errorf("%w: %d origin credentials for askpass", ErrNoAccess, len(found))
+	}
+	value, err := d.value(found[0])
+	if err != nil {
+		return Grant{}, err
+	}
+	return Grant{Ref: found[0].Ref, Origin: found[0].Origin, User: found[0].User, Value: string(value)}, nil
+}
+
 func reader(runDir string, c Consumer) func(ref string) (string, error) {
 	return func(ref string) (string, error) {
 		d, err := readDelivery(runDir)
@@ -190,7 +225,7 @@ func (d *delivery) needles() ([]redact.Needle, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, redact.Needle{Ref: e.Ref, Value: v})
+		out = append(out, redact.Needle{Ref: e.Ref, Value: v, User: e.User})
 	}
 	return out, nil
 }

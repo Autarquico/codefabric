@@ -213,3 +213,63 @@ func TestDeliver_MergeFaultAtEveryStepLeavesTheOldOrTheMergedDelivery(t *testing
 		}
 	}
 }
+
+func TestBindAndAskpassGrant(t *testing.T) {
+	dir := runDir(t)
+	m := New()
+	if err := m.DeliverFor(dir, 1, []Consumer{Askpass}, v1[:1], allow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AskpassGrant(dir); !errors.Is(err, ErrNoAccess) {
+		t.Fatalf("a ref not bound to an origin: %v", err)
+	}
+	b := Binding{Origin: "https://example.com/org/repo.git", User: "x-access-token"}
+	if err := m.Bind(dir, "api/token", b); err != nil {
+		t.Fatal(err)
+	}
+	g, err := AskpassGrant(dir)
+	if err != nil || g.Ref != "api/token" || g.Origin != b.Origin || g.User != b.User || g.Value != "old-token-value-1" {
+		t.Fatalf("AskpassGrant = %+v, %v", g, err)
+	}
+	// A merge of the same attempt keeps the binding.
+	if err := m.DeliverFor(dir, 1, []Consumer{Harness}, v1[1:], allow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AskpassGrant(dir); err != nil {
+		t.Fatalf("after a merge: %v", err)
+	}
+	needles, err := Load(dir)
+	if err != nil || needles[0].User != b.User {
+		t.Fatalf("Load = %+v, %v: the user is not carried to the redaction", needles, err)
+	}
+	if err := m.Revoke(dir, Askpass, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AskpassGrant(dir); !errors.Is(err, ErrNoAccess) {
+		t.Fatalf("after the revocation: %v", err)
+	}
+}
+
+func TestBindRefusesWhatIsNotAFrame(t *testing.T) {
+	dir := runDir(t)
+	m := New()
+	if err := m.DeliverFor(dir, 1, []Consumer{Askpass}, v1[:1], allow); err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string]Binding{
+		"no user":      {Origin: "https://h/r", User: ""},
+		"colon":        {Origin: "https://h/r", User: "a:b"},
+		"at":           {Origin: "https://h/r", User: "a@b"},
+		"newline":      {Origin: "https://h/r", User: "a\nb"},
+		"space":        {Origin: "https://h/r", User: "a b"},
+		"no origin":    {Origin: "", User: "u"},
+		"control char": {Origin: "https://h/r\n", User: "u"},
+	} {
+		if err := m.Bind(dir, "api/token", b); err == nil {
+			t.Errorf("%s: bound", name)
+		}
+	}
+	if err := m.Bind(dir, "other", Binding{Origin: "https://h/r", User: "u"}); !errors.Is(err, ErrNotDelivered) {
+		t.Errorf("a ref not delivered: %v", err)
+	}
+}

@@ -58,6 +58,10 @@ type entry struct {
 	Ref    string     `json:"ref"`
 	File   string     `json:"file"`
 	Access []Consumer `json:"access,omitempty"`
+	// Origin and User are the destination the ref is authorized for and the
+	// user it is sent with (see Bind). Neither is a secret.
+	Origin string `json:"origin,omitempty"`
+	User   string `json:"user,omitempty"`
 	// Harness is the single flag of the manifests written before Access:
 	// true is the access set {harness}. normalize folds it into Access, and
 	// it is never written.
