@@ -2,7 +2,7 @@
 codename: codefabric
 title: Credencial de origin vía GIT_ASKPASS
 type: task
-status: active
+status: shipped
 priority: P0
 size: M
 issue: 83
