@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Suscripciones del Client SDK"
+title: Suscripciones del Client SDK
 type: task
-status: draft
+status: active
 priority: P1
 size: S
-issue: null
+issue: 94
 prs: []
-related_issues: []
+related_issues: [94]
 sub_issues: []
 depends_on: [observe-attach-events]
 supersedes: []
 related_specs: [codefabric-spec, phase-3-tui]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-04
 ---
 
 # Suscripciones del Client SDK
