@@ -1,0 +1,16 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Tasks · 4 ───────────────────────────────────────────────────
+   ID        STATE      WAITING   CREATED  NAME
+ › t-4k2m    running              12:29    auth-refactor
+   t-9p1x    waiting    input     11:02    infra
+   t-2c7q    completed            10:15    payments
+   t-8h3w    failed               09:40    frontend
+
+ ──────────────── Detail ──────────────────────────────────────────────────────
+ ! Complete task failed
+ Code          CF_INVALID_REQUEST  exit 2
+ What          there is no action no.such.action
+ Try           Check the values you gave and try again.
+
+ ──────────────────────────────────────────────────────────────────────────────
+ [any key] Dismiss

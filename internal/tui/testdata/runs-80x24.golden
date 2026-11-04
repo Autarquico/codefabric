@@ -1,0 +1,18 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Runs · 3 ────────────────────────────────────────────────────
+   ID        TRY STATE          RUNTIME  STARTED TASK
+ › r-7d3a    1   running        active   12:30   tsk…D7E9F2
+   r-1b8e    2   failed         stopped  11:05   tsk…D7E9F4
+   r-5f0c    1   queued         none     —       tsk…D7E9F6
+
+ ──────────────── Detail ──────────────────────────────────────────────────────
+ Run           r-7d3a (try 1)
+ State         running
+ Task          tsk…D7E9F2
+ Worker        wrk…D7E9F3
+ Branch        cf/auth-refactor
+ Model         claude-opus
+
+ ──────────────────────────────────────────────────────────────────────────────
+ [↑↓] Move [/] Filter [enter] Actions [a] Attach [p] Publish [esc] Back
+ [q] Quit

@@ -1,0 +1,20 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Workers · 3 ─────────────────────────────────────────────────
+   NAME             STATE      HEALTH    RUNS  SEEN    HOST
+   linux            online     ok        2/4   12:59   linux.lan
+ › macbook          degraded   degraded  1/2   12:58   macbook.local
+   proxmox          offline              0/2   08:12   
+
+ ──────────────── Detail ──────────────────────────────────────────────────────
+ Worker        macbook (w-6e2b)
+ State         degraded
+ Health        degraded
+ Message       1 component failing
+ Runs          1 active of 2, 1 reserved
+ Host          macbook.local darwin/arm64
+ Daemon        0.3.0
+ disk          fail 2% free free some space
+
+ ──────────────────────────────────────────────────────────────────────────────
+ [↑↓] Move [/] Filter [enter] Actions [d] Drain [u] Undrain [x] Remove
+ [esc] Back [q] Quit

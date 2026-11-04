@@ -89,5 +89,14 @@ func (r *Router) Update(msg tea.Msg) (tea.Cmd, bool) {
 	return cmd, handled
 }
 
+// Routes are the routes of the screens in the stack, home excluded.
+func (r *Router) Routes() []Route {
+	var out []Route
+	for _, e := range r.stack[1:] {
+		out = append(out, e.route)
+	}
+	return out
+}
+
 // Depth is how many screens are stacked, home included.
 func (r *Router) Depth() int { return len(r.stack) }
