@@ -247,3 +247,46 @@ func TestASetThatOutlivesItsBoundIsAbandoned(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// A Set abandoned reports how it finally ended, once; one that was not
+// abandoned reports nothing.
+func TestAnAbandonedSetReportsItsLateOutcome(t *testing.T) {
+	for name, lateErr := range map[string]error{"wrote": nil, "failed": errors.New("exit status 36")} {
+		t.Run(name, func(t *testing.T) {
+			b := &fakeBackend{setBlock: make(chan struct{}), setStarted: make(chan struct{}), setErr: lateErr}
+			late := make(chan error, 2)
+			ctx := secrets.WithLateOutcome(t.Context(), func(err error) { late <- err })
+			err := NewWith(b, 20*time.Millisecond).Set(ctx, "acc", []byte("value"))
+			if !errors.Is(err, secrets.ErrAbandoned) {
+				t.Fatalf("got %v", err)
+			}
+			close(b.setBlock)
+			select {
+			case got := <-late:
+				if !errors.Is(got, lateErr) {
+					t.Fatalf("late = %v, want %v", got, lateErr)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("no late outcome")
+			}
+			select {
+			case <-late:
+				t.Fatal("reported twice")
+			case <-time.After(50 * time.Millisecond):
+			}
+		})
+	}
+}
+
+func TestASetThatFinishesInTimeReportsNoLateOutcome(t *testing.T) {
+	late := make(chan error, 1)
+	ctx := secrets.WithLateOutcome(t.Context(), func(err error) { late <- err })
+	if err := NewWith(&fakeBackend{setErr: errors.New("x")}, time.Minute).Set(ctx, "acc", []byte("v")); !errors.Is(err, secrets.ErrUnavailable) {
+		t.Fatalf("got %v", err)
+	}
+	select {
+	case <-late:
+		t.Fatal("reported")
+	case <-time.After(50 * time.Millisecond):
+	}
+}

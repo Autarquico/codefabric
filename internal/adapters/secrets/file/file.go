@@ -322,7 +322,15 @@ func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects [
 	if err != nil {
 		return err
 	}
-	if err := s.vault.Set(ctx, account(namespace, ref, item), v); err != nil {
+	// An abandoned write keeps its record until we learn it failed: then it
+	// wrote nothing and the record goes. The callback runs on the vault's
+	// goroutine, holding no lock of ours.
+	onLate := func(err error) {
+		if err != nil {
+			s.forget(context.Background(), item)
+		}
+	}
+	if err := s.vault.Set(secrets.WithLateOutcome(ctx, onLate), account(namespace, ref, item), v); err != nil {
 		if !errors.Is(err, secrets.ErrAbandoned) { // the write finished without writing: nothing to clean
 			s.forget(ctx, item)
 		}

@@ -624,6 +624,46 @@ func TestASweepOfAnotherStoreStillCleansAnAbandonedSetThatLandsLate(t *testing.T
 	}
 }
 
+// lateVault abandons every Set and lets the test say how each ended.
+type lateVault struct {
+	*fakeVault
+	late []func(error)
+}
+
+func (l *lateVault) Set(ctx context.Context, _ string, _ []byte) error {
+	l.late = append(l.late, secrets.LateOutcome(ctx))
+	return fmt.Errorf("%w: %w", secrets.ErrAbandoned, secrets.ErrUnavailable)
+}
+
+// Abandoned writes that later fail wrote nothing: their records go, and the
+// backlog they filled empties.
+func TestAbandonedWritesThatFailLateFreeTheBacklog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker", "secrets.json")
+	c := clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC))
+	lv := &lateVault{fakeVault: newFakeVault()}
+	s := New(path, c, WithVault(lv))
+	ctx := context.Background()
+	for i := range maxRetired {
+		if err := s.Set(ctx, fmt.Sprintf("ref%03d", i), sentinel, nil, secrets.BackendKeyring); !errors.Is(err, secrets.ErrAbandoned) {
+			t.Fatalf("Set %d = %v", i, err)
+		}
+	}
+	if err := s.Set(ctx, "one-more", sentinel, nil, secrets.BackendKeyring); !strings.Contains(fmt.Sprint(err), "waiting to be cleaned up") {
+		t.Fatalf("a full backlog accepted a write: %v", err)
+	}
+	if n := len(readCatalog(t, path).Retired); n != maxRetired {
+		t.Fatalf("%d records before the late failures", n)
+	}
+	for _, fn := range lv.late {
+		fn(secrets.ErrUnavailable)
+	}
+	if n := len(readCatalog(t, path).Retired); n != 0 {
+		t.Fatalf("%d records after the late failures", n)
+	}
+	s = New(path, c, WithVault(newFakeVault()))
+	setKeyring(t, s, "gh/token", []byte("good-value-1234"))
+}
+
 // At maxRetired records new keyring work is refused and no record is dropped.
 func TestBacklogAtTheCapRefusesNewKeyringWorkAndDropsNothing(t *testing.T) {
 	s, v, _, path := newKeyringStore(t)

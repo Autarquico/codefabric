@@ -70,6 +70,22 @@ type Status struct {
 	State State
 }
 
+type lateKey struct{}
+
+// WithLateOutcome asks a Vault to report, through fn, how a Set it gave up on
+// (ErrAbandoned) finally ended: nil if it wrote, an error if it wrote nothing.
+// fn runs once, on a goroutine of the Vault, never on the caller's, and only
+// for a Set abandoned; a Vault that cannot tell ignores it.
+func WithLateOutcome(ctx context.Context, fn func(err error)) context.Context {
+	return context.WithValue(ctx, lateKey{}, fn)
+}
+
+// LateOutcome is the function WithLateOutcome set on ctx, or nil.
+func LateOutcome(ctx context.Context) func(err error) {
+	fn, _ := ctx.Value(lateKey{}).(func(error))
+	return fn
+}
+
 // Vault is a key-value keyring a Store keeps values in, by account. Get and
 // Delete of an account the Vault does not hold are ErrNotFound; a Vault that
 // cannot be reached is ErrUnavailable. Errors never carry a value.

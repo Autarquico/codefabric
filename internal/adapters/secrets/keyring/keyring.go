@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	zk "github.com/zalando/go-keyring"
@@ -68,7 +69,7 @@ func NewWith(b Backend, timeout time.Duration) Vault {
 
 // Get implements secrets.Vault.
 func (v Vault) Get(ctx context.Context, account string) ([]byte, error) {
-	s, err := call(ctx, v.slot, v.timeout, func() (string, error) { return v.b.Get(Service, account) })
+	s, err := call(ctx, v.slot, v.timeout, nil, func() (string, error) { return v.b.Get(Service, account) })
 	if err != nil {
 		return nil, classify(err)
 	}
@@ -85,7 +86,7 @@ func (v Vault) Set(ctx context.Context, account string, value []byte) error {
 			domain.ErrInvalidSecret, MaxValueLen, len(value))
 	}
 	password := string(value)
-	_, err := call(ctx, v.slot, v.timeout, func() (struct{}, error) {
+	_, err := call(ctx, v.slot, v.timeout, secrets.LateOutcome(ctx), func() (struct{}, error) {
 		return struct{}{}, v.b.Set(Service, account, password)
 	})
 	return classify(err)
@@ -93,7 +94,7 @@ func (v Vault) Set(ctx context.Context, account string, value []byte) error {
 
 // Delete implements secrets.Vault.
 func (v Vault) Delete(ctx context.Context, account string) error {
-	_, err := call(ctx, v.slot, v.timeout, func() (struct{}, error) { return struct{}{}, v.b.Delete(Service, account) })
+	_, err := call(ctx, v.slot, v.timeout, nil, func() (struct{}, error) { return struct{}{}, v.b.Delete(Service, account) })
 	return classify(err)
 }
 
@@ -112,7 +113,9 @@ var errAbandoned = errors.New("abandoned")
 // slot still taken when it expires (an earlier call stuck beyond its own
 // bound) is unavailability, so a keyring that never answers costs one
 // goroutine, not one per attempt, while concurrent healthy calls take turns.
-func call[T any](ctx context.Context, slot chan struct{}, timeout time.Duration, f func() (T, error)) (T, error) {
+// If the caller gave up on a launched call, onLate (when not nil) gets its
+// final error from the call's own goroutine, after the slot is released.
+func call[T any](ctx context.Context, slot chan struct{}, timeout time.Duration, onLate func(error), f func() (T, error)) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
 		return zero, err
@@ -134,18 +137,32 @@ func call[T any](ctx context.Context, slot chan struct{}, timeout time.Duration,
 		err error
 	}
 	done := make(chan result, 1)
+	var abandoned atomic.Bool // whoever swaps it first decides who reports the result
 	go func() {
 		v, err := f()
 		<-slot
+		if abandoned.Swap(true) { // the caller already left
+			if onLate != nil {
+				onLate(err)
+			}
+			return
+		}
 		done <- result{v, err}
 	}()
+	giveUp := func(cause error) (T, error) {
+		if abandoned.Swap(true) { // it finished meanwhile: its result is in done
+			r := <-done
+			return r.v, r.err
+		}
+		return zero, fmt.Errorf("%w: %w", errAbandoned, cause)
+	}
 	select {
 	case r := <-done:
 		return r.v, r.err
 	case <-ctx.Done():
-		return zero, fmt.Errorf("%w: %w", errAbandoned, ctx.Err())
+		return giveUp(ctx.Err())
 	case <-timer.C:
-		return zero, fmt.Errorf("%w: %w", errAbandoned, errTimeout)
+		return giveUp(errTimeout)
 	}
 }
 
