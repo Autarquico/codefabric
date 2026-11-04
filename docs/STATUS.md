@@ -14,7 +14,6 @@
 - #20 Adapter de Claude Code
 - #21 Adapter de Codex CLI
 - #22 Workflows: apply, drift y lock de configuración
-- #23 Secrets locales al Worker
 - #24 Config del repo y Environment host
 - #25 Doctor y wizard de join
 - #26 E2E v0.2
@@ -22,6 +21,8 @@
 - #48 authsync: límites residuales del broker de auth.json
 - #49 codex-adapter: minors de las reviews de #45
 - #50 e2e: flakes de cmd/cf bajo carga
+- #82 Backend keyring de secrets
+- #83 Credencial de origin vía GIT_ASKPASS
 <!-- /pm-sync:done-this-week -->
 
 ---
