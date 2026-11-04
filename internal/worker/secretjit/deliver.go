@@ -53,7 +53,8 @@ func (m *Manager) Deliver(runDir string, attempt uint64, secrets []redact.Needle
 // newer one is ErrStale. A delivery in place that is corrupt, unsafe or
 // unreadable (its manifest, a current value or a retained one) is never
 // replaced, whatever the attempt: DeliverFor fails with the error, and only
-// Release removes it. Only a confirmed absence starts a delivery from nothing. A crash at any point leaves secrets/
+// Release removes it. Only a confirmed absence, with no staging or retired delivery left by a publish
+// that did not end, starts a delivery from nothing. A crash at any point leaves secrets/
 // absent, or complete with the old or the merged values, and calling
 // DeliverFor or Release again converges.
 //
@@ -80,7 +81,12 @@ func (m *Manager) DeliverFor(runDir string, attempt uint64, access []Consumer, s
 	d, err := openDelivery(runDir)
 	switch {
 	case errors.Is(err, ErrNotDelivered):
-		// Confirmed absent: the only case a delivery starts from nothing.
+		// Confirmed absent: the only case a delivery starts from nothing. What an
+		// earlier publish left (a retired delivery, a staging) means it was cut
+		// short and secrets/ may have held values that this one would not carry.
+		if err := leftovers(runDir); err != nil {
+			return err
+		}
 		return m.publish(runDir, attempt, items, nil, verify)
 	case err != nil:
 		// A delivery is in place but cannot be read whole: replacing it would drop
@@ -120,6 +126,21 @@ func (m *Manager) DeliverFor(runDir string, attempt uint64, access []Consumer, s
 		}
 		return m.publish(runDir, attempt, items, kept, verify)
 	}
+}
+
+// leftovers is an ErrCorrupt if a previous publish left its staging or the
+// retired delivery behind with secrets/ absent. Release or Sweep removes them.
+func leftovers(runDir string) error {
+	for _, name := range []string{deletingName, stagingName} {
+		ok, err := present(filepath.Join(runDir, name))
+		switch {
+		case err != nil:
+			return fmt.Errorf("secretjit: %w", err)
+		case ok:
+			return fmt.Errorf("%w: %s was left by a publish that did not end", ErrCorrupt, name)
+		}
+	}
+	return nil
 }
 
 // checkSecrets validates the arguments of a delivery and returns access

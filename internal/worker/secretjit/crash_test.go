@@ -245,3 +245,49 @@ func TestRelease_RemovesWhatTheHarnessMadeUnwritable(t *testing.T) {
 	}
 	wantOnly(t, dir)
 }
+
+// A publish cut short between retiring secrets/ and renaming the staging into
+// place leaves secrets/ absent with the old values in secrets.deleting. A newer
+// attempt must not take that for a delivery that never was: it stops, and after
+// Release (which removes what was left) the delivery starts from nothing.
+func TestDeliver_ANewerAttemptAfterACrashBetweenRetiringAndPublishingDoesNotLoseTheEarlierValues(t *testing.T) {
+	dir := runDir(t)
+	deliver(t, dir, 1, v1)
+	op := func(m *Manager) error { return m.Deliver(dir, 2, v2, allow) }
+
+	// Find the step that retires secrets/ and crash just after it.
+	probe := &faults{}
+	if err := op(probe.manager()); err != nil {
+		t.Fatal(err)
+	}
+	at := slices.Index(probe.steps, "rename secrets secrets.deleting") + 1
+	if at == 0 {
+		t.Fatalf("no retire step in %q", probe.steps)
+	}
+	dir = runDir(t)
+	deliver(t, dir, 1, v1)
+	crashed, _ := run(func() error {
+		return (&faults{at: at, mode: mode{after: true, crash: true}}).manager().Deliver(dir, 2, v2, allow)
+	})
+	if !crashed {
+		t.Fatal("the fault did not strike")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, liveName)); !os.IsNotExist(err) {
+		t.Fatalf("secrets/ is in place after the crash: %v", err)
+	}
+
+	err := New().Deliver(dir, 3, v2, allow)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("Deliver after the crash = %v, want ErrCorrupt", err)
+	}
+	if _, err := Load(dir); !errors.Is(err, ErrNotDelivered) {
+		t.Fatalf("Load = %v: nothing may have been published without the earlier values", err)
+	}
+	if err := New().Release(dir, allow); err != nil {
+		t.Fatal(err)
+	}
+	wantOnly(t, dir)
+	if err := New().Deliver(dir, 3, v2, allow); err != nil {
+		t.Fatalf("Deliver after Release: %v", err)
+	}
+}

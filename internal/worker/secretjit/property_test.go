@@ -249,6 +249,13 @@ func (w *jitWorld) step() {
 			if !errors.Is(err, ErrStale) {
 				w.fail("an attempt %d older than %d in place: %v", attempt, before.attempt, err)
 			}
+		case errors.Is(err, ErrCorrupt) && !exists(filepath.Join(w.dir, liveName)):
+			// secrets/ is absent but a publish that was cut short left its staging
+			// or retired delivery: Deliver stops, and Release cleans up.
+			if rerr := New().Release(w.dir, allow); rerr != nil {
+				w.fail("Release after leftovers: %v", rerr)
+			}
+			w.model = jitModel{}
 		case err != nil:
 			w.fail("Deliver(%d): %v", attempt, err)
 		case before.attempt == attempt && !before.corrupt:
@@ -340,4 +347,9 @@ func TestProperty_SecretsDelivery(t *testing.T) {
 			})
 		})
 	}
+}
+
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
 }
