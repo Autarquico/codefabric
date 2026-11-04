@@ -26,6 +26,12 @@ const RepoConfigCapability = "repo-config:v1"
 // of the Controller is only placed on a Worker that announces it.
 const EnvironmentHostCapability = "environment-host:v1"
 
+// OriginAskpassCapability is that of a Worker that fetches the origin of a Run
+// with the credential of its origin secret, handed over through an askpass
+// program. A Run that froze an origin secret is only placed on a Worker that
+// announces it: one that does not would fetch with whatever credentials it has.
+const OriginAskpassCapability = "origin-askpass:v1"
+
 // legacyHarness is the only harness of the Workers that predate
 // HarnessModesMarker, and legacyModes the modes it ran in there.
 const legacyHarness = "command"

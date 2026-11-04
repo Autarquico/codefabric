@@ -63,7 +63,10 @@ type Project struct {
 	Defaults           ProjectDefaults `json:"defaults"`
 	// RepoConfig is "allow" or "deny": whether the repo may carry .codefabric/project.yaml.
 	RepoConfig domain.RepoConfig `json:"repo_config"`
-	CreatedAt  time.Time         `json:"created_at"`
+	// OriginSecret is the ref of the secret that authenticates the fetch of the
+	// origin; absent if the repo is fetched without credentials.
+	OriginSecret string    `json:"origin_secret,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // RepoURLs are every URL of the Project: the main repo, then the aliases.
@@ -80,11 +83,15 @@ type CreateProjectRequest struct {
 	Defaults           ProjectDefaults `json:"defaults,omitempty"`
 	// RepoConfig defaults to allow.
 	RepoConfig domain.RepoConfig `json:"repo_config,omitempty"`
+	// OriginSecret is the ref that authenticates the origin: https only, and
+	// in the allowlist of the Project.
+	OriginSecret string `json:"origin_secret,omitempty"`
 }
 
 // UpdateProjectRequest is PATCH /v1/projects/{ref}: only the fields present
 // change. An empty workflow or environment clears it. AddRepos and RemoveRepos
-// edit the aliases; the main repo cannot be removed.
+// edit the aliases; the main repo cannot be removed. An empty OriginSecret
+// clears it.
 type UpdateProjectRequest struct {
 	RequestID          string             `json:"request_id,omitempty"`
 	AddRepos           []string           `json:"add_repos,omitempty"`
@@ -97,6 +104,7 @@ type UpdateProjectRequest struct {
 	Completion         *domain.Completion `json:"completion,omitempty"`
 	Retry              *Retry             `json:"retry,omitempty"`
 	RepoConfig         *domain.RepoConfig `json:"repo_config,omitempty"`
+	OriginSecret       *string            `json:"origin_secret,omitempty"`
 }
 
 // ListProjectsResponse is GET /v1/projects.

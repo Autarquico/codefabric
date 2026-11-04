@@ -4,7 +4,9 @@ package projects
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/input"
@@ -49,6 +51,9 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateProje
 				}
 				return v1.Project{}, input.Invalid("a Project named %q already exists", req.Name)
 			}
+			if err := checkOrigin(ctx, tx, "", req.Repo, req.OriginSecret); err != nil {
+				return v1.Project{}, err
+			}
 			short, err := tx.NextShortID(ctx, domain.KindProject)
 			if err != nil {
 				return v1.Project{}, err
@@ -56,7 +61,8 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateProje
 			p := store.Project{
 				ID: s.ids.New(domain.KindProject), Short: short, Name: req.Name, Repo: req.Repo,
 				DefaultBranch: req.DefaultBranch, DefaultWorkflow: req.DefaultWorkflow,
-				DefaultEnvironment: req.DefaultEnvironment, Defaults: req.Defaults, RepoConfig: req.RepoConfig, CreatedAt: act.Now,
+				DefaultEnvironment: req.DefaultEnvironment, Defaults: req.Defaults, RepoConfig: req.RepoConfig,
+				OriginSecret: req.OriginSecret, CreatedAt: act.Now,
 			}
 			if err := tx.InsertProject(ctx, p); err != nil {
 				return v1.Project{}, err
@@ -86,6 +92,11 @@ func (s *Service) Set(ctx context.Context, by pki.Session, ref string, req v1.Up
 		before := View(p)
 		if err := apply(&p, req); err != nil {
 			return v1.Project{}, err
+		}
+		if req.OriginSecret != nil {
+			if err := checkOrigin(ctx, tx, p.ID, p.Repo, p.OriginSecret); err != nil {
+				return v1.Project{}, err
+			}
 		}
 		if err := tx.UpdateProject(ctx, p); err != nil {
 			return v1.Project{}, err
@@ -129,7 +140,7 @@ func View(p store.Project) v1.Project {
 		ID: string(p.ID), Short: domain.ShortID{Kind: domain.KindProject, N: p.Short}.String(),
 		Name: p.Name, Repo: p.Repo, RepoAliases: append([]string{}, p.RepoAliases...), DefaultBranch: p.DefaultBranch,
 		DefaultWorkflow: p.DefaultWorkflow, DefaultEnvironment: p.DefaultEnvironment,
-		Defaults: p.Defaults, RepoConfig: p.RepoConfig, CreatedAt: p.CreatedAt,
+		Defaults: p.Defaults, RepoConfig: p.RepoConfig, OriginSecret: p.OriginSecret, CreatedAt: p.CreatedAt,
 	}
 }
 
@@ -148,6 +159,9 @@ func apply(p *store.Project, req v1.UpdateProjectRequest) error {
 	}
 	if req.RepoConfig != nil {
 		p.RepoConfig = *req.RepoConfig
+	}
+	if req.OriginSecret != nil {
+		p.OriginSecret = *req.OriginSecret
 	}
 	if req.Mode != nil {
 		p.Defaults.Mode = *req.Mode
@@ -197,7 +211,7 @@ func validateNew(req v1.CreateProjectRequest) error {
 	return input.First(
 		input.Name("name", req.Name), input.Repo(req.Repo), input.Ref("default_branch", req.DefaultBranch),
 		input.Label("default_workflow", req.DefaultWorkflow), input.Label("default_environment", req.DefaultEnvironment),
-		repoConfig(req.RepoConfig),
+		repoConfig(req.RepoConfig), originSecret(req.Repo, req.OriginSecret),
 		validateDefaults(req.Defaults.Mode, req.Defaults.Resources, req.Defaults.Completion, req.Defaults.Retry),
 	)
 }
@@ -224,6 +238,10 @@ func validateUpdate(req v1.UpdateProjectRequest) error {
 	if req.RepoConfig != nil {
 		errs = append(errs, repoConfig(*req.RepoConfig))
 	}
+	if req.OriginSecret != nil && *req.OriginSecret != "" {
+		// The repo of a Project does not change, so it is known only in the transaction.
+		errs = append(errs, originRef(*req.OriginSecret))
+	}
 	var mode domain.Mode
 	var completion domain.Completion
 	if req.Mode != nil {
@@ -233,6 +251,48 @@ func validateUpdate(req v1.UpdateProjectRequest) error {
 		completion = *req.Completion
 	}
 	return input.First(append(errs, validateDefaults(mode, req.Resources, completion, req.Retry))...)
+}
+
+// originRef is an error unless ref names a secret.
+func originRef(ref string) error {
+	if !domain.ValidSecretRef(ref) {
+		return input.Invalid("origin_secret: %q is not a valid secret ref", ref)
+	}
+	return nil
+}
+
+// originSecret is an error unless ref, if any, is a valid ref and repo is
+// fetched over https: a credential is never offered to another scheme.
+func originSecret(repo, ref string) error {
+	switch {
+	case ref == "":
+		return nil
+	case !strings.HasPrefix(repo, "https://"):
+		return input.Invalid("origin_secret needs an https:// repo, and %s is not", repo)
+	}
+	return originRef(ref)
+}
+
+// checkOrigin is the combined check of the origin secret of a Project: a valid
+// ref, an https repo and a ref the Project allows. project is "" for a Project
+// not yet created, which allows nothing. Clearing it needs no check.
+func checkOrigin(ctx context.Context, q store.Querier, project domain.ID, repo, ref string) error {
+	if err := originSecret(repo, ref); err != nil || ref == "" {
+		return err
+	}
+	var allowed []string
+	if project != "" {
+		var err error
+		if allowed, err = store.ProjectAllowlist(ctx, q, project); err != nil {
+			return err
+		}
+	}
+	if slices.Contains(allowed, ref) {
+		return nil
+	}
+	return domain.NewError(domain.CodePolicyDenied,
+		fmt.Sprintf("origin_secret %s is not in the allowlist of the Project: allow it first with `cf project secrets allow <project> %s`", ref, ref),
+		map[string]any{"not_allowed": []string{ref}})
 }
 
 func repoConfig(c domain.RepoConfig) error {

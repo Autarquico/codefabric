@@ -60,6 +60,7 @@ func newProjectCreateCmd() *cobra.Command {
 	f.StringVar(&req.DefaultWorkflow, "workflow", "", "default Workflow")
 	f.StringVar(&req.DefaultEnvironment, "environment", "", "default Environment")
 	f.StringVar((*string)(&req.RepoConfig), "repo-config", "", "whether the repo may carry .codefabric/project.yaml: allow (default) or deny")
+	f.StringVar(&req.OriginSecret, "origin-secret", "", "ref of the secret that authenticates the origin (https only; the Project must allow it)")
 	f.StringVar(&req.RequestID, flagRequestID, "", "idempotency key: repeating the command with it creates nothing twice")
 	return cmd
 }
@@ -113,8 +114,8 @@ func newProjectShowCmd() *cobra.Command {
 
 func printProject(w io.Writer, p v1.Project) error {
 	d := p.Defaults
-	_, err := fmt.Fprintf(w, "ID           %s (%s)\nName         %s\nRepo         %s\n%sBranch       %s\nWorkflow     %s\nEnvironment  %s\nRepo config  %s\nMode         %s\nCompletion   %s\nResources    %s\nRetry        %s\nCreated      %s\n",
-		p.ID, p.Short, p.Name, p.Repo, aliasLines(p.RepoAliases), p.DefaultBranch, dash(p.DefaultWorkflow), dash(p.DefaultEnvironment), dash(string(p.RepoConfig)),
+	_, err := fmt.Fprintf(w, "ID           %s (%s)\nName         %s\nRepo         %s\n%sBranch       %s\nWorkflow     %s\nEnvironment  %s\nRepo config  %s\nOrigin auth  %s\nMode         %s\nCompletion   %s\nResources    %s\nRetry        %s\nCreated      %s\n",
+		p.ID, p.Short, p.Name, p.Repo, aliasLines(p.RepoAliases), p.DefaultBranch, dash(p.DefaultWorkflow), dash(p.DefaultEnvironment), dash(string(p.RepoConfig)), dash(p.OriginSecret),
 		dash(string(d.Mode)), dash(string(d.Completion)), resourcesLabel(d.Resources), retryLabel(d.Retry), local(p.CreatedAt))
 	return err
 }
@@ -145,6 +146,7 @@ func newProjectSetCmd() *cobra.Command {
 	var (
 		branch, workflow, environment string
 		mode, completion, repoConfig  string
+		originSecret                  string
 		cpu, memoryMB                 int
 		addRepos, removeRepos         []string
 	)
@@ -167,6 +169,9 @@ func newProjectSetCmd() *cobra.Command {
 			if f.Changed("repo-config") {
 				rc := domain.RepoConfig(repoConfig)
 				req.RepoConfig = &rc
+			}
+			if f.Changed("origin-secret") {
+				req.OriginSecret = &originSecret
 			}
 			if f.Changed("mode") {
 				m := domain.Mode(mode)
@@ -198,6 +203,7 @@ func newProjectSetCmd() *cobra.Command {
 	f.StringVar(&workflow, "workflow", "", "default Workflow (empty clears it)")
 	f.StringVar(&environment, "environment", "", "default Environment (empty clears it)")
 	f.StringVar(&repoConfig, "repo-config", "", "whether the repo may carry .codefabric/project.yaml: allow or deny")
+	f.StringVar(&originSecret, "origin-secret", "", "ref of the secret that authenticates the origin (empty clears it; https only; the Project must allow it)")
 	f.StringVar(&mode, "mode", "", "default mode: headless or interactive")
 	f.StringVar(&completion, "completion", "", "default completion: first_success, promote or manual")
 	f.StringArrayVar(&addRepos, "add-repo", nil, "another URL of the repository; repeatable. A working copy belongs to the Project if its origin is exactly one of its URLs")

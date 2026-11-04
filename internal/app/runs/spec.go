@@ -28,6 +28,9 @@ type Inherited struct {
 	Completion   domain.Completion
 	Retry        v1.Retry
 	RepoConfig   domain.RepoConfig
+	// OriginSecret and OriginURL are the ref that authenticates the origin of
+	// the Project and the URL it authenticates; both empty when there is none.
+	OriginSecret, OriginURL string
 }
 
 // Origins says, for each field Inherit resolves, the layer that gave it. The
@@ -50,6 +53,9 @@ func InheritWithOrigins(t store.Task, p store.Project) (Inherited, Origins) {
 	global := domain.Defaults()
 	var o Origins
 	in := Inherited{Prompt: t.Prompt, Requirements: t.Requirements, RepoConfig: p.RepoConfig}
+	if p.OriginSecret != "" {
+		in.OriginSecret, in.OriginURL = p.OriginSecret, p.Repo
+	}
 	in.SourceRef, o.SourceRef = pick(layer(t.SourceRef, domain.OriginTask), layer(p.DefaultBranch, domain.OriginProject))
 	in.Mode, o.Mode = pick(layer(t.Mode, domain.OriginTask), layer(p.Defaults.Mode, domain.OriginProject), layer(global.TaskMode, domain.OriginGlobal))
 	in.Workflow, o.Workflow = pick(layer(t.Workflow, domain.OriginTask), layer(p.DefaultWorkflow, domain.OriginProject))
@@ -126,6 +132,10 @@ type runSpec struct {
 	Completion   domain.Completion `json:"completion"`
 	Retry        specRetry         `json:"retry"`
 	Secrets      *specSecrets      `json:"secrets,omitempty"`
+	// Origin is the credential of the origin and the URL it is for. It is not
+	// among Secrets: the harness never receives it. Absent from a Run without
+	// an origin secret, whose spec stays as it was byte for byte.
+	Origin *specOrigin `json:"origin,omitempty"`
 	// RepoConfig and EnvironmentDef are schema 4 only. RepoConfig freezes
 	// whether the Worker reads the repo's configuration (allow|deny);
 	// EnvironmentDef is the canonical definition of the pinned Environment, so
@@ -141,6 +151,11 @@ type runSpec struct {
 type specOrigins struct {
 	Resources   domain.Origin `json:"resources"`
 	Environment domain.Origin `json:"environment,omitempty"`
+}
+
+type specOrigin struct {
+	Secret string `json:"secret"`
+	URL    string `json:"url"`
 }
 
 type specSource struct {
@@ -215,6 +230,9 @@ func newSpec(in Inherited, origins Origins, snapshot string, source Source, envi
 		Retry:      specRetry{OnFailed: in.Retry.OnFailed, OnLost: in.Retry.OnLost, MaxAttempts: in.Retry.MaxAttempts},
 		Secrets:    secrets,
 	}
+	if in.OriginSecret != "" {
+		spec.Origin = &specOrigin{Secret: in.OriginSecret, URL: in.OriginURL}
+	}
 	if repoConfig {
 		spec.RepoConfig = first(in.RepoConfig, domain.Defaults().ProjectRepoConfig)
 		spec.EnvironmentDef = environmentDef
@@ -270,7 +288,9 @@ func (s runSpec) encode() (raw []byte, digest string, err error) {
 // PlacementOf reads the placement out of a Run's stored spec: its requirements
 // (plus domain.WorkflowConfigCapability when it froze a Workflow,
 // domain.RepoConfigCapability for schema 4, and domain.EnvironmentHostCapability
-// with those the Environment requires when it froze one),
+// with those the Environment requires when it froze one, and
+// domain.OriginAskpassCapability with the origin secret among the secrets the
+// Worker must hold when it froze one),
 // the mode the harness must run in and the secrets the Worker must hold. A spec
 // without requirements asks for nothing.
 func PlacementOf(spec []byte) (domain.Placement, error) {
@@ -280,6 +300,7 @@ func PlacementOf(spec []byte) (domain.Placement, error) {
 		Workflow       string                 `json:"workflow"`
 		Requirements   specRequirements       `json:"requirements"`
 		Secrets        *specSecrets           `json:"secrets"`
+		Origin         *specOrigin            `json:"origin"`
 		EnvironmentDef *domain.EnvironmentDef `json:"environment_def"`
 	}
 	if err := json.Unmarshal(spec, &stored); err != nil {
@@ -299,6 +320,9 @@ func PlacementOf(spec []byte) (domain.Placement, error) {
 		capabilities = append(slices.Clone(capabilities), domain.EnvironmentHostCapability)
 		capabilities = append(capabilities, def.RequiresCapabilities...)
 	}
+	if stored.Origin != nil {
+		capabilities = append(slices.Clone(capabilities), domain.OriginAskpassCapability)
+	}
 	if len(capabilities) > len(r.Capabilities) {
 		capabilities = set(capabilities)
 	}
@@ -309,6 +333,9 @@ func PlacementOf(spec []byte) (domain.Placement, error) {
 	}
 	if stored.Secrets != nil {
 		placement.Secrets = stored.Secrets.Refs
+	}
+	if stored.Origin != nil {
+		placement.Secrets = set(append(slices.Clone(placement.Secrets), stored.Origin.Secret))
 	}
 	return placement, nil
 }
