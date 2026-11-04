@@ -2,6 +2,13 @@
 // the Worker, <config>/worker/secrets.json: a JSON file only its owner may read
 // (0600, in a 0700 directory).
 //
+// A secret may instead live in a secrets.Vault (the OS keyring): the catalog
+// then holds only a pointer, an immutable item named <catalog id>/<ref>/<ulid>.
+// Set writes a new item, swaps the pointer in the catalog atomically and only
+// then deletes the old item, so a reader never pairs the scope of one version
+// with the value of another; an item whose delete failed (a locked keyring) or
+// whose Set never finished is kept in the catalog as retired and deleted later.
+//
 // Writers serialize on an flock of secrets.json.lock and replace the catalog
 // atomically; readers take no lock, since they see the old catalog or the new
 // one. A catalog others could read or replace is refused, never repaired.
@@ -39,6 +46,12 @@ const (
 	dirPerm       = 0o700
 	lockPoll      = 10 * time.Millisecond
 
+	// checkTimeout bounds Check: a locked keyring may wait for a prompt.
+	checkTimeout = 5 * time.Second
+	// pendingGrace is how long an item being written is left alone before a
+	// sweep treats it as the leftover of a crashed Set.
+	pendingGrace = 10 * time.Minute
+
 	// maxCatalogBytes bounds what a read loads: every secret at its largest,
 	// base64-encoded, with room to spare.
 	maxCatalogBytes = 2 * domain.MaxWorkerSecrets * domain.MaxSecretValueLen
@@ -48,14 +61,25 @@ const (
 type Store struct {
 	path  string
 	clock clock.Clock
+	vault secrets.Vault
 }
+
+// Option configures a Store.
+type Option func(*Store)
+
+// WithVault lets the Store keep values in v (secrets.BackendKeyring).
+func WithVault(v secrets.Vault) Option { return func(s *Store) { s.vault = v } }
 
 var _ secrets.Store = (*Store)(nil)
 
 // New is the Store of the catalog at path; neither the file nor its directory
 // need exist until the first Set. The clock stamps when secrets change.
-func New(path string, c clock.Clock) *Store {
-	return &Store{path: path, clock: c}
+func New(path string, c clock.Clock, opts ...Option) *Store {
+	s := &Store{path: path, clock: c}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // catalog is secrets.json.
@@ -64,11 +88,22 @@ type catalog struct {
 	CatalogID  string           `json:"catalog_id"`
 	Generation uint64           `json:"generation"`
 	Secrets    map[string]entry `json:"secrets"`
+	Retired    []retiredItem    `json:"retired,omitempty"`
+}
+
+// retiredItem is a vault item no entry points to: one a Set replaced or a
+// Delete forgot, or (Pending) one a Set is still writing.
+type retiredItem struct {
+	Ref     string    `json:"ref"`
+	Item    string    `json:"item"`
+	At      time.Time `json:"at"`
+	Pending bool      `json:"pending,omitempty"`
 }
 
 type entry struct {
 	Backend   string    `json:"backend"`
 	Value     value     `json:"value,omitempty"`
+	Item      string    `json:"item,omitempty"`
 	Projects  []string  `json:"projects,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -132,15 +167,35 @@ func (s *Store) Get(ctx context.Context, ref string) (secrets.Secret, error) {
 	if err != nil {
 		return secrets.Secret{}, err
 	}
-	e, ok := c.Secrets[ref]
-	switch {
-	case !ok:
-		return secrets.Secret{}, fmt.Errorf("%w: %q", secrets.ErrNotFound, ref)
-	case e.Backend != secrets.BackendFile:
-		return secrets.Secret{}, fmt.Errorf("%w: secret %q is kept in %q", secrets.ErrUnsupportedBackend, ref, e.Backend)
+	// A keyring item that is gone may only have been replaced since the
+	// catalog was read: look again, once.
+	for attempt := 0; ; attempt++ {
+		e, ok := c.Secrets[ref]
+		switch {
+		case !ok:
+			return secrets.Secret{}, fmt.Errorf("%w: %q", secrets.ErrNotFound, ref)
+		case e.Backend == secrets.BackendFile:
+			return secrets.Secret{Metadata: e.metadata(ref), Value: bytes.Clone(e.Value)}, nil
+		case e.Backend != secrets.BackendKeyring || s.vault == nil:
+			return secrets.Secret{}, fmt.Errorf("%w: secret %q is kept in %q", secrets.ErrUnsupportedBackend, ref, e.Backend)
+		}
+		v, err := s.vault.Get(ctx, account(c.CatalogID, ref, e.Item))
+		switch {
+		case err == nil:
+			return secrets.Secret{Metadata: e.metadata(ref), Value: v}, nil
+		case errors.Is(err, secrets.ErrNotFound) && attempt == 0:
+			if c, err = s.load(); err != nil {
+				return secrets.Secret{}, err
+			}
+		case errors.Is(err, secrets.ErrNotFound):
+			return secrets.Secret{}, fmt.Errorf("%w: the keyring no longer holds the value of %q", secrets.ErrNotFound, ref)
+		default:
+			return secrets.Secret{}, fmt.Errorf("secret %q: %w", ref, err)
+		}
 	}
-	return secrets.Secret{Metadata: e.metadata(ref), Value: bytes.Clone(e.Value)}, nil
 }
+
+func account(namespace, ref, item string) string { return namespace + "/" + ref + "/" + item }
 
 func (e entry) metadata(ref string) secrets.Metadata {
 	return secrets.Metadata{
@@ -150,7 +205,7 @@ func (e entry) metadata(ref string) secrets.Metadata {
 }
 
 // Set implements secrets.Store.
-func (s *Store) Set(ctx context.Context, ref string, v []byte, projects []string) error {
+func (s *Store) Set(ctx context.Context, ref string, v []byte, projects []string, backend string) error {
 	if err := domain.CheckSecretRefs([]string{ref}, 1); err != nil {
 		return err
 	}
@@ -161,30 +216,201 @@ func (s *Store) Set(ctx context.Context, ref string, v []byte, projects []string
 	if err != nil {
 		return fmt.Errorf("secret %q: %w", ref, err)
 	}
-	return s.update(ctx, func(c *catalog, now time.Time) error {
-		old, exists := c.Secrets[ref]
-		if !exists && len(c.Secrets) >= domain.MaxWorkerSecrets {
-			return fmt.Errorf("%w: it holds %d secrets, at most %d", secrets.ErrFull, len(c.Secrets), domain.MaxWorkerSecrets)
+	switch {
+	case backend == secrets.BackendFile:
+		return s.update(ctx, func(c *catalog, now time.Time) error {
+			if err := checkRoom(c, ref); err != nil {
+				return err
+			}
+			created := now
+			if old, exists := c.Secrets[ref]; exists {
+				created = old.CreatedAt
+				retire(c, ref, old, now)
+			}
+			c.Secrets[ref] = entry{
+				Backend: secrets.BackendFile, Value: bytes.Clone(v), Projects: projects,
+				CreatedAt: created, UpdatedAt: now,
+			}
+			return nil
+		})
+	case backend == secrets.BackendKeyring && s.vault != nil:
+		return s.setKeyring(ctx, ref, v, projects)
+	}
+	return fmt.Errorf("%w: this Store cannot keep a secret in %q", secrets.ErrUnsupportedBackend, backend)
+}
+
+func checkRoom(c *catalog, ref string) error {
+	if _, exists := c.Secrets[ref]; !exists && len(c.Secrets) >= domain.MaxWorkerSecrets {
+		return fmt.Errorf("%w: it holds %d secrets, at most %d", secrets.ErrFull, len(c.Secrets), domain.MaxWorkerSecrets)
+	}
+	return nil
+}
+
+// retire records the vault item of e, if it has one, to be deleted.
+func retire(c *catalog, ref string, e entry, now time.Time) {
+	if e.Backend == secrets.BackendKeyring {
+		c.Retired = append(c.Retired, retiredItem{Ref: ref, Item: e.Item, At: now})
+	}
+}
+
+// setKeyring writes a new item, then points the catalog at it. The catalog
+// notes the item first (and so persists its namespace before the first vault
+// write): a crash in between leaves a pending record to sweep, never a pointer
+// without a value.
+func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects []string) error {
+	item := ulid.MustNew(ulid.Timestamp(s.clock.Now()), rand.Reader).String()
+	var namespace string
+	err := s.update(ctx, func(c *catalog, now time.Time) error {
+		if err := checkRoom(c, ref); err != nil {
+			return err
 		}
+		namespace = c.CatalogID
+		c.Retired = append(c.Retired, retiredItem{Ref: ref, Item: item, At: now, Pending: true})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.vault.Set(ctx, account(namespace, ref, item), v); err != nil {
+		return fmt.Errorf("secret %q: %w", ref, err)
+	}
+	err = s.update(ctx, func(c *catalog, now time.Time) error {
+		pending := slices.IndexFunc(c.Retired, func(r retiredItem) bool { return r.Item == item && r.Pending })
+		if c.CatalogID != namespace || pending < 0 {
+			return fmt.Errorf("secret %q: the catalog changed while the keyring was written; try again", ref)
+		}
+		if err := checkRoom(c, ref); err != nil {
+			return err
+		}
+		c.Retired = slices.Delete(c.Retired, pending, pending+1)
 		created := now
-		if exists {
+		if old, exists := c.Secrets[ref]; exists {
 			created = old.CreatedAt
+			retire(c, ref, old, now)
 		}
 		c.Secrets[ref] = entry{
-			Backend: secrets.BackendFile, Value: bytes.Clone(v), Projects: projects,
+			Backend: secrets.BackendKeyring, Item: item, Projects: projects,
 			CreatedAt: created, UpdatedAt: now,
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	s.sweep(ctx)
+	return nil
 }
 
 // Delete implements secrets.Store.
 func (s *Store) Delete(ctx context.Context, ref string) error {
-	return s.update(ctx, func(c *catalog, _ time.Time) error {
-		if _, ok := c.Secrets[ref]; !ok {
+	err := s.update(ctx, func(c *catalog, now time.Time) error {
+		e, ok := c.Secrets[ref]
+		if !ok {
 			return fmt.Errorf("%w: %q", secrets.ErrNotFound, ref)
 		}
 		delete(c.Secrets, ref)
+		retire(c, ref, e, now)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s.sweep(ctx)
+	return nil
+}
+
+// Check implements secrets.Store.
+func (s *Store) Check(ctx context.Context) ([]secrets.Status, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]string, 0, len(c.Secrets))
+	for ref := range c.Secrets {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+	statuses := make([]secrets.Status, 0, len(refs))
+	for _, ref := range refs {
+		state, err := s.state(ctx, c, ref)
+		if err != nil {
+			return nil, err
+		}
+		if state != "" {
+			statuses = append(statuses, secrets.Status{Ref: ref, State: state})
+		}
+	}
+	s.sweep(ctx)
+	return statuses, nil
+}
+
+// state is how ref stands, or "" if it was deleted meanwhile.
+func (s *Store) state(ctx context.Context, c catalog, ref string) (secrets.State, error) {
+	for attempt := 0; ; attempt++ {
+		e, ok := c.Secrets[ref]
+		switch {
+		case !ok:
+			return "", nil
+		case e.Backend != secrets.BackendKeyring:
+			return secrets.StateOK, nil
+		case s.vault == nil:
+			return secrets.StateUnavailable, nil
+		}
+		v, err := s.vault.Get(ctx, account(c.CatalogID, ref, e.Item))
+		clear(v)
+		switch {
+		case err == nil:
+			return secrets.StateOK, nil
+		case errors.Is(err, secrets.ErrNotFound) && attempt == 0:
+			var lerr error
+			if c, lerr = s.load(); lerr != nil {
+				return "", lerr
+			}
+		case errors.Is(err, secrets.ErrNotFound):
+			return secrets.StateBroken, nil
+		default:
+			return secrets.StateUnavailable, nil
+		}
+	}
+}
+
+// sweep deletes the vault items the catalog has retired, and the leftovers of
+// Sets that crashed, then forgets them. It is best effort: what a locked
+// keyring refuses stays retired for the next sweep.
+func (s *Store) sweep(ctx context.Context) {
+	if s.vault == nil {
+		return
+	}
+	c, err := s.load()
+	if err != nil || len(c.Retired) == 0 {
+		return
+	}
+	now := s.clock.Now()
+	var gone []string
+	for _, r := range c.Retired {
+		if r.Pending && now.Sub(r.At) < pendingGrace {
+			continue
+		}
+		if e := c.Secrets[r.Ref]; e.Item == r.Item {
+			gone = append(gone, r.Item) // pointed to after all: only the record is stale
+			continue
+		}
+		err := s.vault.Delete(ctx, account(c.CatalogID, r.Ref, r.Item))
+		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
+			break
+		}
+		gone = append(gone, r.Item)
+	}
+	if len(gone) == 0 {
+		return
+	}
+	_ = s.update(ctx, func(c *catalog, _ time.Time) error {
+		c.Retired = slices.DeleteFunc(c.Retired, func(r retiredItem) bool { return slices.Contains(gone, r.Item) })
 		return nil
 	})
 }
@@ -211,11 +437,11 @@ func (s *Store) update(ctx context.Context, change func(*catalog, time.Time) err
 		return err
 	}
 	now := s.clock.Now().UTC()
-	if err := change(&c, now); err != nil {
-		return err
-	}
 	if c.CatalogID == "" {
 		c.CatalogID = ulid.MustNew(ulid.Timestamp(now), rand.Reader).String()
+	}
+	if err := change(&c, now); err != nil {
+		return err
 	}
 	c.Generation++
 	data, err := json.Marshal(c)
@@ -304,6 +530,11 @@ func decode(data []byte) (catalog, error) {
 			return catalog{}, fmt.Errorf("%w: %w", secrets.ErrCorrupt, err)
 		}
 	}
+	for _, r := range c.Retired {
+		if _, err := ulid.ParseStrict(r.Item); err != nil || !domain.ValidSecretRef(r.Ref) {
+			return catalog{}, fmt.Errorf("%w: a retired item is not valid", secrets.ErrCorrupt)
+		}
+	}
 	return c, nil
 }
 
@@ -317,6 +548,13 @@ func checkEntry(ref string, e entry) error {
 	case e.Backend == secrets.BackendFile:
 		if err := domain.CheckSecretValue(e.Value); err != nil {
 			return fmt.Errorf("secret %q: %w", ref, err)
+		}
+	case e.Backend == secrets.BackendKeyring:
+		if _, err := ulid.ParseStrict(e.Item); err != nil {
+			return fmt.Errorf("secret %q names no valid keyring item", ref)
+		}
+		if len(e.Value) > 0 {
+			return fmt.Errorf("secret %q is kept in %q and must not carry a value here", ref, e.Backend)
 		}
 	case len(e.Value) > 0:
 		return fmt.Errorf("secret %q is kept in %q and must not carry a value here", ref, e.Backend)

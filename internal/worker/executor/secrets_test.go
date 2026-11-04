@@ -91,10 +91,10 @@ func (s *fakeStore) Get(_ context.Context, ref string) (secrets.Secret, error) {
 	}, nil
 }
 
-func (s *fakeStore) Set(_ context.Context, ref string, value []byte, projects []string) error {
+func (s *fakeStore) Set(_ context.Context, ref string, value []byte, projects []string, backend string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries[ref] = fakeSecret{value: bytes.Clone(value), projects: projects, backend: secrets.BackendFile}
+	s.entries[ref] = fakeSecret{value: bytes.Clone(value), projects: projects, backend: backend}
 	return nil
 }
 
@@ -520,7 +520,7 @@ func TestTheCatalogChangingDuringThePrepareFailsIt(t *testing.T) {
 		{"the ref was scoped to another Project", func(s *fakeStore) { s.scope("github.personal", "project_9") }, domain.CodePolicyDenied},
 		{"a value for another Project replaced it as it was read", func(s *fakeStore) {
 			s.onGet = func(ref string) {
-				_ = s.Set(context.Background(), ref, []byte(ghValue+"-of-project-9"), []string{"project_9"})
+				_ = s.Set(context.Background(), ref, []byte(ghValue+"-of-project-9"), []string{"project_9"}, secrets.BackendFile)
 			}
 		}, domain.CodePolicyDenied},
 	}
@@ -700,3 +700,5 @@ func TestTheHarnessLosesItsAccessToTheSecretsOnceItStarted(t *testing.T) {
 		t.Errorf("what the output is redacted of went with the access: %v", err)
 	}
 }
+
+func (s *fakeStore) Check(context.Context) ([]secrets.Status, error) { return nil, nil }

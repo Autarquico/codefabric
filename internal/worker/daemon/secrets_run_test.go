@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -27,7 +28,7 @@ func TestRun_TheHeartbeatPublishesTheCatalogAndNeverAValue(t *testing.T) {
 	c.join("box", paths)
 	catalog := secretsfile.New(paths.WorkerSecretsFile(), clock.Real{})
 	const value = "sentinel-0d1c3a7f-value-never-leaves"
-	if err := catalog.Set(t.Context(), "gh/token", []byte(value), nil); err != nil {
+	if err := catalog.Set(t.Context(), "gh/token", []byte(value), nil, secrets.BackendFile); err != nil {
 		t.Fatal(err)
 	}
 	run(t, paths, &logs{})
@@ -36,7 +37,7 @@ func TestRun_TheHeartbeatPublishesTheCatalogAndNeverAValue(t *testing.T) {
 		return w.State == domain.WorkerOnline && slices.Equal(secretRefs(w), []string{"gh/token"})
 	})
 	// Set talks to no one: the next heartbeat carries it.
-	if err := catalog.Set(t.Context(), "npm/token", []byte(value+"-2"), nil); err != nil {
+	if err := catalog.Set(t.Context(), "npm/token", []byte(value+"-2"), nil, secrets.BackendFile); err != nil {
 		t.Fatal(err)
 	}
 	w := c.eventually("box", "the second secret to be reported", func(w v1.Worker) bool {

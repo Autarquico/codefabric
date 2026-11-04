@@ -93,7 +93,7 @@ func newSecretsSetCmd() *cobra.Command {
 			if err := cmd.Context().Err(); err != nil {
 				return cancelled()
 			}
-			if err := store.Set(cmd.Context(), ref, value, projects); err != nil {
+			if err := store.Set(cmd.Context(), ref, value, projects, secrets.BackendFile); err != nil {
 				return secretsError(err)
 			}
 			meta, err := secretMeta(cmd.Context(), store, ref)

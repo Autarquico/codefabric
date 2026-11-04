@@ -17,6 +17,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
@@ -166,7 +167,7 @@ func TestAnotherPrepareRendersTheRotatedValueAndLeavesNoOldOne(t *testing.T) {
 	if err := f.e.prepare(t.Context(), f.run(k)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Set(t.Context(), "team/token", []byte(rotated), nil); err != nil {
+	if err := store.Set(t.Context(), "team/token", []byte(rotated), nil, secrets.BackendFile); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.e.prepare(t.Context(), f.run(k)); err != nil {

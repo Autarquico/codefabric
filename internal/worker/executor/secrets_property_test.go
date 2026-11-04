@@ -197,7 +197,7 @@ func (s *secretWorld) keyOf(run string, epoch uint64) state.Key {
 func (s *secretWorld) setSecret(ref string) {
 	value := fmt.Sprintf("cfsv-%016x%016x", s.rng.Uint64(), s.rng.Uint64())
 	s.values[value] = true
-	must(s.t, s.store.Set(s.t.Context(), ref, []byte(value), nil))
+	must(s.t, s.store.Set(s.t.Context(), ref, []byte(value), nil, secrets.BackendFile))
 }
 
 func (s *secretWorld) setAllowed(ref string, allow bool) {
@@ -342,7 +342,7 @@ func (s *secretWorld) interfere(where string) {
 		s.log = append(s.log, "catalog-rescope "+where)
 		value := fmt.Sprintf("cfsv-%016x%016x", s.rng.Uint64(), s.rng.Uint64())
 		s.values[value], s.foreign[value] = true, true
-		must(s.t, s.store.Set(s.t.Context(), ref, []byte(value), []string{projectElsewhere}))
+		must(s.t, s.store.Set(s.t.Context(), ref, []byte(value), []string{projectElsewhere}, secrets.BackendFile))
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
+	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -221,7 +222,7 @@ func TestClaudeAuth(t *testing.T) {
 	}{
 		{name: "nothing", want: v1.ComponentFail, action: "claude login en box"},
 		{name: "secret in the store", want: v1.ComponentOK, setup: func(t *testing.T, _ *host, s *secretsfile.Store) {
-			if err := s.Set(t.Context(), claude.OAuthTokenRef, []byte(secretValue), nil); err != nil {
+			if err := s.Set(t.Context(), claude.OAuthTokenRef, []byte(secretValue), nil, secrets.BackendFile); err != nil {
 				t.Fatal(err)
 			}
 		}},
