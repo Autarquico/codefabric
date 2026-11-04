@@ -1,6 +1,10 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
+
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+)
 
 // registerOverviewRoutes adds the snapshot that a home screen starts from.
 func (s *Server) registerOverviewRoutes() {
@@ -12,7 +16,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request, c caller) erro
 	if err != nil {
 		return err
 	}
-	out, err := s.work.Events.Overview(r.Context(), c.Session, int(min(activity, 1<<20)))
+	out, err := s.work.Events.Overview(r.Context(), c.Session, int(min(activity, v1.OverviewMaxActivity+1)))
 	if err != nil {
 		return err
 	}

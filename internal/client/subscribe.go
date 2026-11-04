@@ -2,9 +2,7 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -41,16 +39,21 @@ type UpdateKind int
 
 // Kinds of Update.
 const (
-	// UpdateSnapshot carries the state: the first one, and every refetch.
+	// UpdateSnapshot carries the state: the first one, and every refetch. It
+	// replaces the state, not the events already delivered.
 	UpdateSnapshot UpdateKind = iota
 	// UpdateResync carries the state read again because the Controller no
 	// longer held the cursor: events may have been lost, so discard what was
 	// accumulated from them (an activity list) and start from this state.
 	UpdateResync
-	// UpdateEvent carries an event that arrived, once, in order, never one the
-	// last snapshot already includes.
+	// UpdateEvent carries an event that arrived on the stream, once and in
+	// order, never one the first (or the resync) snapshot already includes.
+	// Later snapshots do not move the stream: an event may reach the handler
+	// that a refetched snapshot reflects too, but none is ever skipped.
 	UpdateEvent
-	// UpdateConnected: the stream is open.
+	// UpdateConnected: the stream is open. Connected and Disconnected describe
+	// the stream, not the refetches: a snapshot that cannot be read keeps the
+	// last state and is tried again with the backoff.
 	UpdateConnected
 	// UpdateDisconnected: the Controller cannot be reached; Err says why. The
 	// subscription goes on trying and says UpdateConnected when it succeeds.
@@ -86,10 +89,11 @@ type subscription[S any] struct {
 
 	fetchMu sync.Mutex // one read of the snapshot at a time, applied in order
 
-	mu        sync.Mutex // guards what follows, and serialises the handler
-	applied   uint64     // the highest sequence the handler has been told of or the snapshot includes
-	connected *bool      // nil before the first word
-	dirty     chan struct{}
+	mu         sync.Mutex // guards what follows, and serialises the handler
+	applied    uint64     // the stream position: the highest sequence told to the handler, or the cursor of the first or resync snapshot
+	positioned bool       // the first snapshot has set applied
+	connected  *bool      // nil before the first word
+	dirty      chan struct{}
 }
 
 func (s *subscription[S]) run(ctx context.Context) error {
@@ -142,31 +146,10 @@ func (s *subscription[S]) streamSpec() streamSpec {
 	s.mu.Lock()
 	resume := strconv.FormatUint(s.applied, 10)
 	s.mu.Unlock()
-	q := s.view.Filter
-	q.After, q.Tail, q.Limit = "", 0, 0
-	return streamSpec{
-		resumeAt: resume,
-		request: func(lastID string) (string, http.Header) {
-			h := http.Header{}
-			if lastID != "" {
-				h.Set("Last-Event-ID", lastID)
-			}
-			return withQuery("/v1/events/stream", q.values()), h
-		},
-		handle: func(ev sseEvent) (bool, string, error) {
-			if ev.Name != v1.SSEEvent {
-				return false, "", nil
-			}
-			var e v1.Event
-			if err := json.Unmarshal([]byte(ev.Data), &e); err != nil {
-				return false, "", domain.NewError(domain.CodeInternal, "the Controller sent an unreadable event", nil)
-			}
-			s.apply(e)
-			return false, "", nil
-		},
-		onOpen: func() { s.setConnected(true, nil) },
-		onDown: func(err error) { s.setConnected(false, err) },
-	}
+	spec := eventStream(s.view.Filter, resume, func(e v1.Event) error { s.apply(e); return nil })
+	spec.onOpen = func() { s.setConnected(true, nil) }
+	spec.onDown = func(err error) { s.setConnected(false, err) }
+	return spec
 }
 
 // apply tells the handler of an event it has not seen and marks the snapshot
@@ -206,9 +189,10 @@ func (s *subscription[S]) setConnected(up bool, err error) {
 	s.handler(Update[S]{Kind: UpdateDisconnected, Err: err})
 }
 
-// fetch reads the snapshot and tells the handler. The cursor of a resync
-// replaces the position (the history may be another one); any other only moves
-// it forward.
+// fetch reads the snapshot and tells the handler. Only the first snapshot and
+// a resync set the stream position (a resync replaces it: the history may be
+// another one). A refetch leaves it: the cursor of a snapshot may be ahead of
+// the events that have streamed, and those must still reach the handler.
 func (s *subscription[S]) fetch(ctx context.Context, kind UpdateKind) error {
 	s.fetchMu.Lock()
 	defer s.fetchMu.Unlock()
@@ -222,10 +206,8 @@ func (s *subscription[S]) fetch(ctx context.Context, kind UpdateKind) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if kind == UpdateResync {
-		s.applied = at
-	} else {
-		s.applied = max(s.applied, at)
+	if kind == UpdateResync || !s.positioned {
+		s.applied, s.positioned = at, true
 	}
 	s.handler(Update[S]{Kind: kind, State: state})
 	return nil
@@ -255,9 +237,11 @@ func (s *subscription[S]) snapshotWithRetry(ctx context.Context, kind UpdateKind
 
 // refresher reads the snapshot again when an event dirtied it and, if the view
 // asks, every Refresh. Whatever fails and may work later is tried again after
-// the backoff, and keeps the last state meanwhile.
+// the backoff, and keeps the last state meanwhile. Two reads are at least
+// minRefetch apart, so a burst of events cannot flood the Controller.
 func (s *subscription[S]) refresher(ctx context.Context) error {
 	delay := s.c.timing.backoffInitial
+	var last time.Time // when the snapshot was last read
 	for {
 		var tick <-chan time.Time
 		stop := func() {}
@@ -273,6 +257,17 @@ func (s *subscription[S]) refresher(ctx context.Context) error {
 		case <-tick:
 		}
 		stop()
+		// Events that come meanwhile merge into the one pending read.
+		if wait := s.c.timing.minRefetch - s.c.clock.Now().Sub(last); wait > 0 && !last.IsZero() {
+			if err := s.c.sleep(ctx, wait); err != nil {
+				return nil
+			}
+			select {
+			case <-s.dirty:
+			default:
+			}
+		}
+		last = s.c.clock.Now()
 		switch err := s.fetch(ctx, UpdateSnapshot); {
 		case err == nil:
 			delay = s.c.timing.backoffInitial

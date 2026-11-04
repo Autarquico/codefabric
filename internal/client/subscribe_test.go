@@ -215,10 +215,11 @@ func TestSubscribe_ACursorTheControllerLostResyncs(t *testing.T) {
 	}
 }
 
-func TestSubscribe_RefreshReadsTheSnapshotOnTheClock(t *testing.T) {
+func TestSubscribe_RefreshReadsTheSnapshotEveryPeriodOnTheClock(t *testing.T) {
 	c := testClient(t, streamOf())
 	fake := clock.NewFake(time.Unix(0, 0))
 	c.clock = fake
+	c.timing.idle = time.Hour
 	var calls atomic.Int32
 	view := counting("0", &calls)
 	view.Invalidates = func(v1.Event) bool { return false }
@@ -227,9 +228,177 @@ func TestSubscribe_RefreshReadsTheSnapshotOnTheClock(t *testing.T) {
 	run(t, c, view, r)
 
 	for want := int32(2); want <= 3; want++ {
-		eventually(t, "a refresh", func() bool {
-			fake.Advance(5 * time.Second)
-			return calls.Load() >= want
-		})
+		if err := fake.BlockUntil(t.Context(), 2); err != nil { // the idle timer of the stream, and the refresh
+			t.Fatal(err)
+		}
+		fake.Advance(4 * time.Second)
+		if got := calls.Load(); got != want-1 {
+			t.Fatalf("read %d times before the period was over, want %d", got, want-1)
+		}
+		fake.Advance(time.Second)
+		eventually(t, "a refresh", func() bool { return calls.Load() == want })
+	}
+}
+
+// A refetch must not move the stream: the cursor of a snapshot is usually ahead
+// of the events that have reached the client, and those still have to be told.
+func TestSubscribe_ARefetchAheadOfTheStreamSkipsNoEvent(t *testing.T) {
+	refetched := make(chan struct{})
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		sseWrite(w, eventFrame(1))
+		select {
+		case <-refetched:
+		case <-r.Context().Done():
+			return
+		}
+		for seq := uint64(2); seq <= 5; seq++ {
+			sseWrite(w, eventFrame(seq))
+		}
+		<-r.Context().Done()
+	}))
+	var calls atomic.Int32
+	view := View[int]{
+		Snapshot: func(context.Context, *Client) (int, string, error) {
+			n := calls.Add(1)
+			if n == 2 {
+				close(refetched)
+				return 2, "5", nil // already includes 2..5, which have not streamed yet
+			}
+			return int(n), "0", nil
+		},
+		Invalidates: func(e v1.Event) bool { return e.Sequence == 1 },
+	}
+	r := &recorder{}
+	run(t, c, view, r)
+
+	eventually(t, "event 5", func() bool { return slices.Contains(r.sequences(), 5) })
+	if got := r.sequences(); !slices.Equal(got, []uint64{1, 2, 3, 4, 5}) {
+		t.Fatalf("sequences = %v, want every one once", got)
+	}
+}
+
+func TestSubscribe_ABurstOfEventsReadsTheSnapshotAtMostOncePerMinimumInterval(t *testing.T) {
+	second := make(chan struct{})
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for seq := uint64(1); seq <= 3; seq++ {
+			sseWrite(w, eventFrame(seq))
+		}
+		select {
+		case <-second:
+		case <-r.Context().Done():
+			return
+		}
+		for seq := uint64(4); seq <= 13; seq++ {
+			sseWrite(w, eventFrame(seq))
+		}
+		<-r.Context().Done()
+	}))
+	fake := clock.NewFake(time.Unix(0, 0))
+	c.clock = fake
+	c.timing.idle = time.Hour // its timer is the one that is always there
+	c.timing.minRefetch = time.Second
+	var calls atomic.Int32
+	r := &recorder{}
+	run(t, c, counting("0", &calls), r)
+
+	eventually(t, "the refetch of the first burst", func() bool { return calls.Load() == 2 })
+	close(second)
+	eventually(t, "the second burst", func() bool { return slices.Contains(r.sequences(), 13) })
+	if err := fake.BlockUntil(t.Context(), 2); err != nil { // the idle timer of the stream, and the wait
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("the snapshot was read %d times inside the minimum interval, want 2", got)
+	}
+	fake.Advance(time.Second)
+	eventually(t, "one read for the whole second burst", func() bool { return calls.Load() == 3 })
+
+	// Nothing is left pending: no timer waits for another read.
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := fake.BlockUntil(ctx, 2); err == nil {
+		t.Errorf("another read is waiting after %d", calls.Load())
+	}
+}
+
+func TestEventCursorIsTheLatestSequenceOfTheController(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/events" || r.URL.Query().Get("tail") != "1" {
+			t.Errorf("asked for %s", r.URL)
+		}
+		_, _ = w.Write([]byte(`{"events":[],"cursor":"42","has_more":false}`))
+	}))
+	got, err := c.eventCursor(t.Context())
+	if err != nil || got != "42" {
+		t.Fatalf("eventCursor = %q, %v", got, err)
+	}
+}
+
+func TestListViewsTakeTheCursorBeforeTheyReadTheList(t *testing.T) {
+	var order []string
+	var mu sync.Mutex
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		order = append(order, r.URL.Path)
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/v1/events":
+			_, _ = w.Write([]byte(`{"events":[],"cursor":"7","has_more":false}`))
+		default:
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	for name, snapshot := range map[string]func() (string, error){
+		"tasks": func() (string, error) {
+			_, cur, err := TasksView(TaskQuery{}).Snapshot(t.Context(), c)
+			return cur, err
+		},
+		"runs":    func() (string, error) { _, cur, err := RunsView(RunQuery{}).Snapshot(t.Context(), c); return cur, err },
+		"workers": func() (string, error) { _, cur, err := WorkersView(false).Snapshot(t.Context(), c); return cur, err },
+	} {
+		mu.Lock()
+		order = nil
+		mu.Unlock()
+		cur, err := snapshot()
+		if err != nil || cur != "7" {
+			t.Errorf("%s: cursor %q, %v", name, cur, err)
+		}
+		mu.Lock()
+		if len(order) != 2 || order[0] != "/v1/events" {
+			t.Errorf("%s: requests %v, want the cursor first", name, order)
+		}
+		mu.Unlock()
+	}
+}
+
+func TestReadyViewsInvalidateOnTheirOwnEvents(t *testing.T) {
+	cases := []struct {
+		name        string
+		invalidates func(v1.Event) bool
+		task, run   bool
+		worker      bool
+	}{
+		{"tasks", TasksView(TaskQuery{}).Invalidates, true, true, false},
+		{"runs", RunsView(RunQuery{}).Invalidates, false, true, false},
+		{"workers", WorkersView(false).Invalidates, false, false, true},
+	}
+	for _, tc := range cases {
+		if got := tc.invalidates(v1.Event{TaskID: "t"}); got != tc.task {
+			t.Errorf("%s on a Task event = %v", tc.name, got)
+		}
+		if got := tc.invalidates(v1.Event{RunID: "r"}); got != tc.run {
+			t.Errorf("%s on a Run event = %v", tc.name, got)
+		}
+		if got := tc.invalidates(v1.Event{WorkerID: "w"}); got != tc.worker {
+			t.Errorf("%s on a Worker event = %v", tc.name, got)
+		}
+		if tc.invalidates(v1.Event{}) {
+			t.Errorf("%s on an event of nothing it shows", tc.name)
+		}
+	}
+	if WorkersView(false).Refresh != RefreshEvery || OverviewView().Refresh != RefreshEvery || TasksView(TaskQuery{}).Refresh != 0 {
+		t.Error("only the views of health refresh by the clock")
 	}
 }

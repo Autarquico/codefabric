@@ -17,20 +17,20 @@ import (
 )
 
 // tape records the updates of a subscription.
-type tape struct {
+type tape[S any] struct {
 	mu      sync.Mutex
-	updates []client.Update[v1.Overview]
+	updates []client.Update[S]
 	at      []time.Time
 }
 
-func (p *tape) handle(u client.Update[v1.Overview]) {
+func (p *tape[S]) handle(u client.Update[S]) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.updates = append(p.updates, u)
 	p.at = append(p.at, time.Now())
 }
 
-func (p *tape) count(kind client.UpdateKind) int {
+func (p *tape[S]) count(kind client.UpdateKind) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	n := 0
@@ -42,13 +42,13 @@ func (p *tape) count(kind client.UpdateKind) int {
 	return n
 }
 
-func (p *tape) snapshot() []client.Update[v1.Overview] {
+func (p *tape[S]) snapshot() []client.Update[S] {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return slices.Clone(p.updates)
 }
 
-func (p *tape) sequences() []uint64 {
+func (p *tape[S]) sequences() []uint64 {
 	var out []uint64
 	for _, u := range p.snapshot() {
 		if u.Kind == client.UpdateEvent {
@@ -58,16 +58,7 @@ func (p *tape) sequences() []uint64 {
 	return out
 }
 
-// eventsOnly is the view of the scenarios: the snapshot is read once and only
-// the events are followed, so that what the handler is told is the whole story.
-func eventsOnly() client.View[v1.Overview] {
-	v := client.OverviewView()
-	v.Refresh = 0
-	v.Invalidates = func(v1.Event) bool { return false }
-	return v
-}
-
-func subscribeIn(t *testing.T, c *client.Client, view client.View[v1.Overview], p *tape) {
+func subscribeIn[S any](t *testing.T, c *client.Client, view client.View[S], p *tape[S]) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -124,8 +115,8 @@ func TestScenario_ClientSubscriptions_Reconexion(t *testing.T) {
 	c, err := client.Open(tc.ownerDir, client.WithController(proxy.Addr()), client.WithClock(fake))
 	must(t, err)
 
-	p := &tape{}
-	subscribeIn(t, c, eventsOnly(), p)
+	p := &tape[v1.Overview]{}
+	subscribeIn(t, c, client.OverviewView(), p)
 	pollFor(t, nil, "the stream", func() bool { return p.count(client.UpdateConnected) == 1 })
 	first := p.snapshot()[0]
 	if first.Kind != client.UpdateSnapshot {
@@ -179,8 +170,8 @@ func TestScenario_ClientSubscriptions_CursorExpirado(t *testing.T) {
 	c, err := client.Open(tc.ownerDir, client.WithController(proxy.Addr()), client.WithClock(fake))
 	must(t, err)
 
-	p := &tape{}
-	subscribeIn(t, c, eventsOnly(), p)
+	p := &tape[v1.Overview]{}
+	subscribeIn(t, c, client.OverviewView(), p)
 	pollFor(t, nil, "the stream", func() bool { return p.count(client.UpdateConnected) == 1 })
 
 	// The retention purges everything held while the client is cut off.
@@ -214,8 +205,12 @@ func TestScenario_ClientSubscriptions_CursorExpirado(t *testing.T) {
 	newTasks(t, tc, 1, "next")
 	next := lastSequence(t, tc)
 	pollFor(t, fake, "the event after the resync", func() bool { return slices.Contains(p.sequences(), next) })
-	if n := slices.Index(p.sequences(), next); slices.Contains(p.sequences()[:n], last) {
-		t.Errorf("an event the resync already includes was delivered again: %v", p.sequences())
+	seqs := p.sequences()
+	if slices.Contains(seqs, last) || slices.Contains(seqs, purged) {
+		t.Errorf("an event the resync already includes was delivered: %v", seqs)
+	}
+	if n := slices.Index(seqs, next); n != 0 || slices.Index(seqs[1:], next) >= 0 {
+		t.Errorf("the event after the resync must arrive first and once: %v", seqs)
 	}
 }
 
@@ -242,7 +237,7 @@ func TestScenario_ClientSubscriptions_Carga(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			_ = client.Subscribe(ctx, c, eventsOnly(), func(u client.Update[v1.Overview]) {
+			_ = client.Subscribe(ctx, c, client.OverviewView(), func(u client.Update[v1.Overview]) {
 				switch u.Kind {
 				case client.UpdateConnected:
 					once.Do(func() { close(ready) })

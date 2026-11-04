@@ -29,10 +29,13 @@ var errEventTooLarge = errors.New("client: a stream event is larger than any the
 // the backoff between connections. Tests shorten it.
 type streamTiming struct {
 	header, idle, backoffInitial, backoffMax time.Duration
+	// minRefetch is the least time between two reads of a subscription's snapshot.
+	minRefetch time.Duration
 }
 
 var defaultStreamTiming = streamTiming{
 	header: 30 * time.Second, idle: 45 * time.Second, backoffInitial: 500 * time.Millisecond, backoffMax: 10 * time.Second,
+	minRefetch: time.Second,
 }
 
 // sseEvent is one server-sent event as it came. A comment is not one.
