@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 // SegmentBytes is the size at which the hot bytes of an output are sealed into
@@ -125,19 +127,47 @@ func (s *sealer) take() []outputKey {
 	return keys
 }
 
+// Between two attempts after a failed seal the sealer waits sealRetryMin, then
+// twice as long each time, up to sealRetryMax, on the DB's clock.
+const (
+	sealRetryMin = time.Second
+	sealRetryMax = 30 * time.Second
+)
+
 func (s *sealer) start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel, s.done = cancel, make(chan struct{})
 	go func() {
 		defer close(s.done)
+		var (
+			retry   clock.Timer
+			retryAt <-chan time.Time
+			backoff = sealRetryMin
+		)
+		disarm := func() {
+			if retry != nil {
+				retry.Stop()
+				retry, retryAt = nil, nil
+			}
+		}
+		defer disarm()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-s.wake:
+			case <-retryAt:
 			}
-			if _, err := s.pass1(ctx); err != nil && ctx.Err() == nil {
-				s.db.log.Warn("store: sealing output failed; it will be tried again", "err", err)
+			disarm()
+			_, err := s.pass1(ctx)
+			switch {
+			case err == nil:
+				backoff = sealRetryMin
+			case ctx.Err() == nil:
+				s.db.log.Warn("store: sealing output failed; it will be tried again", "err", err, "in", backoff)
+				retry = s.db.clock.NewTimer(backoff)
+				retryAt = retry.C()
+				backoff = min(2*backoff, sealRetryMax)
 			}
 		}
 	}()
@@ -163,8 +193,8 @@ func (s *sealer) drain(ctx context.Context) error {
 // pass1 is one round-robin pass: it seals at most ONE segment of each due
 // output, so a fast output cannot hold the sealer while the others sit at
 // MaxUnsealedBytes. An output that still has something to seal goes back into
-// due and wakes the sealer; one whose seal fails stays due without a wake, for
-// the next time something wakes it. It reports whether any segment was sealed.
+// due and wakes the sealer; one whose seal fails stays due, and the background
+// sealer tries again after a backoff. It reports whether any segment was sealed.
 func (s *sealer) pass1(ctx context.Context) (bool, error) {
 	s.pass.Lock()
 	defer s.pass.Unlock()

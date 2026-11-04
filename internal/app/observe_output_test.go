@@ -487,6 +487,16 @@ func TestOutputFollow_ASlowReaderGetsEverythingInPages(t *testing.T) {
 	}
 }
 
+func (e *env) sealedOffset(run domain.ID, epoch uint64) uint64 {
+	e.t.Helper()
+	var o store.Output
+	must(e.t, e.db.Read(e.t.Context(), func(q store.Querier) (err error) {
+		o, err = store.OutputOf(e.t.Context(), q, run, epoch)
+		return err
+	}))
+	return o.Sealed
+}
+
 // A follow that is waiting at the end of the hot tail gets what is sealed under
 // it and what comes after, in order and without a gap.
 func TestOutputFollow_GoesOnAcrossASeal(t *testing.T) {
@@ -509,6 +519,11 @@ func TestOutputFollow_GoesOnAcrossASeal(t *testing.T) {
 		send(i)
 	}
 	waitUntil(t, "the rest", func() bool { return len(s.text()) == int(offset) }) //nolint:gosec // bounded
+	waitUntil(t, "the first segment to be installed", func() bool { return e.sealedOffset(domain.ID(o.run.ID), o.lease.Epoch) >= 1<<20 })
+	for i := 20; i < 23; i++ { // the follower is active and the hot tail under it is gone
+		send(i)
+	}
+	waitUntil(t, "what follows the seal", func() bool { return len(s.text()) == int(offset) }) //nolint:gosec // bounded
 	if s.text() != want.String() {
 		t.Fatal("the bytes delivered across the seal are not the bytes sent")
 	}

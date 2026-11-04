@@ -32,6 +32,7 @@ type env struct {
 	t         *testing.T
 	db        *store.DB
 	clock     *clock.Fake
+	blobRoot  string // the directory of the blob store
 	authority *pki.Authority
 	app       *app.Services
 	owner     pki.Session
@@ -50,7 +51,8 @@ func newEnv(t *testing.T) *env {
 func newEnvWith(t *testing.T, configure func(*app.Config, *clock.Fake)) *env {
 	t.Helper()
 	clk := clock.NewFake(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC))
-	blobs, err := blob.New(t.TempDir(), clk)
+	blobRoot := t.TempDir()
+	blobs, err := blob.New(blobRoot, clk)
 	must(t, err)
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "controller.db"), store.Options{Clock: clk, Blobs: blobs})
 	must(t, err)
@@ -59,7 +61,7 @@ func newEnvWith(t *testing.T, configure func(*app.Config, *clock.Fake)) *env {
 	must(t, err)
 	ids := domain.NewIDGenerator(clk.Now, rand.Reader)
 	e := &env{
-		t: t, db: db, clock: clk,
+		t: t, db: db, clock: clk, blobRoot: blobRoot,
 		authority: pki.NewAuthority(pki.AuthorityConfig{
 			DB: db, CA: ca, Clock: clk, IDs: ids, CertTTL: domain.Defaults().IdentityCertTTL, EnrollWorker: workers.Enroll,
 		}),

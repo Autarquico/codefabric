@@ -163,6 +163,12 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 	end := offset + uint64(len(data))
 	switch {
 	case offset > o.End:
+		if t.overBackpressure(o) {
+			// Not a gap to take while bytes wait to be sealed: dropping them
+			// would lose output that was accepted.
+			t.markSealDue(o)
+			return Output{}, ErrOutputBusy
+		}
 		if err := t.trimOutput(ctx, run, epoch, offset); err != nil {
 			return Output{}, err
 		}
@@ -177,7 +183,7 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 		data, offset = data[o.End-offset:], o.End
 	}
 
-	if t.db.sealer != nil && o.End-o.Sealed >= MaxUnsealedBytes {
+	if t.overBackpressure(o) {
 		t.markSealDue(o)
 		return Output{}, ErrOutputBusy
 	}
@@ -198,6 +204,11 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 	t.MarkOutput()
 	t.markSealDue(o)
 	return o, nil
+}
+
+// overBackpressure says that the output holds MaxUnsealedBytes waiting to be sealed.
+func (t *Tx) overBackpressure(o Output) bool {
+	return t.db.sealer != nil && o.End-o.Sealed >= MaxUnsealedBytes
 }
 
 // closeAtLimit closes the output where it stands, for having reached the cap.

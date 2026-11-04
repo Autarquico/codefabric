@@ -2,14 +2,19 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 // checkStorage states the invariants of the storage: the segments tile
@@ -80,6 +85,16 @@ func (f *leaseFixture) sendAll(run domain.ID, epoch uint64, all []byte) {
 	f.t.Helper()
 	for off := 0; off < len(all); off += v1.OutputChunkBytes {
 		if _, err := f.append(run, epoch, uint64(off), all[off:min(off+v1.OutputChunkBytes, len(all))]); err != nil { //nolint:gosec // small
+			f.t.Fatal(err)
+		}
+	}
+}
+
+// sendAllNoSeal is sendAll with the sealer idle.
+func (f *leaseFixture) sendAllNoSeal(run domain.ID, epoch uint64, all []byte) {
+	f.t.Helper()
+	for off := 0; off < len(all); off += v1.OutputChunkBytes {
+		if _, err := f.appendNoSeal(run, epoch, uint64(off), all[off:min(off+v1.OutputChunkBytes, len(all))]); err != nil { //nolint:gosec // small
 			f.t.Fatal(err)
 		}
 	}
@@ -478,5 +493,153 @@ func TestSealer_BackgroundSealsAndCloseReturns(t *testing.T) {
 	}
 	if err := f.db.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A seal that fails for a while (the blob store cannot write) is tried again
+// by itself, with backoff on the clock of the DB, even if nothing else is ever
+// appended: the bytes do not wait in SQLite for the next activity.
+func TestSealer_ATransientFailureIsRetriedWithoutNewAppends(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not stop root")
+	}
+	root := t.TempDir()
+	blobs, err := blob.New(root, clock.NewFake(epoch0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(root, "tmp")
+	if err := os.Chmod(tmp, 0o500); err != nil { //nolint:gosec // a directory the test makes unwritable
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(tmp, 0o700) }) //nolint:gosec // so that TempDir can be removed
+	f := newLeaseFixtureWith(t, newWorkerFixtureWith(t, Options{Blobs: blobs}))
+	run := f.queuedRun(1).ID
+	f.fill(run, SegmentBytes+10)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := f.clk.BlockUntil(ctx, 1); err != nil {
+		t.Fatalf("no retry was scheduled: %v", err)
+	}
+	if got := f.sealedOffset(run); got != 0 {
+		t.Fatalf("sealed %d with the blob store failing", got)
+	}
+	if err := os.Chmod(tmp, 0o700); err != nil { //nolint:gosec // the store recovers
+		t.Fatal(err)
+	}
+	for f.sealedOffset(run) != SegmentBytes {
+		if ctx.Err() != nil {
+			t.Fatal("the segment was not sealed after the store recovered")
+		}
+		f.clk.Advance(sealRetryMax)
+		time.Sleep(5 * time.Millisecond)
+	}
+	f.checkStorage(run, 1)
+}
+
+// A hole is not taken while the hot tail is over its bound: dropping it would
+// lose bytes that were accepted and are only waiting to be sealed.
+func TestAppendOutput_AHoleIsRefusedWhileTheOutputIsBusy(t *testing.T) {
+	f, run := outputFixture(t)
+	f.fill(run, MaxUnsealedBytes)
+	if _, err := f.appendNoSeal(run, 1, MaxUnsealedBytes+100, []byte("beyond")); !errors.Is(err, ErrOutputBusy) {
+		t.Fatalf("a hole over the bound: %v", err)
+	}
+	if o, _ := f.held(run, 1); o.Start != 0 || o.End != MaxUnsealedBytes {
+		t.Fatalf("held [%d, %d) after a refused hole", o.Start, o.End)
+	}
+	f.seal()
+	f.checkStorage(run, 1)
+}
+
+// A Controller that stops with unsealed output (the hot tail of a ring written
+// before segments, or a seal that never ran) seals it by itself when it starts
+// again, and the output reads back as it was sent.
+func TestOpen_AfterARestartTheUnsealedOutputIsSealedAndReadsBack(t *testing.T) {
+	blobs := newBlobs(t)
+	path := filepath.Join(t.TempDir(), "controller.db")
+	clk := clock.NewFake(epoch0)
+	first := reopen(t, path, Options{Clock: clk, Blobs: blobs, manualSeal: true})
+	f := newLeaseFixtureWith(t, &workerFixture{t: t, db: first, clk: clk})
+	run := f.queuedRun(1).ID
+	rng := rand.New(rand.NewPCG(21, 22)) //nolint:gosec // reproducible test data
+	all := randomBytes(rng, 3*SegmentBytes+1000)
+	f.sendAllNoSeal(run, 1, all)
+	if got := f.sealedOffset(run); got != 0 {
+		t.Fatalf("sealed %d before the restart", got)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f.db = reopen(t, path, Options{Clock: clk, Blobs: blobs})
+	deadline := time.Now().Add(10 * time.Second)
+	for f.sealedOffset(run) != 3*SegmentBytes {
+		if time.Now().After(deadline) {
+			t.Fatalf("sealed %d after the restart", f.sealedOffset(run))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, data := f.held(run, 1); !bytes.Equal(data, all) {
+		t.Fatal("the output after the restart is not the bytes sent")
+	}
+	f.checkStorage(run, 1)
+}
+
+// What a read says when a sealed segment cannot be read back: ErrOutputUnreadable
+// whichever way the blob is wrong, and never wrong bytes.
+func TestOutputRange_ASegmentThatCannotBeReadIsUnreadable(t *testing.T) {
+	corrupt := map[string]func(t *testing.T, path string){
+		"missing blob": func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"truncated gzip": func(t *testing.T, path string) {
+			st, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Truncate(path, st.Size()/2); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"bad checksum": func(t *testing.T, path string) {
+			b, err := os.ReadFile(path) //nolint:gosec // a path of the test's own TempDir
+			if err != nil {
+				t.Fatal(err)
+			}
+			b[len(b)-8] ^= 0xff                                  // the CRC-32 of the gzip trailer
+			if err := os.WriteFile(path, b, 0o600); err != nil { //nolint:gosec // a path of the test's own TempDir
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, damage := range corrupt {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			blobs, err := blob.New(root, clock.NewFake(epoch0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, run := outputFixtureWith(t, newWorkerFixtureWith(t, Options{Blobs: blobs, manualSeal: true}))
+			rng := rand.New(rand.NewPCG(31, 32)) //nolint:gosec // reproducible test data
+			f.sendAll(run, 1, randomBytes(rng, SegmentBytes+10))
+			var digest string
+			if err := f.db.Reader().QueryRowContext(t.Context(), `SELECT digest FROM logs_index`).Scan(&digest); err != nil {
+				t.Fatal(err)
+			}
+			hex := digest[strings.LastIndex(digest, ":")+1:]
+			damage(t, filepath.Join(root, "blobs", "sha256", hex[0:2], hex[2:4], hex))
+
+			err = f.db.Read(t.Context(), func(q Querier) error {
+				_, err := f.db.OutputRange(t.Context(), q, run, 1, 0, SegmentBytes)
+				return err
+			})
+			if !errors.Is(err, ErrOutputUnreadable) {
+				t.Fatalf("read of a damaged segment = %v, want ErrOutputUnreadable", err)
+			}
+		})
 	}
 }

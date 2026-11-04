@@ -3,6 +3,7 @@ package runs
 import (
 	"context"
 	"errors"
+	"maps"
 	"time"
 	"unicode/utf8"
 
@@ -45,9 +46,10 @@ func (s *Service) AppendOutput(ctx context.Context, by pki.Session, batch v1.Out
 	}
 	out := v1.OutputBatchResponse{Acks: make([]v1.OutputAck, 0, len(batch.Entries))}
 	entries := batch.Entries
+	busy := map[outputRef]bool{}
 	if len(entries) == 0 {
 		// Nothing to apply, but the caller is still authorised: a transaction that does only that.
-		_, err := s.appendSome(ctx, by, nil)
+		_, err := s.appendSome(ctx, by, nil, busy)
 		return out, err
 	}
 	for len(entries) > 0 {
@@ -56,7 +58,7 @@ func (s *Service) AppendOutput(ctx context.Context, by pki.Session, batch v1.Out
 			size += len(entries[n].Data)
 			n++
 		}
-		acks, err := s.appendSome(ctx, by, entries[:n])
+		acks, err := s.appendSome(ctx, by, entries[:n], busy)
 		if err != nil {
 			return v1.OutputBatchResponse{}, err
 		}
@@ -66,24 +68,47 @@ func (s *Service) AppendOutput(ctx context.Context, by pki.Session, batch v1.Out
 	return out, nil
 }
 
-func (s *Service) appendSome(ctx context.Context, by pki.Session, entries []v1.OutputEntry) ([]v1.OutputAck, error) {
+// outputRef names the output of a lease inside a batch.
+type outputRef struct {
+	run   string
+	epoch uint64
+}
+
+// appendSome applies entries in one transaction. busy holds the outputs of the
+// batch that were refused as busy: an entry after one of those would leave a
+// hole in front of the bytes that were refused, so it is refused the same way
+// without being applied (the Worker sends both again, in order).
+func (s *Service) appendSome(ctx context.Context, by pki.Session, entries []v1.OutputEntry, busy map[outputRef]bool) ([]v1.OutputAck, error) {
 	acks := make([]v1.OutputAck, 0, len(entries))
+	var refused map[outputRef]bool
 	err := s.db.WithTx(ctx, func(tx *store.Tx) error {
 		acks = acks[:0]
+		refused = maps.Clone(busy)
 		now := s.clock.Now()
 		w, err := workerOfCaller(ctx, tx, by, now)
 		if err != nil {
 			return err
 		}
 		for _, e := range entries {
+			ref := outputRef{e.RunID, e.LeaseEpoch}
+			if refused[ref] {
+				acks = append(acks, busyAck(e))
+				continue
+			}
 			ack, err := s.appendEntry(ctx, tx, w, now, e)
 			if err != nil {
 				return err
+			}
+			if ack.Code == domain.CodeInProgress {
+				refused[ref] = true
 			}
 			acks = append(acks, ack)
 		}
 		return nil
 	})
+	if err == nil {
+		maps.Copy(busy, refused)
+	}
 	return acks, err
 }
 
@@ -117,6 +142,13 @@ func (s *Service) appendEntry(ctx context.Context, tx *store.Tx, w store.Worker,
 	}
 	ack.Start, ack.End, ack.Closed = o.Start, o.End, o.Closed
 	return ack, nil
+}
+
+func busyAck(e v1.OutputEntry) v1.OutputAck {
+	err := outputError(store.ErrOutputBusy)
+	var coded *domain.Error
+	errors.As(err, &coded)
+	return v1.OutputAck{RunID: e.RunID, LeaseEpoch: e.LeaseEpoch, Code: coded.Code, Message: coded.Message}
 }
 
 // outputError says, in the terms of the API, what the store refused.
@@ -276,7 +308,7 @@ func (s *Service) ReadOutput(ctx context.Context, by pki.Session, q OutputRead) 
 		}
 		return nil
 	})
-	return out, err
+	return out, outputError(err)
 }
 
 // OutputFollow is GET /v1/runs/{ref}/output?follow=true: the same selection as a
