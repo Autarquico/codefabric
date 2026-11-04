@@ -206,7 +206,14 @@ func (g *Git) fetchCommit(ctx context.Context, bare string, s SourceSpec) error 
 	if g.hasCommit(ctx, bare, s.SourceCommit) {
 		return nil
 	}
-	f, err := g.originFetch(bare, s.Auth)
+	var refs string
+	if s.Auth != nil {
+		var err error
+		if refs, err = g.refSnapshot(ctx, bare); err != nil {
+			return err
+		}
+	}
+	f, err := g.originFetch(bare, s.Auth, refs)
 	if err != nil {
 		return err
 	}

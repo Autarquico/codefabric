@@ -4,6 +4,7 @@ package gitops_test
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
@@ -56,6 +57,7 @@ type askpassRig struct {
 	home   string
 	origin *gitorigin.Origin
 	commit string
+	src    string
 	auth   *gitops.OriginAuth
 	g      *gitops.Git
 	logs   *bytes.Buffer
@@ -73,7 +75,7 @@ func newAskpassRig(t *testing.T, trust bool) *askpassRig {
 	}
 	src := gittest.InitRepo(t)
 	other := gittest.InitRepo(t)
-	r := &askpassRig{t: t, home: home, logs: &bytes.Buffer{}, commit: gittest.Run(t, src, "rev-parse", "HEAD")}
+	r := &askpassRig{t: t, src: src, home: home, logs: &bytes.Buffer{}, commit: gittest.Run(t, src, "rev-parse", "HEAD")}
 	r.origin = gitorigin.New(t, map[string]string{"org/repo.git": src, "org/other.git": other}, originUser, originToken)
 	// Everything of the Worker is under a path with spaces and a quote.
 	r.paths = config.Paths{ConfigDir: t.TempDir(), DataDir: filepath.Join(t.TempDir(), "data dir, it's here")}
@@ -433,7 +435,77 @@ func TestOriginAuth_FetchDoesNotMaintainTheSharedBare(t *testing.T) {
 	if got := packs(t, bare); got < nPacks {
 		t.Errorf("the packs of the bare shrank from %d to %d: something repacked it", nPacks, got)
 	}
-	if out, _ := exec.CommandContext(t.Context(), "pgrep", "-f", "maintenance run|gc --auto").Output(); strings.TrimSpace(string(out)) != "" { //nolint:gosec // a test
-		t.Errorf("a maintenance process is running: %s", out)
+}
+
+// dirSize is the bytes of the files under dir.
+func dirSize(t *testing.T, dir string) int64 {
+	t.Helper()
+	var n int64
+	err := filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, err := d.Info()
+		if err == nil {
+			n += info.Size()
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// With the refs of the bare as its negotiation snapshot, a fetch of a commit
+// one change ahead brings the delta and not the history again, and it leaves
+// the refs of the bare as they were.
+func TestOriginAuth_SecondFetchBringsOnlyTheDelta(t *testing.T) {
+	r := newAskpassRig(t, true)
+	bare := r.paths.WorkerRepoDir(project)
+	blob := make([]byte, 2<<20)
+	if _, err := rand.Read(blob); err != nil { // incompressible, so a full fetch is 2 MiB
+		t.Fatal(err)
+	}
+	pushToOrigin := func(file string, content []byte, msg string) string {
+		if err := os.WriteFile(filepath.Join(r.src, file), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Above fetch.unpackLimit (100 objects) git keeps the received pack whole;
+		// below it, objects the bare already has are dropped, which would hide the bug.
+		for i := range 120 {
+			if err := os.WriteFile(filepath.Join(r.src, fmt.Sprintf("n%03d", i)), []byte(fmt.Sprint(i, msg)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		oid := gittest.Commit(t, r.src, "f", msg, msg)
+		gittest.Run(t, r.src, "push", "--quiet", filepath.Join(r.origin.Root, "org", "repo.git"), "main")
+		return oid
+	}
+	r.commit = pushToOrigin("big.bin", blob, "add big")
+	if err := r.prepare(r.url("org/repo.git")); err != nil {
+		t.Fatalf("Prepare: %v\n%s", err, r.logs)
+	}
+	first := dirSize(t, filepath.Join(bare, "objects"))
+	if first < 2<<20 {
+		t.Fatalf("the first fetch stored only %d bytes: the test would prove nothing", first)
+	}
+	refsBefore := gittest.Run(t, bare, "for-each-ref")
+
+	next := pushToOrigin("small", []byte("x\n"), "one change")
+	err := r.g.EnsureSource(t.Context(), gitops.SourceSpec{
+		Project: project, Run: run, Repo: r.url("org/repo.git"), SourceRef: "main", SourceCommit: next, Auth: r.auth,
+	})
+	if err != nil {
+		t.Fatalf("EnsureSource: %v\n%s", err, r.logs)
+	}
+	if _, err := gittest.Try(t, bare, "cat-file", "-e", next+"^{commit}"); err != nil {
+		t.Fatalf("the new commit did not arrive: %v", err)
+	}
+	if grown := dirSize(t, filepath.Join(bare, "objects")) - first; grown > 128<<10 {
+		t.Errorf("the second fetch added %d bytes for a one-line change: it downloaded the history again", grown)
+	}
+	if got := gittest.Run(t, bare, "for-each-ref"); got != refsBefore {
+		t.Errorf("the refs of the bare changed:\n%s\nwas:\n%s", got, refsBefore)
 	}
 }

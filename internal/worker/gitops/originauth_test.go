@@ -86,7 +86,7 @@ func TestOriginFetchEnvIsControlled(t *testing.T) {
 }
 
 func TestOriginFetchWithoutAuthIsTheUsers(t *testing.T) {
-	f, err := (&Git{}).originFetch("/b", nil)
+	f, err := (&Git{}).originFetch("/b", nil, "")
 	if err != nil || f.values != nil || !slices.Equal(f.env, userEnv()) {
 		t.Errorf("originFetch(nil) = %+v, %v", f, err)
 	}

@@ -34,6 +34,8 @@ type Origin struct {
 	URL string
 	// CA is a PEM file with the certificate the server presents.
 	CA string
+	// Root is the directory the bare clones are under, for tests that move a repository on.
+	Root string
 
 	srv      *httptest.Server
 	mu       sync.Mutex
@@ -61,7 +63,7 @@ func New(t *testing.T, repos map[string]string, user, token string) *Origin {
 		Path: gitPath, Args: []string{"http-backend"},
 		Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1", "HOME=" + root, "GIT_CONFIG_NOSYSTEM=1"},
 	}
-	o := &Origin{}
+	o := &Origin{Root: root}
 	o.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		u, p, ok := req.BasicAuth()
 		authorized := ok && u == user && p == token
