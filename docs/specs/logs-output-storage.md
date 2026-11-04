@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Almacenamiento de logs y output"
+title: Almacenamiento de logs y output
 type: task
-status: draft
+status: active
 priority: P1
 size: M
-issue: null
+issue: 100
 prs: []
-related_issues: []
+related_issues: [100]
 sub_issues: []
 depends_on: [observe-attach-events]
 supersedes: []
 related_specs: [codefabric-spec, phase-4-recovery]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-04
 ---
 
 # Almacenamiento de logs y output
@@ -60,6 +60,8 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+
+- Las migraciones de esta milestone se numeran en la secuencia común asignada al mergear (el store rechaza migraciones fuera de orden).
 
 ## Referencias
 

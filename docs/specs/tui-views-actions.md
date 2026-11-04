@@ -2,18 +2,18 @@
 codename: codefabric
 title: "TUI: vistas y acciones"
 type: task
-status: draft
+status: active
 priority: P1
 size: L
-issue: null
+issue: 96
 prs: []
-related_issues: []
+related_issues: [96]
 sub_issues: []
 depends_on: [tui-shell-home]
 supersedes: []
 related_specs: [codefabric-spec, phase-3-tui]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-04
 ---
 
 # TUI: vistas y acciones

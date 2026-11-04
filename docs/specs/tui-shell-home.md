@@ -2,18 +2,18 @@
 codename: codefabric
 title: "TUI: shell y home"
 type: task
-status: draft
+status: active
 priority: P1
 size: M
-issue: null
+issue: 95
 prs: []
-related_issues: []
+related_issues: [95]
 sub_issues: []
 depends_on: [client-subscriptions]
 supersedes: []
 related_specs: [codefabric-spec, phase-3-tui]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-04
 ---
 
 # TUI: shell y home
@@ -60,6 +60,8 @@ Cada scenario se implementa como un test `TestScenario_*`.
 
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
+
+- MODELS (decisión del usuario, 2026-11-04): hasta la Fase 6 (usage-attribution) el panel muestra «usage not reported», nunca porcentajes.
 
 ## Referencias
 
