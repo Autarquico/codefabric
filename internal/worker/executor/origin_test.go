@@ -227,7 +227,9 @@ func TestAnAssignmentThatIsNotTheFrozenOriginIsRefused(t *testing.T) {
 func TestAnOriginSecretTheWorkerCannotReadFailsWithTheCodedUnavailable(t *testing.T) {
 	g := &fakeGit{}
 	f, k := originRun(t, 2, g)
-	f.store().Delete(t.Context(), originRef) //nolint:errcheck // a fake
+	if err := f.store().Delete(t.Context(), originRef); err != nil {
+		t.Fatal(err)
+	}
 	err := f.e.prepare(t.Context(), f.run(k))
 	var coded *codedFailure
 	if !errors.As(err, &coded) || coded.code != domain.CodeSecretUnavailable {
