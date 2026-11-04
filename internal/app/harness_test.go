@@ -50,11 +50,18 @@ func newEnv(t *testing.T) *env {
 // clock is already the fake one when configure runs.
 func newEnvWith(t *testing.T, configure func(*app.Config, *clock.Fake)) *env {
 	t.Helper()
+	return newEnvStore(t, configure, store.Options{})
+}
+
+// newEnvStore is newEnvWith with options for the store (the clock and the blob
+// store are set here).
+func newEnvStore(t *testing.T, configure func(*app.Config, *clock.Fake), opts store.Options) *env {
+	t.Helper()
 	clk := clock.NewFake(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC))
 	blobRoot := t.TempDir()
 	blobs, err := blob.New(blobRoot, clk)
 	must(t, err)
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "controller.db"), store.Options{Clock: clk, Blobs: blobs})
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "controller.db"), withClockAndBlobs(opts, clk, blobs))
 	must(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	ca, err := pki.NewCA(clk.Now())
@@ -188,4 +195,9 @@ func wantCode(t *testing.T, err error, code domain.Code) {
 	if !errors.As(err, &de) || de.Code != code {
 		t.Fatalf("got %v, want code %s", err, code)
 	}
+}
+
+func withClockAndBlobs(opts store.Options, clk *clock.Fake, blobs *blob.Store) store.Options {
+	opts.Clock, opts.Blobs = clk, blobs
+	return opts
 }

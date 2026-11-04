@@ -633,12 +633,15 @@ func TestOutputRange_ASegmentThatCannotBeReadIsUnreadable(t *testing.T) {
 			hex := digest[strings.LastIndex(digest, ":")+1:]
 			damage(t, filepath.Join(root, "blobs", "sha256", hex[0:2], hex[2:4], hex))
 
-			err = f.db.Read(t.Context(), func(q Querier) error {
-				_, err := f.db.OutputRange(t.Context(), q, run, 1, 0, SegmentBytes)
-				return err
-			})
-			if !errors.Is(err, ErrOutputUnreadable) {
-				t.Fatalf("read of a damaged segment = %v, want ErrOutputUnreadable", err)
+			// Whole, and a page that stops well before the end: neither serves a byte.
+			for _, to := range []uint64{SegmentBytes, 100} {
+				err = f.db.Read(t.Context(), func(q Querier) error {
+					_, err := f.db.OutputRange(t.Context(), q, run, 1, 0, to)
+					return err
+				})
+				if !errors.Is(err, ErrOutputUnreadable) {
+					t.Fatalf("read of [0, %d) of a damaged segment = %v, want ErrOutputUnreadable", to, err)
+				}
 			}
 		})
 	}

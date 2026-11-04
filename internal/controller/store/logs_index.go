@@ -113,11 +113,15 @@ func (db *DB) readSegment(ctx context.Context, out []byte, s segment, from, to u
 	if _, err := io.ReadFull(rc, out[n:]); err != nil {
 		return nil, fmt.Errorf("%w: segment %s is shorter than its index: %w", ErrOutputUnreadable, s.digest, err)
 	}
-	if to == s.last {
-		// The range reaches the end of the segment: reading to EOF makes gzip check its CRC.
-		if _, err := io.Copy(io.Discard, rc); err != nil {
-			return nil, fmt.Errorf("%w: segment %s fails its checksum: %w", ErrOutputUnreadable, s.digest, err)
-		}
+	// Serve nothing from a segment that is not whole: read the rest to EOF (so
+	// gzip checks its CRC) and check the raw length the index promises. The
+	// bytes are discarded as they stream, so memory stays bounded.
+	rest, err := io.Copy(io.Discard, rc)
+	if err != nil {
+		return nil, fmt.Errorf("%w: segment %s fails its checksum: %w", ErrOutputUnreadable, s.digest, err)
+	}
+	if uint64(rest) != s.last-to { //nolint:gosec // rest is not negative
+		return nil, fmt.Errorf("%w: segment %s holds a different length than its index", ErrOutputUnreadable, s.digest)
 	}
 	return out, nil
 }

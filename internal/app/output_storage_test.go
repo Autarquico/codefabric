@@ -46,12 +46,22 @@ func (e *env) readAll(o outputRun) (start uint64, data []byte) {
 // answered as retryable, nothing is lost, and sending them again completes the
 // output.
 func TestOutput_ABusyChunkDoesNotLetTheNextOneDropWhatWasAccepted(t *testing.T) {
+	testBusyBatch(t, 3)
+}
+
+// The same with a batch that does not fit in one transaction (outputTxBytes):
+// the refusal holds across the transactions of the batch.
+func TestOutput_ABusyBatchLargerThanATransactionLosesNothing(t *testing.T) {
+	testBusyBatch(t, 8)
+}
+
+func testBusyBatch(t *testing.T, refused int) {
 	e := newEnv(t)
 	o := e.outputRun("alpha")
 	restore := e.breakBlobWrites()
 
 	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // reproducible test data
-	source := make([]byte, store.MaxUnsealedBytes+2*v1.OutputChunkBytes+1234)
+	source := make([]byte, store.MaxUnsealedBytes+(refused-1)*v1.OutputChunkBytes+1234)
 	for i := range source {
 		source[i] = byte(rng.Uint32()) //nolint:gosec // truncation is the point: a random byte
 	}
@@ -72,7 +82,13 @@ func TestOutput_ABusyChunkDoesNotLetTheNextOneDropWhatWasAccepted(t *testing.T) 
 		}
 	}
 
-	acks := e.send(o.worker, chunk(full), chunk(full+1), chunk(full+2))
+	tail := func() (batch []v1.OutputEntry) {
+		for i := full; i < full+refused; i++ {
+			batch = append(batch, chunk(i))
+		}
+		return batch
+	}
+	acks := e.send(o.worker, tail()...)
 	for i, ack := range acks {
 		if ack.Code != domain.CodeInProgress {
 			t.Fatalf("entry %d = %+v, want CF_IN_PROGRESS", i, ack)
@@ -85,7 +101,7 @@ func TestOutput_ABusyChunkDoesNotLetTheNextOneDropWhatWasAccepted(t *testing.T) 
 	restore()
 	waitUntil(t, "the resend to be accepted", func() bool {
 		e.clock.Advance(time.Minute) // fires the sealer's retry
-		for _, ack := range e.send(o.worker, chunk(full), chunk(full+1), chunk(full+2)) {
+		for _, ack := range e.send(o.worker, tail()...) {
 			if ack.Code != "" {
 				return false
 			}
@@ -113,5 +129,61 @@ func TestOutput_AReadWithAMissingSegmentIsAnInternalErrorWithoutDetails(t *testi
 	wantCode(t, err, domain.CodeInternal)
 	if strings.Contains(err.Error(), "sha256") || strings.Contains(err.Error(), e.blobRoot) {
 		t.Fatalf("the error shows the storage: %v", err)
+	}
+}
+
+// A jump that would pass the cap closes the output as it stood: the bytes it
+// had, its offsets and its final offset are kept, not dropped by the gap.
+func TestOutput_AJumpOverTheCapClosesTheOutputIntact(t *testing.T) {
+	e := newEnvStore(t, nil, store.Options{OutputMaxBytes: 100})
+	o := e.outputRun("alpha")
+	kept := strings.Repeat("k", 60)
+	e.send(o.worker, entry(o, 0, kept))
+
+	acks := e.send(o.worker, entry(o, 1000, strings.Repeat("j", 41)))
+	if acks[0].Code != domain.CodeInvalidTransition {
+		t.Fatalf("ack = %+v, want the output closed", acks[0])
+	}
+	got := e.readOutput(runs.OutputRead{Ref: o.run.ID, HasOffset: true, Offset: 0, Limit: v1.OutputPageBytes})
+	if string(got.Data) != kept || got.Start != 0 || got.End != 60 || !got.Closed {
+		t.Fatalf("read = start %d end %d closed %v with %d bytes", got.Start, got.End, got.Closed, len(got.Data))
+	}
+}
+
+// A partial page of a segment whose blob is damaged is an internal error with a
+// fixed message, never the bytes in front of the damage.
+func TestOutput_APartialReadOfADamagedSegmentIsAnInternalError(t *testing.T) {
+	damage := map[string]func(b []byte) []byte{
+		"truncated gzip": func(b []byte) []byte { return b[:len(b)/2] },
+		"bad checksum":   func(b []byte) []byte { b[len(b)-8] ^= 0xff; return b },
+	}
+	for name, d := range damage {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			o := e.outputRun("alpha")
+			rng := rand.New(rand.NewPCG(5, 6)) //nolint:gosec // reproducible test data
+			for off := 0; off < 1<<20+v1.OutputChunkBytes; off += v1.OutputChunkBytes {
+				chunk := make([]byte, v1.OutputChunkBytes)
+				for i := range chunk {
+					chunk[i] = byte(rng.Uint32()) //nolint:gosec // truncation is the point: a random byte
+				}
+				e.send(o.worker, v1.OutputEntry{RunID: o.run.ID, LeaseEpoch: o.lease.Epoch, Offset: uint64(off), Data: chunk}) //nolint:gosec // small
+			}
+			waitUntil(t, "the segment", func() bool { return e.sealedOffset(domain.ID(o.run.ID), o.lease.Epoch) >= 1<<20 })
+
+			var digest string
+			must(t, e.db.Reader().QueryRowContext(t.Context(), `SELECT digest FROM logs_index`).Scan(&digest))
+			hex := digest[strings.LastIndex(digest, ":")+1:]
+			path := filepath.Join(e.blobRoot, "blobs", "sha256", hex[0:2], hex[2:4], hex)
+			raw, err := os.ReadFile(path) //nolint:gosec // a path of the test's own TempDir
+			must(t, err)
+			must(t, os.WriteFile(path, d(raw), 0o600)) //nolint:gosec // a path of the test's own TempDir
+
+			_, err = e.app.Runs.ReadOutput(t.Context(), e.owner, runs.OutputRead{Ref: o.run.ID, HasOffset: true, Offset: 0, Limit: 100})
+			wantCode(t, err, domain.CodeInternal)
+			if strings.Contains(err.Error(), "sha256") || strings.Contains(err.Error(), e.blobRoot) || strings.Contains(err.Error(), "gzip") {
+				t.Fatalf("the error shows the storage: %v", err)
+			}
+		})
 	}
 }

@@ -169,6 +169,10 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 			t.markSealDue(o)
 			return Output{}, ErrOutputBusy
 		}
+		if o.Accepted+uint64(len(data)) > t.db.outputMax {
+			// Over the cap: close what the output holds, before the gap drops any of it.
+			return t.closeAtLimit(ctx, o, at)
+		}
 		if err := t.trimOutput(ctx, run, epoch, offset); err != nil {
 			return Output{}, err
 		}
