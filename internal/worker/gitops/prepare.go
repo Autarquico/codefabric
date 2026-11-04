@@ -210,14 +210,19 @@ func (g *Git) fetchCommit(ctx context.Context, bare string, s SourceSpec) error 
 	if err != nil {
 		return err
 	}
+	var lastFailure string
 	for _, refspec := range []string{s.SourceRef, s.SourceCommit} {
 		if err := g.fetch(ctx, bare, s.Repo, refspec, f); err != nil {
+			lastFailure = clean(redacted(err.Error(), f.values), nil)
 			g.log.WarnContext(ctx, "fetching the source of a Run failed", "run", s.Run, "err", redacted(err.Error(), f.values))
 			continue
 		}
 		if g.hasCommit(ctx, bare, s.SourceCommit) {
 			return nil
 		}
+	}
+	if lastFailure != "" {
+		return fmt.Errorf("gitops: the source commit %s is not available from the repository of the Project (the branch may have moved or been rewritten): %s", s.SourceCommit[:12], lastFailure)
 	}
 	return fmt.Errorf("gitops: the source commit %s is not available from the repository of the Project (the branch may have moved or been rewritten)", s.SourceCommit[:12])
 }

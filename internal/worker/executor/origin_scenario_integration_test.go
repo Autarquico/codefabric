@@ -361,9 +361,12 @@ exec '%s' "$@"
 		t.Fatalf("phase = %s, want stopped; reports %v", got, kinds(r.reports(k)))
 	}
 	marker := "[REDACTED:" + originRef + "]"
-	// gitops reports a failed fetch as "the commit is not available" and keeps
-	// what git said for the log, redacted: the report has no value to leak.
-	noTokenIn(t, "the prepare_failed message", r.prepareFailedMessage(k))
+	// gitops reports a failed fetch with the tail of what git said, redacted.
+	msg := r.prepareFailedMessage(k)
+	if !strings.Contains(msg, marker) {
+		t.Errorf("the prepare_failed message does not show %s:\n%s", marker, msg)
+	}
+	noTokenIn(t, "the prepare_failed message", msg)
 	if !strings.Contains(r.logs.String(), marker) {
 		t.Errorf("the log does not show %s:\n%s", marker, r.logs)
 	}
