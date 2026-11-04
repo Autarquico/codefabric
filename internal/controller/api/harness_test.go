@@ -29,6 +29,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/buildinfo"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/controller/api"
+	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
 	"github.com/Autarquico/codefabric/internal/controller/store"
@@ -66,12 +67,12 @@ func newController(t *testing.T, start time.Time, opts ...func(*api.Config)) *te
 // the server starts.
 func newControllerWithRoutes(t *testing.T, start time.Time, routes func(*api.Server), opts ...func(*api.Config)) *testController {
 	t.Helper()
-	return buildController(t, start, routes, nil, opts...)
+	return buildController(t, start, routes, nil, nil, opts...)
 }
 
 // buildController is newControllerWithRoutes with a git relay: the API serves
 // it and the Run use cases verify publications against it.
-func buildController(t *testing.T, start time.Time, routes func(*api.Server), gitRelay *relay.Relay, opts ...func(*api.Config)) *testController {
+func buildController(t *testing.T, start time.Time, routes func(*api.Server), gitRelay *relay.Relay, blobs *blob.Store, opts ...func(*api.Config)) *testController {
 	t.Helper()
 	var runOpts []runs.Option
 	if gitRelay != nil {
@@ -81,7 +82,7 @@ func buildController(t *testing.T, start time.Time, routes func(*api.Server), gi
 	dir := t.TempDir()
 
 	var err error
-	tc.db, err = store.Open(t.Context(), filepath.Join(dir, "controller.db"), store.Options{Clock: tc.clock})
+	tc.db, err = store.Open(t.Context(), filepath.Join(dir, "controller.db"), store.Options{Clock: tc.clock, Blobs: blobs})
 	must(t, err)
 	t.Cleanup(func() { _ = tc.db.Close() })
 

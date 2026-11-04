@@ -341,7 +341,7 @@ func TestOutputFollow_DeliversTheTailThenWhatArrivesThenTheEOF(t *testing.T) {
 	}
 }
 
-func TestOutputFollow_StartsWhereAskedAndFlagsWhatTheRingDropped(t *testing.T) {
+func TestOutputFollow_StartsWhereAskedAndFlagsWhatTheWorkerSkipped(t *testing.T) {
 	e := newEnv(t)
 	o := e.outputRun("alpha")
 	e.send(o.worker, entry(o, 0, "0123456789"))
@@ -476,14 +476,66 @@ func TestOutputFollow_ASlowReaderGetsEverythingInPages(t *testing.T) {
 		e.send(o.worker, entry(o, uint64(i)*v1.OutputChunkBytes, chunk)) //nolint:gosec // small
 		want.WriteString(chunk)
 	}
-	// 30 chunks of 64 KiB are 1.9 MiB: the ring keeps the last MiB.
+	// 30 chunks of 64 KiB are 1.9 MiB: one segment is sealed and the rest is hot, and the follow reads both.
 	s, begin := e.followOutput(runs.OutputFollow{Ref: o.run.ID, HasOffset: true, Offset: 0})
-	if begin.Start == 0 || begin.End != 30*v1.OutputChunkBytes {
+	if begin.Start != 0 || begin.End != 30*v1.OutputChunkBytes {
 		t.Fatalf("begin = %+v", begin)
 	}
-	waitUntil(t, "the retained tail", func() bool { return len(s.text()) == int(begin.End-begin.Start) }) //nolint:gosec // bounded
-	if s.text() != want.String()[begin.Start:] {
+	waitUntil(t, "all of it", func() bool { return len(s.text()) == int(begin.End) }) //nolint:gosec // bounded
+	if s.text() != want.String() {
 		t.Fatal("the bytes delivered are not the bytes sent")
+	}
+}
+
+func (e *env) sealedOffset(run domain.ID, epoch uint64) uint64 {
+	e.t.Helper()
+	var o store.Output
+	must(e.t, e.db.Read(e.t.Context(), func(q store.Querier) (err error) {
+		o, err = store.OutputOf(e.t.Context(), q, run, epoch)
+		return err
+	}))
+	return o.Sealed
+}
+
+// A follow that is waiting at the end of the hot tail gets what is sealed under
+// it and what comes after, in order and without a gap.
+func TestOutputFollow_GoesOnAcrossASeal(t *testing.T) {
+	e := newEnv(t)
+	o := e.outputRun("alpha")
+	var want strings.Builder
+	offset := uint64(0)
+	send := func(i int) {
+		chunk := fmt.Sprintf("%02d", i) + strings.Repeat("y", v1.OutputChunkBytes-2)
+		e.send(o.worker, entry(o, offset, chunk))
+		offset += uint64(len(chunk))
+		want.WriteString(chunk)
+	}
+	for i := range 15 { // 960 KiB: nothing sealed yet
+		send(i)
+	}
+	s, _ := e.followOutput(runs.OutputFollow{Ref: o.run.ID, HasOffset: true, Offset: 0})
+	waitUntil(t, "the hot tail", func() bool { return len(s.text()) == int(offset) }) //nolint:gosec // bounded
+	for i := 15; i < 20; i++ {                                                        // crosses 1 MiB: the first segment is sealed
+		send(i)
+	}
+	waitUntil(t, "the rest", func() bool { return len(s.text()) == int(offset) }) //nolint:gosec // bounded
+	waitUntil(t, "the first segment to be installed", func() bool { return e.sealedOffset(domain.ID(o.run.ID), o.lease.Epoch) >= 1<<20 })
+	for i := 20; i < 23; i++ { // the follower is active and the hot tail under it is gone
+		send(i)
+	}
+	waitUntil(t, "what follows the seal", func() bool { return len(s.text()) == int(offset) }) //nolint:gosec // bounded
+	if s.text() != want.String() {
+		t.Fatal("the bytes delivered across the seal are not the bytes sent")
+	}
+	s.mu.Lock()
+	gaps := s.gaps
+	s.mu.Unlock()
+	if len(gaps) != 0 {
+		t.Fatalf("gaps = %v", gaps)
+	}
+	if got := e.readOutput(runs.OutputRead{Ref: o.run.ID, HasOffset: true, Offset: v1.OutputTailBytes - 10, Limit: 20}); len(got.Data) != 20 ||
+		string(got.Data) != want.String()[v1.OutputTailBytes-10:v1.OutputTailBytes+10] || got.Truncated {
+		t.Fatalf("read across the seal = %q truncated %v", got.Data, got.Truncated)
 	}
 }
 
