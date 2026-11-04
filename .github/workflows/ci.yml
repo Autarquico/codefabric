@@ -71,7 +71,7 @@ jobs:
           go-version: "1.27.x"
           check-latest: true
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y git tmux
+        run: sudo apt-get update && sudo apt-get install -y git tmux dbus-user-session gnome-keyring
       - if: runner.os == 'macOS'
         run: brew install tmux
       - if: runner.os == 'Linux'
@@ -94,6 +94,44 @@ jobs:
           CF_REQUIRE_GIT: "1"
           CF_REQUIRE_SYSTEMD: ${{ runner.os == 'Linux' && '1' || '' }}
           CF_REQUIRE_LAUNCHD: ${{ runner.os == 'macOS' && '1' || '' }}
+      # The keyring backend of secrets against a real, isolated keyring: a
+      # gnome-keyring-daemon with its own data dir on the user bus above, and a
+      # temporary keychain that is the default one on macOS (the login keychain
+      # is not touched). CF_REQUIRE_KEYRING makes the tests fail, not skip.
+      - if: runner.os == 'Linux'
+        name: Start an isolated Secret Service
+        run: |
+          data="$(mktemp -d)"
+          echo "XDG_DATA_HOME=${data}" >> "$GITHUB_ENV"
+          printf 'ci-keyring-password' | XDG_DATA_HOME="${data}" gnome-keyring-daemon --daemonize --unlock --components=secrets >/dev/null
+          for _ in $(seq 1 30); do
+            if busctl --user list --no-pager | grep -q org.freedesktop.secrets; then exit 0; fi
+            sleep 1
+          done
+          echo "the Secret Service did not appear on the user bus" >&2
+          exit 1
+      - if: runner.os == 'macOS'
+        name: Create a temporary default keychain
+        run: |
+          keychain="${RUNNER_TEMP}/cf-test.keychain-db"
+          security create-keychain -p ci-keychain-password "${keychain}"
+          security set-keychain-settings -lut 3600 "${keychain}"
+          security unlock-keychain -p ci-keychain-password "${keychain}"
+          security list-keychains -d user -s "${keychain}" "${HOME}/Library/Keychains/login.keychain-db"
+          security default-keychain -d user -s "${keychain}"
+      - name: Keyring tests
+        run: |
+          CGO_ENABLED=1 go test -race -tags integration -count=1 -v -run 'TestKeyring_' ./internal/adapters/secrets/keyring/ | tee keyring-tests.txt
+          # a selection that matches nothing, or tests that skipped, would pass quietly
+          grep -q -e '--- PASS: TestKeyring_StoreKeepsTheValueOnlyInTheRealKeyring' keyring-tests.txt
+          if grep -q -e '--- SKIP' keyring-tests.txt; then echo 'a keyring test skipped' >&2; exit 1; fi
+        env:
+          CF_REQUIRE_KEYRING: "1"
+      - if: always() && runner.os == 'macOS'
+        name: Remove the temporary keychain
+        run: |
+          security default-keychain -d user -s "${HOME}/Library/Keychains/login.keychain-db"
+          security delete-keychain "${RUNNER_TEMP}/cf-test.keychain-db" || true
 
   # The end-to-end suite against the real cf: the fixed seed corpus on ubuntu,
   # its first seed with slower timings on macOS.
