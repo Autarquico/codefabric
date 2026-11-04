@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/rand/v2"
 	"testing"
+	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/controller/blob"
@@ -419,4 +420,63 @@ func TestAppendOutput_AHoleDropsWhatWasHeld(t *testing.T) {
 func (f *leaseFixture) putSegment(t *testing.T, raw []byte) (blob.Digest, int64, error) {
 	t.Helper()
 	return f.db.blobs.PutGzip(t.Context(), raw)
+}
+
+func (f *leaseFixture) fill(run domain.ID, n int) {
+	f.t.Helper()
+	chunk := bytes.Repeat([]byte("x"), v1.OutputChunkBytes)
+	for off := 0; off < n; off += v1.OutputChunkBytes {
+		if _, err := f.appendNoSeal(run, 1, uint64(off), chunk[:min(v1.OutputChunkBytes, n-off)]); err != nil { //nolint:gosec // small
+			f.t.Fatal(err)
+		}
+	}
+}
+
+func (f *leaseFixture) sealedOffset(run domain.ID) uint64 {
+	f.t.Helper()
+	o, _ := f.held(run, 1)
+	return o.Sealed
+}
+
+// One busy output cannot hold the sealer: a pass seals at most one segment of
+// each due output, so two busy outputs advance in step and neither starves.
+func TestSealer_APassSealsOneSegmentPerOutput(t *testing.T) {
+	f, a := outputFixture(t)
+	b := f.queuedRun(2).ID
+	f.fill(a, 4*SegmentBytes)
+	f.fill(b, 4*SegmentBytes)
+
+	for pass := uint64(1); pass <= 4; pass++ {
+		progressed, err := f.db.sealer.pass1(t.Context())
+		if err != nil || !progressed {
+			t.Fatalf("pass %d = %v, %v", pass, progressed, err)
+		}
+		if sa, sb := f.sealedOffset(a), f.sealedOffset(b); sa != pass*SegmentBytes || sb != pass*SegmentBytes {
+			t.Fatalf("after pass %d sealed %d and %d, want %d each", pass, sa, sb, pass*SegmentBytes)
+		}
+	}
+	if progressed, err := f.db.sealer.pass1(t.Context()); err != nil || progressed {
+		t.Fatalf("a pass with nothing left = %v, %v", progressed, err)
+	}
+}
+
+// The production path: the goroutine seals after the commit, and Close stops it
+// and returns.
+func TestSealer_BackgroundSealsAndCloseReturns(t *testing.T) {
+	blobs := newBlobs(t)
+	w := newWorkerFixtureWith(t, Options{Blobs: blobs})
+	f := newLeaseFixtureWith(t, w)
+	run := f.queuedRun(1).ID
+	f.fill(run, SegmentBytes+10)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for f.sealedOffset(run) != SegmentBytes {
+		if time.Now().After(deadline) {
+			t.Fatal("the background sealer did not seal")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := f.db.Close(); err != nil {
+		t.Fatal(err)
+	}
 }

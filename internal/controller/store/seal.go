@@ -136,7 +136,7 @@ func (s *sealer) start() {
 				return
 			case <-s.wake:
 			}
-			if err := s.drain(ctx); err != nil && ctx.Err() == nil {
+			if _, err := s.pass1(ctx); err != nil && ctx.Err() == nil {
 				s.db.log.Warn("store: sealing output failed; it will be tried again", "err", err)
 			}
 		}
@@ -150,34 +150,53 @@ func (s *sealer) stop() {
 	}
 }
 
-// drain seals everything that is due. An output whose seal fails stays due, for
-// the next time something wakes the sealer.
+// drain seals everything that is due, until nothing is.
 func (s *sealer) drain(ctx context.Context) error {
+	for {
+		progressed, err := s.pass1(ctx)
+		if err != nil || !progressed {
+			return err
+		}
+	}
+}
+
+// pass1 is one round-robin pass: it seals at most ONE segment of each due
+// output, so a fast output cannot hold the sealer while the others sit at
+// MaxUnsealedBytes. An output that still has something to seal goes back into
+// due and wakes the sealer; one whose seal fails stays due without a wake, for
+// the next time something wakes it. It reports whether any segment was sealed.
+func (s *sealer) pass1(ctx context.Context) (bool, error) {
 	s.pass.Lock()
 	defer s.pass.Unlock()
-	var errs []error
+	var (
+		errs       []error
+		progressed bool
+	)
 	for _, k := range s.take() {
-		if err := s.sealOutput(ctx, k); err != nil {
+		more, sealed, err := s.sealOne(ctx, k)
+		progressed = progressed || sealed
+		switch {
+		case err != nil:
 			errs = append(errs, fmt.Errorf("the output of %s: %w", k.run, err))
 			s.mu.Lock()
 			s.due[k] = struct{}{}
 			s.mu.Unlock()
+		case more:
+			s.add(k)
 		}
 	}
-	return errors.Join(errs...)
+	return progressed, errors.Join(errs...)
 }
 
-// sealOutput seals the output segment by segment until nothing is left to seal.
-func (s *sealer) sealOutput(ctx context.Context, k outputKey) error {
-	for {
-		p, err := s.prepare(ctx, k)
-		if err != nil || p == nil {
-			return err
-		}
-		if _, err := s.install(ctx, p); err != nil {
-			return err
-		}
+// sealOne seals the next segment of the output, if there is one. It reports
+// whether the output has another to seal and whether this call sealed one.
+func (s *sealer) sealOne(ctx context.Context, k outputKey) (more, sealed bool, err error) {
+	p, err := s.prepare(ctx, k)
+	if err != nil || p == nil {
+		return false, false, err
 	}
+	sealed, err = s.install(ctx, p)
+	return sealed && p.more, sealed, err
 }
 
 // sealing is a segment written to the CAS and not yet indexed.
@@ -187,6 +206,7 @@ type sealing struct {
 	digest      string
 	storedBytes int64
 	rawBytes    int
+	more        bool // set by install: the output has another segment to seal
 }
 
 // prepare reads the next range to seal from a snapshot and writes its gzip to
@@ -247,6 +267,8 @@ func (s *sealer) install(ctx context.Context, p *sealing) (bool, error) {
 		if _, err := tx.Exec(ctx, `UPDATE run_output SET sealed_offset = ? WHERE run_id = ? AND lease_epoch = ?`, p.last, p.key.run, p.key.epoch); err != nil {
 			return fmt.Errorf("store: moving the sealed offset: %w", err)
 		}
+		o.Sealed = p.last
+		p.more = sealTarget(o) > p.last
 		installed = true
 		return nil
 	})

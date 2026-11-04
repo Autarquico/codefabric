@@ -7,8 +7,7 @@
 --
 -- first_offset and last_offset are the raw (uncompressed) range of the segment,
 -- last_offset exclusive; raw_bytes is its length. digest is that of the stored
--- gzip bytes and is also recorded in blobs_meta. The segments of an output are
--- contiguous from run_output.start_offset; rows below it are what the Worker
+-- gzip bytes. The segments of an output are contiguous from run_output.start_offset; rows below it are what the Worker
 -- skipped past (a gap restarts the output): kept, never read. The segments are
 -- not recorded in blobs_meta: this index is their only reference count.
 CREATE TABLE logs_index (
