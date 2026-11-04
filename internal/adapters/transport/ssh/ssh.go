@@ -129,14 +129,14 @@ func Attach(ctx context.Context, o Options, target domain.SSHTarget, remote []st
 	case err == nil:
 		return 0, nil
 	case errors.As(err, &exit):
-		return ExitStatus(exit), nil
+		return exitStatus(exit), nil
 	}
 	return 0, fmt.Errorf("ssh: starting %s: %w", cmd.Path, err)
 }
 
-// ExitStatus is the status Attach reports for a finished ssh: its own exit
+// exitStatus is the status Attach reports for a finished ssh: its own exit
 // code, or 255 when a signal ended it.
-func ExitStatus(exit *exec.ExitError) int {
+func exitStatus(exit *exec.ExitError) int {
 	if code := exit.ExitCode(); code >= 0 {
 		return code
 	}

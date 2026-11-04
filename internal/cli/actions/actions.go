@@ -14,6 +14,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -66,7 +68,22 @@ func flags(names ...string) []Arg {
 	return args
 }
 
+func required(names ...string) []Arg {
+	args := flags(names...)
+	for i := range args {
+		args[i].Required = true
+	}
+	return args
+}
+
 func with(args []Arg, more ...Arg) []Arg { return append(more, args...) }
+
+// adopt are the inputs adopt and commit need without a terminal to ask on: the
+// harness to include, and the confirmation, which the caller gives (yes=true)
+// after its own confirm dialog, since a run here has no stdin to answer on.
+func adopt() []Arg {
+	return append(required("harness", "yes"), flags("replace-secrets", "changelog")...)
+}
 
 var projectFlag = flags("project")
 
@@ -96,11 +113,26 @@ var descriptors = []Descriptor{
 	{ID: "worker.undrain", Title: "Undrain worker", Target: Worker, Path: []string{"worker", "undrain"}},
 	{ID: "worker.remove", Title: "Remove worker", Target: Worker, Path: []string{"worker", "remove"}},
 
-	{ID: "workflow.adopt", Title: "Adopt workflow", Target: Workflow, Path: []string{"workflow", "adopt"}},
-	{ID: "workflow.commit", Title: "Commit workflow", Target: Workflow, Path: []string{"workflow", "commit"}},
-	{ID: "workflow.apply", Title: "Apply workflow", Target: Workflow, Path: []string{"workflow", "apply"}, Args: flags("dry-run", "preview")},
-	{ID: "workflow.rollback", Title: "Roll back workflow", Path: []string{"workflow", "rollback"}},
-	{ID: "workflow.sync", Title: "Sync workflow", Target: Workflow, Path: []string{"workflow", "sync"}},
+	{
+		ID: "workflow.adopt", Title: "Adopt workflow", Target: Workflow, Path: []string{"workflow", "adopt"},
+		Args: adopt(),
+	},
+	{
+		ID: "workflow.commit", Title: "Commit workflow", Target: Workflow, Path: []string{"workflow", "commit"},
+		Args: append(adopt(), Arg{Name: "rebase", Flag: true}),
+	},
+	{
+		ID: "workflow.apply", Title: "Apply workflow", Target: Workflow, Path: []string{"workflow", "apply"},
+		Args: with(flags("dry-run", "preview", "force", "detach"), required("worker", "harness")...),
+	},
+	{
+		ID: "workflow.rollback", Title: "Roll back workflow", Path: []string{"workflow", "rollback"},
+		Args: with(flags("dry-run", "force", "detach"), required("worker", "harness")...),
+	},
+	{
+		ID: "workflow.sync", Title: "Sync workflow", Target: Workflow, Path: []string{"workflow", "sync"},
+		Args: with(flags("dry-run", "detach"), required("harness")...),
+	},
 
 	{
 		ID: "project.create", Title: "New project", Path: []string{"project", "create"},
@@ -182,7 +214,7 @@ func (r Runner) Run(ctx context.Context, id string, in Input) Result {
 	d, ok := Lookup(id)
 	switch {
 	case !ok:
-		return refused(domain.CodeNotFound, "there is no action "+id)
+		return refused(domain.CodeInvalidRequest, "there is no action "+id)
 	case d.Terminal:
 		return refused(domain.CodeInvalidRequest, d.Title+" takes over the terminal: prepare it with Attach")
 	}
@@ -209,9 +241,19 @@ func (r Runner) Attach(ctx context.Context, id string, in Input) (*cli.AttachSes
 	if in.Target == "" {
 		return nil, asFailure(domain.NewError(domain.CodeInvalidRequest, d.Title+" needs its "+string(d.Target), nil))
 	}
+	if err := d.checkValues(in); err != nil {
+		return nil, asFailure(err)
+	}
+	readOnly := false
+	if v := in.Values["read-only"]; v != "" {
+		var err error
+		if readOnly, err = strconv.ParseBool(v); err != nil {
+			return nil, asFailure(invalid(d.Title + ": read-only is not a boolean"))
+		}
+	}
 	session, err := cli.PrepareAttach(ctx, r.Options.Terminal, cli.AttachParams{
 		Ref: in.Target, Project: in.Values["project"], SSHTarget: in.Values["ssh-target"],
-		ReadOnly: in.Values["read-only"] == "true", Controller: in.Controller,
+		ReadOnly: readOnly, Controller: in.Controller,
 	})
 	if err != nil {
 		return nil, asFailure(err)
@@ -222,7 +264,9 @@ func (r Runner) Attach(ctx context.Context, id string, in Input) (*cli.AttachSes
 // argv is the command line of the action. Flags come first and every positional
 // value after `--`, so nothing the person typed can be read as a flag.
 func (d Descriptor) argv(in Input) ([]string, error) {
-	invalid := func(msg string) error { return domain.NewError(domain.CodeInvalidRequest, msg, nil) }
+	if err := d.checkValues(in); err != nil {
+		return nil, err
+	}
 	argv := append([]string(nil), d.Path...)
 	argv = append(argv, "--json")
 	if in.Controller != "" {
@@ -235,9 +279,7 @@ func (d Descriptor) argv(in Input) ([]string, error) {
 		}
 		positional = append(positional, in.Target)
 	}
-	known := map[string]bool{}
 	for _, a := range d.Args {
-		known[a.Name] = true
 		value := in.Values[a.Name]
 		switch {
 		case value == "" && a.Required:
@@ -249,17 +291,24 @@ func (d Descriptor) argv(in Input) ([]string, error) {
 			positional = append(positional, value)
 		}
 	}
-	for name := range in.Values {
-		if !known[name] {
-			return nil, invalid(d.Title + " takes no " + name)
-		}
-	}
 	if len(positional) > 0 {
 		argv = append(argv, "--")
 		argv = append(argv, positional...)
 	}
 	return argv, nil
 }
+
+// checkValues refuses a value the action has no input for.
+func (d Descriptor) checkValues(in Input) error {
+	for name := range in.Values {
+		if !slices.ContainsFunc(d.Args, func(a Arg) bool { return a.Name == name }) {
+			return invalid(d.Title + " takes no " + name)
+		}
+	}
+	return nil
+}
+
+func invalid(msg string) error { return domain.NewError(domain.CodeInvalidRequest, msg, nil) }
 
 // failureOf reads the §40 envelope the command wrote to stdout under --json.
 func failureOf(exit int, stdout []byte, stderr string) *Failure {

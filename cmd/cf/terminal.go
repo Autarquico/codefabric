@@ -33,12 +33,9 @@ func remoteArgv(req cli.AttachRequest) ([]string, error) {
 	return argv, nil
 }
 
-func rejectedTarget(err error) error {
-	if errors.Is(err, ssh.ErrRejected) {
-		return domain.NewError(domain.CodeRunNotAttachable, "the target was refused before anything was run",
-			map[string]any{"reason": "invalid_ssh_target"})
-	}
-	return err
+func errRejectedTarget() error {
+	return domain.NewError(domain.CodeRunNotAttachable, "the target was refused before anything was run",
+		map[string]any{"reason": "invalid_ssh_target"})
 }
 
 func (sshTerminal) Attach(ctx context.Context, req cli.AttachRequest, stdio cli.TerminalIO) (int, error) {
@@ -49,7 +46,7 @@ func (sshTerminal) Attach(ctx context.Context, req cli.AttachRequest, stdio cli.
 	code, err := ssh.Attach(ctx, ssh.Options{}, req.Target, argv, ssh.Stdio{In: stdio.In, Out: stdio.Out, Err: stdio.Err})
 	switch {
 	case errors.Is(err, ssh.ErrRejected):
-		return 0, rejectedTarget(err)
+		return 0, errRejectedTarget()
 	case err != nil:
 		return 0, domain.NewError(domain.CodeRunNotAttachable, "ssh could not be started on this machine",
 			map[string]any{"reason": v1.NotAttachableSSHFailed})
@@ -68,7 +65,7 @@ func (sshTerminal) Command(ctx context.Context, req cli.AttachRequest) (*exec.Cm
 	cmd, err := ssh.Process(ssh.Options{}, req.Target, argv)
 	if err != nil {
 		if errors.Is(err, ssh.ErrRejected) {
-			return nil, rejectedTarget(err)
+			return nil, errRejectedTarget()
 		}
 		return nil, domain.NewError(domain.CodeRunNotAttachable, "ssh could not be prepared on this machine",
 			map[string]any{"reason": v1.NotAttachableSSHFailed})

@@ -97,7 +97,8 @@ func newAttachCmd(term Terminal) *cobra.Command {
 // AttachParams is what a caller that is not the `cf attach` command gives to
 // PrepareAttach.
 type AttachParams struct {
-	// Ref is a Run or a Task; Project narrows a Task name.
+	// Ref is a Run or a Task; Project narrows a Task name (empty: the Project of
+	// the working directory, as for the command).
 	Ref, Project string
 	// SSHTarget overrides where to connect, as the --ssh-target flag does.
 	SSHTarget string
@@ -126,7 +127,8 @@ func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachS
 	if err != nil {
 		return nil, err
 	}
-	req, err := resolveAttach(ctx, c, p.Ref, p.Project, p.SSHTarget)
+	project := scopeOf(ctx, c, p.Project)
+	req, err := resolveAttach(ctx, c, p.Ref, project, p.SSHTarget)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +140,7 @@ func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachS
 	if err != nil {
 		return nil, err
 	}
-	return &AttachSession{Cmd: cmd, c: c, ref: p.Ref, project: p.Project}, nil
+	return &AttachSession{Cmd: cmd, c: c, ref: p.Ref, project: project}, nil
 }
 
 // Finish turns how the process ended (the error tea.ExecProcess hands back,
