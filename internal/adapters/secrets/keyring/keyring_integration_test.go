@@ -15,6 +15,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	"github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	"github.com/Autarquico/codefabric/internal/adapters/secrets/keyring"
+	"github.com/Autarquico/codefabric/internal/adapters/secrets/secretstest"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
@@ -157,9 +158,7 @@ func TestKeyring_StoreKeepsTheValueOnlyInTheRealKeyring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), value) {
-		t.Error("the catalog holds the value")
-	}
+	secretstest.RequireValueOutOfCatalog(t, raw, "gh/token", []byte(value))
 	if st, err := s.Check(t.Context()); err != nil || len(st) != 1 || st[0].State != secrets.StateOK {
 		t.Errorf("Check = %+v, %v", st, err)
 	}

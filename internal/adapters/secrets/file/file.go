@@ -53,13 +53,12 @@ const (
 	// pendingGrace is how long an item being written is left alone before a
 	// sweep treats it as the leftover of a crashed Set.
 	pendingGrace = 10 * time.Minute
-	// pendingForget is how long, from its creation, the record of an item being
-	// written is kept. A sweep deletes the item (idempotent) but keeps the
-	// record, so a write that lands late, from this or any other process, is
-	// deleted by a later sweep. Far beyond any bounded keyring operation; the
-	// residual risk is a write completing more than this late, which leaves an
-	// orphan item.
-	pendingForget = 24 * time.Hour
+	// maxRetired bounds the retired and pending records of a catalog. A
+	// pending record outlives any clock: only a sweep whose Delete removed the
+	// item proves the late write landed and was cleaned, so growth is bounded by
+	// dropping the oldest records instead. Residual risk: a write that completes
+	// after its record was displaced leaves an orphan item in the keyring.
+	maxRetired = 64
 
 	// maxCatalogBytes bounds what a read loads: every secret at its largest,
 	// base64-encoded, with room to spare.
@@ -455,8 +454,8 @@ func (s *Store) sweep(ctx context.Context) {
 		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
 			break
 		}
-		if r.Pending && now.Sub(r.At) < pendingForget {
-			continue // deleted, but the write may still land: the next sweep deletes it again
+		if r.Pending && err != nil {
+			continue // nothing there yet: the write may still land, the next sweep deletes again
 		}
 		gone = append(gone, r.Item)
 	}
@@ -504,12 +503,28 @@ func (s *Store) update(ctx context.Context, change func(*catalog, time.Time) err
 	if err := change(&c, now); err != nil {
 		return err
 	}
+	capRetired(&c)
 	c.Generation++
 	data, err := json.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("secrets: encoding the catalog: %w", err)
 	}
 	return atomicfile.Write(s.path, data, filePerm)
+}
+
+// capRetired drops the oldest records beyond maxRetired, naming only refs.
+func capRetired(c *catalog) {
+	over := len(c.Retired) - maxRetired
+	if over <= 0 {
+		return
+	}
+	refs := make([]string, over)
+	for i, r := range c.Retired[:over] {
+		refs[i] = r.Ref
+	}
+	slog.Warn("secrets: too many keyring items awaiting deletion; the oldest records were dropped",
+		"refs", refs, "max", maxRetired)
+	c.Retired = slices.Clone(c.Retired[over:])
 }
 
 func holdsKeyring(c catalog) bool {

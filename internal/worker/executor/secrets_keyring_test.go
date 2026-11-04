@@ -88,9 +88,7 @@ func TestScenario_SecretsKeyring_Keyring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), ghValue) {
-		t.Error("the catalog holds the value")
-	}
+	secretstest.RequireValueOutOfCatalog(t, raw, "github.personal", []byte(ghValue))
 	if vault.Len() != 1 {
 		t.Errorf("the keyring holds %d items, want 1", vault.Len())
 	}

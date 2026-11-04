@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
+	"github.com/Autarquico/codefabric/internal/adapters/secrets/secretstest"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
@@ -130,9 +132,7 @@ func TestKeyringKeepsTheValueOutOfTheCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(raw, sentinel) {
-		t.Fatalf("the catalog holds the value: %s", raw)
-	}
+	secretstest.RequireValueOutOfCatalog(t, raw, "gh/token", sentinel)
 	c := readCatalog(t, path)
 	e := c.Secrets["gh/token"]
 	if e.Backend != secrets.BackendKeyring || c.CatalogID == "" {
@@ -237,14 +237,10 @@ func TestCrashBetweenTheVaultWriteAndTheSwapLeavesTheOldVersionAndASweepableItem
 	}
 	c.Advance(pendingGrace + time.Second)
 	setKeyring(t, s, "another", []byte("another-value-1234"))
-	// Swept, but the record stays: a write of the crashed Set may land late.
-	if cat := readCatalog(t, path); len(cat.Retired) != 1 || v.count() != 3 {
+	// The sweep removed an item that existed: the write landed and is cleaned,
+	// which is the evidence that lets the record go.
+	if cat := readCatalog(t, path); len(cat.Retired) != 0 || v.count() != 3 {
 		t.Fatalf("vault holds %d items (want 3: one per ref); retired %+v", v.count(), cat.Retired)
-	}
-	c.Advance(pendingForget)
-	setKeyring(t, s, "yet-another", []byte("another-value-1234"))
-	if cat := readCatalog(t, path); len(cat.Retired) != 0 {
-		t.Fatalf("retired %+v: the record outlived pendingForget", cat.Retired)
 	}
 }
 
@@ -589,7 +585,10 @@ func TestASweepOfAnotherStoreStillCleansAnAbandonedSetThatLandsLate(t *testing.T
 		t.Fatalf("Set = %v", err)
 	}
 	c.Advance(pendingGrace + time.Minute)
-	other.sweep(ctx)
+	for range 20 { // many sweeps, a long time: the record stays while nothing was deleted
+		other.sweep(ctx)
+		c.Advance(24 * time.Hour)
+	}
 	if cat := readCatalog(t, path); len(cat.Retired) != 1 || !cat.Retired[0].Pending {
 		t.Fatalf("retired = %+v: forgotten while the write may land", cat.Retired)
 	}
@@ -599,13 +598,30 @@ func TestASweepOfAnotherStoreStillCleansAnAbandonedSetThatLandsLate(t *testing.T
 		t.Fatalf("the vault holds %d items after the late write", backend.count())
 	}
 	other.sweep(ctx)
-	if cat := readCatalog(t, path); backend.count() != 0 || len(cat.Retired) != 1 {
+	if cat := readCatalog(t, path); backend.count() != 0 || len(cat.Retired) != 0 {
 		t.Fatalf("the late item was left: %d items, retired %+v", backend.count(), cat.Retired)
 	}
+}
 
-	c.Advance(pendingForget)
-	writer.sweep(ctx)
-	if cat := readCatalog(t, path); len(cat.Retired) != 0 {
-		t.Fatalf("retired = %+v: not forgotten after pendingForget", cat.Retired)
+// Past maxRetired records the oldest are dropped, so a catalog whose sets keep
+// being abandoned does not grow without bound.
+func TestRetiredRecordsAreCapped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker", "secrets.json")
+	c := clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC))
+	s := New(path, c, WithVault(&abandoningVault{fakeVault: newFakeVault()}))
+	ctx := context.Background()
+	for i := range maxRetired + 10 {
+		ref := fmt.Sprintf("ref%03d", i)
+		if err := s.Set(ctx, ref, []byte("value-1234567890"), nil, secrets.BackendKeyring); !errors.Is(err, secrets.ErrUnavailable) {
+			t.Fatalf("Set = %v", err)
+		}
+		c.Advance(time.Second)
+	}
+	cat := readCatalog(t, path)
+	if len(cat.Retired) != maxRetired {
+		t.Fatalf("%d records, want %d", len(cat.Retired), maxRetired)
+	}
+	if first, last := cat.Retired[0].Ref, cat.Retired[len(cat.Retired)-1].Ref; first != "ref010" || last != fmt.Sprintf("ref%03d", maxRetired+9) {
+		t.Fatalf("kept %s..%s: not the newest", first, last)
 	}
 }

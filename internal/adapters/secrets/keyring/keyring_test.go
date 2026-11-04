@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -167,8 +168,10 @@ func TestACancelledContextReachesNoBackendAndLeavesNothingBehind(t *testing.T) {
 }
 
 // A keyring that never answers holds one operation, not one per attempt; the
-// next ones are refused at once, and the slot frees when the operation ends.
+// next ones wait for the slot within their bound and then report unavailable,
+// and the slot frees when the operation ends.
 func TestAStuckOperationLetsNoSecondOneStart(t *testing.T) {
+	baseline := runtime.NumGoroutine()
 	b := &fakeBackend{block: make(chan struct{})}
 	v := NewWith(b, 20*time.Millisecond)
 	if _, err := v.Get(t.Context(), "a"); !errors.Is(err, secrets.ErrUnavailable) {
@@ -180,11 +183,14 @@ func TestAStuckOperationLetsNoSecondOneStart(t *testing.T) {
 			t.Fatalf("Delete while stuck = %v", err)
 		}
 	}
-	if d := time.Since(start); d > 10*time.Millisecond {
-		t.Fatalf("refusals took %s: they should not wait", d)
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("waits took %s: they are bounded by the timeout", d)
 	}
 	if n := b.calls.Load(); n != 1 {
 		t.Fatalf("%d backend calls, want the one stuck", n)
+	}
+	if g := runtime.NumGoroutine(); g > baseline+5 {
+		t.Fatalf("%d goroutines, %d before", g, baseline)
 	}
 
 	close(b.block)
@@ -197,5 +203,28 @@ func TestAStuckOperationLetsNoSecondOneStart(t *testing.T) {
 	}
 	if err := v.Delete(t.Context(), "a"); err != nil {
 		t.Fatalf("Delete after the slot freed = %v", err)
+	}
+}
+
+// slowBackend answers every call after delay.
+type slowBackend struct{ delay time.Duration }
+
+func (s slowBackend) Get(string, string) (string, error) { time.Sleep(s.delay); return "v", nil }
+func (s slowBackend) Set(string, string, string) error   { time.Sleep(s.delay); return nil }
+func (s slowBackend) Delete(string, string) error        { time.Sleep(s.delay); return nil }
+
+// Healthy, slow-but-finite operations take turns: a Check and a Get, or two
+// Gets, at the same time all succeed.
+func TestConcurrentOperationsOnAHealthyKeyringAllSucceed(t *testing.T) {
+	v := NewWith(slowBackend{delay: 50 * time.Millisecond}, 5*time.Second)
+	errs := make(chan error, 4)
+	for range 2 {
+		go func() { _, err := v.Get(t.Context(), "a"); errs <- err }()
+		go func() { errs <- v.Delete(t.Context(), "b") }()
+	}
+	for range 4 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent operation = %v", err)
+		}
 	}
 }

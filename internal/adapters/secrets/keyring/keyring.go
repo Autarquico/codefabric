@@ -101,15 +101,13 @@ func (v Vault) Delete(ctx context.Context, account string) error {
 // waited, as opposed to a caller that gave up.
 var errTimeout = errors.New("the keyring did not answer in time")
 
-// errBusy is an operation refused because an earlier one, abandoned by its
-// caller, has not finished.
-var errBusy = errors.New("the keyring is still busy with an earlier operation")
-
 // call runs f, giving up when ctx ends or after timeout: the library has no
 // context, and a locked keyring may wait for an unlock prompt. The abandoned
-// call finishes in its goroutine, which holds the slot until then: while it
-// does, call refuses to launch another, so a keyring that never answers costs
-// one goroutine, not one per attempt.
+// call finishes in its goroutine, which holds the slot until then. A caller
+// waits for the slot, within the same bound as the operation itself: only a
+// slot still taken when it expires (an earlier call stuck beyond its own
+// bound) is unavailability, so a keyring that never answers costs one
+// goroutine, not one per attempt, while concurrent healthy calls take turns.
 func call[T any](ctx context.Context, slot chan struct{}, timeout time.Duration, f func() (T, error)) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
@@ -118,10 +116,14 @@ func call[T any](ctx context.Context, slot chan struct{}, timeout time.Duration,
 	if timeout <= 0 {
 		timeout = OpTimeout
 	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case slot <- struct{}{}:
-	default:
-		return zero, errBusy
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	case <-timer.C:
+		return zero, errTimeout
 	}
 	type result struct {
 		v   T
@@ -133,8 +135,6 @@ func call[T any](ctx context.Context, slot chan struct{}, timeout time.Duration,
 		<-slot
 		done <- result{v, err}
 	}()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
 	select {
 	case r := <-done:
 		return r.v, r.err
@@ -155,8 +155,6 @@ func classify(err error) error {
 		return secrets.ErrNotFound
 	case errors.Is(err, zk.ErrSetDataTooBig):
 		return fmt.Errorf("%w: the keyring refused a value that large", domain.ErrInvalidSecret)
-	case errors.Is(err, errBusy):
-		return fmt.Errorf("%w: the keyring is still busy with an earlier operation", secrets.ErrUnavailable)
 	case errors.Is(err, errTimeout):
 		return fmt.Errorf("%w: the keyring did not answer in time", secrets.ErrUnavailable)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

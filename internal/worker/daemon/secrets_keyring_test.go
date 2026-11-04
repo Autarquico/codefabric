@@ -304,10 +304,15 @@ func TestSecretsSet_BackendKeyringKeepsTheValueOutOfTheCatalog(t *testing.T) {
 	} else if !strings.Contains(out, `"backend":"keyring"`) {
 		t.Errorf("set --json = %s", out)
 	}
-	raw, err := os.ReadFile(w.path) //nolint:gosec // a file of the test
-	if err != nil || bytes.Contains(raw, []byte(keyringValue)) {
-		t.Errorf("the catalog holds the value (%v)", err)
+	// npm/token is file-backed and holds keyringValue by design: another value there.
+	if err := w.store.Set(t.Context(), "npm/token", []byte("file-held-value-0000"), nil, secrets.BackendFile); err != nil {
+		t.Fatal(err)
 	}
+	raw, err := os.ReadFile(w.path) //nolint:gosec // a file of the test
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretstest.RequireValueOutOfCatalog(t, raw, "other/token", []byte(keyringValue))
 	if _, err := cf(t, keyringValue, "set", "x/token", "--backend", "central"); domainCode(err) != domain.CodeInvalidRequest {
 		t.Errorf("an unknown backend: %v", err)
 	}
