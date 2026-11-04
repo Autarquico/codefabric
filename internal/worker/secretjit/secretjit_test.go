@@ -101,7 +101,7 @@ func TestDeliver_IsFencedByAttempt(t *testing.T) {
 	}
 
 	deliver(t, dir, 3, v2)
-	wantLoad(t, dir, v2)
+	wantLoad(t, dir, append(slices.Clone(v2), v1...))
 	wantOnly(t, dir, liveName)
 }
 
@@ -440,7 +440,7 @@ func TestConcurrentDeliverReleaseAndLoadNeverShowAHalfDelivery(t *testing.T) {
 				t.Errorf("Load: %v", err)
 				return
 			}
-			if !sameNeedles(got, v1) && !sameNeedles(got, v2) {
+			if !sameNeedles(got, v1) && !sameNeedles(got, v2) && !sameNeedles(got, slices.Concat(v1, v2)) && !sameNeedles(got, slices.Concat(v2, v1)) {
 				t.Errorf("Load = %q", got)
 				return
 			}

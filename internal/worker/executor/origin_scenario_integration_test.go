@@ -47,6 +47,7 @@ type originRig struct {
 	commit string
 	home   string
 	logs   *syncLog
+	user   string // the Basic user of the credential
 	repo   string // the origin the Project froze
 	other  string // another repository of the same host
 }
@@ -55,6 +56,12 @@ type originRig struct {
 // is held for it) and a private repository behind the origin. wrapGit, if
 // set, is a script that stands for the git binary: it is given the real one.
 func newOriginRig(t *testing.T, wrapGit func(realGit string, r *originRig) string) *originRig {
+	t.Helper()
+	return newOriginRigAs(t, scenarioUser, wrapGit)
+}
+
+// newOriginRigAs is newOriginRig for a credential whose user is user.
+func newOriginRigAs(t *testing.T, user string, wrapGit func(realGit string, r *originRig) string) *originRig {
 	t.Helper()
 	gittest.Require(t)
 	// Every directory of the test is under a path with spaces and a comma.
@@ -75,12 +82,17 @@ func newOriginRig(t *testing.T, wrapGit func(realGit string, r *originRig) strin
 	}
 	src, other := gittest.InitRepo(t), gittest.InitRepo(t)
 	commit := gittest.Commit(t, src, "private.txt", "only with the credential\n", "private")
-	r := &originRig{home: home, commit: commit, logs: &syncLog{}}
-	r.origin = gitorigin.New(t, map[string]string{"org/repo.git": src, "org/other.git": other}, scenarioUser, scenarioToken)
+	r := &originRig{home: home, commit: commit, logs: &syncLog{}, user: user}
+	r.origin = gitorigin.New(t, map[string]string{"org/repo.git": src, "org/other.git": other}, user, scenarioToken)
 	r.repo, r.other = r.origin.URL+"/org/repo.git", r.origin.URL+"/org/other.git"
 	log := slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	store := newFakeStore(map[string]string{originRef: scenarioToken})
 	store.scope(originRef, scenarioProject)
+	if user != scenarioUser {
+		e := store.entries[originRef]
+		e.user = user
+		store.entries[originRef] = e
+	}
 	r.fixture = newFixture(t, func(o *Options) {
 		script, err := EnsureAskpassScript(o.Paths, []string{"/usr/bin/env", asWrapper + "=1", mustExecutable(t), "worker", "git-askpass"})
 		if err != nil {
@@ -158,8 +170,8 @@ func (r *originRig) worktree(k state.Key) string {
 	return r.paths.WorkerWorktreeDir(k.RunID, k.LeaseEpoch)
 }
 
-func tokenForms() map[string]string {
-	user := scenarioUser + ":" + scenarioToken
+func tokenForms(basicUser string) map[string]string {
+	user := basicUser + ":" + scenarioToken
 	return map[string]string{
 		"token":                 scenarioToken,
 		"query-escaped":         url.QueryEscape(scenarioToken),
@@ -170,11 +182,13 @@ func tokenForms() map[string]string {
 	}
 }
 
-func noTokenIn(t *testing.T, what, text string) {
+func noTokenIn(t *testing.T, what, text string, users ...string) {
 	t.Helper()
-	for name, form := range tokenForms() {
-		if strings.Contains(text, form) {
-			t.Errorf("%s holds the credential (%s):\n%s", what, name, text)
+	for _, user := range append([]string{scenarioUser}, users...) {
+		for name, form := range tokenForms(user) {
+			if strings.Contains(text, form) {
+				t.Errorf("%s holds the credential (%s, user %s):\n%s", what, name, user, text)
+			}
 		}
 	}
 }
@@ -184,20 +198,20 @@ func noTokenIn(t *testing.T, what, text string) {
 // delivery directories, which are where the credential is meant to be.
 func (r *originRig) noTokenAnywhere(k state.Key, errs ...error) {
 	r.t.Helper()
-	noTokenIn(r.t, "the log", r.logs.String())
+	noTokenIn(r.t, "the log", r.logs.String(), r.user)
 	for _, err := range errs {
 		if err != nil {
-			noTokenIn(r.t, "an error", err.Error())
+			noTokenIn(r.t, "an error", err.Error(), r.user)
 		}
 	}
 	reports, _ := json.Marshal(r.reports(k))
-	noTokenIn(r.t, "the reports", string(reports))
+	noTokenIn(r.t, "the reports", string(reports), r.user)
 	st, _ := json.Marshal(r.run(k))
-	noTokenIn(r.t, "the state of the Run", string(st))
+	noTokenIn(r.t, "the state of the Run", string(st), r.user)
 	r.rt.mu.Lock()
 	starts, _ := json.Marshal(r.rt.starts)
 	r.rt.mu.Unlock()
-	noTokenIn(r.t, "what the Runtime was asked to start", string(starts))
+	noTokenIn(r.t, "what the Runtime was asked to start", string(starts), r.user)
 	root := filepath.Dir(r.paths.ConfigDir)
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		switch {
@@ -209,7 +223,7 @@ func (r *originRig) noTokenAnywhere(k state.Key, errs ...error) {
 			return nil
 		}
 		raw, _ := os.ReadFile(path) //nolint:gosec // a file of the test
-		noTokenIn(r.t, path, string(raw))
+		noTokenIn(r.t, path, string(raw), r.user)
 		return nil
 	})
 }
@@ -284,7 +298,7 @@ func TestScenario_OriginAskpass_DestinoNoAutorizado(t *testing.T) {
 		if got := r.run(k).Phase; got != state.PhaseStopped {
 			t.Fatalf("phase = %s, want stopped; reports %v\nlog:\n%s", got, kinds(r.reports(k)), r.logs)
 		}
-		noTokenIn(t, "the prepare_failed message", r.prepareFailedMessage(k))
+		noTokenIn(t, "the prepare_failed message", r.prepareFailedMessage(k), r.user)
 		if !strings.Contains(r.logs.String(), "fetching the source of a Run failed") {
 			t.Errorf("the Run did not fail at the fetch:\n%s", r.logs)
 		}
@@ -376,4 +390,49 @@ exec '%s' "$@"
 	if _, err := os.Stat(filepath.Join(r.runDir(k), execwrap.OutputLog)); err == nil {
 		t.Error("a Run that failed at prepare has an output.log")
 	}
+}
+
+// A credential with a user of its own: git authenticates as it against the
+// TLS origin, and a failed fetch that echoes the Basic header of that user is
+// redacted of it.
+func TestScenario_OriginAskpass_CustomUser(t *testing.T) {
+	const user = "deploy-bot"
+	basic := base64.StdEncoding.EncodeToString([]byte(user + ":" + scenarioToken))
+	t.Run("the fetch authenticates as the user", func(t *testing.T) {
+		r := newOriginRigAs(t, user, nil)
+		k := r.assignAt(r.repo, r.repo)
+		r.settle(k)
+		if got := r.run(k).Phase; got != state.PhaseRunning {
+			t.Fatalf("phase = %s, want running; reports %v\nlog:\n%s", got, kinds(r.reports(k)), r.logs)
+		}
+		if n := r.origin.AuthorizedFor("/org/repo.git"); n == 0 {
+			t.Errorf("the origin saw no request authorized as %s: %v", user, r.origin.Saw())
+		}
+		if needles, err := secretjit.Load(r.runDir(k)); err != nil || len(needles) != 1 || needles[0].User != user {
+			t.Errorf("the retained needles = %+v, %v: want one with user %s", needles, err, user)
+		}
+		r.askpassDenied(k)
+		r.noTokenAnywhere(k)
+	})
+	t.Run("a failed fetch that shows the Basic header is redacted", func(t *testing.T) {
+		r := newOriginRigAs(t, user, func(realGit string, _ *originRig) string {
+			return fmt.Sprintf(`#!/bin/sh
+case "$1" in fetch)
+echo "fatal: header Authorization: Basic %s" >&2
+exit 128;;
+esac
+exec '%s' "$@"
+`, basic, realGit)
+		})
+		k := r.assignAt(r.repo, r.repo)
+		r.settle(k)
+		if got := r.run(k).Phase; got != state.PhaseStopped {
+			t.Fatalf("phase = %s, want stopped; reports %v", got, kinds(r.reports(k)))
+		}
+		msg := r.prepareFailedMessage(k)
+		if !strings.Contains(msg, "[REDACTED:"+originRef+"]") || strings.Contains(msg, basic) {
+			t.Errorf("the prepare_failed message does not redact the Basic form of %s:\n%s", user, msg)
+		}
+		r.noTokenAnywhere(k)
+	})
 }

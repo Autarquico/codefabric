@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -198,6 +199,11 @@ func (m manifest) check() error {
 			return fmt.Errorf("%w: %s names the wrong file for %q", ErrCorrupt, manifestName, e.Ref)
 		}
 	}
+	for i, r := range m.Retained {
+		if r.File != retainedFile(i) || domain.CheckSecretRefs([]string{r.Ref}, 1) != nil {
+			return fmt.Errorf("%w: %s has a bad retained entry %d", ErrCorrupt, manifestName, i)
+		}
+	}
 	return nil
 }
 
@@ -219,13 +225,23 @@ func (d *delivery) value(e entry) ([]byte, error) {
 }
 
 func (d *delivery) needles() ([]redact.Needle, error) {
-	out := make([]redact.Needle, 0, len(d.m.Refs))
+	out := make([]redact.Needle, 0, len(d.m.Refs)+len(d.m.Retained))
 	for _, e := range d.m.Refs {
 		v, err := d.value(e)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, redact.Needle{Ref: e.Ref, Value: v, User: e.User})
+	}
+	for _, r := range d.m.Retained {
+		v, err := d.value(entry{Ref: r.Ref, File: r.File})
+		if err != nil {
+			return nil, err
+		}
+		// What a ref holds now is not repeated as retained.
+		if !slices.ContainsFunc(out, func(n redact.Needle) bool { return n.Ref == r.Ref && n.User == r.User && bytes.Equal(n.Value, v) }) {
+			out = append(out, redact.Needle{Ref: r.Ref, Value: v, User: r.User})
+		}
 	}
 	return out, nil
 }

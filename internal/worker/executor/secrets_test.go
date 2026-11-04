@@ -47,6 +47,7 @@ type fakeSecret struct {
 	value    []byte
 	projects []string
 	backend  string
+	user     string
 }
 
 func newFakeStore(values map[string]string) *fakeStore {
@@ -86,7 +87,7 @@ func (s *fakeStore) Get(_ context.Context, ref string) (secrets.Secret, error) {
 		return secrets.Secret{}, secrets.ErrNotFound
 	}
 	return secrets.Secret{
-		Metadata: secrets.Metadata{Ref: ref, Backend: e.backend, Projects: e.projects},
+		Metadata: secrets.Metadata{Ref: ref, Backend: e.backend, Projects: e.projects, User: e.user},
 		Value:    bytes.Clone(e.value),
 	}, nil
 }

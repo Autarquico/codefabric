@@ -52,7 +52,21 @@ type manifest struct {
 	Schema  int     `json:"schema"`
 	Attempt uint64  `json:"attempt"`
 	Refs    []entry `json:"refs"`
+	// Retained are the values an earlier attempt of the Run delivered that
+	// this one no longer holds as a ref (or holds with another value or user):
+	// nobody may read them, but Load returns them, so the redaction and the
+	// guard of publication cover every value the Run used until Release.
+	Retained []retained `json:"retained,omitempty"`
 }
+
+// retained is a value kept only to be redacted. Its file is retainedFile(i).
+type retained struct {
+	Ref  string `json:"ref"`
+	File string `json:"file"`
+	User string `json:"user,omitempty"`
+}
+
+func retainedFile(i int) string { return fmt.Sprintf("retained-%d", i) }
 
 type entry struct {
 	Ref    string     `json:"ref"`

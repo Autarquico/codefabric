@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -337,5 +338,56 @@ func TestScrubKeepsTheIdentityOfTheErrorItRedacts(t *testing.T) {
 	}
 	if strings.Contains(got.Error(), originValue) || strings.Contains(coded.msg, originValue) {
 		t.Errorf("the value is in %q / %q", got, coded.msg)
+	}
+}
+
+// An origin-only Run is a Run with secrets all the same: its harness cannot
+// publish the credential of the origin, and the needles are gone with the
+// release.
+func TestAnOriginOnlyRunCannotPublishItsCredentialAndTheNeedlesGoWithTheRelease(t *testing.T) {
+	g := &fakeGit{head: headOID, guard: blockOnValues}
+	store := newFakeStore(map[string]string{originRef: originValue})
+	f := secretFixture(t, store, func(o *Options) {
+		o.Git = g
+		o.AskpassScript = "/state/bin/git-askpass"
+		o.RelayTLS = RelayTLS{Cert: "/c/cert.pem", Key: "/c/key.pem", CA: "/c/ca.pem"}
+	})
+	k := f.assign(originSpec(4, originURL), func(a *v1.AssignCommand) { a.Repo = originURL })
+	if f.e.decideOnce(t.Context()) {
+		t.Fatal("deciding wanted a retry")
+	}
+	if err := f.e.prepare(t.Context(), f.run(k)); !errors.Is(err, errAckPending) {
+		t.Fatalf("first prepare = %v, want the ack wait", err)
+	}
+	f.confirmReports(k)
+	f.e.step(t.Context(), k)
+	if got := f.run(k).Phase; got != state.PhaseRunning {
+		t.Fatalf("phase = %s, want running; reports %v", got, kinds(f.reports(k)))
+	}
+	w := newWrapperProcess(t, "exit 0")
+	<-w.ended
+	f.writeWrapper(k, w.w)
+	f.writeStarted(k, w.w, t0.Add(time.Second))
+	f.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: exitedAt, Cause: execwrap.CauseExit})
+	if !f.e.step(t.Context(), k) {
+		t.Fatal("the Run was not settled")
+	}
+	f.turn()
+
+	if p := f.publication(k); p.State != state.PubFailed || g.pushCount() != 0 {
+		t.Fatalf("publication = %s after %d pushes", p.State, g.pushCount())
+	}
+	g.mu.Lock()
+	checked := append([]gitops.Forbidden(nil), g.forbidden...)
+	g.mu.Unlock()
+	if len(checked) == 0 || len(checked[0].Values) != 1 || string(checked[0].Values[0].Value) != originValue {
+		t.Fatalf("the sealing was not checked against the credential of the origin: %+v", checked)
+	}
+	f.releaseTick()
+	if f.delivered(k) {
+		t.Error("the needles are left after the release")
+	}
+	if _, err := secretjit.Load(f.runDir(k)); !errors.Is(err, secretjit.ErrNotDelivered) {
+		t.Errorf("Load after the release = %v", err)
 	}
 }

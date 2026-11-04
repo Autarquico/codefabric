@@ -74,6 +74,7 @@ func (m *Manager) DeliverFor(runDir string, attempt uint64, access []Consumer, s
 	for i, s := range secrets {
 		items[i] = item{ref: s.Ref, value: s.Value, access: access}
 	}
+	var kept []redact.Needle
 	if d, err := openDelivery(runDir); err == nil {
 		current := d.m.Attempt
 		if current > attempt {
@@ -97,11 +98,15 @@ func (m *Manager) DeliverFor(runDir string, attempt uint64, access []Consumer, s
 				}
 				return m.extend(runDir, held, merged[kept:], verify)
 			}
-		} else {
-			d.close()
 		}
+		// A newer attempt replaces the access, never the retention: whatever
+		// the delivery in place held stays redactable until Release. A delivery
+		// whose values cannot be read is replaced all the same.
+		old, _ := d.needles()
+		d.close()
+		kept = old
 	}
-	return m.publish(runDir, attempt, items, verify)
+	return m.publish(runDir, attempt, items, kept, verify)
 }
 
 // checkSecrets validates the arguments of a delivery and returns access
@@ -170,7 +175,7 @@ func (d *delivery) merge(items []item) (merged []item, kept int, err error) {
 // left unnamed is rewritten by the next try, or removed with the delivery.
 func (m *Manager) extend(runDir string, held manifest, added []item, verify func() error) error {
 	live := filepath.Join(runDir, liveName)
-	man := manifest{Schema: held.Schema, Attempt: held.Attempt, Refs: slices.Clone(held.Refs)}
+	man := manifest{Schema: held.Schema, Attempt: held.Attempt, Refs: slices.Clone(held.Refs), Retained: held.Retained}
 	for _, it := range added {
 		e := entry{Ref: it.ref, File: fileName(it.ref), Access: it.access}
 		path := filepath.Join(live, e.File)
@@ -195,7 +200,26 @@ func (m *Manager) extend(runDir string, held manifest, added []item, verify func
 }
 
 // publish builds the delivery in staging and renames it into place.
-func (m *Manager) publish(runDir string, attempt uint64, items []item, verify func() error) error {
+// kept are the values of the delivery it replaces: they stay in the new one
+// only to be redacted, and Load returns them with the rest.
+func (m *Manager) publish(runDir string, attempt uint64, items []item, kept []redact.Needle, verify func() error) error {
+	man := manifest{Schema: manifestSchema, Attempt: attempt}
+	var held []redact.Needle
+	for _, k := range kept {
+		if k.User == "" && slices.ContainsFunc(items, func(it item) bool { return it.ref == k.Ref && bytes.Equal(it.value, k.Value) }) {
+			continue
+		}
+		if slices.ContainsFunc(held, func(h redact.Needle) bool { return h.Ref == k.Ref && h.User == k.User && bytes.Equal(h.Value, k.Value) }) {
+			continue
+		}
+		man.Retained = append(man.Retained, retained{Ref: k.Ref, File: retainedFile(len(held)), User: k.User})
+		held = append(held, k)
+	}
+	if len(held) > 0 {
+		if _, err := redact.NewEscapedSet(append(needlesOf(items), held...)); err != nil {
+			return fmt.Errorf("secretjit: the output could not be redacted: %w", err)
+		}
+	}
 	staging := filepath.Join(runDir, stagingName)
 	if err := m.remove(staging); err != nil {
 		return err
@@ -203,13 +227,17 @@ func (m *Manager) publish(runDir string, attempt uint64, items []item, verify fu
 	if err := m.fs.mkdir(staging); err != nil {
 		return m.abandon(staging, fmt.Errorf("secretjit: creating %s: %w", staging, err))
 	}
-	man := manifest{Schema: manifestSchema, Attempt: attempt}
 	for _, it := range items {
 		e := entry{Ref: it.ref, File: fileName(it.ref), Access: it.access}
 		if err := m.writeSynced(filepath.Join(staging, e.File), it.value); err != nil {
 			return m.abandon(staging, fmt.Errorf("secretjit: writing secret %q: %w", it.ref, err))
 		}
 		man.Refs = append(man.Refs, e)
+	}
+	for i, h := range held {
+		if err := m.writeSynced(filepath.Join(staging, man.Retained[i].File), h.Value); err != nil {
+			return m.abandon(staging, fmt.Errorf("secretjit: writing a retained value of %q: %w", h.Ref, err))
+		}
 	}
 	data, err := json.Marshal(man)
 	if err != nil {

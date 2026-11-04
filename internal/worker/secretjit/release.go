@@ -186,10 +186,25 @@ func (m *Manager) Bind(runDir, ref string, b Binding) error {
 		return err
 	}
 	man := d.m
-	d.close()
 	i := slices.IndexFunc(man.Refs, func(e entry) bool { return e.Ref == ref })
 	if i < 0 {
+		d.close()
 		return fmt.Errorf("%w: %q is not in the delivery", ErrNotDelivered, ref)
+	}
+	// Another user for the same value keeps the old pairing redactable.
+	if old := man.Refs[i].User; old != "" && old != b.User {
+		v, err := d.value(man.Refs[i])
+		if err != nil {
+			d.close()
+			return err
+		}
+		man.Retained = append(slices.Clone(man.Retained), retained{Ref: ref, File: retainedFile(len(man.Retained)), User: old})
+		d.close()
+		if err := m.writeSynced(filepath.Join(runDir, liveName, man.Retained[len(man.Retained)-1].File), v); err != nil {
+			return fmt.Errorf("secretjit: writing a retained value of %q: %w", ref, err)
+		}
+	} else {
+		d.close()
 	}
 	man.Refs = slices.Clone(man.Refs)
 	man.Refs[i].Origin, man.Refs[i].User = b.Origin, b.User

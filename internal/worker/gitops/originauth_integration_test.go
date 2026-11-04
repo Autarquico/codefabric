@@ -76,7 +76,7 @@ func newAskpassRig(t *testing.T, trust bool) *askpassRig {
 	src := gittest.InitRepo(t)
 	other := gittest.InitRepo(t)
 	r := &askpassRig{t: t, src: src, home: home, logs: &bytes.Buffer{}, commit: gittest.Run(t, src, "rev-parse", "HEAD")}
-	r.origin = gitorigin.New(t, map[string]string{"org/repo.git": src, "org/other.git": other}, originUser, originToken)
+	r.origin = gitorigin.New(t, map[string]string{"org/repo.git": src, "org/other.git": other, "org/repo": gittest.InitRepo(t)}, originUser, originToken)
 	// Everything of the Worker is under a path with spaces and a quote.
 	r.paths = config.Paths{ConfigDir: t.TempDir(), DataDir: filepath.Join(t.TempDir(), "data dir, it's here")}
 	self, err := os.Executable()
@@ -284,6 +284,17 @@ func TestOriginAuth_DestinoNoAutorizado(t *testing.T) {
 		}
 		if got := elsewhere.Saw(); len(got) != 0 {
 			t.Errorf("the other host was reached: %v", got)
+		}
+		r.noLeak(err)
+	})
+	t.Run("the same path without .git is another repository", func(t *testing.T) {
+		r := newAskpassRig(t, true)
+		err := r.prepare(r.url("org/repo"))
+		if err == nil {
+			t.Fatal("Prepare fetched /org/repo with the credential of /org/repo.git")
+		}
+		if n := r.origin.AuthorizedFor("/org/repo"); n != 0 {
+			t.Errorf("the credential reached /org/repo %d times", n)
 		}
 		r.noLeak(err)
 	})

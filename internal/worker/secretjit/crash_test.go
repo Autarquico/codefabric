@@ -1,10 +1,12 @@
 package secretjit
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/Autarquico/codefabric/internal/support/redact"
@@ -59,7 +61,19 @@ func converges(t *testing.T, dir string, rec recovery) {
 		return
 	}
 	wantOnly(t, dir, liveName)
-	wantLoad(t, dir, rec.want)
+	// A delivery that replaced an earlier one also retains its values.
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, w := range rec.want {
+		if !slices.ContainsFunc(got, func(n redact.Needle) bool { return n.Ref == w.Ref && bytes.Equal(n.Value, w.Value) }) {
+			t.Fatalf("Load = %q, lacks %q", got, w.Ref)
+		}
+	}
+	if len(got) > len(rec.want)+len(v1) {
+		t.Fatalf("Load = %q, more than the delivery and what it retains", got)
+	}
 	wantPrivate(t, dir)
 }
 
@@ -115,7 +129,7 @@ func TestDeliver_FaultAtEveryStepLeavesNoHalfDeliveryAndRecovers(t *testing.T) {
 			case errors.Is(err, ErrNotDelivered):
 			case err != nil:
 				t.Fatalf("after the fault, secrets/ is not a whole delivery: %v", err)
-			case !sameNeedles(got, v2) && (s.name == "fresh" || !sameNeedles(got, v1)):
+			case !sameNeedles(got, v2) && (s.name == "fresh" || (!sameNeedles(got, v1) && !sameNeedles(got, slices.Concat(v2, v1)))):
 				t.Fatalf("after the fault, Load = %q", got)
 			}
 		})

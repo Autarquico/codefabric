@@ -134,6 +134,7 @@ func parsePrompt(prompt string) (parsedPrompt, bool) {
 		return p, false
 	}
 	authority, path, _ := strings.Cut(target, "/")
+	path = "/" + path
 	if i := strings.LastIndexByte(authority, '@'); i >= 0 {
 		p.user, authority = authority[:i], authority[i+1:]
 		if p.user == "" {
@@ -157,9 +158,11 @@ func authorizedDestination(origin string) (string, bool) {
 	return canonicalDestination(u.Host, u.Path)
 }
 
-// canonicalDestination is "host[:port]/path": the host in lower case, the
-// default port dropped, the path without the slashes around it or a ".git" at
-// its end. A destination without a host or a path is none.
+// canonicalDestination is "host[:port]path": the host in lower case and the
+// default port dropped, which are equivalent by definition. The path is
+// compared exactly as git was given it (path starts with "/"): a ".git" at its
+// end, a trailing or a doubled slash name another repository. A destination
+// without a host or a path is none.
 func canonicalDestination(authority, path string) (string, bool) {
 	u, err := url.Parse("https://" + authority)
 	if err != nil || u.Host != authority || u.Hostname() == "" || u.User != nil {
@@ -172,12 +175,10 @@ func canonicalDestination(authority, path string) (string, bool) {
 	if port := u.Port(); port != "" && port != "443" {
 		host += ":" + port
 	}
-	path = strings.Trim(path, "/")
-	path = strings.Trim(strings.TrimSuffix(path, ".git"), "/")
-	if path == "" {
+	if len(path) < 2 || path[0] != '/' {
 		return "", false
 	}
-	return host + "/" + path, true
+	return host + path, true
 }
 
 // AskpassScript is the content of the script git runs as GIT_ASKPASS: it

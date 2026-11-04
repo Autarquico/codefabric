@@ -2,6 +2,7 @@ package secretjit
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -126,7 +127,9 @@ func (w *jitWorld) observe() (needles []redact.Needle, delivered bool) {
 
 func sortedNeedles(n []redact.Needle) []redact.Needle {
 	out := slices.Clone(n)
-	slices.SortFunc(out, func(a, b redact.Needle) int { return strings.Compare(a.Ref, b.Ref) })
+	slices.SortFunc(out, func(a, b redact.Needle) int {
+		return cmp.Or(strings.Compare(a.Ref, b.Ref), bytes.Compare(a.Value, b.Value))
+	})
 	return out
 }
 
@@ -154,7 +157,9 @@ func (w *jitWorld) settleTo(allowed ...jitModel) {
 	w.fail("after a fault the delivery is %q (%v), which no state it may leave is: %+v", got, err, allowed)
 }
 
-// hasAccess says whether the harness may read needles, all of them or none.
+// hasAccess says whether the harness may read any of needles: the ones of the
+// attempt in place are readable together, and the values retained from earlier
+// attempts never are.
 func (w *jitWorld) hasAccess(needles []redact.Needle) bool {
 	resolve := Resolver(w.dir)
 	var reads int
@@ -163,16 +168,12 @@ func (w *jitWorld) hasAccess(needles []redact.Needle) bool {
 		switch {
 		case err == nil && v == string(n.Value):
 			reads++
-		case err == nil:
-			w.fail("the harness reads %q as another value", n.Ref)
-		case !errors.Is(err, ErrNoAccess):
+		case err == nil, errors.Is(err, ErrNoAccess): // another value of the ref is the current one
+		default:
 			w.fail("the harness reading %q: %v", n.Ref, err)
 		}
 	}
-	if reads != 0 && reads != len(needles) {
-		w.fail("the harness may read %d of %d secrets", reads, len(needles))
-	}
-	return reads == len(needles)
+	return reads > 0
 }
 
 // check is the delivery in place against the model.
@@ -216,7 +217,16 @@ func (w *jitWorld) step() {
 		w.log = append(w.log, fmt.Sprintf("deliver %d refuse=%v fault=%v", attempt, refuse, f != nil))
 		crashed, err := run(func() error { return m.Deliver(w.dir, attempt, needles, verify) })
 		noValue(w.t, err)
-		fresh := jitModel{attempt: attempt, needles: needles, access: true}
+		// A newer attempt replaces the access and keeps every value used before.
+		union := slices.Clone(needles)
+		if !before.corrupt && before.attempt != 0 {
+			for _, n := range before.needles {
+				if !slices.ContainsFunc(union, func(u redact.Needle) bool { return u.Ref == n.Ref && bytes.Equal(u.Value, n.Value) }) {
+					union = append(union, n)
+				}
+			}
+		}
+		fresh := jitModel{attempt: attempt, needles: union, access: true}
 		stale := !before.corrupt && before.attempt > attempt
 		switch {
 		case struck(f, crashed, err):

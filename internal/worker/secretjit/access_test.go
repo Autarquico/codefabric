@@ -1,6 +1,8 @@
 package secretjit
 
 import (
+	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -329,5 +331,60 @@ func TestDeliver_ADeliveryThatCannotBeReadInPlaceFailsAndIsNotReplaced(t *testin
 	after, rerr := os.ReadFile(filepath.Join(dir, liveName, manifestName)) //nolint:gosec // a test
 	if rerr != nil || string(after) != string(before) {
 		t.Fatalf("the manifest changed: %v\n%s\n%s", rerr, before, after)
+	}
+}
+
+// A later attempt replaces the access, never the retention: the token and the
+// user of the first one stay in Load, so the redaction and the guard of
+// publication cover both pairings until Release.
+func TestDeliver_ANewerAttemptRetainsTheRotatedTokenAndUser(t *testing.T) {
+	dir := runDir(t)
+	m := New()
+	first := redact.Needle{Ref: "origin/token", Value: []byte("first-token-value-aaaa")}
+	second := redact.Needle{Ref: "origin/token", Value: []byte("second-token-value-bbb")}
+	bind := func(attempt uint64, n redact.Needle, user string) {
+		t.Helper()
+		if err := m.DeliverFor(dir, attempt, askpassOnly, []redact.Needle{n}, allow); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Bind(dir, n.Ref, Binding{Origin: "https://git.example/org/repo.git", User: user}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bind(1, first, "x-access-token")
+	bind(2, second, "deploy-bot")
+
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := redact.NewEscapedSet(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	basic := func(user string, n redact.Needle) string {
+		return base64.StdEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(user + ":" + string(n.Value)))
+	}
+	for _, leak := range []string{
+		string(first.Value), string(second.Value),
+		basic("x-access-token", first), basic("deploy-bot", second),
+	} {
+		var out bytes.Buffer
+		w := redact.NewWriter(&out, set)
+		_, _ = w.Write([]byte("log " + leak + " end"))
+		_ = w.Close()
+		if !w.Matched() || bytes.Contains(out.Bytes(), []byte(leak)) {
+			t.Errorf("%q survives the redaction", leak)
+		}
+	}
+	if v, err := AskpassReader(dir)(first.Ref); err != nil || v != string(second.Value) {
+		t.Fatalf("askpass reads %q, %v: want the second attempt's value", v, err)
+	}
+
+	if err := m.Release(dir, allow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); !errors.Is(err, ErrNotDelivered) {
+		t.Fatalf("Load after Release = %v", err)
 	}
 }
