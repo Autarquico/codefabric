@@ -41,13 +41,13 @@ func (f *codedFailure) Error() string { return string(f.code) + ": " + f.msg }
 // that report. Until then it says errPrepareLater, and the next try finds the
 // stored resolution: nothing is read or computed twice, and the report that is
 // sent again after a restart is the same one.
-func (e *Executor) resolveRepoConfig(ctx context.Context, r state.Run, spec specView) error {
+func (e *Executor) resolveRepoConfig(ctx context.Context, r state.Run, spec specView, og *originAccess) error {
 	res, ok, err := state.ResolutionOf(ctx, e.o.DB.Reader(), r.Key)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		if err := e.recordResolution(ctx, r, spec); err != nil {
+		if err := e.recordResolution(ctx, r, spec, og); err != nil {
 			return err
 		}
 		return errAckPending
@@ -65,7 +65,7 @@ func (e *Executor) resolveRepoConfig(ctx context.Context, r state.Run, spec spec
 
 // recordResolution computes the effective configuration and stores it with its
 // report in one transaction.
-func (e *Executor) recordResolution(ctx context.Context, r state.Run, spec specView) error {
+func (e *Executor) recordResolution(ctx context.Context, r state.Run, spec specView, og *originAccess) error {
 	in := repoconfig.Inputs{
 		RepoConfig: spec.RepoConfig,
 		Resources:  domain.Resources{CPU: spec.Requirements.Resources.CPU, MemoryMB: spec.Requirements.Resources.MemoryMB},
@@ -76,7 +76,7 @@ func (e *Executor) recordResolution(ctx context.Context, r state.Run, spec specV
 	// The commit must be here before any git read: the file of the repo (if the
 	// Project allows it) and the digest inputs of the Environment both need it.
 	if e.o.Git != nil {
-		if err := e.ensureSource(ctx, r, spec); err != nil {
+		if err := e.ensureSource(ctx, r, spec, og); err != nil {
 			return err
 		}
 	}
@@ -161,12 +161,16 @@ func (e *Executor) blobIDs(ctx context.Context, r state.Run, paths []string) (ma
 	return blobs, nil
 }
 
-func (e *Executor) ensureSource(ctx context.Context, r state.Run, spec specView) error {
+func (e *Executor) ensureSource(ctx context.Context, r state.Run, spec specView, og *originAccess) error {
 	if r.Repo == "" {
 		return fmt.Errorf("this assignment was made before the Controller sent the repository of the Run: it cannot be prepared")
 	}
+	auth, err := og.credential(ctx)
+	if err != nil {
+		return err
+	}
 	return e.o.Git.EnsureSource(ctx, gitops.SourceSpec{
-		Project: r.ProjectID, Run: r.RunID, Repo: r.Repo, SourceRef: spec.Source.Ref, SourceCommit: r.SourceCommit,
+		Project: r.ProjectID, Run: r.RunID, Repo: r.Repo, SourceRef: spec.Source.Ref, SourceCommit: r.SourceCommit, Auth: auth,
 	})
 }
 

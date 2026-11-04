@@ -178,7 +178,7 @@ func Run(ctx context.Context, o Options) error {
 		DB: db, Controller: c, Workflows: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
 		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
 	}
-	d.writeAskpassScript(ctx, o)
+	eo.AskpassScript = d.writeAskpassScript(ctx, o)
 	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})
 	eo.AuthSync = broker
 	// Publishing the result of a Run needs git: without it this Worker offers no harness.
@@ -537,17 +537,20 @@ func (d *daemon) sleep(ctx context.Context, wait time.Duration) bool {
 // writeAskpassScript keeps the GIT_ASKPASS script of the Worker (AskpassScriptPath)
 // up to date. Without it a Run whose origin has a credential cannot be prepared,
 // which is said when that Run is, not by stopping the daemon.
-func (d *daemon) writeAskpassScript(ctx context.Context, o Options) {
+func (d *daemon) writeAskpassScript(ctx context.Context, o Options) string {
 	argv := o.AskpassArgv
 	if len(argv) == 0 {
 		self, err := os.Executable()
 		if err != nil {
 			d.log.WarnContext(ctx, "the askpass script cannot be written: this binary cannot be located", "err", err)
-			return
+			return ""
 		}
 		argv = []string{self, "worker", "git-askpass"}
 	}
-	if _, err := EnsureAskpassScript(o.Paths, argv); err != nil {
+	path, err := EnsureAskpassScript(o.Paths, argv)
+	if err != nil {
 		d.log.WarnContext(ctx, "the askpass script cannot be written", "err", err)
+		return ""
 	}
+	return path
 }

@@ -141,9 +141,29 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if !ok {
 		return fmt.Errorf("this Worker has no harness %q", spec.Requirements.Harness)
 	}
+	if code, err := checkSpecOrigin(spec, r.Repo); err != nil {
+		return fmt.Errorf("%s: %w", code, err)
+	}
+	var sp *secretPrepare
+	attempt := func() (*secretPrepare, error) {
+		if sp == nil {
+			var err error
+			sp, err = e.beginSecrets(ctx, r)
+			return sp, err
+		}
+		return sp, nil
+	}
+	// The credential of the origin is available to the fetches of this attempt
+	// alone: whatever the exit, askpass loses it when prepare returns.
+	og := e.originOf(r, spec, attempt)
+	defer func() {
+		if err := og.revoke(); err != nil {
+			e.log.WarnContext(ctx, "taking the origin credential back from askpass failed; the next prepare attempt takes it back", "run", r.RunID, "err", err)
+		}
+	}()
 	if spec.Schema == domain.RunSpecSchemaRepoConfig {
-		// Before anything is made for the Run, or any secret asked for.
-		if err := e.resolveRepoConfig(ctx, r, spec); err != nil {
+		// Before anything is made for the Run, or any other secret asked for.
+		if err := e.resolveRepoConfig(ctx, r, spec, og); err != nil {
 			return err
 		}
 	}
@@ -160,14 +180,8 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 			return err
 		}
 	}
-	var sp *secretPrepare
-	attempt := func() (*secretPrepare, error) {
-		if sp == nil {
-			var err error
-			sp, err = e.beginSecrets(ctx, r)
-			return sp, err
-		}
-		return sp, nil
+	if slices.Contains(cfgRefs, og.ref()) && og != nil {
+		return fmt.Errorf("%s: the configuration of the harness uses the origin secret, which the harness never receives", domain.CodeInvalidRequest)
 	}
 	// The secrets of the configuration are asked for with the rest. The
 	// Controller grants the refs the spec declares and those of the frozen
@@ -187,8 +201,12 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err := mkdir(dir); err != nil {
 		return err
 	}
-	if err := e.makeWorktree(ctx, r, spec, worktree); err != nil {
+	if err := e.makeWorktree(ctx, r, spec, worktree, og); err != nil {
 		return err
+	}
+	// The last fetch is over: from here on askpass has nothing to answer with.
+	if err := og.revoke(); err != nil {
+		return fmt.Errorf("%s: taking the origin credential back: %w", domain.CodeSecretUnavailable, err)
 	}
 	mat, err := e.materialize(ctx, adapter, dir, snap)
 	if err != nil {
@@ -226,7 +244,9 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 		return err
 	}
 	l.SecretEnv = env
-	l.RedactOutput = len(cfgRefs) > 0
+	// Whatever the Run retains is redacted from its output, the credential of
+	// the origin included (the harness never reads it, but may print it).
+	l.RedactOutput = len(cfgRefs) > 0 || og != nil
 	extra = slices.DeleteFunc(extra, func(ref string) bool { return slices.Contains(want, ref) })
 	if len(want)+len(extra) > 0 {
 		p, err := attempt()

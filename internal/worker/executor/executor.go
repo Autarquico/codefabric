@@ -115,6 +115,10 @@ type Options struct {
 	// Git prepares, seals and pushes. Without one a Run gets an empty directory
 	// and its result is not published (tests).
 	Git Git
+	// AskpassScript is the absolute path of the GIT_ASKPASS script of this
+	// Worker (daemon.AskpassScriptPath). Without it a Run whose origin has a
+	// credential fails its prepare.
+	AskpassScript string
 	// RelayTLS are the files git presents to the relay when it pushes.
 	RelayTLS RelayTLS
 	Hooks    Hooks

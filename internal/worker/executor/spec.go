@@ -28,6 +28,8 @@ type specView struct {
 		} `json:"resources"`
 	} `json:"requirements"`
 	Secrets *specSecrets `json:"secrets"`
+	// Origin is the credential of the origin the Run froze, nil for none.
+	Origin *specOrigin `json:"origin"`
 	// RepoConfig is the policy of the Project frozen with the Run (schema 4);
 	// EnvironmentDef the Environment it pinned, nil if it has none.
 	RepoConfig     domain.RepoConfig      `json:"repo_config"`
