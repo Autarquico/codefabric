@@ -54,3 +54,17 @@ func TestSecretGrant_AuthorisesTheSecretsOfTheFrozenWorkflow(t *testing.T) {
 		t.Errorf("denials = %q", got)
 	}
 }
+
+// The markers of the pinned Workflow are harness secrets too: a Run whose
+// origin ref is one of them is refused.
+func TestOriginSecret_ARunRefusesAWorkflowThatUsesTheOriginRef(t *testing.T) {
+	e := newWorkflowEnv(t, 0)
+	e.project("backend", httpsProject)
+	e.allow("backend", originRef)
+	_, err := e.setOrigin("backend", originRef)
+	must(t, err)
+	e.mustCommit("review", 0, manifest(e.secretComponent("fake", "script", originRef)))
+
+	_, err = e.createTask("backend", "x", withHarness("fake", domain.ModeHeadless), withWorkflow("review@latest"))
+	wantCode(t, err, domain.CodePolicyDenied)
+}

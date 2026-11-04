@@ -49,6 +49,8 @@ type Options struct {
 	applyPoll  time.Duration
 	// environmentStore does the same for the environment commands.
 	environmentStore func(*cobra.Command) (environmentStore, error)
+	// projectUpdater replaces the Controller client of `project set` in tests.
+	projectUpdater func(*cobra.Command) (projectUpdater, error)
 	// doctorStore and sshProbe replace the Controller client and the ssh of `cf doctor` in tests.
 	doctorStore func(*cobra.Command) (doctorStore, error)
 	sshProbe    sshProbe
@@ -185,7 +187,7 @@ func newRootCmd(opts Options) *cobra.Command {
 	flags.String(flagController, "", "host:port of the Controller for this run, instead of the one stored at connect time")
 	flags.Bool(flagDebug, false, "show the details of an error")
 	root.AddCommand(newVersionCmd(), newStatusCmd(), newConnectCmd(), newClientCmd(), newConfigCmd(),
-		newProjectCmd(), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd(),
+		newProjectCmd(openProjectUpdater(opts)), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd(),
 		newAttachCmd(opts.Terminal), newPsCmd(), newEventsCmd(), newLogsCmd(),
 		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)),
 		newDoctorCmd(openDoctorStore(opts), probeOf(opts)))

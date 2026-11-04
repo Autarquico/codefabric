@@ -111,6 +111,10 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		}
 	}
 
+	if err := requireOriginSeparate(ctx, tx, in, pin); err != nil {
+		return v1.Run{}, err
+	}
+
 	var (
 		envPin domain.EnvironmentRef
 		envDef []byte

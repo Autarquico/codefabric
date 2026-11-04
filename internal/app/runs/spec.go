@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -386,4 +387,31 @@ func requireAllowed(harness string, allowlist []string) error {
 		fmt.Sprintf("harness %s needs the secrets %s and the Project does not allow them: run `cf project secrets allow <project> %s`",
 			harness, strings.Join(missing, ", "), strings.Join(missing, " ")),
 		map[string]any{"not_allowed": missing})
+}
+
+// requireOriginSeparate fails when the origin ref is also a harness secret:
+// the grant is per ref, so the harness would receive the origin credential.
+// The harness secrets are those the Task binds, those its harness always needs
+// and the markers of the pinned Workflow.
+func requireOriginSeparate(ctx context.Context, q store.Querier, in Inherited, pin domain.WorkflowRef) error {
+	ref := in.OriginSecret
+	if ref == "" {
+		return nil
+	}
+	harnessRefs := []string{}
+	for _, e := range in.Requirements.SecretEnv {
+		harnessRefs = append(harnessRefs, e.Ref)
+	}
+	if pin.Version != 0 {
+		fromWorkflow, err := workflowSecretRefs(ctx, q, pin, in.Requirements.Harness)
+		if err != nil {
+			return err
+		}
+		harnessRefs = append(harnessRefs, fromWorkflow...)
+	}
+	if !slices.Contains(harnessRefs, ref) {
+		return nil
+	}
+	return domain.NewError(domain.CodePolicyDenied,
+		fmt.Sprintf("origin_secret %s cannot also be a harness secret", ref), map[string]any{"ref": ref})
 }

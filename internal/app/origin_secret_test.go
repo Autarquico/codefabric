@@ -25,37 +25,56 @@ func (e *env) setOrigin(project, ref string) (v1.Project, error) {
 	return e.app.Projects.Set(e.t.Context(), e.owner, project, v1.UpdateProjectRequest{OriginSecret: &ref})
 }
 
+// Every https Project starts with the origin secret set; a refused change
+// leaves it as it was. The Projects of another URL form cannot hold one.
 func TestOriginSecret_ValidationOfAProject(t *testing.T) {
 	cases := []struct {
 		name    string
 		repo    string
-		allowed bool
+		allowed bool // when the change is made
 		ref     string
 		want    domain.Code // "" for accepted
 	}{
 		{"allowed, https", originRepo, true, originRef, ""},
-		{"clearing needs nothing", sshRepo, false, "", ""},
+		{"clearing a set origin", originRepo, false, "", ""},
 		{"ssh repo", sshRepo, true, originRef, domain.CodeInvalidRequest},
 		{"http repo", "http://example.com/org/x.git", true, originRef, domain.CodeInvalidRequest},
 		{"not a ref", originRepo, true, "Not A Ref!", domain.CodeInvalidRequest},
-		{"not allowlisted", originRepo, false, originRef, domain.CodePolicyDenied},
+		{"not allowlisted", originRepo, false, "other/ref", domain.CodePolicyDenied},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			e := newEnv(t)
 			e.project("backend", func(r *v1.CreateProjectRequest) { r.Repo = c.repo })
-			if c.allowed {
+			before := ""
+			if c.repo == originRepo {
+				e.allow("backend", originRef)
+				_, err := e.setOrigin("backend", originRef)
+				must(t, err)
+				before = originRef
+				if !c.allowed {
+					_, err := e.app.Projects.DenySecrets(t.Context(), e.owner, "backend", v1.ProjectSecretsRequest{Refs: []string{originRef}})
+					must(t, err)
+				}
+			} else {
 				e.allow("backend", originRef)
 			}
 			p, err := e.setOrigin("backend", c.ref)
+			want := before
 			if c.want == "" {
 				must(t, err)
-				if p.OriginSecret != c.ref {
-					t.Errorf("origin_secret = %q, want %q", p.OriginSecret, c.ref)
+				want = c.ref
+				if p.OriginSecret != want {
+					t.Errorf("origin_secret = %q, want %q", p.OriginSecret, want)
 				}
-				return
+			} else {
+				wantCode(t, err, c.want)
 			}
-			wantCode(t, err, c.want)
+			stored, err := e.app.Projects.Get(t.Context(), "backend")
+			must(t, err)
+			if stored.OriginSecret != want {
+				t.Errorf("stored origin_secret = %q, want %q", stored.OriginSecret, want)
+			}
 		})
 	}
 }
@@ -214,4 +233,24 @@ func TestOriginSecret_TheGrantFollowsTheAllowlist(t *testing.T) {
 	if got := denials(t, err); got != originRef+"="+v1.SecretNotAllowlisted {
 		t.Errorf("denials = %q", got)
 	}
+}
+
+// The grant is per ref, so a ref that is also a harness secret would hand the
+// harness the origin credential: the Run is refused, however the ref got there.
+func TestOriginSecret_ARunRefusesTheOriginRefAsAHarnessSecret(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend", httpsProject)
+	e.allow("backend", originRef)
+	_, err := e.setOrigin("backend", originRef)
+	must(t, err)
+
+	_, err = e.createTask("backend", "x", usingSecret("ORIGIN_TOKEN", originRef))
+	wantCode(t, err, domain.CodePolicyDenied)
+	if !strings.Contains(err.Error(), "origin_secret "+originRef+" cannot also be a harness secret") {
+		t.Errorf("error = %v", err)
+	}
+	if n := e.count("tasks"); n != 0 {
+		t.Errorf("%d Tasks from a refused request", n)
+	}
+	e.mustTask("backend", "y", usingSecret("OTHER_TOKEN", "other/ref"))
 }

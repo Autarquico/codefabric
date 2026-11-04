@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -13,9 +14,21 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-func newProjectCmd() *cobra.Command {
+// projectUpdater is the part of *client.Client that `project set` uses.
+type projectUpdater interface {
+	UpdateProject(ctx context.Context, ref string, req v1.UpdateProjectRequest) (v1.Project, error)
+}
+
+func openProjectUpdater(opts Options) func(*cobra.Command) (projectUpdater, error) {
+	if opts.projectUpdater != nil {
+		return opts.projectUpdater
+	}
+	return func(cmd *cobra.Command) (projectUpdater, error) { return openClient(cmd) }
+}
+
+func newProjectCmd(open func(*cobra.Command) (projectUpdater, error)) *cobra.Command {
 	cmd := &cobra.Command{Use: "project", Short: "Manage Projects"}
-	cmd.AddCommand(newProjectCreateCmd(), newProjectListCmd(), newProjectShowCmd(), newProjectSetCmd(), newProjectSecretsCmd(), newProjectExplainCmd())
+	cmd.AddCommand(newProjectCreateCmd(), newProjectListCmd(), newProjectShowCmd(), newProjectSetCmd(open), newProjectSecretsCmd(), newProjectExplainCmd())
 	return cmd
 }
 
@@ -141,7 +154,7 @@ func retryLabel(r *v1.Retry) string {
 	return fmt.Sprintf("on_failed=%s on_lost=%s max_attempts=%d", r.OnFailed, r.OnLost, r.MaxAttempts)
 }
 
-func newProjectSetCmd() *cobra.Command {
+func newProjectSetCmd(open func(*cobra.Command) (projectUpdater, error)) *cobra.Command {
 	var (
 		branch, workflow, environment string
 		mode, completion, repoConfig  string
@@ -186,7 +199,7 @@ func newProjectSetCmd() *cobra.Command {
 				}
 				req.Resources = &v1.Resources{CPU: cpu, MemoryMB: memoryMB}
 			}
-			c, err := openClient(cmd)
+			c, err := open(cmd)
 			if err != nil {
 				return err
 			}
