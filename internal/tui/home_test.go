@@ -367,13 +367,15 @@ func TestHome_AShortTerminalNeverPassesItsHeight(t *testing.T) {
 		{"connecting", func(*Model) {}, "Connecting to the Controller…"},
 	}
 	for _, tc := range cases {
-		for height := 1; height <= 14; height++ {
-			t.Run(tc.name, func(t *testing.T) {
-				m := shell(t)
-				m.Update(tea.WindowSizeMsg{Width: 48, Height: height})
-				tc.setup(m)
-				assertFits(t, frame(m), 48, height)
-			})
+		for _, width := range []int{40, 48} {
+			for height := 1; height <= 24; height++ {
+				t.Run(tc.name, func(t *testing.T) {
+					m := shell(t)
+					m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+					tc.setup(m)
+					assertFits(t, frame(m), width, height)
+				})
+			}
 		}
 		t.Run(tc.name+" at 48x12", func(t *testing.T) {
 			m := shell(t)

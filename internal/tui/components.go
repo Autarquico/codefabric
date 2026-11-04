@@ -38,7 +38,7 @@ func healthDot(c RenderContext) (lipgloss.Style, string) {
 
 // banner is a line that says what is wrong without taking the screen away.
 func banner(c RenderContext, text string) string {
-	return margin + c.Theme.Danger.Render("! "+text)
+	return margin + c.Theme.Danger.Render(ansi.Truncate("! "+text, max(c.Width-len(margin), 1), "…"))
 }
 
 // column is a heading over lines.
