@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Paleta, búsqueda y notificaciones"
+title: Paleta, búsqueda y notificaciones
 type: task
-status: draft
+status: active
 priority: P1
 size: M
-issue: null
+issue: 98
 prs: []
-related_issues: []
+related_issues: [98]
 sub_issues: []
 depends_on: [tui-views-actions]
 supersedes: []
 related_specs: [codefabric-spec, phase-3-tui]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-04
 ---
 
 # Paleta, búsqueda y notificaciones
