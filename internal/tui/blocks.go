@@ -287,16 +287,13 @@ type Menu struct {
 	cursor int
 }
 
-// menuFor builds the menu of a kind from the registry: the actions that act on
-// that kind and need nothing the person has not already given (a target).
-// skip names the ones a view keeps out, such as those that need a form.
-func menuFor(kind actions.Kind, skip func(actions.Descriptor) bool) *Menu {
+// menuFor builds a menu from the registry: the actions the view offers.
+func menuFor(offer func(actions.Descriptor) bool) *Menu {
 	var items []actions.Descriptor
 	for _, d := range actions.All() {
-		if d.Target != kind || skip(d) || needsInput(d) {
-			continue
+		if offer(d) {
+			items = append(items, d)
 		}
-		items = append(items, d)
 	}
 	return &Menu{items: items}
 }
@@ -361,12 +358,46 @@ func commandOf(d actions.Descriptor) string {
 type Confirm struct {
 	Action actions.Descriptor
 	Target Row
+	Values map[string]string // the inputs the person gave, if the action has any
 }
 
 func (cf Confirm) render(c RenderContext) []string {
 	lines := []string{margin + ansi.Truncate(c.Theme.Warning.Render(printable(cf.Action.Title)+"?"), c.inner(), "…")}
-	lines = append(lines, wrapped(c, "On", cf.Target.Label, c.Theme.Text)...)
-	return append(lines, wrapped(c, "Command", commandOf(cf.Action)+" "+cf.Target.ID, c.Theme.Text)...)
+	lines = append(lines, wrapped(c, "On", cf.on(), c.Theme.Text)...)
+	return append(lines, wrapped(c, "Command", commandLine(cf.Action, cf.Target.ID, cf.Values), c.Theme.Text)...)
+}
+
+// on is what the action acts on: its target, else the inputs it was given.
+func (cf Confirm) on() string {
+	if cf.Action.Target != actions.None {
+		return cf.Target.Label
+	}
+	var given []string
+	for _, a := range cf.Action.Args {
+		if v := cf.Values[a.Name]; v != "" {
+			given = append(given, a.Name+" "+v)
+		}
+	}
+	return strings.Join(given, " · ")
+}
+
+// commandLine is the cf command with the arguments that the action will run
+// with, in the order the CLI takes them.
+func commandLine(d actions.Descriptor, target string, values map[string]string) string {
+	parts := []string{commandOf(d)}
+	if d.Target != actions.None {
+		parts = append(parts, target)
+	}
+	for _, a := range d.Args {
+		switch v := values[a.Name]; {
+		case v == "":
+		case a.Flag:
+			parts = append(parts, "--"+a.Name+"="+v)
+		default:
+			parts = append(parts, v)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // Notice is an error ready to read: what failed, its code, what happened and

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli/actions"
 )
 
@@ -41,7 +43,15 @@ type viewSpec struct {
 	shortcuts []shortcut
 	skip      func(actions.Descriptor) bool // keeps an action out of the menu
 	timeline  bool                          // the detail carries the Task's timeline
-	needs     []Route                       // lists of other views that are followed with this one
+	history   bool                          // the detail carries the versions of a Workflow
+	forms     bool                          // the menu offers actions that need inputs, asked for in a form
+	also      []string                      // actions of no kind that the menu adds
+	suggest   func(s *State, id, input string) []string
+	readOnly  bool    // there is nothing to do to an item
+	needs     []Route // lists of other views that are followed with this one
+	// open builds a screen that is not a list with a detail (Logs, Models); the
+	// shell registers it whether or not there is a Backend.
+	open func(env screenEnv) Screen
 
 	feed   func(s *State) feedInfo
 	rows   func(c RenderContext) []Row
@@ -98,6 +108,11 @@ type (
 		timeline    Timeline
 		err         error
 	}
+	historyMsg struct {
+		name, stamp string
+		versions    []v1.WorkflowVersion
+		err         error
+	}
 )
 
 type timeline struct {
@@ -107,18 +122,28 @@ type timeline struct {
 	loading bool
 }
 
+type versions struct {
+	name, stamp string
+	list        []v1.WorkflowVersion
+	err         error
+	loading     bool
+}
+
 type browser struct {
 	id      uint64
 	spec    viewSpec
 	backend Backend
+	state   *State // the shell's, as of the last Sync
 	list    List
 	rows    []Row // all rows, as of the last Sync
 	menu    *Menu
+	form    *Form
 	confirm *Confirm
 	notice  *Notice
 	flash   string
 	busy    string
 	tl      timeline
+	vs      versions
 }
 
 func (b *browser) screenID() uint64 { return b.id }
@@ -130,14 +155,38 @@ func newBrowser(spec viewSpec, backend Backend) *browser {
 // Sync refreshes the rows the keys act on and asks for what the detail of the
 // selected item needs.
 func (b *browser) Sync(c RenderContext) tea.Cmd {
-	b.rows = b.spec.rows(c)
-	if !b.spec.timeline {
-		return nil
-	}
+	b.rows, b.state = b.spec.rows(c), c.State
 	row, ok := b.list.selected(b.rows)
-	if !ok {
+	switch {
+	case !ok:
+		return nil
+	case b.spec.history:
+		return b.syncHistory(row)
+	case b.spec.timeline:
+		return b.syncTimeline(c, row)
+	}
+	return nil
+}
+
+// syncHistory reads the versions of the selected Workflow again when its head
+// changes.
+func (b *browser) syncHistory(row Row) tea.Cmd {
+	if b.vs.name == row.ID && b.vs.stamp == row.Stamp {
 		return nil
 	}
+	previous := b.vs
+	b.vs = versions{name: row.ID, stamp: row.Stamp, loading: true}
+	if previous.name == row.ID {
+		b.vs.list, b.vs.loading = previous.list, false
+	}
+	backend, name, stamp := b.backend, row.ID, row.Stamp
+	return func() tea.Msg {
+		list, err := backend.History(name)
+		return historyMsg{name: name, stamp: stamp, versions: list, err: err}
+	}
+}
+
+func (b *browser) syncTimeline(c RenderContext, row Row) tea.Cmd {
 	// The timeline is read again when the Task changes and when the activity
 	// of the shell brings an event about it, so it follows a running Task.
 	stamp := row.Stamp + "/" + strconv.FormatUint(c.State.Activity.newestFor(row.ID), 10)
@@ -190,6 +239,10 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 		if msg.task == b.tl.task && msg.stamp == b.tl.stamp {
 			b.tl.Timeline, b.tl.err, b.tl.loading = msg.timeline, msg.err, false
 		}
+	case historyMsg:
+		if msg.name == b.vs.name && msg.stamp == b.vs.stamp {
+			b.vs.list, b.vs.err, b.vs.loading = msg.versions, msg.err, false
+		}
 	}
 	return b, nil, false
 }
@@ -224,11 +277,21 @@ func (b *browser) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 	case b.notice != nil:
 		b.notice = nil
 		return b, nil, true
+	case b.form != nil:
+		switch b.form.press(k) {
+		case formDone:
+			f := *b.form
+			b.form = nil
+			return b, b.confirmOrStart(f.Action, f.Target, f.values), true
+		case formCancelled:
+			b.form = nil
+		}
+		return b, nil, true
 	case b.confirm != nil:
 		cf := *b.confirm
 		b.confirm = nil
 		if key == "y" {
-			return b, b.start(cf.Action, cf.Target), true
+			return b, b.start(cf.Action, cf.Target, cf.Values), true
 		}
 		return b, nil, true
 	case b.menu != nil:
@@ -262,35 +325,63 @@ func (b *browser) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 			return b, b.invoke(d, row), true
 		}
 	}
-	if key == "enter" {
-		b.menu = menuFor(b.spec.kind, b.skipped)
+	if key == "enter" && !b.spec.readOnly {
+		b.menu = menuFor(b.offered)
 		return b, nil, true
 	}
 	return b, nil, false
 }
 
-func (b *browser) skipped(d actions.Descriptor) bool { return b.spec.skip != nil && b.spec.skip(d) }
-
-// invoke runs an action on a row, after the person confirms it when it is
-// destructive.
-func (b *browser) invoke(d actions.Descriptor, row Row) tea.Cmd {
+// offered says whether the menu lists an action: the ones that act on this kind
+// of item (and those of no kind that the view names), minus the ones it keeps
+// out, and, unless the view has a form, the ones that need inputs.
+func (b *browser) offered(d actions.Descriptor) bool {
 	switch {
-	case b.busy != "":
-		b.flash = "Wait for " + b.busy
-		return nil
-	case d.Destructive:
-		b.confirm = &Confirm{Action: d, Target: row}
-		return nil
+	case b.spec.skip != nil && b.spec.skip(d):
+		return false
+	case d.Target != b.spec.kind && !slices.Contains(b.spec.also, d.ID):
+		return false
 	}
-	return b.start(d, row)
+	return b.spec.forms || !needsInput(d)
 }
 
-func (b *browser) start(d actions.Descriptor, row Row) tea.Cmd {
+// invoke runs an action on a row: after the form that asks for its inputs, and
+// after the person confirms it when it is destructive.
+func (b *browser) invoke(d actions.Descriptor, row Row) tea.Cmd {
+	if b.busy != "" {
+		b.flash = "Wait for " + b.busy
+		return nil
+	}
+	if inputs := formInputs(d); len(inputs) > 0 {
+		b.form = newForm(d, row, inputs, func(input string) []string {
+			if b.spec.suggest == nil || b.state == nil {
+				return nil
+			}
+			return b.spec.suggest(b.state, row.ID, input)
+		})
+		return nil
+	}
+	return b.confirmOrStart(d, row, nil)
+}
+
+func (b *browser) confirmOrStart(d actions.Descriptor, row Row, values map[string]string) tea.Cmd {
+	if d.Destructive {
+		b.confirm = &Confirm{Action: d, Target: row, Values: values}
+		return nil
+	}
+	return b.start(d, row, values)
+}
+
+func (b *browser) start(d actions.Descriptor, row Row, values map[string]string) tea.Cmd {
 	if b.busy != "" {
 		return nil
 	}
 	b.busy = d.Title + "…"
-	backend, in, asker := b.backend, actions.Input{Target: row.ID}, from(b.id)
+	backend, asker := b.backend, from(b.id)
+	in := actions.Input{Target: row.ID, Values: values}
+	if d.Target == actions.None {
+		in.Target = ""
+	}
 	if d.Terminal {
 		return func() tea.Msg {
 			session, failure := backend.Attach(d.ID, in)
@@ -366,7 +457,9 @@ func (b *browser) bottom(c RenderContext, topLines int) []string {
 }
 
 // modal says whether a menu, a dialog or an error is open over the detail.
-func (b *browser) modal() bool { return b.notice != nil || b.confirm != nil || b.menu != nil }
+func (b *browser) modal() bool {
+	return b.notice != nil || b.confirm != nil || b.menu != nil || b.form != nil
+}
 
 func padTo(lines []string, n int) []string {
 	for len(lines) < n {
@@ -412,16 +505,23 @@ func (b *browser) footer(c RenderContext, compact bool) []string {
 	switch {
 	case b.notice != nil:
 		hints = []Hint{{"any key", "Dismiss"}}
+	case b.form != nil:
+		hints = b.form.hints()
 	case b.confirm != nil:
 		hints = []Hint{{"y", b.confirm.Action.Title}, {"n", "Keep it as it is"}}
 	case b.menu != nil:
 		hints = []Hint{{"↑↓", "Move"}, {"enter", "Run"}, {"esc", "Close"}}
 	case b.list.typing:
 		hints = []Hint{{"enter", "Keep filter"}, {"esc", "Clear"}}
+	case compact && b.spec.readOnly:
+		hints = []Hint{{"/", "Filter"}, {"esc", "Back"}, {"q", "Quit"}}
 	case compact:
 		hints = []Hint{{"enter", "Actions"}, {"esc", "Back"}, {"q", "Quit"}}
 	default:
-		hints = []Hint{{"↑↓", "Move"}, {"/", "Filter"}, {"enter", "Actions"}}
+		hints = []Hint{{"↑↓", "Move"}, {"/", "Filter"}}
+		if !b.spec.readOnly {
+			hints = append(hints, Hint{"enter", "Actions"})
+		}
 		for _, s := range b.spec.shortcuts {
 			hints = append(hints, Hint{s.Key, s.Label})
 		}
@@ -436,6 +536,8 @@ func (b *browser) pane(c RenderContext, rows []Row, room int) []string {
 	switch {
 	case b.notice != nil:
 		return b.notice.render(c)
+	case b.form != nil:
+		return b.form.render(c)
 	case b.confirm != nil:
 		return b.confirm.render(c)
 	case b.menu != nil:
@@ -444,8 +546,11 @@ func (b *browser) pane(c RenderContext, rows []Row, room int) []string {
 		return nil
 	}
 	lines := fieldLines(c, b.spec.detail(c, row.ID))
-	if b.spec.timeline {
+	switch {
+	case b.spec.timeline:
 		lines = append(lines, b.timelineLines(c, room-len(lines))...)
+	case b.spec.history:
+		lines = append(lines, b.historyLines(c, room-len(lines))...)
 	}
 	return lines
 }
@@ -476,4 +581,46 @@ func (b *browser) timelineLines(c RenderContext, room int) []string {
 			levelStyle(c, e.Level).Render(ansi.Truncate(activityMessage(e), messageWidth, "…"))
 	}
 	return append([]string{head}, lines[max(len(lines)-(room-1), 0):]...)
+}
+
+// historyLines are the versions of the selected Workflow, newest first, that
+// fit under its fields.
+func (b *browser) historyLines(c RenderContext, room int) []string {
+	if room < 2 {
+		return nil
+	}
+	head := margin + c.Theme.Faint.Render("History")
+	switch {
+	case b.vs.loading:
+		return []string{head, margin + c.Theme.Faint.Render("Loading…")}
+	case b.vs.err != nil:
+		f := actions.FailureOf(b.vs.err)
+		return []string{head, margin + c.Theme.Danger.Render(ansi.Truncate("! "+string(f.Code)+" "+printable(f.Message), c.inner(), "…"))}
+	case len(b.vs.list) == 0:
+		return []string{head, margin + c.Theme.Faint.Render("No versions yet")}
+	}
+	lines := []string{head}
+	summaryWidth := max(c.inner()-timeWidth-versionWidth-4, 8)
+	for _, v := range b.vs.list[:min(len(b.vs.list), room-1)] {
+		lines = append(lines, margin+c.Theme.Title.Render(fit("v"+strconv.Itoa(v.Version), versionWidth))+"  "+
+			c.Theme.Faint.Render(fit(activityTime(v.CreatedAt, c.Now, c.Loc), timeWidth))+"  "+
+			c.Theme.Text.Render(ansi.Truncate(versionSummary(v), summaryWidth, "…")))
+	}
+	return lines
+}
+
+const versionWidth = 4
+
+// versionSummary is what a version says of itself: its changelog, else the
+// components it changed.
+func versionSummary(v v1.WorkflowVersion) string {
+	if text := firstLine(printable(v.Changelog)); text != "" {
+		return text
+	}
+	marks := map[string]string{"added": "+", "removed": "-", "modified": "~"}
+	changed := make([]string, len(v.Changed))
+	for i, ch := range v.Changed {
+		changed[i] = marks[ch.Change] + printable(ch.Harness+"/"+ch.Name)
+	}
+	return strings.Join(changed, " ")
 }

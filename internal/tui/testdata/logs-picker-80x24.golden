@@ -1,0 +1,8 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Logs · pick a Run ───────────────────────────────────────────
+   ID        TRY STATE          RUNTIME  STARTED TASK
+ › r-7d3a    1   running        active   12:30   auth-refactor
+   r-1b8e    2   failed         stopped  11:05   frontend
+   r-5f0c    1   queued         none     —       infra
+ ──────────────────────────────────────────────────────────────────────────────
+ [↑↓] Move [/] Filter [enter] Follow [esc] Back [q] Quit

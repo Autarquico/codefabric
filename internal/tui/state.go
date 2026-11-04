@@ -38,9 +38,11 @@ type State struct {
 	Activity   activityLog
 
 	// The lists of the views, while they are followed.
-	Tasks   Feed[v1.Task]
-	Runs    Feed[v1.Run]
-	Workers Feed[v1.Worker]
+	Tasks     Feed[v1.Task]
+	Runs      Feed[v1.Run]
+	Workers   Feed[v1.Worker]
+	Workflows Feed[WorkflowRow]
+	Projects  Feed[v1.Project]
 }
 
 // Feed is the list that a view follows: the items of the last snapshot, whether

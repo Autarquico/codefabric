@@ -1,0 +1,10 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Models ──────────────────────────────────────────────────────
+ PROVIDER        USAGE
+ Anthropic       usage not reported
+ OpenAI          usage not reported
+
+ Quota and Fabric-attributed usage appear here once a provider reports them.
+ Drill-down by Project, Worker, Workflow, Harness, Run and time comes later.
+ ──────────────────────────────────────────────────────────────────────────────
+ [esc] Back [q] Quit

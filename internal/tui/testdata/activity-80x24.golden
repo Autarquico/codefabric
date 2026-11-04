@@ -1,0 +1,19 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Activity · 7 ────────────────────────────────────────────────
+   WHEN    SUBJECT          EVENT                  MESSAGE
+ › 12:44   auth-refactor    task state changed     tests failed
+   12:44   auth-refactor    task state changed     agent analyzing failure
+   12:43   payments         task state changed     ✓ completed
+   12:41   frontend         task state changed     moved macbook → linux
+   12:38   linux            task state changed     worker joined
+   12:32   personal@28      task state changed     synced → proxmox
+   12:29   infra            task state changed     needs your input
+
+ ──────────────── Detail ──────────────────────────────────────────────────────
+ Event         TaskStateChanged
+ Subject       auth-refactor
+ Message       tests failed
+ When          2026-11-04 12:44:00
+
+ ──────────────────────────────────────────────────────────────────────────────
+ [↑↓] Move [/] Filter [esc] Back [q] Quit

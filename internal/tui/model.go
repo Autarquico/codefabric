@@ -55,8 +55,12 @@ func New(opts Options) *Model {
 		opts.Location = time.Local
 	}
 	m := &Model{opts: opts, router: NewRouter(Home{}), theme: NewTheme(true), views: specs(), ctx: context.Background(), feeding: map[Route]context.CancelFunc{}}
-	if opts.Backend != nil {
-		for route, spec := range m.views {
+	env := screenEnv{Backend: opts.Backend, Feeds: opts.Feeds, ctx: func() context.Context { return m.ctx }, send: m.tell}
+	for route, spec := range m.views {
+		switch {
+		case spec.open != nil:
+			m.router.Register(route, func() Screen { return spec.open(env) })
+		case opts.Backend != nil:
 			m.router.Register(route, func() Screen { return newBrowser(spec, opts.Backend) })
 		}
 	}
@@ -66,6 +70,14 @@ func New(opts Options) *Model {
 // bind connects the shell to the program that runs it: send delivers what the
 // feeds produce, and ctx ends them.
 func (m *Model) bind(ctx context.Context, send func(tea.Msg)) { m.ctx, m.send = ctx, send }
+
+// tell delivers a message to the program; before the shell is bound to one
+// there is nobody to tell.
+func (m *Model) tell(msg tea.Msg) {
+	if m.send != nil {
+		m.send(msg)
+	}
+}
 
 // stop ends every feed.
 func (m *Model) stop() {
@@ -203,6 +215,9 @@ func (m *Model) follow(route Route) {
 	}
 	spec, ok := m.views[route]
 	if !ok {
+		return
+	}
+	if spec.follow == nil {
 		return
 	}
 	run := spec.follow(m.opts.Feeds, m.send)

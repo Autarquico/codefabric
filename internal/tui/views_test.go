@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,7 +48,8 @@ func (s session) Finish(err error) error { return s.AttachSession.Finish(context
 
 type fakeBackend struct {
 	mu       sync.Mutex
-	ran      []string // "action target"
+	ran      []string        // "action target"
+	inputs   []actions.Input // the inputs of each run
 	run      func(id string, in actions.Input) actions.Result
 	attached []string
 	failure  *actions.Failure
@@ -56,11 +58,13 @@ type fakeBackend struct {
 	asked    []string      // Timeline calls
 	session  Attachment    // given instead of the fake ssh, when set
 	gate     chan struct{} // when set, Attach and Timeline wait for it to be closed
+	versions map[string][]v1.WorkflowVersion
 }
 
 func (f *fakeBackend) Run(id string, in actions.Input) actions.Result {
 	f.mu.Lock()
 	f.ran = append(f.ran, id+" "+in.Target)
+	f.inputs = append(f.inputs, in)
 	f.mu.Unlock()
 	if f.run != nil {
 		return f.run(id, in)
@@ -96,6 +100,12 @@ func (f *fakeBackend) Timeline(taskID string) (Timeline, error) {
 	defer f.mu.Unlock()
 	f.asked = append(f.asked, taskID)
 	return Timeline{Events: f.timeline[taskID]}, nil
+}
+
+func (f *fakeBackend) History(workflow string) ([]v1.WorkflowVersion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.versions[workflow], nil
 }
 
 func newBackend() *fakeBackend {
@@ -626,10 +636,11 @@ func TestScenario_TuiViewsActions_Runs_AttachAndPublish(t *testing.T) {
 		t.Errorf("attached %v", be.attached)
 	}
 
-	press(t, m, "p") // the key of Projects on the home: nothing happens here
-	if len(be.ran) != 0 {
-		t.Fatalf("p published a Run: %v", be.ran)
+	press(t, m, "p") // the key of Projects: it opens Projects, it does not publish
+	if len(be.ran) != 0 || m.Router().Top() == nil || len(m.Router().Routes()) != 2 {
+		t.Fatalf("p published a Run or did not open Projects: %v", be.ran)
 	}
+	press(t, m, "esc")
 	press(t, m, "P")
 	if len(be.ran) != 0 || !strings.Contains(frame(m), "Publish run?") {
 		t.Fatalf("publishing did not ask first (ran %v):\n%s", be.ran, frame(m))
@@ -800,9 +811,9 @@ func TestViews_ShortcutsResolveInTheRegistry(t *testing.T) {
 			switch {
 			case !ok:
 				t.Errorf("%s: %q is not an action of the registry", route, s.Action)
-			case d.Target != spec.kind && !d.Terminal:
+			case d.Target != spec.kind && !d.Terminal && !slices.Contains(spec.also, d.ID):
 				t.Errorf("%s: %s acts on %q", route, s.Action, d.Target)
-			case needsInput(d):
+			case needsInput(d) && !spec.forms:
 				t.Errorf("%s: %s needs inputs a key cannot give", route, s.Action)
 			case seen[s.Key]:
 				t.Errorf("%s: key %q is used twice", route, s.Key)

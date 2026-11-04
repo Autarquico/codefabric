@@ -1,0 +1,20 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Workflows · 2 ───────────────────────────────────────────────
+   NAME               HEAD  ON HEAD  DRIFT     CREATED
+ › default            v3    1/2      1 drifted 09:00
+   infra              v1    —        —         08:00
+
+ ──────────────── Detail ──────────────────────────────────────────────────────
+ Workflow      default
+ Head          v3 · sha256:aaaaaaaaaaaa
+ Created       09:00
+ linux/claude  v3
+ macbook/cla…  v2 (head v3) · drift: skills
+ History
+ v3    12:00   tighten the review skill
+ v2    10:30   ~claude/skills +claude/hooks
+ v1    09:00   adopted
+
+ ──────────────────────────────────────────────────────────────────────────────
+ [↑↓] Move [/] Filter [enter] Actions [a] Apply [s] Sync [R] Rollback
+ [esc] Back [q] Quit
