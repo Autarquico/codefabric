@@ -85,11 +85,13 @@ func (m *Manager) DeliverFor(runDir string, attempt uint64, access []Consumer, s
 			merged, kept, err := d.merge(items)
 			d.close()
 			switch {
-			case errors.Is(err, ErrConflict):
+			case err != nil:
+				// Replacing the delivery would drop the refs it holds, and with them
+				// their redaction: fail, and the prepare is made again from nothing.
 				return err
-			case err == nil && len(merged) == kept:
+			case len(merged) == kept:
 				return m.tidy(runDir)
-			case err == nil:
+			default:
 				if err := checkSet(needlesOf(merged)); err != nil {
 					return err
 				}

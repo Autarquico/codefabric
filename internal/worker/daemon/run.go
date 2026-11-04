@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/user"
+	"slices"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -199,6 +200,8 @@ func Run(ctx context.Context, o Options) error {
 		if eo.Harnesses, eo.Withheld, d.capabilities, err = d.announce(ctx, eo.Host, adapters); err != nil {
 			return err
 		}
+		// Here git is usable (gitops.New checked its version) and the Worker offers harnesses.
+		d.capabilities = withOriginAskpass(d.capabilities, eo.AskpassScript)
 	}
 	if err := d.startDoctor(ctx, o); err != nil {
 		return err
@@ -532,6 +535,16 @@ func (d *daemon) sleep(ctx context.Context, wait time.Duration) bool {
 	case <-timer.C():
 		return true
 	}
+}
+
+// withOriginAskpass adds domain.OriginAskpassCapability to caps when the
+// askpass script exists: only then can this Worker fetch the origin of a Run
+// with its credential, and placement relies on the capability saying so.
+func withOriginAskpass(caps []string, script string) []string {
+	if script == "" {
+		return caps
+	}
+	return slices.Sorted(slices.Values(append(slices.Clone(caps), domain.OriginAskpassCapability)))
 }
 
 // writeAskpassScript keeps the GIT_ASKPASS script of the Worker (AskpassScriptPath)

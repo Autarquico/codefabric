@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -124,15 +125,17 @@ const MaxUserLen = 256
 
 // CheckUser is an error, wrapping domain.ErrInvalidSecret, unless user can be
 // the username of a Basic-auth credential: at most MaxUserLen bytes, without
-// CR, LF, NUL or ':', which would break the line git is answered with or the
-// "user:token" pair. Empty is valid: it is DefaultUser. The error does not
-// quote user.
+// ':', '@', '/', '%', white space or a control character, which would break the
+// line git is answered with, the "user:token" pair or the URL the user is
+// matched in. Empty is valid: it is DefaultUser. It is the one rule of the
+// user: `secrets set` applies it, and so does the binding of a prepare. The
+// error does not quote user.
 func CheckUser(user string) error {
 	if len(user) > MaxUserLen {
 		return fmt.Errorf("%w: the user has more than %d bytes", domain.ErrInvalidSecret, MaxUserLen)
 	}
-	if strings.ContainsAny(user, "\r\n\x00:") {
-		return fmt.Errorf("%w: the user has a CR, LF, NUL or ':'", domain.ErrInvalidSecret)
+	if strings.ContainsAny(user, ":@/%") || strings.ContainsFunc(user, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) {
+		return fmt.Errorf("%w: the user has a control character, white space, ':', '@', '/' or '%%'", domain.ErrInvalidSecret)
 	}
 	return nil
 }

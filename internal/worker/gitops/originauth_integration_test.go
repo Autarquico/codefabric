@@ -7,11 +7,13 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Autarquico/codefabric/internal/config"
@@ -134,7 +136,7 @@ func (r *askpassRig) noLeak(err error) {
 	}
 }
 
-func TestScenario_OriginAskpass_RepoPrivado(t *testing.T) {
+func TestOriginAuth_RepoPrivado(t *testing.T) {
 	r := newAskpassRig(t, true)
 	// The hostile configuration of the user must change nothing.
 	record := gitorigin.HostileHome(t, r.home, r.origin)
@@ -160,7 +162,7 @@ func TestScenario_OriginAskpass_RepoPrivado(t *testing.T) {
 	}
 }
 
-func TestScenario_OriginAskpass_HostileConfigDoesNotDisableTLSVerification(t *testing.T) {
+func TestOriginAuth_HostileConfigDoesNotDisableTLSVerification(t *testing.T) {
 	r := newAskpassRig(t, false) // the CA of the server is not trusted
 	hostile := fmt.Sprintf("[http]\n\tsslVerify = false\n[http \"%s/\"]\n\tsslVerify = false\n", r.origin.URL)
 	if err := os.WriteFile(filepath.Join(r.home, ".gitconfig"), []byte(hostile), 0o600); err != nil {
@@ -176,7 +178,98 @@ func TestScenario_OriginAskpass_HostileConfigDoesNotDisableTLSVerification(t *te
 	r.noLeak(err)
 }
 
-func TestScenario_OriginAskpass_DestinoNoAutorizado(t *testing.T) {
+// plantHostileBare makes the bare repository of the Project, as the Worker
+// does, and gives its own config what a harness of another Run could write
+// there for the origin: no TLS verification, a CA of its own, a proxy, a header
+// and an include. It returns how many connections the proxy took.
+func (r *askpassRig) plantHostileBare(t *testing.T) (proxyHits func() int) {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var hits atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			hits.Add(1)
+			_ = c.Close()
+		}
+	}()
+	t.Setenv("NO_PROXY", "") // the rig exempts the origin; a bare config must not need that to be ignored
+	t.Setenv("no_proxy", "")
+	bare := r.paths.WorkerRepoDir(project)
+	init := exec.CommandContext(t.Context(), "git", "init", "--bare", "--quiet", bare) //nolint:gosec // a test
+	init.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + r.home, "GIT_CONFIG_NOSYSTEM=1"}
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	included := filepath.Join(t.TempDir(), "included")
+	if err := os.WriteFile(included, []byte("[http]\n\tsslVerify = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hostile := fmt.Sprintf("[http %q]\n\tsslVerify = false\n\tsslCAInfo = %s\n\tproxy = http://%s\n\textraHeader = Authorization: Basic %s\n"+
+		"[url \"https://evil.invalid/\"]\n\tinsteadOf = %s/\n[include]\n\tpath = %s\n",
+		r.origin.URL+"/", filepath.Join(t.TempDir(), "no-such-ca.pem"), ln.Addr(), base64.StdEncoding.EncodeToString([]byte("attacker:wrong")), r.origin.URL, included)
+	f, err := os.OpenFile(filepath.Join(bare, "config"), os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // a test
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(hostile); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The control: a git run inside that repository does take the hostile value.
+	ctl := exec.CommandContext(t.Context(), "git", "config", "--get-urlmatch", "http.sslVerify", r.url("org/repo.git")) //nolint:gosec // a test
+	ctl.Dir, ctl.Env = bare, []string{"PATH=" + os.Getenv("PATH"), "HOME=" + r.home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.sslVerify", "GIT_CONFIG_VALUE_0=true"}
+	if out, _ := ctl.Output(); strings.TrimSpace(string(out)) != "false" {
+		t.Fatalf("the planted config does not override the command line (%q): the test proves nothing", out)
+	}
+	return func() int { return int(hits.Load()) }
+}
+
+func TestOriginAuth_HostileBareConfigIsNotRead(t *testing.T) {
+	t.Run("an untrusted server stays untrusted", func(t *testing.T) {
+		r := newAskpassRig(t, false)
+		proxied := r.plantHostileBare(t)
+		err := r.prepare(r.url("org/repo.git"))
+		if err == nil {
+			t.Fatal("Prepare worked against a server nobody trusts")
+		}
+		if n := r.origin.AuthorizedFor("/"); n != 0 {
+			t.Errorf("the credential reached an untrusted server %d times", n)
+		}
+		if n := proxied(); n != 0 {
+			t.Errorf("the fetch went through the proxy of the bare config %d times", n)
+		}
+		r.noLeak(err)
+	})
+	t.Run("a trusted server is fetched as configured by the Worker", func(t *testing.T) {
+		r := newAskpassRig(t, true)
+		proxied := r.plantHostileBare(t)
+		if err := r.prepare(r.url("org/repo.git")); err != nil {
+			t.Fatalf("Prepare: %v\n%s", err, r.logs)
+		}
+		if n := proxied(); n != 0 {
+			t.Errorf("the fetch went through the proxy of the bare config %d times", n)
+		}
+		if n := r.origin.AuthorizedFor("/org/repo.git"); n == 0 {
+			t.Errorf("origin saw no authorized request: %v", r.origin.Saw())
+		}
+		if got := gittest.Run(t, r.paths.WorkerWorktreeDir(run, 1), "rev-parse", "HEAD"); got != r.commit {
+			t.Errorf("HEAD = %s, want %s", got, r.commit)
+		}
+		r.noLeak(nil)
+	})
+}
+
+func TestOriginAuth_DestinoNoAutorizado(t *testing.T) {
 	t.Run("a redirect to another host", func(t *testing.T) {
 		r := newAskpassRig(t, true)
 		elsewhere := gitorigin.New(t, map[string]string{"org/repo.git": gittest.InitRepo(t)}, originUser, originToken)
@@ -227,7 +320,7 @@ func TestScenario_OriginAskpass_DestinoNoAutorizado(t *testing.T) {
 	})
 }
 
-func TestScenario_OriginAskpass_ErrorDeFetch(t *testing.T) {
+func TestOriginAuth_ErrorDeFetch(t *testing.T) {
 	gittest.Require(t)
 	r := newAskpassRig(t, true)
 	// A git that fails the way some do: its error shows the URL it was given

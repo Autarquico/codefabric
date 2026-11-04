@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -168,11 +169,11 @@ const maxBindingLen = 2048
 // Bind records on ref, already delivered in runDir, the destination it is
 // authorized for and the user it is sent with, for AskpassGrant and for the
 // redaction of the user:value forms. Binding again replaces the record. The
-// user has no ':' (the Basic framing), '@', '/', '%' or control character.
+// user is valid by secrets.CheckUser, the rule `secrets set` applies too, and
+// is not empty.
 func (m *Manager) Bind(runDir, ref string, b Binding) error {
-	if b.Origin == "" || len(b.Origin) > maxBindingLen || b.User == "" || len(b.User) > maxBindingLen ||
-		strings.ContainsFunc(b.Origin, unicode.IsControl) ||
-		strings.ContainsAny(b.User, ":@/%") || strings.ContainsFunc(b.User, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) {
+	if b.Origin == "" || len(b.Origin) > maxBindingLen || b.User == "" || secrets.CheckUser(b.User) != nil ||
+		strings.ContainsFunc(b.Origin, unicode.IsControl) {
 		return errors.New("secretjit: the origin or the user of a binding is not valid")
 	}
 	unlock, err := lock(runDir)

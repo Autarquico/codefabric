@@ -5,6 +5,7 @@ package executor
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -244,5 +245,97 @@ func TestOriginOnlyRunRetainsItsSecretsForTheRelease(t *testing.T) {
 	f, k := originRun(t, 2, &fakeGit{})
 	if !f.e.usesSecrets(f.run(k)) {
 		t.Error("an origin-only Run is not a Run with secrets")
+	}
+}
+
+// withOrigin adds the origin of originSpec to a spec that already has secrets.
+func withOrigin(t *testing.T, spec []byte, url string) []byte {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(spec, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["origin"] = map[string]any{"secret": originRef, "url": url}
+	m["repo_config"] = domain.RepoConfigDeny
+	m["origins"] = map[string]any{"resources": "project"}
+	raw, _ := json.Marshal(m)
+	return raw
+}
+
+func TestAnAttemptWithAnOriginAndHarnessSecretsGivesEachConsumerOnlyItsOwn(t *testing.T) {
+	const harnessRef = "github.personal"
+	var atFetch struct{ origin, harness error }
+	var f *fixture
+	var k state.Key
+	g := &fakeGit{onPrepare: func(gitops.PrepareSpec, string) error {
+		_, atFetch.origin = secretjit.AskpassReader(f.runDir(k))(originRef)
+		_, atFetch.harness = secretjit.AskpassReader(f.runDir(k))(harnessRef)
+		return nil
+	}}
+	store := newFakeStore(map[string]string{originRef: originValue, harnessRef: ghValue})
+	f = secretFixture(t, store, func(o *Options) {
+		o.Git = g
+		o.AskpassScript = "/state/bin/git-askpass"
+	})
+	spec := withOrigin(t, secretSpec("echo hi", "headless", map[string]string{"GH": harnessRef}), originURL)
+	k = f.assign(spec, func(a *v1.AssignCommand) { a.Repo = originURL })
+	if f.e.decideOnce(t.Context()) || f.run(k).Phase != state.PhaseAccepted {
+		t.Fatalf("not accepted: %s", f.run(k).Phase)
+	}
+	if err := f.e.prepare(t.Context(), f.run(k)); err != nil {
+		t.Fatal(err)
+	}
+	dir := f.runDir(k)
+
+	if atFetch.origin != nil || !errors.Is(atFetch.harness, secretjit.ErrNoAccess) {
+		t.Errorf("at the fetch askpass reads the origin: %v; the harness ref: %v", atFetch.origin, atFetch.harness)
+	}
+	if got, err := secretjit.Resolver(dir)(harnessRef); err != nil || got != ghValue {
+		t.Errorf("the harness reads its own secret: %q, %v", got, err)
+	}
+	if _, err := secretjit.Resolver(dir)(originRef); !errors.Is(err, secretjit.ErrNoAccess) {
+		t.Errorf("the harness reads the origin credential: %v", err)
+	}
+	for _, ref := range []string{originRef, harnessRef} {
+		if _, err := secretjit.AskpassReader(dir)(ref); !errors.Is(err, secretjit.ErrNoAccess) {
+			t.Errorf("askpass reads %s after the fetch: %v", ref, err)
+		}
+	}
+	needles, err := secretjit.Load(dir)
+	if err != nil || len(needles) != 2 {
+		t.Fatalf("retention = %v, %v", needles, err)
+	}
+	for _, n := range needles {
+		wantUser := ""
+		if n.Ref == originRef {
+			wantUser = secrets.DefaultUser
+		}
+		if n.User != wantUser {
+			t.Errorf("%s retained with user %q, want %q", n.Ref, n.User, wantUser)
+		}
+	}
+	var l execwrap.Launch
+	if ok, err := execwrap.Read(dir, execwrap.LaunchFile, &l); !ok || err != nil || !l.RedactOutput {
+		t.Errorf("launch = %+v, %v", l, err)
+	}
+}
+
+func TestScrubKeepsTheIdentityOfTheErrorItRedacts(t *testing.T) {
+	f, k := originRun(t, 2, &fakeGit{})
+	if err := f.e.prepare(t.Context(), f.run(k)); err != nil {
+		t.Fatal(err)
+	}
+	cut := fmt.Errorf("%w: the prepare was cut short: %w", errPrepareLater,
+		&codedFailure{code: domain.CodeSecretUnavailable, msg: "reading " + originValue})
+	got := f.e.scrub(f.run(k), cut)
+	if !errors.Is(got, errPrepareLater) {
+		t.Errorf("a prepare that was cut short is no longer retryable: %v", got)
+	}
+	var coded *codedFailure
+	if !errors.As(got, &coded) || coded.code != domain.CodeSecretUnavailable {
+		t.Fatalf("the code is lost: %v", got)
+	}
+	if strings.Contains(got.Error(), originValue) || strings.Contains(coded.msg, originValue) {
+		t.Errorf("the value is in %q / %q", got, coded.msg)
 	}
 }

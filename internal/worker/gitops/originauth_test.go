@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -28,8 +29,9 @@ func TestOriginFetchEnvIsControlled(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://proxy.internal:3128")
 	t.Setenv("NO_PROXY", "localhost")
 	t.Setenv("http_proxy", "http://not-for-https")
+	runDir := t.TempDir()
 	a := &OriginAuth{ //nolint:gosec // a sentinel, not a credential
-		Askpass: "/state/bin/git-askpass", RunDir: "/state/runs/r1",
+		Askpass: "/state/bin/git-askpass", RunDir: runDir,
 		Needles: []redact.Needle{{Ref: "origin", Value: []byte("tok-0123456789"), User: "x-access-token"}},
 	}
 	env, err := OriginEnv(&Git{}, "/state/repos/p1", a)
@@ -39,12 +41,16 @@ func TestOriginFetchEnvIsControlled(t *testing.T) {
 	got := envMap(env)
 	for k, want := range map[string]string{ //nolint:gosec // paths and sentinels, not credentials
 		"HOME": "/state/repos/p1", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_ALLOW_PROTOCOL": "https",
-		"GIT_ASKPASS": "/state/bin/git-askpass", "CF_ASKPASS_RUN_DIR": "/state/runs/r1", "GIT_TERMINAL_PROMPT": "0",
+		"GIT_ASKPASS": "/state/bin/git-askpass", "CF_ASKPASS_RUN_DIR": runDir, "GIT_OBJECT_DIRECTORY": "/state/repos/p1/objects", "GIT_TERMINAL_PROMPT": "0",
 		"HTTPS_PROXY": "http://proxy.internal:3128", "NO_PROXY": "localhost",
 	} {
 		if got[k] != want {
 			t.Errorf("%s = %q, want %q", k, got[k], want)
 		}
+	}
+	// Git runs in a repository of its own, inside the run directory, not in the bare one.
+	if dir := got["GIT_DIR"]; filepath.Dir(dir) != runDir || strings.HasPrefix(dir, "/state/repos") {
+		t.Errorf("GIT_DIR = %q", dir)
 	}
 	for _, k := range []string{"XDG_CONFIG_HOME", "SSH_AUTH_SOCK", "GIT_SSL_NO_VERIFY", "http_proxy"} {
 		if _, ok := got[k]; ok {

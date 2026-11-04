@@ -158,7 +158,7 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	og := e.originOf(r, spec, attempt)
 	defer func() {
 		if err := og.revoke(); err != nil {
-			e.log.WarnContext(ctx, "taking the origin credential back from askpass failed; the next prepare attempt takes it back", "run", r.RunID, "err", err)
+			e.log.WarnContext(ctx, "taking the origin credential back from askpass failed; the Run is prepared again, and Release removes the delivery", "run", r.RunID, "err", err)
 		}
 	}()
 	if spec.Schema == domain.RunSpecSchemaRepoConfig {
@@ -180,7 +180,7 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 			return err
 		}
 	}
-	if slices.Contains(cfgRefs, og.ref()) && og != nil {
+	if spec.Origin != nil && slices.Contains(cfgRefs, spec.Origin.Secret) {
 		return fmt.Errorf("%s: the configuration of the harness uses the origin secret, which the harness never receives", domain.CodeInvalidRequest)
 	}
 	// The secrets of the configuration are asked for with the rest. The
@@ -206,7 +206,7 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	}
 	// The last fetch is over: from here on askpass has nothing to answer with.
 	if err := og.revoke(); err != nil {
-		return fmt.Errorf("%s: taking the origin credential back: %w", domain.CodeSecretUnavailable, err)
+		return fmt.Errorf("%w: %s: taking the origin credential back: %w", errPrepareLater, domain.CodeSecretUnavailable, err)
 	}
 	mat, err := e.materialize(ctx, adapter, dir, snap)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 )
 
@@ -290,5 +291,22 @@ func TestRevokeAttempt_ALateRevokeOfAnOlderAttemptLeavesTheNewerDelivery(t *test
 	}
 	if _, err := AskpassReader(dir)(origin.Ref); !errors.Is(err, ErrNoAccess) {
 		t.Fatalf("askpass after the revoke of its own attempt: %v", err)
+	}
+}
+
+// `secrets set --user` and the binding of a prepare apply one rule: a user the
+// first stores is a user the second binds.
+func TestBind_RefusesExactlyTheUsersSecretsSetRefuses(t *testing.T) {
+	for _, user := range []string{"x-access-token", "svc-bot", "a.b_c", "a@b", "a b", "a/b", "a%40b", "a\tb", "a\u00a0b", "a:b", "a\x00b", "a\nb", strings.Repeat("u", secrets.MaxUserLen+1)} {
+		dir := runDir(t)
+		m := New()
+		if err := m.DeliverFor(dir, 1, []Consumer{Askpass}, v1[:1], allow); err != nil {
+			t.Fatal(err)
+		}
+		stored := secrets.CheckUser(user) == nil
+		bound := m.Bind(dir, "api/token", Binding{Origin: "https://h/r", User: user}) == nil
+		if stored != bound {
+			t.Errorf("user %q: secrets set accepts it = %v, Bind accepts it = %v", user, stored, bound)
+		}
 	}
 }

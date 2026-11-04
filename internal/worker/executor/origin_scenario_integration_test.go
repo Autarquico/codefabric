@@ -3,7 +3,6 @@
 package executor
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -372,10 +371,9 @@ exec '%s' "$@"
 	}
 	r.noTokenAnywhere(k)
 	r.askpassDenied(k)
-	if log, err := os.ReadFile(filepath.Join(r.runDir(k), execwrap.OutputLog)); err == nil { //nolint:gosec // a file of the test
-		noTokenIn(t, "output.log", string(log))
-		if bytes.Contains(log, []byte("fatal:")) && !bytes.Contains(log, []byte(marker)) {
-			t.Errorf("output.log shows the failure without the marker: %s", log)
-		}
+	// A Run that fails at prepare never writes output.log: the git output of the
+	// scenario is the prepare_failed message checked above.
+	if _, err := os.Stat(filepath.Join(r.runDir(k), execwrap.OutputLog)); err == nil {
+		t.Error("a Run that failed at prepare has an output.log")
 	}
 }

@@ -72,14 +72,6 @@ func (e *Executor) originOf(r state.Run, spec specView, attempt func() (*secretP
 	return &originAccess{e: e, r: r, origin: *spec.Origin, attempt: attempt}
 }
 
-// ref is the origin ref of o, empty for none.
-func (o *originAccess) ref() string {
-	if o == nil {
-		return ""
-	}
-	return o.origin.Secret
-}
-
 // credential is what the fetches of origin run with. The first call does, in
 // this order: the run directory, the Controller's grant, the read of the value
 // and its user, the delivery for askpass alone, and the binding to the origin
@@ -154,7 +146,8 @@ func (o *originAccess) revoke() error {
 		return nil
 	}
 	err := o.e.jit.RevokeAttempt(o.e.runDir(o.r.Key), o.p.attempt, secretjit.Askpass, []string{o.origin.Secret})
-	if errors.Is(err, secretjit.ErrStale) {
+	if err == nil || errors.Is(err, secretjit.ErrStale) {
+		o.delivered = false
 		return nil
 	}
 	return err
@@ -174,14 +167,18 @@ func deliveryError(err error) error {
 }
 
 // scrubbed is an error whose text has been redacted of the secrets of the
-// Run; it still unwraps to the original, for errors.Is and errors.As.
+// Run. It keeps the identity of the original: errors.Is answers as the
+// original does (errPrepareLater and the like still match), and errors.As
+// finds the original chain, with a coded failure replaced by its redacted copy.
 type scrubbed struct {
-	msg string
-	err error
+	msg    string
+	err    error // the original
+	unwrap error // what errors.As walks: err, with a coded failure redacted
 }
 
-func (s *scrubbed) Error() string { return s.msg }
-func (s *scrubbed) Unwrap() error { return s.err }
+func (s *scrubbed) Error() string        { return s.msg }
+func (s *scrubbed) Unwrap() error        { return s.unwrap }
+func (s *scrubbed) Is(target error) bool { return errors.Is(s.err, target) }
 
 // scrub redacts err of what the Run retains, so that neither the report of a
 // failed prepare nor the log carries a value. A Run whose retention cannot be
@@ -204,9 +201,10 @@ func (e *Executor) scrub(r state.Run, err error) error {
 		}
 		return string(redact.Bytes([]byte(s), set))
 	}
+	unwrap := err
 	var coded *codedFailure
 	if errors.As(err, &coded) {
-		return &codedFailure{code: coded.code, msg: redactText(coded.msg)}
+		unwrap = &codedFailure{code: coded.code, msg: redactText(coded.msg)}
 	}
-	return &scrubbed{msg: redactText(err.Error()), err: err}
+	return &scrubbed{msg: redactText(err.Error()), err: err, unwrap: unwrap}
 }
