@@ -1,0 +1,14 @@
+ CODEFABRIC                                                   ● healthy
+
+ TASKS                  WORKERS                MODELS
+ 0 running              1/1 online             usage not reported
+ 0 needs you
+
+ ──────────────── Activity ────────────────────────────────────────────
+ 12:00   project…W0X1Y2    eviltxt
+ 12:00   run…W0X1Y2        run publication failed
+ 12:00   linux             worker joined
+ 12:00   task-12           task → running
+ ──────────────────────────────────────────────────────────────────────
+ [t] Tasks [w] Workers [m] Models [r] Runs [f] Workflows
+ [p] Projects [a] Activity [l] Logs [/] Search [q] Quit

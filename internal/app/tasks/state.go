@@ -70,6 +70,7 @@ func rederive(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.I
 	ev.Data = map[string]any{
 		"from": string(from), "from_waiting_reason": string(fromReason),
 		"to": string(state), "waiting_reason": string(reason),
+		"short_id": shortID(task.Short), "name": task.Name,
 	}
 	_, _, err = tx.AppendEvent(ctx, ev)
 	return err

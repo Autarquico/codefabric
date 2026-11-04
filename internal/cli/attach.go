@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
+	"os/exec"
 	"strconv"
 
 	"github.com/spf13/cobra"
@@ -20,6 +22,10 @@ type Terminal interface {
 	// Attach returns the exit status of the attach: 0 when the person detached,
 	// 255 when the transport itself failed. An error is a refusal or a failure to start.
 	Attach(ctx context.Context, req AttachRequest, stdio TerminalIO) (int, error)
+	// Command is the same session as a process that is not started and has no
+	// streams wired, for a caller that suspends its own screen to run it (the
+	// TUI, through tea.ExecProcess). The refusals are those of Attach.
+	Command(ctx context.Context, req AttachRequest) (*exec.Cmd, error)
 }
 
 // AttachRequest is what the CLI has checked and the Terminal runs: the Run and
@@ -73,7 +79,7 @@ func newAttachCmd(term Terminal) *cobra.Command {
 				return domain.NewError(domain.CodeInvalidRequest, "cf attach needs a terminal on its standard input", nil)
 			}
 			if term == nil {
-				return domain.NewError(domain.CodeNotImplemented, "this build of cf cannot open a terminal on a Worker", nil)
+				return errNoTerminal()
 			}
 			code, err := term.Attach(cmd.Context(), req, TerminalIO{In: cmd.InOrStdin(), Out: cmd.OutOrStdout(), Err: cmd.ErrOrStderr()})
 			if err != nil {
@@ -86,6 +92,76 @@ func newAttachCmd(term Terminal) *cobra.Command {
 	cmd.Flags().StringVar(&sshTarget, "ssh-target", "", "reach the Worker at this [user@]host[:port] instead of the one it announced")
 	addProjectFlag(cmd, "the Project that narrows a Task name")
 	return cmd
+}
+
+// AttachParams is what a caller that is not the `cf attach` command gives to
+// PrepareAttach.
+type AttachParams struct {
+	// Ref is a Run or a Task; Project narrows a Task name (empty: the Project of
+	// the working directory, as for the command).
+	Ref, Project string
+	// SSHTarget overrides where to connect, as the --ssh-target flag does.
+	SSHTarget string
+	ReadOnly  bool
+	// Controller is the --controller of this call; empty is the stored one.
+	Controller string
+}
+
+// AttachSession is a verified attach that the caller runs itself: Cmd, with its
+// streams wired by the caller, and then Finish with how it ended.
+type AttachSession struct {
+	Cmd *exec.Cmd
+
+	c       *client.Client
+	ref     string
+	project string
+}
+
+// PrepareAttach does what `cf attach` does before it runs anything: resolves the
+// target at the Controller, verifies it against the Run, applies the ssh target
+// override, and has the Terminal build the process. The TUI runs the process
+// with tea.ExecProcess and hands the outcome to Finish, so both clients refuse
+// and map exit statuses the same way.
+func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachSession, error) {
+	c, err := dialController(p.Controller)
+	if err != nil {
+		return nil, err
+	}
+	project := scopeOf(ctx, c, p.Project)
+	req, err := resolveAttach(ctx, c, p.Ref, project, p.SSHTarget)
+	if err != nil {
+		return nil, err
+	}
+	req.ReadOnly = p.ReadOnly
+	if term == nil {
+		return nil, errNoTerminal()
+	}
+	cmd, err := term.Command(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &AttachSession{Cmd: cmd, c: c, ref: p.Ref, project: project}, nil
+}
+
+// Finish turns how the process ended (the error tea.ExecProcess hands back,
+// nil when ssh exited 0) into the answer `cf attach` would give.
+func (s *AttachSession) Finish(ctx context.Context, runErr error) error {
+	var exit *exec.ExitError
+	switch {
+	case runErr == nil:
+		return attachExit(ctx, s.c, s.ref, s.project, 0)
+	case errors.As(runErr, &exit):
+		code := exit.ExitCode()
+		if code < 0 {
+			code = sshFailed // ended by a signal
+		}
+		return attachExit(ctx, s.c, s.ref, s.project, code)
+	}
+	return notAttachable(v1.NotAttachableSSHFailed, "ssh could not be started on this machine")
+}
+
+func errNoTerminal() error {
+	return domain.NewError(domain.CodeNotImplemented, "this build of cf cannot open a terminal on a Worker", nil)
 }
 
 // attachExit turns the status of the attach into the answer of the command.

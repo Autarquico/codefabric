@@ -1,0 +1,12 @@
+ CODEFABRIC                                               ● unreachable
+ ! Controller unreachable — reconnecting…
+
+ TASKS                  WORKERS                MODELS
+ — running              —/— online             usage not reported
+ — needs you
+
+ ──────────────── Activity ────────────────────────────────────────────
+ Connecting to the Controller…
+ ──────────────────────────────────────────────────────────────────────
+ [t] Tasks [w] Workers [m] Models [r] Runs [f] Workflows
+ [p] Projects [a] Activity [l] Logs [/] Search [q] Quit

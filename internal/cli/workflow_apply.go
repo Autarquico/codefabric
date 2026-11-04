@@ -65,6 +65,19 @@ func (f *applyFlags) bindTarget(cmd *cobra.Command, withWorker bool) {
 	fl.StringVar(&f.harness, flagHarness, "", "harness to apply (claude-code, codex); required")
 	fl.StringSliceVar(&f.components, flagComponents, nil, "components to touch (comma list); default: all of the harness")
 	fl.BoolVar(&f.force, flagForce, false, "overwrite managed components edited locally since the last apply (local ones are never written)")
+	// check reports a missing one as a usage error (cobra's own required-flag
+	// error would exit 1); the mark lets the action registry read what each command requires.
+	if withWorker {
+		markRequired(cmd, flagWorker)
+	}
+	markRequired(cmd, flagHarness)
+}
+
+// RequiredFlagAnnotation marks a flag the command requires and checks itself.
+const RequiredFlagAnnotation = "cf_required"
+
+func markRequired(cmd *cobra.Command, flag string) {
+	_ = cmd.Flags().SetAnnotation(flag, RequiredFlagAnnotation, []string{"true"})
 }
 
 func (f *applyFlags) bindWait(cmd *cobra.Command) {
