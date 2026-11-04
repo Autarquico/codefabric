@@ -46,6 +46,10 @@ var (
 	// keyring, no keyring service, access denied or a timeout. The secret may
 	// well exist; it is not ErrNotFound.
 	ErrUnavailable = errors.New("secrets: backend unavailable")
+	// ErrAbandoned is a Vault.Set given up on while the write may still be in
+	// flight, so it may land later. It always comes with ErrUnavailable. A Set
+	// that fails without it definitely wrote nothing.
+	ErrAbandoned = errors.New("secrets: write abandoned, it may still land")
 )
 
 // State is how a secret stands in its backend.
@@ -69,6 +73,7 @@ type Status struct {
 // Vault is a key-value keyring a Store keeps values in, by account. Get and
 // Delete of an account the Vault does not hold are ErrNotFound; a Vault that
 // cannot be reached is ErrUnavailable. Errors never carry a value.
+// A failed Set wrote nothing unless it is ErrAbandoned.
 type Vault interface {
 	Get(ctx context.Context, account string) ([]byte, error)
 	Set(ctx context.Context, account string, value []byte) error

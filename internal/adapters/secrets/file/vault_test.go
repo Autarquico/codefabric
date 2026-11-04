@@ -352,8 +352,29 @@ func TestFailedVaultWriteChangesNothing(t *testing.T) {
 	if gerr != nil || string(got.Value) != "first-value-1234" {
 		t.Fatalf("Get = %q, %v", got.Value, gerr)
 	}
-	if len(readCatalog(t, path).Retired) != 1 {
-		t.Fatal("the unwritten item should be pending for a sweep")
+	if len(readCatalog(t, path).Retired) != 0 {
+		t.Fatal("a write that finished without writing leaves nothing to sweep")
+	}
+}
+
+// Failed writes that definitely wrote nothing must not exhaust the backlog.
+func TestFailedKeyringSetsDoNotFillTheBacklog(t *testing.T) {
+	s, v, _, path := newKeyringStore(t)
+	ctx := context.Background()
+	v.locked = true
+	for i := range maxRetired + 5 {
+		err := s.Set(ctx, fmt.Sprintf("ref%03d", i), sentinel, nil, secrets.BackendKeyring)
+		if !errors.Is(err, secrets.ErrUnavailable) || strings.Contains(err.Error(), "waiting to be cleaned up") {
+			t.Fatalf("Set %d = %v", i, err)
+		}
+	}
+	if n := len(readCatalog(t, path).Retired); n != 0 {
+		t.Fatalf("%d records after failed writes", n)
+	}
+	v.locked = false
+	setKeyring(t, s, "gh/token", []byte("good-value-1234"))
+	if n := len(readCatalog(t, path).Retired); n != 0 || v.count() != 1 {
+		t.Fatalf("%d records, %d items", n, v.count())
 	}
 }
 
@@ -560,7 +581,7 @@ type abandoningVault struct {
 
 func (a *abandoningVault) Set(_ context.Context, account string, value []byte) error {
 	a.account, a.value = account, bytes.Clone(value)
-	return secrets.ErrUnavailable
+	return fmt.Errorf("%w: %w", secrets.ErrAbandoned, secrets.ErrUnavailable)
 }
 
 func (a *abandoningVault) land() {
@@ -603,8 +624,7 @@ func TestASweepOfAnotherStoreStillCleansAnAbandonedSetThatLandsLate(t *testing.T
 	}
 }
 
-// Past maxRetired records the oldest are dropped, so a catalog whose sets keep
-// being abandoned does not grow without bound.
+// At maxRetired records new keyring work is refused and no record is dropped.
 func TestBacklogAtTheCapRefusesNewKeyringWorkAndDropsNothing(t *testing.T) {
 	s, v, _, path := newKeyringStore(t)
 	ctx := context.Background()

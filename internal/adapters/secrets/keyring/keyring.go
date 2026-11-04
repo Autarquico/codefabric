@@ -101,6 +101,10 @@ func (v Vault) Delete(ctx context.Context, account string) error {
 // waited, as opposed to a caller that gave up.
 var errTimeout = errors.New("the keyring did not answer in time")
 
+// errAbandoned marks an error returned while the launched call was still
+// running: it may yet finish.
+var errAbandoned = errors.New("abandoned")
+
 // call runs f, giving up when ctx ends or after timeout: the library has no
 // context, and a locked keyring may wait for an unlock prompt. The abandoned
 // call finishes in its goroutine, which holds the slot until then. A caller
@@ -139,15 +143,22 @@ func call[T any](ctx context.Context, slot chan struct{}, timeout time.Duration,
 	case r := <-done:
 		return r.v, r.err
 	case <-ctx.Done():
-		return zero, ctx.Err()
+		return zero, fmt.Errorf("%w: %w", errAbandoned, ctx.Err())
 	case <-timer.C:
-		return zero, errTimeout
+		return zero, fmt.Errorf("%w: %w", errAbandoned, errTimeout)
 	}
 }
 
 // classify maps an error of the library to the ones of the port, dropping its
-// text.
+// text. A call given up on while running is also ErrAbandoned.
 func classify(err error) error {
+	if errors.Is(err, errAbandoned) {
+		return fmt.Errorf("%w: %w", secrets.ErrAbandoned, classifyFinished(err))
+	}
+	return classifyFinished(err)
+}
+
+func classifyFinished(err error) error {
 	switch {
 	case err == nil:
 		return nil

@@ -138,7 +138,7 @@ func TestCancelledSetKeepsItsOwnCopyOfTheValue(t *testing.T) {
 	go func() { errc <- v.Set(ctx, "acc", value) }()
 	<-b.setStarted
 	cancel()
-	if err := <-errc; !errors.Is(err, secrets.ErrUnavailable) {
+	if err := <-errc; !errors.Is(err, secrets.ErrUnavailable) || !errors.Is(err, secrets.ErrAbandoned) {
 		t.Fatalf("got %v", err)
 	}
 	clear(value)
@@ -153,7 +153,7 @@ func TestACancelledContextReachesNoBackendAndLeavesNothingBehind(t *testing.T) {
 	v := NewWith(b, time.Minute)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := v.Set(ctx, "acc", []byte("value")); !errors.Is(err, secrets.ErrUnavailable) {
+	if err := v.Set(ctx, "acc", []byte("value")); !errors.Is(err, secrets.ErrUnavailable) || errors.Is(err, secrets.ErrAbandoned) {
 		t.Fatalf("Set = %v", err)
 	}
 	if _, err := v.Get(ctx, "acc"); !errors.Is(err, secrets.ErrUnavailable) {
@@ -226,5 +226,24 @@ func TestConcurrentOperationsOnAHealthyKeyringAllSucceed(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Fatalf("concurrent operation = %v", err)
 		}
+	}
+}
+
+// A Set the library answered, with an error, wrote nothing: not abandoned.
+func TestASetThatFailedIsNotAbandoned(t *testing.T) {
+	b := &fakeBackend{setErr: errors.New("exit status 36")}
+	err := NewWith(b, time.Minute).Set(t.Context(), "acc", []byte("value"))
+	if !errors.Is(err, secrets.ErrUnavailable) || errors.Is(err, secrets.ErrAbandoned) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A Set that outlives its bound may still land: abandoned.
+func TestASetThatOutlivesItsBoundIsAbandoned(t *testing.T) {
+	b := &fakeBackend{setBlock: make(chan struct{}), setStarted: make(chan struct{})}
+	defer close(b.setBlock)
+	err := NewWith(b, 20*time.Millisecond).Set(t.Context(), "acc", []byte("value"))
+	if !errors.Is(err, secrets.ErrUnavailable) || !errors.Is(err, secrets.ErrAbandoned) {
+		t.Fatalf("got %v", err)
 	}
 }

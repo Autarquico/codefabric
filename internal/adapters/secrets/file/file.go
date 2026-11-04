@@ -323,7 +323,7 @@ func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects [
 		return err
 	}
 	if err := s.vault.Set(ctx, account(namespace, ref, item), v); err != nil {
-		if errors.Is(err, domain.ErrInvalidSecret) { // refused before the keyring was touched
+		if !errors.Is(err, secrets.ErrAbandoned) { // the write finished without writing: nothing to clean
 			s.forget(ctx, item)
 		}
 		return fmt.Errorf("secret %q: %w", ref, err)
@@ -370,7 +370,8 @@ func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects [
 var errStale = errors.New("secrets: stale set")
 
 // forget drops the pending record of item, best effort: the item was never
-// written, so nothing is left to sweep.
+// written, so nothing is left to sweep. Only a write that may still land keeps
+// its record.
 func (s *Store) forget(ctx context.Context, item string) {
 	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), checkTimeout)
 	defer cancel()
