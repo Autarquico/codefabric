@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -38,7 +39,13 @@ type Options struct {
 	// Workflows builds the adopter of the harness configuration of this machine
 	// (`cf workflow adopt|commit`). Without one they answer CF_NOT_IMPLEMENTED.
 	Workflows WorkflowAdopterFactory
+	// TUI opens the terminal UI over the Controller (`cf` with no arguments on a
+	// terminal). internal/tui is composed in by cmd/cf: the CLI may not import
+	// it. Without one, `cf` prints its help.
+	TUI func(ctx context.Context, c *client.Client) error
 
+	// openTUIClient replaces the Controller client that the TUI gets in tests.
+	openTUIClient func(*cobra.Command) (*client.Client, error)
 	// workflowStore replaces the Controller client of the workflow commands in tests.
 	workflowStore func(*cobra.Command) (workflowStore, error)
 	// workflowApplyStore does the same for status, diff, apply, rollback, explain and sync.
@@ -181,6 +188,8 @@ func newRootCmd(opts Options) *cobra.Command {
 		Short:         "CodeFabric: run coding agents across a pool of machines",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Args:          cobra.ArbitraryArgs,
+		RunE:          rootRun(opts),
 	}
 	flags := root.PersistentFlags()
 	flags.Bool(flagJSON, false, "output as JSON; errors too, as {\"error\":{code,message,details}} on stdout")
@@ -192,6 +201,37 @@ func newRootCmd(opts Options) *cobra.Command {
 		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)),
 		newDoctorCmd(openDoctorStore(opts), probeOf(opts)))
 	return root
+}
+
+// rootRun is what bare `cf` does: open the TUI when both ends are a terminal
+// and JSON was not asked for; else it is what it always was, a command that
+// only groups the others.
+func rootRun(opts Options) func(*cobra.Command, []string) error {
+	open := opts.openTUIClient
+	if open == nil {
+		open = openClient
+	}
+	return func(cmd *cobra.Command, args []string) error {
+		asJSON, _ := cmd.Flags().GetBool(flagJSON)
+		if opts.TUI == nil || len(args) > 0 || asJSON || !isTerminal(cmd.InOrStdin()) || !isTerminalStream(cmd.OutOrStdout()) {
+			return showHelpOrRejectArgs(cmd, args)
+		}
+		c, err := open(cmd)
+		if err != nil {
+			return err
+		}
+		return opts.TUI(cmd.Context(), c)
+	}
+}
+
+// isTerminalStream is isTerminal for an output stream; one that says so itself
+// (tests) is believed.
+func isTerminalStream(w io.Writer) bool {
+	if t, ok := w.(interface{ IsTerminal() bool }); ok {
+		return t.IsTerminal()
+	}
+	r, ok := w.(io.Reader)
+	return ok && isTerminal(r)
 }
 
 // addCommands composes commands from other packages into root. One that has

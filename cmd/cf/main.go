@@ -17,6 +17,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/client/workflowadopt"
 	"github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
+	"github.com/Autarquico/codefabric/internal/tui"
 	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
 )
 
@@ -28,7 +29,7 @@ func run() int { return cli.ExecuteWith(options(), commands()...) }
 
 // options are what the CLI cannot reach itself (ADR 0001).
 func options() cli.Options {
-	return cli.Options{Terminal: sshTerminal{}, Workflows: workflowAdopter}
+	return cli.Options{Terminal: sshTerminal{}, Workflows: workflowAdopter, TUI: tui.Run}
 }
 
 // workflowAdopter composes the adopt of `cf workflow`: the harness adapters of

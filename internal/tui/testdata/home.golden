@@ -1,0 +1,17 @@
+ CODEFABRIC                                                   ● healthy
+
+ TASKS                  WORKERS                MODELS
+ 3 running              3/3 online             usage not reported
+ 1 needs you
+
+ ──────────────── Activity ────────────────────────────────────────────
+ 12:44   auth-refactor     tests failed
+ 12:44   auth-refactor     agent analyzing failure
+ 12:43   payments          ✓ completed
+ 12:41   frontend          moved macbook → linux
+ 12:38   linux             worker joined
+ 12:32   personal@28       synced → proxmox
+ 12:29   infra             needs your input
+ ──────────────────────────────────────────────────────────────────────
+ [t] Tasks [w] Workers [m] Models [r] Runs [f] Workflows
+ [p] Projects [a] Activity [l] Logs [/] Search [q] Quit
