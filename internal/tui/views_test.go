@@ -53,8 +53,9 @@ type fakeBackend struct {
 	failure  *actions.Failure
 	term     *fakeTerminal
 	timeline map[string][]v1.Event
-	asked    []string   // Timeline calls
-	session  Attachment // given instead of the fake ssh, when set
+	asked    []string      // Timeline calls
+	session  Attachment    // given instead of the fake ssh, when set
+	gate     chan struct{} // when set, Attach and Timeline wait for it to be closed
 }
 
 func (f *fakeBackend) Run(id string, in actions.Input) actions.Result {
@@ -68,6 +69,9 @@ func (f *fakeBackend) Run(id string, in actions.Input) actions.Result {
 }
 
 func (f *fakeBackend) Attach(id string, in actions.Input) (Attachment, *actions.Failure) {
+	if f.gate != nil {
+		<-f.gate
+	}
 	f.mu.Lock()
 	f.attached = append(f.attached, id+" "+in.Target)
 	f.mu.Unlock()
@@ -85,6 +89,9 @@ func (f *fakeBackend) Attach(id string, in actions.Input) (Attachment, *actions.
 }
 
 func (f *fakeBackend) Timeline(taskID string) (Timeline, error) {
+	if f.gate != nil {
+		<-f.gate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.asked = append(f.asked, taskID)
@@ -540,7 +547,7 @@ func TestScenario_TuiViewsActions_Attach_TheCallbackDoesNotAskTheController(t *t
 	target := Row{ID: "tsk_1", Label: "auth-refactor (t-4k2m)"}
 	slow := slowAttach{asked: asked, release: release}
 
-	msg := attachEnded(target, slow)(nil)
+	msg := attachEnded(from(b.id), target, slow)(nil)
 	select {
 	case <-asked:
 		t.Fatal("the exit callback called Finish on the event loop")
@@ -574,7 +581,7 @@ func TestScenario_TuiViewsActions_Attach_ExitCodesReachTheErrorPanel(t *testing.
 	m := openTasks(t, be)
 	target := Row{ID: "tsk_1", Label: "auth-refactor (t-4k2m)"}
 	sess, _ := be.Attach("run.attach", actions.Input{Target: "tsk_1"})
-	end := func(runErr error) { feed(t, m, attachEnded(target, sess)(runErr)) }
+	end := func(runErr error) { feed(t, m, attachEnded(from(m.router.Top().(*browser).id), target, sess)(runErr)) }
 
 	exit255 := exec.CommandContext(context.Background(), "sh", "-c", "exit 255").Run()
 	end(exit255)

@@ -125,6 +125,12 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case fatalMsg:
 		m.fatal = msg.err
 		return tea.Quit
+	case answer:
+		// The answer of an asynchronous call goes to the screen that asked,
+		// wherever it is in the stack; if it is gone, nobody wants it. A prepared
+		// attach that nobody runs holds nothing (its process was never started).
+		cmd, _ := m.router.Deliver(msg.origin(), msg)
+		return cmd
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case tea.BackgroundColorMsg:

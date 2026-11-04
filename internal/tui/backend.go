@@ -74,24 +74,41 @@ type timelineReader interface {
 	TaskTimeline(ctx context.Context, ref, project, after string, limit int) (v1.TaskTimeline, error)
 }
 
+// actionRunner is the part of actions.Runner that the backend uses.
+type actionRunner interface {
+	Run(ctx context.Context, id string, in actions.Input) actions.Result
+	Attach(ctx context.Context, id string, in actions.Input) (*cli.AttachSession, *actions.Failure)
+}
+
 type sdkBackend struct {
 	ctx    context.Context
 	client timelineReader
-	runner actions.Runner
+	runner actionRunner
+	// controller is the one the TUI was opened with (--controller, or the
+	// stored one): every action goes to it, not to what the runner would dial.
+	controller string
 }
 
 // NewBackend is the Backend over the Client SDK and the action registry. ctx
 // bounds every call; the runner carries the composition of the binary (its
 // Terminal).
 func NewBackend(ctx context.Context, c *client.Client, runner actions.Runner) Backend {
-	return sdkBackend{ctx: ctx, client: c, runner: runner}
+	return sdkBackend{ctx: ctx, client: c, runner: runner, controller: c.Controller()}
+}
+
+// onController aims the input at the Controller of the TUI.
+func (b sdkBackend) onController(in actions.Input) actions.Input {
+	in.Controller = b.controller
+	return in
 }
 
 func (b sdkBackend) Run(id string, in actions.Input) actions.Result {
+	in = b.onController(in)
 	return b.runner.Run(b.ctx, id, in)
 }
 
 func (b sdkBackend) Attach(id string, in actions.Input) (Attachment, *actions.Failure) {
+	in = b.onController(in)
 	session, failure := b.runner.Attach(b.ctx, id, in)
 	if failure != nil {
 		return nil, failure

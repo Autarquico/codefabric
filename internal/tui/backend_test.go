@@ -89,7 +89,7 @@ func TestSDKBackend_Timeline_AFailedPageIsAnError(t *testing.T) {
 }
 
 func TestSDKBackend_Attach_ARefusalIsAFailureAndNoSession(t *testing.T) {
-	session, failure := sdkBackend{ctx: context.Background()}.Attach("task.cancel", actions.Input{Target: "tsk_1"})
+	session, failure := sdkBackend{ctx: context.Background(), runner: actions.Runner{}}.Attach("task.cancel", actions.Input{Target: "tsk_1"})
 	if session != nil || failure == nil || failure.Code != domain.CodeInvalidRequest {
 		t.Errorf("session %v, failure %+v", session, failure)
 	}

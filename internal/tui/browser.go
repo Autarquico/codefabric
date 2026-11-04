@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -52,14 +53,27 @@ type viewSpec struct {
 	apply  func(s *State, update any)
 }
 
+// answer is the message an asynchronous call of a screen ends with. The shell
+// delivers it to the screen that made the call.
+type answer interface{ origin() uint64 }
+
+// from says which screen asked.
+type from uint64
+
+func (f from) origin() uint64 { return uint64(f) }
+
+var lastScreenID atomic.Uint64
+
 // Messages of the actions in flight.
 type (
 	actionDoneMsg struct {
+		from
 		action actions.Descriptor
 		target Row
 		result actions.Result
 	}
 	attachReadyMsg struct {
+		from
 		target  Row
 		session Attachment
 		failure *actions.Failure
@@ -67,16 +81,19 @@ type (
 	// attachEndedMsg is the process of an attach ending; the answer of `cf
 	// attach` to it may need the Controller, so it is asked for in a command.
 	attachEndedMsg struct {
+		from
 		target  Row
 		session Attachment
 		runErr  error // how the process ended
 	}
 	attachExitMsg struct {
+		from
 		target    Row
 		runErr    error // how the process ended
 		finishErr error // what `cf attach` would answer to that
 	}
 	timelineMsg struct {
+		from
 		task, stamp string
 		timeline    Timeline
 		err         error
@@ -91,6 +108,7 @@ type timeline struct {
 }
 
 type browser struct {
+	id      uint64
 	spec    viewSpec
 	backend Backend
 	list    List
@@ -103,8 +121,10 @@ type browser struct {
 	tl      timeline
 }
 
+func (b *browser) screenID() uint64 { return b.id }
+
 func newBrowser(spec viewSpec, backend Backend) *browser {
-	return &browser{spec: spec, backend: backend}
+	return &browser{id: lastScreenID.Add(1), spec: spec, backend: backend}
 }
 
 // Sync refreshes the rows the keys act on and asks for what the detail of the
@@ -129,10 +149,10 @@ func (b *browser) Sync(c RenderContext) tea.Cmd {
 	if previous.task == row.ID {
 		b.tl.Timeline, b.tl.loading = previous.Timeline, false // keep what is shown until the new read answers
 	}
-	backend, id := b.backend, row.ID
+	backend, id, asker := b.backend, row.ID, from(b.id)
 	return func() tea.Msg {
 		read, err := backend.Timeline(id)
-		return timelineMsg{task: id, stamp: stamp, timeline: read, err: err}
+		return timelineMsg{from: asker, task: id, stamp: stamp, timeline: read, err: err}
 	}
 }
 
@@ -153,11 +173,11 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 			b.notice = &Notice{Title: "Attach failed", Failure: msg.failure}
 			return b, nil, false
 		}
-		return b, tea.ExecProcess(msg.session.Cmd(), attachEnded(msg.target, msg.session)), false
+		return b, tea.ExecProcess(msg.session.Cmd(), attachEnded(msg.from, msg.target, msg.session)), false
 	case attachEndedMsg:
 		b.busy = "Checking the attach…"
 		return b, func() tea.Msg {
-			return attachExitMsg{target: msg.target, runErr: msg.runErr, finishErr: msg.session.Finish(msg.runErr)}
+			return attachExitMsg{from: msg.from, target: msg.target, runErr: msg.runErr, finishErr: msg.session.Finish(msg.runErr)}
 		}, false
 	case attachExitMsg:
 		b.busy = ""
@@ -177,9 +197,9 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 // attachEnded is what the shell hears when the process of an attach ends. It
 // only carries the exit: the callback runs on the event loop, which must not
 // wait for the network.
-func attachEnded(target Row, session Attachment) func(error) tea.Msg {
+func attachEnded(asker from, target Row, session Attachment) func(error) tea.Msg {
 	return func(runErr error) tea.Msg {
-		return attachEndedMsg{target: target, session: session, runErr: runErr}
+		return attachEndedMsg{from: asker, target: target, session: session, runErr: runErr}
 	}
 }
 
@@ -270,15 +290,15 @@ func (b *browser) start(d actions.Descriptor, row Row) tea.Cmd {
 		return nil
 	}
 	b.busy = d.Title + "…"
-	backend, in := b.backend, actions.Input{Target: row.ID}
+	backend, in, asker := b.backend, actions.Input{Target: row.ID}, from(b.id)
 	if d.Terminal {
 		return func() tea.Msg {
 			session, failure := backend.Attach(d.ID, in)
-			return attachReadyMsg{target: row, session: session, failure: failure}
+			return attachReadyMsg{from: asker, target: row, session: session, failure: failure}
 		}
 	}
 	return func() tea.Msg {
-		return actionDoneMsg{action: d, target: row, result: backend.Run(d.ID, in)}
+		return actionDoneMsg{from: asker, action: d, target: row, result: backend.Run(d.ID, in)}
 	}
 }
 
