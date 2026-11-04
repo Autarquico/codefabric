@@ -2,18 +2,18 @@
 codename: codefabric
 title: Backend keyring de secrets
 type: task
-status: draft
+status: active
 priority: P0
 size: M
-issue: null
+issue: 82
 prs: []
-related_issues: []
+related_issues: [82]
 sub_issues: []
 depends_on: [secrets-local]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows, secrets-local]
 created: 2026-10-16
-updated: 2026-10-16
+updated: 2026-11-04
 ---
 
 # Backend keyring de secrets
@@ -56,6 +56,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ## Notas técnicas / riesgos
 
 - Los tests reales del llavero van gated (como `CF_REQUIRE_LAUNCHD`); en CI se usan dobles.
+- Llavero bloqueado (decisión del usuario, 2026-11-04): el secret se sigue anunciando y el Run falla en prepare con `CF_SECRET_UNAVAILABLE`; solo una entrada huérfana (sin valor en el llavero) deja de anunciarse.
 
 ## Referencias
 

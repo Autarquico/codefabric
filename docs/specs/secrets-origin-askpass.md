@@ -2,18 +2,18 @@
 codename: codefabric
 title: Credencial de origin vía GIT_ASKPASS
 type: task
-status: draft
+status: active
 priority: P0
 size: M
-issue: null
+issue: 83
 prs: []
-related_issues: []
+related_issues: [83]
 sub_issues: []
 depends_on: [secrets-local]
 supersedes: []
 related_specs: [codefabric-spec, phase-2-harnesses-workflows, secrets-local]
 created: 2026-10-16
-updated: 2026-10-16
+updated: 2026-11-04
 ---
 
 # Credencial de origin vía GIT_ASKPASS
@@ -57,6 +57,11 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ## Notas técnicas / riesgos
 
 - Probar con git real en las versiones soportadas y con rutas con espacios.
+- Usuario: `cf worker secrets set <ref> --user <u>`; si falta, `x-access-token` (decisión del usuario, 2026-11-04).
+- El fetch autenticado corre con config de git aislada (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`); un proxy solo se respeta vía el entorno del daemon (decisión del usuario, 2026-11-04).
+- El destino autorizado es esquema + host:puerto + ruta del repo (`credential.useHttpPath=true`); otro repo del mismo host no recibe la credencial.
+- Un Worker sin la capacidad `origin-askpass:v1` no es elegible para un Run cuyo Project tiene `origin_secret`.
+- Límite aceptado (decisión del usuario, 2026-11-04): el harness corre con el mismo usuario del SO, así que la revocación es de acceso vía `cf`, no aislamiento del SO; las agujas retenidas en el directorio del Run son legibles por ese usuario. Un broker queda como followup.
 
 ## Referencias
 
