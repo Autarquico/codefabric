@@ -60,19 +60,6 @@ func TestOriginSecret_ValidationOfAProject(t *testing.T) {
 	}
 }
 
-// A Project that does not exist yet allows nothing, so it cannot be created
-// with an origin secret.
-func TestOriginSecret_ACreatedProjectHasNothingAllowedYet(t *testing.T) {
-	e := newEnv(t)
-	_, err := e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "backend", Repo: originRepo, OriginSecret: originRef})
-	wantCode(t, err, domain.CodePolicyDenied)
-	_, err = e.app.Projects.Create(t.Context(), e.owner, v1.CreateProjectRequest{Name: "backend", Repo: sshRepo, OriginSecret: originRef})
-	wantCode(t, err, domain.CodeInvalidRequest)
-	if n := e.count("projects"); n != 0 {
-		t.Errorf("%d Projects from refused requests", n)
-	}
-}
-
 func TestOriginSecret_ChangingAnotherFieldKeepsItAndClearingRemovesIt(t *testing.T) {
 	e := newEnv(t)
 	e.project("backend", httpsProject)

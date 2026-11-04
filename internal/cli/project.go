@@ -60,7 +60,6 @@ func newProjectCreateCmd() *cobra.Command {
 	f.StringVar(&req.DefaultWorkflow, "workflow", "", "default Workflow")
 	f.StringVar(&req.DefaultEnvironment, "environment", "", "default Environment")
 	f.StringVar((*string)(&req.RepoConfig), "repo-config", "", "whether the repo may carry .codefabric/project.yaml: allow (default) or deny")
-	f.StringVar(&req.OriginSecret, "origin-secret", "", "ref of the secret that authenticates the origin (https only; the Project must allow it)")
 	f.StringVar(&req.RequestID, flagRequestID, "", "idempotency key: repeating the command with it creates nothing twice")
 	return cmd
 }

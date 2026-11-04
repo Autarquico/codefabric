@@ -83,9 +83,6 @@ type CreateProjectRequest struct {
 	Defaults           ProjectDefaults `json:"defaults,omitempty"`
 	// RepoConfig defaults to allow.
 	RepoConfig domain.RepoConfig `json:"repo_config,omitempty"`
-	// OriginSecret is the ref that authenticates the origin: https only, and
-	// in the allowlist of the Project.
-	OriginSecret string `json:"origin_secret,omitempty"`
 }
 
 // UpdateProjectRequest is PATCH /v1/projects/{ref}: only the fields present

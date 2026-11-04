@@ -51,9 +51,6 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateProje
 				}
 				return v1.Project{}, input.Invalid("a Project named %q already exists", req.Name)
 			}
-			if err := checkOrigin(ctx, tx, "", req.Repo, req.OriginSecret); err != nil {
-				return v1.Project{}, err
-			}
 			short, err := tx.NextShortID(ctx, domain.KindProject)
 			if err != nil {
 				return v1.Project{}, err
@@ -61,8 +58,7 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateProje
 			p := store.Project{
 				ID: s.ids.New(domain.KindProject), Short: short, Name: req.Name, Repo: req.Repo,
 				DefaultBranch: req.DefaultBranch, DefaultWorkflow: req.DefaultWorkflow,
-				DefaultEnvironment: req.DefaultEnvironment, Defaults: req.Defaults, RepoConfig: req.RepoConfig,
-				OriginSecret: req.OriginSecret, CreatedAt: act.Now,
+				DefaultEnvironment: req.DefaultEnvironment, Defaults: req.Defaults, RepoConfig: req.RepoConfig, CreatedAt: act.Now,
 			}
 			if err := tx.InsertProject(ctx, p); err != nil {
 				return v1.Project{}, err
@@ -211,7 +207,7 @@ func validateNew(req v1.CreateProjectRequest) error {
 	return input.First(
 		input.Name("name", req.Name), input.Repo(req.Repo), input.Ref("default_branch", req.DefaultBranch),
 		input.Label("default_workflow", req.DefaultWorkflow), input.Label("default_environment", req.DefaultEnvironment),
-		repoConfig(req.RepoConfig), originSecret(req.Repo, req.OriginSecret),
+		repoConfig(req.RepoConfig),
 		validateDefaults(req.Defaults.Mode, req.Defaults.Resources, req.Defaults.Completion, req.Defaults.Retry),
 	)
 }
@@ -274,18 +270,15 @@ func originSecret(repo, ref string) error {
 }
 
 // checkOrigin is the combined check of the origin secret of a Project: a valid
-// ref, an https repo and a ref the Project allows. project is "" for a Project
-// not yet created, which allows nothing. Clearing it needs no check.
+// ref, an https repo and a ref the Project allows. Clearing it needs no check.
+// A new Project allows nothing, so only `set` names an origin secret.
 func checkOrigin(ctx context.Context, q store.Querier, project domain.ID, repo, ref string) error {
 	if err := originSecret(repo, ref); err != nil || ref == "" {
 		return err
 	}
-	var allowed []string
-	if project != "" {
-		var err error
-		if allowed, err = store.ProjectAllowlist(ctx, q, project); err != nil {
-			return err
-		}
+	allowed, err := store.ProjectAllowlist(ctx, q, project)
+	if err != nil {
+		return err
 	}
 	if slices.Contains(allowed, ref) {
 		return nil
