@@ -53,11 +53,9 @@ const (
 	// pendingGrace is how long an item being written is left alone before a
 	// sweep treats it as the leftover of a crashed Set.
 	pendingGrace = 10 * time.Minute
-	// maxRetired bounds the retired and pending records of a catalog. A
-	// pending record outlives any clock: only a sweep whose Delete removed the
-	// item proves the late write landed and was cleaned, so growth is bounded by
-	// dropping the oldest records instead. Residual risk: a write that completes
-	// after its record was displaced leaves an orphan item in the keyring.
+	// maxRetired bounds the retired and pending records of a catalog. A record
+	// is never dropped: only a sweep that removed the item proves it clean. At
+	// the bound, an operation that would add a record is refused instead.
 	maxRetired = 64
 
 	// maxCatalogBytes bounds what a read loads: every secret at its largest,
@@ -231,6 +229,7 @@ func (s *Store) Set(ctx context.Context, ref string, v []byte, projects []string
 	if err != nil {
 		return fmt.Errorf("secret %q: %w", ref, err)
 	}
+	s.relieve(ctx)
 	switch {
 	case backend == secrets.BackendFile:
 		err := s.update(ctx, func(c *catalog, now time.Time) error {
@@ -240,7 +239,9 @@ func (s *Store) Set(ctx context.Context, ref string, v []byte, projects []string
 			created := now
 			if old, exists := c.Secrets[ref]; exists {
 				created = old.CreatedAt
-				retire(c, ref, old, now)
+				if err := retire(c, ref, old, now); err != nil {
+					return err
+				}
 			}
 			c.Secrets[ref] = entry{
 				Backend: secrets.BackendFile, Value: bytes.Clone(v), Projects: projects,
@@ -268,9 +269,32 @@ func checkRoom(c *catalog, ref string) error {
 
 // retire records the vault item of e, if it has one, to be deleted.
 // A copied catalog retires nothing: the item is not only its own.
-func retire(c *catalog, ref string, e entry, now time.Time) {
-	if e.Backend == secrets.BackendKeyring && !c.copied {
-		c.Retired = append(c.Retired, retiredItem{Ref: ref, Item: e.Item, At: now})
+// It refuses, with ErrUnavailable, when the backlog is full.
+func retire(c *catalog, ref string, e entry, now time.Time) error {
+	if e.Backend != secrets.BackendKeyring || c.copied {
+		return nil
+	}
+	if err := checkBacklog(c); err != nil {
+		return err
+	}
+	c.Retired = append(c.Retired, retiredItem{Ref: ref, Item: e.Item, At: now})
+	return nil
+}
+
+// checkBacklog refuses a new cleanup record once maxRetired are waiting.
+func checkBacklog(c *catalog) error {
+	if len(c.Retired) >= maxRetired {
+		return fmt.Errorf("%w: the keyring has %d items waiting to be cleaned up; unlock it and retry",
+			secrets.ErrUnavailable, len(c.Retired))
+	}
+	return nil
+}
+
+// relieve sweeps when the backlog is full, so an operation that needs a
+// record finds room if the keyring can be reached.
+func (s *Store) relieve(ctx context.Context) {
+	if c, err := s.load(); err == nil && len(c.Retired) >= maxRetired {
+		s.sweep(ctx)
 	}
 }
 
@@ -289,6 +313,9 @@ func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects [
 			return secrets.ErrCopied
 		}
 		namespace = c.CatalogID
+		if err := checkBacklog(c); err != nil {
+			return err
+		}
 		c.Retired = append(c.Retired, retiredItem{Ref: ref, Item: item, At: now, Pending: true})
 		return nil
 	})
@@ -315,7 +342,9 @@ func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects [
 		created := now
 		if old, exists := c.Secrets[ref]; exists {
 			created = old.CreatedAt
-			retire(c, ref, old, now)
+			if err := retire(c, ref, old, now); err != nil {
+				return err
+			}
 		}
 		c.Secrets[ref] = entry{
 			Backend: secrets.BackendKeyring, Item: item, Projects: projects,
@@ -353,13 +382,16 @@ func (s *Store) forget(ctx context.Context, item string) {
 
 // Delete implements secrets.Store.
 func (s *Store) Delete(ctx context.Context, ref string) error {
+	s.relieve(ctx)
 	err := s.update(ctx, func(c *catalog, now time.Time) error {
 		e, ok := c.Secrets[ref]
 		if !ok {
 			return fmt.Errorf("%w: %q", secrets.ErrNotFound, ref)
 		}
+		if err := retire(c, ref, e, now); err != nil {
+			return err
+		}
 		delete(c.Secrets, ref)
-		retire(c, ref, e, now)
 		return nil
 	})
 	if err != nil {
@@ -503,28 +535,12 @@ func (s *Store) update(ctx context.Context, change func(*catalog, time.Time) err
 	if err := change(&c, now); err != nil {
 		return err
 	}
-	capRetired(&c)
 	c.Generation++
 	data, err := json.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("secrets: encoding the catalog: %w", err)
 	}
 	return atomicfile.Write(s.path, data, filePerm)
-}
-
-// capRetired drops the oldest records beyond maxRetired, naming only refs.
-func capRetired(c *catalog) {
-	over := len(c.Retired) - maxRetired
-	if over <= 0 {
-		return
-	}
-	refs := make([]string, over)
-	for i, r := range c.Retired[:over] {
-		refs[i] = r.Ref
-	}
-	slog.Warn("secrets: too many keyring items awaiting deletion; the oldest records were dropped",
-		"refs", refs, "max", maxRetired)
-	c.Retired = slices.Clone(c.Retired[over:])
 }
 
 func holdsKeyring(c catalog) bool {

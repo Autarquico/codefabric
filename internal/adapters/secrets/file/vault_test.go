@@ -605,23 +605,45 @@ func TestASweepOfAnotherStoreStillCleansAnAbandonedSetThatLandsLate(t *testing.T
 
 // Past maxRetired records the oldest are dropped, so a catalog whose sets keep
 // being abandoned does not grow without bound.
-func TestRetiredRecordsAreCapped(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "worker", "secrets.json")
-	c := clock.NewFake(time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC))
-	s := New(path, c, WithVault(&abandoningVault{fakeVault: newFakeVault()}))
+func TestBacklogAtTheCapRefusesNewKeyringWorkAndDropsNothing(t *testing.T) {
+	s, v, _, path := newKeyringStore(t)
 	ctx := context.Background()
-	for i := range maxRetired + 10 {
-		ref := fmt.Sprintf("ref%03d", i)
-		if err := s.Set(ctx, ref, []byte("value-1234567890"), nil, secrets.BackendKeyring); !errors.Is(err, secrets.ErrUnavailable) {
-			t.Fatalf("Set = %v", err)
+	total := maxRetired + 5
+	for i := range total {
+		setKeyring(t, s, fmt.Sprintf("ref%03d", i), []byte(fmt.Sprintf("value-%03d-1234567890", i)))
+	}
+	v.locked = true
+	var refused int
+	for i := range total {
+		err := s.Delete(ctx, fmt.Sprintf("ref%03d", i))
+		switch {
+		case err == nil:
+		case errors.Is(err, secrets.ErrUnavailable) && strings.Contains(err.Error(), "waiting to be cleaned up"):
+			refused++
+		default:
+			t.Fatalf("Delete = %v", err)
 		}
-		c.Advance(time.Second)
 	}
 	cat := readCatalog(t, path)
-	if len(cat.Retired) != maxRetired {
-		t.Fatalf("%d records, want %d", len(cat.Retired), maxRetired)
+	if refused != total-maxRetired || len(cat.Retired) != maxRetired || len(cat.Secrets) != total-maxRetired {
+		t.Fatalf("refused %d, retired %d, kept %d", refused, len(cat.Retired), len(cat.Secrets))
 	}
-	if first, last := cat.Retired[0].Ref, cat.Retired[len(cat.Retired)-1].Ref; first != "ref010" || last != fmt.Sprintf("ref%03d", maxRetired+9) {
-		t.Fatalf("kept %s..%s: not the newest", first, last)
+	if err := s.Set(ctx, "plain", []byte("plain-value-1234"), nil, secrets.BackendFile); err != nil {
+		t.Fatalf("a file Set is refused: %v", err)
+	}
+	if err := s.Set(ctx, "new/token", sentinel, nil, secrets.BackendKeyring); !errors.Is(err, secrets.ErrUnavailable) {
+		t.Fatalf("a keyring Set at the cap = %v", err)
+	}
+	v.locked = false
+	if _, err := s.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(readCatalog(t, path).Retired) != 0 || v.count() != total-maxRetired {
+		t.Fatalf("after unlocking: %d records, %d items", len(readCatalog(t, path).Retired), v.count())
+	}
+	for _, val := range v.items {
+		if !strings.HasPrefix(string(val), "value-") {
+			t.Fatalf("unexpected item %q", val)
+		}
 	}
 }

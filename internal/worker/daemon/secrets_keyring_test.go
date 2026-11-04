@@ -298,8 +298,9 @@ func TestSecretsSet_AnOversizedKeyringValueNamesTheCap(t *testing.T) {
 }
 
 func TestSecretsSet_BackendKeyringKeepsTheValueOutOfTheCatalog(t *testing.T) {
+	const otherValue = "other-token-value-7788"
 	w := newKeyringWorker(t)
-	if out, err := cf(t, keyringValue, "set", "other/token", "--backend", "keyring", "--json"); err != nil || strings.Contains(out, keyringValue) {
+	if out, err := cf(t, otherValue, "set", "other/token", "--backend", "keyring", "--json"); err != nil || strings.Contains(out, otherValue) {
 		t.Fatalf("set (%v): %s", err, out)
 	} else if !strings.Contains(out, `"backend":"keyring"`) {
 		t.Errorf("set --json = %s", out)
@@ -312,7 +313,7 @@ func TestSecretsSet_BackendKeyringKeepsTheValueOutOfTheCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secretstest.RequireValueOutOfCatalog(t, raw, "other/token", []byte(keyringValue))
+	secretstest.RequireValueOutOfCatalog(t, raw, "other/token", []byte(otherValue))
 	if _, err := cf(t, keyringValue, "set", "x/token", "--backend", "central"); domainCode(err) != domain.CodeInvalidRequest {
 		t.Errorf("an unknown backend: %v", err)
 	}
