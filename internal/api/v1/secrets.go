@@ -7,7 +7,8 @@ import "time"
 
 // Backends of a Worker's secrets.
 const (
-	SecretBackendFile = "file"
+	SecretBackendFile    = "file"
+	SecretBackendKeyring = "keyring"
 )
 
 // MaxSecretsReportBytes bounds a SecretsReport, serialized, inside the 64 KiB

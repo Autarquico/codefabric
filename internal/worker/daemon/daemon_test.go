@@ -152,6 +152,12 @@ func (r *running) stop() error {
 
 func run(t *testing.T, paths config.Paths, out *logs, rt ...cfruntime.Runtime) *running {
 	t.Helper()
+	return runMutated(t, paths, out, nil, rt...)
+}
+
+// runMutated is run with the options mutate changes.
+func runMutated(t *testing.T, paths config.Paths, out *logs, mutate func(*daemon.Options), rt ...cfruntime.Runtime) *running {
+	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	r := &running{cancel: cancel, done: make(chan struct{})}
 	// Without a Runtime of its own the test gets a fake one: the verdict of the
@@ -159,6 +165,9 @@ func run(t *testing.T, paths config.Paths, out *logs, rt ...cfruntime.Runtime) *
 	opts := daemon.Options{Paths: paths, Interval: interval, Logger: slog.New(slog.NewTextHandler(out, nil)), Runtime: &recordingRuntime{}}
 	if len(rt) > 0 {
 		opts.Runtime = rt[0]
+	}
+	if mutate != nil {
+		mutate(&opts)
 	}
 	go func() {
 		defer close(r.done)

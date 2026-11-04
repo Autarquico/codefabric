@@ -243,6 +243,17 @@ func TestSecrets_TheMetadataIsKeptAsReported(t *testing.T) {
 	}
 }
 
+func TestSecrets_AKeyringSecretIsKeptAsReported(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	w := e.join("box")
+	meta := v1.SecretMeta{Ref: "gh/token", Backend: v1.SecretBackendKeyring, UpdatedAt: secretsAt}
+	e.beat(w, request(newEpoch(), daemonOf(1, 1), func(r *v1.HeartbeatRequest) { r.Secrets.Refs = []v1.SecretMeta{meta} }))
+
+	if got := e.worker("box").Secrets; len(got) != 1 || got[0].Backend != v1.SecretBackendKeyring {
+		t.Errorf("secrets = %+v, want one of the keyring", got)
+	}
+}
+
 func TestSecrets_ARemovedWorkerHoldsNone(t *testing.T) {
 	e := newEnv(t, controllerVersion)
 	w := e.join("box")
@@ -294,7 +305,7 @@ func TestHeartbeat_SecretsValidation(t *testing.T) {
 		"a generation without secrets": {func(r *v1.HeartbeatRequest) { r.Generation = 1 }},
 		"an invalid ref":               {daemonOf(1, 1), refs(meta("-x"))},
 		"a ref twice":                  {daemonOf(1, 1), refs(meta("a"), meta("a"))},
-		"an unknown backend":           {daemonOf(1, 1), refs(meta("a", func(m *v1.SecretMeta) { m.Backend = "keyring" }))},
+		"an unknown backend":           {daemonOf(1, 1), refs(meta("a", func(m *v1.SecretMeta) { m.Backend = "central" }))},
 		"no updated_at":                {daemonOf(1, 1), refs(meta("a", func(m *v1.SecretMeta) { m.UpdatedAt = time.Time{} }))},
 		"too many Projects":            {daemonOf(1, 1), refs(meta("a", scoped(nine...)))},
 		"a scope that is no Project":   {daemonOf(1, 1), refs(meta("a", scoped("task_01J00000000000000000000000")))},

@@ -225,7 +225,7 @@ func TestEvaluateRejectsWhatTheWorkerCannotHandOut(t *testing.T) {
 		{
 			name: "a ref of a backend this Worker cannot read", store: func() *fakeStore {
 				s := newFakeStore(nil)
-				s.entries["github.personal"] = fakeSecret{value: []byte(ghValue), backend: "keyring"}
+				s.entries["github.personal"] = fakeSecret{value: []byte(ghValue), backend: "central"}
 				return s
 			},
 			spec: secretSpec("x", "headless", map[string]string{"GH": "github.personal"}), code: domain.CodeSecretUnavailable, says: `"github.personal"`,
@@ -537,7 +537,8 @@ func TestTheCatalogChangingDuringThePrepareFailsIt(t *testing.T) {
 				t.Fatal("the Run did not end")
 			}
 			reports := f.reports(k)
-			if len(reports) == 0 || reports[0].Kind != v1.ReportPrepareFailed || !strings.Contains(reports[0].Message, string(tc.code)) {
+			if len(reports) == 0 || reports[0].Kind != v1.ReportPrepareFailed ||
+				(reports[0].Code != tc.code && !strings.Contains(reports[0].Message, string(tc.code))) {
 				t.Errorf("reports = %+v", reports)
 			}
 			if f.rt.startCount() != 0 {

@@ -68,7 +68,7 @@ func (k RunReportKind) IsValid() bool {
 
 // PrepareFailureCodes are the codes a prepare_failed may carry: the only ones
 // the Controller keeps as the failure code of a Run.
-var PrepareFailureCodes = []domain.Code{domain.CodeRepoConfigInvalid, domain.CodeNotImplemented}
+var PrepareFailureCodes = []domain.Code{domain.CodeRepoConfigInvalid, domain.CodeNotImplemented, domain.CodeSecretUnavailable}
 
 // Causes of an exit. ExitCauseWrapperLost is what the Worker saw, not an exit
 // the harness made: the wrapper died and left no exit code.

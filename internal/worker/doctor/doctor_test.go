@@ -18,6 +18,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
+	"github.com/Autarquico/codefabric/internal/adapters/secrets/secretstest"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/doctor"
@@ -489,4 +490,42 @@ func findOpt(cs []v1.ComponentHealth, name string) (v1.ComponentHealth, bool) {
 		}
 	}
 	return v1.ComponentHealth{}, false
+}
+
+func TestClaudeAuth_AKeyringTokenIsReportedByItsState(t *testing.T) {
+	cases := []struct {
+		name    string
+		prepare func(v *secretstest.Vault)
+		want    string
+		says    string
+	}{
+		{name: "fine", prepare: func(*secretstest.Vault) {}, want: v1.ComponentOK},
+		{name: "locked", prepare: func(v *secretstest.Vault) { v.Lock() }, want: v1.ComponentOK, says: "llavero no responde"},
+		{name: "broken", prepare: func(v *secretstest.Vault) { v.Lose(claude.OAuthTokenRef) }, want: v1.ComponentFail, says: "está roto"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vault := secretstest.New()
+			dir := filepath.Join(t.TempDir(), "private")
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			store := secretsfile.New(filepath.Join(dir, "secrets.json"), clock.Real{}, secretsfile.WithVault(vault))
+			if err := store.Set(t.Context(), claude.OAuthTokenRef, []byte(secretValue), nil, secrets.BackendKeyring); err != nil {
+				t.Fatal(err)
+			}
+			tc.prepare(vault)
+			d := doctor.New(doctor.Options{
+				Host: newHost(t), Adapters: []harness.Adapter{claude.Adapter{}}, Worker: "box", DataDir: t.TempDir(), Secrets: store, GOOS: "linux",
+				Runtime: func(context.Context) error { return nil }, Disk: plenty,
+			})
+			c := find(t, d.Check(t.Context()), "auth:claude-code")
+			if c.Status != tc.want || !strings.Contains(c.Message, tc.says) {
+				t.Errorf("auth = %+v, want %s saying %q", c, tc.want, tc.says)
+			}
+			if strings.Contains(c.Message+c.Action, secretValue) {
+				t.Errorf("the check revealed a secret: %+v", c)
+			}
+		})
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
+	"github.com/Autarquico/codefabric/internal/adapters/secrets/keyring"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -59,14 +61,18 @@ func newSecretsCmd() *cobra.Command {
 
 func newSecretsSetCmd() *cobra.Command {
 	var projects []string
+	var backend string
 	cmd := &cobra.Command{
 		Use:   "set <ref>",
 		Short: "Store a secret under ref, reading its value from stdin or a prompt",
 		Long: "Store a secret under ref, replacing what ref held. The value is read from stdin up to\n" +
 			"its end, without one final newline, or, on a terminal, typed twice without echo. It\n" +
 			"has " + fmt.Sprint(domain.MinSecretValueLen) + " to " + fmt.Sprint(domain.MaxSecretValueLen) +
-			" bytes: a shorter one could not be redacted from the output of\na Run. --project limits it to the Runs of those Projects.",
-		Example: "  printf %s \"$TOKEN\" | cf worker secrets set github/token\n  cf worker secrets set npm/token --project project_01J...",
+			" bytes: a shorter one could not be redacted from the output of\na Run. --project limits it to the Runs of those Projects. --backend keyring keeps the value\n" +
+			"in the keyring of this machine (macOS Keychain, Secret Service on Linux) and only a pointer to it\n" +
+			"in the catalog; it has at most " + fmt.Sprint(keyring.MaxValueLen) + " bytes there.",
+		Example: "  printf %s \"$TOKEN\" | cf worker secrets set github/token\n  cf worker secrets set npm/token --project project_01J...\n" +
+			"  printf %s \"$TOKEN\" | cf worker secrets set github/token --backend keyring",
 		// The arguments are checked in RunE, to explain a value given as one.
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -81,6 +87,9 @@ func newSecretsSetCmd() *cobra.Command {
 			if err := checkSecretArgs(ref, projects); err != nil {
 				return err
 			}
+			if backend != secrets.BackendFile && backend != secrets.BackendKeyring {
+				return invalid("--backend is file or keyring")
+			}
 			store, err := openSecrets()
 			if err != nil {
 				return err
@@ -93,7 +102,7 @@ func newSecretsSetCmd() *cobra.Command {
 			if err := cmd.Context().Err(); err != nil {
 				return cancelled()
 			}
-			if err := store.Set(cmd.Context(), ref, value, projects, secrets.BackendFile); err != nil {
+			if err := store.Set(cmd.Context(), ref, value, projects, backend); err != nil {
 				return secretsError(err)
 			}
 			meta, err := secretMeta(cmd.Context(), store, ref)
@@ -108,6 +117,7 @@ func newSecretsSetCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
+	f.StringVar(&backend, "backend", secrets.BackendFile, "where the value is kept: file (the catalog) or keyring (the OS keyring)")
 	f.StringArrayVar(&projects, "project", nil, "only Runs of this Project may use it, by Project ID; repeatable (default: any Project)")
 	f.String(valueFlag, "", "")
 	f.Lookup(valueFlag).NoOptDefVal = " "
@@ -118,8 +128,12 @@ func newSecretsSetCmd() *cobra.Command {
 func newSecretsListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List the secrets of this Worker: refs and metadata, never values",
-		Args:  cobra.NoArgs,
+		Short: "List the secrets of this Worker: refs, metadata and status, never values",
+		Long: "List the secrets of this Worker: refs and metadata, never values. STATUS is ok; broken, a\n" +
+			"keyring entry whose value the keyring no longer has (the Worker does not announce it:\n" +
+			"set it again, or remove it with `rm`); or unavailable, a keyring that could not be asked\n" +
+			"(locked), whose secret the Worker still announces.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			store, err := openSecrets()
 			if err != nil {
@@ -129,13 +143,14 @@ func newSecretsListCmd() *cobra.Command {
 			if err != nil {
 				return secretsError(err)
 			}
-			list := make([]v1.SecretMeta, 0, len(metas))
-			for _, m := range metas {
-				list = append(list, toSecretMeta(m))
+			statuses, err := store.Check(cmd.Context())
+			if err != nil {
+				return secretsError(err)
 			}
+			list := secretRows(metas, statuses)
 			if jsonOutput(cmd) {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
-					Secrets []v1.SecretMeta `json:"secrets"`
+					Secrets []secretRow `json:"secrets"`
 				}{list})
 			}
 			return printSecrets(cmd.OutOrStdout(), list)
@@ -146,7 +161,7 @@ func newSecretsListCmd() *cobra.Command {
 func newSecretsRmCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "rm <ref>",
-		Short: "Remove a secret from this Worker",
+		Short: "Remove a secret from this Worker, also one whose keyring value is gone (broken)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]
@@ -174,12 +189,22 @@ func newSecretsRmCmd() *cobra.Command {
 
 var nextHeartbeat = fmt.Sprintf("The Controller will know at the next heartbeat (every %s).", domain.Defaults().WorkerHeartbeatInterval)
 
-func openSecrets() (*secretsfile.Store, error) {
+// openSecrets is the store of this Worker's secrets, with the OS keyring; a
+// variable so that tests can hand the command another.
+var openSecrets = defaultOpenSecrets
+
+func defaultOpenSecrets() (secrets.Store, error) {
 	paths, err := config.ResolveFromEnv()
 	if err != nil {
 		return nil, err
 	}
-	return secretsfile.New(paths.WorkerSecretsFile(), clock.Real{}), nil
+	return newSecretStore(paths, clock.Real{}), nil
+}
+
+// newSecretStore is the catalog of the Worker with the OS keyring behind its
+// keyring entries: the one store the daemon, the doctor and the commands share.
+func newSecretStore(paths config.Paths, c clock.Clock) *secretsfile.Store {
+	return secretsfile.New(paths.WorkerSecretsFile(), c, secretsfile.WithVault(keyring.New()))
 }
 
 // checkSecretArgs vets ref and projects before a value is read, with messages
@@ -249,10 +274,22 @@ func secretsError(err error) error {
 		return domain.NewError(domain.CodeNotFound, "this Worker holds no secret by that ref; see `cf worker secrets list`", nil)
 	case errors.Is(err, domain.ErrInvalidSecret):
 		return invalid("the secret is not valid; nothing was stored")
+	case errors.Is(err, secrets.ErrUnavailable):
+		return domain.NewError(domain.CodeSecretUnavailable, "the keyring of this machine cannot be reached ("+keyringHint()+"); try again once it can", nil)
 	case errors.Is(err, context.Canceled):
 		return cancelled()
 	}
 	return err
+}
+
+// keyringHint is what to check when the keyring does not answer: a diagnosis
+// from the OS, since the keyring does not say whether it is locked, absent or
+// denies access. It names no ref and no value.
+func keyringHint() string {
+	if runtime.GOOS == "darwin" {
+		return "the login keychain may be locked, or deny access to this process; unlock it in Keychain Access"
+	}
+	return "a Secret Service (gnome-keyring, KWallet or KeePassXC) may not be running on the session bus, or be locked"
 }
 
 func secretMeta(ctx context.Context, store secrets.Store, ref string) (v1.SecretMeta, error) {
@@ -272,15 +309,38 @@ func toSecretMeta(m secrets.Metadata) v1.SecretMeta {
 	return v1.SecretMeta{Ref: m.Ref, Backend: m.Backend, Projects: m.Projects, UpdatedAt: m.UpdatedAt}
 }
 
-func printSecrets(out io.Writer, list []v1.SecretMeta) error {
+// secretRow is a line of `list`: the metadata the Worker announces, and the
+// status of its value in its backend, which only this machine knows.
+type secretRow struct {
+	v1.SecretMeta
+	Status secrets.State `json:"status"`
+}
+
+// secretRows pairs metadata with its status; a secret removed since the Check
+// has none and is left out.
+func secretRows(metas []secrets.Metadata, statuses []secrets.Status) []secretRow {
+	state := make(map[string]secrets.State, len(statuses))
+	for _, st := range statuses {
+		state[st.Ref] = st.State
+	}
+	rows := make([]secretRow, 0, len(metas))
+	for _, m := range metas {
+		if st, ok := state[m.Ref]; ok {
+			rows = append(rows, secretRow{toSecretMeta(m), st})
+		}
+	}
+	return rows
+}
+
+func printSecrets(out io.Writer, list []secretRow) error {
 	if len(list) == 0 {
 		_, err := fmt.Fprintln(out, "This Worker holds no secrets. Add one with: cf worker secrets set <ref>")
 		return err
 	}
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "REF\tBACKEND\tPROJECTS\tUPDATED")
+	fmt.Fprintln(w, "REF\tBACKEND\tSTATUS\tPROJECTS\tUPDATED")
 	for _, m := range list {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", m.Ref, m.Backend, scopeLabel(m.Projects), m.UpdatedAt.Local().Format("2006-01-02 15:04"))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", m.Ref, m.Backend, m.Status, scopeLabel(m.Projects), m.UpdatedAt.Local().Format("2006-01-02 15:04"))
 	}
 	return w.Flush()
 }
