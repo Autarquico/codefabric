@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -11,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/oklog/ulid/v2"
@@ -38,10 +38,16 @@ type Options struct {
 	// Logger gets the debug line of a transaction that held the writer for
 	// long (see WithTx); it defaults to slog.Default().
 	Logger *slog.Logger
-	// Blobs is where the sealed segments of the output of Runs are written. It
-	// defaults to the content-addressed store in the directory of the database,
-	// which is where the Controller keeps its own.
+	// Blobs is the content-addressed store where the output of Runs is sealed
+	// into segments: the Controller's own, the same instance the use cases get.
+	// Without it nothing is sealed: the hot tail keeps all the output of a
+	// (Run, epoch), up to OutputMaxBytes, and what was sealed cannot be read.
 	Blobs *blob.Store
+	// OutputMaxBytes is the most a Controller accepts for the output of one
+	// (Run, lease epoch); it defaults to DefaultOutputMaxBytes.
+	OutputMaxBytes uint64
+
+	manualSeal bool // tests only: segments are sealed by SealPending, not in the background
 
 	goMigrations []*goose.Migration // tests only: Go migrations to run after the embedded SQL
 }
@@ -49,14 +55,13 @@ type Options struct {
 // DB is the Controller's SQLite store: one serialised writer and a pool of
 // query-only readers over the same WAL database.
 type DB struct {
-	path   string
-	writer *sql.DB
-	reader *sql.DB
-	clock  clock.Clock
-	// blobs is Options.Blobs, or the store of the directory of the database, opened by segments().
-	blobs     *blob.Store
-	blobsOnce sync.Once
-	blobsErr  error
+	path      string
+	writer    *sql.DB
+	reader    *sql.DB
+	clock     clock.Clock
+	blobs     *blob.Store // Options.Blobs; nil when nothing is sealed
+	sealer    *sealer     // nil without blobs
+	outputMax uint64
 	log       *slog.Logger
 	ids       *domain.IDGenerator
 	notifier  *eventbus.Notifier
@@ -91,6 +96,7 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 		db.ids = domain.NewIDGenerator(db.clock.Now, rand.Reader)
 	}
 	db.blobs = opts.Blobs
+	db.outputMax = cmp.Or(opts.OutputMaxBytes, DefaultOutputMaxBytes)
 	readerConns := opts.ReaderConns
 	if readerConns <= 0 {
 		readerConns = defaultReaderConns
@@ -111,9 +117,15 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := db.SealOutputs(ctx); err != nil {
-		_ = db.Close()
-		return nil, err
+	if db.blobs != nil {
+		db.sealer = newSealer(db)
+		if err := db.sealer.seed(ctx); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if !opts.manualSeal {
+			db.sealer.start()
+		}
 	}
 	return db, nil
 }
@@ -195,6 +207,9 @@ func (db *DB) loadState(ctx context.Context) error {
 
 // Close releases both pools.
 func (db *DB) Close() error {
+	if db.sealer != nil {
+		db.sealer.stop()
+	}
 	return errors.Join(db.reader.Close(), db.writer.Close())
 }
 

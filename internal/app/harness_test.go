@@ -18,6 +18,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/workers"
+	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -49,7 +50,9 @@ func newEnv(t *testing.T) *env {
 func newEnvWith(t *testing.T, configure func(*app.Config, *clock.Fake)) *env {
 	t.Helper()
 	clk := clock.NewFake(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC))
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "controller.db"), store.Options{Clock: clk})
+	blobs, err := blob.New(t.TempDir(), clk)
+	must(t, err)
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "controller.db"), store.Options{Clock: clk, Blobs: blobs})
 	must(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	ca, err := pki.NewCA(clk.Now())

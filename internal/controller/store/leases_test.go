@@ -21,7 +21,12 @@ type leaseFixture struct {
 
 func newLeaseFixture(t *testing.T) *leaseFixture {
 	t.Helper()
-	f := &leaseFixture{workerFixture: newWorkerFixture(t)}
+	return newLeaseFixtureWith(t, newWorkerFixture(t))
+}
+
+func newLeaseFixtureWith(t *testing.T, w *workerFixture) *leaseFixture {
+	t.Helper()
+	f := &leaseFixture{workerFixture: w}
 	f.alpha = f.worker(1, "alpha", domain.WorkerOnline)
 	f.beta = f.worker(2, "beta", domain.WorkerOnline)
 	ctx := t.Context()

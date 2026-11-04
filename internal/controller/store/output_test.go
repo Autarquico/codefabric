@@ -12,11 +12,17 @@ import (
 
 func outputFixture(t *testing.T) (*leaseFixture, domain.ID) {
 	t.Helper()
-	f := newLeaseFixture(t)
+	return outputFixtureWith(t, newWorkerFixture(t))
+}
+
+func outputFixtureWith(t *testing.T, w *workerFixture) (*leaseFixture, domain.ID) {
+	t.Helper()
+	f := newLeaseFixtureWith(t, w)
 	return f, f.queuedRun(1).ID
 }
 
-func (f *leaseFixture) append(run domain.ID, epoch, offset uint64, data []byte) (Output, error) {
+// appendNoSeal is one AppendOutput in its own transaction, with the sealer idle.
+func (f *leaseFixture) appendNoSeal(run domain.ID, epoch, offset uint64, data []byte) (Output, error) {
 	f.t.Helper()
 	var o Output
 	err := f.db.WithTx(f.t.Context(), func(tx *Tx) (err error) {
@@ -26,6 +32,22 @@ func (f *leaseFixture) append(run domain.ID, epoch, offset uint64, data []byte) 
 	return o, err
 }
 
+// append is appendNoSeal followed by the seal the sealer would do: the fixture
+// has no background sealer, so that the tests are deterministic.
+func (f *leaseFixture) append(run domain.ID, epoch, offset uint64, data []byte) (Output, error) {
+	f.t.Helper()
+	o, err := f.appendNoSeal(run, epoch, offset, data)
+	f.seal()
+	return o, err
+}
+
+func (f *leaseFixture) seal() {
+	f.t.Helper()
+	if err := f.db.SealPending(f.t.Context()); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
 func (f *leaseFixture) close(run domain.ID, epoch, final uint64, note string) (Output, error) {
 	f.t.Helper()
 	var o Output
@@ -33,6 +55,7 @@ func (f *leaseFixture) close(run domain.ID, epoch, final uint64, note string) (O
 		o, err = tx.CloseOutput(f.t.Context(), run, epoch, final, note, f.clk.Now())
 		return err
 	})
+	f.seal()
 	return o, err
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/pressly/goose/v3"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
@@ -69,9 +70,24 @@ type workerFixture struct {
 
 func newWorkerFixture(t *testing.T) *workerFixture {
 	t.Helper()
-	clk := clock.NewFake(epoch0)
-	db, _ := openTest(t, Options{Clock: clk})
-	return &workerFixture{t: t, db: db, clk: clk}
+	return newWorkerFixtureWith(t, Options{Blobs: newBlobs(t), manualSeal: true})
+}
+
+// newWorkerFixtureWith opens the store with opts, whose Clock is the fixture's.
+func newWorkerFixtureWith(t *testing.T, opts Options) *workerFixture {
+	t.Helper()
+	opts.Clock = clock.NewFake(epoch0)
+	db, _ := openTest(t, opts)
+	return &workerFixture{t: t, db: db, clk: opts.Clock.(*clock.Fake)}
+}
+
+func newBlobs(t *testing.T) *blob.Store {
+	t.Helper()
+	bs, err := blob.New(t.TempDir(), clock.NewFake(epoch0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bs
 }
 
 // worker inserts a worker identity and its Worker.

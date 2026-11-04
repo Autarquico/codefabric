@@ -117,11 +117,11 @@ func TestAppendOutput_SealsSegmentsAndKeepsEverything(t *testing.T) {
 			t.Fatalf("OutputRange%v: %v", r, err)
 		}
 	}
-	// The segments are in the blob store and recorded in blobs_meta.
+	// The segments are in the blob store, and only logs_index counts them.
 	var indexed, recorded int
 	if err := f.db.Reader().QueryRowContext(t.Context(),
-		`SELECT COUNT(*), (SELECT COUNT(*) FROM blobs_meta WHERE digest IN (SELECT digest FROM logs_index)) FROM logs_index`).Scan(&indexed, &recorded); err != nil || indexed != 3 || recorded != 3 {
-		t.Fatalf("indexed %d, recorded %d: %v", indexed, recorded, err)
+		`SELECT COUNT(*), (SELECT COUNT(*) FROM blobs_meta) FROM logs_index`).Scan(&indexed, &recorded); err != nil || indexed != 3 || recorded != 0 {
+		t.Fatalf("indexed %d, in blobs_meta %d: %v", indexed, recorded, err)
 	}
 	// Bytes already sealed are still compared, not just dropped.
 	if got, err := f.append(run, 1, 0, all[:100]); err != nil || got.End != o.End {
@@ -162,32 +162,172 @@ func TestAppendOutput_OverlapAcrossASegmentBoundary(t *testing.T) {
 	f.checkStorage(run, 1)
 }
 
-// A rollback after the segment was written leaves the output as it was: the
-// bytes are not acknowledged, and sending them again seals them onto the blob
-// that is already there.
-func TestAppendOutput_ARolledBackSealLosesNothingAndIsRepeatable(t *testing.T) {
+// A gap that lands while a segment is being written moves the output past the
+// range: the segment is not indexed (it is an orphan), nothing is retired, and
+// the output is what the gap left.
+func TestSealer_AGapDuringTheSealLeavesAnOrphanAndIndexesNothing(t *testing.T) {
 	f, run := outputFixture(t)
 	rng := rand.New(rand.NewPCG(5, 6)) //nolint:gosec // reproducible test data
-	all := randomBytes(rng, SegmentBytes)
-	f.sendAll(run, 1, all[:SegmentBytes-1])
-	boom := errors.New("boom")
-	err := f.db.WithTx(t.Context(), func(tx *Tx) error {
-		if _, err := tx.AppendOutput(t.Context(), run, 1, SegmentBytes-1, all[SegmentBytes-1:], f.clk.Now()); err != nil {
-			return err
+	all := randomBytes(rng, SegmentBytes+100)
+	for off := 0; off < len(all); off += v1.OutputChunkBytes {
+		if _, err := f.appendNoSeal(run, 1, uint64(off), all[off:min(off+v1.OutputChunkBytes, len(all))]); err != nil { //nolint:gosec // small
+			t.Fatal(err)
 		}
-		return boom
-	})
-	if !errors.Is(err, boom) {
+	}
+	p, err := f.db.sealer.prepare(t.Context(), outputKey{string(run), 1})
+	if err != nil || p == nil {
+		t.Fatalf("prepare = %v, %v", p, err)
+	}
+	if _, err := f.appendNoSeal(run, 1, 5*SegmentBytes, []byte("after the gap")); err != nil {
 		t.Fatal(err)
 	}
-	if o, data := f.held(run, 1); o.End != SegmentBytes-1 || o.Sealed != 0 || !bytes.Equal(data, all[:SegmentBytes-1]) {
-		t.Fatalf("after the rollback: [%d, %d) sealed %d", o.Start, o.End, o.Sealed)
+	if installed, err := f.db.sealer.install(t.Context(), p); err != nil || installed {
+		t.Fatalf("install = %v, %v", installed, err)
 	}
-	if o, err := f.append(run, 1, SegmentBytes-1, all[SegmentBytes-1:]); err != nil || o.Sealed != SegmentBytes {
-		t.Fatalf("append again = %+v, %v", o, err)
+	var indexed int
+	if err := f.db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM logs_index`).Scan(&indexed); err != nil || indexed != 0 {
+		t.Fatalf("%d segments indexed: %v", indexed, err)
 	}
+	if o, data := f.held(run, 1); o.Start != 5*SegmentBytes || string(data) != "after the gap" {
+		t.Fatalf("held %q from %d", data, o.Start)
+	}
+	f.checkStorage(run, 1)
+}
+
+// A segment that is installed is the bytes that were hot, and a sealer that
+// finds the range changed at its end (an append after the read) still installs it.
+func TestSealer_AnAppendDuringTheSealDoesNotStopIt(t *testing.T) {
+	f, run := outputFixture(t)
+	rng := rand.New(rand.NewPCG(9, 10)) //nolint:gosec // reproducible test data
+	all := randomBytes(rng, SegmentBytes+v1.OutputChunkBytes)
+	for off := 0; off < SegmentBytes+100; off += v1.OutputChunkBytes {
+		if _, err := f.appendNoSeal(run, 1, uint64(off), all[off:min(off+v1.OutputChunkBytes, SegmentBytes+100)]); err != nil { //nolint:gosec // small
+			t.Fatal(err)
+		}
+	}
+	p, err := f.db.sealer.prepare(t.Context(), outputKey{string(run), 1})
+	if err != nil || p == nil {
+		t.Fatalf("prepare = %v, %v", p, err)
+	}
+	if _, err := f.appendNoSeal(run, 1, SegmentBytes+100, all[SegmentBytes+100:]); err != nil {
+		t.Fatal(err)
+	}
+	if installed, err := f.db.sealer.install(t.Context(), p); err != nil || !installed {
+		t.Fatalf("install = %v, %v", installed, err)
+	}
+	f.seal()
 	if _, data := f.held(run, 1); !bytes.Equal(data, all) {
 		t.Fatal("the bytes are not the bytes sent")
+	}
+	f.checkStorage(run, 1)
+}
+
+// The hot tail has a bound: when the sealer is behind, new bytes are refused
+// with ErrOutputBusy and stored nowhere; sending them again after it caught up works.
+func TestAppendOutput_WhenTheSealerIsBehindTheOutputIsBusy(t *testing.T) {
+	f, run := outputFixture(t)
+	chunk := bytes.Repeat([]byte("b"), v1.OutputChunkBytes)
+	var off uint64
+	for ; off < MaxUnsealedBytes; off += uint64(len(chunk)) {
+		if _, err := f.appendNoSeal(run, 1, off, chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.appendNoSeal(run, 1, off, chunk); !errors.Is(err, ErrOutputBusy) {
+		t.Fatalf("append over the bound: %v", err)
+	}
+	if o, _ := f.held(run, 1); o.End != off {
+		t.Fatalf("end = %d after a refused append, want %d", o.End, off)
+	}
+	if o, err := f.appendNoSeal(run, 1, off-uint64(len(chunk)), chunk); err != nil || o.End != off {
+		t.Fatalf("a resend of what is held must still be acknowledged: %+v, %v", o, err)
+	}
+	f.seal()
+	if o, err := f.append(run, 1, off, chunk); err != nil || o.End != off+uint64(len(chunk)) {
+		t.Fatalf("append after the seal = %+v, %v", o, err)
+	}
+	f.checkStorage(run, 1)
+}
+
+// Without a blob store nothing is sealed: the hot tail keeps everything, there
+// is no bound but the cap, and what is held reads back.
+func TestAppendOutput_WithoutABlobStoreTheHotTailKeepsEverything(t *testing.T) {
+	f, run := outputFixtureWith(t, newWorkerFixtureWith(t, Options{}))
+	rng := rand.New(rand.NewPCG(11, 12)) //nolint:gosec // reproducible test data
+	all := randomBytes(rng, MaxUnsealedBytes+3*v1.OutputChunkBytes)
+	for off := 0; off < len(all); off += v1.OutputChunkBytes {
+		if _, err := f.append(run, 1, uint64(off), all[off:min(off+v1.OutputChunkBytes, len(all))]); err != nil { //nolint:gosec // small
+			t.Fatal(err)
+		}
+	}
+	if o, data := f.held(run, 1); o.Sealed != 0 || !bytes.Equal(data, all) {
+		t.Fatalf("sealed %d, %d bytes held of %d", o.Sealed, len(data), len(all))
+	}
+	if _, err := f.close(run, 1, uint64(len(all)), ""); err != nil {
+		t.Fatal(err)
+	}
+	var indexed int
+	if err := f.db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM logs_index`).Scan(&indexed); err != nil || indexed != 0 {
+		t.Fatalf("%d segments without a blob store: %v", indexed, err)
+	}
+}
+
+// The output of a (Run, epoch) is capped. The append that passes the cap closes
+// the output where it stands, with a note; what came before is kept, and later
+// entries find the output closed, which the Worker takes as final.
+func TestAppendOutput_TheCapClosesTheOutput(t *testing.T) {
+	f, run := outputFixtureWith(t, newWorkerFixtureWith(t, Options{Blobs: newBlobs(t), manualSeal: true, OutputMaxBytes: 100}))
+	if _, err := f.append(run, 1, 0, bytes.Repeat([]byte("a"), 60)); err != nil {
+		t.Fatal(err)
+	}
+	// The error rolls nothing back here: the use case acknowledges it and commits.
+	err := f.db.WithTx(t.Context(), func(tx *Tx) error {
+		_, err := tx.AppendOutput(t.Context(), run, 1, 60, bytes.Repeat([]byte("b"), 41), f.clk.Now())
+		if !errors.Is(err, ErrOutputClosed) {
+			t.Fatalf("append past the cap: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, data := f.held(run, 1)
+	if !o.Closed || o.FinalOffset != 60 || o.Note != OutputLimitNote || o.End != 60 || len(data) != 60 {
+		t.Fatalf("held %+v, %d bytes", o, len(data))
+	}
+	if _, err := f.append(run, 1, 60, []byte("c")); !errors.Is(err, ErrOutputClosed) {
+		t.Fatalf("append to the closed output: %v", err)
+	}
+	f.seal()
+	if o, data := f.held(run, 1); o.Sealed != 60 || len(data) != 60 {
+		t.Fatalf("after the seal: %+v, %d bytes", o, len(data))
+	}
+	// Exactly the cap fits; another epoch has its own.
+	if o, err := f.append(run, 2, 0, bytes.Repeat([]byte("d"), 100)); err != nil || o.End != 100 || o.Closed {
+		t.Fatalf("an output of exactly the cap = %+v, %v", o, err)
+	}
+}
+
+// A Worker that skips ahead over and over does not get more room, and does not
+// make a segment, a blob or a row of each gap.
+func TestAppendOutput_GapsDoNotAmplifyWrites(t *testing.T) {
+	f, run := outputFixtureWith(t, newWorkerFixtureWith(t, Options{Blobs: newBlobs(t), manualSeal: true, OutputMaxBytes: 100}))
+	var off uint64
+	var last error
+	for i := 0; i < 200 && last == nil; i++ {
+		_, last = f.append(run, 1, off, []byte("x"))
+		off += 10 // one byte, then a hole
+	}
+	if !errors.Is(last, ErrOutputClosed) {
+		t.Fatalf("the cap never closed the output: %v", last)
+	}
+	var indexed, blobs, chunks int
+	if err := f.db.Reader().QueryRowContext(t.Context(),
+		`SELECT (SELECT COUNT(*) FROM logs_index), (SELECT COUNT(*) FROM blobs_meta), (SELECT COUNT(*) FROM run_output_chunks)`).Scan(&indexed, &blobs, &chunks); err != nil {
+		t.Fatal(err)
+	}
+	if indexed != 0 || blobs != 0 || chunks > 1 {
+		t.Fatalf("%d segments, %d blobs, %d chunks after a burst of gaps", indexed, blobs, chunks)
 	}
 }
 
@@ -238,27 +378,27 @@ func TestSealOutputs_RecoversHotBytesWhoseBlobExistsWithoutAnIndexRow(t *testing
 	}
 }
 
-// Closing seals the remainder: a closed output is wholly in segments.
+// Closing leaves the remainder to the sealer: a closed output ends up wholly in segments.
 func TestCloseOutput_SealsTheRemainder(t *testing.T) {
 	f, run := outputFixture(t)
 	if _, err := f.append(run, 1, 0, []byte("short output")); err != nil {
 		t.Fatal(err)
 	}
-	if o, err := f.close(run, 1, 12, ""); err != nil || o.Sealed != 12 {
+	if o, err := f.close(run, 1, 12, ""); err != nil || !o.Closed {
 		t.Fatalf("close = %+v, %v", o, err)
 	}
 	var hot int
 	if err := f.db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM run_output_chunks`).Scan(&hot); err != nil || hot != 0 {
 		t.Fatalf("%d hot chunks after the close: %v", hot, err)
 	}
-	if o, data := f.held(run, 1); string(data) != "short output" || !o.Closed {
+	if o, data := f.held(run, 1); string(data) != "short output" || !o.Closed || o.Sealed != 12 {
 		t.Fatalf("held %q, %+v", data, o)
 	}
 }
 
-// A hole the Worker skipped seals what was held: it is not lost, though it is
-// no longer part of what is read.
-func TestAppendOutput_AHoleSealsWhatWasHeld(t *testing.T) {
+// A hole the Worker skipped drops what was held and not sealed: no segment is
+// written for it.
+func TestAppendOutput_AHoleDropsWhatWasHeld(t *testing.T) {
 	f, run := outputFixture(t)
 	if _, err := f.append(run, 1, 0, []byte("abc")); err != nil {
 		t.Fatal(err)
@@ -267,20 +407,16 @@ func TestAppendOutput_AHoleSealsWhatWasHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	var segs int
-	if err := f.db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM logs_index WHERE last_offset = 3`).Scan(&segs); err != nil || segs != 1 {
+	if err := f.db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM logs_index`).Scan(&segs); err != nil || segs != 0 {
 		t.Fatalf("segments for the skipped bytes = %d: %v", segs, err)
 	}
-	if o, data := f.held(run, 1); o.Start != 100 || string(data) != "xyz" {
-		t.Fatalf("held %q from %d", data, o.Start)
+	if o, data := f.held(run, 1); o.Start != 100 || string(data) != "xyz" || o.Accepted != 6 {
+		t.Fatalf("held %q from %d, accepted %d", data, o.Start, o.Accepted)
 	}
 	f.checkStorage(run, 1)
 }
 
 func (f *leaseFixture) putSegment(t *testing.T, raw []byte) (blob.Digest, int64, error) {
 	t.Helper()
-	blobs, err := f.db.segments()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return blobs.PutGzip(t.Context(), raw)
+	return f.db.blobs.PutGzip(t.Context(), raw)
 }

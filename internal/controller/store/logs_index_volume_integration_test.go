@@ -17,7 +17,7 @@ import (
 func TestScenario_LogsOutputStorage_Volumen(t *testing.T) {
 	const (
 		total      = 100 << 20
-		heapBudget = 48 << 20 // a page is 256 KiB and a segment 1 MiB: the budget is generous
+		pageMargin = 256 << 10 // per page, besides the page: the gzip reader and its copy buffers
 	)
 	f, run := outputFixture(t)
 
@@ -42,6 +42,7 @@ func TestScenario_LogsOutputStorage_Volumen(t *testing.T) {
 			}
 			return nil
 		})
+		f.seal() // the sealer between two transactions
 	}
 	for n := range chunks {
 		written.Write(chunk(n))
@@ -61,7 +62,7 @@ func TestScenario_LogsOutputStorage_Volumen(t *testing.T) {
 	runtime.GC()
 	var base runtime.MemStats
 	runtime.ReadMemStats(&base)
-	peak := uint64(0)
+	pages := uint64(0)
 	read := sha256.New()
 	for from := uint64(0); from < o.End; from += v1.OutputPageBytes {
 		to := min(from+v1.OutputPageBytes, o.End)
@@ -73,16 +74,18 @@ func TestScenario_LogsOutputStorage_Volumen(t *testing.T) {
 			t.Fatal(err)
 		}
 		read.Write(page)
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
-		peak = max(peak, m.HeapAlloc)
+		pages++
 	}
 	if string(read.Sum(nil)) != string(written.Sum(nil)) {
 		t.Fatal("the bytes paged are not the bytes written")
 	}
-	if peak > base.HeapAlloc+heapBudget {
-		t.Fatalf("peak heap %d MiB over a baseline of %d MiB paging %d MiB: the output was not paged",
-			peak>>20, base.HeapAlloc>>20, total>>20)
+	var end runtime.MemStats
+	runtime.ReadMemStats(&end)
+	// Bytes allocated, not the heap: it does not depend on when the GC runs, and a
+	// page that loads a whole segment shows up in it.
+	allocated := end.TotalAlloc - base.TotalAlloc
+	if budget := pages * (v1.OutputPageBytes + pageMargin); allocated > budget {
+		t.Fatalf("paging %d MiB in %d pages allocated %d MiB, over %d MiB: the output was not paged", total>>20, pages, allocated>>20, budget>>20)
 	}
-	t.Logf("paged %d MiB; peak heap %d MiB (baseline %d MiB)", total>>20, peak>>20, base.HeapAlloc>>20)
+	t.Logf("paged %d MiB in %d pages; %d MiB allocated", total>>20, pages, allocated>>20)
 }

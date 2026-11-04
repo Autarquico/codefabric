@@ -24,7 +24,15 @@ var (
 	// ErrOutputIncomplete: the Worker closed an output whose last bytes the store
 	// has not received.
 	ErrOutputIncomplete = errors.New("output closed before its last bytes arrived")
+	// ErrOutputBusy: the sealer is behind and the hot tail of the output is full.
+	// Nothing was stored; the same bytes can be sent again later.
+	ErrOutputBusy = errors.New("output is waiting to be sealed")
+	// ErrOutputUnreadable: a sealed segment is missing, corrupt or shorter than its index.
+	ErrOutputUnreadable = errors.New("sealed output cannot be read")
 )
+
+// OutputLimitNote is the note of an output that was closed for reaching the cap.
+const OutputLimitNote = "output limit reached"
 
 // Output is what the store holds of the output of a Run under a lease epoch:
 // the bytes [Start, End). [Start, Sealed) are in immutable segments (logs_index)
@@ -35,18 +43,19 @@ type Output struct {
 	Epoch       uint64
 	Start, End  uint64
 	Sealed      uint64
+	Accepted    uint64 // bytes accepted so far, which a gap does not give back: what the cap counts
 	Closed      bool
 	FinalOffset uint64
 	Note        string
 	UpdatedAt   time.Time
 }
 
-const outputColumns = `start_offset, end_offset, sealed_offset, closed_at IS NOT NULL, COALESCE(final_offset, 0), COALESCE(note, ''), updated_at`
+const outputColumns = `start_offset, end_offset, sealed_offset, accepted_bytes, closed_at IS NOT NULL, COALESCE(final_offset, 0), COALESCE(note, ''), updated_at`
 
 func scanOutput(run domain.ID, epoch uint64, row rowScanner) (Output, error) {
 	o := Output{RunID: run, Epoch: epoch}
 	var updated int64
-	if err := row.Scan(&o.Start, &o.End, &o.Sealed, &o.Closed, &o.FinalOffset, &o.Note, &updated); err != nil {
+	if err := row.Scan(&o.Start, &o.End, &o.Sealed, &o.Accepted, &o.Closed, &o.FinalOffset, &o.Note, &updated); err != nil {
 		return Output{}, scanErr(err, "run output")
 	}
 	o.UpdatedAt = time.Unix(0, updated).UTC()
@@ -117,13 +126,19 @@ func (t *Tx) MarkOutput() { t.output = true }
 //   - bytes below End are the ones already stored (compared, while the store
 //     still holds them: a difference is ErrOutputConflict), and only what lies
 //     above End is added;
-//   - offset > End leaves a hole the Worker skipped: what was held is dropped and
-//     the output restarts at offset.
+//   - offset > End leaves a hole the Worker skipped: what was held and not yet
+//     sealed is dropped, as data the Worker abandoned, and the output restarts
+//     at offset. A hole never writes a segment, so a Worker that skips ahead
+//     over and over costs no more than the bytes it sends.
 //
-// Whenever the hot tail holds a whole segment (SegmentBytes) it is sealed into
-// an immutable gzip segment, in this same transaction and before the hot chunks
-// are retired: no byte is dropped before it is durable. Bytes are never trimmed
-// away; a hole the Worker skipped seals what was held and restarts at offset.
+// The hot tail is sealed into immutable segments after the commit, by the
+// sealer (see SegmentBytes); no byte is trimmed away before it is indexed. If
+// there are MaxUnsealedBytes waiting, new bytes are refused with ErrOutputBusy.
+//
+// An output holds at most OutputMaxBytes of what was accepted. The append that
+// would pass it closes the output at what it holds, with OutputLimitNote, and
+// returns ErrOutputClosed: the close is part of the transaction, so the caller
+// that turns the error into an answer must commit it (the use case does).
 func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint64, data []byte, at time.Time) (Output, error) {
 	switch {
 	case epoch < 1, len(data) == 0, len(data) > v1.OutputChunkBytes,
@@ -148,7 +163,7 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 	end := offset + uint64(len(data))
 	switch {
 	case offset > o.End:
-		if err := t.sealOutput(ctx, &o, o.End); err != nil {
+		if err := t.trimOutput(ctx, run, epoch, offset); err != nil {
 			return Output{}, err
 		}
 		o.Start, o.End, o.Sealed = offset, offset, offset
@@ -162,21 +177,41 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 		data, offset = data[o.End-offset:], o.End
 	}
 
+	if t.db.sealer != nil && o.End-o.Sealed >= MaxUnsealedBytes {
+		t.markSealDue(o)
+		return Output{}, ErrOutputBusy
+	}
+	if o.Accepted+uint64(len(data)) > t.db.outputMax {
+		return t.closeAtLimit(ctx, o, at)
+	}
 	if err := t.appendChunks(ctx, run, epoch, offset, data); err != nil {
 		return Output{}, err
 	}
 	o.End = offset + uint64(len(data))
-	if err := t.sealFull(ctx, &o); err != nil {
-		return Output{}, err
-	}
+	o.Accepted += uint64(len(data))
 	if _, err := t.Exec(ctx,
-		`UPDATE run_output SET start_offset = ?, end_offset = ?, sealed_offset = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ?`,
-		o.Start, o.End, o.Sealed, at.UnixNano(), string(run), epoch); err != nil {
+		`UPDATE run_output SET start_offset = ?, end_offset = ?, sealed_offset = ?, accepted_bytes = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ?`,
+		o.Start, o.End, o.Sealed, o.Accepted, at.UnixNano(), string(run), epoch); err != nil {
 		return Output{}, fmt.Errorf("store: updating output: %w", err)
 	}
 	o.UpdatedAt = at
 	t.MarkOutput()
+	t.markSealDue(o)
 	return o, nil
+}
+
+// closeAtLimit closes the output where it stands, for having reached the cap.
+func (t *Tx) closeAtLimit(ctx context.Context, o Output, at time.Time) (Output, error) {
+	if _, err := t.Exec(ctx,
+		`UPDATE run_output SET start_offset = ?, end_offset = ?, sealed_offset = ?, closed_at = ?, final_offset = ?, note = ?, updated_at = ?
+		 WHERE run_id = ? AND lease_epoch = ?`,
+		o.Start, o.End, o.Sealed, at.UnixNano(), o.End, OutputLimitNote, at.UnixNano(), string(o.RunID), o.Epoch); err != nil {
+		return Output{}, fmt.Errorf("store: closing output at its limit: %w", err)
+	}
+	o.Closed = true
+	t.MarkOutput()
+	t.markSealDue(o)
+	return Output{}, ErrOutputClosed
 }
 
 // mergeBelow is the size under which the last chunk of an output takes what
@@ -282,16 +317,13 @@ func (t *Tx) CloseOutput(ctx context.Context, run domain.ID, epoch, final uint64
 	case o.End > final:
 		return Output{}, fmt.Errorf("%w: holds up to %d, closed at %d", ErrOutputConflict, o.End, final)
 	}
-	// The close seals what is left hot: a closed output lives wholly in segments.
-	if err := t.sealOutput(ctx, &o, o.End); err != nil {
-		return Output{}, err
-	}
 	if _, err := t.Exec(ctx,
-		`UPDATE run_output SET closed_at = ?, final_offset = ?, note = ?, sealed_offset = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ?`,
-		at.UnixNano(), final, nullable(note), o.Sealed, at.UnixNano(), string(run), epoch); err != nil {
+		`UPDATE run_output SET closed_at = ?, final_offset = ?, note = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ?`,
+		at.UnixNano(), final, nullable(note), at.UnixNano(), string(run), epoch); err != nil {
 		return Output{}, fmt.Errorf("store: closing output: %w", err)
 	}
 	o.Closed, o.FinalOffset, o.Note, o.UpdatedAt = true, final, note, at
 	t.MarkOutput()
+	t.markSealDue(o) // the sealer seals what is left hot: a closed output ends up wholly in segments
 	return o, nil
 }

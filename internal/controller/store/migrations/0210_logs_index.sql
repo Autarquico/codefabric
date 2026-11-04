@@ -9,7 +9,8 @@
 -- last_offset exclusive; raw_bytes is its length. digest is that of the stored
 -- gzip bytes and is also recorded in blobs_meta. The segments of an output are
 -- contiguous from run_output.start_offset; rows below it are what the Worker
--- skipped past (a gap restarts the output): kept, never read.
+-- skipped past (a gap restarts the output): kept, never read. The segments are
+-- not recorded in blobs_meta: this index is their only reference count.
 CREATE TABLE logs_index (
     run_id       TEXT    NOT NULL,
     lease_epoch  INTEGER NOT NULL,
@@ -29,3 +30,8 @@ CREATE UNIQUE INDEX logs_index_offsets ON logs_index (run_id, lease_epoch, first
 -- sealed: its hot tail starts at start_offset, and the Controller seals it at startup.
 ALTER TABLE run_output ADD COLUMN sealed_offset INTEGER NOT NULL DEFAULT 0;
 UPDATE run_output SET sealed_offset = start_offset;
+
+-- The bytes the Controller has accepted for the output, for the cap per output:
+-- they only grow, so a Worker that skips ahead over and over does not get more.
+ALTER TABLE run_output ADD COLUMN accepted_bytes INTEGER NOT NULL DEFAULT 0;
+UPDATE run_output SET accepted_bytes = end_offset - start_offset;

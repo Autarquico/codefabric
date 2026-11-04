@@ -20,6 +20,8 @@ type Tx struct {
 	tx     *sql.Tx
 	maxSeq uint64 // highest event sequence inserted by this transaction
 	output bool   // the transaction changed the output of a Run
+	// sealDue are the outputs that this transaction left with bytes to seal.
+	sealDue []outputKey
 }
 
 // WithTx runs fn inside BEGIN IMMEDIATE on the writer. It commits when fn
@@ -61,6 +63,9 @@ func (db *DB) WithTx(ctx context.Context, fn func(*Tx) error) error {
 	}
 	if tx.output {
 		db.output.Notify(db.outputSeq.Add(1))
+	}
+	if len(tx.sealDue) > 0 {
+		db.sealer.add(tx.sealDue...)
 	}
 	return nil
 }

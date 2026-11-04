@@ -124,6 +124,11 @@ func outputError(err error) error {
 	switch {
 	case errors.Is(err, store.ErrOutputClosed):
 		return domain.NewError(domain.CodeInvalidTransition, "the output of this lease is closed", nil)
+	case errors.Is(err, store.ErrOutputBusy):
+		// Not a refusal: the Worker keeps the bytes and sends them again (CF_IN_PROGRESS is not one of its final codes).
+		return domain.NewError(domain.CodeInProgress, "the output is waiting to be sealed; send it again", nil)
+	case errors.Is(err, store.ErrOutputUnreadable):
+		return domain.NewError(domain.CodeInternal, "the output already stored cannot be read back", nil)
 	case errors.Is(err, store.ErrOutputConflict), errors.Is(err, store.ErrOutputIncomplete), errors.Is(err, store.ErrOutputInvalid):
 		return domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
 	}
@@ -221,8 +226,8 @@ func (s *Service) runOf(ctx context.Context, q store.Querier, by pki.Session, re
 }
 
 // ReadOutput answers GET /v1/runs/{ref}/output: a page of the tail of the
-// output the Controller holds. Truncated says that older output was asked for
-// and the Controller no longer has it.
+// output the Controller holds. Truncated says that output below Start was asked
+// for: the Worker skipped it and it was never stored.
 func (s *Service) ReadOutput(ctx context.Context, by pki.Session, q OutputRead) (v1.RunOutput, error) {
 	if err := q.validate(); err != nil {
 		return v1.RunOutput{}, err
