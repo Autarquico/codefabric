@@ -42,6 +42,7 @@ type Model struct {
 
 	views   map[Route]viewSpec
 	ctx     context.Context
+	end     context.CancelFunc // ends ctx: the TUI's own, whatever the caller's does
 	send    func(tea.Msg)
 	feeding map[Route]context.CancelFunc
 }
@@ -55,8 +56,12 @@ func New(opts Options) *Model {
 		opts.Location = time.Local
 	}
 	m := &Model{opts: opts, router: NewRouter(Home{}), theme: NewTheme(true), views: specs(), ctx: context.Background(), feeding: map[Route]context.CancelFunc{}}
-	if opts.Backend != nil {
-		for route, spec := range m.views {
+	env := screenEnv{Backend: opts.Backend, Feeds: opts.Feeds, ctx: func() context.Context { return m.ctx }, send: m.tell}
+	for route, spec := range m.views {
+		switch {
+		case spec.open != nil:
+			m.router.Register(route, func() Screen { return spec.open(env) })
+		case opts.Backend != nil:
 			m.router.Register(route, func() Screen { return newBrowser(spec, opts.Backend) })
 		}
 	}
@@ -65,10 +70,26 @@ func New(opts Options) *Model {
 
 // bind connects the shell to the program that runs it: send delivers what the
 // feeds produce, and ctx ends them.
-func (m *Model) bind(ctx context.Context, send func(tea.Msg)) { m.ctx, m.send = ctx, send }
+func (m *Model) bind(ctx context.Context, send func(tea.Msg)) {
+	m.stop()
+	m.ctx, m.end = context.WithCancel(ctx)
+	m.send = send
+}
 
-// stop ends every feed.
+// tell delivers a message to the program; before the shell is bound to one
+// there is nobody to tell.
+func (m *Model) tell(msg tea.Msg) {
+	if m.send != nil {
+		m.send(msg)
+	}
+}
+
+// stop ends every feed and everything the screens follow under the context of
+// the shell, so nothing outlives the TUI when the caller's context stays alive.
 func (m *Model) stop() {
+	if m.end != nil {
+		m.end()
+	}
 	for route, cancel := range m.feeding {
 		cancel()
 		delete(m.feeding, route)
@@ -144,6 +165,7 @@ func (m *Model) press(key string) tea.Cmd {
 	action, route := resolve(key)
 	switch action {
 	case ActionQuit:
+		m.stop()
 		return tea.Quit
 	case ActionBack:
 		m.router.Back()
@@ -203,6 +225,9 @@ func (m *Model) follow(route Route) {
 	}
 	spec, ok := m.views[route]
 	if !ok {
+		return
+	}
+	if spec.follow == nil {
 		return
 	}
 	run := spec.follow(m.opts.Feeds, m.send)

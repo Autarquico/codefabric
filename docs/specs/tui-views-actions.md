@@ -6,14 +6,14 @@ status: active
 priority: P1
 size: L
 issue: 96
-prs: [106, 108]
+prs: [106, 108, 117]
 related_issues: [96]
 sub_issues: []
 depends_on: [tui-shell-home]
 supersedes: []
 related_specs: [codefabric-spec, phase-3-tui]
 created: 2026-10-10
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # TUI: vistas y acciones

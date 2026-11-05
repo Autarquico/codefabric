@@ -1,0 +1,467 @@
+package notify_test
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/client/notify"
+	"github.com/Autarquico/codefabric/internal/config"
+	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
+)
+
+type fakeNative struct {
+	mu    sync.Mutex
+	shown [][2]string
+}
+
+func (f *fakeNative) Show(_ context.Context, title, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shown = append(f.shown, [2]string{title, body})
+	return nil
+}
+
+func (f *fakeNative) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.shown)
+}
+
+func runFailed(seq uint64, run string) v1.Event {
+	return v1.Event{Sequence: seq, Type: domain.EventRunFailed, RunID: run, ProjectID: "p1", Message: "run failed"}
+}
+
+func newNotifier(prefs config.ClientNotify, n notify.Native, clk *clock.Fake) *notify.Notifier {
+	return notify.New(notify.Options{Prefs: prefs, Native: n, Clock: clk})
+}
+
+// fakeSource replays scripted streams: each FollowEvents call takes the next one.
+type fakeSource struct {
+	mu      sync.Mutex
+	streams [][]v1.Event
+	errs    []error
+	afters  []string
+}
+
+func (s *fakeSource) followCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.afters)
+}
+
+func (s *fakeSource) Events(context.Context, client.EventQuery) (v1.EventPage, error) {
+	return v1.EventPage{Cursor: "100"}, nil
+}
+
+func (s *fakeSource) FollowEvents(ctx context.Context, q client.EventQuery, fn func(v1.Event) error) error {
+	s.mu.Lock()
+	s.afters = append(s.afters, q.After)
+	i := len(s.afters) - 1
+	s.mu.Unlock()
+	if i >= len(s.streams) {
+		return context.Canceled
+	}
+	for _, e := range s.streams[i] {
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	if i < len(s.errs) {
+		return s.errs[i]
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestScenario_PaletteSearchNotify_Dedupe(t *testing.T) {
+	native := &fakeNative{}
+	clk := clock.NewFake(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	n := newNotifier(config.ClientNotify{}, native, clk)
+
+	expired := domain.NewError(domain.CodeCursorExpired, "purged", nil)
+	// The same RunFailed arrives, repeats with a new sequence, and is replayed after a resync.
+	src := &fakeSource{
+		streams: [][]v1.Event{{runFailed(7, "r1"), runFailed(7, "r1"), runFailed(8, "r1")}, {runFailed(7, "r1")}},
+		errs:    []error{expired, context.Canceled},
+	}
+	ctx := context.Background()
+	if err := n.Watch(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	if got := native.count(); got != 1 {
+		t.Fatalf("the same RunFailed notified %d times, want 1", got)
+	}
+	if want := []string{"", ""}; !slices.Equal(src.afters, want) {
+		t.Errorf("resumed from %q, want %q", src.afters, want)
+	}
+
+	// Past the window only the sequence can say it is the same event.
+	clk.Advance(notify.DedupeWindow + time.Second)
+	n.Handle(ctx, runFailed(7, "r1"))
+	if got := native.count(); got != 1 {
+		t.Fatalf("a replayed sequence notified again: %d", got)
+	}
+
+	// A different Run is a different event; the same one after the window notifies again.
+	n.Handle(ctx, runFailed(9, "r2"))
+	clk.Advance(notify.DedupeWindow + time.Second)
+	n.Handle(ctx, runFailed(10, "r1"))
+	if got := native.count(); got != 3 {
+		t.Errorf("after another Run and the window: %d notifications, want 3", got)
+	}
+}
+
+func TestPrefsFilterEvents(t *testing.T) {
+	native := &fakeNative{}
+	clk := clock.NewFake(time.Now())
+	n := newNotifier(config.ClientNotify{MutedProjects: []string{"muted"}}, native, clk)
+	ctx := context.Background()
+	n.Handle(ctx, v1.Event{Sequence: 1, Type: domain.EventRunCompleted, RunID: "a"})                      // not a default type
+	n.Handle(ctx, v1.Event{Sequence: 2, Type: domain.EventWorkerLost, WorkerID: "w", ProjectID: "muted"}) // muted Project
+	n.Handle(ctx, v1.Event{Sequence: 3, Type: domain.EventWorkerLost, WorkerID: "w"})
+	n.Handle(ctx, v1.Event{Sequence: 4, Type: domain.EventTaskNeedsInput, TaskID: "t"})
+	if got := native.count(); got != 2 {
+		t.Fatalf("%d notifications, want 2: %v", got, native.shown)
+	}
+	if got := n.Types(); !slices.Equal(got, []string{"RunFailed", "TaskNeedsInput", "WorkerLost"}) {
+		t.Errorf("default types %v", got)
+	}
+}
+
+func TestMutedEventDoesNotConsumeDedupe(t *testing.T) {
+	native := &fakeNative{}
+	n := newNotifier(config.ClientNotify{}, native, clock.NewFake(time.Now()))
+	n.Handle(context.Background(), v1.Event{Sequence: 1, Type: domain.EventRunCompleted, RunID: "a"})
+	n.Handle(context.Background(), runFailed(1, "a")) // same sequence, other type: the first one never notified
+	if native.count() != 1 {
+		t.Fatalf("got %d", native.count())
+	}
+}
+
+func TestDedupeStateIsBounded(t *testing.T) {
+	native := &fakeNative{}
+	n := newNotifier(config.ClientNotify{}, native, clock.NewFake(time.Now()))
+	ctx := context.Background()
+	for i := range 10_000 {
+		n.Handle(ctx, runFailed(uint64(i+1), "run-"+strings.Repeat("x", i%7)+string(rune('a'+i%26))+time.Duration(i).String()))
+	}
+	// The oldest sequence has been forgotten: its replay notifies again (the state did not grow without bound).
+	before := native.count()
+	n.Handle(ctx, runFailed(1, "run-"+strings.Repeat("x", 0)+"a"+time.Duration(0).String()))
+	if native.count() != before+1 {
+		t.Errorf("the oldest key is still remembered after 10000 events")
+	}
+}
+
+func TestQuietHoursHoldBackNativeOnly(t *testing.T) {
+	native := &fakeNative{}
+	var hooked int
+	exec := func(context.Context, string, []string, []byte) ([]byte, error) { hooked++; return nil, nil }
+	at := time.Date(2026, 1, 1, 23, 30, 0, 0, time.Local)
+	clk := clock.NewFake(at)
+	prefs := config.ClientNotify{QuietHours: &config.QuietHours{Start: "22:00", End: "07:00"}, Hook: []string{"hook"}}
+	n := notify.New(notify.Options{Prefs: prefs, Native: native, Exec: exec, Clock: clk})
+	n.Handle(context.Background(), runFailed(1, "a"))
+	if native.count() != 0 || hooked != 1 {
+		t.Fatalf("quiet: native %d hook %d", native.count(), hooked)
+	}
+	clk.Advance(7*time.Hour + 30*time.Minute)
+	n.Handle(context.Background(), runFailed(2, "b"))
+	if native.count() != 1 {
+		t.Fatalf("after the quiet hours: native %d", native.count())
+	}
+}
+
+func TestHookGetsEventJSONOnStdin(t *testing.T) {
+	var gotName string
+	var gotArgs []string
+	var gotStdin []byte
+	exec := func(_ context.Context, name string, args []string, stdin []byte) ([]byte, error) {
+		gotName, gotArgs, gotStdin = name, args, stdin
+		return []byte("ok"), nil
+	}
+	n := notify.New(notify.Options{Prefs: config.ClientNotify{Hook: []string{"/opt/hook", "--flag", "a b"}}, Exec: exec})
+	n.Handle(context.Background(), runFailed(5, "r1"))
+	if gotName != "/opt/hook" || !slices.Equal(gotArgs, []string{"--flag", "a b"}) {
+		t.Errorf("argv %q %q", gotName, gotArgs)
+	}
+	if !strings.Contains(string(gotStdin), `"type":"RunFailed"`) || !strings.Contains(string(gotStdin), `"run_id":"r1"`) {
+		t.Errorf("stdin %s", gotStdin)
+	}
+}
+
+func TestHookFailureDoesNotStopNative(t *testing.T) {
+	native := &fakeNative{}
+	exec := func(context.Context, string, []string, []byte) ([]byte, error) { return nil, errors.New("boom") }
+	n := notify.New(notify.Options{Prefs: config.ClientNotify{Hook: []string{"h"}}, Native: native, Exec: exec})
+	n.Handle(context.Background(), runFailed(1, "a"))
+	if native.count() != 1 {
+		t.Fatal("native not shown")
+	}
+}
+
+func TestNotificationTextIsSanitized(t *testing.T) {
+	native := &fakeNative{}
+	n := newNotifier(config.ClientNotify{}, native, clock.NewFake(time.Now()))
+	e := runFailed(1, "a")
+	e.Message = "\x1b[31mred\x1b[0m \x1b]0;title\x07text\x00\n" + strings.Repeat("z", 500)
+	n.Handle(context.Background(), e)
+	body := native.shown[0][1]
+	if strings.ContainsAny(body, "\x1b\x00\n\x07") || !strings.HasPrefix(body, "red text") || len([]rune(body)) > 200 {
+		t.Errorf("body %q", body)
+	}
+}
+
+func TestNoNativeIsLoggedOnce(t *testing.T) {
+	var log strings.Builder
+	n := notify.New(notify.Options{Log: newLogger(&log)})
+	n.Handle(context.Background(), runFailed(1, "a"))
+	n.Handle(context.Background(), runFailed(2, "b"))
+	if got := strings.Count(log.String(), "no native notifications"); got != 1 {
+		t.Errorf("logged %d times:\n%s", got, log.String())
+	}
+}
+
+func TestTestBypassesPrefsDedupeAndQuietHours(t *testing.T) {
+	native := &fakeNative{}
+	at := time.Date(2026, 1, 1, 23, 30, 0, 0, time.Local)
+	prefs := config.ClientNotify{Events: []string{}, QuietHours: &config.QuietHours{Start: "22:00", End: "07:00"}}
+	n := newNotifier(prefs, native, clock.NewFake(at))
+	for range 2 {
+		if err := n.Test(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if native.count() != 2 {
+		t.Fatalf("got %d", native.count())
+	}
+}
+
+func TestTestSaysWhenThereIsNothingToDeliverWith(t *testing.T) {
+	n := newNotifier(config.ClientNotify{}, nil, clock.NewFake(time.Now()))
+	if err := n.Test(context.Background()); err == nil || !strings.Contains(err.Error(), "no native notifications") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestTestReportsFailedDelivery(t *testing.T) {
+	failing := func(context.Context, string, []string, []byte) ([]byte, error) {
+		return []byte("boom"), errors.New("exit status 3")
+	}
+	n := notify.New(notify.Options{Prefs: config.ClientNotify{Hook: []string{"hook"}}, Native: errNative{}, Exec: failing})
+	err := n.Test(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "native notification failed") || !strings.Contains(err.Error(), "hook hook failed") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestTestWithOnlyAHookRunsIt(t *testing.T) {
+	var ran bool
+	ok := func(context.Context, string, []string, []byte) ([]byte, error) { ran = true; return nil, nil }
+	n := notify.New(notify.Options{Prefs: config.ClientNotify{Hook: []string{"hook"}}, Exec: ok})
+	if err := n.Test(context.Background()); err != nil || !ran {
+		t.Fatalf("ran %v, err %v", ran, err)
+	}
+}
+
+type errNative struct{}
+
+func (errNative) Show(context.Context, string, string) error { return errors.New("osascript failed") }
+
+func TestWatchTriesTheControllerAgain(t *testing.T) {
+	native := &fakeNative{}
+	var log strings.Builder
+	n := notify.New(notify.Options{
+		Native: native, Log: newLogger(&log),
+		BackoffInitial: time.Millisecond, BackoffMax: 2 * time.Millisecond,
+	})
+	down := domain.NewError(domain.CodeControllerUnreachable, "no route", nil)
+	src := &fakeSource{
+		streams: [][]v1.Event{nil, nil, {runFailed(1, "r1")}},
+		errs:    []error{down, down, context.Canceled},
+	}
+	if err := n.Watch(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+	if native.count() != 1 || src.followCalls() != 3 {
+		t.Errorf("notified %d after %d attempts", native.count(), src.followCalls())
+	}
+	if got := strings.Count(log.String(), "cannot follow events"); got != 1 {
+		t.Errorf("the outage was logged %d times:\n%s", got, log.String())
+	}
+	if !strings.Contains(log.String(), "reconnected") {
+		t.Errorf("no reconnection logged:\n%s", log.String())
+	}
+}
+
+func TestWatchGivesUpOnAPermanentError(t *testing.T) {
+	n := notify.New(notify.Options{BackoffInitial: time.Millisecond})
+	denied := domain.NewError(domain.CodeUnauthenticated, "revoked", nil)
+	src := &fakeSource{streams: [][]v1.Event{nil}, errs: []error{denied}}
+	if err := n.Watch(context.Background(), src); err == nil || src.followCalls() != 1 {
+		t.Fatalf("err %v after %d attempts", err, src.followCalls())
+	}
+}
+
+func TestSuppressedSequenceIsRememberedPastTheWindow(t *testing.T) {
+	native := &fakeNative{}
+	clk := clock.NewFake(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	n := newNotifier(config.ClientNotify{}, native, clk)
+	ctx := context.Background()
+	n.Handle(ctx, runFailed(7, "r1"))
+	n.Handle(ctx, runFailed(8, "r1")) // the subject suppresses it, the sequence is still seen
+	clk.Advance(notify.DedupeWindow + time.Second)
+	n.Handle(ctx, runFailed(8, "r1")) // a replay of 8, not a new event
+	if got := native.count(); got != 1 {
+		t.Fatalf("a replay of a suppressed sequence notified: %d", got)
+	}
+}
+
+func TestMinLevelFiltersNativeAndHook(t *testing.T) {
+	native := &fakeNative{}
+	var hooked int
+	exec := func(context.Context, string, []string, []byte) ([]byte, error) { hooked++; return nil, nil }
+	prefs := config.ClientNotify{MinLevel: domain.LevelError, Hook: []string{"hook"}}
+	n := notify.New(notify.Options{Prefs: prefs, Native: native, Exec: exec})
+	ctx := context.Background()
+	for i, level := range []string{domain.LevelInfo, domain.LevelWarn, "", domain.LevelError} {
+		e := runFailed(uint64(i+1), "r"+level)
+		e.Level = level
+		n.Handle(ctx, e)
+	}
+	if native.count() != 1 || hooked != 1 {
+		t.Fatalf("native %d hook %d, want 1 and 1", native.count(), hooked)
+	}
+	// A filtered event never consumed the dedupe: the same Run at error level notifies.
+	e := runFailed(9, "r"+domain.LevelWarn)
+	e.Level = domain.LevelError
+	n.Handle(ctx, e)
+	if native.count() != 2 || hooked != 2 {
+		t.Errorf("after a filtered event: native %d hook %d, want 2 and 2", native.count(), hooked)
+	}
+}
+
+// blocking returns a hook and a Native that wait for their context to end.
+func blocking(done chan<- error) (notify.Exec, notify.Native) {
+	exec := func(ctx context.Context, _ string, _ []string, _ []byte) ([]byte, error) {
+		<-ctx.Done()
+		done <- context.Cause(ctx)
+		return nil, ctx.Err()
+	}
+	return exec, blockingNative{done}
+}
+
+type blockingNative struct{ done chan<- error }
+
+func (b blockingNative) Show(ctx context.Context, _, _ string) error {
+	<-ctx.Done()
+	b.done <- context.Cause(ctx)
+	return ctx.Err()
+}
+
+func TestDeliveryTimeoutsRunOnTheClock(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	done := make(chan error, 2)
+	exec, native := blocking(done)
+	n := notify.New(notify.Options{Prefs: config.ClientNotify{Hook: []string{"hook"}}, Native: native, Exec: exec, Clock: clk})
+	returned := make(chan struct{})
+	go func() { n.Handle(context.Background(), runFailed(1, "a")); close(returned) }()
+
+	waitCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if err := clk.BlockUntil(waitCtx, 1); err != nil { // the native one is waiting
+		t.Fatal(err)
+	}
+	clk.Advance(time.Second)
+	select {
+	case err := <-done:
+		t.Fatalf("ended before its timeout: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	clk.Advance(10 * time.Second) // past the native timeout; the hook then starts and waits
+	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("native ended with %v, want a timeout", err)
+	}
+	if err := clk.BlockUntil(waitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Minute)
+	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("hook ended with %v, want a timeout", err)
+	}
+	<-returned
+}
+
+func TestDeliveryEndsWithItsContext(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	done := make(chan error, 1)
+	exec, _ := blocking(done)
+	n := notify.New(notify.Options{Prefs: config.ClientNotify{Hook: []string{"hook"}}, Exec: exec, Clock: clk})
+	ctx, cancel := context.WithCancel(context.Background())
+	returned := make(chan struct{})
+	go func() { n.Handle(ctx, runFailed(1, "a")); close(returned) }()
+	waitCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if err := clk.BlockUntil(waitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ended with %v, want cancellation", err)
+	}
+	<-returned
+}
+
+func TestWatchBackoffRunsOnTheClock(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	native := &fakeNative{}
+	n := notify.New(notify.Options{Native: native, Clock: clk, BackoffInitial: 5 * time.Second})
+	down := domain.NewError(domain.CodeControllerUnreachable, "no route", nil)
+	src := &fakeSource{streams: [][]v1.Event{nil, {runFailed(1, "r1")}}, errs: []error{down, context.Canceled}}
+	finished := make(chan error, 1)
+	go func() { finished <- n.Watch(context.Background(), src) }()
+
+	waitCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if err := clk.BlockUntil(waitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(4 * time.Second)
+	if got := src.followCalls(); got != 1 {
+		t.Fatalf("tried again before the backoff: %d calls", got)
+	}
+	clk.Advance(time.Second)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	if src.followCalls() != 2 || native.count() != 1 {
+		t.Errorf("%d attempts, %d notifications", src.followCalls(), native.count())
+	}
+}
+
+func TestWatchBackoffEndsWithItsContext(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	n := notify.New(notify.Options{Clock: clk, BackoffInitial: time.Hour})
+	down := domain.NewError(domain.CodeControllerUnreachable, "no route", nil)
+	src := &fakeSource{streams: [][]v1.Event{nil}, errs: []error{down}}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan error, 1)
+	go func() { finished <- n.Watch(ctx, src) }()
+	waitCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if err := clk.BlockUntil(waitCtx, 1); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+}
