@@ -119,6 +119,9 @@ type wrapper struct {
 
 	deadline <-chan time.Time // its end, nil when not armed
 	timer    clock.Timer
+
+	// input is the FIFO of the harness's stdin, nil when it has none.
+	input *inputPipe
 }
 
 func (w *wrapper) grace() time.Duration {
@@ -169,6 +172,7 @@ func (w *wrapper) run() error {
 		return w.fail("opening the output log: %v", err)
 	}
 	defer func() { _ = log.Close() }()
+	defer func() { w.input.close() }() // nil-safe; closing it is what lets the harness read EOF
 
 	cmd := exec.Command(w.launch.Argv[0], w.launch.Argv[1:]...) //nolint:gosec,noctx // the argv is what the Run asked for; nothing ends the harness but the wrapper
 	cmd.Dir = w.launch.Dir
@@ -193,6 +197,7 @@ func (w *wrapper) run() error {
 		return err
 	}
 
+	w.input.start(w.launch.InitialInput)
 	waited := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
@@ -311,6 +316,15 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, logPipe.w, logPipe.w
 	pipes := []copyPipe{logPipe}
+	var inputEnd *os.File // the end of the FIFO that is the harness's stdin
+	if w.launch.InputPath != "" {
+		// Before the harness exists: it never reads a FIFO nobody holds open for writing.
+		if w.input, inputEnd, err = openInput(w.launch.InputPath); err != nil {
+			_ = logPipe.abort()
+			return nil, nil, err
+		}
+		cmd.Stdin = inputEnd
+	}
 	var events eventsSink // set when stdout goes apart
 	if w.structured() {
 		open := w.o.openEvents
@@ -354,6 +368,9 @@ func (w *wrapper) wire(cmd *exec.Cmd, log *os.File, set *redact.Set) (copied <-c
 	}()
 	for _, p := range pipes {
 		parentEnds = append(parentEnds, p.w)
+	}
+	if inputEnd != nil {
+		parentEnds = append(parentEnds, inputEnd)
 	}
 	return done, parentEnds, nil
 }
@@ -443,6 +460,12 @@ func (w *wrapper) waitForGate() (stopped bool, err error) {
 // supervise waits for the harness to end, starting the stop when asked to. It
 // returns false if the grace of a stop ran out with the harness alive.
 func (w *wrapper) supervise(waited <-chan struct{}) bool {
+	var inputTick <-chan time.Time // the daemon's word that the input is over is a file
+	if w.input != nil {
+		t := time.NewTicker(inputPoll)
+		defer t.Stop()
+		inputTick = t.C
+	}
 	for {
 		select {
 		case <-waited:
@@ -454,6 +477,11 @@ func (w *wrapper) supervise(waited <-chan struct{}) bool {
 		case <-w.deadline:
 			w.deadline = nil
 			return false
+		case <-inputTick:
+			if fileExists(filepath.Join(w.o.RunDir, InputEOFFile)) {
+				w.input.close()
+				inputTick = nil
+			}
 		}
 	}
 }

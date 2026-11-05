@@ -39,6 +39,9 @@ const (
 	// EventsFile is the stdout of a headless harness that asked for
 	// Launch.StructuredStdout: its structured stream, apart from OutputLog.
 	EventsFile = "events.jsonl"
+	// InputEOFFile is the marker with which the daemon says that the input of
+	// the harness is over: the wrapper, which holds the FIFO open, closes it.
+	InputEOFFile = "input.eof"
 )
 
 // Modes of execution (§7.4).
@@ -69,6 +72,12 @@ type Launch struct {
 	// retains even when it has no SecretEnv: the secrets of its configuration
 	// are in files, not in its environment.
 	RedactOutput bool `json:"redact_output,omitempty"`
+
+	// InputPath makes the stdin of a headless harness a FIFO at that path (see
+	// harness.Launch.InputPath) and InitialInput is written to it as the
+	// harness starts. Interactive mode ignores both: the terminal is its input.
+	InputPath    string `json:"input_path,omitempty"`
+	InitialInput string `json:"initial_input,omitempty"`
 }
 
 // SecretEnv is a variable of the harness whose value is the secret Ref names.

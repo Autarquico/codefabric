@@ -64,6 +64,8 @@ type Options struct {
 	RedactPipeArgv []string
 	// AskpassArgv replaces `<this binary> worker git-askpass`, for tests.
 	AskpassArgv []string
+	// PermissionServerArgv replaces `<this binary> worker mcp-bridge`, for tests.
+	PermissionServerArgv []string
 	// StopGrace replaces stop.grace (Appendix A), for tests.
 	StopGrace time.Duration
 	// GitPath replaces the git found on the PATH, for tests.
@@ -178,6 +180,7 @@ func Run(ctx context.Context, o Options) error {
 	eo := executor.Options{
 		DB: db, Controller: c, Workflows: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
 		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
+		PermissionServerArgv: o.PermissionServerArgv,
 	}
 	eo.AskpassScript = d.writeAskpassScript(ctx, o)
 	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})
@@ -202,6 +205,7 @@ func Run(ctx context.Context, o Options) error {
 		}
 		// Here git is usable (gitops.New checked its version) and the Worker offers harnesses.
 		d.capabilities = withOriginAskpass(d.capabilities, eo.AskpassScript)
+		d.capabilities, eo.StructuredInput = d.withStructuredInput(ctx, d.capabilities, eo.Harnesses, o.PermissionServerArgv)
 	}
 	if err := d.startDoctor(ctx, o); err != nil {
 		return err

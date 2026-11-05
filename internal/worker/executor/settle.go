@@ -398,6 +398,7 @@ func fillExit(en *v1.RunReportEntry, f facts) {
 // removes the auth copies of its materialisation.
 func (e *Executor) forget(k state.Key) {
 	_ = e.dropMaterialization(k, e.runDir(k)) // logged; the janitor retries
+	e.dropInput(context.Background(), k)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.memos, k)

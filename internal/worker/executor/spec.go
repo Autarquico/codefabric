@@ -20,9 +20,12 @@ type specView struct {
 		Ref string `json:"ref"`
 	} `json:"source"`
 	Requirements struct {
-		Harness   string `json:"harness"`
-		Model     string `json:"model"`
-		Resources struct {
+		Harness string `json:"harness"`
+		Model   string `json:"model"`
+		// Permissions is PermissionsAsk for a Run whose harness asks what it is
+		// not allowed to do; empty leaves the harness to skip its prompts.
+		Permissions string `json:"permissions"`
+		Resources   struct {
 			CPU      int `json:"cpu"`
 			MemoryMB int `json:"memory_mb"`
 		} `json:"resources"`

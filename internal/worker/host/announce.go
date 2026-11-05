@@ -43,6 +43,11 @@ type Harness struct {
 	Path string
 	// Err is why Detect failed, for DetectFailed.
 	Err error
+	// StructuredInput: it can be answered while it runs, and the Worker
+	// announces domain.HarnessStructuredInputCapability for it.
+	StructuredInput bool
+	// InputErr is why a harness that declares StructuredInput is not announced as having it.
+	InputErr error
 }
 
 // Announcement is what a Worker announces of its harnesses.
@@ -58,7 +63,9 @@ type Announcement struct {
 // offers, for a Runtime that runs runtimeModes. A harness is offered when
 // some of its modes is one of runtimeModes and Detect finds it installed; the
 // Worker then announces harness:<id>, harness:<id>:mode:<m> for each of
-// those modes and harness:<id>:config-isolation if it has ConfigIsolation.
+// those modes and harness:<id>:config-isolation if it has ConfigIsolation, and
+// harness:<id>:structured-input:v1 if it has StructuredInput and what it needs
+// of the host (harness.StructuredInputChecker) is there.
 // It always announces domain.RepoConfigCapability (it reads the repo
 // configuration of a Run), domain.WorkflowConfigCapability (it fetches and
 // materialises the Workflow a Run froze), domain.EnvironmentHostCapability (it runs the prepare
@@ -84,10 +91,29 @@ func Announce(ctx context.Context, host harness.Host, reg *harness.Registry, run
 		if a.Capabilities().ConfigIsolation {
 			out.Capabilities = append(out.Capabilities, domain.HarnessConfigIsolationCapability(id))
 		}
+		if a.Capabilities().StructuredInput {
+			if h.InputErr = structuredInputReady(ctx, host, a); h.InputErr == nil {
+				h.StructuredInput = true
+				out.Capabilities = append(out.Capabilities, domain.HarnessStructuredInputCapability(id))
+			}
+			out.Harnesses[len(out.Harnesses)-1] = h
+		}
 	}
 	slices.Sort(out.Capabilities)
 	out.Capabilities = slices.Compact(out.Capabilities)
 	return out
+}
+
+// structuredInputReady is nil when the harness can be answered while it runs on
+// this host: an adapter whose input depends on the program installed checks it.
+func structuredInputReady(ctx context.Context, host harness.Host, a harness.Adapter) error {
+	c, ok := a.(harness.StructuredInputChecker)
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, DetectTimeout)
+	defer cancel()
+	return c.CheckStructuredInput(ctx, host)
 }
 
 func assess(ctx context.Context, host harness.Host, a harness.Adapter, runtimeModes []domain.Mode) Harness {
