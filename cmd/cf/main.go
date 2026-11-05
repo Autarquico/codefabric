@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/cli"
 	"github.com/Autarquico/codefabric/internal/cli/actions"
 	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/client/notify"
 	"github.com/Autarquico/codefabric/internal/client/workflowadopt"
 	"github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
@@ -31,12 +34,28 @@ func run() int { return cli.ExecuteWith(options(), commands()...) }
 
 // options are what the CLI cannot reach itself (ADR 0001).
 func options() cli.Options {
-	opts := cli.Options{Terminal: sshTerminal{}, Workflows: workflowAdopter}
+	native := notify.DetectNative(runtime.GOOS, exec.LookPath, notify.OSExec)
+	opts := cli.Options{Terminal: sshTerminal{}, Workflows: workflowAdopter, Native: native}
 	// The actions of the TUI run the same commands, with this same composition.
-	opts.TUI = func(ctx context.Context, c *client.Client) error {
+	opts.TUI = tuiWithNotifications(native, func(ctx context.Context, c *client.Client) error {
 		return tui.Run(ctx, c, actions.Runner{Options: opts})
-	}
+	})
 	return opts
+}
+
+// tuiWithNotifications runs the TUI and, while it is open, the notifier of this
+// machine over the same Controller. A broken client config or a stream that
+// ends does not take the TUI down, and the notifier tries the Controller again
+// until the TUI closes; the TUI owns the terminal, so nothing is logged.
+func tuiWithNotifications(native notify.Native, run func(context.Context, *client.Client) error) func(context.Context, *client.Client) error {
+	return func(ctx context.Context, c *client.Client) error {
+		ctx, stop := context.WithCancel(ctx)
+		defer stop()
+		if n, err := cli.NewNotifier(native, nil); err == nil {
+			go func() { _ = n.Watch(ctx, c) }()
+		}
+		return run(ctx, c)
+	}
 }
 
 // workflowAdopter composes the adopt of `cf workflow`: the harness adapters of
