@@ -1,36 +1,50 @@
 package cli
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-func TestLogsOnlyKnowsTheOutputOfOneRunYet(t *testing.T) {
+func TestPrintLogKeepsEveryFieldOnOneLineAndFreeOfEscapes(t *testing.T) {
+	l := v1.Log{
+		Sequence: 7, Level: "in\x1b[2Jfo", Source: "worker:\x1b]0;x\x07w", RunID: "run\r1", Message: "a\nb\tc\x1b[31m!",
+		Attrs: []byte(`{"k":"\u001b"}`),
+	}
+	var safe, raw bytes.Buffer
+	printLog(&safe, l, false)
+	printLog(&raw, l, true)
+	if got := safe.String(); strings.ContainsAny(got, "\x1b\x07\r") || strings.Count(got, "\n") != 1 ||
+		!strings.Contains(got, "worker:w/run1  a b c!  {") {
+		t.Errorf("sanitised: %q", got)
+	}
+	if got := raw.String(); !strings.Contains(got, "\x1b[2J") {
+		t.Errorf("raw: %q", got)
+	}
+}
+
+func TestLogsFlagsAreCheckedBeforeAnythingIsAsked(t *testing.T) {
 	isolatedMachine(t)
 	for _, args := range [][]string{
-		{"logs"},
-		{"logs", "--follow"},
-		{"logs", "--worker", "box"},
-		{"logs", "--run", "run-1", "--level", "error"},
-		{"logs", "--run", "run-1", "--since", "2h"},
-		{"logs", "--run", "run-1", "--project", "p"},
-		{"logs", "--task", "t"},
+		{"logs", "--run", "run-1", "--tail", "0"},
+		{"logs", "--tail", "0"},
+		{"logs", "--since", "yesterday"},
+		{"logs", "--after", "5", "--tail", "3"},
+		{"logs", "--limit", "5", "--tail", "3"},
 	} {
-		code, out, _ := run(t, append(args, "--json")...)
-		if env := errorOf(t, out); code != 8 || env["code"] != string(domain.CodeNotImplemented) {
-			t.Errorf("%v: exit %d, %v", args, code, env)
+		if code, _, _ := run(t, args...); code != 2 {
+			t.Errorf("%v: exit %d, want a usage error", args, code)
 		}
-	}
-	if code, _, _ := run(t, "logs", "--run", "run-1", "--tail", "0"); code != 2 {
-		t.Errorf("--tail 0: exit %d", code)
 	}
 }
 
 func TestObservationCommandsNeedCredentialsAndTheirArguments(t *testing.T) {
 	isolatedMachine(t)
-	for _, args := range [][]string{{"ps"}, {"events"}, {"events", "--follow"}, {"logs", "--run", "run-1"}, {"attach", "auth-race"}} {
+	for _, args := range [][]string{{"ps"}, {"events"}, {"events", "--follow"}, {"logs", "--run", "run-1"}, {"logs"}, {"logs", "--worker", "box", "--level", "error"}, {"logs", "--run", "run-1", "--structured"}, {"attach", "auth-race"}} {
 		code, out, _ := run(t, append(args, "--json")...)
 		if env := errorOf(t, out); code != 6 || env["code"] != string(domain.CodeUnauthenticated) {
 			t.Errorf("%v: exit %d, %v", args, code, env)
