@@ -45,6 +45,7 @@ type Model struct {
 	end     context.CancelFunc // ends ctx: the TUI's own, whatever the caller's does
 	send    func(tea.Msg)
 	feeding map[Route]context.CancelFunc
+	pal     paletteHost
 }
 
 // New builds the shell, at home.
@@ -65,6 +66,7 @@ func New(opts Options) *Model {
 			m.router.Register(route, func() Screen { return newBrowser(spec, opts.Backend) })
 		}
 	}
+	m.registerPalette()
 	return m
 }
 
@@ -126,6 +128,9 @@ func (m *Model) settle() tea.Cmd {
 }
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
+	if cmd, handled := m.paletteMsg(msg); handled {
+		return cmd
+	}
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		m.status = ""
@@ -162,6 +167,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 }
 
 func (m *Model) press(key string) tea.Cmd {
+	if key == ":" {
+		return m.openPalette(true)
+	}
 	action, route := resolve(key)
 	switch action {
 	case ActionQuit:
