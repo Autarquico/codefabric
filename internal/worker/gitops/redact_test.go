@@ -141,10 +141,13 @@ func TestWhatTheRedactionHoldsBackIsFlushedOnEveryEnd(t *testing.T) {
 			if tc.cancel {
 				go func() {
 					defer cancel()
-					if f, err := os.Open(printed); err == nil { //nolint:gosec // the fifo of the test; blocks until the child has printed
-						_, _ = f.Read(make([]byte, 1))
-						_ = f.Close()
+					f, err := os.Open(printed) //nolint:gosec // the fifo of the test; blocks until the child has printed
+					if err != nil {
+						t.Errorf("waiting for the child to print: %v", err)
+						return
 					}
+					_, _ = f.Read(make([]byte, 1))
+					_ = f.Close()
 				}()
 			}
 			res, err := scriptGit(t, tc.body).run(ctx, cmd{dir: t.TempDir(), timeout: time.Minute, args: []string{"fetch"}, values: cutSet(t)})
