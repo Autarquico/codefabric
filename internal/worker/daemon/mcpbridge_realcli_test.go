@@ -107,7 +107,7 @@ func runLive(t *testing.T, decision, mark string) []string {
 	worktree := t.TempDir()
 	run := harness.RunSpec{
 		RunID: "run_live", LeaseEpoch: 1, Mode: domain.ModeHeadless, Model: "haiku", RunDir: t.TempDir(), ConfigDir: t.TempDir(), Worktree: worktree,
-		Prompt: "Use the Bash tool to run exactly this command: " + liveCommand + ". Do not run anything else. Then reply with what it printed, or why it did not run.",
+		Prompt:          "Use the Bash tool to run exactly this command: " + liveCommand + ". Do not run anything else. Then reply with what it printed, or why it did not run.",
 		StructuredInput: true, InputPath: "unused", AskPermissions: true,
 		PermissionServer: []string{os.Args[0], "-test.run=^TestRealCLIBridgeHelper$", "--", "cf-live-bridge", decision, mark},
 	}

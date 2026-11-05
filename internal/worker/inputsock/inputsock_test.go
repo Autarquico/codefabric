@@ -52,14 +52,14 @@ func TestASocketPathOverTheLimitOfAUnixSocketIsRefused(t *testing.T) {
 
 type nopHandler struct{}
 
-func (nopHandler) Request(*inputsock.Conn, inputsock.Message) {}
-func (nopHandler) Ack(*inputsock.Conn, inputsock.Message)     {}
-func (nopHandler) Gone(*inputsock.Conn)                       {}
+func (nopHandler) Request(*inputsock.Conn, inputsock.Message)  {}
+func (nopHandler) Ack(*inputsock.Conn, inputsock.Message)      {}
+func (nopHandler) Gone(*inputsock.Conn)                        {}
 func (nopHandler) Withdraw(*inputsock.Conn, inputsock.Message) {}
 
 // answering answers every request with allow, and acks.
 type answering struct {
-	mu       sync.Mutex
+	mu        sync.Mutex
 	requests  []inputsock.Message
 	acks      []string
 	withdrawn []string
@@ -217,7 +217,7 @@ func TestASocketDirectoryOthersCanEnterIsRefused(t *testing.T) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(dir, 0o755); err != nil {
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // a directory others can enter, on purpose
 		t.Fatal(err)
 	}
 	if srv, err := inputsock.Listen(filepath.Join(dir, "r.sock"), nopHandler{}); err == nil {

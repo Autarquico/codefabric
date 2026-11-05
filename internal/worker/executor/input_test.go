@@ -3,8 +3,8 @@ package executor
 import (
 	"context"
 	"database/sql"
-	"log/slog"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -222,7 +222,9 @@ func TestAWithdrawnPermissionIsClosed(t *testing.T) {
 	f, k, client := askSocket(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	go func() { _, _ = client.Ask(ctx, inputsock.Message{PromptID: "p1", Tool: "Bash", Input: json.RawMessage(`{}`)}) }()
+	go func() {
+		_, _ = client.Ask(ctx, inputsock.Message{PromptID: "p1", Tool: "Bash", Input: json.RawMessage(`{}`)})
+	}()
 	waitFor(t, "the prompt", func() bool {
 		n, err := state.OpenInputPrompts(t.Context(), f.db.Reader(), k)
 		return err == nil && n == 1
