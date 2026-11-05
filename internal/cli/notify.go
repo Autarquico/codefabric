@@ -32,7 +32,7 @@ func newNotifyCmd(native notify.Native) *cobra.Command {
 		Use:   "notify",
 		Short: "Desktop notifications and hooks for the events that need you",
 		Long: "Notifications are made by this process, on this machine, from the event stream; the Controller\n" +
-			"does not send them. What notifies is set under \"notify\" in client.json (see `cf config paths`).",
+			"does not send them. The TUI notifies on its own while it is open. What notifies is set under \"notify\" in client.json (see `cf config paths`).",
 	}
 	cmd.AddCommand(newNotifyWatchCmd(native), newNotifyTestCmd(native))
 	return cmd
@@ -68,7 +68,9 @@ func newNotifyTestCmd(native notify.Native) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			n.Test(cmd.Context())
+			if err := n.Test(cmd.Context()); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "sample notification sent")
 			return nil
 		},

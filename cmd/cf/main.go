@@ -39,7 +39,8 @@ func options() cli.Options {
 
 // tuiWithNotifications runs the TUI and, while it is open, the notifier of this
 // machine over the same Controller. A broken client config or a stream that
-// ends does not take the TUI down; the TUI owns the terminal, so nothing is logged.
+// ends does not take the TUI down, and the notifier tries the Controller again
+// until the TUI closes; the TUI owns the terminal, so nothing is logged.
 func tuiWithNotifications(native notify.Native) func(context.Context, *client.Client) error {
 	return func(ctx context.Context, c *client.Client) error {
 		ctx, stop := context.WithCancel(ctx)

@@ -52,7 +52,7 @@ func TestLoadClient_Notify(t *testing.T) {
 	if c, err = config.LoadClient(p); err != nil || len(c.Notify.NotifyEvents()) != 0 {
 		t.Fatalf("explicitly none: %+v, %v", c.Notify, err)
 	}
-	for _, bad := range []string{`{"notify":{"quiet_hours":{"start":"25:00","end":"07:00"}}}`, `{"notify":{"hook":[]}}`, `{"notify":{"hook":[""]}}`} {
+	for _, bad := range []string{`{"notify":{"quiet_hours":{"start":"25:00","end":"07:00"}}}`, `{"notify":{"hook":[]}}`, `{"notify":{"hook":[""]}}`, `{"notify":{"hook":["./notify.sh"]}}`, `{"notify":{"hook":["bin/hook"]}}`} {
 		write(bad)
 		if _, err := config.LoadClient(p); err == nil {
 			t.Errorf("%s was accepted", bad)

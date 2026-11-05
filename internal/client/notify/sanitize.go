@@ -14,8 +14,8 @@ var (
 	csiSequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]?`)
 )
 
-// Sanitize makes text from an event fit to show: ANSI sequences and control
-// characters are gone, whitespace runs are one space, and it is cut to maxText runes.
+// Sanitize makes text from an event fit to show: ANSI sequences, control
+// and format characters (bidi overrides, zero-width) are gone, whitespace runs are one space, and it is cut to maxText runes.
 func Sanitize(text string) string {
 	text = oscSequence.ReplaceAllString(text, "")
 	text = csiSequence.ReplaceAllString(text, "")
@@ -23,6 +23,8 @@ func Sanitize(text string) string {
 	space := false
 	for _, r := range text {
 		switch {
+		case unicode.Is(unicode.Cf, r):
+			// dropped: it joins the words around it
 		case unicode.IsSpace(r) || unicode.IsControl(r):
 			space = b.Len() > 0
 		default:

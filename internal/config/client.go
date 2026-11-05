@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -22,7 +24,7 @@ type Client struct {
 
 // ClientNotify is what this machine is told about (spec §26).
 type ClientNotify struct {
-	// Events are the event types that notify. Absent, DefaultNotifyEvents.
+	// Events are the event types that notify. Absent, what needs a person: TaskNeedsInput, RunFailed, WorkerLost.
 	Events []string `json:"events,omitempty"`
 	// MutedProjects are Projects (id) whose events never notify.
 	MutedProjects []string `json:"muted_projects,omitempty"`
@@ -39,15 +41,24 @@ type QuietHours struct {
 	End   string `json:"end"`
 }
 
-// DefaultNotifyEvents is what notifies when nothing says otherwise: what needs a person.
-var DefaultNotifyEvents = []string{"TaskNeedsInput", "RunFailed", "WorkerLost"}
+// defaultNotifyEvents is what notifies when nothing says otherwise: what needs a person.
+func defaultNotifyEvents() []string {
+	return []string{string(domain.EventTaskNeedsInput), string(domain.EventRunFailed), string(domain.EventWorkerLost)}
+}
 
 // NotifyEvents are the event types that notify.
 func (n ClientNotify) NotifyEvents() []string {
 	if n.Events == nil {
-		return DefaultNotifyEvents
+		return defaultNotifyEvents()
 	}
 	return n.Events
+}
+
+func (n ClientNotify) hookCommand() string {
+	if len(n.Hook) == 0 {
+		return ""
+	}
+	return n.Hook[0]
 }
 
 func (n ClientNotify) validate() error {
@@ -60,6 +71,9 @@ func (n ClientNotify) validate() error {
 	}
 	if n.Hook != nil && (len(n.Hook) == 0 || n.Hook[0] == "") {
 		return errors.New("notify.hook: the command is empty")
+	}
+	if cmd := n.hookCommand(); strings.ContainsRune(cmd, filepath.Separator) && !filepath.IsAbs(cmd) {
+		return fmt.Errorf("notify.hook: %q is relative to wherever cf runs; use an absolute path or a name on PATH", cmd)
 	}
 	return nil
 }

@@ -89,6 +89,7 @@ func TestSanitize(t *testing.T) {
 		"a\x1b]8;;http://x\x07link\x1b]8;;\x07": "alink",
 		"a\r\n\tb\x00c":                         "a b c",
 		"\x1b[":                                 "",
+		"a\u202ebc\u200bd":                      "abcd",
 	} {
 		if got := Sanitize(in); got != want {
 			t.Errorf("Sanitize(%q) = %q, want %q", in, got, want)
@@ -110,5 +111,32 @@ func TestSeenForgetsOldestAndExpires(t *testing.T) {
 	}
 	if s.has("c", now.Add(time.Minute)) {
 		t.Error("did not expire")
+	}
+}
+
+func TestOSExecEndsWithContextWhenAChildHoldsTheOutput(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := OSExec(ctx, "sh", []string{"-c", "sleep 5 & wait"}, nil)
+	if err == nil || time.Since(start) > 3*time.Second {
+		t.Fatalf("not stopped: %v after %v", err, time.Since(start))
+	}
+}
+
+func TestOSExecKillsAChildLeftHoldingTheOutput(t *testing.T) {
+	start := time.Now()
+	if _, err := OSExec(context.Background(), "sh", []string{"-c", "sleep 5 &"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("waited %v for the backgrounded child", time.Since(start))
+	}
+}
+
+func TestNotifySendEscapesMarkupInTheBody(t *testing.T) {
+	args := notifySendArgs("t", `<a href="http://x">y</a> & z`)
+	if got, want := args[len(args)-1], "&lt;a href=&#34;http://x&#34;&gt;y&lt;/a&gt; &amp; z"; got != want {
+		t.Errorf("body %q, want %q", got, want)
 	}
 }

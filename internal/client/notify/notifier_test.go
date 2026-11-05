@@ -69,6 +69,9 @@ func (s *fakeSource) FollowEvents(ctx context.Context, q client.EventQuery, fn f
 	s.afters = append(s.afters, q.After)
 	i := len(s.afters) - 1
 	s.mu.Unlock()
+	if i >= len(s.streams) {
+		return context.Canceled
+	}
 	for _, e := range s.streams[i] {
 		if err := fn(e); err != nil {
 			return err
@@ -90,24 +93,24 @@ func TestScenario_PaletteSearchNotify_Dedupe(t *testing.T) {
 	// The same RunFailed arrives, repeats with a new sequence, and is replayed after a resync.
 	src := &fakeSource{
 		streams: [][]v1.Event{{runFailed(7, "r1"), runFailed(7, "r1"), runFailed(8, "r1")}, {runFailed(7, "r1")}},
-		errs:    []error{expired},
+		errs:    []error{expired, context.Canceled},
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		for native.count() < 1 || src.followCalls() < 2 {
-			time.Sleep(time.Millisecond)
-		}
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
+	ctx := context.Background()
 	if err := n.Watch(ctx, src); err != nil {
 		t.Fatal(err)
 	}
 	if got := native.count(); got != 1 {
 		t.Fatalf("the same RunFailed notified %d times, want 1", got)
 	}
-	if want := []string{"", "100"}; !slices.Equal(src.afters, want) {
+	if want := []string{"", ""}; !slices.Equal(src.afters, want) {
 		t.Errorf("resumed from %q, want %q", src.afters, want)
+	}
+
+	// Past the window only the sequence can say it is the same event.
+	clk.now = clk.now.Add(notify.DedupeWindow + time.Second)
+	n.Handle(ctx, runFailed(7, "r1"))
+	if got := native.count(); got != 1 {
+		t.Fatalf("a replayed sequence notified again: %d", got)
 	}
 
 	// A different Run is a different event; the same one after the window notifies again.
@@ -235,12 +238,83 @@ func TestNoNativeIsLoggedOnce(t *testing.T) {
 	}
 }
 
-func TestTestBypassesPrefsAndDedupe(t *testing.T) {
+func TestTestBypassesPrefsDedupeAndQuietHours(t *testing.T) {
 	native := &fakeNative{}
-	n := newNotifier(config.ClientNotify{Events: []string{}}, native, &clock{now: time.Now()})
-	n.Test(context.Background())
-	n.Test(context.Background())
+	at := time.Date(2026, 1, 1, 23, 30, 0, 0, time.Local)
+	prefs := config.ClientNotify{Events: []string{}, QuietHours: &config.QuietHours{Start: "22:00", End: "07:00"}}
+	n := newNotifier(prefs, native, &clock{now: at})
+	for range 2 {
+		if err := n.Test(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if native.count() != 2 {
 		t.Fatalf("got %d", native.count())
+	}
+}
+
+func TestTestSaysWhenThereIsNothingToDeliverWith(t *testing.T) {
+	n := newNotifier(config.ClientNotify{}, nil, &clock{now: time.Now()})
+	if err := n.Test(context.Background()); err == nil || !strings.Contains(err.Error(), "no native notifications") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestTestReportsFailedDelivery(t *testing.T) {
+	failing := func(context.Context, string, []string, []byte) ([]byte, error) {
+		return []byte("boom"), errors.New("exit status 3")
+	}
+	n := notify.New(notify.Options{Prefs: config.ClientNotify{Hook: []string{"hook"}}, Native: errNative{}, Exec: failing})
+	err := n.Test(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "native notification failed") || !strings.Contains(err.Error(), "hook hook failed") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestTestWithOnlyAHookRunsIt(t *testing.T) {
+	var ran bool
+	ok := func(context.Context, string, []string, []byte) ([]byte, error) { ran = true; return nil, nil }
+	n := notify.New(notify.Options{Prefs: config.ClientNotify{Hook: []string{"hook"}}, Exec: ok})
+	if err := n.Test(context.Background()); err != nil || !ran {
+		t.Fatalf("ran %v, err %v", ran, err)
+	}
+}
+
+type errNative struct{}
+
+func (errNative) Show(context.Context, string, string) error { return errors.New("osascript failed") }
+
+func TestWatchTriesTheControllerAgain(t *testing.T) {
+	native := &fakeNative{}
+	var log strings.Builder
+	n := notify.New(notify.Options{
+		Native: native, Log: newLogger(&log),
+		BackoffInitial: time.Millisecond, BackoffMax: 2 * time.Millisecond,
+	})
+	down := domain.NewError(domain.CodeControllerUnreachable, "no route", nil)
+	src := &fakeSource{
+		streams: [][]v1.Event{nil, nil, {runFailed(1, "r1")}},
+		errs:    []error{down, down, context.Canceled},
+	}
+	if err := n.Watch(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+	if native.count() != 1 || src.followCalls() != 3 {
+		t.Errorf("notified %d after %d attempts", native.count(), src.followCalls())
+	}
+	if got := strings.Count(log.String(), "cannot follow events"); got != 1 {
+		t.Errorf("the outage was logged %d times:\n%s", got, log.String())
+	}
+	if !strings.Contains(log.String(), "reconnected") {
+		t.Errorf("no reconnection logged:\n%s", log.String())
+	}
+}
+
+func TestWatchGivesUpOnAPermanentError(t *testing.T) {
+	n := notify.New(notify.Options{BackoffInitial: time.Millisecond})
+	denied := domain.NewError(domain.CodeUnauthenticated, "revoked", nil)
+	src := &fakeSource{streams: [][]v1.Event{nil}, errs: []error{denied}}
+	if err := n.Watch(context.Background(), src); err == nil || src.followCalls() != 1 {
+		t.Fatalf("err %v after %d attempts", err, src.followCalls())
 	}
 }

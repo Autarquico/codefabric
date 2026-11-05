@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"html"
 	"strings"
 )
 
@@ -67,5 +68,6 @@ func (n notifySend) Show(ctx context.Context, title, body string) error {
 }
 
 func notifySendArgs(title, body string) []string {
-	return []string{"--app-name=CodeFabric", "--", title, body}
+	// The body is markup for some servers (KDE, GNOME Shell, dunst): escape it.
+	return []string{"--app-name=CodeFabric", "--", title, html.EscapeString(body)}
 }

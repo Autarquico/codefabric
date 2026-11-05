@@ -42,6 +42,9 @@ type Options struct {
 	Exec Exec
 	Now  func() time.Time
 	Log  *slog.Logger
+	// Backoff bounds the wait between attempts to reach the Controller; zero
+	// values mean 0.5 s growing to 10 s.
+	BackoffInitial, BackoffMax time.Duration
 }
 
 // Notifier applies the preferences, the dedupe and the delivery to events.
@@ -61,6 +64,12 @@ type Notifier struct {
 func New(o Options) *Notifier {
 	if o.Exec == nil {
 		o.Exec = OSExec
+	}
+	if o.BackoffInitial <= 0 {
+		o.BackoffInitial = 500 * time.Millisecond
+	}
+	if o.BackoffMax <= 0 {
+		o.BackoffMax = 10 * time.Second
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -100,13 +109,48 @@ func (n *Notifier) Handle(ctx context.Context, e v1.Event) {
 		return
 	}
 	title, body := "CodeFabric: "+Sanitize(string(e.Type)), Sanitize(e.Message)
-	n.deliver(ctx, title, body, e)
+	if !n.quietNow() {
+		n.logFailure(n.showNative(ctx, title, body))
+	}
+	n.logFailure(n.runHook(ctx, e))
 }
 
-// Test delivers a sample notification, bypassing preferences and dedupe.
-func (n *Notifier) Test(ctx context.Context) {
+// Test delivers a sample notification through the native channel and the hook,
+// bypassing preferences, quiet hours and dedupe, and returns what went wrong:
+// a failed delivery, or nothing to deliver with at all.
+func (n *Notifier) Test(ctx context.Context) error {
 	e := v1.Event{Type: "NotifyTest", Message: "This is a test notification from cf.", Timestamp: n.opts.Now()}
-	n.deliver(ctx, "CodeFabric: test", e.Message, e)
+	hook := len(n.opts.Prefs.Hook) > 0
+	if n.opts.Native == nil && !hook {
+		return errNothingToDeliver
+	}
+	var errs []error
+	if n.opts.Native != nil {
+		errs = append(errs, n.showNative(ctx, "CodeFabric: test", e.Message))
+	}
+	if hook {
+		errs = append(errs, n.runHook(ctx, e))
+	}
+	return errors.Join(errs...)
+}
+
+var errNothingToDeliver = errors.New("no native notifications on this machine (osascript or notify-send) and no hook in client.json")
+
+// logFailure logs a failed delivery; a missing native channel is said once.
+func (n *Notifier) logFailure(err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, errNoNative) {
+		n.mu.Lock()
+		first := !n.warned
+		n.warned = true
+		n.mu.Unlock()
+		if !first {
+			return
+		}
+	}
+	n.log.Warn("notify: " + err.Error())
 }
 
 func (n *Notifier) firstTime(e v1.Event) bool {
@@ -134,47 +178,38 @@ func subjectOf(e v1.Event) string {
 	return ""
 }
 
-func (n *Notifier) deliver(ctx context.Context, title, body string, e v1.Event) {
-	if !n.quietNow() {
-		n.showNative(ctx, title, body)
-	}
-	if hook := n.opts.Prefs.Hook; len(hook) > 0 {
-		n.runHook(ctx, hook, e)
-	}
-}
+var errNoNative = errors.New("this machine has no native notifications (osascript or notify-send)")
 
-func (n *Notifier) showNative(ctx context.Context, title, body string) {
+func (n *Notifier) showNative(ctx context.Context, title, body string) error {
 	if n.opts.Native == nil {
-		n.mu.Lock()
-		first := !n.warned
-		n.warned = true
-		n.mu.Unlock()
-		if first {
-			n.log.Warn("notify: this machine has no native notifications (osascript or notify-send)")
-		}
-		return
+		return errNoNative
 	}
 	ctx, cancel := context.WithTimeout(ctx, nativeTimeout)
 	defer cancel()
 	if err := n.opts.Native.Show(ctx, title, body); err != nil {
-		n.log.Warn("notify: native notification failed", "err", err)
+		return fmt.Errorf("native notification failed: %w", err)
 	}
+	return nil
 }
 
-func (n *Notifier) runHook(ctx context.Context, argv []string, e v1.Event) {
+// runHook runs the configured hook, if any, with e as JSON on its stdin.
+func (n *Notifier) runHook(ctx context.Context, e v1.Event) error {
+	argv := n.opts.Prefs.Hook
+	if len(argv) == 0 {
+		return nil
+	}
 	payload, err := json.Marshal(e)
 	if err != nil {
-		n.log.Warn("notify: hook payload", "err", err)
-		return
+		return fmt.Errorf("hook payload: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, hookTimeout)
 	defer cancel()
 	out, err := n.opts.Exec(ctx, argv[0], argv[1:], payload)
 	if err != nil {
-		n.log.Warn("notify: hook failed", "command", argv[0], "err", err, "output", Sanitize(string(out)))
-		return
+		return fmt.Errorf("hook %s failed: %w (output: %s)", argv[0], err, Sanitize(string(out)))
 	}
 	n.log.Info("notify: hook ran", "command", argv[0], "output", Sanitize(string(out)))
+	return nil
 }
 
 // quietNow says whether the local time of now is inside the quiet hours.
@@ -199,37 +234,61 @@ func (n *Notifier) quietNow() bool {
 
 // Source is the part of the SDK client that Watch reads events from.
 type Source interface {
-	Events(ctx context.Context, q client.EventQuery) (v1.EventPage, error)
 	FollowEvents(ctx context.Context, q client.EventQuery, fn func(v1.Event) error) error
 }
 
 // Watch notifies about the events that happen from now on, until ctx ends or
-// the Controller says following would fail again. A cursor the Controller no
-// longer holds resumes from now; replayed events are the dedupe's business.
+// the Controller says following would fail again (revoked credentials, a bad
+// filter). A Controller that cannot be reached, at the start or later, is
+// tried again with a backoff, and said once per outage. A cursor the Controller
+// no longer holds resumes from now; replayed events are the dedupe's business.
 func (n *Notifier) Watch(ctx context.Context, src Source) error {
 	q := client.EventQuery{Types: n.Types()}
 	if len(q.Types) == 0 {
 		<-ctx.Done()
 		return nil
 	}
+	delay, down := n.opts.BackoffInitial, false
 	for {
 		err := src.FollowEvents(ctx, q, func(e v1.Event) error {
+			if down {
+				n.log.Info("notify: reconnected to the Controller")
+				down = false
+			}
+			delay = n.opts.BackoffInitial
 			q.After = strconv.FormatUint(e.Sequence, 10)
 			n.Handle(ctx, e)
 			return nil
 		})
 		var coded *domain.Error
 		switch {
-		case err == nil, errors.Is(err, context.Canceled):
+		case err == nil, ctx.Err() != nil, errors.Is(err, context.Canceled):
 			return nil
 		case errors.As(err, &coded) && coded.Code == domain.CodeCursorExpired:
-			page, perr := src.Events(ctx, client.EventQuery{Tail: 1})
-			if perr != nil {
-				return fmt.Errorf("notify: resuming after a purge: %w", perr)
-			}
-			q.After = page.Cursor
-		default:
+			n.log.Warn("notify: events were purged before they were read; continuing from now", "after", q.After)
+			q.After = ""
+			continue
+		case errors.As(err, &coded) && permanent(coded.Code):
 			return err
 		}
+		if !down {
+			n.log.Warn("notify: cannot follow events; trying again", "err", err)
+			down = true
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, n.opts.BackoffMax)
 	}
+}
+
+// permanent: the Controller answered, and asking again would fail the same.
+func permanent(code domain.Code) bool {
+	switch code {
+	case domain.CodeUnauthenticated, domain.CodePolicyDenied, domain.CodeInvalidRequest, domain.CodeNotFound, domain.CodeVersionIncompatible:
+		return true
+	}
+	return false
 }
