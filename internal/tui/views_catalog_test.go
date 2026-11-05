@@ -198,13 +198,13 @@ func TestScenario_TuiViewsActions_Workflows_RollbackIsNotPresentedAsAboutTheSele
 
 func TestScenario_TuiViewsActions_Workflows_SaysWhatIsOnlyInTheCLI(t *testing.T) {
 	m := openWorkflows(t, newVersionedBackend())
-	for _, want := range []string{"cf workflow adopt default", "cf workflow commit default", "cf workflow diff default --worker=", "cf workflow explain default --worker="} {
+	for _, want := range []string{"cf workflow adopt <new-name>", "cf workflow commit default", "cf workflow diff default --worker=", "cf workflow explain default --worker="} {
 		if !strings.Contains(strings.Join(strings.Fields(frame(m)), " "), want) {
 			t.Errorf("the detail does not give %q:\n%s", want, frame(m))
 		}
 	}
 	press(t, m, "enter")
-	if got := frame(m); !strings.Contains(got, "CLI only") || !strings.Contains(got, "cf workflow adopt default") {
+	if got := frame(m); !strings.Contains(got, "CLI only") || !strings.Contains(got, "cf workflow adopt <new-name>") {
 		t.Errorf("the menu does not say adopt is CLI-only:\n%s", got)
 	}
 }
@@ -439,6 +439,20 @@ func TestScenario_TuiViewsActions_Logs_FollowsTheOutputLive(t *testing.T) {
 	deliverFollow(t, m, msgs, 1)
 	if got := frame(m); !strings.Contains(got, "Ended: the output is closed") || !strings.Contains(got, "ended") {
 		t.Errorf("the end of the output is not shown:\n%s", got)
+	}
+}
+
+func TestScenario_TuiViewsActions_Logs_EndShowsTheLastLineWithoutNewline(t *testing.T) {
+	src := newOutputSource()
+	m, msgs := logsShell(t, src)
+	press(t, m, "enter")
+	emit := <-src.started
+	emit(LogEvent{Data: []byte("boom")})
+	deliverFollow(t, m, msgs, 1)
+	emit(LogEvent{Ended: "the output is closed"})
+	deliverFollow(t, m, msgs, 1)
+	if got := frame(m); !strings.Contains(got, "boom") || !strings.Contains(got, "Ended: the output is closed") {
+		t.Errorf("the last line without a newline is lost at the end:\n%s", got)
 	}
 }
 
