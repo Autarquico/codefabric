@@ -46,7 +46,7 @@ func (s *Service) Search(ctx context.Context, q Query) (v1.SearchResponse, error
 		if err != nil {
 			return err
 		}
-		exact, err := exactMatches(ctx, r, text, searched, scope)
+		exact, err := exactMatches(ctx, r, text, searched, scope, limit)
 		if err != nil {
 			return err
 		}
@@ -102,33 +102,42 @@ func invalid(msg, field string) error {
 	return domain.NewError(domain.CodeInvalidRequest, msg, map[string]any{"field": field})
 }
 
-// exactMatches resolves text as a reference for each kind. Several matches of
-// one kind are all returned, marked ambiguous.
-func exactMatches(ctx context.Context, r store.Querier, text string, ks []domain.Kind, scope domain.ID) ([]v1.SearchResult, error) {
-	var out []v1.SearchResult
+// exactMatch is a hit on a reference and how well the reference matched.
+type exactMatch struct {
+	level domain.RefLevel
+	res   v1.SearchResult
+}
+
+// exactMatches resolves text as a reference for each kind: the first step of
+// the §3.13 order that finds anything. Several matches of one kind are all
+// returned, marked ambiguous. The result is ordered by match level across
+// kinds, so that a Project named "task-1" never ranks above Task "task-1".
+// Each lookup is a filtered query of at most max(limit, 2) rows.
+func exactMatches(ctx context.Context, r store.Querier, text string, ks []domain.Kind, scope domain.ID, limit int) ([]v1.SearchResult, error) {
+	var found []exactMatch
 	for _, k := range ks {
-		cands, err := refs.Candidates(ctx, r, k)
-		if err != nil {
-			return nil, err
+		for _, step := range domain.RefSteps(text, k) {
+			hits, err := store.SearchRef(ctx, r, k, step, scope, max(limit, 2))
+			if err != nil {
+				return nil, err
+			}
+			if len(hits) == 0 {
+				continue
+			}
+			how := v1.SearchMatchExact
+			if len(hits) > 1 {
+				how = v1.SearchMatchAmbiguous
+			}
+			for _, h := range hits {
+				found = append(found, exactMatch{step.Level, result(h, how)})
+			}
+			break
 		}
-		matched := domain.MatchRef(text, k, scope, cands)
-		ids := make([]domain.ID, len(matched))
-		for i, c := range matched {
-			ids[i] = c.ID
-		}
-		hits, err := store.SearchByID(ctx, r, ids)
-		if err != nil {
-			return nil, err
-		}
-		hits = slices.DeleteFunc(hits, func(h store.SearchHit) bool { return scope != "" && h.Project != scope })
-		slices.SortFunc(hits, func(a, b store.SearchHit) int { return strings.Compare(string(a.ID), string(b.ID)) })
-		how := v1.SearchMatchExact
-		if len(hits) > 1 {
-			how = v1.SearchMatchAmbiguous
-		}
-		for _, h := range hits {
-			out = append(out, result(h, how))
-		}
+	}
+	slices.SortStableFunc(found, func(a, b exactMatch) int { return int(a.level) - int(b.level) })
+	out := make([]v1.SearchResult, len(found))
+	for i, f := range found {
+		out[i] = f.res
 	}
 	return out, nil
 }

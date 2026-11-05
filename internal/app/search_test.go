@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -411,4 +412,131 @@ func TestSearch_AmbiguousReferenceReturnsEveryCandidate(t *testing.T) {
 	}
 	_, err := e.searchErr("shared", inProject("nope"))
 	wantCode(t, err, domain.CodeNotFound)
+}
+
+func TestSearch_ANameNeverPushesAShortIDOutOfTheLimit(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	task := e.mustTask("backend", "x", func(r *v1.CreateTaskRequest) { noStart(r) }).Task
+	// The API refuses such a name; a legacy row or a direct write may still have one.
+	e.exec(`UPDATE projects SET name = 'task-1'`)
+	if task.Short != "task-1" {
+		t.Fatalf("the first Task is %s, want task-1", task.Short)
+	}
+
+	got := e.search("task-1", func(q *search.Query) { q.Limit = 1 })
+	if len(got) != 1 || got[0].ID != task.ID {
+		t.Errorf("limit 1 = %+v, want Task %s: a short ID outranks a name", got, task.ID)
+	}
+	got = e.search("task-1")
+	if len(got) < 2 || got[0].ID != task.ID || got[1].Kind != domain.KindProject {
+		t.Errorf("results = %+v, want the Task (short ID) before the Project (name)", got)
+	}
+}
+
+func TestSearch_APrefixOfManyEntriesIsBoundedByTheLimit(t *testing.T) {
+	e := newEnv(t)
+	// Far more entries than SQLite has variables, all behind one ULID prefix.
+	e.exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000)
+		INSERT INTO search_docs (kind, id, short_id, project_id, archived)
+		SELECT 'task', 'task_BULKPFX' || printf('%05d', i), 'task-' || (900000 + i), '', 0 FROM n`)
+	e.exec(`INSERT INTO search_index (rowid, name, body) SELECT rowid, 'bulk', '' FROM search_docs WHERE id LIKE 'task_BULKPFX%'`)
+
+	for _, limit := range []int{1, 5} {
+		got, err := e.searchErr("bulkpf", func(q *search.Query) { q.Limit = limit })
+		if err != nil || len(got) != limit {
+			t.Fatalf("limit %d: %d results, err %v", limit, len(got), err)
+		}
+		for _, r := range got {
+			if r.Match != v1.SearchMatchAmbiguous {
+				t.Errorf("limit %d: %+v, want ambiguous", limit, r)
+			}
+		}
+	}
+	if got := e.search("bulkpf"); len(got) != v1.SearchDefaultLimit {
+		t.Errorf("default limit: %d results, want %d", len(got), v1.SearchDefaultLimit)
+	}
+}
+
+func idPrefix(t *testing.T, kind, a, b string) string {
+	t.Helper()
+	pa, pb := strings.TrimPrefix(a, kind+"_")[:6], strings.TrimPrefix(b, kind+"_")[:6]
+	if pa != pb {
+		t.Skipf("the two %s IDs do not share a 6-character prefix (%s, %s)", kind, pa, pb)
+	}
+	return pa
+}
+
+func TestSearch_ULIDPrefixOfProjectsWorkersAndWorkflows(t *testing.T) {
+	e := newWorkflowEnv(t, 0)
+	back := e.project("backend")
+	front := e.project("frontend")
+	w1, w2 := e.storedWorker(e.joinWorker("one")), e.storedWorker(e.joinWorker("two"))
+	wf1 := e.mustCommit("wf-a", 0, manifest(e.component("codex", "agents", "one")))
+	wf2 := e.mustCommit("wf-b", 0, manifest(e.component("codex", "agents", "two")))
+
+	ambiguous := func(kind, prefix string, want ...string) {
+		t.Helper()
+		got := e.search(prefix, ofKind(kind))
+		if len(got) != len(want) {
+			t.Fatalf("%s %q = %+v, want %v", kind, prefix, got, want)
+		}
+		for _, id := range want {
+			if r, ok := find(got, id); !ok || r.Match != v1.SearchMatchAmbiguous {
+				t.Errorf("%s %q: %s = %+v, want it ambiguous", kind, prefix, id, r)
+			}
+		}
+	}
+	ambiguous("project", idPrefix(t, "project", back.ID, front.ID), back.ID, front.ID)
+	ambiguous("worker", idPrefix(t, "worker", string(w1.ID), string(w2.ID)), string(w1.ID), string(w2.ID))
+	ambiguous("workflow", idPrefix(t, "workflow", wf1.WorkflowID, wf2.WorkflowID), wf1.WorkflowID, wf2.WorkflowID)
+
+	// A prefix longer than the shared part names one entity.
+	for _, c := range []struct{ kind, id string }{
+		{"project", back.ID}, {"worker", string(w1.ID)}, {"workflow", wf1.WorkflowID},
+	} {
+		long := strings.TrimPrefix(c.id, c.kind+"_")[:20]
+		got := e.search(long, ofKind(c.kind))
+		if len(got) != 1 || got[0].ID != c.id || got[0].Match != v1.SearchMatchExact {
+			t.Errorf("%s prefix %q = %+v, want %s exact", c.kind, long, got, c.id)
+		}
+	}
+
+	// A Project filter keeps the Project's own entry and drops the global kinds.
+	got := e.search(idPrefix(t, "project", back.ID, front.ID), ofKind("project"), inProject("frontend"))
+	if len(got) != 1 || got[0].ID != front.ID || got[0].Match != v1.SearchMatchExact {
+		t.Errorf("Project prefix narrowed to frontend = %+v", got)
+	}
+	got = e.search(strings.TrimPrefix(string(w1.ID), "worker_")[:20], ofKind("worker"), inProject("frontend"))
+	if len(got) != 0 {
+		t.Errorf("a Worker belongs to no Project, got %+v under a Project filter", got)
+	}
+}
+
+func TestSearch_AnAbortedMutationLeavesTheIndexUntouched(t *testing.T) {
+	e := newEnv(t)
+	e.project("backend")
+	e.mustTask("backend", "kept", func(r *v1.CreateTaskRequest) { r.Name = "kept"; noStart(r) })
+	before := e.indexDump()
+
+	abort := errors.New("abort")
+	err := e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		for _, stmt := range []string{
+			`UPDATE tasks SET name = 'renamed', prompt = 'other words'`,
+			`UPDATE projects SET name = 'renamed'`,
+			`DELETE FROM runs`,
+			`DELETE FROM tasks`,
+		} {
+			if _, err := tx.Exec(t.Context(), stmt); err != nil {
+				return err
+			}
+		}
+		return abort
+	})
+	if !errors.Is(err, abort) {
+		t.Fatalf("err = %v, want the abort", err)
+	}
+	if after := e.indexDump(); !slices.Equal(before, after) {
+		t.Errorf("an aborted transaction changed the index:\n--- before\n%s\n--- after\n%s", strings.Join(before, "\n"), strings.Join(after, "\n"))
+	}
 }

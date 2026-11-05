@@ -84,7 +84,51 @@ func SearchText(ctx context.Context, q Querier, match string, f SearchFilter) ([
 	return collect(ctx, q, scanHit, sb.String(), args...)
 }
 
+// refNameTables are the entity tables whose name column a reference may match.
+var refNameTables = map[domain.Kind]string{
+	domain.KindProject:  "projects",
+	domain.KindTask:     "tasks",
+	domain.KindWorker:   "workers",
+	domain.KindWorkflow: "workflows",
+}
+
+// SearchRef returns at most limit entries of kind that one step of the
+// reference order points to, archived ones included, by ID. A non-empty scope
+// keeps only the entries of that Project. Every value is bound, and the number
+// of parameters does not depend on how many entries match.
+func SearchRef(ctx context.Context, q Querier, kind domain.Kind, step domain.RefStep, scope domain.ID, limit int) ([]SearchHit, error) {
+	args := []any{string(kind)}
+	var cond string
+	switch step.Level {
+	case domain.RefCanonicalID:
+		cond, args = `d.id = ?`, append(args, step.Key)
+	case domain.RefShortID:
+		cond, args = `d.short_id = ?`, append(args, step.Key)
+	case domain.RefName:
+		table, ok := refNameTables[kind]
+		if !ok {
+			return nil, nil
+		}
+		cond, args = `d.archived = 0 AND d.id IN (SELECT id FROM `+table+` WHERE name = ?)`, append(args, step.Key)
+	case domain.RefULIDPrefix:
+		low := string(kind) + "_" + step.Key
+		high := low[:len(low)-1] + string(low[len(low)-1]+1)
+		cond, args = `d.id >= ? AND d.id < ?`, append(args, low, high)
+	default:
+		return nil, nil
+	}
+	if scope != "" {
+		cond += ` AND d.project_id = ?`
+		args = append(args, string(scope))
+	}
+	args = append(args, limit)
+	return collect(ctx, q, scanHit,
+		`SELECT `+searchColumns+` FROM search_docs d JOIN search_index i ON i.rowid = d.rowid
+ WHERE d.kind = ? AND `+cond+` ORDER BY d.id LIMIT ?`, args...)
+}
+
 // SearchByID returns the entries with the given IDs, archived ones included.
+// Not for references: one parameter per id.
 func SearchByID(ctx context.Context, q Querier, ids []domain.ID) ([]SearchHit, error) {
 	if len(ids) == 0 {
 		return nil, nil
