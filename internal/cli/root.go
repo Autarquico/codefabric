@@ -19,6 +19,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/client/notify"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -43,6 +44,9 @@ type Options struct {
 	// terminal). internal/tui is composed in by cmd/cf: the CLI may not import
 	// it. Without one, `cf` prints its help.
 	TUI func(ctx context.Context, c *client.Client) error
+	// Native shows the desktop notifications of `cf notify`. Without one they
+	// are only logged as unavailable.
+	Native notify.Native
 
 	// openTUIClient replaces the Controller client that the TUI gets in tests.
 	openTUIClient func(*cobra.Command) (*client.Client, error)
@@ -207,7 +211,7 @@ func newRootCmd(opts Options) *cobra.Command {
 		newProjectCmd(openProjectUpdater(opts)), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd(),
 		newAttachCmd(opts.Terminal), newPsCmd(), newEventsCmd(), newLogsCmd(),
 		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)),
-		newDoctorCmd(openDoctorStore(opts), probeOf(opts)))
+		newDoctorCmd(openDoctorStore(opts), probeOf(opts)), newNotifyCmd(opts.Native))
 	return root
 }
 

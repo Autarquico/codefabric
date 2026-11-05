@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 
 	"github.com/spf13/cobra"
 
@@ -14,6 +16,8 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli"
+	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/client/notify"
 	"github.com/Autarquico/codefabric/internal/client/workflowadopt"
 	"github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
@@ -29,7 +33,22 @@ func run() int { return cli.ExecuteWith(options(), commands()...) }
 
 // options are what the CLI cannot reach itself (ADR 0001).
 func options() cli.Options {
-	return cli.Options{Terminal: sshTerminal{}, Workflows: workflowAdopter, TUI: tui.Run}
+	native := notify.DetectNative(runtime.GOOS, exec.LookPath, notify.OSExec)
+	return cli.Options{Terminal: sshTerminal{}, Workflows: workflowAdopter, TUI: tuiWithNotifications(native), Native: native}
+}
+
+// tuiWithNotifications runs the TUI and, while it is open, the notifier of this
+// machine over the same Controller. A broken client config or a stream that
+// ends does not take the TUI down; the TUI owns the terminal, so nothing is logged.
+func tuiWithNotifications(native notify.Native) func(context.Context, *client.Client) error {
+	return func(ctx context.Context, c *client.Client) error {
+		ctx, stop := context.WithCancel(ctx)
+		defer stop()
+		if n, err := cli.NewNotifier(native, nil); err == nil {
+			go func() { _ = n.Watch(ctx, c) }()
+		}
+		return tui.Run(ctx, c)
+	}
 }
 
 // workflowAdopter composes the adopt of `cf workflow`: the harness adapters of
