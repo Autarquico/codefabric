@@ -15,12 +15,14 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 )
 
@@ -49,7 +51,8 @@ const (
 
 const (
 	batchSize    = 256
-	drainTimeout = 2 * time.Second
+	writeTimeout = 10 * time.Second // a write that is not under way at shutdown
+	drainTimeout = 2 * time.Second  // all that is left to write, and a write under way, once ctx ends
 	redacted     = "<redacted>"
 )
 
@@ -61,6 +64,8 @@ type Options struct {
 	// Redact, if set, runs on the message and on every string value before the
 	// blunt redaction of redact.Text: the place for the needles of known secrets.
 	Redact func(string) string
+	// Clock times the deadlines of the writer; the real one if nil.
+	Clock clock.Clock
 }
 
 // Tee is the queue and the writer that drains it.
@@ -69,6 +74,7 @@ type Tee struct {
 	dropped  atomic.Uint64
 	closed   atomic.Bool
 	extra    func(string) string
+	clk      clock.Clock
 	maxMsg   int
 	maxAttrs int
 
@@ -82,8 +88,11 @@ type ids struct{ run, task, project string }
 
 // New makes a tee; nothing is written until Run.
 func New(o Options) *Tee {
+	if o.Clock == nil {
+		o.Clock = clock.Real{}
+	}
 	t := &Tee{
-		queue: make(chan Entry, positive(o.Capacity, DefaultCapacity)), extra: o.Redact,
+		clk: o.Clock, queue: make(chan Entry, positive(o.Capacity, DefaultCapacity)), extra: o.Redact,
 		maxMsg: positive(o.MaxMessageBytes, DefaultMaxMessageBytes), maxAttrs: positive(o.MaxAttrsBytes, DefaultMaxAttrsBytes),
 	}
 	t.cur = &t.null
@@ -106,7 +115,7 @@ func (t *Tee) Dropped() uint64 { return t.dropped.Load() }
 // values, and Options.Redact, must not log through the teed logger.
 func (t *Tee) Wrap(inner slog.Handler) slog.Handler {
 	enc := slog.NewJSONHandler(writerFunc(t.buf.Write), &slog.HandlerOptions{Level: slog.LevelDebug - 8, ReplaceAttr: t.replace})
-	return &handler{tee: t, inner: inner, enc: enc}
+	return &handler{tee: t, inner: inner, base: enc}
 }
 
 type writerFunc func([]byte) (int, error)
@@ -116,8 +125,34 @@ func (w writerFunc) Write(p []byte) (int, error) { return w(p) }
 type handler struct {
 	tee   *Tee
 	inner slog.Handler
-	enc   slog.Handler // a JSON handler with the attributes and groups of this one
-	ids   ids          // the IDs its WithAttrs named
+	base  slog.Handler // a JSON handler without attributes or groups
+	ops   []op         // the WithAttrs and WithGroup of this handler, raw: they are encoded with each record
+}
+
+// op is a WithAttrs (attrs) or a WithGroup (group). They are kept raw and
+// replayed on the encoder at each record, so that what is held as a secret
+// after they were made is redacted in them too.
+type op struct {
+	attrs []slog.Attr
+	group string
+}
+
+func (h *handler) with(o op) *handler {
+	n := *h
+	n.ops = append(h.ops[:len(h.ops):len(h.ops)], o)
+	return &n
+}
+
+func (h *handler) encoder() slog.Handler {
+	enc := h.base
+	for _, o := range h.ops {
+		if o.group != "" {
+			enc = enc.WithGroup(o.group)
+		} else {
+			enc = enc.WithAttrs(o.attrs)
+		}
+	}
+	return enc
 }
 
 func (h *handler) Enabled(ctx context.Context, l slog.Level) bool { return h.inner.Enabled(ctx, l) }
@@ -137,20 +172,21 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func (h *handler) WithAttrs(as []slog.Attr) slog.Handler {
-	n := *h
+	if len(as) == 0 {
+		return h
+	}
+	n := h.with(op{attrs: slices.Clone(as)})
 	n.inner = h.inner.WithAttrs(as)
-	h.tee.mu.Lock()
-	h.tee.cur = &n.ids // the JSON handler formats them now, through replace
-	n.enc = h.enc.WithAttrs(as)
-	h.tee.cur = &h.tee.null
-	h.tee.mu.Unlock()
-	return &n
+	return n
 }
 
 func (h *handler) WithGroup(name string) slog.Handler {
-	n := *h
-	n.inner, n.enc = h.inner.WithGroup(name), h.enc.WithGroup(name)
-	return &n
+	if name == "" {
+		return h
+	}
+	n := h.with(op{group: name})
+	n.inner = h.inner.WithGroup(name)
+	return n
 }
 
 // entry encodes the attributes of r, redacted, with those of the handler.
@@ -164,10 +200,10 @@ func (t *Tee) entry(ctx context.Context, h *handler, r slog.Record) Entry {
 	r.Attrs(func(a slog.Attr) bool { rec.AddAttrs(a); return true })
 
 	t.mu.Lock()
-	found := h.ids
+	var found ids
 	t.cur = &found
 	t.buf.Reset()
-	encErr := h.enc.Handle(ctx, rec)
+	encErr := h.encoder().Handle(ctx, rec)
 	attrs := bytes.Clone(bytes.TrimSpace(t.buf.Bytes()))
 	t.cur = &t.null
 	t.mu.Unlock()
@@ -277,11 +313,12 @@ func levelName(l slog.Level) string {
 }
 
 // Run writes what is queued to sink until ctx ends; then it stops taking
-// records, writes what is left within a short time of its own, and returns.
-// A write under way when ctx ends is not cut short: the sink gets a context
-// that ctx does not cancel. The overflow of the queue is reported, as a warn
-// entry before the next batch and on fallback; so is a batch the sink failed
-// to store, which is lost.
+// records, writes what is left and returns. No write waits for ever: the sink
+// gets a context that ctx does not cancel but that ends writeTimeout after the
+// write began or, once ctx has ended, drainTimeout after that; what is left is
+// written within drainTimeout. Both are measured on the clock of Options. The
+// overflow of the queue is reported, as a warn entry before the next batch and
+// on fallback; so is a batch the sink failed to store, which is lost.
 func (t *Tee) Run(ctx context.Context, sink Sink, fallback *slog.Logger) {
 	w := writer{tee: t, sink: sink, log: fallback}
 	detached := context.WithoutCancel(ctx)
@@ -289,7 +326,7 @@ func (t *Tee) Run(ctx context.Context, sink Sink, fallback *slog.Logger) {
 		select {
 		case <-ctx.Done():
 			t.closed.Store(true)
-			drain, cancel := context.WithTimeout(detached, drainTimeout)
+			drain, cancel := t.bounded(detached, drainTimeout, nil)
 			for {
 				batch := t.collect(nil)
 				if len(batch) == 0 {
@@ -301,9 +338,35 @@ func (t *Tee) Run(ctx context.Context, sink Sink, fallback *slog.Logger) {
 			cancel()
 			return
 		case e := <-t.queue:
-			w.write(detached, t.collect([]Entry{e}))
+			wctx, cancel := t.bounded(detached, writeTimeout, ctx.Done())
+			w.write(wctx, t.collect([]Entry{e}))
+			cancel()
 		}
 	}
+}
+
+// bounded is a context that ends d after now, or, once stop is closed, drainTimeout
+// after that, if sooner.
+func (t *Tee) bounded(parent context.Context, d time.Duration, stop <-chan struct{}) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	timer := t.clk.NewTimer(d)
+	go func() {
+		defer timer.Stop()
+		select {
+		case <-timer.C():
+		case <-ctx.Done():
+		case <-stop:
+			last := t.clk.NewTimer(drainTimeout)
+			defer last.Stop()
+			select {
+			case <-last.C():
+			case <-timer.C():
+			case <-ctx.Done():
+			}
+		}
+		cancel()
+	}()
+	return ctx, cancel
 }
 
 // collect takes what is queued, up to a batch, without waiting.

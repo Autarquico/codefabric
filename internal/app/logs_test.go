@@ -2,6 +2,8 @@ package app_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -218,6 +220,97 @@ func TestScenario_LogsOutputStorage_Follow(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the line did not arrive in 2 s")
+	}
+}
+
+// Lines of ~20 KiB, forty of them: more than LogsPageBytes, fewer than the limit.
+func bigLines(n int, at time.Time) []v1.LogEntry {
+	out := make([]v1.LogEntry, n)
+	for i := range out {
+		out[i] = logLine("E", uint64(i+1), at, "info", fmt.Sprintf("big-%02d-%s", i, strings.Repeat("m", v1.LogMessageMaxBytes-16)))
+		out[i].Attrs = []byte(`{"pad":"` + strings.Repeat("a", v1.LogAttrsMaxBytes-64) + `"}`)
+	}
+	return out
+}
+
+// shipInBatches keeps each batch under the byte budget of a POST.
+func shipInBatches(e *env, w pki.Session, lines []v1.LogEntry) {
+	for len(lines) > 0 {
+		k := min(len(lines), 8)
+		e.shipLogs(w, lines[:k]...)
+		lines = lines[k:]
+	}
+}
+
+func logWorkerSeq(l v1.Log) uint64 {
+	if l.WorkerSeq == nil {
+		return 0
+	}
+	return *l.WorkerSeq
+}
+
+func TestLogs_APageIsCutAtItsByteBudgetAndTheCursorLosesNothing(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	const n = 40
+	shipInBatches(e, w, bigLines(n, e.clock.Now()))
+
+	var seen []v1.Log
+	cursor, pages := "", 0
+	for {
+		after, err := logs.ParseCursor(cursor)
+		must(t, err)
+		page, err := e.app.Logs.List(t.Context(), e.owner, logs.Query{After: after, Limit: v1.LogsMaxLimit})
+		must(t, err)
+		raw, err := json.Marshal(page.Logs)
+		must(t, err)
+		if len(page.Logs) > 1 && len(raw) > v1.LogsPageBytes {
+			t.Fatalf("a page of %d lines is %d bytes", len(page.Logs), len(raw))
+		}
+		seen, cursor, pages = append(seen, page.Logs...), page.Cursor, pages+1
+		if !page.HasMore {
+			break
+		}
+		if pages > n {
+			t.Fatal("the pages do not end")
+		}
+	}
+	if pages < 2 || len(seen) != n {
+		t.Fatalf("%d lines in %d pages, want %d in at least 2", len(seen), pages, n)
+	}
+	for i, l := range seen {
+		if logWorkerSeq(l) != uint64(i+1) {
+			t.Fatalf("line %d is worker_seq %d: a line was lost or repeated", i, logWorkerSeq(l))
+		}
+	}
+}
+
+func TestLogs_ATailCutByTheByteBudgetKeepsTheNewestLines(t *testing.T) {
+	e := newEnv(t)
+	w := e.joinWorker("alpha")
+	const n = 40
+	shipInBatches(e, w, bigLines(n, e.clock.Now()))
+
+	page, err := e.app.Logs.List(t.Context(), e.owner, logs.Query{Tail: n})
+	must(t, err)
+	if len(page.Logs) == 0 || len(page.Logs) >= n {
+		t.Fatalf("%d lines: the tail was not cut", len(page.Logs))
+	}
+	if last := page.Logs[len(page.Logs)-1]; logWorkerSeq(last) != n {
+		t.Fatalf("the tail ends at worker_seq %d, not at the newest", logWorkerSeq(last))
+	}
+	for i, l := range page.Logs {
+		if want := n - uint64(len(page.Logs)) + uint64(i) + 1; logWorkerSeq(l) != want {
+			t.Fatalf("the tail has a gap: line %d is %d, want %d", i, logWorkerSeq(l), want)
+		}
+	}
+	// Its cursor is the end: following from it misses nothing and repeats nothing.
+	after, err := logs.ParseCursor(page.Cursor)
+	must(t, err)
+	next, err := e.app.Logs.List(t.Context(), e.owner, logs.Query{After: after})
+	must(t, err)
+	if len(next.Logs) != 0 {
+		t.Fatalf("%d lines after the tail", len(next.Logs))
 	}
 }
 

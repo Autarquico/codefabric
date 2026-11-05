@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/slogtee"
 )
 
@@ -254,5 +255,107 @@ func TestLongMessagesAndAttributesAreBounded(t *testing.T) {
 	}
 	if len(e.Attrs) > 64 || !json.Valid(e.Attrs) {
 		t.Fatalf("attrs = %s", e.Attrs)
+	}
+}
+
+// A secret held after With was called is still redacted in what With attached,
+// whatever JSON has to escape in it.
+func TestAttributesOfWithAreRedactedWithTheSecretsHeldAtEmitTime(t *testing.T) {
+	const secret = `late"secret\value-123456`
+	var mu sync.Mutex
+	var held []string
+	tee := slogtee.New(slogtee.Options{Redact: func(s string) string {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, h := range held {
+			s = strings.ReplaceAll(s, h, "[REDACTED:k]")
+		}
+		return s
+	}})
+	child := slog.New(tee.Wrap(quiet)).With("detail", secret).WithGroup("g").With("more", secret)
+	var c collector
+	stop := run(t, tee, c.sink, slog.New(slog.DiscardHandler))
+
+	mu.Lock()
+	held = append(held, secret)
+	mu.Unlock()
+	child.Info("after the hold")
+	stop()
+
+	got := c.all()
+	if len(got) != 1 {
+		t.Fatalf("%d entries", len(got))
+	}
+	m := attrs(t, got[0])
+	g, _ := m["g"].(map[string]any)
+	if strings.Contains(string(got[0].Attrs), "late") || m["detail"] != "[REDACTED:k]" || g["more"] != "[REDACTED:k]" {
+		t.Fatalf("the secret leaks: %s", got[0].Attrs)
+	}
+}
+
+// A sink that waits for its context cannot hold the shutdown: once the writer
+// is asked to stop, the write under way ends drainTimeout later on the clock.
+func TestAWriteUnderWayDoesNotHoldTheShutdown(t *testing.T) {
+	clk := clock.NewFake(time.Unix(0, 0))
+	tee := slogtee.New(slogtee.Options{Clock: clk})
+	log := slog.New(tee.Wrap(quiet))
+	entered := make(chan struct{})
+	sink := func(ctx context.Context, _ []slogtee.Entry) error {
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); tee.Run(ctx, sink, slog.New(slog.DiscardHandler)) }()
+
+	log.Info("stuck")
+	<-entered
+	cancel()
+	wait, stopWaiting := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopWaiting()
+	if err := clk.BlockUntil(wait, 2); err != nil { // the write's own timer and the one of the shutdown
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+		t.Fatal("stopped before the clock moved")
+	default:
+	}
+	clk.Advance(2 * time.Second)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the writer did not stop")
+	}
+	if tee.Dropped() != 1 {
+		t.Fatalf("dropped = %d, want the batch that was cut", tee.Dropped())
+	}
+}
+
+// Without a stop, a write is bounded by its own deadline.
+func TestAWriteIsBoundedByADeadline(t *testing.T) {
+	clk := clock.NewFake(time.Unix(0, 0))
+	tee := slogtee.New(slogtee.Options{Clock: clk})
+	log := slog.New(tee.Wrap(quiet))
+	entered := make(chan struct{})
+	sink := func(ctx context.Context, _ []slogtee.Entry) error {
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go tee.Run(ctx, sink, slog.New(slog.DiscardHandler))
+
+	log.Info("stuck")
+	<-entered
+	clk.Advance(time.Minute)
+	deadline := time.Now().Add(5 * time.Second)
+	for tee.Dropped() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if tee.Dropped() != 1 {
+		t.Fatal("the write was not cut by its deadline")
 	}
 }

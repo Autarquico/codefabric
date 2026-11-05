@@ -85,3 +85,51 @@ func hasCode(err error, code domain.Code) bool {
 	var de *domain.Error
 	return errors.As(err, &de) && de.Code == code
 }
+
+// With the stream open, one line reaches the client in under 2 s.
+func TestLogs_ALineReachesAnOpenStreamWithinTwoSeconds(t *testing.T) {
+	tc := newController(t, time.Now())
+	worker, _ := tc.enrollRealWorker("alpha")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	lines := make(chan v1.Log, 4)
+	errc := make(chan error, 1)
+	go func() {
+		errc <- tc.owner.FollowLogs(ctx, client.LogQuery{Worker: "alpha"}, func(l v1.Log) error {
+			lines <- l
+			return nil
+		})
+	}()
+	// The stream is open once a line shipped after it arrives; those that come
+	// before it are "before now" and skipped. Then the one that is timed.
+	for seq, opened := uint64(1), false; !opened; seq++ {
+		if _, err := worker.ShipLogs(ctx, v1.LogBatch{Entries: []v1.LogEntry{{WorkerEpoch: "E1", WorkerSeq: seq, Timestamp: time.Now(), Level: "info", Message: "probe"}}}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-lines:
+			opened = true
+		case <-time.After(200 * time.Millisecond):
+		case err := <-errc:
+			t.Fatalf("follow ended: %v", err)
+		}
+	}
+	sent := time.Now()
+	if _, err := worker.ShipLogs(ctx, v1.LogBatch{Entries: []v1.LogEntry{{WorkerEpoch: "E1", WorkerSeq: 1000, Timestamp: time.Now(), Level: "info", Message: "timed"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		select {
+		case l := <-lines:
+			if l.Message != "timed" {
+				continue // a probe still in flight
+			}
+			if took := time.Since(sent); took > 2*time.Second {
+				t.Fatalf("the line took %v", took)
+			}
+			return
+		case <-time.After(2 * time.Second):
+			t.Fatal("the line did not arrive in 2 s")
+		}
+	}
+}
