@@ -227,3 +227,19 @@ func TestScenario_TuiViewsActions_Errores(t *testing.T) {
 		}
 	}
 }
+
+// A client with a person in front of it asks before these: they cannot be
+// undone from the same screen. A new destructive action is a decision to make
+// here, in the open.
+func TestScenario_TuiViewsActions_DestructiveActionsAreFlagged(t *testing.T) {
+	var got []string
+	for _, d := range actions.All() {
+		if d.Destructive {
+			got = append(got, d.ID)
+		}
+	}
+	want := "[task.cancel task.archive run.publish worker.remove workflow.rollback environment.apply]"
+	if fmt.Sprint(got) != want {
+		t.Errorf("destructive actions: %v, want %s", got, want)
+	}
+}
