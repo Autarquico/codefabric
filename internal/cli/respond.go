@@ -42,6 +42,7 @@ func newTaskRespondCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&req.PromptID, "prompt", "", "prompt to answer (default: the only one waiting)")
+	f.StringVar(&req.Run, "run", "", "Run whose prompt to answer, when more than one Run of the Task waits (default: the only one)")
 	f.BoolVar(&allow, "allow", false, "allow what a permission prompt asks")
 	f.BoolVar(&deny, "deny", false, "deny what a permission prompt asks")
 	f.StringVar(&req.Answer.Text, "text", "", "answer to a question or free-text prompt")

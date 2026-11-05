@@ -428,3 +428,55 @@ func TestReport_APromptThatIsNotBoundedPrintableTextIsRefused(t *testing.T) {
 		t.Errorf("Run = %s", got)
 	}
 }
+
+func TestRespond_APromptIdOpenInTwoRunsNeedsTheRunToBeNamed(t *testing.T) {
+	e := newEnv(t)
+	w1, w2 := e.structuredWorker("alpha"), e.structuredWorker("beta")
+	first := e.harnessRun(w1)
+	first.mustSend(first.entry(v1.ReportInputRequested, asks("p1", domain.PromptPermission)))
+	second := e.secondRunOf(first, w2)
+	second.mustSend(second.entry(v1.ReportInputRequested, asks("p1", domain.PromptPermission)))
+
+	_, err := e.respond(first.run, v1.RespondRequest{PromptID: "p1", Answer: allow()})
+	wantCode(t, err, domain.CodeInvalidRequest)
+	if !strings.Contains(err.Error(), first.run.Short) || !strings.Contains(err.Error(), second.run.Short) {
+		t.Errorf("the error does not list both Runs: %v", err)
+	}
+	if n := len(inputOrders(e.commands(w1))) + len(inputOrders(e.commands(w2))); n != 0 {
+		t.Fatalf("a rejected answer queued %d orders", n)
+	}
+
+	out, err := e.respond(first.run, v1.RespondRequest{PromptID: "p1", Run: second.run.Short, Answer: allow()})
+	must(t, err)
+	if out.RunID != second.run.ID {
+		t.Errorf("answered run %s, want %s", out.RunID, second.run.ID)
+	}
+	if len(inputOrders(e.commands(w1))) != 0 || len(inputOrders(e.commands(w2))) != 1 {
+		t.Errorf("the order did not go to the named Run's Worker")
+	}
+}
+
+func TestRespond_APermissionIsNotAnsweredWithText(t *testing.T) {
+	e := newEnv(t)
+	r := e.harnessRun(e.structuredWorker("alpha"))
+	r.mustSend(r.entry(v1.ReportInputRequested, asks("p1", domain.PromptPermission)))
+
+	_, err := e.respond(r.run, v1.RespondRequest{Answer: v1.InputAnswer{Decision: domain.AnswerAllow, Text: "do not run it"}})
+	wantCode(t, err, domain.CodeInvalidRequest)
+	if n := len(inputOrders(e.commands(r.w))); n != 0 {
+		t.Errorf("a rejected answer queued %d orders", n)
+	}
+}
+
+// secondRunOf starts another Run of the Task of first on w and reports it started.
+func (e *env) secondRunOf(first *reporter, w pki.Session) *reporter {
+	e.t.Helper()
+	run, err := e.startRun(first.run.TaskID, strings.Repeat("a", 40))
+	must(e.t, err)
+	l := e.offer(run.ID, w)
+	_, err = e.accept(w, l)
+	must(e.t, err)
+	r := &reporter{e: e, w: w, run: run, lease: l, epoch: reportEpoch}
+	r.mustSend(r.entry(v1.ReportStarted))
+	return r
+}

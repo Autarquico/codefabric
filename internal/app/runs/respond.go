@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/input"
@@ -45,7 +46,7 @@ func (s *Service) Respond(ctx context.Context, by pki.Session, ref, project stri
 			if err != nil {
 				return v1.RespondResponse{}, err
 			}
-			run, prompt, err := promptToAnswer(ctx, tx, task, req.PromptID)
+			run, prompt, err := promptToAnswer(ctx, tx, task, req.Run, req.PromptID)
 			if err != nil {
 				return v1.RespondResponse{}, err
 			}
@@ -122,8 +123,10 @@ func orderInputIn(ctx context.Context, tx *store.Tx, act mutation.Act, run store
 }
 
 // promptToAnswer finds the Run of the Task that waits for input and the prompt
-// the answer is for. Without a prompt_id the Task must have exactly one pending.
-func promptToAnswer(ctx context.Context, tx *store.Tx, task store.Task, promptID string) (store.Run, store.InputPrompt, error) {
+// the answer is for. A prompt_id is only unique within a Run, so when more than
+// one Run has it open the answer must name the Run; without a prompt_id the Task
+// (or the named Run) must have exactly one pending.
+func promptToAnswer(ctx context.Context, tx *store.Tx, task store.Task, runRef, promptID string) (store.Run, store.InputPrompt, error) {
 	all, err := store.Runs(ctx, tx, store.RunFilter{TaskID: task.ID})
 	if err != nil {
 		return store.Run{}, store.InputPrompt{}, err
@@ -145,6 +148,18 @@ func promptToAnswer(ctx context.Context, tx *store.Tx, task store.Task, promptID
 		return store.Run{}, store.InputPrompt{}, notRespondable(
 			fmt.Sprintf("task %s is not waiting for input", task.Name), "not_waiting", live)
 	}
+	if runRef != "" {
+		id, err := refs.Run(ctx, tx, runRef)
+		if err != nil {
+			return store.Run{}, store.InputPrompt{}, err
+		}
+		i := slices.IndexFunc(waiting, func(r store.Run) bool { return r.ID == id })
+		if i < 0 {
+			return store.Run{}, store.InputPrompt{}, notRespondable(
+				fmt.Sprintf("run %s of task %s is not waiting for input", runRef, task.Name), "not_waiting", live)
+		}
+		waiting = []store.Run{waiting[i]}
+	}
 	var open []store.InputPrompt
 	runOf := map[string]store.Run{}
 	for _, r := range waiting {
@@ -158,11 +173,25 @@ func promptToAnswer(ctx context.Context, tx *store.Tx, task store.Task, promptID
 		}
 	}
 	if promptID != "" {
-		i := slices.IndexFunc(open, func(p store.InputPrompt) bool { return p.PromptID == promptID })
-		if i < 0 {
-			return store.Run{}, store.InputPrompt{}, domain.NewError(domain.CodeNotFound, "the Task has no open prompt "+promptID, nil)
+		var matches []store.InputPrompt
+		for _, p := range open {
+			if p.PromptID == promptID {
+				matches = append(matches, p)
+			}
 		}
-		return runOf[string(open[i].RunID)+"/"+promptID], open[i], nil
+		switch len(matches) {
+		case 0:
+			return store.Run{}, store.InputPrompt{}, domain.NewError(domain.CodeNotFound, "the Task has no open prompt "+promptID, nil)
+		case 1:
+			return runOf[string(matches[0].RunID)+"/"+promptID], matches[0], nil
+		}
+		shorts := make([]string, len(matches))
+		for i, p := range matches {
+			shorts[i] = shortID(runOf[string(p.RunID)+"/"+promptID].Short)
+		}
+		return store.Run{}, store.InputPrompt{}, domain.NewError(domain.CodeInvalidRequest,
+			fmt.Sprintf("prompt %s is open in more than one Run (%s): name the Run with --run", promptID, strings.Join(shorts, ", ")),
+			map[string]any{"prompt_id": promptID, "runs": shorts})
 	}
 	pending := slices.DeleteFunc(slices.Clone(open), func(p store.InputPrompt) bool { return p.State != domain.PromptPending })
 	switch len(pending) {
@@ -207,6 +236,9 @@ func validateAnswer(kind domain.PromptKind, a v1.InputAnswer) error {
 	case domain.PromptPermission:
 		if a.Decision != domain.AnswerAllow && a.Decision != domain.AnswerDeny {
 			return input.Invalid("a permission is answered with --allow or --deny")
+		}
+		if a.Text != "" {
+			return input.Invalid("a permission is answered with --allow or --deny, not with text")
 		}
 	default:
 		if a.Decision != "" || a.Text == "" {

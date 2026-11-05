@@ -35,9 +35,12 @@ type InputCommand struct {
 }
 
 // RespondRequest is POST /v1/tasks/{ref}/respond. PromptID may be left out when
-// the Task has exactly one prompt waiting for an answer.
+// the Task has exactly one prompt waiting for an answer. Run (a Run reference)
+// narrows the Task's prompts to one Run's, needed when the same prompt_id is
+// open in more than one.
 type RespondRequest struct {
 	RequestID string      `json:"request_id,omitempty"`
+	Run       string      `json:"run,omitempty"`
 	PromptID  string      `json:"prompt_id,omitempty"`
 	Answer    InputAnswer `json:"answer"`
 }
