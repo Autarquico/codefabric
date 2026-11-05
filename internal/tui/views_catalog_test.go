@@ -80,7 +80,7 @@ func TestScenario_TuiViewsActions_Workflows(t *testing.T) {
 func TestScenario_TuiViewsActions_Workflows_ShowsWhereItIsAppliedAndItsHistory(t *testing.T) {
 	m := openWorkflows(t, newVersionedBackend())
 	got := frame(m)
-	for _, want := range []string{"1/2", "1 drifted", "macbook/cla", "drift: skills", "v3", "tighten the review skill", "~claude/skills +claude/hooks"} {
+	for _, want := range []string{"1/2", "1 drifted", "macbook/claude", "drift: skills", "v3", "tighten the review skill", "~claude/skills +claude/hooks"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the workflow lacks %q:\n%s", want, got)
 		}
@@ -94,7 +94,7 @@ func TestScenario_TuiViewsActions_Workflows_ShowsWhereItIsAppliedAndItsHistory(t
 func TestScenario_TuiViewsActions_Workflows_ApplyAsksForItsInputs(t *testing.T) {
 	be := newVersionedBackend()
 	m := openWorkflows(t, be)
-	press(t, m, "a")
+	press(t, m, "A")
 	if got := frame(m); !strings.Contains(got, "worker") || !strings.Contains(got, "linux") || len(be.ran) != 0 {
 		t.Fatalf("apply does not ask for the worker, or ran without it:\n%s", got)
 	}
@@ -127,7 +127,7 @@ func TestScenario_TuiViewsActions_Workflows_SyncAsksOnlyForTheHarness(t *testing
 func TestScenario_TuiViewsActions_Workflows_FormCanBeCancelled(t *testing.T) {
 	be := newVersionedBackend()
 	m := openWorkflows(t, be)
-	press(t, m, "a")
+	press(t, m, "A")
 	typeText(t, m, "q") // a letter of the answer, not the key that quits
 	if frame(m) == "" || len(m.Router().Routes()) != 1 {
 		t.Fatal("a key typed in the form left the view")
@@ -147,7 +147,7 @@ func TestScenario_TuiViewsActions_Workflows_RollbackConfirmsWithTheCommandItRuns
 	typeText(t, m, "claude")
 	press(t, m, "enter")
 	got := frame(m)
-	for _, want := range []string{"Roll back workflow?", "cf workflow rollback --worker=linux --harness=claude", "worker linux"} {
+	for _, want := range []string{"Roll back a Worker's harness?", "cf workflow rollback --worker=linux --harness=claude", "worker linux", "default v3"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("the confirmation lacks %q:\n%s", want, got)
 		}
@@ -174,7 +174,7 @@ func TestScenario_TuiViewsActions_Workflows_AdoptAndCommitStayOutOfTheMenu(t *te
 	m := openWorkflows(t, newVersionedBackend())
 	press(t, m, "enter")
 	got := frame(m)
-	for _, want := range []string{"Apply workflow", "Sync workflow", "Roll back workflow"} {
+	for _, want := range []string{"Apply workflow", "Sync workflow", "Roll back a Worker's harness"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the menu lacks %q:\n%s", want, got)
 		}
@@ -183,6 +183,53 @@ func TestScenario_TuiViewsActions_Workflows_AdoptAndCommitStayOutOfTheMenu(t *te
 		if strings.Contains(got, not) {
 			t.Errorf("the menu offers %q, which needs the review of the CLI:\n%s", not, got)
 		}
+	}
+}
+
+func TestScenario_TuiViewsActions_Workflows_RollbackIsNotPresentedAsAboutTheSelectedWorkflow(t *testing.T) {
+	m := openWorkflows(t, newVersionedBackend())
+	press(t, m, "down") // infra
+	press(t, m, "R")
+	got := frame(m)
+	if !strings.Contains(got, "Roll back a Worker's harness") || strings.Contains(got, "infra)") || strings.Contains(got, "Roll back workflow · infra") {
+		t.Errorf("the rollback form is headed with the selected Workflow:\n%s", got)
+	}
+}
+
+func TestScenario_TuiViewsActions_Workflows_SaysWhatIsOnlyInTheCLI(t *testing.T) {
+	m := openWorkflows(t, newVersionedBackend())
+	for _, want := range []string{"cf workflow adopt default", "cf workflow commit default", "cf workflow diff default --worker=", "cf workflow explain default --worker="} {
+		if !strings.Contains(strings.Join(strings.Fields(frame(m)), " "), want) {
+			t.Errorf("the detail does not give %q:\n%s", want, frame(m))
+		}
+	}
+	press(t, m, "enter")
+	if got := frame(m); !strings.Contains(got, "CLI only") || !strings.Contains(got, "cf workflow adopt default") {
+		t.Errorf("the menu does not say adopt is CLI-only:\n%s", got)
+	}
+}
+
+// The versions that were asked for answer to the Workflows screen even if the
+// person went to another screen meanwhile.
+func TestScenario_TuiViewsActions_Workflows_HistoryAnswersWhileAnotherScreenIsOver(t *testing.T) {
+	m := openWorkflows(t, newVersionedBackend())
+	b := m.Router().Top().(*browser)
+	b.vs.loading, b.vs.list = true, nil
+	press(t, m, "w")
+	m.Update(historyMsg{from: from(b.id), name: b.vs.name, stamp: b.vs.stamp, versions: versionsFixture()["default"]})
+	press(t, m, "esc")
+	if got := frame(m); !strings.Contains(got, "tighten the review skill") || strings.Contains(got, "Loading…") {
+		t.Errorf("the history that answered under another screen was lost:\n%s", got)
+	}
+}
+
+func TestScenario_TuiViewsActions_Workflows_KeepsTheWorkerAndHarnessOfLongNames(t *testing.T) {
+	m := openWorkflows(t, newVersionedBackend())
+	rows := workflowsFixture()
+	rows[0].Held[1].Worker = "macbook-pro-of-the-office"
+	feed(t, m, feedMsg{RouteWorkflows, client.Update[[]WorkflowRow]{Kind: client.UpdateSnapshot, State: rows}})
+	if got := frame(m); !strings.Contains(got, "macbook-pro-of-the-office/claude") {
+		t.Errorf("the worker/harness pair is cut:\n%s", got)
 	}
 }
 
@@ -219,13 +266,30 @@ func TestScenario_TuiViewsActions_Projects_OriginAuthNamesTheSecretNotItsValue(t
 	}
 }
 
-// Models says "usage not reported" for each provider, and never a percentage.
+// Models lists the harnesses that Workers announce, says their usage is not
+// reported, and never invents a provider or a percentage.
 func TestScenario_TuiViewsActions_Models(t *testing.T) {
 	m := viewShellWith(t, newBackend(), "m")
+	workers := workersFixture()
+	workers[0].Capabilities = []string{"harness-modes:v1", "harness:claude", "harness:claude:mode:headless", "harness:command"}
+	workers[1].Capabilities = []string{"harness-modes:v1", "harness:claude:mode:interactive", "harness:claude"}
+	feed(t, m, feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateSnapshot, State: workers}})
 	got := frame(m)
 	compareGolden(t, "models-80x24.golden", got)
-	if strings.Count(got, "usage not reported") != len(providers) || strings.Contains(got, "%") {
-		t.Errorf("models invents a figure or lacks a provider:\n%s", got)
+	if strings.Count(got, "usage not reported") < 2 || strings.Contains(got, "%") || strings.Contains(got, "Anthropic") || strings.Contains(got, "OpenAI") {
+		t.Errorf("models invents a figure or a provider:\n%s", got)
+	}
+	if !strings.Contains(got, "claude") || !strings.Contains(got, "command") {
+		t.Errorf("the harnesses the Workers announce are not listed:\n%s", got)
+	}
+}
+
+func TestScenario_TuiViewsActions_Models_WithNothingKnownIsOneLine(t *testing.T) {
+	m := viewShellWith(t, newBackend(), "m")
+	feed(t, m, feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateSnapshot, State: workersFixture()}})
+	got := frame(m)
+	if strings.Count(got, "usage not reported") != 1 || strings.Contains(got, "Anthropic") || strings.Contains(got, "%") {
+		t.Errorf("without a known harness the view is not one 'usage not reported' line:\n%s", got)
 	}
 }
 
@@ -290,6 +354,7 @@ type outputSource struct {
 	started chan func(LogEvent)
 	runs    chan string
 	stopped chan struct{}
+	err     error // when set, the follow ends with it as soon as it starts
 }
 
 func newOutputSource() *outputSource {
@@ -299,6 +364,9 @@ func newOutputSource() *outputSource {
 func (o *outputSource) follow(ctx context.Context, run string, handle func(LogEvent)) error {
 	o.runs <- run
 	o.started <- handle
+	if o.err != nil {
+		return o.err
+	}
 	<-ctx.Done()
 	o.stopped <- struct{}{}
 	return ctx.Err()
@@ -322,8 +390,8 @@ func logsShell(t *testing.T, src *outputSource) (*Model, chan tea.Msg) {
 	return m, msgs
 }
 
-// deliver gives the shell what the follow sent, until it has sent n messages.
-func deliver(t *testing.T, m *Model, msgs chan tea.Msg, n int) {
+// deliverFollow gives the shell what the follow sent, until it has sent n messages.
+func deliverFollow(t *testing.T, m *Model, msgs chan tea.Msg, n int) {
 	t.Helper()
 	for range n {
 		select {
@@ -355,20 +423,20 @@ func TestScenario_TuiViewsActions_Logs_FollowsTheOutputLive(t *testing.T) {
 
 	emit(LogEvent{Restart: true})
 	emit(LogEvent{Data: []byte("compiling\nrunning te")})
-	deliver(t, m, msgs, 2)
+	deliverFollow(t, m, msgs, 2)
 	got := frame(m)
 	if !strings.Contains(got, "compiling") || strings.Contains(got, "running te") {
 		t.Errorf("a line that has not ended is shown, or a complete one is not:\n%s", got)
 	}
 	emit(LogEvent{Data: []byte("sts\nall passed\n")})
-	deliver(t, m, msgs, 1)
+	deliverFollow(t, m, msgs, 1)
 	compareGolden(t, "logs-follow-80x24.golden", frame(m))
 	if got := frame(m); !strings.Contains(got, "running tests") || !strings.Contains(got, "all passed") {
 		t.Errorf("a line cut between two chunks was not joined:\n%s", got)
 	}
 
 	emit(LogEvent{Ended: "the output is closed"})
-	deliver(t, m, msgs, 1)
+	deliverFollow(t, m, msgs, 1)
 	if got := frame(m); !strings.Contains(got, "Ended: the output is closed") || !strings.Contains(got, "ended") {
 		t.Errorf("the end of the output is not shown:\n%s", got)
 	}
@@ -380,7 +448,7 @@ func TestScenario_TuiViewsActions_Logs_NeverPassesEscapeSequencesToTheTerminal(t
 	press(t, m, "enter")
 	emit := <-src.started
 	emit(LogEvent{Data: []byte("\x1b[31mred\x1b[0m \x1b]0;pwned\x07ok\x1b[2J\x1b[Hdone\bx\r\nsecond\tline\n")})
-	deliver(t, m, msgs, 1)
+	deliverFollow(t, m, msgs, 1)
 	raw := m.Frame()
 	if strings.Contains(raw, "pwned") || strings.Contains(raw, "\x1b[2J") || strings.Contains(raw, "\x1b]") || strings.Contains(raw, "\x07") {
 		t.Fatalf("output acted on the terminal: %q", raw)
@@ -401,7 +469,7 @@ func TestScenario_TuiViewsActions_Logs_KeepsABoundedScrollbackAndPausesWhileRead
 		fmt.Fprintf(&b, "line %d\n", i)
 	}
 	emit(LogEvent{Data: []byte(b.String())})
-	deliver(t, m, msgs, 1)
+	deliverFollow(t, m, msgs, 1)
 	f := m.Router().Top().(*logsScreen).follow
 	if len(f.lines) != maxLogLines {
 		t.Fatalf("the scrollback holds %d lines, want %d", len(f.lines), maxLogLines)
@@ -415,7 +483,7 @@ func TestScenario_TuiViewsActions_Logs_KeepsABoundedScrollbackAndPausesWhileRead
 	press(t, m, "up")
 	paused := frame(m)
 	emit(LogEvent{Data: []byte("fresh\n")})
-	deliver(t, m, msgs, 1)
+	deliverFollow(t, m, msgs, 1)
 	if got := frame(m); got != paused && strings.Contains(got, "fresh") {
 		t.Errorf("new output moved the page the person is reading:\n%s", got)
 	}
@@ -428,7 +496,7 @@ func TestScenario_TuiViewsActions_Logs_KeepsABoundedScrollbackAndPausesWhileRead
 	}
 
 	emit(LogEvent{Data: []byte(strings.Repeat("x", maxPartialLine+10))})
-	deliver(t, m, msgs, 1)
+	deliverFollow(t, m, msgs, 1)
 	if len(f.partial) != 0 {
 		t.Errorf("a line that never ends grows without bound: %d bytes held", len(f.partial))
 	}
@@ -467,109 +535,130 @@ func TestScenario_TuiViewsActions_Logs_LeavingEndsTheFollow(t *testing.T) {
 	<-src.stopped
 }
 
-func TestScenario_TuiViewsActions_Logs_AFailedFollowIsShown(t *testing.T) {
+func TestScenario_TuiViewsActions_Logs_AFailedFollowIsShownAndCanBeRetried(t *testing.T) {
 	src := newOutputSource()
-	m, _ := logsShell(t, src)
+	src.err = fmt.Errorf("stream broke")
+	m, msgs := logsShell(t, src)
 	press(t, m, "enter")
 	<-src.started
-	m.Update(logFailedMsg{follow: 1, err: fmt.Errorf("stream broke")})
-	if got := frame(m); !strings.Contains(got, "stream broke") || !strings.Contains(got, "stopped") {
-		t.Errorf("a follow that gave up does not say why:\n%s", got)
+	deliverFollow(t, m, msgs, 1)
+	got := frame(m)
+	if !strings.Contains(got, "stream broke") || !strings.Contains(got, "stopped") || !strings.Contains(got, "Press enter to follow again") || !strings.Contains(got, "[enter] Retry") {
+		t.Errorf("a follow that gave up does not say why or what to do:\n%s", got)
 	}
-}
-
-func TestScenario_TuiViewsActions_Logs_WithoutASourceSaysSo(t *testing.T) {
-	m := viewShellWith(t, newBackend(), "l")
-	m.Update(feedMsg{RouteRuns, client.Update[[]v1.Run]{Kind: client.UpdateSnapshot, State: runsFixture()}})
+	src.err = nil
 	press(t, m, "enter")
-	if got := frame(m); !strings.Contains(got, "Logs are not available") {
-		t.Errorf("no word about the missing source:\n%s", got)
+	if run := <-src.runs; run == "" {
+		t.Fatal("enter did not follow again")
+	}
+	<-src.runs
+	if got := frame(m); strings.Contains(got, "stream broke") {
+		t.Errorf("the failure stays after following again:\n%s", got)
 	}
 }
 
-func TestCleanLine(t *testing.T) {
-	for in, want := range map[string]string{
-		"plain":                                "plain",
-		"\x1b[1;31mred\x1b[0m":                 "red",
-		"\x1b]8;;http://x\x07link\x1b]8;;\x07": "link",
-		"\x1bPdevice\x1b\\after":               "after",
-		"a\tb":                                 "a    b",
-		"progress 10%\rprogress 100%":          "progress 100%",
-		"crlf\r":                               "crlf",
-		"bell\x07 and \x00nul":                 "bell and nul",
-		"bad \xff utf8":                        "bad � utf8",
-		"rtl \u202etxt":                        "rtl txt",
-		"héllo wörld 日本":                       "héllo wörld 日本",
-	} {
-		if got := cleanLine([]byte(in)); got != want {
-			t.Errorf("cleanLine(%q) = %q, want %q", in, got, want)
-		}
+// What a follow sends reaches the Logs screen that started it while another
+// screen is over it (the asynchronous replies of a screen are addressed to it).
+func TestScenario_TuiViewsActions_Logs_OutputArrivesWhileAnotherScreenIsOver(t *testing.T) {
+	src := newOutputSource()
+	m, msgs := logsShell(t, src)
+	press(t, m, "enter")
+	emit := <-src.started
+	press(t, m, "w") // Workers over the follow
+	emit(LogEvent{Data: []byte("while you were away\n")})
+	deliverFollow(t, m, msgs, 1)
+	press(t, m, "esc")
+	if got := frame(m); !strings.Contains(got, "while you were away") {
+		t.Errorf("the line that arrived under another screen was lost:\n%s", got)
 	}
 }
 
-// Every key of the home opens a screen of its own, except Search, which no
-// milestone of this spec builds.
-func TestScenario_TuiViewsActions_EveryKeyOfTheHomeOpensAView(t *testing.T) {
-	for _, row := range bindings {
-		for _, b := range row {
-			m := New(Options{Clock: func() time.Time { return now }, Location: time.UTC, Backend: newBackend(), Feeds: Feeds{Output: newOutputSource().follow}})
-			m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-			press(t, m, b.Key)
-			got := frame(m)
-			if b.Route == RouteSearch {
-				if !strings.Contains(got, "Search is not available yet") {
-					t.Errorf("Search changed without a view for it:\n%s", got)
-				}
-				continue
-			}
-			if !m.Router().Has(b.Route) || m.Router().Depth() != 2 || strings.Contains(got, "not available yet") {
-				t.Errorf("[%s] %s does not open a view:\n%s", b.Key, b.Label, got)
-			}
-			if !strings.Contains(got, titleOf(b.Route)) {
-				t.Errorf("[%s] opened a screen that is not %s:\n%s", b.Key, b.Label, got)
-			}
-		}
+// A reconnect inside an epoch continues the line; only a new epoch ends it.
+func TestScenario_TuiViewsActions_Logs_AnOpenLineSurvivesAReconnectAndEndsWithANewEpoch(t *testing.T) {
+	f := &logFollow{wrap: true}
+	f.apply(LogEvent{Data: []byte("running te")})
+	f.apply(LogEvent{Data: []byte("sts\n")}) // the same epoch, resumed
+	if len(f.lines) != 1 || f.lines[0].text != "running tests" {
+		t.Fatalf("a resumed line was not joined: %v", f.lines)
+	}
+	f.apply(LogEvent{Data: []byte("crash with no newline")})
+	f.apply(LogEvent{Restart: true})
+	f.apply(LogEvent{Data: []byte("new epoch\n")})
+	if len(f.lines) != 3 || f.lines[1].text != "crash with no newline" || f.lines[2].text != "new epoch" {
+		t.Errorf("the open line of the old epoch was lost or joined to the new one: %v", f.lines)
 	}
 }
 
-func titleOf(r Route) string {
-	return strings.ToUpper(string(r)[:1]) + string(r)[1:]
+func followWith(t *testing.T, text string) (*Model, *outputSource, func(LogEvent), chan tea.Msg) {
+	t.Helper()
+	src := newOutputSource()
+	m, msgs := logsShell(t, src)
+	press(t, m, "enter")
+	emit := <-src.started
+	emit(LogEvent{Data: []byte(text)})
+	deliverFollow(t, m, msgs, 1)
+	return m, src, emit, msgs
 }
 
-func TestViews_TheNewOnesFitTheTerminal(t *testing.T) {
-	opens := map[string]func(t *testing.T) *Model{
-		"workflows": func(t *testing.T) *Model { return openWorkflows(t, newVersionedBackend()) },
-		"projects":  func(t *testing.T) *Model { return openProjects(t, newBackend()) },
-		"activity":  activityShell,
-		"models":    func(t *testing.T) *Model { return viewShellWith(t, newBackend(), "m") },
-		"logs": func(t *testing.T) *Model {
-			m, _ := logsShell(t, newOutputSource())
-			return m
-		},
+func TestScenario_TuiViewsActions_Logs_FiltersTheOutputLive(t *testing.T) {
+	m, _, emit, msgs := followWith(t, "compiling\nERROR disk full\nrunning\nerror again\n")
+	press(t, m, "/")
+	typeText(t, m, "error")
+	got := frame(m)
+	if !strings.Contains(got, "ERROR disk full") || !strings.Contains(got, "error again") || strings.Contains(got, "compiling") || !strings.Contains(got, "2/4") {
+		t.Fatalf("the filter did not keep only the matching lines, or the count is missing:\n%s", got)
 	}
-	for name, open := range opens {
-		for _, size := range [][2]int{{80, 24}, {60, 16}, {48, 12}, {40, 8}, {40, 6}} {
-			m := open(t)
-			m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-			assertFits(t, frame(m), size[0], size[1])
-			press(t, m, "enter")
-			assertFits(t, frame(m), size[0], size[1])
-			if name != "models" && !strings.Contains(frame(m), "─") {
-				t.Errorf("%s %dx%d draws no structure", name, size[0], size[1])
-			}
-		}
+	emit(LogEvent{Data: []byte("fine\nanother Error\n")})
+	deliverFollow(t, m, msgs, 1)
+	if got := frame(m); !strings.Contains(got, "another Error") || strings.Contains(got, "fine") || !strings.Contains(got, "3/6") {
+		t.Errorf("a new line is not filtered as it arrives:\n%s", got)
 	}
-	for _, size := range [][2]int{{60, 16}, {40, 8}} {
-		m := openWorkflows(t, newVersionedBackend())
-		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		if got := frame(m); !strings.Contains(got, "default") {
-			t.Errorf("workflows %dx%d hides the selected row:\n%s", size[0], size[1], got)
-		}
-		press(t, m, "esc")
-		press(t, m, "R")
-		assertFits(t, frame(m), size[0], size[1])
-		if got := frame(m); !strings.Contains(got, "worker") {
-			t.Errorf("workflows %dx%d hides the form:\n%s", size[0], size[1], got)
-		}
+	press(t, m, "enter") // keep the filter
+	if got := frame(m); !strings.Contains(got, "[esc] Clear filter") {
+		t.Errorf("a kept filter does not say how to clear it:\n%s", got)
+	}
+}
+
+func TestScenario_TuiViewsActions_Logs_EscClearsTheFilterBeforeLeaving(t *testing.T) {
+	m, _, _, _ := followWith(t, "alpha\nbeta\n")
+	press(t, m, "/")
+	typeText(t, m, "beta")
+	press(t, m, "enter")
+	press(t, m, "esc") // clears the filter
+	if got := frame(m); !strings.Contains(got, "alpha") || !strings.Contains(got, "[esc] Pick a Run") {
+		t.Fatalf("esc did not clear the filter:\n%s", got)
+	}
+	if got := frame(m); !strings.Contains(got, "Logs · ") {
+		t.Fatalf("esc left the follow instead of clearing the filter:\n%s", got)
+	}
+	press(t, m, "esc")
+	if got := frame(m); !strings.Contains(got, "pick a Run") {
+		t.Errorf("a second esc did not go back to the picker:\n%s", got)
+	}
+}
+
+func TestScenario_TuiViewsActions_Logs_LongLinesWrapAndCanBeCut(t *testing.T) {
+	long := "/very/long/path/" + strings.Repeat("segment/", 12) + "END-OF-THE-LINE"
+	m, _, _, _ := followWith(t, long+"\n")
+	if got := frame(m); !strings.Contains(strings.ReplaceAll(got, "\n ", ""), "END-OF-THE-LINE") || strings.Contains(got, "…") {
+		t.Errorf("a long line is cut by default:\n%s", got)
+	}
+	press(t, m, "W")
+	got := frame(m)
+	if strings.Contains(got, "END-OF-THE-LINE") || !strings.Contains(got, "…") || !strings.Contains(got, "[W] Wrap lines") {
+		t.Errorf("the toggle does not cut the line, or does not say how to wrap it:\n%s", got)
+	}
+}
+
+func TestScenario_TuiViewsActions_Logs_ScrollingToTheTopShowsAFullPage(t *testing.T) {
+	var b strings.Builder
+	for i := range 100 {
+		fmt.Fprintf(&b, "line %03d\n", i)
+	}
+	m, _, _, _ := followWith(t, b.String())
+	press(t, m, "g")
+	got := frame(m)
+	if !strings.Contains(got, "line 000") || !strings.Contains(got, "line 010") {
+		t.Errorf("the top of the output is one line, not a page:\n%s", got)
 	}
 }

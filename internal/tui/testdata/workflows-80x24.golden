@@ -8,13 +8,16 @@
  Workflow      default
  Head          v3 · sha256:aaaaaaaaaaaa
  Created       09:00
- linux/claude  v3
- macbook/cla…  v2 (head v3) · drift: skills
+ Applied       linux/claude · v3
+               macbook/claude · v2 (head v3) · drift: skills
  History
  v3    12:00   tighten the review skill
  v2    10:30   ~claude/skills +claude/hooks
  v1    09:00   adopted
+ CLI only      cf workflow adopt default · cf workflow commit default · cf
+               workflow diff default --worker=<worker> --harness=<harness> · cf
+               workflow explain default --worker=<worker> --harness=<harness>
 
  ──────────────────────────────────────────────────────────────────────────────
- [↑↓] Move [/] Filter [enter] Actions [a] Apply [s] Sync [R] Rollback
+ [↑↓] Move [/] Filter [enter] Actions [A] Apply [s] Sync [R] Rollback
  [esc] Back [q] Quit

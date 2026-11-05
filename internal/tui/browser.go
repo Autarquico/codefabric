@@ -47,8 +47,15 @@ type viewSpec struct {
 	forms     bool                          // the menu offers actions that need inputs, asked for in a form
 	also      []string                      // actions of no kind that the menu adds
 	suggest   func(s *State, id, input string) []string
-	readOnly  bool    // there is nothing to do to an item
-	needs     []Route // lists of other views that are followed with this one
+	// retitle renames actions in this view, for the ones the registry names for
+	// a target they do not have here; holds says what an action with inputs
+	// would touch, which the confirm shows; cliNote tells what is only in the CLI.
+	retitle  map[string]string
+	holds    func(s *State, d actions.Descriptor, values map[string]string) string
+	cliNote  func(row Row) string
+	readOnly bool    // there is nothing to do to an item
+	primary  string  // what enter does on an item of a read only view, when the screen around the browser answers it
+	needs    []Route // lists of other views that are followed with this one
 	// open builds a screen that is not a list with a detail (Logs, Models); the
 	// shell registers it whether or not there is a Backend.
 	open func(env screenEnv) Screen
@@ -109,6 +116,7 @@ type (
 		err         error
 	}
 	historyMsg struct {
+		from
 		name, stamp string
 		versions    []v1.WorkflowVersion
 		err         error
@@ -141,6 +149,7 @@ type browser struct {
 	confirm *Confirm
 	notice  *Notice
 	flash   string
+	warn    string // something the person asked for that cannot be done
 	busy    string
 	tl      timeline
 	vs      versions
@@ -179,10 +188,10 @@ func (b *browser) syncHistory(row Row) tea.Cmd {
 	if previous.name == row.ID {
 		b.vs.list, b.vs.loading = previous.list, false
 	}
-	backend, name, stamp := b.backend, row.ID, row.Stamp
+	backend, name, stamp, asker := b.backend, row.ID, row.Stamp, from(b.id)
 	return func() tea.Msg {
 		list, err := backend.History(name)
-		return historyMsg{name: name, stamp: stamp, versions: list, err: err}
+		return historyMsg{from: asker, name: name, stamp: stamp, versions: list, err: err}
 	}
 }
 
@@ -272,7 +281,7 @@ func exitDetail(runErr error) string {
 
 func (b *browser) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 	key := k.String()
-	b.flash = ""
+	b.flash, b.warn = "", ""
 	switch {
 	case b.notice != nil:
 		b.notice = nil
@@ -322,14 +331,25 @@ func (b *browser) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 			if !found {
 				return b, nil, true
 			}
-			return b, b.invoke(d, row), true
+			return b, b.invoke(b.titled(d), row), true
 		}
 	}
 	if key == "enter" && !b.spec.readOnly {
 		b.menu = menuFor(b.offered)
+		for i, d := range b.menu.items {
+			b.menu.items[i] = b.titled(d)
+		}
 		return b, nil, true
 	}
 	return b, nil, false
+}
+
+// titled is the action as this view names it.
+func (b *browser) titled(d actions.Descriptor) actions.Descriptor {
+	if title, ok := b.spec.retitle[d.ID]; ok {
+		d.Title = title
+	}
+	return d
 }
 
 // offered says whether the menu lists an action: the ones that act on this kind
@@ -367,6 +387,9 @@ func (b *browser) invoke(d actions.Descriptor, row Row) tea.Cmd {
 func (b *browser) confirmOrStart(d actions.Descriptor, row Row, values map[string]string) tea.Cmd {
 	if d.Destructive {
 		b.confirm = &Confirm{Action: d, Target: row, Values: values}
+		if b.spec.holds != nil && b.state != nil {
+			b.confirm.Holds = b.spec.holds(b.state, d, values)
+		}
 		return nil
 	}
 	return b.start(d, row, values)
@@ -492,6 +515,8 @@ func (b *browser) statusLine(c RenderContext) string {
 	switch {
 	case b.busy != "":
 		return margin + c.Theme.Faint.Render(b.busy)
+	case b.warn != "":
+		return margin + c.Theme.Warning.Render(ansi.Truncate(printable(b.warn), c.inner(), "…"))
 	case b.flash != "":
 		return margin + c.Theme.Success.Render(ansi.Truncate(printable(b.flash), c.inner(), "…"))
 	case c.Status != "":
@@ -515,12 +540,18 @@ func (b *browser) footer(c RenderContext, compact bool) []string {
 		hints = []Hint{{"enter", "Keep filter"}, {"esc", "Clear"}}
 	case compact && b.spec.readOnly:
 		hints = []Hint{{"/", "Filter"}, {"esc", "Back"}, {"q", "Quit"}}
+		if b.spec.primary != "" {
+			hints = append([]Hint{{"enter", b.spec.primary}}, hints...)
+		}
 	case compact:
 		hints = []Hint{{"enter", "Actions"}, {"esc", "Back"}, {"q", "Quit"}}
 	default:
 		hints = []Hint{{"↑↓", "Move"}, {"/", "Filter"}}
-		if !b.spec.readOnly {
+		switch {
+		case !b.spec.readOnly:
 			hints = append(hints, Hint{"enter", "Actions"})
+		case b.spec.primary != "":
+			hints = append(hints, Hint{"enter", b.spec.primary})
 		}
 		for _, s := range b.spec.shortcuts {
 			hints = append(hints, Hint{s.Key, s.Label})
@@ -541,18 +572,19 @@ func (b *browser) pane(c RenderContext, rows []Row, room int) []string {
 	case b.confirm != nil:
 		return b.confirm.render(c)
 	case b.menu != nil:
-		return b.menu.render(c, row.Label)
+		return append(b.menu.render(c, row.Label), b.cliLines(c, row)...)
 	case !ok:
 		return nil
 	}
 	lines := fieldLines(c, b.spec.detail(c, row.ID))
+	note := b.cliLines(c, row)
 	switch {
 	case b.spec.timeline:
 		lines = append(lines, b.timelineLines(c, room-len(lines))...)
 	case b.spec.history:
-		lines = append(lines, b.historyLines(c, room-len(lines))...)
+		lines = append(lines, b.historyLines(c, room-len(lines)-len(note))...)
 	}
-	return lines
+	return append(lines, note...)
 }
 
 // timelineLines are the newest events of the Task that fit under its fields.
@@ -623,4 +655,12 @@ func versionSummary(v v1.WorkflowVersion) string {
 		changed[i] = marks[ch.Change] + printable(ch.Harness+"/"+ch.Name)
 	}
 	return strings.Join(changed, " ")
+}
+
+// cliLines say what the view leaves to the CLI, with the command to run.
+func (b *browser) cliLines(c RenderContext, row Row) []string {
+	if b.spec.cliNote == nil {
+		return nil
+	}
+	return wrapped(c, "CLI only", b.spec.cliNote(row), c.Theme.Faint)
 }

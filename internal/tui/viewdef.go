@@ -30,8 +30,11 @@ type viewDef[T any] struct {
 	history   bool                          // the detail carries the versions of a Workflow
 	// forms lets the menu offer actions that need inputs, which a form asks for;
 	// also names the actions of other kinds (nothing to target) the menu adds.
-	forms bool
-	also  []string
+	forms   bool
+	also    []string
+	retitle map[string]string
+	holds   func(s *State, d actions.Descriptor, values map[string]string) string
+	cliNote func(row Row) string
 	// suggest is what the form can propose for an input of an action on the item.
 	suggest func(s *State, id, input string) []string
 	// needs are the lists of other views that the rows draw names from.
@@ -60,7 +63,7 @@ func (d viewDef[T]) spec() viewSpec {
 	return viewSpec{
 		route: d.route, title: d.title, kind: d.kind, columns: d.columns, empty: d.empty,
 		shortcuts: d.shortcuts, skip: d.skip, timeline: d.timeline, history: d.history, needs: d.needs,
-		forms: d.forms, also: d.also, suggest: d.suggest,
+		forms: d.forms, also: d.also, suggest: d.suggest, retitle: d.retitle, holds: d.holds, cliNote: d.cliNote,
 		feed: func(s *State) feedInfo {
 			f := d.list(s)
 			return feedInfo{f.Loaded, f.Down, f.Err}

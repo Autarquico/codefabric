@@ -24,9 +24,13 @@ func workflowsDef() viewDef[WorkflowRow] {
 		empty:   "No workflows yet",
 		skip:    func(d actions.Descriptor) bool { return slices.Contains(adoptIDs, d.ID) },
 		// Rolling back acts on a Worker's harness, not on one Workflow: it has
-		// no target, so the menu names it.
+		// no target, so the view names it for what it is. Apply is a capital:
+		// "a" is Activity on the home.
 		also:      []string{"workflow.rollback"},
-		shortcuts: []shortcut{{"a", "Apply", "workflow.apply"}, {"s", "Sync", "workflow.sync"}, {"R", "Rollback", "workflow.rollback"}},
+		retitle:   map[string]string{"workflow.rollback": "Roll back a Worker's harness"},
+		holds:     rollbackHolds,
+		cliNote:   workflowCLINote,
+		shortcuts: []shortcut{{"A", "Apply", "workflow.apply"}, {"s", "Sync", "workflow.sync"}, {"R", "Rollback", "workflow.rollback"}},
 		needs:     []Route{RouteWorkers},
 		list:      func(s *State) *Feed[WorkflowRow] { return &s.Workflows },
 		source:    func(f Feeds) FeedSource[WorkflowRow] { return f.Workflows },
@@ -51,12 +55,42 @@ func workflowsDef() viewDef[WorkflowRow] {
 				{"Head", joinParts(headOf(w.Summary), shortDigest(w.Summary.HeadDigest)), ToneText},
 				{"Created", activityTime(w.Summary.CreatedAt, c.Now, c.Loc), ToneFaint},
 			}
-			for _, s := range w.Held {
-				fields = append(fields, Field{s.Worker + "/" + s.Harness, heldOf(s, w.Summary.Head), heldTone(s, w.Summary.Head)})
+			for i, s := range w.Held {
+				label := ""
+				if i == 0 {
+					label = "Applied"
+				}
+				// The pair is the identity of the row: it leads the value, whole.
+				fields = append(fields, Field{label, s.Worker + "/" + s.Harness + " · " + heldOf(s, w.Summary.Head), heldTone(s, w.Summary.Head)})
 			}
 			return fields
 		},
 	}
+}
+
+// workflowCLINote is what the Workflows view leaves to the CLI, with the
+// commands for the selected Workflow: adopt and commit take a snapshot of the
+// machine and need the review the CLI shows; diff and explain print plans.
+func workflowCLINote(row Row) string {
+	name := row.ID
+	target := " " + name + " --worker=<worker> --harness=<harness>"
+	return "cf workflow adopt " + name + " · cf workflow commit " + name +
+		" · cf workflow diff" + target + " · cf workflow explain" + target
+}
+
+// rollbackHolds says what the Worker and harness of a rollback hold now.
+func rollbackHolds(s *State, d actions.Descriptor, values map[string]string) string {
+	if d.ID != "workflow.rollback" {
+		return ""
+	}
+	for _, w := range s.Workflows.Items {
+		for _, h := range w.Held {
+			if h.Worker == values["worker"] && h.Harness == values["harness"] {
+				return w.Summary.Name + " v" + strconv.Itoa(h.AppliedVersion) + ", which goes back to the version it held before"
+			}
+		}
+	}
+	return "no Workflow is known on that Worker and harness"
 }
 
 // coverage says on how many of the Workers that hold the Workflow it is at its
