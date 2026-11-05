@@ -32,7 +32,15 @@ func newNotifyCmd(native notify.Native) *cobra.Command {
 		Use:   "notify",
 		Short: "Desktop notifications and hooks for the events that need you",
 		Long: "Notifications are made by this process, on this machine, from the event stream; the Controller\n" +
-			"does not send them. The TUI notifies on its own while it is open. What notifies is set under \"notify\" in client.json (see `cf config paths`).",
+			"does not send them. The TUI notifies on its own while it is open. What notifies is set under \"notify\" in client.json (see `cf config paths`):\n\n" +
+			"  {\"notify\": {\n" +
+			"    \"events\": [\"RunFailed\", \"TaskNeedsInput\", \"WorkerLost\"],   default; any event type, [] for none\n" +
+			"    \"min_level\": \"warn\",                                       least severe level: debug, info, warn, error\n" +
+			"    \"muted_projects\": [\"<project id>\"],\n" +
+			"    \"quiet_hours\": {\"start\": \"22:00\", \"end\": \"07:30\"},      local time; holds back native notifications only\n" +
+			"    \"hook\": [\"/path/to/command\", \"arg\"]                         argv, no shell; gets each event as JSON on stdin\n" +
+			"  }}\n\n" +
+			"The hook gets the event as JSON (type, run_id, task_id, level, message, ...) and has 10 s to finish.",
 	}
 	cmd.AddCommand(newNotifyWatchCmd(native), newNotifyTestCmd(native))
 	return cmd

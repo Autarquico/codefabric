@@ -20,6 +20,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 // Bounds of the dedupe state and of the adapters.
@@ -40,8 +41,9 @@ type Options struct {
 	Native Native
 	// Exec runs the hook; default OSExec.
 	Exec Exec
-	Now  func() time.Time
-	Log  *slog.Logger
+	// Clock tells the time and runs every timeout and wait; default the system clock.
+	Clock clock.Clock
+	Log   *slog.Logger
 	// Backoff bounds the wait between attempts to reach the Controller; zero
 	// values mean 0.5 s growing to 10 s.
 	BackoffInitial, BackoffMax time.Duration
@@ -71,8 +73,8 @@ func New(o Options) *Notifier {
 	if o.BackoffMax <= 0 {
 		o.BackoffMax = 10 * time.Second
 	}
-	if o.Now == nil {
-		o.Now = time.Now
+	if o.Clock == nil {
+		o.Clock = clock.Real{}
 	}
 	n := &Notifier{
 		opts: o, types: map[string]bool{}, muted: map[string]bool{}, quiet: o.Prefs.QuietHours, log: o.Log,
@@ -105,7 +107,7 @@ func (n *Notifier) Types() []string {
 // or the same type and subject within DedupeWindow (a repeat). Failures of the
 // adapters are logged, not returned: a notification never stops the stream.
 func (n *Notifier) Handle(ctx context.Context, e v1.Event) {
-	if !n.types[string(e.Type)] || n.muted[e.ProjectID] || !n.firstTime(e) {
+	if !n.eligible(e) || !n.firstTime(e) {
 		return
 	}
 	title, body := "CodeFabric: "+Sanitize(string(e.Type)), Sanitize(e.Message)
@@ -115,11 +117,20 @@ func (n *Notifier) Handle(ctx context.Context, e v1.Event) {
 	n.logFailure(n.runHook(ctx, e))
 }
 
+// eligible applies the preferences: type, Project and severity.
+func (n *Notifier) eligible(e v1.Event) bool {
+	if !n.types[string(e.Type)] || n.muted[e.ProjectID] {
+		return false
+	}
+	floor := n.opts.Prefs.MinLevel
+	return floor == "" || domain.LevelAtLeast(e.Level, floor)
+}
+
 // Test delivers a sample notification through the native channel and the hook,
 // bypassing preferences, quiet hours and dedupe, and returns what went wrong:
 // a failed delivery, or nothing to deliver with at all.
 func (n *Notifier) Test(ctx context.Context) error {
-	e := v1.Event{Type: "NotifyTest", Message: "This is a test notification from cf.", Timestamp: n.opts.Now()}
+	e := v1.Event{Type: "NotifyTest", Message: "This is a test notification from cf.", Timestamp: n.opts.Clock.Now()}
 	hook := len(n.opts.Prefs.Hook) > 0
 	if n.opts.Native == nil && !hook {
 		return errNothingToDeliver
@@ -156,14 +167,19 @@ func (n *Notifier) logFailure(err error) {
 func (n *Notifier) firstTime(e v1.Event) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	now := n.opts.Now()
+	now := n.opts.Clock.Now()
 	subject := string(e.Type) + "/" + subjectOf(e)
 	seq := strconv.FormatUint(e.Sequence, 10)
-	if (e.Sequence != 0 && n.seqs.has(seq, now)) || n.subject.has(subject, now) {
-		return false
-	}
+	// Every new sequence is remembered, even if the subject suppresses it, so
+	// that its replay after the window is still recognised.
 	if e.Sequence != 0 {
+		if n.seqs.has(seq, now) {
+			return false
+		}
 		n.seqs.add(seq, now)
+	}
+	if n.subject.has(subject, now) {
+		return false
 	}
 	n.subject.add(subject, now)
 	return true
@@ -184,12 +200,29 @@ func (n *Notifier) showNative(ctx context.Context, title, body string) error {
 	if n.opts.Native == nil {
 		return errNoNative
 	}
-	ctx, cancel := context.WithTimeout(ctx, nativeTimeout)
+	ctx, cancel := n.withTimeout(ctx, nativeTimeout)
 	defer cancel()
 	if err := n.opts.Native.Show(ctx, title, body); err != nil {
 		return fmt.Errorf("native notification failed: %w", err)
 	}
 	return nil
+}
+
+// withTimeout is context.WithTimeout on the injected clock.
+func (n *Notifier) withTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	t := n.opts.Clock.NewTimer(d)
+	go func() {
+		select {
+		case <-t.C():
+			cancel(context.DeadlineExceeded)
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, func() {
+		t.Stop()
+		cancel(context.Canceled)
+	}
 }
 
 // runHook runs the configured hook, if any, with e as JSON on its stdin.
@@ -202,7 +235,7 @@ func (n *Notifier) runHook(ctx context.Context, e v1.Event) error {
 	if err != nil {
 		return fmt.Errorf("hook payload: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, hookTimeout)
+	ctx, cancel := n.withTimeout(ctx, hookTimeout)
 	defer cancel()
 	out, err := n.opts.Exec(ctx, argv[0], argv[1:], payload)
 	if err != nil {
@@ -222,7 +255,7 @@ func (n *Notifier) quietNow() bool {
 	if err1 != nil || err2 != nil {
 		return false
 	}
-	now := n.opts.Now().Local()
+	now := n.opts.Clock.Now().Local()
 	at := time.Duration(now.Hour())*time.Hour + time.Duration(now.Minute())*time.Minute
 	from := time.Duration(start.Hour())*time.Hour + time.Duration(start.Minute())*time.Minute
 	to := time.Duration(end.Hour())*time.Hour + time.Duration(end.Minute())*time.Minute
@@ -275,10 +308,12 @@ func (n *Notifier) Watch(ctx context.Context, src Source) error {
 			n.log.Warn("notify: cannot follow events; trying again", "err", err)
 			down = true
 		}
+		wait := n.opts.Clock.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			wait.Stop()
 			return nil
-		case <-time.After(delay):
+		case <-wait.C():
 		}
 		delay = min(delay*2, n.opts.BackoffMax)
 	}

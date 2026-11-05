@@ -44,15 +44,15 @@ func TestLoadClient_Notify(t *testing.T) {
 	if err != nil || len(c.Notify.NotifyEvents()) != 3 {
 		t.Fatalf("defaults: %+v, %v", c.Notify.NotifyEvents(), err)
 	}
-	write(`{"notify":{"events":["RunCompleted"],"muted_projects":["p1"],"quiet_hours":{"start":"22:00","end":"07:30"},"hook":["/bin/true","x"]}}`)
-	if c, err = config.LoadClient(p); err != nil || c.Notify.NotifyEvents()[0] != "RunCompleted" || c.Notify.QuietHours.End != "07:30" {
+	write(`{"notify":{"events":["RunCompleted"],"muted_projects":["p1"],"min_level":"warn","quiet_hours":{"start":"22:00","end":"07:30"},"hook":["/bin/true","x"]}}`)
+	if c, err = config.LoadClient(p); err != nil || c.Notify.NotifyEvents()[0] != "RunCompleted" || c.Notify.QuietHours.End != "07:30" || c.Notify.MinLevel != "warn" {
 		t.Fatalf("set: %+v, %v", c.Notify, err)
 	}
 	write(`{"notify":{"events":[]}}`)
 	if c, err = config.LoadClient(p); err != nil || len(c.Notify.NotifyEvents()) != 0 {
 		t.Fatalf("explicitly none: %+v, %v", c.Notify, err)
 	}
-	for _, bad := range []string{`{"notify":{"quiet_hours":{"start":"25:00","end":"07:00"}}}`, `{"notify":{"hook":[]}}`, `{"notify":{"hook":[""]}}`, `{"notify":{"hook":["./notify.sh"]}}`, `{"notify":{"hook":["bin/hook"]}}`} {
+	for _, bad := range []string{`{"notify":{"min_level":"critical"}}`, `{"notify":{"quiet_hours":{"start":"25:00","end":"07:00"}}}`, `{"notify":{"hook":[]}}`, `{"notify":{"hook":[""]}}`, `{"notify":{"hook":["./notify.sh"]}}`, `{"notify":{"hook":["bin/hook"]}}`} {
 		write(bad)
 		if _, err := config.LoadClient(p); err == nil {
 			t.Errorf("%s was accepted", bad)

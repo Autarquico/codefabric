@@ -28,6 +28,8 @@ type ClientNotify struct {
 	Events []string `json:"events,omitempty"`
 	// MutedProjects are Projects (id) whose events never notify.
 	MutedProjects []string `json:"muted_projects,omitempty"`
+	// MinLevel, if set, is the least severe event level that notifies: debug, info, warn or error.
+	MinLevel string `json:"min_level,omitempty"`
 	// QuietHours, if set, holds back the native notifications in that window.
 	QuietHours *QuietHours `json:"quiet_hours,omitempty"`
 	// Hook is a command (argv, never a shell) that gets each notified event as
@@ -62,6 +64,9 @@ func (n ClientNotify) hookCommand() string {
 }
 
 func (n ClientNotify) validate() error {
+	if n.MinLevel != "" && !domain.ValidLevel(n.MinLevel) {
+		return fmt.Errorf("notify.min_level: %q is not an event level", n.MinLevel)
+	}
 	if q := n.QuietHours; q != nil {
 		for _, hhmm := range []string{q.Start, q.End} {
 			if _, err := time.Parse("15:04", hhmm); err != nil {
