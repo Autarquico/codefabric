@@ -420,6 +420,21 @@ func TestShip_ALoneRunWithALotOfOutputGetsTheWholeBatchEachPass(t *testing.T) {
 	}
 }
 
+// What an idle Run does not take goes to the Runs after it in the pass: a busy
+// Run behind seven idle ones gets the whole batch.
+func TestShip_AnIdleRunLeavesItsShareToTheRunsAfterIt(t *testing.T) {
+	f := newFixture(t)
+	for _, id := range []string{"run_a", "run_b", "run_c", "run_d", "run_e", "run_f", "run_g"} {
+		f.run(id, state.PhaseRunning) // no output yet
+	}
+	k := f.run("run_z", state.PhaseRunning)
+	f.write(k, strings.Repeat("z", 3<<20))
+	f.once()
+	if got := f.cursor(k).Sent; got != 1<<20 {
+		t.Fatalf("the pass sent %d bytes of the busy Run, want the whole batch (%d)", got, 1<<20)
+	}
+}
+
 // A Worker that had the "last MiB" logic left cursors at an offset deep in the
 // log: they go on from there, and the bytes before it are not sent (the Controller
 // of that time never held them).

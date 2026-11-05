@@ -157,11 +157,13 @@ func (s *Shipper) Once(ctx context.Context) error {
 		runs = append(runs[s.rotate%len(runs):], runs[:s.rotate%len(runs)]...)
 	}
 	defer func() { s.rotate += visited }()
-	for _, r := range runs {
+	for i, r := range runs {
 		if budget <= 0 || len(batch.Entries) >= v1.OutputBatchMaxItems {
 			break
 		}
-		it, err := s.plan(ctx, r, min(max(perRunBytes, batchBytes/len(runs)), budget))
+		// Each Run gets its share of what is left: what an idle or waiting Run
+		// does not take goes to the Runs after it.
+		it, err := s.plan(ctx, r, min(max(perRunBytes, budget/(len(runs)-i)), budget))
 		if err != nil {
 			return err
 		}
@@ -233,7 +235,7 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 		return nil, nil
 	}
 	if b, ok := s.busy[r.Key]; ok && s.o.Clock.Now().Before(b.until) {
-		return nil, nil // the Controller asked to wait; the others use its room
+		return nil, nil // the Controller asked to wait; the Runs after it use its room
 	}
 	it := &item{cursor: cur}
 	entry := func(e v1.OutputEntry) {
