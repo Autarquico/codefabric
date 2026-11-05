@@ -3,11 +3,12 @@
 package gitops
 
 import (
-	"cmp"
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -115,19 +116,41 @@ func TestAValueAtTheCapOfTheStdoutOfGitLeavesNoFragment(t *testing.T) {
 // back is written as a marker and never as the fragment.
 func TestWhatTheRedactionHoldsBackIsFlushedOnEveryEnd(t *testing.T) {
 	half := cutValue[:len(cutValue)/2]
+	// The cancelled child tells through a fifo that it has printed; only then is it cancelled.
+	// It then blocks opening a fifo nobody writes, so only the cancellation ends it.
+	dir := t.TempDir()
+	printed, never := filepath.Join(dir, "printed"), filepath.Join(dir, "never")
+	for _, fifo := range []string{printed, never} {
+		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for name, tc := range map[string]struct {
 		body    string
-		timeout time.Duration
+		cancel  bool
 		wantErr bool
 		exit    int
 	}{
 		"success":      {body: "printf '" + half + "'; printf '" + half + "' >&2"},
 		"non-zero":     {body: "printf '" + half + "'; printf '" + half + "' >&2; exit 3", exit: 3},
-		"cancellation": {body: "printf '" + half + "'; printf '" + half + "' >&2; sleep 30", timeout: 500 * time.Millisecond, wantErr: true},
+		"cancellation": {body: "printf '" + half + "'; printf '" + half + "' >&2; echo > '" + printed + "'; read _ < '" + never + "'", cancel: true, wantErr: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			timeout := cmp.Or(tc.timeout, time.Minute)
-			res, err := scriptGit(t, tc.body).run(t.Context(), cmd{dir: t.TempDir(), timeout: timeout, args: []string{"fetch"}, values: cutSet(t)})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.cancel {
+				go func() {
+					defer cancel()
+					f, err := os.Open(printed) //nolint:gosec // the fifo of the test; blocks until the child has printed
+					if err != nil {
+						t.Errorf("waiting for the child to print: %v", err)
+						return
+					}
+					_, _ = f.Read(make([]byte, 1))
+					_ = f.Close()
+				}()
+			}
+			res, err := scriptGit(t, tc.body).run(ctx, cmd{dir: t.TempDir(), timeout: time.Minute, args: []string{"fetch"}, values: cutSet(t)})
 			if (err != nil) != tc.wantErr || res.exit != tc.exit {
 				t.Fatalf("err = %v, exit = %d", err, res.exit)
 			}
