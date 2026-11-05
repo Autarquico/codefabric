@@ -129,6 +129,7 @@ func TestScenario_TuiViewsActions_ParidadCLI_EjecutaCadaAccion(t *testing.T) {
 		"task.defer":            {actions.Input{Target: "t1"}, []string{"task", "defer", "t1"}},
 		"task.resume":           {actions.Input{Target: "t1"}, []string{"task", "resume", "t1"}},
 		"task.move":             {actions.Input{Target: "t1", Values: vals("worker", "w1")}, []string{"task", "move", "t1", "w1"}},
+		"task.respond":          {actions.Input{Target: "t1", Values: vals("allow", "true")}, []string{"task", "respond", "t1", "--allow"}},
 		"task.timeline":         {actions.Input{Target: "t1", Values: vals("limit", "5")}, []string{"task", "timeline", "t1", "--limit=5"}},
 		"run.fork":              {actions.Input{Target: "r1"}, []string{"run", "fork", "r1"}},
 		"run.promote":           {actions.Input{Target: "r1"}, []string{"run", "promote", "r1"}},

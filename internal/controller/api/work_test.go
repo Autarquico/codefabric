@@ -50,6 +50,8 @@ func TestProjectsTasksRunsApi_WorkRoutesAreForClientsOnly(t *testing.T) {
 		{"POST", "/v1/tasks/x/defer"},
 		{"POST", "/v1/tasks/x/resume"},
 		{"POST", "/v1/tasks/x/move"},
+		{"POST", "/v1/tasks/x/respond"},
+		{"GET", "/v1/inbox"},
 		{"GET", "/v1/runs"},
 		{"GET", "/v1/runs/x"},
 		{"POST", "/v1/runs/x/fork"},

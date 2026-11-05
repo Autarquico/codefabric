@@ -41,3 +41,32 @@ func TestObserveRoutes_PsAndAttachErrors(t *testing.T) {
 		t.Errorf("ps in an unknown project: %d %s", status, env.Code)
 	}
 }
+
+func TestRespondRoute_ATaskNotWaitingIsNotRespondableAndTheBodyIsChecked(t *testing.T) {
+	f := newSchedulingFixture(t)
+	hc := f.httpClientFor(f.ownerDir)
+
+	body := `{"request_id":"r1","answer":{"decision":"allow"}}`
+	status, env, _ := f.call(hc, http.MethodPost, "/v1/tasks/"+f.run.TaskID+"/respond", body)
+	if status != http.StatusConflict || env.Code != domain.CodeRunNotRespondable {
+		t.Fatalf("respond = %d %+v", status, env)
+	}
+	if env.Details["attach"] != "cf attach "+f.run.Short {
+		t.Errorf("details = %v", env.Details)
+	}
+	if status, env, _ = f.call(hc, http.MethodPost, "/v1/tasks/"+f.run.TaskID+"/respond", `{"nope":1}`); status != http.StatusBadRequest || env.Code != domain.CodeInvalidRequest {
+		t.Errorf("a body with an unknown field: %d %s", status, env.Code)
+	}
+	if status, env, _ = f.call(hc, http.MethodPost, "/v1/tasks/"+f.run.TaskID+"/respond?project=nowhere", body); status != http.StatusNotFound || env.Code != domain.CodeNotFound {
+		t.Errorf("respond in an unknown project: %d %s", status, env.Code)
+	}
+}
+
+func TestInboxRoute_AnEmptyControllerListsAnEmptyArray(t *testing.T) {
+	f := newSchedulingFixture(t)
+	status, _, raw := f.call(f.httpClientFor(f.ownerDir), http.MethodGet, "/v1/inbox", "")
+	var out map[string]json.RawMessage
+	if status != http.StatusOK || json.Unmarshal(raw, &out) != nil || string(out["items"]) != "[]" {
+		t.Fatalf("inbox = %d %s", status, raw)
+	}
+}

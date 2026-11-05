@@ -300,7 +300,7 @@ func menuFor(offer func(actions.Descriptor) bool) *Menu {
 
 func needsInput(d actions.Descriptor) bool {
 	for _, a := range d.Args {
-		if a.Required {
+		if a.Required || a.OneOf != "" {
 			return true
 		}
 	}
