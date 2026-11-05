@@ -104,7 +104,7 @@ var descriptors = []Descriptor{
 	},
 	{
 		ID: "task.respond", Title: "Answer task", Target: Task, Path: []string{"task", "respond"},
-		Args: flags("prompt", "allow", "deny", "text", "request-id", "project"),
+		Args: flags("prompt", "run", "allow", "deny", "text", "request-id", "project"),
 	},
 	{ID: "task.timeline", Title: "Task timeline", Target: Task, Path: []string{"task", "timeline"}, Args: flags("after", "limit", "project")},
 
