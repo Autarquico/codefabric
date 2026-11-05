@@ -1,0 +1,258 @@
+package slogtee_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Autarquico/codefabric/internal/support/slogtee"
+)
+
+// quiet is an inner handler at info that writes nowhere.
+var quiet = slog.NewTextHandler(io.Discard, nil)
+
+// collector is a sink that keeps what it is given.
+type collector struct {
+	mu      sync.Mutex
+	entries []slogtee.Entry
+}
+
+func (c *collector) sink(_ context.Context, es []slogtee.Entry) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = append(c.entries, es...)
+	return nil
+}
+
+func (c *collector) all() []slogtee.Entry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]slogtee.Entry(nil), c.entries...)
+}
+
+// run starts the writer and returns the function that stops it and waits.
+func run(t *testing.T, tee *slogtee.Tee, sink slogtee.Sink, fallback *slog.Logger) func() {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); tee.Run(ctx, sink, fallback) }()
+	return func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the writer did not stop")
+		}
+	}
+}
+
+func attrs(t *testing.T, e slogtee.Entry) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(e.Attrs, &m); err != nil {
+		t.Fatalf("attrs %s: %v", e.Attrs, err)
+	}
+	return m
+}
+
+type secretValue string
+
+func (secretValue) LogValue() slog.Value { return slog.StringValue("[hidden]") }
+
+func TestTheInnerHandlerGetsEveryRecordAndTheTeeAJSONCopyWithItsIDs(t *testing.T) {
+	var stderr bytes.Buffer
+	tee := slogtee.New(slogtee.Options{})
+	log := slog.New(tee.Wrap(slog.NewTextHandler(&stderr, nil)))
+	var c collector
+	stop := run(t, tee, c.sink, slog.New(slog.DiscardHandler))
+
+	log.With("run", "run_01J", "project", "project-1").WithGroup("g").Info("hello", "n", 3, "task", "task_01J", "v", secretValue("x"))
+	log.Debug("not enabled") // the inner handler is at info: the tee follows it
+	log.Warn("plain")
+	stop()
+
+	if !strings.Contains(stderr.String(), "msg=hello") || !strings.Contains(stderr.String(), "g.n=3") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	got := c.all()
+	if len(got) != 2 {
+		t.Fatalf("%d entries, want 2: %+v", len(got), got)
+	}
+	e := got[0]
+	if e.Msg != "hello" || e.Level != "info" || e.Time.IsZero() {
+		t.Fatalf("entry = %+v", e)
+	}
+	// run comes from With at the top level; task is inside a group, project is not an ID.
+	if e.RunID != "run_01J" || e.TaskID != "" || e.ProjectID != "" {
+		t.Fatalf("ids = %q %q %q", e.RunID, e.TaskID, e.ProjectID)
+	}
+	m := attrs(t, e)
+	g, _ := m["g"].(map[string]any)
+	if m["run"] != "run_01J" || g["n"] != float64(3) || g["v"] != "[hidden]" {
+		t.Fatalf("attrs = %s", e.Attrs)
+	}
+	if _, ok := m["level"]; ok {
+		t.Fatalf("the level is a column, not an attribute: %s", e.Attrs)
+	}
+	if got[1].Level != "warn" || string(got[1].Attrs) != "{}" {
+		t.Fatalf("second = %+v", got[1])
+	}
+}
+
+func TestTheCopyIsRedacted(t *testing.T) {
+	const secret = "s3cr3t-value-123456"
+	tee := slogtee.New(slogtee.Options{Redact: func(s string) string { return strings.ReplaceAll(s, secret, "[REDACTED:k]") }})
+	log := slog.New(tee.Wrap(quiet))
+	var c collector
+	stop := run(t, tee, c.sink, slog.New(slog.DiscardHandler))
+
+	log.Info("pushing to https://x:"+secret+"@example.com/r.git failed",
+		"api_token", "anything", "err", errors.New("auth "+secret), "cfg", map[string]string{"v": secret}, "url", "https://u:pw@h/p")
+	stop()
+
+	got := c.all()
+	if len(got) != 1 {
+		t.Fatalf("%d entries", len(got))
+	}
+	raw := got[0].Msg + string(got[0].Attrs)
+	for _, leak := range []string{secret, "anything", "u:pw"} {
+		if strings.Contains(raw, leak) {
+			t.Errorf("%q leaks: %s", leak, raw)
+		}
+	}
+	m := attrs(t, got[0])
+	if m["api_token"] != "<redacted>" || m["err"] != "auth [REDACTED:k]" {
+		t.Fatalf("attrs = %s", got[0].Attrs)
+	}
+	if cfg, ok := m["cfg"].(map[string]any); !ok || cfg["v"] != "[REDACTED:k]" {
+		t.Fatalf("a structured value keeps its shape: %s", got[0].Attrs)
+	}
+}
+
+func TestLoggingNeverWaitsForTheSinkAndTheOverflowIsCountedAndReported(t *testing.T) {
+	tee := slogtee.New(slogtee.Options{Capacity: 4})
+	log := slog.New(tee.Wrap(quiet))
+	release := make(chan struct{})
+	var c collector
+	sink := func(ctx context.Context, es []slogtee.Entry) error {
+		<-release
+		return c.sink(ctx, es)
+	}
+	var fallback bytes.Buffer
+	stop := run(t, tee, sink, slog.New(slog.NewTextHandler(&fallback, nil)))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 100 {
+			log.Info("line")
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("logging waited for a sink that does not return")
+	}
+	if tee.Dropped() == 0 {
+		t.Fatal("a queue of 4 took 100 lines")
+	}
+	close(release)
+	stop()
+
+	got := c.all()
+	var kept, reported float64
+	for _, e := range got {
+		if e.Level != "warn" {
+			kept++
+			continue
+		}
+		n, _ := attrs(t, e)["dropped"].(float64)
+		if n < 1 || !strings.Contains(e.Msg, "dropped") {
+			t.Fatalf("the overflow entry = %+v", e)
+		}
+		reported += n
+	}
+	if reported == 0 || !strings.Contains(fallback.String(), "dropped") {
+		t.Fatalf("the overflow is not reported: %d entries, fallback %q", len(got), fallback.String())
+	}
+	if kept+reported != 100 || uint64(reported) != tee.Dropped() {
+		t.Fatalf("%v kept + %v reported != 100 (dropped %d)", kept, reported, tee.Dropped())
+	}
+}
+
+// The sink logs through the teed logger, as store.WithTx does: nothing waits
+// on anything, and the writer stops when asked.
+func TestASinkThatLogsThroughTheTeeNeitherDeadlocksNorKeepsTheWriterRunning(t *testing.T) {
+	tee := slogtee.New(slogtee.Options{Capacity: 8})
+	log := slog.New(tee.Wrap(quiet))
+	var c collector
+	sink := func(ctx context.Context, es []slogtee.Entry) error {
+		log.InfoContext(ctx, "store: a transaction held the writer") // synchronous, from the writer itself
+		return c.sink(ctx, es)
+	}
+	stop := run(t, tee, sink, slog.New(slog.DiscardHandler))
+	log.Info("first")
+	deadline := time.Now().Add(5 * time.Second)
+	for len(c.all()) < 3 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	stop()
+	if len(c.all()) < 3 {
+		t.Fatal("the writer stalled")
+	}
+}
+
+func TestWhatIsQueuedIsWrittenOnShutdown(t *testing.T) {
+	tee := slogtee.New(slogtee.Options{})
+	log := slog.New(tee.Wrap(quiet))
+	for i := range 1000 {
+		log.Info("before the writer", "i", i)
+	}
+	var c collector
+	stop := run(t, tee, c.sink, slog.New(slog.DiscardHandler))
+	stop()
+	if got := len(c.all()); got != 1000 {
+		t.Fatalf("%d of 1000 written", got)
+	}
+	log.Info("after the writer stopped")
+	if tee.Dropped() != 0 {
+		t.Fatal("a line after the shutdown is not an overflow")
+	}
+}
+
+func TestAFailingSinkLosesTheBatchAndSaysSoOnTheFallbackOnly(t *testing.T) {
+	tee := slogtee.New(slogtee.Options{})
+	log := slog.New(tee.Wrap(quiet))
+	var fallback bytes.Buffer
+	var calls int
+	sink := func(context.Context, []slogtee.Entry) error { calls++; return errors.New("disk full") }
+	log.Info("a")
+	stop := run(t, tee, sink, slog.New(slog.NewTextHandler(&fallback, nil)))
+	stop()
+	if calls != 1 || tee.Dropped() != 1 || !strings.Contains(fallback.String(), "disk full") {
+		t.Fatalf("calls %d, dropped %d, fallback %q", calls, tee.Dropped(), fallback.String())
+	}
+}
+
+func TestLongMessagesAndAttributesAreBounded(t *testing.T) {
+	tee := slogtee.New(slogtee.Options{MaxMessageBytes: 10, MaxAttrsBytes: 64})
+	log := slog.New(tee.Wrap(quiet))
+	var c collector
+	stop := run(t, tee, c.sink, slog.New(slog.DiscardHandler))
+	log.Info("ñññññññññññ", "big", strings.Repeat("x", 100))
+	stop()
+	e := c.all()[0]
+	if len(e.Msg) > 10 || !strings.HasPrefix("ñññññññññññ", e.Msg) {
+		t.Fatalf("msg = %q", e.Msg)
+	}
+	if len(e.Attrs) > 64 || !json.Valid(e.Attrs) {
+		t.Fatalf("attrs = %s", e.Attrs)
+	}
+}

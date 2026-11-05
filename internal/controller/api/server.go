@@ -177,6 +177,9 @@ func New(c Config) (*Server, error) {
 	}
 	s.registerOutputRoutes()
 	s.registerObserveRoutes()
+	if s.work.Logs != nil {
+		s.registerLogRoutes()
+	}
 	return s, nil
 }
 

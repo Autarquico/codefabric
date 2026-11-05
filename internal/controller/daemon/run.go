@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/workers"
@@ -25,6 +26,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/support/slogtee"
 )
 
 // Options parameterise Start.
@@ -85,6 +87,11 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
+	// The store and the writer of the structured logs log through fallback, which
+	// is not teed: what they say about storing a line is not another line to store.
+	fallback := o.Logger
+	tee := slogtee.New(slogtee.Options{MaxMessageBytes: v1.LogMessageMaxBytes, MaxAttrsBytes: v1.LogAttrsMaxBytes})
+	o.Logger = slog.New(tee.Wrap(fallback.Handler()))
 	p := o.Paths
 	cfg, err := config.LoadController(p)
 	if err != nil {
@@ -106,7 +113,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening the blob store: %w", err)
 	}
-	db, err := store.Open(ctx, p.DatabaseFile(), store.Options{Clock: o.Clock, Logger: o.Logger, Blobs: blobs})
+	db, err := store.Open(ctx, p.DatabaseFile(), store.Options{Clock: o.Clock, Logger: fallback, Blobs: blobs})
 	if err != nil {
 		return nil, err
 	}
@@ -138,9 +145,11 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		RunLostTimeout: cmp.Or(o.RunLostTimeout, time.Duration(cfg.RunLostTimeout)),
 		Blobs:          blobs, MaxBlobBytes: workflows.DefaultMaxBlobBytes,
 	}, runOpts...)
+	stopLogs := runLogs(ctx, tee, services, fallback)
 	// §27.1: the stops that are owed are resumed before anything is served.
 	if err := services.Reconciliation.Startup(ctx, o.Logger); err != nil {
 		_ = ln.Close()
+		stopLogs()
 		_ = db.Close()
 		return nil, err
 	}
@@ -151,6 +160,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	})
 	if err != nil {
 		_ = ln.Close()
+		stopLogs()
 		_ = db.Close()
 		return nil, err
 	}
@@ -174,9 +184,23 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		serveErr := srv.Serve(ctx, ln)
 		stop()
 		background.Wait()
+		stopLogs()
 		c.err = errors.Join(serveErr, db.Close())
 	}()
 	return c, nil
+}
+
+// runLogs writes the structured logs of the Controller into its store until
+// the returned stop is called, which writes what is left and waits: it is
+// called before the store is closed, after everything that logs has stopped.
+func runLogs(ctx context.Context, tee *slogtee.Tee, services *app.Services, fallback *slog.Logger) (stop func()) {
+	logCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tee.Run(logCtx, services.Logs.AppendController, fallback)
+	}()
+	return func() { cancel(); <-done }
 }
 
 // renewServerCert asks load for the server certificate every interval and
