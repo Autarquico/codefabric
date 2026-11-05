@@ -205,7 +205,7 @@ func newRootCmd(opts Options) *cobra.Command {
 	flags.Bool(flagDebug, false, "show the details of an error")
 	root.AddCommand(newVersionCmd(), newStatusCmd(), newConnectCmd(), newClientCmd(), newConfigCmd(),
 		newProjectCmd(openProjectUpdater(opts)), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd(),
-		newAttachCmd(opts.Terminal), newPsCmd(), newEventsCmd(), newLogsCmd(),
+		newAttachCmd(opts.Terminal), newPsCmd(), newEventsCmd(), newLogsCmd(), newSearchCmd(),
 		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)),
 		newDoctorCmd(openDoctorStore(opts), probeOf(opts)))
 	return root

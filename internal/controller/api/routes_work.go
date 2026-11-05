@@ -7,10 +7,12 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/events"
 	"github.com/Autarquico/codefabric/internal/app/runs"
+	"github.com/Autarquico/codefabric/internal/app/search"
 	"github.com/Autarquico/codefabric/internal/app/tasks"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -45,6 +47,7 @@ func (s *Server) registerWorkRoutes() {
 	s.handle("POST /v1/runs/{ref}/promote", clientsOnly, notImplemented("promote"))
 
 	s.handle("GET /v1/resolve", clientsOnly, s.resolve)
+	s.handle("GET /v1/search", clientsOnly, s.search)
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request, c caller) error {
@@ -242,6 +245,24 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request, _ caller) error 
 func (s *Server) resolve(w http.ResponseWriter, r *http.Request, _ caller) error {
 	q := r.URL.Query()
 	out, err := s.work.Resolve(r.Context(), domain.Kind(q.Get("kind")), q.Get("ref"), q.Get("project"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (s *Server) search(w http.ResponseWriter, r *http.Request, _ caller) error {
+	q := r.URL.Query()
+	limit := 0
+	if text := q.Get("limit"); text != "" {
+		n, err := strconv.Atoi(text)
+		if err != nil {
+			return domain.NewError(domain.CodeInvalidRequest, "limit must be a number", map[string]any{"field": "limit"})
+		}
+		limit = n
+	}
+	out, err := s.work.Search.Search(r.Context(), search.Query{Text: q.Get("q"), Kind: q.Get("kind"), Project: q.Get("project"), Limit: limit})
 	if err != nil {
 		return err
 	}

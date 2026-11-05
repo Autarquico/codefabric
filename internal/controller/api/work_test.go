@@ -55,6 +55,7 @@ func TestProjectsTasksRunsApi_WorkRoutesAreForClientsOnly(t *testing.T) {
 		{"POST", "/v1/runs/x/fork"},
 		{"POST", "/v1/runs/x/promote"},
 		{"GET", "/v1/resolve?kind=task&ref=x"},
+		{"GET", "/v1/search?q=x"},
 	}
 	for _, r := range routes {
 		name := r.method + " " + r.path
@@ -170,7 +171,10 @@ func TestProjectsTasksRunsApi_ErrorsAndStatuses(t *testing.T) {
 		{"an unknown project", "GET", "/v1/projects/nope", "", 404, domain.CodeNotFound},
 		{"an unknown task", "GET", "/v1/tasks/nope", "", 404, domain.CodeNotFound},
 		{"an unknown state filter", "GET", "/v1/tasks?state=bogus", "", 400, domain.CodeInvalidRequest},
-		{"an unknown kind to resolve", "GET", "/v1/resolve?kind=worker&ref=x", "", 400, domain.CodeInvalidRequest},
+		{"an unknown kind to resolve", "GET", "/v1/resolve?kind=plan&ref=x", "", 400, domain.CodeInvalidRequest},
+		{"search without a query", "GET", "/v1/search", "", 400, domain.CodeInvalidRequest},
+		{"search with a bad limit", "GET", "/v1/search?q=x&limit=abc", "", 400, domain.CodeInvalidRequest},
+		{"search with a huge limit", "GET", "/v1/search?q=x&limit=1000", "", 400, domain.CodeInvalidRequest},
 		{"no ref to resolve", "GET", "/v1/resolve?kind=task&ref=", "", 404, domain.CodeNotFound},
 		{"a task in a missing project", "POST", "/v1/tasks", `{"project":"nope","prompt":"x","no_start":true}`, 404, domain.CodeNotFound},
 		{"a bad request_id", "POST", "/v1/tasks", `{"request_id":"a b","project":"backend","prompt":"x","no_start":true}`, 400, domain.CodeInvalidRequest},

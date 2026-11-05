@@ -41,8 +41,24 @@ const minULIDPrefixLength = 6
 // cands must already be filtered by kind. Names only match unarchived
 // candidates; scopeProject narrows a name only when it is ambiguous.
 func Resolve(ref string, kind Kind, scopeProject ID, cands []Candidate) (ID, error) {
-	if ref == "" {
+	matches := MatchRef(ref, kind, scopeProject, cands)
+	switch len(matches) {
+	case 0:
 		return "", notFound(ref, kind)
+	case 1:
+		return matches[0].ID, nil
+	default:
+		return "", NewError(CodeAmbiguousRef,
+			fmt.Sprintf("reference %q matches %d %ss", ref, len(matches), kind),
+			map[string]any{"ref": ref, "candidates": idsOf(matches)})
+	}
+}
+
+// MatchRef is the first step of the §3.13 order that matches anything, with all
+// the candidates it matched: one is a resolution, several are an ambiguity.
+func MatchRef(ref string, kind Kind, scopeProject ID, cands []Candidate) []Candidate {
+	if ref == "" {
+		return nil
 	}
 	steps := []func() []Candidate{
 		func() []Candidate { return matchCanonicalID(ref, kind, cands) },
@@ -51,18 +67,11 @@ func Resolve(ref string, kind Kind, scopeProject ID, cands []Candidate) (ID, err
 		func() []Candidate { return matchULIDPrefix(ref, cands) },
 	}
 	for _, step := range steps {
-		switch matches := step(); len(matches) {
-		case 0:
-			continue
-		case 1:
-			return matches[0].ID, nil
-		default:
-			return "", NewError(CodeAmbiguousRef,
-				fmt.Sprintf("reference %q matches %d %ss", ref, len(matches), kind),
-				map[string]any{"ref": ref, "candidates": idsOf(matches)})
+		if matches := step(); len(matches) > 0 {
+			return matches
 		}
 	}
-	return "", notFound(ref, kind)
+	return nil
 }
 
 func notFound(ref string, kind Kind) *Error {

@@ -13,6 +13,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app/refs"
 	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/scheduler"
+	"github.com/Autarquico/codefabric/internal/app/search"
 	"github.com/Autarquico/codefabric/internal/app/tasks"
 	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/app/workflows"
@@ -40,6 +41,8 @@ type Services struct {
 	Reconciliation *reconciliation.Service
 	// Events reads the event store: pages and follows (§20, §31.4).
 	Events *events.Service
+	// Search finds entities by reference and by text (§37).
+	Search *search.Service
 
 	db *store.DB
 }
@@ -80,6 +83,7 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 			Hooks: cfg.ReconciliationHooks,
 		}),
 		Events:       events.New(db, clk),
+		Search:       search.New(db),
 		Workflows:    workflows.New(db, clk, ids, cfg.Blobs, blobLimit(cfg.MaxBlobBytes)...),
 		Environments: environments.New(db, clk),
 		db:           db,
