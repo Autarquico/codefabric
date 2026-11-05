@@ -357,7 +357,11 @@ func TestPalette_RejectsWhatTheRegistryExcludes(t *testing.T) {
 			t.Errorf("%q: the panel lacks %q:\n%s", c.line, c.message, out)
 		}
 		press(t, m, "x") // dismiss: back to the line
-		press(t, m, "esc")
+		if p := current(t, m); p.mode != modeColon || p.input != c.line {
+			t.Errorf("%q: mode %v, input %q: the line is not kept", c.line, p.mode, p.input)
+		}
+		press(t, m, "esc") // clears the line
+		press(t, m, "esc") // closes
 	}
 	if len(be.lines) != 0 {
 		t.Errorf("rejected lines ran: %v", be.lines)
@@ -393,6 +397,46 @@ func TestPalette_FailureOfALineKeepsTheLineForEditing(t *testing.T) {
 	press(t, m, "x")
 	if p := current(t, m); p.mode != modeColon || p.input != "task cancel x" {
 		t.Errorf("mode %v, input %q: the line is not kept", p.mode, p.input)
+	}
+}
+
+func TestPalette_NoBackendKeepsTheLineForEditing(t *testing.T) {
+	m := viewShellWith(t, newBackend(), "esc") // a Backend that cannot run lines
+	press(t, m, ":")
+	typePalette(t, m, "task cancel x")
+	press(t, m, "enter")
+	press(t, m, "x")
+	if p := current(t, m); p.mode != modeColon || p.input != "task cancel x" {
+		t.Errorf("mode %v, input %q: the line is not kept", p.mode, p.input)
+	}
+}
+
+func TestPalette_EditsAreTypedInTheCommandLine(t *testing.T) {
+	be := &lineBackend{fakeBackend: newBackend()}
+	m := openTasks(t, be)
+	openPalette(t, m)
+	typePalette(t, m, "edit task")
+	press(t, m, "enter")
+	if p := current(t, m); p.mode != modeColon || p.input != "task set tsk_1 " {
+		t.Fatalf("mode %v, input %q: the edit does not wait for its flags", p.mode, p.input)
+	}
+	if len(be.lines) != 0 || len(be.ran) != 0 {
+		t.Fatalf("an edit with nothing to change ran: %v %v", be.lines, be.ran)
+	}
+	typePalette(t, m, "--name=renamed")
+	press(t, m, "enter")
+	if len(be.lines) != 1 || be.lines[0] != "cf task set tsk_1 --name=renamed" {
+		t.Errorf("lines = %v, want the flag to reach the backend", be.lines)
+	}
+}
+
+func TestPalette_EditWithoutSelectionLeavesTheTargetToType(t *testing.T) {
+	m := viewShellWith(t, &lineBackend{fakeBackend: newBackend()}, "esc")
+	openPalette(t, m)
+	typePalette(t, m, "edit project")
+	press(t, m, "enter")
+	if p := current(t, m); p.mode != modeColon || p.input != "project set " {
+		t.Errorf("mode %v, input %q", p.mode, p.input)
 	}
 }
 

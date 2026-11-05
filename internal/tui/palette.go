@@ -389,6 +389,9 @@ func (p *palette) choose(it paletteItem) tea.Cmd {
 	}
 	d := it.action
 	p.query = p.input
+	if slices.Contains(edits, d.ID) {
+		return p.editInLine(d)
+	}
 	p.pending, p.asks, p.asked, p.input = d, nil, 0, ""
 	p.values, p.target = map[string]string{}, Row{}
 	if d.Target != actions.None {
@@ -404,6 +407,22 @@ func (p *palette) choose(it paletteItem) tea.Cmd {
 		}
 	}
 	return p.proceed()
+}
+
+// edits are the actions whose inputs are all optional flags and that change
+// nothing without one (the backend rejects an empty edit). Other actions with
+// only optional flags, such as complete or timeline, are complete as they are.
+var edits = []string{"task.set", "project.set"}
+
+// editInLine hands an edit to the `:` mode with its command typed, so the person
+// adds the flags and the line parser runs it like any other line.
+func (p *palette) editInLine(d actions.Descriptor) tea.Cmd {
+	words := slices.Clone(d.Path)
+	if p.applies(d) {
+		words = append(words, p.sel.row.ID)
+	}
+	p.mode, p.histPos, p.input = modeColon, len(p.hist.lines), strings.Join(words, " ")+" "
+	return nil
 }
 
 // proceed asks for the next input, or confirms, or runs.
@@ -452,6 +471,7 @@ func (p *palette) runLine(text string) tea.Cmd {
 	if text == "" {
 		return nil
 	}
+	p.fromLine = true
 	p.hist.add(text)
 	p.histPos, p.draft = len(p.hist.lines), ""
 	line, failure := actions.ParseLine(text)
@@ -465,7 +485,7 @@ func (p *palette) runLine(text string) tea.Cmd {
 		return nil
 	}
 	asker, row := from(p.id), Row{ID: text, Label: line.String()}
-	p.mode, p.busy, p.fromLine = modeBusy, line.String()+"…", true
+	p.mode, p.busy = modeBusy, line.String()+"…"
 	if line.Action.Terminal {
 		return func() tea.Msg {
 			session, failure := lines.AttachLine(line)
