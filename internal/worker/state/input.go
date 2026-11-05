@@ -14,6 +14,7 @@ import (
 const (
 	PromptOpen         = "open"
 	PromptAcknowledged = "acknowledged"
+	PromptWithdrawn    = "withdrawn"
 
 	OrderQueued     = "queued"
 	OrderDelivering = "delivering"
@@ -74,12 +75,23 @@ func OpenInputPrompts(ctx context.Context, q Querier, k Key) (int, error) {
 	return n, nil
 }
 
-// AcknowledgeInputPrompt closes a prompt; changed is false when it was not open.
+// AcknowledgeInputPrompt closes a prompt whose answer reached the harness;
+// changed is false when it was not open.
 func AcknowledgeInputPrompt(ctx context.Context, tx *Tx, k Key, promptID string) (changed bool, err error) {
+	return closeInputPrompt(ctx, tx, k, promptID, PromptAcknowledged)
+}
+
+// WithdrawInputPrompt closes a prompt the harness stopped waiting for; changed
+// is false when it was not open.
+func WithdrawInputPrompt(ctx context.Context, tx *Tx, k Key, promptID string) (changed bool, err error) {
+	return closeInputPrompt(ctx, tx, k, promptID, PromptWithdrawn)
+}
+
+func closeInputPrompt(ctx context.Context, tx *Tx, k Key, promptID, to string) (bool, error) {
 	res, err := tx.exec(ctx, `UPDATE input_prompts SET state = ? WHERE run_id = ? AND lease_epoch = ? AND prompt_id = ? AND state = ?`,
-		PromptAcknowledged, k.RunID, k.LeaseEpoch, promptID, PromptOpen)
+		to, k.RunID, k.LeaseEpoch, promptID, PromptOpen)
 	if err != nil {
-		return false, fmt.Errorf("state: acknowledging an input prompt: %w", err)
+		return false, fmt.Errorf("state: closing an input prompt (%s): %w", to, err)
 	}
 	n, err := res.RowsAffected()
 	return n == 1, err

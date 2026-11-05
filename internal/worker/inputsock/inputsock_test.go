@@ -55,12 +55,14 @@ type nopHandler struct{}
 func (nopHandler) Request(*inputsock.Conn, inputsock.Message) {}
 func (nopHandler) Ack(*inputsock.Conn, inputsock.Message)     {}
 func (nopHandler) Gone(*inputsock.Conn)                       {}
+func (nopHandler) Withdraw(*inputsock.Conn, inputsock.Message) {}
 
 // answering answers every request with allow, and acks.
 type answering struct {
 	mu       sync.Mutex
-	requests []inputsock.Message
-	acks     []string
+	requests  []inputsock.Message
+	acks      []string
+	withdrawn []string
 }
 
 func (h *answering) Request(c *inputsock.Conn, m inputsock.Message) {
@@ -78,6 +80,13 @@ func (h *answering) Ack(c *inputsock.Conn, m inputsock.Message) {
 }
 
 func (*answering) Gone(*inputsock.Conn) {}
+
+func (h *answering) Withdraw(c *inputsock.Conn, m inputsock.Message) {
+	h.mu.Lock()
+	h.withdrawn = append(h.withdrawn, m.PromptID)
+	h.mu.Unlock()
+	_ = c.Send(inputsock.Message{Op: inputsock.OpWithdrawn, PromptID: m.PromptID})
+}
 
 func TestTheSocketIsPrivateAndAskingAndAckingWork(t *testing.T) {
 	path := filepath.Join(shortDir(t), "s", "r.sock")
@@ -181,5 +190,46 @@ func TestAClientWhoseContextEndsStopsAsking(t *testing.T) {
 	defer cancel()
 	if _, err := c.Ask(ctx, inputsock.Message{PromptID: "p"}); err == nil {
 		t.Error("asked a socket that is not there and got an answer")
+	}
+}
+
+func TestAWithdrawnQuestionIsToldToTheDaemon(t *testing.T) {
+	path := filepath.Join(shortDir(t), "w.sock")
+	h := &answering{}
+	srv, err := inputsock.Listen(path, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := (&inputsock.Client{Path: path}).Withdraw(ctx, "p7"); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.withdrawn) != 1 || h.withdrawn[0] != "p7" {
+		t.Errorf("withdrawn = %v", h.withdrawn)
+	}
+}
+
+// A socket directory others can enter is refused, not used as it is.
+func TestASocketDirectoryOthersCanEnterIsRefused(t *testing.T) {
+	dir := filepath.Join(shortDir(t), "open")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if srv, err := inputsock.Listen(filepath.Join(dir, "r.sock"), nopHandler{}); err == nil {
+		srv.Close()
+		t.Error("a 0755 directory was used")
+	}
+	link := filepath.Join(filepath.Dir(dir), "link")
+	if err := os.Symlink(shortDir(t), link); err != nil {
+		t.Fatal(err)
+	}
+	if srv, err := inputsock.Listen(filepath.Join(link, "r.sock"), nopHandler{}); err == nil {
+		srv.Close()
+		t.Error("a symlink was used as the directory")
 	}
 }

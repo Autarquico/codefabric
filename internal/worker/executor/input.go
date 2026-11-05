@@ -54,10 +54,6 @@ import (
 // never asked is dropped. A harness whose Worker does not announce the
 // capability keeps the behaviour of stopForInput.
 
-// PermissionsAsk is the value of requirements.permissions that runs the harness
-// in its default permission mode, so that what it asks goes to the inbox.
-const PermissionsAsk = "ask"
-
 // InputFIFO is the name, in the run directory, of the FIFO that is the stdin of
 // a harness with structured input.
 const InputFIFO = "input.fifo"
@@ -91,7 +87,7 @@ func (e *Executor) announcesInput(harnessID string) bool {
 // asks permissions on a Worker that cannot answer them does not run: skipping
 // the prompts it asked for would be running with more than it was given.
 func (e *Executor) inputOfLaunch(r state.Run, spec specView, dir string, run *harness.RunSpec) error {
-	ask := spec.Requirements.Permissions == PermissionsAsk
+	ask := spec.Requirements.Permissions == v1.PermissionsAsk
 	if !e.structuredInput(spec) {
 		if ask {
 			return fmt.Errorf("%s: the Run asks for permissions and this Worker does not announce %s for %s",
@@ -182,6 +178,10 @@ func (ir *inputRun) Ack(c *inputsock.Conn, m inputsock.Message) {
 	ir.e.permissionAcked(ir, c, m)
 }
 
+func (ir *inputRun) Withdraw(c *inputsock.Conn, m inputsock.Message) {
+	ir.e.permissionWithdrawn(ir, c, m)
+}
+
 func (ir *inputRun) Gone(c *inputsock.Conn) {
 	ir.mu.Lock()
 	defer ir.mu.Unlock()
@@ -206,7 +206,7 @@ func (e *Executor) serveInput(ctx context.Context, r state.Run, alive bool) {
 		e.dropInput(ctx, r.Key)
 		return
 	}
-	if spec.Requirements.Permissions == PermissionsAsk {
+	if spec.Requirements.Permissions == v1.PermissionsAsk {
 		e.ensureSocket(ctx, r)
 	}
 	e.deliverInputs(ctx, r)
@@ -323,7 +323,8 @@ func (e *Executor) permissionAsked(ir *inputRun, c *inputsock.Conn, m inputsock.
 	if _, err := state.InputPromptOf(ctx, e.o.DB.Reader(), k, m.PromptID); errors.Is(err, state.ErrNotFound) {
 		open, err := state.OpenInputPrompts(ctx, e.o.DB.Reader(), k)
 		if err != nil {
-			e.log.WarnContext(ctx, "counting the open prompts of a Run failed", "run", k.RunID, "err", err)
+			e.log.WarnContext(ctx, "counting the open prompts of a Run failed; the bridge asks again", "run", k.RunID, "err", err)
+			_ = c.Close()
 			return
 		}
 		if open >= v1.MaxOpenPrompts {
@@ -333,10 +334,12 @@ func (e *Executor) permissionAsked(ir *inputRun, c *inputsock.Conn, m inputsock.
 		summary := "permission to use " + m.Tool + ": " + compactJSON(m.Input)
 		if err := e.openPrompt(ctx, r, m.PromptID, domain.PromptPermission, summary, []string{domain.AnswerAllow, domain.AnswerDeny}, false); err != nil {
 			e.log.WarnContext(ctx, "recording a permission prompt failed; the bridge asks again", "run", k.RunID, "err", err)
+			_ = c.Close()
 			return
 		}
 	} else if err != nil {
-		e.log.WarnContext(ctx, "reading a prompt failed", "run", k.RunID, "err", err)
+		e.log.WarnContext(ctx, "reading a prompt failed; the bridge asks again", "run", k.RunID, "err", err)
+		_ = c.Close()
 		return
 	}
 	ir.setWaiter(m.PromptID, c)
@@ -352,12 +355,33 @@ func (e *Executor) permissionAcked(ir *inputRun, c *inputsock.Conn, m inputsock.
 		if order, err := state.InputOrderFor(ctx, e.o.DB.Reader(), k, m.PromptID); err == nil {
 			if err := e.finishDelivery(ctx, k, order); err != nil {
 				e.log.WarnContext(ctx, "recording the delivery of a permission failed; the bridge acks again", "run", k.RunID, "err", err)
+				_ = c.Close()
 				return
 			}
 		}
 	}
 	ir.dropWaiter(m.PromptID)
 	_ = c.Send(inputsock.Message{Op: inputsock.OpAcked, PromptID: m.PromptID})
+}
+
+// permissionWithdrawn closes a prompt whose harness stopped waiting for the
+// answer: it no longer counts against v1.MaxOpenPrompts nor holds the input of
+// the harness open, and an answer that comes for it is dropped.
+func (e *Executor) permissionWithdrawn(ir *inputRun, c *inputsock.Conn, m inputsock.Message) {
+	ctx, k := ir.ctx, ir.key
+	unlock := e.lock(k)
+	defer unlock()
+	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		_, err := state.WithdrawInputPrompt(ctx, tx, k, m.PromptID)
+		return err
+	})
+	if err != nil {
+		e.log.WarnContext(ctx, "withdrawing a permission prompt failed; the bridge withdraws it again", "run", k.RunID, "err", err)
+		_ = c.Close()
+		return
+	}
+	ir.dropWaiter(m.PromptID)
+	_ = c.Send(inputsock.Message{Op: inputsock.OpWithdrawn, PromptID: m.PromptID})
 }
 
 // sendPermissionAnswer writes the order that answers the prompt to the bridge
@@ -407,10 +431,8 @@ func (e *Executor) deliverInputs(ctx context.Context, r state.Run) {
 
 func (e *Executor) ignoreOrder(ctx context.Context, o state.InputOrder) {
 	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
-		if _, err := state.SetInputOrderState(ctx, tx, o.Seq, o.State, state.OrderIgnored); err != nil {
-			return err
-		}
-		return nil
+		_, err := state.SetInputOrderState(ctx, tx, o.Seq, o.State, state.OrderIgnored)
+		return err
 	})
 	if err != nil && ctx.Err() == nil {
 		e.log.WarnContext(ctx, "dropping an input order failed", "seq", o.Seq, "err", err)
@@ -440,8 +462,7 @@ func (e *Executor) writeAnswer(ctx context.Context, r state.Run, o state.InputOr
 	if err != nil {
 		return
 	}
-	text := o.Text
-	if sendErr := adapter.SendInput(ctx, e.o.Host, e.handleOf(adapter, r, spec), harness.Input{Text: text}); sendErr != nil {
+	if sendErr := adapter.SendInput(ctx, e.o.Host, e.handleOf(adapter, r, spec), harness.Input{Text: o.Text}); sendErr != nil {
 		e.log.WarnContext(ctx, "handing an answer to the harness of a Run failed; it is tried again", "run", r.RunID, "err", sendErr)
 		_ = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 			_, err := state.SetInputOrderState(ctx, tx, o.Seq, state.OrderDelivering, state.OrderQueued)

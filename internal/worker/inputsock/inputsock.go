@@ -12,6 +12,8 @@
 //	daemon -> bridge  {"op":"answer","prompt_id":..,"decision":"allow|deny","message":..}
 //	bridge -> daemon  {"op":"ack","prompt_id":..}     the answer went to the harness
 //	daemon -> bridge  {"op":"acked","prompt_id":..}   the daemon recorded it
+//	bridge -> daemon  {"op":"withdraw","prompt_id":..}  the harness stopped waiting
+//	daemon -> bridge  {"op":"withdrawn","prompt_id":..} the daemon closed the prompt
 //
 // An answer may arrive more than once (the daemon sends it again to a bridge
 // that asks again); the bridge answers its harness once and acks every time.
@@ -34,6 +36,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -50,6 +53,10 @@ const (
 	OpAnswer  = "answer"
 	OpAck     = "ack"
 	OpAcked   = "acked"
+	// OpWithdraw is a question the harness stopped waiting for (the call of the
+	// tool was cancelled): nobody is to answer it any more.
+	OpWithdraw  = "withdraw"
+	OpWithdrawn = "withdrawn"
 )
 
 // Message is one line of the conversation; only the fields of its Op are set.
@@ -105,6 +112,8 @@ type Handler interface {
 	Request(c *Conn, m Message)
 	// Ack says that the answer of the prompt reached the harness.
 	Ack(c *Conn, m Message)
+	// Withdraw says that the harness no longer waits for the answer.
+	Withdraw(c *Conn, m Message)
 	// Gone is a connection that ended.
 	Gone(c *Conn)
 }
@@ -130,8 +139,8 @@ func Listen(path string, h Handler) (*Server, error) {
 	if len(path) > MaxPath {
 		return nil, fmt.Errorf("inputsock: the socket path is %d bytes, over the %d a unix socket takes", len(path), MaxPath)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("inputsock: %w", err)
+	if err := privateDir(filepath.Dir(path)); err != nil {
+		return nil, err
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("inputsock: removing a stale socket: %w", err)
@@ -168,6 +177,28 @@ func (s *Server) Shutdown() {
 
 // Wait returns once Shutdown was called and every handler has returned.
 func (s *Server) Wait() { s.wg.Wait() }
+
+// privateDir makes dir 0700, or refuses it: a directory that is not one, is
+// not this user's, or that others can enter, would let them at the socket.
+func privateDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("inputsock: %w", err)
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("inputsock: %w", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	switch {
+	case !fi.IsDir():
+		return fmt.Errorf("inputsock: the socket directory %s is not a directory", dir)
+	case !ok || int(st.Uid) != os.Getuid():
+		return fmt.Errorf("inputsock: the socket directory %s is not owned by this user", dir)
+	case fi.Mode().Perm() != 0o700:
+		return fmt.Errorf("inputsock: the socket directory %s is %v, not 0700", dir, fi.Mode().Perm())
+	}
+	return nil
+}
 
 // Close is Shutdown and Wait.
 func (s *Server) Close() {
@@ -224,6 +255,8 @@ func (s *Server) serve(c *Conn) {
 			s.h.Request(c, m)
 		case OpAck:
 			s.h.Ack(c, m)
+		case OpWithdraw:
+			s.h.Withdraw(c, m)
 		}
 	}
 }
@@ -297,8 +330,20 @@ func (c *Client) Ask(ctx context.Context, req Message) (Message, error) {
 // Confirm tells the daemon that the answer of the prompt reached the harness,
 // until the daemon says it recorded it, or ctx ends.
 func (c *Client) Confirm(ctx context.Context, promptID string) error {
+	return c.tell(ctx, Message{Op: OpAck, PromptID: promptID}, OpAcked)
+}
+
+// Withdraw tells the daemon that the harness no longer waits for the answer
+// of the prompt, until the daemon says it closed it, or ctx ends.
+func (c *Client) Withdraw(ctx context.Context, promptID string) error {
+	return c.tell(ctx, Message{Op: OpWithdraw, PromptID: promptID}, OpWithdrawn)
+}
+
+// tell sends m on a new connection each time the daemon goes away, until it
+// replies with reply.
+func (c *Client) tell(ctx context.Context, m Message, reply string) error {
 	for {
-		_, err := c.exchange(ctx, Message{Op: OpAck, PromptID: promptID}, func(m Message) bool { return m.Op == OpAcked })
+		_, err := c.exchange(ctx, m, func(r Message) bool { return r.Op == reply })
 		if err == nil {
 			return nil
 		}

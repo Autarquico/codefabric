@@ -2,6 +2,8 @@ package executor
 
 import (
 	"context"
+	"database/sql"
+	"log/slog"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -108,10 +110,10 @@ func socketDir(t *testing.T) string {
 }
 
 // askSocket is a started Run with the socket of its bridge up.
-func askSocket(t *testing.T) (*fixture, state.Key, *inputsock.Client) {
+func askSocket(t *testing.T, mutate ...func(*Options)) (*fixture, state.Key, *inputsock.Client) {
 	t.Helper()
 	dir := socketDir(t)
-	f := newFixture(t, func(o *Options) { o.SocketDir = dir })
+	f := newFixture(t, append(mutate, func(o *Options) { o.SocketDir = dir })...)
 	k := f.started("ask")
 	f.e.ensureSocket(t.Context(), f.run(k))
 	if f.e.inputOf(k) == nil {
@@ -154,4 +156,87 @@ func TestTakingTheSocketDownUnderTheLockOfTheRunDoesNotWaitForItsHandlers(t *tes
 	}
 	unlock()
 	cancel()
+}
+
+func execSQL(t *testing.T, f *fixture, query string) {
+	t.Helper()
+	if _, err := f.db.Reader().(*sql.DB).ExecContext(t.Context(), query); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// answerOrder is the `input` order of the Controller for a permission of k.
+func answerOrder(t *testing.T, f *fixture, k state.Key, seq uint64, promptID, decision string) {
+	t.Helper()
+	blocked, err := f.e.persist(t.Context(), []v1.WorkerCommand{{Seq: seq, Type: domain.CommandInput, Input: &v1.InputCommand{
+		RunID: k.RunID, LeaseID: f.run(k).LeaseID, Epoch: k.LeaseEpoch, PromptID: promptID, Kind: domain.PromptPermission,
+		Answer: v1.InputAnswer{Decision: decision},
+	}}})
+	if err != nil || blocked {
+		t.Fatalf("persist: blocked=%v err=%v", blocked, err)
+	}
+}
+
+func (f *fixture) deliver(k state.Key) {
+	unlock := f.e.lock(k)
+	defer unlock()
+	f.e.deliverInputs(f.t.Context(), f.run(k))
+}
+
+// A question the daemon failed to record is not left waiting on a connection
+// nobody answers: the bridge is made to ask again, and gets its answer.
+func TestAPermissionThatFailedToBeRecordedIsAskedAgain(t *testing.T) {
+	logs := &syncBuffer{}
+	f, k, client := askSocket(t, func(o *Options) { o.Log = slog.New(slog.NewTextHandler(logs, nil)) })
+	execSQL(t, f, `CREATE TRIGGER fail_prompts BEFORE INSERT ON input_prompts BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	got := make(chan inputsock.Message, 1)
+	go func() {
+		ans, _ := client.Ask(ctx, inputsock.Message{PromptID: "p1", Tool: "Bash", Input: json.RawMessage(`{}`)})
+		got <- ans
+	}()
+	waitFor(t, "a failed record", func() bool { return strings.Contains(logs.String(), "recording a permission prompt failed") })
+	execSQL(t, f, `DROP TRIGGER fail_prompts`)
+	waitFor(t, "the prompt asked again", func() bool {
+		_, err := state.InputPromptOf(t.Context(), f.db.Reader(), k, "p1")
+		return err == nil
+	})
+	answerOrder(t, f, k, 7001, "p1", domain.AnswerAllow)
+	f.deliver(k)
+	select {
+	case ans := <-got:
+		if ans.Decision != domain.AnswerAllow {
+			t.Errorf("answer = %+v", ans)
+		}
+	case <-ctx.Done():
+		t.Fatal("the bridge got no answer")
+	}
+}
+
+// A withdrawn prompt is closed: it frees its place among the open prompts, so
+// that the input of the harness can end, and an answer for it is dropped.
+func TestAWithdrawnPermissionIsClosed(t *testing.T) {
+	f, k, client := askSocket(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	go func() { _, _ = client.Ask(ctx, inputsock.Message{PromptID: "p1", Tool: "Bash", Input: json.RawMessage(`{}`)}) }()
+	waitFor(t, "the prompt", func() bool {
+		n, err := state.OpenInputPrompts(t.Context(), f.db.Reader(), k)
+		return err == nil && n == 1
+	})
+	if err := client.Withdraw(ctx, "p1"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := state.OpenInputPrompts(t.Context(), f.db.Reader(), k); err != nil || n != 0 {
+		t.Errorf("open prompts = %d (%v)", n, err)
+	}
+	answerOrder(t, f, k, 7002, "p1", domain.AnswerAllow)
+	f.deliver(k)
+	if orders, err := state.PendingInputOrders(t.Context(), f.db.Reader(), k); err != nil || len(orders) != 0 {
+		t.Errorf("orders = %v (%v)", orders, err)
+	}
+	if delivered := slices.ContainsFunc(f.reports(k), func(r v1.RunReportEntry) bool { return r.Kind == v1.ReportInputDelivered }); delivered {
+		t.Error("a withdrawn prompt was reported delivered")
+	}
 }

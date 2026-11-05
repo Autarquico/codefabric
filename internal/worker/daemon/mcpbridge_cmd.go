@@ -27,7 +27,9 @@ const approveTool = "approve"
 const mcpProtocolVersion = "2025-06-18"
 
 // confirmWait is how long the bridge, once its harness has closed its stdin,
-// waits for the daemon to record the answers it has returned.
+// waits for the daemon to record the answers it has returned and the questions
+// it withdrew. Before that, it tells the daemon for as long as the bridge lives:
+// the harness waits for the end of its input, which waits for those records.
 const confirmWait = 2 * time.Second
 
 // newMCPBridgeCmd is the MCP server Claude Code is launched with to ask
@@ -64,7 +66,8 @@ type asker interface {
 
 type socketAsker struct {
 	client *inputsock.Client
-	// confirms outlive the call that made them, and the context of the server.
+	// confirms (acks and withdrawals) outlive the call that made them, and the
+	// context of the server.
 	confirms sync.WaitGroup
 }
 
@@ -76,16 +79,16 @@ func (a *socketAsker) ask(ctx context.Context, tool string, input json.RawMessag
 		return "", "", err
 	}
 	ans, err := a.client.Ask(ctx, inputsock.Message{PromptID: id, Tool: tool, Input: input})
+	life := context.WithoutCancel(ctx)
 	if err != nil {
+		// The call was cancelled: its prompt is not to wait in the inbox, nor to
+		// hold the input of the harness open.
+		a.confirms.Go(func() { _ = a.client.Withdraw(life, id) })
 		return "", "", err
 	}
 	// The harness is about to be told; the daemon is told after, and as many
 	// times as it takes. It is not the harness's to wait for.
-	a.confirms.Go(func() {
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*confirmWait)
-		defer cancel()
-		_ = a.client.Confirm(cctx, id)
-	})
+	a.confirms.Go(func() { _ = a.client.Confirm(life, id) })
 	return ans.Decision, ans.Message, nil
 }
 

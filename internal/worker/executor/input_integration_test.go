@@ -109,7 +109,7 @@ func delivered(rs []v1.RunReportEntry, promptID string) bool {
 // Then the Worker reports input_requested with a summary of the call.
 func TestScenario_NeedsInputInbox_Permiso(t *testing.T) {
 	f := newInputFixture(t, permissionStep("decision.txt"))
-	k := f.assign(askSpec(PermissionsAsk))
+	k := f.assign(askSpec(v1.PermissionsAsk))
 	defer f.runLoops()()
 
 	req := f.requested(k)
@@ -128,7 +128,7 @@ func TestScenario_NeedsInputInbox_Permiso(t *testing.T) {
 // harness gets the decision, the Worker reports input_delivered and the Run ends.
 func TestScenario_NeedsInputInbox_Respuesta(t *testing.T) {
 	f := newInputFixture(t, permissionStep("decision.txt"))
-	k := f.assign(askSpec(PermissionsAsk))
+	k := f.assign(askSpec(v1.PermissionsAsk))
 	defer f.runLoops()()
 
 	req := f.requested(k)
@@ -147,7 +147,7 @@ func TestScenario_NeedsInputInbox_Respuesta(t *testing.T) {
 // makes the socket again, the harness asks again, and the answer reaches it.
 func TestScenario_NeedsInputInbox_Reinicio(t *testing.T) {
 	f := newInputFixture(t, permissionStep("decision.txt"))
-	k := f.assign(askSpec(PermissionsAsk))
+	k := f.assign(askSpec(v1.PermissionsAsk))
 	stop := f.runLoops()
 	req := f.requested(k)
 	stop()

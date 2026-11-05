@@ -4,13 +4,14 @@
 -- (needs-input). A prompt is written in the transaction of its input_requested
 -- report, once: its ID is the harness's (a tool use) or the bridge's, so that
 -- the same ask read twice, or asked again after the daemon restarted, finds its
--- row. It is open until the answer reached the harness (acknowledged).
+-- row. It is open until the answer reached the harness (acknowledged), or
+-- until the harness stopped waiting for it (withdrawn).
 CREATE TABLE input_prompts (
     run_id      TEXT    NOT NULL,
     lease_epoch INTEGER NOT NULL CHECK (lease_epoch >= 1),
     prompt_id   TEXT    NOT NULL,
     kind        TEXT    NOT NULL CHECK (kind IN ('permission', 'question', 'text')),
-    state       TEXT    NOT NULL CHECK (state IN ('open', 'acknowledged')),
+    state       TEXT    NOT NULL CHECK (state IN ('open', 'acknowledged', 'withdrawn')),
     created_at  INTEGER NOT NULL,
     PRIMARY KEY (run_id, lease_epoch, prompt_id)
 ) STRICT;
