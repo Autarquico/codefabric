@@ -30,8 +30,9 @@ func (c controllerOf) UploadOutput(ctx context.Context, b v1.OutputBatch) (v1.Ou
 }
 
 // A Worker with a real outputship and a real Controller (service, store, sealer
-// and CAS): more than three MiB of output arrive whole and in order, however
-// many times the Controller asks the Worker to wait.
+// and CAS): more than three MiB of output arrive whole and in order across
+// sealed segments and the hot tail. Backpressure (CF_IN_PROGRESS, from 8 MiB
+// waiting to be sealed) is covered with the fake Controller in outputship.
 func TestOutput_AWorkerShipsMoreThanThreeMiBAndTheControllerHoldsAllOfItInOrder(t *testing.T) {
 	e := newEnv(t)
 	o := e.outputRun("alpha")
@@ -61,7 +62,8 @@ func TestOutput_AWorkerShipsMoreThanThreeMiBAndTheControllerHoldsAllOfItInOrder(
 		return state.SetRunning(ctx, tx, key, `{"runtime":"tmux","ref":"x/y"}`, at)
 	}))
 
-	// A log whose every byte tells where it is: a reordering or a hole shows.
+	// A log whose pattern repeats every 182 bytes: the byte compare with the Start/End
+	// checks is what shows a reordering or a hole.
 	log := make([]byte, 3<<20+4321)
 	for i := range log {
 		log[i] = byte('a' + (i/7)%26)
@@ -79,9 +81,12 @@ func TestOutput_AWorkerShipsMoreThanThreeMiBAndTheControllerHoldsAllOfItInOrder(
 		if cur.Sent == uint64(len(log)) {
 			break
 		}
-		clk.Advance(time.Minute) // a Controller that asked to wait is not waited for in real time
+		clk.Advance(time.Second)
 		must(t, ship.Once(ctx))
 		time.Sleep(time.Millisecond) // the sealer is a goroutine of the Controller
+	}
+	if cur, err := state.OutputCursorOf(ctx, db.Reader(), key); err != nil || cur.Sent != uint64(len(log)) {
+		t.Fatalf("the cursor is at %d of %d (err %v)", cur.Sent, len(log), err)
 	}
 
 	var got []byte

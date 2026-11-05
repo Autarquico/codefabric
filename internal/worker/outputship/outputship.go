@@ -40,8 +40,9 @@ import (
 // Limits and timings. The Controller keeps the whole output (sealed segments and
 // a hot tail), so every byte is sent, from the cursor on. A batch carries at most
 // batchBytes of output, which is base64 of at most 4/3 of that in a body the
-// Controller reads up to v1.OutputBatchBytes; perRunBytes and the rotation keep
-// one large output from starving the others.
+// Controller reads up to v1.OutputBatchBytes; perRunBytes (the least each Run is
+// offered; a lone Run is offered the whole batch) and the rotation keep one large
+// output from starving the others.
 const (
 	interval    = time.Second
 	batchBytes  = 1 << 20
@@ -143,6 +144,7 @@ func (s *Shipper) Once(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.forget(runs)
 	var (
 		items   []*item
 		batch   v1.OutputBatch
@@ -159,7 +161,7 @@ func (s *Shipper) Once(ctx context.Context) error {
 		if budget <= 0 || len(batch.Entries) >= v1.OutputBatchMaxItems {
 			break
 		}
-		it, err := s.plan(ctx, r, min(perRunBytes, budget))
+		it, err := s.plan(ctx, r, min(max(perRunBytes, batchBytes/len(runs)), budget))
 		if err != nil {
 			return err
 		}
@@ -200,6 +202,24 @@ func (s *Shipper) Once(ctx context.Context) error {
 	return nil
 }
 
+// forget drops what is remembered of the Runs that no longer have output to send.
+func (s *Shipper) forget(runs []state.Run) {
+	live := make(map[state.Key]bool, len(runs))
+	for _, r := range runs {
+		live[r.Key] = true
+	}
+	for k := range s.busy {
+		if !live[k] {
+			delete(s.busy, k)
+		}
+	}
+	for k := range s.final {
+		if !live[k] {
+			delete(s.final, k)
+		}
+	}
+}
+
 func isFinal(r state.Run) bool { return r.Phase == state.PhaseStopped }
 
 // plan decides what to send of one assignment: the new bytes of its log, then
@@ -210,7 +230,6 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 		return nil, err
 	}
 	if cur.Done {
-		delete(s.busy, r.Key)
 		return nil, nil
 	}
 	if b, ok := s.busy[r.Key]; ok && s.o.Clock.Now().Before(b.until) {

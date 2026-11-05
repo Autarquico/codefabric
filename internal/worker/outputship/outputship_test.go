@@ -386,11 +386,11 @@ func TestShip_ARunWithALotOfOutputDoesNotStarveTheOthers(t *testing.T) {
 		t.Fatal("the small output waited")
 	}
 	for _, k := range []state.Key{a, b} {
-		if n := len(f.ctl.outputs[k].data); n == 0 || n > 2*v1.OutputChunkBytes {
+		if n := len(f.ctl.outputs[k].data); n == 0 || n > (1<<20)/3 {
 			t.Fatalf("%s got %d bytes in the first pass", k.RunID, n)
 		}
 	}
-	for range 80 {
+	for range 12 {
 		f.clk.Advance(time.Second)
 		f.once()
 	}
@@ -398,6 +398,25 @@ func TestShip_ARunWithALotOfOutputDoesNotStarveTheOthers(t *testing.T) {
 		if f.cursor(k).Sent != 3<<20 {
 			t.Fatalf("%s sent up to %d", k.RunID, f.cursor(k).Sent)
 		}
+	}
+}
+
+// A lone Run is offered the whole batch: 3 MiB are shipped in a few passes, not
+// at the rate of the share each Run is guaranteed.
+func TestShip_ALoneRunWithALotOfOutputGetsTheWholeBatchEachPass(t *testing.T) {
+	f := newFixture(t)
+	k := f.run("run_a", state.PhaseRunning)
+	f.write(k, strings.Repeat("a", 3<<20))
+	f.once()
+	if got := f.cursor(k).Sent; got != 1<<20 {
+		t.Fatalf("the first pass sent %d bytes, want the whole batch (%d)", got, 1<<20)
+	}
+	for range 2 {
+		f.clk.Advance(time.Second)
+		f.once()
+	}
+	if got := f.cursor(k).Sent; got != 3<<20 {
+		t.Fatalf("3 passes sent %d of %d", got, 3<<20)
 	}
 }
 
