@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -16,6 +19,68 @@ import (
 // is a claim, and this file wins over it.
 type Client struct {
 	Attach ClientAttach `json:"attach"`
+	Notify ClientNotify `json:"notify"`
+}
+
+// ClientNotify is what this machine is told about (spec §26).
+type ClientNotify struct {
+	// Events are the event types that notify. Absent, what needs a person: TaskNeedsInput, RunFailed, WorkerLost.
+	Events []string `json:"events,omitempty"`
+	// MutedProjects are Projects (id) whose events never notify.
+	MutedProjects []string `json:"muted_projects,omitempty"`
+	// MinLevel, if set, is the least severe event level that notifies: debug, info, warn or error.
+	MinLevel string `json:"min_level,omitempty"`
+	// QuietHours, if set, holds back the native notifications in that window.
+	QuietHours *QuietHours `json:"quiet_hours,omitempty"`
+	// Hook is a command (argv, never a shell) that gets each notified event as
+	// JSON on stdin.
+	Hook []string `json:"hook,omitempty"`
+}
+
+// QuietHours is a daily window of local time, "HH:MM" each; it may cross midnight.
+type QuietHours struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+// defaultNotifyEvents is what notifies when nothing says otherwise: what needs a person.
+func defaultNotifyEvents() []string {
+	return []string{string(domain.EventTaskNeedsInput), string(domain.EventRunFailed), string(domain.EventWorkerLost)}
+}
+
+// NotifyEvents are the event types that notify.
+func (n ClientNotify) NotifyEvents() []string {
+	if n.Events == nil {
+		return defaultNotifyEvents()
+	}
+	return n.Events
+}
+
+func (n ClientNotify) hookCommand() string {
+	if len(n.Hook) == 0 {
+		return ""
+	}
+	return n.Hook[0]
+}
+
+func (n ClientNotify) validate() error {
+	if n.MinLevel != "" && !domain.ValidLevel(n.MinLevel) {
+		return fmt.Errorf("notify.min_level: %q is not an event level", n.MinLevel)
+	}
+	if q := n.QuietHours; q != nil {
+		for _, hhmm := range []string{q.Start, q.End} {
+			if _, err := time.Parse("15:04", hhmm); err != nil {
+				return fmt.Errorf("notify.quiet_hours: %q is not HH:MM", hhmm)
+			}
+		}
+	}
+	if n.Hook != nil && (len(n.Hook) == 0 || n.Hook[0] == "") {
+		return errors.New("notify.hook: the command is empty")
+	}
+	if cmd := n.hookCommand(); strings.ContainsRune(cmd, filepath.Separator) && !filepath.IsAbs(cmd) {
+		return fmt.Errorf("notify.hook: %q is relative to wherever cf runs; use an absolute path or a name on PATH", cmd)
+	}
+	return nil
 }
 
 // ClientAttach is what `cf attach` trusts.
@@ -45,6 +110,9 @@ func LoadClient(p Paths) (Client, error) {
 		if !domain.ValidSSHTarget(target) {
 			return Client{}, fmt.Errorf("config: %s: attach.ssh_targets[%q] is not [user@]host[:port]", p.ClientConfigFile(), worker)
 		}
+	}
+	if err := c.Notify.validate(); err != nil {
+		return Client{}, fmt.Errorf("config: %s: %w", p.ClientConfigFile(), err)
 	}
 	return c, nil
 }

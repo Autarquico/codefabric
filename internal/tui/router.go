@@ -61,7 +61,7 @@ func (r *Router) Open(route Route) bool {
 	for i := len(r.stack) - 1; i > 0; i-- {
 		if r.stack[i].route == route {
 			changed := i < len(r.stack)-1
-			r.stack = r.stack[:i+1]
+			r.drop(i + 1)
 			return changed
 		}
 	}
@@ -74,8 +74,19 @@ func (r *Router) Back() bool {
 	if len(r.stack) == 1 {
 		return false
 	}
-	r.stack = r.stack[:len(r.stack)-1]
+	r.drop(len(r.stack) - 1)
 	return true
+}
+
+// drop leaves the stack with its first n screens; the ones that go are told,
+// if they hold something that has to end (a follow).
+func (r *Router) drop(n int) {
+	for _, e := range r.stack[n:] {
+		if c, ok := e.screen.(interface{ Close() }); ok {
+			c.Close()
+		}
+	}
+	r.stack = r.stack[:n]
 }
 
 // Top is the screen in view.
@@ -87,6 +98,31 @@ func (r *Router) Update(msg tea.Msg) (tea.Cmd, bool) {
 	next, cmd, handled := top.screen.Update(msg)
 	top.screen = next
 	return cmd, handled
+}
+
+// identified is a screen that messages can be addressed to.
+type identified interface{ screenID() uint64 }
+
+// Deliver gives msg to the screen with that id, wherever it is in the stack.
+// found is false when the screen is no longer there.
+func (r *Router) Deliver(id uint64, msg tea.Msg) (cmd tea.Cmd, found bool) {
+	for i := range r.stack {
+		if s, ok := r.stack[i].screen.(identified); ok && s.screenID() == id {
+			next, cmd, _ := r.stack[i].screen.Update(msg)
+			r.stack[i].screen = next
+			return cmd, true
+		}
+	}
+	return nil, false
+}
+
+// Routes are the routes of the screens in the stack, home excluded.
+func (r *Router) Routes() []Route {
+	var out []Route
+	for _, e := range r.stack[1:] {
+		out = append(out, e.route)
+	}
+	return out
 }
 
 // Depth is how many screens are stacked, home included.

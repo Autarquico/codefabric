@@ -36,6 +36,33 @@ type State struct {
 	Loaded     bool
 	Overview   v1.Overview
 	Activity   activityLog
+
+	// The lists of the views, while they are followed.
+	Tasks     Feed[v1.Task]
+	Runs      Feed[v1.Run]
+	Workers   Feed[v1.Worker]
+	Workflows Feed[WorkflowRow]
+	Projects  Feed[v1.Project]
+}
+
+// Feed is the list that a view follows: the items of the last snapshot, whether
+// there was one, and whether the Controller is out of reach.
+type Feed[T any] struct {
+	Items  []T
+	Loaded bool
+	Down   bool
+	Err    error // why the feed gave up
+}
+
+func (f *Feed[T]) apply(u client.Update[[]T]) {
+	switch u.Kind {
+	case client.UpdateSnapshot, client.UpdateResync:
+		f.Items, f.Loaded = u.State, true
+	case client.UpdateConnected:
+		f.Down = false
+	case client.UpdateDisconnected:
+		f.Down = true
+	}
 }
 
 // apply folds an update into the state.

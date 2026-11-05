@@ -58,6 +58,9 @@ type Descriptor struct {
 	// Terminal marks an action that takes over the terminal (attach): it is
 	// prepared with Runner.Attach, and the caller runs the process.
 	Terminal bool
+	// Destructive marks an action that is hard or impossible to undo. A caller
+	// with a person in front of it asks for confirmation before running it.
+	Destructive bool
 }
 
 func flags(names ...string) []Arg {
@@ -93,9 +96,9 @@ var descriptors = []Descriptor{
 		Args: with(flags("project", "name", "ref", "harness", "model", "completion"), Arg{Name: "prompt", Required: true}),
 	},
 	{ID: "task.set", Title: "Edit task", Target: Task, Path: []string{"task", "set"}, Args: flags("name", "completion", "project")},
-	{ID: "task.cancel", Title: "Cancel task", Target: Task, Path: []string{"task", "cancel"}, Args: projectFlag},
+	{ID: "task.cancel", Destructive: true, Title: "Cancel task", Target: Task, Path: []string{"task", "cancel"}, Args: projectFlag},
 	{ID: "task.complete", Title: "Complete task", Target: Task, Path: []string{"task", "complete"}, Args: projectFlag},
-	{ID: "task.archive", Title: "Archive task", Target: Task, Path: []string{"task", "archive"}, Args: projectFlag},
+	{ID: "task.archive", Destructive: true, Title: "Archive task", Target: Task, Path: []string{"task", "archive"}, Args: projectFlag},
 	{ID: "task.defer", Title: "Defer task", Target: Task, Path: []string{"task", "defer"}, Args: projectFlag},
 	{ID: "task.resume", Title: "Resume task", Target: Task, Path: []string{"task", "resume"}, Args: projectFlag},
 	{
@@ -112,11 +115,11 @@ var descriptors = []Descriptor{
 	{ID: "run.attach", Title: "Attach to run", Target: Run, Path: []string{"attach"}, Terminal: true, Args: flags("read-only", "ssh-target", "project")},
 	{ID: "run.fork", Title: "Fork run", Target: Run, Path: []string{"run", "fork"}},
 	{ID: "run.promote", Title: "Promote run", Target: Run, Path: []string{"run", "promote"}},
-	{ID: "run.publish", Title: "Publish run", Target: Run, Path: []string{"run", "publish"}},
+	{ID: "run.publish", Destructive: true, Title: "Publish run", Target: Run, Path: []string{"run", "publish"}},
 
 	{ID: "worker.drain", Title: "Drain worker", Target: Worker, Path: []string{"worker", "drain"}},
 	{ID: "worker.undrain", Title: "Undrain worker", Target: Worker, Path: []string{"worker", "undrain"}},
-	{ID: "worker.remove", Title: "Remove worker", Target: Worker, Path: []string{"worker", "remove"}},
+	{ID: "worker.remove", Destructive: true, Title: "Remove worker", Target: Worker, Path: []string{"worker", "remove"}},
 
 	{
 		ID: "workflow.adopt", Title: "Adopt workflow", Target: Workflow, Path: []string{"workflow", "adopt"},
@@ -131,7 +134,7 @@ var descriptors = []Descriptor{
 		Args: with(flags("dry-run", "preview", "force", "detach"), required("worker", "harness")...),
 	},
 	{
-		ID: "workflow.rollback", Title: "Roll back workflow", Path: []string{"workflow", "rollback"},
+		ID: "workflow.rollback", Destructive: true, Title: "Roll back workflow", Path: []string{"workflow", "rollback"},
 		Args: with(flags("dry-run", "force", "detach"), required("worker", "harness")...),
 	},
 	{
@@ -156,7 +159,7 @@ var descriptors = []Descriptor{
 		Args: []Arg{{Name: "ref", Required: true}},
 	},
 	{
-		ID: "environment.apply", Title: "Apply environment", Path: []string{"environment", "apply"},
+		ID: "environment.apply", Destructive: true, Title: "Apply environment", Path: []string{"environment", "apply"},
 		Args: []Arg{{Name: "file", Flag: true, Required: true}, {Name: "name", Flag: true}},
 	},
 }
@@ -333,6 +336,10 @@ func asFailure(err error) *Failure {
 	}
 	return &Failure{Code: coded.Code, Message: coded.Message, Hint: hintFor(coded.Code, coded.Details), ExitCode: domain.ExitCode(coded.Code)}
 }
+
+// FailureOf presents any error of the CLI, such as the one that ends an attach
+// (AttachSession.Finish), with its code, hint and exit code.
+func FailureOf(err error) *Failure { return asFailure(err) }
 
 func refused(code domain.Code, message string) Result {
 	return Result{Failure: asFailure(domain.NewError(code, message, nil))}

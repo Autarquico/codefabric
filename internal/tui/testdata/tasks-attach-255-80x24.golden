@@ -1,0 +1,18 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Tasks · 4 ───────────────────────────────────────────────────
+   ID        STATE      WAITING   CREATED  NAME
+ › t-4k2m    running              12:29    auth-refactor
+   t-9p1x    waiting    input     11:02    infra
+   t-2c7q    completed            10:15    payments
+   t-8h3w    failed               09:40    frontend
+
+ ──────────────── Detail ──────────────────────────────────────────────────────
+ ! Attach ended with an error
+ Code          CF_RUN_NOT_ATTACHABLE  exit 8
+ What          ssh could not open the session (it printed why)
+ Process       ssh exited 255
+ Try           ssh could not open the session: check you can ssh to the Worker,
+               or set attach.ssh_targets in client.json.
+
+ ──────────────────────────────────────────────────────────────────────────────
+ [any key] Dismiss
