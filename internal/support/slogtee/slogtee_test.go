@@ -400,3 +400,71 @@ func TestSensitiveKeysInsideCompositeValuesAreRedactedAtAnyDepth(t *testing.T) {
 		t.Fatalf("slice = %s", got[0].Attrs)
 	}
 }
+
+type groupValuer struct{ leak string }
+
+func (g groupValuer) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("credentials", g.leak), slog.String("plain", "fine"))
+}
+
+// Whatever the shape that holds a secret, the persisted bytes do not.
+func TestNoShapeOfRecordPersistsASecret(t *testing.T) {
+	const leak = "opaque-value-123456"
+	const needle = "held-needle-\"quoted\"\n<tag>"
+	cases := []struct {
+		name string
+		log  func(*slog.Logger)
+		keep string // what is not a secret and stays
+	}{
+		{"top-level attribute", func(l *slog.Logger) { l.Info("m", "api_token", leak, "keep", "kept") }, `"keep":"kept"`},
+		{"With attribute", func(l *slog.Logger) { l.With("password", leak, "keep", "kept").Info("m") }, `"keep":"kept"`},
+		{"WithGroup sensitive", func(l *slog.Logger) { l.WithGroup("token").Info("m", "value", leak, "n", 7) }, ``},
+		{"WithGroup sensitive after With", func(l *slog.Logger) {
+			l.With("keep", "kept").WithGroup("credentials").With("a", leak).Info("m", "b", leak)
+		}, `"keep":"kept"`},
+		{"Group sensitive", func(l *slog.Logger) {
+			l.Info("m", slog.Group("password", slog.String("value", leak), slog.Group("in", "x", leak)), "keep", "kept")
+		}, `"keep":"kept"`},
+		{"nested map", func(l *slog.Logger) {
+			l.Info("m", "map", map[string]any{"a": map[string]any{"Authorization": leak}, "ok": "fine"})
+		}, `"ok":"fine"`},
+		{"struct", func(l *slog.Logger) { l.Info("m", "s", nested{Name: "fine", Secret: leak}) }, `"name":"fine"`},
+		{"slice of maps", func(l *slog.Logger) {
+			l.Info("m", "s", []map[string]any{{"cookie": leak}, {"n": 42}})
+		}, `"n":42`},
+		{"LogValuer returning a group", func(l *slog.Logger) { l.Info("m", "v", groupValuer{leak}) }, `"plain":"fine"`},
+		{"value of a plain key holds a needle", func(l *slog.Logger) {
+			l.Info("m", "note", "before "+needle+" after", "map", map[string]string{"k": needle})
+		}, `"note":"before `},
+		{"needle in a key", func(l *slog.Logger) { l.Info("m", needle, "v") }, ``},
+		{"JSON-escaped needle", func(l *slog.Logger) { l.Info("m", "s", struct{ A string }{needle}) }, ``},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tee := slogtee.New(slogtee.Options{Redact: func(s string) string {
+				return strings.NewReplacer(leak, "<needle>", needle, "<needle>").Replace(s)
+			}})
+			var c collector
+			stop := run(t, tee, c.sink, slog.New(slog.DiscardHandler))
+			tc.log(slog.New(tee.Wrap(quiet)))
+			stop()
+
+			got := c.all()
+			if len(got) != 1 {
+				t.Fatalf("%d entries", len(got))
+			}
+			b := string(got[0].Attrs)
+			for _, bad := range []string{leak, needle, `\"quoted\"`, `<tag`, "<tag>"} {
+				if strings.Contains(b, bad) {
+					t.Fatalf("persisted %q: %s", bad, b)
+				}
+			}
+			if !json.Valid(got[0].Attrs) {
+				t.Fatalf("invalid JSON: %s", b)
+			}
+			if tc.keep != "" && !strings.Contains(b, tc.keep) {
+				t.Fatalf("lost %s: %s", tc.keep, b)
+			}
+		})
+	}
+}

@@ -204,12 +204,15 @@ func (t *Tee) entry(ctx context.Context, h *handler, r slog.Record) Entry {
 	t.cur = &found
 	t.buf.Reset()
 	encErr := h.encoder().Handle(ctx, rec)
-	attrs := bytes.Clone(bytes.TrimSpace(t.buf.Bytes()))
+	var attrs []byte
+	if encErr == nil {
+		attrs, encErr = t.redactRecord(t.buf.Bytes())
+	}
 	t.cur = &t.null
 	t.mu.Unlock()
 
 	switch {
-	case encErr != nil || !json.Valid(attrs):
+	case encErr != nil:
 		attrs = []byte(`{"attrs_unencodable":true}`)
 	case len(attrs) > t.maxAttrs:
 		attrs = fmt.Appendf(nil, `{"attrs_truncated_bytes":%d}`, len(attrs))
@@ -219,11 +222,15 @@ func (t *Tee) entry(ctx context.Context, h *handler, r slog.Record) Entry {
 	return e
 }
 
-// sensitiveKey names attributes whose value is never kept, whatever it is.
+// sensitiveKey names the keys whose value is never kept, whatever it is: an
+// attribute, a field of a value or the name of a group.
 var sensitiveKey = regexp.MustCompile(`(?i)(secret|token|passw|authorization|credential|private.?key|api.?key|cookie)`)
 
-// replace is the ReplaceAttr of the encoder: it drops the level and the empty
-// message the encoder adds, redacts every value, and notes the IDs.
+// replace is the ReplaceAttr of the encoder. It drops the level and the empty
+// message the encoder adds, notes the IDs and renders errors and Stringers as
+// text. Redaction is not its job: it sees an attribute without the groups
+// around it and without what the encoder makes of a composite value, so the
+// whole record is redacted once encoded (redactRecord).
 func (t *Tee) replace(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) == 0 {
 		switch a.Key {
@@ -237,62 +244,51 @@ func (t *Tee) replace(groups []string, a slog.Attr) slog.Attr {
 			}
 		}
 	}
-	if sensitiveKey.MatchString(a.Key) {
-		return slog.String(a.Key, redacted)
-	}
 	switch a.Value.Kind() {
 	case slog.KindString:
-		s := a.Value.String()
 		if len(groups) == 0 {
-			t.note(a.Key, s)
+			t.note(a.Key, a.Value.String())
 		}
-		return slog.String(a.Key, t.redact(s))
 	case slog.KindAny:
-		return slog.Attr{Key: a.Key, Value: t.redactAny(a.Value.Any())}
+		if s, ok := a.Value.Any().(fmt.Stringer); ok {
+			return slog.String(a.Key, s.String())
+		}
 	}
 	return a
 }
 
-func (t *Tee) redactAny(v any) slog.Value {
-	switch v := v.(type) {
-	case error:
-		return slog.StringValue(t.redact(v.Error()))
-	case fmt.Stringer:
-		return slog.StringValue(t.redact(v.String()))
-	}
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return slog.StringValue(t.redact(fmt.Sprint(v)))
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
+// redactRecord redacts an encoded record as a whole: the value of every key
+// that names a secret, at any depth and whatever it holds, is replaced, and
+// every key and string of what is left is redacted of the needles.
+func (t *Tee) redactRecord(encoded []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(encoded))
 	dec.UseNumber()
 	var tree any
 	if err := dec.Decode(&tree); err != nil {
-		return slog.StringValue(t.redact(string(raw)))
+		return nil, err
 	}
-	out, err := json.Marshal(t.redactTree(tree))
-	if err != nil {
-		return slog.StringValue(t.redact(string(raw)))
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(t.redactTree(tree)); err != nil {
+		return nil, err
 	}
-	s := t.redact(string(out))
-	if json.Valid([]byte(s)) {
-		return slog.AnyValue(json.RawMessage(s))
-	}
-	return slog.StringValue(s)
+	return bytes.TrimSpace(out.Bytes()), nil
 }
 
-// redactTree redacts a decoded JSON value: whatever a key that names a secret
-// holds, at any depth, and every string.
 func (t *Tee) redactTree(v any) any {
 	switch v := v.(type) {
 	case map[string]any:
+		out := make(map[string]any, len(v))
 		for k, e := range v {
 			if sensitiveKey.MatchString(k) {
-				v[k] = redacted
+				e = redacted
 			} else {
-				v[k] = t.redactTree(e)
+				e = t.redactTree(e)
 			}
+			out[t.redact(k)] = e
 		}
+		return out
 	case []any:
 		for i, e := range v {
 			v[i] = t.redactTree(e)
