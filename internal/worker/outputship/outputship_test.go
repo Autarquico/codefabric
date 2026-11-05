@@ -3,6 +3,7 @@ package outputship_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,7 +31,11 @@ type controller struct {
 	batches [][]v1.OutputEntry
 	outputs map[state.Key]*held
 	refuse  map[string]domain.Code // by run: a code every entry of it gets
-	fail    error
+	// busyFrom: by run, the entries that begin at or after this offset get CF_IN_PROGRESS and store nothing.
+	busyFrom map[string]uint64
+	// capAt: by run, the entry that would pass this offset gets CF_INVALID_TRANSITION (the Controller closed the output).
+	capAt map[string]uint64
+	fail  error
 }
 
 type held struct {
@@ -49,6 +54,16 @@ func (c *controller) UploadOutput(_ context.Context, b v1.OutputBatch) (v1.Outpu
 		ack := v1.OutputAck{RunID: e.RunID, LeaseEpoch: e.LeaseEpoch}
 		if code, ok := c.refuse[e.RunID]; ok {
 			ack.Code = code
+			out.Acks = append(out.Acks, ack)
+			continue
+		}
+		if from, ok := c.busyFrom[e.RunID]; ok && e.Offset >= from {
+			ack.Code = domain.CodeInProgress
+			out.Acks = append(out.Acks, ack)
+			continue
+		}
+		if at, ok := c.capAt[e.RunID]; ok && e.Offset+uint64(len(e.Data)) > at {
+			ack.Code = domain.CodeInvalidTransition
 			out.Acks = append(out.Acks, ack)
 			continue
 		}
@@ -87,7 +102,7 @@ func newFixture(t *testing.T) *fixture {
 	root := t.TempDir()
 	f := &fixture{
 		t: t, paths: config.Paths{ConfigDir: filepath.Join(root, "config"), DataDir: filepath.Join(root, "data")},
-		clk: clock.NewFake(t0), ctl: &controller{outputs: map[state.Key]*held{}, refuse: map[string]domain.Code{}},
+		clk: clock.NewFake(t0), ctl: &controller{outputs: map[state.Key]*held{}, refuse: map[string]domain.Code{}, busyFrom: map[string]uint64{}, capAt: map[string]uint64{}},
 	}
 	db, err := state.Open(t.Context(), f.paths.WorkerStateFile())
 	if err != nil {
@@ -239,16 +254,17 @@ func TestShip_SendsTheOutputOfSeveralRunsInOneRequest(t *testing.T) {
 	}
 }
 
-func TestShip_DoesNotSendWhatTheRingWouldDropAndBoundsABatch(t *testing.T) {
+func TestShip_ANewRunStartsAtZeroAndEveryByteIsSentInOrderWithBoundedBatches(t *testing.T) {
 	f := newFixture(t)
 	k := f.run("run_a", state.PhaseRunning)
-	big := bytes.Repeat([]byte("x"), 3*v1.OutputTailBytes)
-	big[len(big)-1] = 'Z'
+	big := make([]byte, 3*v1.OutputTailBytes+123)
+	for i := range big {
+		big[i] = byte('a' + i%26)
+	}
 	f.write(k, string(big))
 	f.once()
-	first := f.ctl.batches[0][0]
-	if first.Offset != uint64(len(big)-v1.OutputTailBytes) { //nolint:gosec // a small length
-		t.Fatalf("started at %d, want the last MiB (%d)", first.Offset, len(big)-v1.OutputTailBytes)
+	if first := f.ctl.batches[0][0]; first.Offset != 0 {
+		t.Fatalf("started at %d, want 0", first.Offset)
 	}
 	total := 0
 	for _, e := range f.ctl.batches[0] {
@@ -261,12 +277,199 @@ func TestShip_DoesNotSendWhatTheRingWouldDropAndBoundsABatch(t *testing.T) {
 		t.Fatalf("a batch of %d bytes", total)
 	}
 	// It catches up in passes, one request each.
-	for range 20 {
+	for range 40 {
 		f.clk.Advance(time.Second)
 		f.once()
 	}
 	if c := f.cursor(k); c.Sent != uint64(len(big)) {
 		t.Fatalf("sent up to %d of %d", c.Sent, len(big))
+	}
+	if h := f.ctl.outputs[k]; h.start != 0 || !bytes.Equal(h.data, big) {
+		t.Fatal("what the Controller holds is not the whole log")
+	}
+}
+
+func TestShip_ABusyControllerIsWaitedOutPerRunWithoutAdvancingOrBlockingOthers(t *testing.T) {
+	f := newFixture(t)
+	a, b := f.run("run_a", state.PhaseRunning), f.run("run_b", state.PhaseRunning)
+	f.write(a, "aaa")
+	f.write(b, "bbb")
+	f.ctl.busyFrom["run_a"] = 0
+	f.once()
+	if f.cursor(a).Sent != 0 || f.cursor(a).Done || f.sent(b) != "bbb" {
+		t.Fatalf("a = %+v, b sent %q", f.cursor(a), f.sent(b))
+	}
+	// Inside the wait nothing of a is sent, though b has news.
+	f.write(b, "BBB")
+	batches := len(f.ctl.batches)
+	f.clk.Advance(time.Second)
+	f.once()
+	for _, e := range f.ctl.batches[batches:] {
+		for _, x := range e {
+			if x.RunID == "run_a" {
+				t.Fatal("a was sent inside its wait")
+			}
+		}
+	}
+	if f.sent(b) != "bbbBBB" {
+		t.Fatalf("b sent %q", f.sent(b))
+	}
+	// Still busy after the first wait: the wait doubles.
+	f.clk.Advance(2 * time.Second)
+	f.once()
+	batches = len(f.ctl.batches)
+	f.clk.Advance(3 * time.Second) // 3s < 4s
+	f.once()
+	if len(f.ctl.batches) != batches {
+		t.Fatal("the wait did not grow")
+	}
+	// The Controller catches up: a is sent from where it was, once the wait is over.
+	delete(f.ctl.busyFrom, "run_a")
+	f.clk.Advance(2 * time.Second)
+	f.once()
+	if f.sent(a) != "aaa" || f.cursor(a).Sent != 3 {
+		t.Fatalf("a sent %q, cursor %+v", f.sent(a), f.cursor(a))
+	}
+}
+
+// The first chunk of a pass is taken and the second is not: the cursor keeps the
+// first (it is not sent again) and the second is sent from where it left.
+func TestShip_AnEntryThatWasNotTakenDoesNotLoseTheOnesBeforeIt(t *testing.T) {
+	f := newFixture(t)
+	k := f.run("run_a", state.PhaseRunning)
+	text := bytes.Repeat([]byte("q"), 2*v1.OutputChunkBytes)
+	f.write(k, string(text))
+	f.ctl.busyFrom["run_a"] = v1.OutputChunkBytes
+	f.once()
+	if c := f.cursor(k); c.Sent != v1.OutputChunkBytes || c.Done {
+		t.Fatalf("cursor = %+v", c)
+	}
+	delete(f.ctl.busyFrom, "run_a")
+	f.clk.Advance(time.Minute)
+	f.once()
+	if h := f.ctl.outputs[k]; !bytes.Equal(h.data, text) {
+		t.Fatalf("the Controller holds %d bytes", len(h.data))
+	}
+	if first := f.ctl.batches[1][0]; first.Offset != v1.OutputChunkBytes {
+		t.Fatalf("second pass began at %d", first.Offset)
+	}
+}
+
+func TestShip_AnOutputClosedAtTheCapStopsAndIsDone(t *testing.T) {
+	f := newFixture(t)
+	k := f.run("run_a", state.PhaseRunning)
+	f.write(k, string(bytes.Repeat([]byte("c"), 2*v1.OutputChunkBytes)))
+	f.ctl.capAt["run_a"] = v1.OutputChunkBytes + 10 // the second chunk is the one that reaches it
+	f.once()
+	c := f.cursor(k)
+	if !c.Done || c.Sent != v1.OutputChunkBytes {
+		t.Fatalf("cursor = %+v", c)
+	}
+	batches := len(f.ctl.batches)
+	f.write(k, "more")
+	f.clk.Advance(time.Minute)
+	f.once()
+	if len(f.ctl.batches) != batches {
+		t.Fatal("kept sending a closed output")
+	}
+}
+
+func TestShip_ARunWithALotOfOutputDoesNotStarveTheOthers(t *testing.T) {
+	f := newFixture(t)
+	a, b := f.run("run_a", state.PhaseRunning), f.run("run_b", state.PhaseRunning)
+	small := f.run("run_c", state.PhaseRunning)
+	f.write(a, strings.Repeat("a", 3<<20))
+	f.write(b, strings.Repeat("b", 3<<20))
+	f.write(small, "tiny")
+	f.once()
+	if f.sent(small) != "tiny" {
+		t.Fatal("the small output waited")
+	}
+	for _, k := range []state.Key{a, b} {
+		if n := len(f.ctl.outputs[k].data); n == 0 || n > (1<<20)/3 {
+			t.Fatalf("%s got %d bytes in the first pass", k.RunID, n)
+		}
+	}
+	for range 12 {
+		f.clk.Advance(time.Second)
+		f.once()
+	}
+	for _, k := range []state.Key{a, b} {
+		if f.cursor(k).Sent != 3<<20 {
+			t.Fatalf("%s sent up to %d", k.RunID, f.cursor(k).Sent)
+		}
+	}
+}
+
+// A lone Run is offered the whole batch: 3 MiB are shipped in a few passes, not
+// at the rate of the share each Run is guaranteed.
+func TestShip_ALoneRunWithALotOfOutputGetsTheWholeBatchEachPass(t *testing.T) {
+	f := newFixture(t)
+	k := f.run("run_a", state.PhaseRunning)
+	f.write(k, strings.Repeat("a", 3<<20))
+	f.once()
+	if got := f.cursor(k).Sent; got != 1<<20 {
+		t.Fatalf("the first pass sent %d bytes, want the whole batch (%d)", got, 1<<20)
+	}
+	for range 2 {
+		f.clk.Advance(time.Second)
+		f.once()
+	}
+	if got := f.cursor(k).Sent; got != 3<<20 {
+		t.Fatalf("3 passes sent %d of %d", got, 3<<20)
+	}
+}
+
+// What an idle Run does not take goes to the Runs after it in the pass: a busy
+// Run behind seven idle ones gets the whole batch.
+func TestShip_AnIdleRunLeavesItsShareToTheRunsAfterIt(t *testing.T) {
+	f := newFixture(t)
+	for _, id := range []string{"run_a", "run_b", "run_c", "run_d", "run_e", "run_f", "run_g"} {
+		f.run(id, state.PhaseRunning) // no output yet
+	}
+	k := f.run("run_z", state.PhaseRunning)
+	f.write(k, strings.Repeat("z", 3<<20))
+	f.once()
+	if got := f.cursor(k).Sent; got != 1<<20 {
+		t.Fatalf("the pass sent %d bytes of the busy Run, want the whole batch (%d)", got, 1<<20)
+	}
+}
+
+// A Worker that had the "last MiB" logic left cursors at an offset deep in the
+// log: they go on from there, and the bytes before it are not sent (the Controller
+// of that time never held them).
+func TestShip_ACursorFromTheLastMiBLogicGoesOnFromItsOffsetWithoutResending(t *testing.T) {
+	for name, withFile := range map[string]bool{"file known": true, "file not known": false} {
+		f := newFixture(t)
+		k := f.run("run_a", state.PhaseRunning)
+		size := 3 << 20
+		log := bytes.Repeat([]byte("L"), size)
+		f.write(k, string(log))
+		old := state.OutputCursor{Key: k, Sent: uint64(size - 1<<20)} //nolint:gosec // small
+		if withFile {
+			info, err := os.Stat(f.logPath(k))
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := info.Sys().(*syscall.Stat_t)                                   //nolint:forcetypeassert // darwin and linux
+			old.HasFile, old.Dev, old.Ino = true, uint64(st.Dev), uint64(st.Ino) //nolint:gosec,unconvert // as taken
+			sum := sha256.Sum256(log[:4096])
+			old.PrefixLen, old.PrefixSum = 4096, sum[:]
+		}
+		if err := f.db.WithTx(t.Context(), func(tx *state.Tx) error { return state.SaveOutputCursor(t.Context(), tx, old) }); err != nil {
+			t.Fatal(err)
+		}
+		for range 20 {
+			f.clk.Advance(time.Second)
+			f.once()
+		}
+		h := f.ctl.outputs[k]
+		if h == nil || h.start != old.Sent || h.end != uint64(size) || f.cursor(k).Sent != uint64(size) { //nolint:gosec // small
+			t.Fatalf("%s: held %+v, cursor %+v", name, h, f.cursor(k))
+		}
+		if first := f.ctl.batches[0][0]; first.Offset != old.Sent {
+			t.Fatalf("%s: began at %d, want %d", name, first.Offset, old.Sent)
+		}
 	}
 }
 
@@ -418,6 +621,7 @@ func TestShip_ARefusedLeaseStopsTheOutputForGood(t *testing.T) {
 			t.Fatalf("%s: cursor = %+v", code, f.cursor(k))
 		}
 		delete(f.ctl.refuse, "run_a")
+		f.clk.Advance(time.Minute) // CF_IN_PROGRESS makes the Run wait
 		f.once()
 		if f.sent(k) != "x" {
 			t.Fatalf("%s: sent %q", code, f.sent(k))

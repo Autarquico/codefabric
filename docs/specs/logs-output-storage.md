@@ -6,14 +6,14 @@ status: active
 priority: P1
 size: M
 issue: 100
-prs: [104]
+prs: [104, 111]
 related_issues: [100]
 sub_issues: []
 depends_on: [observe-attach-events]
 supersedes: []
 related_specs: [codefabric-spec, phase-4-recovery]
 created: 2026-10-10
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # Almacenamiento de logs y output
