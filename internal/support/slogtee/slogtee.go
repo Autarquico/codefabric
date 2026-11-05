@@ -16,7 +16,6 @@ import (
 	"log/slog"
 	"regexp"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -299,13 +298,22 @@ func (t *Tee) redactTree(v any) any {
 	return v
 }
 
+// canonicalID is the form of the canonical ID of an entity: its kind, an
+// underscore and a ULID. Only such a value is kept as the Run, Task or Project
+// of a record; anything else stays an attribute, and is redacted with them.
+var canonicalID = regexp.MustCompile(`^(run|task|project)_[0-9A-HJKMNP-TV-Z]{26}$`)
+
 func (t *Tee) note(key, value string) {
+	m := canonicalID.FindStringSubmatch(value)
+	if m == nil || t.redact(value) != value {
+		return // not an ID, or one that holds a secret: never kept outside the attributes
+	}
 	switch {
-	case (key == "run" || key == "run_id") && strings.HasPrefix(value, "run_"):
+	case (key == "run" || key == "run_id") && m[1] == "run":
 		t.cur.run = value
-	case (key == "task" || key == "task_id") && strings.HasPrefix(value, "task_"):
+	case (key == "task" || key == "task_id") && m[1] == "task":
 		t.cur.task = value
-	case (key == "project" || key == "project_id") && strings.HasPrefix(value, "project_"):
+	case (key == "project" || key == "project_id") && m[1] == "project":
 		t.cur.project = value
 	}
 }

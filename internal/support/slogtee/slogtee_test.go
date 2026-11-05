@@ -67,6 +67,27 @@ type secretValue string
 
 func (secretValue) LogValue() slog.Value { return slog.StringValue("[hidden]") }
 
+// Only a canonical ID becomes the Run of a record: a value that merely starts
+// like one, or one a known secret is part of, stays an attribute and is redacted.
+func TestOnlyACanonicalIDThatHoldsNoSecretIsKeptAsTheRunOfARecord(t *testing.T) {
+	const held = "run_01HZXJ7W4N2Q8R5T6V9Y0B3C4E"
+	tee := slogtee.New(slogtee.Options{Redact: func(s string) string { return strings.ReplaceAll(s, held, "[REDACTED:x]") }})
+	log := slog.New(tee.Wrap(slog.DiscardHandler))
+	var c collector
+	stop := run(t, tee, c.sink, slog.New(slog.DiscardHandler))
+	log.Info("a", "run", "run_opaque-value-123456")
+	log.Info("b", "run", held)
+	stop()
+	for _, e := range c.all() {
+		if e.RunID != "" {
+			t.Errorf("%s: run %q kept outside the attributes", e.Msg, e.RunID)
+		}
+		if strings.Contains(string(e.Attrs), held) {
+			t.Errorf("%s: the held value persisted: %s", e.Msg, e.Attrs)
+		}
+	}
+}
+
 func TestTheInnerHandlerGetsEveryRecordAndTheTeeAJSONCopyWithItsIDs(t *testing.T) {
 	var stderr bytes.Buffer
 	tee := slogtee.New(slogtee.Options{})
@@ -74,7 +95,7 @@ func TestTheInnerHandlerGetsEveryRecordAndTheTeeAJSONCopyWithItsIDs(t *testing.T
 	var c collector
 	stop := run(t, tee, c.sink, slog.New(slog.DiscardHandler))
 
-	log.With("run", "run_01J", "project", "project-1").WithGroup("g").Info("hello", "n", 3, "task", "task_01J", "v", secretValue("x"))
+	log.With("run", "run_01HZXJ7W4N2Q8R5T6V9Y0B3C4D", "project", "project-1").WithGroup("g").Info("hello", "n", 3, "task", "task_01J", "v", secretValue("x"))
 	log.Debug("not enabled") // the inner handler is at info: the tee follows it
 	log.Warn("plain")
 	stop()
@@ -91,12 +112,12 @@ func TestTheInnerHandlerGetsEveryRecordAndTheTeeAJSONCopyWithItsIDs(t *testing.T
 		t.Fatalf("entry = %+v", e)
 	}
 	// run comes from With at the top level; task is inside a group, project is not an ID.
-	if e.RunID != "run_01J" || e.TaskID != "" || e.ProjectID != "" {
+	if e.RunID != "run_01HZXJ7W4N2Q8R5T6V9Y0B3C4D" || e.TaskID != "" || e.ProjectID != "" {
 		t.Fatalf("ids = %q %q %q", e.RunID, e.TaskID, e.ProjectID)
 	}
 	m := attrs(t, e)
 	g, _ := m["g"].(map[string]any)
-	if m["run"] != "run_01J" || g["n"] != float64(3) || g["v"] != "[hidden]" {
+	if m["run"] != "run_01HZXJ7W4N2Q8R5T6V9Y0B3C4D" || g["n"] != float64(3) || g["v"] != "[hidden]" {
 		t.Fatalf("attrs = %s", e.Attrs)
 	}
 	if _, ok := m["level"]; ok {

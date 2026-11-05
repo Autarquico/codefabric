@@ -32,7 +32,7 @@ func TestTheLogsOfTheWorkerAreJournaledRedactedOfTheValuesOfItsRuns(t *testing.T
 		t.Fatal(err)
 	}
 	// A failure on a path that formats an error without scrubbing it.
-	d.log.ErrorContext(ctx, "rendering the configuration failed: "+value, "run", "run_01", "err", errors.New(`exit 1: `+value))
+	d.log.ErrorContext(ctx, "rendering the configuration failed: "+value, "run", "run_01HZXJ7W4N2Q8R5T6V9Y0B3C4D", "err", errors.New(`exit 1: `+value))
 	stop()
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestTheLogsOfTheWorkerAreJournaledRedactedOfTheValuesOfItsRuns(t *testing.T
 		!strings.Contains(r.Msg, "[REDACTED:team/token]") || !strings.Contains(string(r.Attrs), "[REDACTED:team/token]") {
 		t.Fatalf("journaled line = %q %s", r.Msg, r.Attrs)
 	}
-	if r.RunID != "run_01" || r.Epoch != "EPOCH" {
+	if r.RunID != "run_01HZXJ7W4N2Q8R5T6V9Y0B3C4D" || r.Epoch != "EPOCH" {
 		t.Fatalf("journaled line = %+v", r)
 	}
 }
