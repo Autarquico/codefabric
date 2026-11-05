@@ -76,6 +76,9 @@ func newAuthority(db *store.DB, ca *pki.CA, clk clock.Clock, host, port string) 
 	})
 }
 
+// openStore is store.Open; a test sees through it what the store is given.
+var openStore = store.Open
+
 // Start opens the database, loads the PKI and serves the API until ctx ends.
 func Start(ctx context.Context, o Options) (*Controller, error) {
 	if o.Clock == nil {
@@ -113,7 +116,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening the blob store: %w", err)
 	}
-	db, err := store.Open(ctx, p.DatabaseFile(), store.Options{Clock: o.Clock, Logger: fallback, Blobs: blobs})
+	db, err := openStore(ctx, p.DatabaseFile(), store.Options{Clock: o.Clock, Logger: fallback, Blobs: blobs})
 	if err != nil {
 		return nil, err
 	}

@@ -38,7 +38,9 @@ RETURNING sequence`
 
 // AppendLog stores l and returns its sequence; ReceivedAt is the store's clock.
 // A Worker line already stored under its (WorkerID, WorkerEpoch, WorkerSeq)
-// stores nothing and says dup. The caller has validated l.
+// stores nothing and says dup. The caller has validated l. No notifier is told:
+// write logs through app/logs.Service, which announces the sequence after the
+// commit, or a follow will not see them.
 func (t *Tx) AppendLog(ctx context.Context, l LogRecord) (seq uint64, dup bool, err error) {
 	if !domain.ValidLevel(l.Level) || (l.WorkerSeq != nil && (l.WorkerID == "" || l.WorkerEpoch == "")) {
 		return 0, false, errors.New("store: a log line without a level or with half a Worker key")

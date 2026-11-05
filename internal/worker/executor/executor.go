@@ -32,6 +32,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/host"
 	"github.com/Autarquico/codefabric/internal/worker/journal"
@@ -109,6 +110,10 @@ type Options struct {
 	// Secrets is the catalog of the secrets of this Worker; nil is none, and
 	// a Run that uses any is rejected.
 	Secrets secrets.Store
+	// LogSecrets, if set, holds the values each Run retains while it retains
+	// them (secretjit.Load), for the logs that leave this host to be redacted of
+	// them whatever the line (§34).
+	LogSecrets *redact.Live
 	// StopGrace is stop.grace (Appendix A): how long a harness has to end after
 	// it is asked to, before it is killed. It defaults to that of Appendix A.
 	StopGrace time.Duration

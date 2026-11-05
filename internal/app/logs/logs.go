@@ -69,7 +69,7 @@ func (s *Service) Ingest(ctx context.Context, by pki.Session, b v1.LogBatch) (v1
 		}
 		held := map[string]heldRun{}
 		for _, e := range b.Entries {
-			if validEntry(e) != nil {
+			if !wellFormed(e) {
 				out.Rejected++
 				continue
 			}
@@ -124,26 +124,16 @@ func workerOf(ctx context.Context, q store.Querier, by pki.Session, now time.Tim
 	return w, err
 }
 
-func validEntry(e v1.LogEntry) error {
-	switch {
-	case e.WorkerEpoch == "" || len(e.WorkerEpoch) > v1.LogEpochMaxLen || !utf8.ValidString(e.WorkerEpoch):
-		return input.Invalid("worker_epoch is required, of at most %d bytes", v1.LogEpochMaxLen)
-	case e.WorkerSeq == 0 || e.WorkerSeq > math.MaxInt64:
-		return input.Invalid("worker_seq must be positive")
-	case e.Timestamp.IsZero():
-		return input.Invalid("ts is required")
-	case !domain.ValidLevel(e.Level):
-		return input.Invalid("level must be debug, info, warn or error")
-	case len(e.Message) > v1.LogMessageMaxBytes || !utf8.ValidString(e.Message):
-		return input.Invalid("msg is text of at most %d bytes", v1.LogMessageMaxBytes)
-	case len(e.Attrs) > v1.LogAttrsMaxBytes:
-		return input.Invalid("attrs hold at most %d bytes", v1.LogAttrsMaxBytes)
-	case len(e.Attrs) > 0 && !jsonObject(e.Attrs):
-		return input.Invalid("attrs must be a JSON object")
-	case len(e.RunID) > 64:
-		return input.Invalid("run_id is too long")
-	}
-	return nil
+// wellFormed says whether e is within the bounds of a line. The Worker cuts
+// its lines to them, so one that is not is counted as rejected and not stored.
+func wellFormed(e v1.LogEntry) bool {
+	return e.WorkerEpoch != "" && len(e.WorkerEpoch) <= v1.LogEpochMaxLen && utf8.ValidString(e.WorkerEpoch) &&
+		e.WorkerSeq != 0 && e.WorkerSeq <= math.MaxInt64 &&
+		!e.Timestamp.IsZero() &&
+		domain.ValidLevel(e.Level) &&
+		len(e.Message) <= v1.LogMessageMaxBytes && utf8.ValidString(e.Message) &&
+		len(e.Attrs) <= v1.LogAttrsMaxBytes && (len(e.Attrs) == 0 || jsonObject(e.Attrs)) &&
+		len(e.RunID) <= v1.LogRunIDMaxLen
 }
 
 func jsonObject(raw []byte) bool {
@@ -411,47 +401,23 @@ func (s *Service) Open(ctx context.Context, by pki.Session, q Query, after uint6
 // is missed. idle is called when the stream has been quiet for
 // stream.KeepaliveEvery, after the caller was authorised again.
 func (f *Follower) Run(ctx context.Context, deliver func(logs []v1.Log, cursor string) error, idle func() error) error {
-	pacer := stream.NewPacer(f.s.clock, stream.KeepaliveEvery)
-	for {
-		seen := f.s.notifier.Latest()
-		var page v1.LogPage
-		err := f.s.db.Read(ctx, func(r store.Querier) (err error) {
-			page, err = f.s.pageIn(ctx, r, f.by, f.filter, f.after, v1.LogsDefaultLimit)
-			return err
-		})
-		if err != nil {
-			return err
-		}
-		f.after, _ = ParseCursor(page.Cursor)
-		if len(page.Logs) > 0 {
-			if err := deliver(page.Logs, page.Cursor); err != nil {
+	return stream.Follow(ctx, f.s.clock, f.s.notifier,
+		func(uint64) (bool, bool, error) {
+			var page v1.LogPage
+			err := f.s.db.Read(ctx, func(r store.Querier) (err error) {
+				page, err = f.s.pageIn(ctx, r, f.by, f.filter, f.after, v1.LogsDefaultLimit)
 				return err
-			}
-			pacer.Wrote()
-		}
-		if page.HasMore {
-			continue
-		}
-		for {
-			due, err := pacer.Wait(ctx, f.s.notifier.Changed(seen), 0)
+			})
 			if err != nil {
-				return err
+				return false, false, err
 			}
-			if !due {
-				break
+			f.after, _ = ParseCursor(page.Cursor)
+			if len(page.Logs) == 0 {
+				return false, page.HasMore, nil
 			}
-			if err := f.s.authorize(ctx, f.by); err != nil {
-				return err
-			}
-			if err := idle(); err != nil {
-				return err
-			}
-			pacer.Wrote()
-			if f.s.notifier.Latest() > seen {
-				break
-			}
-		}
-	}
+			return true, page.HasMore, deliver(page.Logs, page.Cursor)
+		},
+		func() error { return f.s.authorize(ctx, f.by) }, idle)
 }
 
 func (s *Service) authorize(ctx context.Context, by pki.Session) error {

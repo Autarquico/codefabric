@@ -17,6 +17,7 @@ const (
 	LogMessageMaxBytes = 4 << 10
 	LogAttrsMaxBytes   = 16 << 10
 	LogEpochMaxLen     = 64
+	LogRunIDMaxLen     = 64
 	// LogsDefaultLimit and LogsMaxLimit bound a page of GET /v1/logs, and
 	// LogsPageBytes the JSON of its logs (the first is always sent).
 	LogsDefaultLimit = 100
@@ -31,8 +32,8 @@ const SSELog = "log"
 // LogEntry is a structured log line of the Worker, as it ships it. (WorkerEpoch,
 // WorkerSeq) identify it for good: it is sent again, unchanged, until the
 // Controller has it. Timestamp is the Worker's clock and orders nothing. RunID
-// is kept only for a Run this Worker holds; the Controller derives the Task and
-// the Project from it and ignores TaskID and ProjectID.
+// is kept only for a Run this Worker held; the Controller derives the Task and
+// the Project from it.
 type LogEntry struct {
 	WorkerEpoch string          `json:"worker_epoch"`
 	WorkerSeq   uint64          `json:"worker_seq"`
@@ -41,8 +42,6 @@ type LogEntry struct {
 	Message     string          `json:"msg"`
 	Attrs       json.RawMessage `json:"attrs,omitempty"`
 	RunID       string          `json:"run_id,omitempty"`
-	TaskID      string          `json:"task_id,omitempty"`
-	ProjectID   string          `json:"project_id,omitempty"`
 }
 
 // LogBatch is POST /v1/worker/logs: 1 to LogBatchMaxEntries entries.

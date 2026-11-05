@@ -101,7 +101,9 @@ func positive(n, def int) int {
 // that failed, since the tee was made.
 func (t *Tee) Dropped() uint64 { return t.dropped.Load() }
 
-// Wrap tees inner: inner keeps getting every record, unchanged.
+// Wrap tees inner: inner keeps getting every record, unchanged. A record is
+// encoded under a lock of the tee, so the LogValue, Error and String of its
+// values, and Options.Redact, must not log through the teed logger.
 func (t *Tee) Wrap(inner slog.Handler) slog.Handler {
 	enc := slog.NewJSONHandler(writerFunc(t.buf.Write), &slog.HandlerOptions{Level: slog.LevelDebug - 8, ReplaceAttr: t.replace})
 	return &handler{tee: t, inner: inner, enc: enc}

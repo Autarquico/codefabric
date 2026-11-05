@@ -57,6 +57,9 @@ func (e *Executor) recoverRuns(ctx context.Context) error {
 			continue
 		}
 		e.retrackAuth(r)
+		if e.usesSecrets(r) {
+			e.loadForLogs(r.Key) // what the previous daemon delivered
+		}
 		if e.step(ctx, r.Key) || ctx.Err() != nil {
 			continue
 		}

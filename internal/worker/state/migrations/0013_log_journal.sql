@@ -12,7 +12,5 @@ CREATE TABLE log_journal (
     level      TEXT    NOT NULL,
     msg        TEXT    NOT NULL,
     attrs      TEXT    NOT NULL,
-    run_id     TEXT,
-    task_id    TEXT,
-    project_id TEXT
+    run_id     TEXT
 ) STRICT;

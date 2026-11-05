@@ -75,7 +75,7 @@ func TestLogs_AWorkerNamesOnlyTheRunsItHeldAndTheirTaskComesFromTheController(t 
 	now := e.clock.Now()
 
 	own := logLine("E1", 1, now, "info", "own")
-	own.RunID, own.TaskID, own.ProjectID = mine.run.ID, "task_forged", "project_forged"
+	own.RunID = mine.run.ID
 	other := logLine("E1", 2, now, "info", "other")
 	other.RunID = theirs.run.ID
 	missing := logLine("E1", 3, now, "info", "missing")
@@ -86,7 +86,7 @@ func TestLogs_AWorkerNamesOnlyTheRunsItHeldAndTheirTaskComesFromTheController(t 
 	if len(got) != 3 {
 		t.Fatalf("%d logs", len(got))
 	}
-	if got[0].RunID != mine.run.ID || got[0].TaskID != mine.run.TaskID || got[0].ProjectID == "" || got[0].ProjectID == "project_forged" {
+	if got[0].RunID != mine.run.ID || got[0].TaskID != mine.run.TaskID || got[0].ProjectID == "" {
 		t.Fatalf("own = %+v", got[0])
 	}
 	for _, l := range got[1:] {
@@ -146,8 +146,9 @@ func TestScenario_LogsOutputStorage_Filtros(t *testing.T) {
 	wantCode(t, err, domain.CodeInvalidRequest)
 }
 
-// Two Workers whose clocks are an hour ahead and an hour behind: the logs list
-// in the order the Controller stored them, never by the time they carry.
+// Two Workers whose clocks are an hour ahead and an hour behind, and a
+// Controller whose clock steps back: the logs list in the order the Controller
+// stored them, never by the time they carry or were received at.
 func TestScenario_LogsOutputStorage_Orden(t *testing.T) {
 	e := newEnv(t)
 	ahead, behind := e.joinWorker("ahead"), e.joinWorker("behind")
@@ -158,7 +159,8 @@ func TestScenario_LogsOutputStorage_Orden(t *testing.T) {
 			w, skew = behind, -time.Hour
 		}
 		e.shipLogs(w, logLine("E", uint64(i+1), now.Add(skew), "info", string(rune('a'+i))))
-		e.clock.Advance(time.Second)
+		// The Controller's clock steps back too: received_at does not follow the sequence either.
+		e.clock.Advance(3*time.Second - time.Duration(i%2)*5*time.Second)
 	}
 	page, err := e.app.Logs.List(t.Context(), e.owner, logs.Query{Limit: 4})
 	must(t, err)
@@ -173,7 +175,7 @@ func TestScenario_LogsOutputStorage_Orden(t *testing.T) {
 			t.Fatalf("sequence %d after %d", got[i].Sequence, got[i-1].Sequence)
 		}
 	}
-	if !got[1].Timestamp.Before(got[0].Timestamp) {
+	if !got[1].Timestamp.Before(got[0].Timestamp) || !got[2].ReceivedAt.Before(got[1].ReceivedAt) {
 		t.Fatal("the clocks of the test are not skewed")
 	}
 }

@@ -176,7 +176,11 @@ func (e *Executor) releaseRun(ctx context.Context, k state.Key, alive func(strin
 	if err := verify(); err != nil {
 		return err
 	}
-	return e.jit.Release(e.runDir(k), verify)
+	if err := e.jit.Release(e.runDir(k), verify); err != nil {
+		return err
+	}
+	e.o.LogSecrets.Drop(e.runDir(k))
+	return nil
 }
 
 // retentionClosed says whether the Run k needs its secrets no longer: it is
