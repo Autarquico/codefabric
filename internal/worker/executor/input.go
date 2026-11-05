@@ -517,15 +517,17 @@ func (e *Executor) finishDelivery(ctx context.Context, k state.Key, o state.Inpu
 // options unless they are fixed, are redacted of the secrets of the Run before
 // they are bounded or reported.
 func (e *Executor) openPrompt(ctx context.Context, r state.Run, id string, kind domain.PromptKind, summary string, options []string, redactOptions bool) error {
+	// What does not print goes first: removed after the redaction, it could
+	// join the halves of a secret the redaction did not see whole.
 	redacted := e.redactor(r)
-	summary = reportable(redacted(summary))
+	summary = reportable(redacted(reportableUnbounded(summary)))
 	if summary == "" {
 		summary = noDescription
 	}
 	var opts []string
 	for _, o := range options {
 		if redactOptions {
-			o = redacted(o)
+			o = redacted(reportableUnbounded(o))
 		}
 		if o = boundText(o, v1.MaxOptionLen); o != "" && len(opts) < v1.MaxPromptOption {
 			opts = append(opts, o)

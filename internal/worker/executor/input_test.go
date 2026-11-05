@@ -266,3 +266,23 @@ func TestARunKeepsTheInputItWasLaunchedWith(t *testing.T) {
 		t.Errorf("a Run launched with input has %q", h.InputPath)
 	}
 }
+
+// A secret split by a character that does not print is still redacted: that
+// character is removed before the redaction, not after it.
+func TestOpenPromptRedactsASecretSplitByAFormatCharacter(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("ask")
+	const secret = "s3cr3t-value-9f2c"
+	if err := f.e.jit.Deliver(f.runDir(k), 1, []redact.Needle{{Ref: "github.personal", Value: []byte(secret)}}, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	split := "s3cr3t-\u200bvalue-9f2c"
+	if err := f.e.openPrompt(t.Context(), f.run(k), "q-1", domain.PromptQuestion, "use "+split+"?", []string{split}, true); err != nil {
+		t.Fatal(err)
+	}
+	reports := f.reports(k)
+	got := reports[len(reports)-1]
+	if strings.Contains(got.Summary, secret) || slices.ContainsFunc(got.Options, func(o string) bool { return strings.Contains(o, secret) }) {
+		t.Errorf("input_requested = %+v", got)
+	}
+}
