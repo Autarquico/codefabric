@@ -1,0 +1,23 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Tasks · 4 ───────────────────────────────────────────────────
+   ID        STATE      WAITING   CREATED  NAME
+ › t-4k2m    running              12:29    auth-refactor
+   t-9p1x    waiting    input     11:02    infra
+   t-2c7q    completed            10:15    payments
+   t-8h3w    failed               09:40    frontend
+
+ ──────────────── Detail ──────────────────────────────────────────────────────
+ Task          auth-refactor (t-4k2m)
+ State         running
+ Mode          edit
+ Completion    manual
+ Workflow      default
+ Prompt        Refactor the auth middleware
+ Timeline
+ 12:29   task created
+ 12:30   run started on linux
+ 12:44   agent analyzing failure
+
+ ──────────────────────────────────────────────────────────────────────────────
+ [↑↓] Move [/] Filter [enter] Actions [a] Attach [c] Cancel [d] Complete
+ [x] Archive [esc] Back [q] Quit

@@ -89,5 +89,30 @@ func (r *Router) Update(msg tea.Msg) (tea.Cmd, bool) {
 	return cmd, handled
 }
 
+// identified is a screen that messages can be addressed to.
+type identified interface{ screenID() uint64 }
+
+// Deliver gives msg to the screen with that id, wherever it is in the stack.
+// found is false when the screen is no longer there.
+func (r *Router) Deliver(id uint64, msg tea.Msg) (cmd tea.Cmd, found bool) {
+	for i := range r.stack {
+		if s, ok := r.stack[i].screen.(identified); ok && s.screenID() == id {
+			next, cmd, _ := r.stack[i].screen.Update(msg)
+			r.stack[i].screen = next
+			return cmd, true
+		}
+	}
+	return nil, false
+}
+
+// Routes are the routes of the screens in the stack, home excluded.
+func (r *Router) Routes() []Route {
+	var out []Route
+	for _, e := range r.stack[1:] {
+		out = append(out, e.route)
+	}
+	return out
+}
+
 // Depth is how many screens are stacked, home included.
 func (r *Router) Depth() int { return len(r.stack) }
