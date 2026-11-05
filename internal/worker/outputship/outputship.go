@@ -37,16 +37,20 @@ import (
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
-// Limits and timings. The ring of the Controller holds the last MiB, so there is
-// no point in sending what is further back; a batch carries at most batchBytes of
-// output, which is base64 of at most 4/3 of that in a body the Controller reads up to
-// v1.OutputBatchBytes.
+// Limits and timings. The Controller keeps the whole output (sealed segments and
+// a hot tail), so every byte is sent, from the cursor on. A batch carries at most
+// batchBytes of output, which is base64 of at most 4/3 of that in a body the
+// Controller reads up to v1.OutputBatchBytes; perRunBytes and the rotation keep
+// one large output from starving the others.
 const (
 	interval    = time.Second
 	batchBytes  = 1 << 20
 	perRunBytes = 2 * v1.OutputChunkBytes
 	settle      = time.Second // the file must not grow for this long before it is closed
 	backoffMax  = 30 * time.Second
+	// busyBackoff is the first wait of a Run whose output the Controller could not
+	// take yet (CF_IN_PROGRESS); it doubles up to backoffMax.
+	busyBackoff = 2 * time.Second
 
 	noteReplaced = "output.log was replaced or truncated"
 
@@ -78,6 +82,13 @@ type Shipper struct {
 	retryAt  time.Time
 	rotate   int
 	final    map[state.Key]finalLook // the size of a finished Run's log at the last look
+	busy     map[state.Key]busyRun   // Runs the Controller asked to wait for
+}
+
+// busyRun is the wait of a Run whose output the Controller could not take.
+type busyRun struct {
+	until time.Time
+	wait  time.Duration
 }
 
 type finalLook struct {
@@ -90,7 +101,7 @@ func New(o Options) *Shipper {
 	if o.Interval < interval {
 		o.Interval = interval
 	}
-	return &Shipper{o: o, final: map[state.Key]finalLook{}}
+	return &Shipper{o: o, final: map[state.Key]finalLook{}, busy: map[state.Key]busyRun{}}
 }
 
 // Run sends until ctx ends.
@@ -115,8 +126,6 @@ type item struct {
 	cursor  state.OutputCursor
 	size    uint64 // of the file when it was read
 	entries []v1.OutputEntry
-	// reaches is the offset the cursor moves to when the data entry is acknowledged.
-	reaches uint64
 	// prefixLen and prefixSum are the fingerprint to keep when the entries are acknowledged.
 	prefixLen int
 	prefixSum []byte
@@ -201,7 +210,11 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 		return nil, err
 	}
 	if cur.Done {
+		delete(s.busy, r.Key)
 		return nil, nil
+	}
+	if b, ok := s.busy[r.Key]; ok && s.o.Clock.Now().Before(b.until) {
+		return nil, nil // the Controller asked to wait; the others use its room
 	}
 	it := &item{cursor: cur}
 	entry := func(e v1.OutputEntry) {
@@ -254,9 +267,6 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 	}
 
 	pos := cur.Sent
-	if size > pos && size-pos > v1.OutputTailBytes {
-		pos = size - v1.OutputTailBytes // the Controller keeps the last MiB: the rest would be dropped on arrival
-	}
 	for size > pos && room > 0 {
 		buf := make([]byte, min(uint64(room), size-pos, v1.OutputChunkBytes))
 		n, err := f.ReadAt(buf, int64(pos)) //nolint:gosec // below the file's size
@@ -269,7 +279,6 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 		entry(v1.OutputEntry{Offset: pos, Data: buf[:n]})
 		pos += uint64(n) //nolint:gosec // n is a count of bytes read
 		room -= n
-		it.reaches = pos
 	}
 	// The fingerprint grows with what is sent, up to fingerprintBytes. The bytes it
 	// covers are the ones read, which an append-only file does not change.
@@ -311,36 +320,59 @@ func (s *Shipper) stable(k state.Key, size uint64) bool {
 	return now.Sub(seen.at) >= settle
 }
 
-// settle applies the acknowledgements of one assignment's entries.
+// settle applies the acknowledgements of one assignment's entries, each as far as
+// it goes: the cursor keeps what was taken even when a later entry was not. The
+// first entry the Controller could not take ends the item (the ones after it
+// would leave a hole); it is sent again, in order, in a later pass.
 func (s *Shipper) settle(ctx context.Context, it *item, acks []v1.OutputAck) error {
 	cur := it.cursor
-	if it.prefixLen > cur.PrefixLen {
-		cur.PrefixLen, cur.PrefixSum = it.prefixLen, it.prefixSum
-	}
+loop:
 	for i, ack := range acks {
 		e := it.entries[i]
 		switch ack.Code {
 		case "":
+			delete(s.busy, cur.Key)
 			if e.EOF {
 				cur.Done, cur.EOFSent = true, true
 				delete(s.final, cur.Key)
 				continue
 			}
-			cur.Sent = it.reaches
+			cur.Sent = max(cur.Sent, e.Offset+uint64(len(e.Data)))
 			if ack.End > cur.Sent && ack.End <= it.size {
 				cur.Sent = ack.End // the Controller has more than this Worker remembered: do not send it again
 			}
-		case domain.CodeStaleLease, domain.CodeNotFound, domain.CodePolicyDenied, domain.CodeInvalidRequest, domain.CodeInvalidTransition:
+		case domain.CodeInvalidTransition:
+			// The output is closed: by the cap of the Controller (the entry that reached
+			// it is the one refused) or by an earlier close. Nothing more is taken.
+			s.o.Log.WarnContext(ctx, "the Controller closed the output of a Run; no more of it is sent",
+				"run", e.RunID, "epoch", e.LeaseEpoch, "message", ack.Message)
+			cur.Done = true
+			delete(s.final, cur.Key)
+			delete(s.busy, cur.Key)
+			break loop
+		case domain.CodeStaleLease, domain.CodeNotFound, domain.CodePolicyDenied, domain.CodeInvalidRequest:
 			// Not this Worker's any more, or not reconcilable: it will not be accepted by trying again.
 			s.o.Log.WarnContext(ctx, "the Controller refused the output of a Run; no more of it is sent",
 				"run", e.RunID, "epoch", e.LeaseEpoch, "code", ack.Code)
 			cur.Done = true
 			delete(s.final, cur.Key)
-			continue
+			delete(s.busy, cur.Key)
+			break loop
+		case domain.CodeInProgress:
+			// Backpressure: the sealer is behind. Nothing advances; this Run waits, longer each time.
+			b := s.busy[cur.Key]
+			b.wait = min(max(2*b.wait, busyBackoff), backoffMax)
+			b.until = s.o.Clock.Now().Add(b.wait)
+			s.busy[cur.Key] = b
+			break loop
 		default:
 			s.o.Log.WarnContext(ctx, "the Controller could not take output; it will be sent again", "run", e.RunID, "code", ack.Code)
-			return nil
+			break loop
 		}
+	}
+	// The fingerprint covers bytes that are sent: not further than the cursor.
+	if it.prefixLen > cur.PrefixLen && uint64(it.prefixLen) <= cur.Sent { //nolint:gosec // a small length
+		cur.PrefixLen, cur.PrefixSum = it.prefixLen, it.prefixSum
 	}
 	return s.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.SaveOutputCursor(ctx, tx, cur) })
 }
