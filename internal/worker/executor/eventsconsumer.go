@@ -156,7 +156,8 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 	// The stop is ordered, and persisted, before the cursor moves: a daemon that
 	// dies in between reads the line again and finds the order there. The
 	// observation itself moves with the cursor, in the same write.
-	if structured := e.structuredInput(spec); needsInput && structured {
+	structured := e.launchedWithInput(r.Key)
+	if needsInput && structured {
 		// The Run is answered, not stopped: the questions become prompts, and the
 		// Run goes on when the answers reach it. Past the end of the harness there
 		// is nobody to answer.
@@ -172,7 +173,7 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 			return false, err
 		}
 	}
-	if sawResult && !final && e.structuredInput(spec) {
+	if sawResult && !final && structured {
 		// A harness fed by a stream ends only when the stream does: its turn is
 		// over and nothing waits for an answer, so the input is closed.
 		if err := e.endInputIfIdle(ctx, r); err != nil {
@@ -241,7 +242,7 @@ func (e *Executor) handleOf(adapter harness.Adapter, r state.Run, spec specView)
 		RunID: domain.ID(r.RunID), LeaseEpoch: r.LeaseEpoch, Mode: domain.Mode(spec.Mode), RunDir: dir,
 		Worktree: e.worktree(r.Key), OutputPath: filepath.Join(dir, execwrap.OutputLog), EventsPath: filepath.Join(dir, execwrap.EventsFile),
 	}
-	if e.structuredInput(spec) {
+	if e.launchedWithInput(r.Key) {
 		h.InputPath = e.inputPath(dir)
 	}
 	if adapter.Capabilities().ConfigIsolation {

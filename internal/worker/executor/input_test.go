@@ -12,9 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/inputsock"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -238,5 +240,29 @@ func TestAWithdrawnPermissionIsClosed(t *testing.T) {
 	}
 	if delivered := slices.ContainsFunc(f.reports(k), func(r v1.RunReportEntry) bool { return r.Kind == v1.ReportInputDelivered }); delivered {
 		t.Error("a withdrawn prompt was reported delivered")
+	}
+}
+
+// Whether a Run is answered while it runs is what it was launched with, not what
+// the daemon announces now: Claude Code may have changed since the launch.
+func TestARunKeepsTheInputItWasLaunchedWith(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("plain")
+	r, dir := f.run(k), f.runDir(k)
+	adapter, _ := f.e.harnesses.Get(command.ID)
+	if h := f.e.handleOf(adapter, r, parseSpec(r.Spec)); h.InputPath != "" || f.e.launchedWithInput(k) {
+		t.Fatalf("a Run launched without input has %q", h.InputPath)
+	}
+	var l execwrap.Launch
+	if ok, err := execwrap.Read(dir, execwrap.LaunchFile, &l); err != nil || !ok {
+		t.Fatalf("launch: %v %v", ok, err)
+	}
+	l.InputPath = filepath.Join(dir, InputFIFO)
+	if err := execwrap.Write(dir, execwrap.LaunchFile, l); err != nil {
+		t.Fatal(err)
+	}
+	// This daemon announces no structured input: the Run still has the FIFO it was launched with.
+	if h := f.e.handleOf(adapter, r, parseSpec(r.Spec)); h.InputPath != l.InputPath || !f.e.launchedWithInput(k) {
+		t.Errorf("a Run launched with input has %q", h.InputPath)
 	}
 }

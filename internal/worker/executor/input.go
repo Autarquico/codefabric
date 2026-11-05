@@ -83,15 +83,28 @@ func (e *Executor) announcesInput(harnessID string) bool {
 	return false
 }
 
+// launchedWithInput says whether the Run was launched to be answered while it
+// runs. That is decided once, by inputOfLaunch, and kept in the launch of the
+// Run: what the daemon announces now may have changed since (another Claude
+// Code), and the Run keeps the input it was launched with.
+func (e *Executor) launchedWithInput(k state.Key) bool {
+	var l execwrap.Launch
+	ok, err := execwrap.Read(e.runDir(k), execwrap.LaunchFile, &l)
+	return err == nil && ok && l.InputPath != ""
+}
+
 // inputOfLaunch tells the adapter how the Run is to be answered. A Run that
 // asks permissions on a Worker that cannot answer them does not run: skipping
 // the prompts it asked for would be running with more than it was given.
 func (e *Executor) inputOfLaunch(r state.Run, spec specView, dir string, run *harness.RunSpec) error {
 	ask := spec.Requirements.Permissions == v1.PermissionsAsk
 	if !e.structuredInput(spec) {
-		if ask {
-			return fmt.Errorf("%s: the Run asks for permissions and this Worker does not announce %s for %s",
-				domain.CodeInvalidRequest, domain.StructuredInputCapability, spec.Requirements.Harness)
+		switch {
+		case ask && spec.Mode == execwrap.ModeInteractive:
+			return &codedFailure{domain.CodeInvalidRequest, "the Run asks for permissions, which only a headless Run can"}
+		case ask:
+			return &codedFailure{domain.CodeInvalidRequest, fmt.Sprintf("the Run asks for permissions and this Worker does not announce %s for %s",
+				domain.StructuredInputCapability, spec.Requirements.Harness)}
 		}
 		return nil
 	}
@@ -198,15 +211,14 @@ func (ir *inputRun) Gone(c *inputsock.Conn) {
 // delivers the orders that wait. The caller holds the lock of the Run. alive
 // says that its harness has not exited.
 func (e *Executor) serveInput(ctx context.Context, r state.Run, alive bool) {
-	spec := parseSpec(r.Spec)
-	if !e.structuredInput(spec) {
+	if !e.launchedWithInput(r.Key) {
 		return
 	}
 	if !alive || !inRun(r) {
 		e.dropInput(ctx, r.Key)
 		return
 	}
-	if spec.Requirements.Permissions == v1.PermissionsAsk {
+	if parseSpec(r.Spec).Requirements.Permissions == v1.PermissionsAsk {
 		e.ensureSocket(ctx, r)
 	}
 	e.deliverInputs(ctx, r)

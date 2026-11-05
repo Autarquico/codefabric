@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -160,8 +161,8 @@ func (a Adapter) launch(host harness.Host, run harness.RunSpec, session string) 
 	var inputPath string
 	if run.StructuredInput && a.Caps.StructuredInput {
 		inputPath = run.InputPath
-		if run.AskPermissions && len(run.PermissionServer) > 0 {
-			argv = append(argv, "--permission-socket", run.PermissionServer[len(run.PermissionServer)-1])
+		if i := slices.Index(run.PermissionServer, "--socket"); run.AskPermissions && i >= 0 && i+1 < len(run.PermissionServer) {
+			argv = append(argv, "--permission-socket", run.PermissionServer[i+1])
 		}
 	}
 	configDir := globalDir(host)
