@@ -17,6 +17,11 @@ type Event struct {
 	Result *Result
 	// Message is set on EventError and EventInputRequired.
 	Message string
+	// ID names what the harness asks on EventInputRequired when it has a name
+	// for it (the tool use of a question): the same ask read twice has the same
+	// ID. Options are the answers it offers, if any.
+	ID      string
+	Options []string
 }
 
 // EventKind is the kind of an Event.

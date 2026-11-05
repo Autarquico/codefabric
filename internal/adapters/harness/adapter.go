@@ -81,6 +81,22 @@ type RunSpec struct {
 	// EventsPath is the file of the structured stream, when there is one
 	// apart from OutputPath (see Launch.StructuredStdout).
 	EventsPath string
+	// StructuredInput asks for a headless process that can be answered while it
+	// runs: its stdin is the FIFO at InputPath (Launch.InputPath) and the
+	// permissions it would ask go to PermissionServer. Only set for an adapter
+	// with Capabilities.StructuredInput, in a Worker that announces it.
+	StructuredInput bool
+	// InputPath is the FIFO the wrapper makes in the RunDir to be the stdin of
+	// the process, and SendInput writes to (see Handle.InputPath).
+	InputPath string
+	// AskPermissions runs the process in its default permission mode instead of
+	// the one that skips the prompts: the permissions it asks go to
+	// PermissionServer. It needs StructuredInput.
+	AskPermissions bool
+	// PermissionServer is the argv of the MCP stdio server that answers the
+	// permission prompts of the process (`cf worker mcp-bridge`), already
+	// bound to the socket of the Run.
+	PermissionServer []string
 }
 
 // Handle names a Run that has started. It is a value the Worker rebuilds
@@ -94,6 +110,9 @@ type Handle struct {
 	Worktree   string
 	OutputPath string
 	EventsPath string
+	// InputPath is the FIFO of the stdin of a Run that was started with
+	// RunSpec.StructuredInput; empty for one that was not.
+	InputPath string
 }
 
 // Detection is what Detect found.
