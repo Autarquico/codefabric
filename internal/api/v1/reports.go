@@ -147,6 +147,14 @@ type RunReportEntry struct {
 	// PromptID names the prompt (input_requested, input_delivered), unique within
 	// the Run and the lease epoch. PromptKind, Summary and Options describe it
 	// (input_requested only).
+	//
+	// Summary and Options are harness text and may carry secrets (a tool input
+	// is a command line or a header). The Worker redacts them with the secret
+	// needles of the Run before reporting; the Controller has none. The Controller
+	// only bounds them: a summary of at most MaxReportMessageLen bytes, at most
+	// MaxPromptOption options of at most MaxOptionLen bytes, all valid UTF-8 with
+	// no control or format characters (anything else is refused, not trimmed), and
+	// at most MaxOpenPrompts open prompts per Run and lease epoch.
 	PromptID   string            `json:"prompt_id,omitempty"`
 	PromptKind domain.PromptKind `json:"prompt_kind,omitempty"`
 	Summary    string            `json:"summary,omitempty"`

@@ -10,6 +10,7 @@ import (
 const (
 	MaxPromptIDLen  = 64
 	MaxPromptOption = 16  // options of one prompt
+	MaxOpenPrompts  = 16  // prompts of one Run left open under one lease epoch
 	MaxOptionLen    = 128 // bytes of one option
 	MaxAnswerText   = 8 << 10
 )
@@ -92,11 +93,10 @@ type InboxRun struct {
 
 // InboxPrompt is what a Run asks.
 type InboxPrompt struct {
-	ID       string            `json:"id"`
-	Kind     domain.PromptKind `json:"kind"`
-	Summary  string            `json:"summary"`
-	Options  []string          `json:"options,omitempty"`
-	Answered bool              `json:"answered"`
+	ID      string            `json:"id"`
+	Kind    domain.PromptKind `json:"kind"`
+	Summary string            `json:"summary"`
+	Options []string          `json:"options,omitempty"`
 }
 
 // InboxResponse is GET /v1/inbox: the items that need a person, the oldest first.

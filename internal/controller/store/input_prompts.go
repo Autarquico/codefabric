@@ -57,24 +57,22 @@ func scanPrompt(row rowScanner) (InputPrompt, error) {
 	return p, nil
 }
 
-// InsertPrompt records a prompt as pending. It says false, and writes nothing,
-// when the Run asked for that prompt under that epoch already: a Worker that
-// restarts re-reads its pending prompts and tells them again.
-func (t *Tx) InsertPrompt(ctx context.Context, p InputPrompt) (bool, error) {
+// InsertPrompt records a prompt as pending. A prompt the Run asked for already
+// under that epoch is an error: the caller looks first.
+func (t *Tx) InsertPrompt(ctx context.Context, p InputPrompt) error {
 	options, err := json.Marshal(append([]string{}, p.Options...))
 	if err != nil {
-		return false, fmt.Errorf("store: encoding options: %w", err)
+		return fmt.Errorf("store: encoding options: %w", err)
 	}
-	res, err := t.Exec(ctx,
+	_, err = t.Exec(ctx,
 		`INSERT INTO input_prompts (run_id, lease_epoch, prompt_id, kind, summary, options, state, requested_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(p.RunID), p.LeaseEpoch, p.PromptID, string(p.Kind), p.Summary, string(options),
 		string(domain.PromptPending), p.RequestedAt.UnixNano())
 	if err != nil {
-		return false, fmt.Errorf("store: inserting prompt: %w", err)
+		return fmt.Errorf("store: inserting prompt: %w", err)
 	}
-	n, err := res.RowsAffected()
-	return n == 1, err
+	return nil
 }
 
 // PromptByID returns the prompt of the Run under the epoch, or ErrNotFound.

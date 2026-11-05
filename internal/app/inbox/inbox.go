@@ -39,7 +39,7 @@ func (s *Service) List(ctx context.Context) (v1.InboxResponse, error) {
 		if err != nil {
 			return err
 		}
-		out.Items = append(asked, failed...)
+		out.Items = append(append(out.Items, asked...), failed...)
 		slices.SortStableFunc(out.Items, func(a, b v1.InboxItem) int { return a.Since.Compare(b.Since) })
 		return nil
 	})

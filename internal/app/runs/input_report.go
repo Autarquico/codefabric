@@ -58,6 +58,13 @@ func inputRequested(ctx context.Context, tx *store.Tx, act mutation.Act, ev *dom
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return inputPlan{}, err
 	}
+	open, err := store.OpenPrompts(ctx, tx, run.ID, e.LeaseEpoch)
+	if err != nil {
+		return inputPlan{}, err
+	}
+	if len(open) >= v1.MaxOpenPrompts {
+		return inputPlan{}, input.Invalid("a Run has at most %d prompts open", v1.MaxOpenPrompts)
+	}
 	if run.State != domain.RunWaitingInput {
 		if _, err := domain.NextRunState(domain.RunStatus{State: run.State}, domain.RunEventInputRequested); err != nil {
 			return inputPlan{}, err
@@ -75,7 +82,7 @@ func inputRequested(ctx context.Context, tx *store.Tx, act mutation.Act, ev *dom
 	}
 	return inputPlan{
 		apply: func() error {
-			if _, err := tx.InsertPrompt(ctx, store.InputPrompt{
+			if err := tx.InsertPrompt(ctx, store.InputPrompt{
 				RunID: run.ID, LeaseEpoch: e.LeaseEpoch, PromptID: e.PromptID, Kind: e.PromptKind,
 				Summary: e.Summary, Options: e.Options, RequestedAt: e.At,
 			}); err != nil {

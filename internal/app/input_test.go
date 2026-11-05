@@ -1,7 +1,10 @@
 package app_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
@@ -17,7 +20,7 @@ func (e *env) structuredWorker(name string) pki.Session {
 	return e.joinWorker(name, withCapabilities(domain.HarnessStructuredInputCapability(inputHarness)))
 }
 
-// runningRun gives a Run of the harness to the Worker and starts it.
+// harnessRun gives a Run of the harness to the Worker and starts it.
 func (e *env) harnessRun(w pki.Session) *reporter {
 	e.t.Helper()
 	run := e.queuedRun("x", onHarness)
@@ -313,5 +316,115 @@ func TestInbox_ListsTheTasksThatFailedAndWaitForADecision(t *testing.T) {
 	if len(inbox.Items) != 1 || inbox.Items[0].Kind != v1.InboxFailed || inbox.Items[0].Task.ID != r.run.TaskID ||
 		inbox.Items[0].EndReason != domain.EndExitCode {
 		t.Errorf("inbox = %+v", inbox.Items)
+	}
+}
+
+func (e *env) inboxFailed() []v1.InboxItem {
+	e.t.Helper()
+	inbox, err := e.app.Inbox.List(e.t.Context())
+	must(e.t, err)
+	return inbox.Items
+}
+
+func TestInbox_AFailedRunWhoseRetryPolicyIsToAskWaitsForADecision(t *testing.T) {
+	e := newEnv(t)
+	r := e.failedRun("x", withRetry(domain.RetryAsk, domain.RetryAsk, 2))
+	task, err := e.app.Tasks.Get(t.Context(), r.run.TaskID, "")
+	must(t, err)
+	if task.State != domain.TaskWaiting || task.WaitingReason != domain.WaitingDecision {
+		t.Fatalf("Task = %s(%s)", task.State, task.WaitingReason)
+	}
+	items := e.inboxFailed()
+	if len(items) != 1 || items[0].Kind != v1.InboxFailed || items[0].Run.State != domain.RunFailed || items[0].EndReason != domain.EndExitCode {
+		t.Errorf("inbox = %+v", items)
+	}
+}
+
+func TestInbox_ALostRunIsListed(t *testing.T) {
+	e := newEnvWith(t, startedNow)
+	r := e.runningRun(e.joinWorker("alpha"), "x")
+	e.clock.Advance(lostTimeout + time.Second)
+	e.sweepLost()
+	items := e.inboxFailed()
+	if len(items) != 1 || items[0].Kind != v1.InboxFailed || items[0].Run.State != domain.RunLost ||
+		items[0].Task.ID != r.run.TaskID {
+		t.Errorf("inbox = %+v", items)
+	}
+}
+
+func TestInbox_ACancelledTaskAndAnArchivedFailureAreNotListed(t *testing.T) {
+	e := newEnv(t)
+	cancelled := e.runningRun(e.joinWorker("alpha"), "a")
+	_, err := e.app.Tasks.Cancel(t.Context(), e.owner, cancelled.run.TaskID, "", v1.ActionRequest{})
+	must(t, err)
+	if items := e.inboxFailed(); len(items) != 0 {
+		t.Errorf("a cancelled Task is listed: %+v", items)
+	}
+
+	failed := e.failedRun("b", withRetry(domain.RetryAsk, domain.RetryAsk, 2))
+	if items := e.inboxFailed(); len(items) != 1 {
+		t.Fatalf("inbox = %+v", items)
+	}
+	_, err = e.app.Tasks.Archive(t.Context(), e.owner, failed.run.TaskID, "", v1.ActionRequest{})
+	must(t, err)
+	if items := e.inboxFailed(); len(items) != 0 {
+		t.Errorf("an archived Task is listed: %+v", items)
+	}
+}
+
+func TestRespond_AnAnswerQueuedBeforeACancelIsWithdrawn(t *testing.T) {
+	e := newEnv(t)
+	w := e.structuredWorker("alpha")
+	r := e.harnessRun(w)
+	r.mustSend(r.entry(v1.ReportInputRequested, asks("p1", domain.PromptPermission)))
+	_, err := e.respond(r.run, v1.RespondRequest{Answer: allow()})
+	must(t, err)
+	if n := len(inputOrders(e.commands(w))); n != 1 {
+		t.Fatalf("%d input orders before the cancel", n)
+	}
+
+	_, err = e.app.Tasks.Cancel(t.Context(), e.owner, r.run.TaskID, "", v1.ActionRequest{})
+	must(t, err)
+	if n := len(inputOrders(e.commands(w))); n != 0 {
+		t.Errorf("%d input orders still reach the Worker after the cancel", n)
+	}
+	if len(e.stops(w)) != 1 {
+		t.Errorf("stops = %+v", e.stops(w))
+	}
+}
+
+func TestReport_AtMostMaxOpenPromptsAreOpenAtOnce(t *testing.T) {
+	e := newEnv(t)
+	r := e.harnessRun(e.structuredWorker("alpha"))
+	for i := range v1.MaxOpenPrompts {
+		r.mustSend(r.entry(v1.ReportInputRequested, asks(fmt.Sprintf("p%d", i), domain.PromptQuestion)))
+	}
+	over := r.mustSend(r.entry(v1.ReportInputRequested, asks("over", domain.PromptQuestion)))
+	if got := results(over); got != "rejected:CF_INVALID_REQUEST" {
+		t.Errorf("one prompt over the bound = %s", got)
+	}
+}
+
+func TestReport_APromptThatIsNotBoundedPrintableTextIsRefused(t *testing.T) {
+	e := newEnv(t)
+	r := e.harnessRun(e.structuredWorker("alpha"))
+	cases := map[string]func(*v1.RunReportEntry){
+		"control character in summary": func(en *v1.RunReportEntry) { en.Summary = "ok\x1b[31m" },
+		"summary too long":             func(en *v1.RunReportEntry) { en.Summary = strings.Repeat("a", v1.MaxReportMessageLen+1) },
+		"empty summary":                func(en *v1.RunReportEntry) { en.Summary = "" },
+		"too many options":             func(en *v1.RunReportEntry) { en.Options = make([]string, v1.MaxPromptOption+1) },
+		"control character in option":  func(en *v1.RunReportEntry) { en.Options = []string{"a\nb"} },
+		"option too long":              func(en *v1.RunReportEntry) { en.Options = []string{strings.Repeat("a", v1.MaxOptionLen+1)} },
+	}
+	for name, mutate := range cases {
+		en := r.entry(v1.ReportInputRequested, asks("pb", domain.PromptQuestion), mutate)
+		if _, err := r.send(en); err == nil {
+			if got := e.storedRun(r.run.ID).State; got == domain.RunWaitingInput {
+				t.Errorf("%s: the prompt was taken", name)
+			}
+		}
+	}
+	if got := e.storedRun(r.run.ID).State; got != domain.RunRunning {
+		t.Errorf("Run = %s", got)
 	}
 }

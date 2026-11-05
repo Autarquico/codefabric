@@ -120,6 +120,20 @@ func (t *Tx) CancelAssign(ctx context.Context, lease domain.ID, at time.Time) er
 	return changedOne(res, err, "cancelling assign")
 }
 
+// CancelInputOrders withdraws the input orders of a lease that the Worker has
+// not acknowledged, so that an answer is never delivered to a Run that is ending.
+// It keeps an earlier cancellation's time and says how many it withdrew.
+func (t *Tx) CancelInputOrders(ctx context.Context, lease domain.ID, at time.Time) (int64, error) {
+	res, err := t.Exec(ctx,
+		`UPDATE worker_commands SET cancelled_at = COALESCE(cancelled_at, ?)
+		 WHERE lease_id = ? AND type = ? AND acked_at IS NULL AND cancelled_at IS NULL`,
+		at.UnixNano(), string(lease), string(domain.CommandInput))
+	if err != nil {
+		return 0, fmt.Errorf("store: cancelling input orders: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // EnqueueStopOnce queues c, a stop, unless the Worker already has a stop of the
 // Run under that epoch, whatever its reason: there is one stop per Worker, Run
 // and epoch (§10.7), and the first reason stands. It says whether it queued one.

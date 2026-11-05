@@ -59,7 +59,11 @@ func (s *Service) Respond(ctx context.Context, by pki.Session, ref, project stri
 			if l.State != domain.LeaseAccepted {
 				return v1.RespondResponse{}, notRespondable("the lease of the Run is no longer live", "stale_lease", &run)
 			}
-			if err := tx.ClaimPrompt(ctx, run.ID, prompt.LeaseEpoch, prompt.PromptID, mustJSON(req.Answer), act.Actor, act.Now); err != nil {
+			answer, err := json.Marshal(req.Answer)
+			if err != nil {
+				return v1.RespondResponse{}, err
+			}
+			if err := tx.ClaimPrompt(ctx, run.ID, prompt.LeaseEpoch, prompt.PromptID, answer, act.Actor, act.Now); err != nil {
 				if errors.Is(err, store.ErrNoRowChanged) {
 					return v1.RespondResponse{}, answeredAlready(prompt)
 				}
@@ -210,12 +214,4 @@ func validateAnswer(kind domain.PromptKind, a v1.InputAnswer) error {
 		}
 	}
 	return nil
-}
-
-func mustJSON(v any) []byte {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		panic(fmt.Sprintf("runs: encoding %T: %v", v, err)) // plain structs of strings
-	}
-	return raw
 }
