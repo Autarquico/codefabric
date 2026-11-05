@@ -25,7 +25,7 @@ const drainFor = time.Second
 // and the whole group is killed when ctx ends or when the command leaves its
 // pipes held, so a hook cannot outlive its timeout through its descendants.
 func OSExec(ctx context.Context, name string, args []string, stdin []byte) ([]byte, error) {
-	cmd := exec.Command(name, args...) //nolint:gosec // argv only: name and args are configured or fixed, no shell
+	cmd := exec.Command(name, args...) //nolint:gosec,noctx // argv only, no shell; procgroup owns the context (a Cancel could signal a reaped group)
 	cmd.Stdin = bytes.NewReader(stdin)
 	out := &boundedBuffer{max: maxOutput}
 	group, err := procgroup.Start(ctx, cmd, procgroup.Options{Stdout: out, Stderr: out, Drain: drainFor})
