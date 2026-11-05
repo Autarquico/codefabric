@@ -676,3 +676,56 @@ func TestScenario_TuiViewsActions_Logs_ScrollingToTheTopShowsAFullPage(t *testin
 		t.Errorf("the top of the output is one line, not a page:\n%s", got)
 	}
 }
+
+func TestScenario_TuiViewsActions_Logs_QuittingEndsTheFollowEvenIfTheCallersContextLives(t *testing.T) {
+	src := newOutputSource()
+	m, _ := logsShell(t, src) // the context given to the shell is never cancelled during the test
+	press(t, m, "enter")
+	<-src.started
+	press(t, m, "q")
+	select {
+	case <-src.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("the follow outlives the TUI")
+	}
+}
+
+func TestScenario_TuiViewsActions_Logs_ALineLongerThanTheScreenCanBeReadFromEndToEnd(t *testing.T) {
+	const size = 4000 // more than three screens of rows at 80x24
+	line := []byte(strings.Repeat("x", size))
+	copy(line, "BEGIN")
+	copy(line[size/2:], "MIDDLE")
+	copy(line[size-3:], "END")
+	m, _, _, _ := followWith(t, string(line)+"\n")
+	seen := func(got string) (begin, middle, end bool) {
+		return strings.Contains(got, "BEGIN"), strings.Contains(got, "MIDDLE"), strings.Contains(got, "END")
+	}
+	if b, mid, e := seen(frame(m)); b || mid || !e {
+		t.Fatalf("following should show only the end of the line: begin=%v middle=%v end=%v", b, mid, e)
+	}
+	press(t, m, "g")
+	if b, mid, e := seen(frame(m)); !b || mid || e {
+		t.Fatalf("g should show only the beginning of the line: begin=%v middle=%v end=%v", b, mid, e)
+	}
+	found := false
+	for range 40 {
+		for range 10 {
+			press(t, m, "down")
+		}
+		if b, mid, e := seen(frame(m)); mid {
+			found = !b && !e
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("paging down from the beginning never showed the middle alone:\n%s", frame(m))
+	}
+	press(t, m, "G")
+	if b, mid, e := seen(frame(m)); b || mid || !e {
+		t.Errorf("G should go back to the end of the line: begin=%v middle=%v end=%v", b, mid, e)
+	}
+	press(t, m, "up")
+	if got := frame(m); !strings.Contains(got, "paused") {
+		t.Errorf("reading a line from the middle does not pause the follow:\n%s", got)
+	}
+}

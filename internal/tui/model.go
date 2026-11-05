@@ -42,6 +42,7 @@ type Model struct {
 
 	views   map[Route]viewSpec
 	ctx     context.Context
+	end     context.CancelFunc // ends ctx: the TUI's own, whatever the caller's does
 	send    func(tea.Msg)
 	feeding map[Route]context.CancelFunc
 }
@@ -69,7 +70,11 @@ func New(opts Options) *Model {
 
 // bind connects the shell to the program that runs it: send delivers what the
 // feeds produce, and ctx ends them.
-func (m *Model) bind(ctx context.Context, send func(tea.Msg)) { m.ctx, m.send = ctx, send }
+func (m *Model) bind(ctx context.Context, send func(tea.Msg)) {
+	m.stop()
+	m.ctx, m.end = context.WithCancel(ctx)
+	m.send = send
+}
 
 // tell delivers a message to the program; before the shell is bound to one
 // there is nobody to tell.
@@ -79,8 +84,12 @@ func (m *Model) tell(msg tea.Msg) {
 	}
 }
 
-// stop ends every feed.
+// stop ends every feed and everything the screens follow under the context of
+// the shell, so nothing outlives the TUI when the caller's context stays alive.
 func (m *Model) stop() {
+	if m.end != nil {
+		m.end()
+	}
 	for route, cancel := range m.feeding {
 		cancel()
 		delete(m.feeding, route)
@@ -156,6 +165,7 @@ func (m *Model) press(key string) tea.Cmd {
 	action, route := resolve(key)
 	switch action {
 	case ActionQuit:
+		m.stop()
 		return tea.Quit
 	case ActionBack:
 		m.router.Back()

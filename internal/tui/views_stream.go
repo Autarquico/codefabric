@@ -207,7 +207,9 @@ type logFollow struct {
 	lines   []logLine
 	partial []byte
 	dropped bool // older lines went out of the scrollback
-	back    int  // matching lines between the newest and the last one in view
+	back    int  // matching lines between the newest and the line at the bottom of the view
+	sub     int  // rows of that line cut off at the bottom: a long line is read row by row
+	width   int  // the width of the last render, which the rows of a line depend on
 	ended   string
 	err     error
 	filter  string
@@ -292,20 +294,24 @@ func (f *logFollow) press(k tea.KeyPressMsg, l *logsScreen) bool {
 		case "enter":
 			f.typing = false
 		case "esc":
-			f.typing, f.filter, f.back = false, "", 0
+			f.typing, f.filter = false, ""
+			f.newest()
 		case "backspace":
 			if r := []rune(f.filter); len(r) > 0 {
-				f.filter, f.back = string(r[:len(r)-1]), 0
+				f.filter = string(r[:len(r)-1])
+				f.newest()
 			}
 		default:
-			f.filter, f.back = f.filter+printable(k.Text), 0
+			f.filter = f.filter + printable(k.Text)
+			f.newest()
 		}
 		return true
 	}
 	switch key {
 	case "esc":
 		if f.filter != "" {
-			f.filter, f.back = "", 0
+			f.filter = ""
+			f.newest()
 		} else {
 			l.stop()
 		}
@@ -313,6 +319,7 @@ func (f *logFollow) press(k tea.KeyPressMsg, l *logsScreen) bool {
 		f.typing = true
 	case "W":
 		f.wrap = !f.wrap
+		f.sub = 0
 	case "enter":
 		if f.err == nil {
 			return true
@@ -329,9 +336,9 @@ func (f *logFollow) press(k tea.KeyPressMsg, l *logsScreen) bool {
 	case "pgdown":
 		f.scroll(-pageLines)
 	case "home", "g":
-		f.scroll(len(f.lines))
+		f.oldest()
 	case "end", "G":
-		f.back = 0
+		f.newest()
 	default:
 		return false
 	}
@@ -404,7 +411,7 @@ func (f *logFollow) flush() {
 
 func (f *logFollow) push(line logLine) {
 	f.lines = append(f.lines, line)
-	if f.back > 0 && f.matches(line) {
+	if (f.back > 0 || f.sub > 0) && f.matches(line) {
 		f.back++ // the person is reading; what arrives does not move the page
 	}
 }
@@ -440,8 +447,54 @@ func (f *logFollow) trim() {
 	}
 }
 
+// newest goes back to following the end of the output.
+func (f *logFollow) newest() { f.back, f.sub = 0, 0 }
+
+// oldest goes to the first row of the first line.
+func (f *logFollow) oldest() {
+	shown := f.shown()
+	if len(shown) == 0 {
+		return
+	}
+	f.back = len(shown) - 1
+	f.sub = len(f.rowsOf(shown[0], f.rowWidth())) - 1
+}
+
+func (f *logFollow) rowWidth() int {
+	if f.width <= 0 {
+		return defaultWidth
+	}
+	return f.width
+}
+
+// scroll moves the page by rows, up when by is positive. The bottom of the
+// page is a line and the rows of it that are cut off, so that a line taller
+// than the screen can be read from its first row to its last.
 func (f *logFollow) scroll(by int) {
-	f.back = min(max(f.back+by, 0), max(len(f.shown())-1, 0))
+	shown := f.shown()
+	if len(shown) == 0 {
+		return
+	}
+	f.back = min(f.back, len(shown)-1)
+	rowsAt := func(back int) int { return len(f.rowsOf(shown[len(shown)-1-back], f.rowWidth())) }
+	f.sub = min(f.sub, rowsAt(f.back)-1)
+	for ; by > 0; by-- {
+		switch {
+		case f.sub < rowsAt(f.back)-1:
+			f.sub++
+		case f.back < len(shown)-1:
+			f.back, f.sub = f.back+1, 0
+		}
+	}
+	for ; by < 0; by++ {
+		switch {
+		case f.sub > 0:
+			f.sub--
+		case f.back > 0:
+			f.back--
+			f.sub = rowsAt(f.back) - 1
+		}
+	}
 }
 
 // cleanLine is a line of output as it may be shown: no escape sequence, no
@@ -484,26 +537,29 @@ func (f *logFollow) rowsOf(line logLine, width int) []logLine {
 	return out
 }
 
-// window is the screen rows of `room` rows that end at the line `back` lines
-// from the newest, or start at the first line when there are not that many
-// above; back is the one it actually shows.
+// window is the screen rows of `room` rows that end at the row `sub` rows
+// above the end of the line `back` lines from the newest, or start at the first
+// row when there are not that many above; back is the one it actually shows.
 func (f *logFollow) window(lines []logLine, width, room int) (rows []logLine, back int) {
 	n := len(lines)
-	end := n - min(f.back, max(n-1, 0))
-	start, count := end, 0
-	for start > 0 && count < room {
-		start--
-		count += len(f.rowsOf(lines[start], width))
+	if n == 0 {
+		return nil, 0
 	}
-	for _, line := range lines[start:end] {
-		rows = append(rows, f.rowsOf(line, width)...)
+	end := n - min(f.back, n-1)
+	last := f.rowsOf(lines[end-1], width)
+	cut := len(last) - min(f.sub, len(last)-1)
+	rows, hidden := last[:cut:cut], last[cut:]
+	for i := end - 2; i >= 0 && len(rows) < room; i-- {
+		rows = append(f.rowsOf(lines[i], width), rows...)
 	}
 	if len(rows) > room {
 		rows = rows[len(rows)-room:]
 	}
-	for end < n && len(rows) < room {
+	if len(rows) < room {
+		rows = append(rows, hidden...)
+	}
+	for ; end < n && len(rows) < room; end++ {
 		rows = append(rows, f.rowsOf(lines[end], width)...)
-		end++
 	}
 	return rows[:min(len(rows), room)], n - end
 }
@@ -517,7 +573,7 @@ func (l *logsScreen) renderFollow(c RenderContext) string {
 		state = "stopped"
 	case f.ended != "":
 		state = "ended"
-	case f.back > 0:
+	case f.back > 0 || f.sub > 0:
 		state = "paused"
 	}
 	title := "Logs · " + printable(f.run.Label) + " · " + state
@@ -554,6 +610,7 @@ func (l *logsScreen) renderFollow(c RenderContext) string {
 	}
 	bottom := append([]string{rule(c, "")}, flow(keyHints(c, hints...), c.inner())...)
 	room := max(c.Height-len(top)-len(bottom)-1, 1) // one row for the status line
+	f.width = c.inner()
 	rows, back := f.window(shown, c.inner(), room)
 	if status := f.status(back); status != "" {
 		bottom = append([]string{margin + c.Theme.Faint.Render(ansi.Truncate(status, c.inner(), "…"))}, bottom...)
