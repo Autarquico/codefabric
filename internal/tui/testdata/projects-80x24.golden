@@ -1,0 +1,21 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Projects · 2 ────────────────────────────────────────────────
+   NAME             ID        BRANCH   ORIGIN   REPO
+ › codefabric       p-1a2b    main     secret   git@github.com:Autarquico/co…
+   site             p-3c4d    trunk    none     https://example.test/site.git
+
+ ──────────────── Detail ──────────────────────────────────────────────────────
+ Project       codefabric (p-1a2b)
+ Repo          git@github.com:Autarquico/codefabric.git
+ Aliases       https://github.com/Autarquico/codefabric
+ Branch        main
+ Workflow      default
+ Environment   dev
+ Mode          edit
+ Completion    manual
+ Repo config   allow
+ Origin auth   secret keyring:github
+ Created       08:00
+
+ ──────────────────────────────────────────────────────────────────────────────
+ [↑↓] Move [/] Filter [enter] Actions [esc] Back [q] Quit

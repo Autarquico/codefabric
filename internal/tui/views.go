@@ -11,11 +11,16 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-// The views of §19.4 that this milestone draws: Tasks, Runs and Workers.
+// The views of §19.4, by route. Tasks, Runs, Workers, Workflows and Projects are
+// lists over a feed with actions from the registry (they need a Backend); the
+// others are screens of their own.
 
-// specs are the views that need a Backend, by route.
+// specs are all the views of the shell.
 func specs() map[Route]viewSpec {
-	all := []viewSpec{tasksDef().spec(), runsDef().spec(), workersDef().spec()}
+	all := []viewSpec{
+		tasksDef().spec(), runsDef().spec(), workersDef().spec(), workflowsDef().spec(), projectsDef().spec(),
+		activityView(), modelsView(), logsView(),
+	}
 	byRoute := make(map[Route]viewSpec, len(all))
 	for _, spec := range all {
 		byRoute[spec.route] = spec

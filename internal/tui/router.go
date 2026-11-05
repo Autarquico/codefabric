@@ -61,7 +61,7 @@ func (r *Router) Open(route Route) bool {
 	for i := len(r.stack) - 1; i > 0; i-- {
 		if r.stack[i].route == route {
 			changed := i < len(r.stack)-1
-			r.stack = r.stack[:i+1]
+			r.drop(i + 1)
 			return changed
 		}
 	}
@@ -74,8 +74,19 @@ func (r *Router) Back() bool {
 	if len(r.stack) == 1 {
 		return false
 	}
-	r.stack = r.stack[:len(r.stack)-1]
+	r.drop(len(r.stack) - 1)
 	return true
+}
+
+// drop leaves the stack with its first n screens; the ones that go are told,
+// if they hold something that has to end (a follow).
+func (r *Router) drop(n int) {
+	for _, e := range r.stack[n:] {
+		if c, ok := e.screen.(interface{ Close() }); ok {
+			c.Close()
+		}
+	}
+	r.stack = r.stack[:n]
 }
 
 // Top is the screen in view.
