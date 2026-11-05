@@ -58,7 +58,7 @@ var (
 	// status reads the HTTP status git reports: "returned error: 403", "HTTP 500".
 	status      = regexp.MustCompile(`(?i)(?:returned error:|\bHTTP(?:/\d(?:\.\d)?)?(?: code)?)\s*(\d{3})\b`)
 	unreachable = regexp.MustCompile(`(?i)could not resolve host|failed to connect|connection (refused|reset|timed out)|timed out|operation too slow|ssl_error_syscall|empty reply|unexpected disconnect|early eof|couldn't connect|network is unreachable|no route to host|send failure|recv failure|non-properly terminated|handshake\(\) failed: the tls connection`)
-	badCert     = regexp.MustCompile(`(?i)ssl certificate problem|certificate verify failed|unknown ca|bad certificate|certificate (has expired|required)|tlsv1 alert|server (certificate )?verification failed|certificate signer not trusted`)
+	badCert     = regexp.MustCompile(`(?i)ssl certificate problem|certificate verify failed|unknown ca|bad certificate|certificate (has expired|required)|tlsv1 alert|server (certificate )?verification failed|certificate signer not trusted|ssl certificate openssl verify result|self.signed certificate`)
 )
 
 // Push sends the commit to refs/heads/<branch> of the relay, without force,
