@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
@@ -30,8 +32,9 @@ const (
 // run.StructuredInput the stdin of the Run is a stream-json FIFO (the prompt is
 // its first message, InitialInput) and AskUserQuestion is allowed: the question
 // is Events' input required and its answer another message of the stream. With
-// run.AskPermissions the Run is also left in its default permission mode, and
-// every permission it asks is the call of the MCP tool PermissionTool on
+// run.AskPermissions the Run is pinned to the default permission mode, reads
+// only the user settings (its own configuration directory), and every
+// permission it asks is the call of the MCP tool PermissionTool on
 // run.PermissionServer.
 func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec) (harness.Launch, error) {
 	if err := a.Capabilities().CheckMode(run.Mode); err != nil {
@@ -92,11 +95,42 @@ func streamArgv(binary string, run harness.RunSpec) ([]string, error) {
 	if !run.AskPermissions {
 		return append(argv, "--permission-mode", "bypassPermissions"), nil
 	}
+	if err := checkReservedServer(run); err != nil {
+		return nil, err
+	}
 	cfg, err := permissionServerConfig(run.PermissionServer)
 	if err != nil {
 		return nil, err
 	}
-	return append(argv, "--mcp-config", cfg, "--permission-prompt-tool", PermissionTool), nil
+	// The mode is pinned, and the settings of the repo (project, local) are not
+	// read, so that none of them turns the prompts off behind the Task's back.
+	return append(argv, "--permission-mode", "default", "--setting-sources", "user",
+		"--mcp-config", cfg, "--permission-prompt-tool", PermissionTool), nil
+}
+
+// checkReservedServer refuses a Run whose configuration, or whose repo,
+// declares an MCP server named PermissionServerName: that one would be the
+// one asked for the permissions.
+func checkReservedServer(run harness.RunSpec) error {
+	for _, path := range []string{filepath.Join(run.ConfigDir, StateFile), filepath.Join(run.Worktree, ".mcp.json")} {
+		raw, err := os.ReadFile(path) //nolint:gosec // a file of the Run
+		if errors.Is(err, os.ErrNotExist) || (err == nil && len(raw) == 0) {
+			continue
+		}
+		var cfg struct {
+			MCPServers map[string]json.RawMessage `json:"mcpServers"`
+		}
+		if err == nil {
+			err = json.Unmarshal(raw, &cfg)
+		}
+		if err != nil {
+			return fmt.Errorf("claude-code: reading the MCP servers of %s: %w", path, err)
+		}
+		if _, taken := cfg.MCPServers[PermissionServerName]; taken {
+			return fmt.Errorf("claude-code: %s declares an MCP server named %q, the name CodeFabric keeps for the permissions of the Run", path, PermissionServerName)
+		}
+	}
+	return nil
 }
 
 func checkInputSpec(run harness.RunSpec) error {

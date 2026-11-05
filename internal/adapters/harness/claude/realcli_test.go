@@ -34,7 +34,7 @@ func TestRealCLI_TheFlagsOfStructuredInputExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude --help: %v\n%s", err, out)
 	}
-	for _, flag := range []string{"--input-format", "--output-format", "--mcp-config", "--permission-prompt-tool", "--permission-mode", "--disallowedTools"} {
+	for _, flag := range []string{"--input-format", "--output-format", "--mcp-config", "--permission-prompt-tool", "--permission-mode", "--disallowedTools", "--setting-sources"} {
 		if !strings.Contains(string(out), flag) {
 			t.Errorf("claude --help does not mention %s", flag)
 		}
@@ -49,5 +49,21 @@ func TestRealCLI_TheVersionIsOneTheAdapterCanAnswer(t *testing.T) {
 	}
 	if err := (claude.Adapter{}).CheckStructuredInput(t.Context(), h); err != nil {
 		t.Error(err)
+	}
+}
+
+// The CLI takes the mode a Run that asks permissions is pinned to. The option is
+// checked before the budget, which is invalid on purpose, so no model is called.
+func TestRealCLI_TheDefaultPermissionModeIsAccepted(t *testing.T) {
+	path := requireRealClaude(t)
+	for mode, accepted := range map[string]bool{"default": true, "not-a-mode": false} {
+		out, _ := exec.CommandContext(t.Context(), path, "-p", "--permission-mode", mode, "--setting-sources", "user", //nolint:gosec // the claude of the machine
+			"--max-budget-usd", "invalid", "hi").CombinedOutput()
+		if refused := strings.Contains(string(out), "--permission-mode"); refused == accepted {
+			t.Errorf("--permission-mode %s: %s", mode, out)
+		}
+		if !strings.Contains(string(out), "--max-budget-usd") && accepted {
+			t.Errorf("--permission-mode %s did not reach the check of the budget: %s", mode, out)
+		}
 	}
 }
