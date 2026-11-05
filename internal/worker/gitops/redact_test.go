@@ -117,9 +117,13 @@ func TestAValueAtTheCapOfTheStdoutOfGitLeavesNoFragment(t *testing.T) {
 func TestWhatTheRedactionHoldsBackIsFlushedOnEveryEnd(t *testing.T) {
 	half := cutValue[:len(cutValue)/2]
 	// The cancelled child tells through a fifo that it has printed; only then is it cancelled.
-	printed := filepath.Join(t.TempDir(), "printed")
-	if err := syscall.Mkfifo(printed, 0o600); err != nil {
-		t.Fatal(err)
+	// It then blocks opening a fifo nobody writes, so only the cancellation ends it.
+	dir := t.TempDir()
+	printed, never := filepath.Join(dir, "printed"), filepath.Join(dir, "never")
+	for _, fifo := range []string{printed, never} {
+		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for name, tc := range map[string]struct {
 		body    string
@@ -129,7 +133,7 @@ func TestWhatTheRedactionHoldsBackIsFlushedOnEveryEnd(t *testing.T) {
 	}{
 		"success":      {body: "printf '" + half + "'; printf '" + half + "' >&2"},
 		"non-zero":     {body: "printf '" + half + "'; printf '" + half + "' >&2; exit 3", exit: 3},
-		"cancellation": {body: "printf '" + half + "'; printf '" + half + "' >&2; echo > '" + printed + "'; sleep 30", cancel: true, wantErr: true},
+		"cancellation": {body: "printf '" + half + "'; printf '" + half + "' >&2; echo > '" + printed + "'; read _ < '" + never + "'", cancel: true, wantErr: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
