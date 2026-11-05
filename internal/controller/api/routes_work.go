@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"slices"
-	"strconv"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/events"
@@ -254,15 +253,11 @@ func (s *Server) resolve(w http.ResponseWriter, r *http.Request, _ caller) error
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request, _ caller) error {
 	q := r.URL.Query()
-	limit := 0
-	if text := q.Get("limit"); text != "" {
-		n, err := strconv.Atoi(text)
-		if err != nil {
-			return domain.NewError(domain.CodeInvalidRequest, "limit must be a number", map[string]any{"field": "limit"})
-		}
-		limit = n
+	limit, err := queryNumber(q.Get("limit"), 0, "limit")
+	if err != nil {
+		return err
 	}
-	out, err := s.work.Search.Search(r.Context(), search.Query{Text: q.Get("q"), Kind: q.Get("kind"), Project: q.Get("project"), Limit: limit})
+	out, err := s.work.Search.Search(r.Context(), search.Query{Text: q.Get("q"), Kind: q.Get("kind"), Project: q.Get("project"), Limit: int(min(limit, v1.SearchMaxLimit+1))})
 	if err != nil {
 		return err
 	}

@@ -44,7 +44,7 @@ type SearchHit struct {
 
 // SearchFilter narrows a text search; zero fields do not filter.
 type SearchFilter struct {
-	Kind    domain.Kind
+	Kinds   []domain.Kind
 	Project domain.ID
 	Limit   int
 }
@@ -69,9 +69,11 @@ func SearchText(ctx context.Context, q Querier, match string, f SearchFilter) ([
 	args := []any{match}
 	sb.WriteString(`SELECT ` + searchColumns + ` FROM search_index i JOIN search_docs d ON d.rowid = i.rowid
  WHERE search_index MATCH ? AND d.archived = 0`)
-	if f.Kind != "" {
-		sb.WriteString(` AND d.kind = ?`)
-		args = append(args, string(f.Kind))
+	if len(f.Kinds) > 0 {
+		sb.WriteString(` AND d.kind IN (` + strings.TrimSuffix(strings.Repeat("?,", len(f.Kinds)), ",") + `)`)
+		for _, k := range f.Kinds {
+			args = append(args, string(k))
+		}
 	}
 	if f.Project != "" {
 		sb.WriteString(` AND d.project_id = ?`)

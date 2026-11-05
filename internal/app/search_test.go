@@ -298,6 +298,26 @@ func TestSearch_RanksANameAboveTheBody(t *testing.T) {
 	}
 }
 
+func TestSearch_RanksByRelevanceAcrossKinds(t *testing.T) {
+	e := newWorkflowEnv(t, 0)
+	e.project("backend")
+	for i := range 3 {
+		e.mustTask("backend", "we should drain the queue", func(r *v1.CreateTaskRequest) { r.Name = fmt.Sprintf("job-%d", i); noStart(r) })
+	}
+	worker := e.storedWorker(e.joinWorker("drain-box"))
+
+	got := e.search("drain")
+	if len(got) == 0 || got[0].ID != string(worker.ID) {
+		t.Errorf("a Worker named drain-box must outrank Tasks that mention drain in the body: %+v", got)
+	}
+
+	exact := e.mustTask("backend", "nothing", func(r *v1.CreateTaskRequest) { r.Name = "drain"; noStart(r) })
+	got = e.search("drain")
+	if len(got) < 2 || got[0].ID != exact.Task.ID || got[0].Match != v1.SearchMatchExact || got[1].ID != string(worker.ID) {
+		t.Errorf("the exact reference first, then the best text match: %+v", got)
+	}
+}
+
 func TestSearch_UserInputIsNeverFTSSyntax(t *testing.T) {
 	e := newEnv(t)
 	e.project("backend")

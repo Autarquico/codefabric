@@ -54,21 +54,19 @@ func (s *Service) Search(ctx context.Context, q Query) (v1.SearchResponse, error
 		for _, res := range exact {
 			seen[res.ID] = true
 		}
-		var texts []v1.SearchResult
+		var texts []store.SearchHit
 		if match := MatchExpression(text); match != "" {
-			for _, k := range searched {
-				hits, err := store.SearchText(ctx, r, match, store.SearchFilter{Kind: k, Project: scope, Limit: limit})
-				if err != nil {
-					return err
-				}
-				for _, h := range hits {
-					if !seen[string(h.ID)] {
-						texts = append(texts, result(h, v1.SearchMatchText))
-					}
-				}
+			texts, err = store.SearchText(ctx, r, match, store.SearchFilter{Kinds: searched, Project: scope, Limit: limit + len(exact)})
+			if err != nil {
+				return err
 			}
 		}
-		out.Results = append(append(out.Results, exact...), texts...)
+		out.Results = append(out.Results, exact...)
+		for _, h := range texts {
+			if !seen[string(h.ID)] {
+				out.Results = append(out.Results, result(h, v1.SearchMatchText))
+			}
+		}
 		if len(out.Results) > limit {
 			out.Results = out.Results[:limit]
 		}

@@ -30,8 +30,9 @@ func newSearchCmd() *cobra.Command {
 			}
 			kind, _ := cmd.Flags().GetString(flagKind)
 			limit, _ := cmd.Flags().GetInt(flagLimit)
+			project, _ := cmd.Flags().GetString(flagProject)
 			res, err := c.Search(cmd.Context(), client.SearchQuery{
-				Text: strings.Join(args, " "), Kind: kind, Project: refScope(cmd, c), Limit: limit,
+				Text: strings.Join(args, " "), Kind: kind, Project: project, Limit: limit,
 			})
 			if err != nil {
 				return err
@@ -41,7 +42,7 @@ func newSearchCmd() *cobra.Command {
 	}
 	cmd.Flags().String(flagKind, "", "only this kind: project, task, run, worker or workflow")
 	cmd.Flags().Int(flagLimit, 0, "how many results (default 20, at most 100)")
-	addProjectFlag(cmd, "only what belongs to this Project")
+	addProjectFlag(cmd, "only what belongs to this Project (default: everything)")
 	return cmd
 }
 

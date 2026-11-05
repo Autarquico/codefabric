@@ -38,7 +38,6 @@ END;
 -- +goose StatementBegin
 CREATE TRIGGER search_projects_upd AFTER UPDATE OF name, repo, default_branch ON projects
 BEGIN
-    UPDATE search_docs SET project_id = NEW.id, archived = 0 WHERE id = NEW.id;
     UPDATE search_index SET name = NEW.name, body = NEW.repo || ' ' || NEW.default_branch
      WHERE rowid = (SELECT rowid FROM search_docs WHERE id = NEW.id);
 END;
@@ -128,7 +127,7 @@ END;
 -- +goose StatementBegin
 CREATE TRIGGER search_workers_upd AFTER UPDATE OF name, hostname, os, arch, removed_at ON workers
 BEGIN
-    UPDATE search_docs SET project_id = '', archived = NEW.removed_at IS NOT NULL WHERE id = NEW.id;
+    UPDATE search_docs SET archived = NEW.removed_at IS NOT NULL WHERE id = NEW.id;
     UPDATE search_index SET name = NEW.name, body = COALESCE(NEW.hostname, '') || ' ' || COALESCE(NEW.os, '') || ' ' || COALESCE(NEW.arch, '')
      WHERE rowid = (SELECT rowid FROM search_docs WHERE id = NEW.id);
 END;
@@ -158,7 +157,6 @@ END;
 -- +goose StatementBegin
 CREATE TRIGGER search_workflows_upd AFTER UPDATE OF name ON workflows
 BEGIN
-    UPDATE search_docs SET project_id = '', archived = 0 WHERE id = NEW.id;
     UPDATE search_index SET name = NEW.name, body = COALESCE((SELECT v.changelog FROM workflow_versions v WHERE v.workflow_id = NEW.id ORDER BY v.version DESC LIMIT 1), '')
      WHERE rowid = (SELECT rowid FROM search_docs WHERE id = NEW.id);
 END;
