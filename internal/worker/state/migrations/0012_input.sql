@@ -35,3 +35,10 @@ CREATE TABLE input_orders (
 ) STRICT;
 
 CREATE INDEX input_orders_run ON input_orders (run_id, lease_epoch, state);
+
+-- turn_over is 1 once the stream showed the harness ending a turn (a result),
+-- until an answer is written to its input, which begins another. A harness fed
+-- by a stream ends only when the stream does: its input is closed once its turn
+-- is over and no prompt is open, whichever of the two comes last, so the end of
+-- the turn is kept here, in the write that moves the cursor past it.
+ALTER TABLE event_cursors ADD COLUMN turn_over INTEGER NOT NULL DEFAULT 0 CHECK (turn_over IN (0, 1));

@@ -23,6 +23,12 @@ import (
 // it would ask a person.
 const approveTool = "approve"
 
+// askUserQuestion is the tool Claude Code asks a person a question with. The
+// question reaches the inbox through the stream of the harness, and its answer
+// through the FIFO: the bridge lets the tool run without asking the daemon, so
+// that one question is one prompt. Allowing it allows nothing but the asking.
+const askUserQuestion = "AskUserQuestion"
+
 // mcpProtocolVersion is answered to a client that names none.
 const mcpProtocolVersion = "2025-06-18"
 
@@ -255,18 +261,25 @@ func approve(ctx context.Context, a asker, params json.RawMessage) (result any, 
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
+	if p.Arguments.ToolName == askUserQuestion {
+		return allowed(input), true
+	}
 	decision, message, err := a.ask(ctx, p.Arguments.ToolName, input)
 	if err != nil {
 		return nil, false
 	}
 	if decision == domain.AnswerAllow {
-		// The input goes back as it came: an allow that changes nothing.
-		return toolResult(mustJSON(map[string]any{"behavior": "allow", "updatedInput": input}), false), true
+		return allowed(input), true
 	}
 	if message == "" {
 		message = "denied"
 	}
 	return toolResult(mustJSON(map[string]any{"behavior": "deny", "message": message}), false), true
+}
+
+// allowed is an allow that changes nothing: the input goes back as it came.
+func allowed(input json.RawMessage) map[string]any {
+	return toolResult(mustJSON(map[string]any{"behavior": "allow", "updatedInput": input}), false)
 }
 
 func toolResult(text string, isError bool) map[string]any {

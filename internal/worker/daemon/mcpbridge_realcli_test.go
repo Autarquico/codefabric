@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,11 @@ const (
 	liveCommand = "mkdir cf-live-dir && echo cf-live-check"
 	liveOutput  = "cf-live-check"
 	liveDenial  = "denied by the CodeFabric live check"
+
+	livePrompt   = "Use the Bash tool to run exactly this command: " + liveCommand + ". Do not run anything else. Then reply with what it printed, or why it did not run."
+	liveQuestion = "Use the AskUserQuestion tool to ask me one question: which of the options cf-alpha or cf-beta to pick. " +
+		"Do not use any other tool. When you have my answer, reply with only the option I picked."
+	liveAnswer = "cf-beta"
 )
 
 // fixedAsker is a bridge with no daemon: it answers every call with decision
@@ -50,13 +56,18 @@ func (a fixedAsker) ask(_ context.Context, tool string, _ json.RawMessage) (stri
 func (fixedAsker) wait(time.Duration) {}
 
 // TestRealCLIBridgeHelper is the bridge Claude Code starts, not a test: it
-// runs only with the arguments the live test gives it, after "--".
+// runs only with the arguments the live test gives it, after "--". What Claude
+// Code sends it is kept next to the mark, to tell which tools it was called for.
 func TestRealCLIBridgeHelper(t *testing.T) {
 	args := flag.Args()
 	if len(args) != 3 || args[0] != "cf-live-bridge" {
 		t.Skip("the bridge of TestRealCLI_TheAnswersOfTheBridgeReachClaudeCode")
 	}
-	err := serveMCP(context.Background(), os.Stdin, os.Stdout, fixedAsker{decision: args[1], mark: args[2]})
+	seen, err := os.Create(args[2] + ".calls")
+	if err != nil {
+		os.Exit(1)
+	}
+	err = serveMCP(context.Background(), io.TeeReader(os.Stdin, seen), os.Stdout, fixedAsker{decision: args[1], mark: args[2]})
 	if err != nil {
 		os.Exit(1)
 	}
@@ -70,7 +81,7 @@ func TestRealCLI_TheAnswersOfTheBridgeReachClaudeCode(t *testing.T) {
 	for _, decision := range []string{domain.AnswerAllow, domain.AnswerDeny} {
 		t.Run(decision, func(t *testing.T) {
 			mark := filepath.Join(t.TempDir(), "asked")
-			lines := runLive(t, decision, mark)
+			lines := runLive(t, decision, mark, livePrompt, "")
 			if tool, err := os.ReadFile(mark); err != nil || string(tool) != "Bash" { //nolint:gosec // a file of the test
 				t.Fatalf("the bridge was not asked for Bash (%q, %v): the user settings may allow the command\n%s", tool, err, strings.Join(lines, "\n"))
 			}
@@ -92,9 +103,49 @@ func TestRealCLI_TheAnswersOfTheBridgeReachClaudeCode(t *testing.T) {
 	}
 }
 
+// A question under permissions: ask is one prompt, the stream's, and its answer
+// is the next user message of the input stream, as the FIFO delivers it. The
+// bridge, whatever Claude Code hands it, does not ask the daemon about it.
+func TestRealCLI_AQuestionIsOnePromptAndItsAnswerReachesClaudeCode(t *testing.T) {
+	if os.Getenv("CF_REQUIRE_CLAUDE") != "1" {
+		t.Skip("set CF_REQUIRE_CLAUDE=1 to run a question through the real Claude Code CLI")
+	}
+	mark := filepath.Join(t.TempDir(), "asked")
+	lines := runLive(t, domain.AnswerDeny, mark, liveQuestion, liveAnswer)
+	transcript := strings.Join(lines, "\n")
+	if tool, err := os.ReadFile(mark); err == nil { //nolint:gosec // a file of the test
+		t.Fatalf("the bridge asked the daemon for %q: a second prompt\n%s", tool, transcript)
+	}
+	calls, _ := os.ReadFile(mark + ".calls") //nolint:gosec // a file of the test
+	t.Logf("the bridge was called for AskUserQuestion: %v", strings.Contains(string(calls), `"AskUserQuestion"`))
+
+	evs, err := claude.Adapter{}.Events(t.Context(), harness.Handle{}, io.NopCloser(strings.NewReader(transcript+"\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := 0
+	for ev := range evs {
+		if ev.Kind == harness.EventInputRequired {
+			asked++
+		}
+	}
+	// Each AskUserQuestion of the stream is a prompt, and the bridge adds none.
+	// The tool result of an allow says nobody answered, and the model may ask
+	// again in the same turn: that is its own second question, not the bridge's.
+	if asked == 0 {
+		t.Errorf("the stream asked no question\n%s", transcript)
+	}
+	t.Logf("questions in the stream: %d", asked)
+	last := lines[len(lines)-1]
+	if !strings.Contains(last, `"type":"result"`) || !strings.Contains(last, liveAnswer) {
+		t.Errorf("the answer did not reach the model: %s\n%s", last, transcript)
+	}
+}
+
 // runLive runs one Run with the argv of the adapter and returns the lines of
-// its output stream. The login is the machine's: CLAUDE_CONFIG_DIR is not set.
-func runLive(t *testing.T, decision, mark string) []string {
+// its output stream; then, if not empty, is a message sent after its first
+// turn, as an answer is. The login is the machine's: CLAUDE_CONFIG_DIR is not set.
+func runLive(t *testing.T, decision, mark, prompt, then string) []string {
 	t.Helper()
 	path, err := exec.LookPath("claude")
 	if err != nil {
@@ -107,7 +158,7 @@ func runLive(t *testing.T, decision, mark string) []string {
 	worktree := t.TempDir()
 	run := harness.RunSpec{
 		RunID: "run_live", LeaseEpoch: 1, Mode: domain.ModeHeadless, Model: "haiku", RunDir: t.TempDir(), ConfigDir: t.TempDir(), Worktree: worktree,
-		Prompt:          "Use the Bash tool to run exactly this command: " + liveCommand + ". Do not run anything else. Then reply with what it printed, or why it did not run.",
+		Prompt:          prompt,
 		StructuredInput: true, InputPath: "unused", AskPermissions: true,
 		PermissionServer: []string{os.Args[0], "-test.run=^TestRealCLIBridgeHelper$", "--", "cf-live-bridge", decision, mark},
 	}
@@ -140,15 +191,33 @@ func runLive(t *testing.T, decision, mark string) []string {
 	sc.Buffer(nil, 1<<22)
 	for sc.Scan() {
 		lines = append(lines, sc.Text())
-		if strings.Contains(sc.Text(), `"type":"result"`) {
+		if !strings.Contains(sc.Text(), `"type":"result"`) {
+			continue
+		}
+		if then == "" {
 			break // the turn is over: the end of the input ends the Run
 		}
+		if _, err := stdin.Write([]byte(liveMessage(t, then))); err != nil {
+			t.Fatal(err)
+		}
+		then = ""
 	}
 	_ = stdin.Close()
 	if err := cmd.Wait(); err != nil {
 		t.Logf("claude: %v\n%s", err, stderr.String())
 	}
 	return lines
+}
+
+// liveMessage is a user message of the stream-json input, framed as the
+// adapter's SendInput frames an answer.
+func liveMessage(t *testing.T, text string) string {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"type": "user", "message": map[string]string{"role": "user", "content": text}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw) + "\n"
 }
 
 type liveResult struct {

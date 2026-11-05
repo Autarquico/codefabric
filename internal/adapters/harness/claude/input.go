@@ -2,7 +2,6 @@ package claude
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -78,25 +77,27 @@ func triple(v string) (out [3]int, ok bool) {
 // gone has nobody on the other end: that is an error, not a wait.
 func (Adapter) SendInput(_ context.Context, _ harness.Host, h harness.Handle, in harness.Input) error {
 	if h.InputPath == "" {
-		return errors.New("claude-code: this Run was not started with structured input")
+		return fmt.Errorf("claude-code: this Run was not started with structured input: %w", harness.ErrInputNotSent)
 	}
 	msg, err := userMessage(in.Text)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", harness.ErrInputNotSent, err)
 	}
 	// ENXIO here is a FIFO nobody reads. The descriptor is opened by hand so that
 	// the file is a non-blocking one the runtime polls, which a write deadline needs.
 	fd, err := syscall.Open(h.InputPath, syscall.O_WRONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("claude-code: opening the input of the Run: %w", err)
+		return fmt.Errorf("claude-code: opening the input of the Run: %w: %w", harness.ErrInputNotSent, err)
 	}
 	f := os.NewFile(uintptr(fd), h.InputPath)
 	defer func() { _ = f.Close() }()
 	if err := f.SetWriteDeadline(time.Now().Add(inputWriteTimeout)); err != nil {
-		return fmt.Errorf("claude-code: writing the input of the Run: %w", err)
+		return fmt.Errorf("claude-code: writing the input of the Run: %w: %w", harness.ErrInputNotSent, err)
 	}
-	if _, err := f.WriteString(msg); err != nil {
-		return fmt.Errorf("claude-code: writing the input of the Run: %w", err)
+	if n, err := f.WriteString(msg); n == 0 && err != nil {
+		return fmt.Errorf("claude-code: writing the input of the Run: %w: %w", harness.ErrInputNotSent, err)
+	} else if err != nil {
+		return fmt.Errorf("claude-code: writing the input of the Run: %d of %d bytes written: %w", n, len(msg), err)
 	}
 	return nil
 }

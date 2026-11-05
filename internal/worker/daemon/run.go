@@ -347,7 +347,10 @@ func (d *daemon) announce(ctx context.Context, h harness.Host, adapters []harnes
 		attrs := []any{"harness", found.ID, "status", found.Status, "modes", found.Modes}
 		switch found.Status {
 		case host.Offered:
-			d.log.InfoContext(ctx, "harness offered", append(attrs, "path", found.Path)...)
+			d.log.InfoContext(ctx, "harness offered", append(attrs, "path", found.Path, "structured_input", found.StructuredInput)...)
+			if found.InputErr != nil {
+				d.log.WarnContext(ctx, "harness offered without structured input: its Runs that ask permissions are refused", "harness", found.ID, "err", found.InputErr)
+			}
 			continue
 		case host.DetectFailed:
 			d.log.WarnContext(ctx, "harness not offered: detecting it failed", append(attrs, "err", found.Err)...)

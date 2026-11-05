@@ -123,6 +123,10 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 		return false, nil
 	}
 	more = full
+	structured, err := e.launchedWithInput(r.Key)
+	if err != nil {
+		return false, err
+	}
 	events, err := e.parseEvents(ctx, adapter, r, spec, data)
 	if err != nil {
 		if errors.Is(err, harness.ErrUnsupported) {
@@ -156,7 +160,6 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 	// The stop is ordered, and persisted, before the cursor moves: a daemon that
 	// dies in between reads the line again and finds the order there. The
 	// observation itself moves with the cursor, in the same write.
-	structured := e.launchedWithInput(r.Key)
 	if needsInput && structured {
 		// The Run is answered, not stopped: the questions become prompts, and the
 		// Run goes on when the answers reach it. Past the end of the harness there
@@ -174,22 +177,22 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 		}
 	}
 	if sawResult && !final && structured {
-		// A harness fed by a stream ends only when the stream does: its turn is
-		// over and nothing waits for an answer, so the input is closed.
-		if err := e.endInputIfIdle(ctx, r); err != nil {
-			return false, err
-		}
+		next.TurnOver = true
 	}
 	if sawInit && !next.StartHeldAt.IsZero() {
 		// The init is what the held start waited for: it goes out with the model, and
 		// the cursor that says it is not held moves in the same write.
-		err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return e.releaseStart(ctx, tx, r.Key, next) })
+		err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return e.releaseStart(ctx, tx, r.Key, next) })
 		if err == nil {
 			e.o.Journal.Notify()
 		}
+	} else {
+		err = e.saveCursor(ctx, next)
+	}
+	if err != nil || !next.TurnOver || final {
 		return more, err
 	}
-	return more, e.saveCursor(ctx, next)
+	return more, e.endInputIfIdle(ctx, r.Key)
 }
 
 func (e *Executor) saveCursor(ctx context.Context, c state.EventCursor) error {
@@ -224,7 +227,11 @@ func (e *Executor) noteFinalFailure(ctx context.Context, r state.Run) (failures 
 func (e *Executor) parseEvents(ctx context.Context, adapter harness.Adapter, r state.Run, spec specView, data []byte) ([]harness.Event, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ch, err := adapter.Events(ctx, e.handleOf(adapter, r, spec), io.NopCloser(bytes.NewReader(data)))
+	h, err := e.handleOf(adapter, r, spec)
+	if err != nil {
+		return nil, err
+	}
+	ch, err := adapter.Events(ctx, h, io.NopCloser(bytes.NewReader(data)))
 	if err != nil {
 		return nil, err
 	}
@@ -236,19 +243,23 @@ func (e *Executor) parseEvents(ctx context.Context, adapter harness.Adapter, r s
 }
 
 // handleOf rebuilds the Handle of a Run from disk.
-func (e *Executor) handleOf(adapter harness.Adapter, r state.Run, spec specView) harness.Handle {
+func (e *Executor) handleOf(adapter harness.Adapter, r state.Run, spec specView) (harness.Handle, error) {
 	dir := e.runDir(r.Key)
 	h := harness.Handle{
 		RunID: domain.ID(r.RunID), LeaseEpoch: r.LeaseEpoch, Mode: domain.Mode(spec.Mode), RunDir: dir,
 		Worktree: e.worktree(r.Key), OutputPath: filepath.Join(dir, execwrap.OutputLog), EventsPath: filepath.Join(dir, execwrap.EventsFile),
 	}
-	if e.launchedWithInput(r.Key) {
+	withInput, err := e.launchedWithInput(r.Key)
+	if err != nil {
+		return harness.Handle{}, err
+	}
+	if withInput {
 		h.InputPath = e.inputPath(dir)
 	}
 	if adapter.Capabilities().ConfigIsolation {
 		h.ConfigDir = host.ConfigDir(dir)
 	}
-	return h
+	return h, nil
 }
 
 // stopForInput orders the stop of a harness that waits for input, once. A Run

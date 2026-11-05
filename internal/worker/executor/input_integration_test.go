@@ -151,6 +151,7 @@ func TestScenario_NeedsInputInbox_Reinicio(t *testing.T) {
 	stop := f.runLoops()
 	req := f.requested(k)
 	stop()
+	before := f.wrapperOf(k)
 
 	f.restart("01J0000000000000000000000E2")
 	defer f.runLoops()()
@@ -163,6 +164,9 @@ func TestScenario_NeedsInputInbox_Reinicio(t *testing.T) {
 	rs := f.reports(k)
 	if !delivered(rs, req.PromptID) || countKind(rs, v1.ReportInputRequested) != 1 {
 		t.Errorf("reports = %v", kinds(rs))
+	}
+	if after := f.wrapperOf(k); after.PID != before.PID || after.Start != before.Start || countKind(rs, v1.ReportStarted) != 1 {
+		t.Errorf("the harness was launched again: wrapper %+v, then %+v; reports %v", before, after, kinds(rs))
 	}
 }
 

@@ -86,11 +86,16 @@ func (e *Executor) announcesInput(harnessID string) bool {
 // launchedWithInput says whether the Run was launched to be answered while it
 // runs. That is decided once, by inputOfLaunch, and kept in the launch of the
 // Run: what the daemon announces now may have changed since (another Claude
-// Code), and the Run keeps the input it was launched with.
-func (e *Executor) launchedWithInput(k state.Key) bool {
+// Code), and the Run keeps the input it was launched with. A launch that cannot
+// be read is an error, never an answer: a Run launched with input that is taken
+// for one without would be stopped instead of asked.
+func (e *Executor) launchedWithInput(k state.Key) (bool, error) {
 	var l execwrap.Launch
 	ok, err := execwrap.Read(e.runDir(k), execwrap.LaunchFile, &l)
-	return err == nil && ok && l.InputPath != ""
+	if err != nil {
+		return false, fmt.Errorf("reading the launch of a Run: %w", err)
+	}
+	return ok && l.InputPath != "", nil
 }
 
 // inputOfLaunch tells the adapter how the Run is to be answered. A Run that
@@ -211,7 +216,12 @@ func (ir *inputRun) Gone(c *inputsock.Conn) {
 // delivers the orders that wait. The caller holds the lock of the Run. alive
 // says that its harness has not exited.
 func (e *Executor) serveInput(ctx context.Context, r state.Run, alive bool) {
-	if !e.launchedWithInput(r.Key) {
+	withInput, err := e.launchedWithInput(r.Key)
+	if err != nil {
+		e.log.WarnContext(ctx, "serving the input of a Run failed; it is tried again", "run", r.RunID, "err", err)
+		return
+	}
+	if !withInput {
 		return
 	}
 	if !alive || !inRun(r) {
@@ -222,6 +232,9 @@ func (e *Executor) serveInput(ctx context.Context, r state.Run, alive bool) {
 		e.ensureSocket(ctx, r)
 	}
 	e.deliverInputs(ctx, r)
+	// The prompts may have closed while nobody looked at the end of the input: an
+	// ack or a withdrawal heard by a daemon that died before acting on it.
+	e.endInputOrWarn(ctx, r.Key)
 }
 
 func (e *Executor) ensureSocket(ctx context.Context, r state.Run) {
@@ -370,6 +383,7 @@ func (e *Executor) permissionAcked(ir *inputRun, c *inputsock.Conn, m inputsock.
 				_ = c.Close()
 				return
 			}
+			e.endInputOrWarn(ctx, k)
 		}
 	}
 	ir.dropWaiter(m.PromptID)
@@ -392,6 +406,7 @@ func (e *Executor) permissionWithdrawn(ir *inputRun, c *inputsock.Conn, m inputs
 		_ = c.Close()
 		return
 	}
+	e.endInputOrWarn(ctx, k)
 	ir.dropWaiter(m.PromptID)
 	_ = c.Send(inputsock.Message{Op: inputsock.OpWithdrawn, PromptID: m.PromptID})
 }
@@ -464,23 +479,37 @@ func (e *Executor) writeAnswer(ctx context.Context, r state.Run, o state.InputOr
 	if !ok {
 		return
 	}
-	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+	h, err := e.handleOf(adapter, r, spec)
+	if err != nil {
+		e.log.WarnContext(ctx, "handing an answer to the harness of a Run failed; it is tried again", "run", r.RunID, "err", err)
+		return
+	}
+	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 		changed, err := state.SetInputOrderState(ctx, tx, o.Seq, state.OrderQueued, state.OrderDelivering)
 		if err == nil && !changed {
 			err = state.ErrChanged
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		// The answer begins a turn of the harness: its input stays open for it.
+		return state.BeginTurn(ctx, tx, r.Key)
 	})
 	if err != nil {
 		return
 	}
-	if sendErr := adapter.SendInput(ctx, e.o.Host, e.handleOf(adapter, r, spec), harness.Input{Text: o.Text}); sendErr != nil {
+	switch sendErr := adapter.SendInput(ctx, e.o.Host, h, harness.Input{Text: o.Text}); {
+	case errors.Is(sendErr, harness.ErrInputNotSent) || errors.Is(sendErr, harness.ErrUnsupported):
 		e.log.WarnContext(ctx, "handing an answer to the harness of a Run failed; it is tried again", "run", r.RunID, "err", sendErr)
 		_ = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
 			_, err := state.SetInputOrderState(ctx, tx, o.Seq, state.OrderDelivering, state.OrderQueued)
 			return err
 		})
 		return
+	case sendErr != nil:
+		// Part of it may be in the stream: written again, the harness would read it
+		// twice. It is taken as delivered, at most once.
+		e.log.WarnContext(ctx, "handing an answer to the harness of a Run may have failed half-way; it is not sent again", "run", r.RunID, "err", sendErr)
 	}
 	e.settleDelivery(ctx, r.Key, o)
 }
@@ -573,14 +602,29 @@ func questionID(ev harness.Event, offset uint64, index int) string {
 }
 
 // endInputIfIdle tells the wrapper that the input of the harness is over once
-// it has finished a turn with no question left open: Claude Code, fed by a
-// stream, ends only when the stream does.
-func (e *Executor) endInputIfIdle(ctx context.Context, r state.Run) error {
-	open, err := state.OpenInputPrompts(ctx, e.o.DB.Reader(), r.Key)
+// it has finished a turn with no prompt left open: Claude Code, fed by a
+// stream, ends only when the stream does. Either can come last, so it is asked
+// again whenever one of them may have changed; asking again is harmless.
+func (e *Executor) endInputIfIdle(ctx context.Context, k state.Key) error {
+	cur, err := state.EventCursorOf(ctx, e.o.DB.Reader(), k)
+	if err != nil || !cur.TurnOver {
+		return err
+	}
+	open, err := state.OpenInputPrompts(ctx, e.o.DB.Reader(), k)
 	if err != nil || open > 0 {
 		return err
 	}
-	return os.WriteFile(filepath.Join(e.runDir(r.Key), execwrap.InputEOFFile), nil, 0o600)
+	eof := filepath.Join(e.runDir(k), execwrap.InputEOFFile)
+	if _, err := os.Stat(eof); err == nil {
+		return nil
+	}
+	return os.WriteFile(eof, nil, 0o600)
+}
+
+func (e *Executor) endInputOrWarn(ctx context.Context, k state.Key) {
+	if err := e.endInputIfIdle(ctx, k); err != nil && ctx.Err() == nil {
+		e.log.WarnContext(ctx, "ending the input of a harness failed; it is tried again", "run", k.RunID, "err", err)
+	}
 }
 
 // redactor is the redaction of the text of a Run of the secrets it holds. A Run

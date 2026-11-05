@@ -328,14 +328,16 @@ func eachEvent(path string, fn func(harness.Event)) error {
 func writeFIFO(path, text string) error {
 	fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("fakeharness: send input: %w", err)
+		return fmt.Errorf("fakeharness: send input: %w: %w", harness.ErrInputNotSent, err)
 	}
 	f := os.NewFile(uintptr(fd), path)
 	defer func() { _ = f.Close() }()
 	if err := f.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return fmt.Errorf("fakeharness: send input: %w", err)
+		return fmt.Errorf("fakeharness: send input: %w: %w", harness.ErrInputNotSent, err)
 	}
-	if _, err := f.WriteString(text); err != nil {
+	if n, err := f.WriteString(text); n == 0 && err != nil {
+		return fmt.Errorf("fakeharness: send input: %w: %w", harness.ErrInputNotSent, err)
+	} else if err != nil {
 		return fmt.Errorf("fakeharness: send input: %w", err)
 	}
 	return nil

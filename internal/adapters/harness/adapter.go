@@ -55,6 +55,9 @@ type Adapter interface {
 	// never turned into events; a tolerant parser cannot recover JSON
 	// interleaved with other output on the same stream.
 	Events(ctx context.Context, h Handle, src io.ReadCloser) (<-chan Event, error)
+	// SendInput writes in to the input of the Run. An error that is
+	// ErrInputNotSent wrote nothing, and the input can be sent again; any other
+	// may have written part of it.
 	SendInput(ctx context.Context, host Host, h Handle, in Input) error
 	// CollectUsage reads the usage of a Run from what it left in h.
 	CollectUsage(ctx context.Context, host Host, h Handle) ([]UsageEvent, error)

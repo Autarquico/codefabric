@@ -252,7 +252,7 @@ func TestARunKeepsTheInputItWasLaunchedWith(t *testing.T) {
 	k := f.started("plain")
 	r, dir := f.run(k), f.runDir(k)
 	adapter, _ := f.e.harnesses.Get(command.ID)
-	if h := f.e.handleOf(adapter, r, parseSpec(r.Spec)); h.InputPath != "" || f.e.launchedWithInput(k) {
+	if h, _ := f.e.handleOf(adapter, r, parseSpec(r.Spec)); h.InputPath != "" || launched(t, f, k) {
 		t.Fatalf("a Run launched without input has %q", h.InputPath)
 	}
 	var l execwrap.Launch
@@ -264,9 +264,18 @@ func TestARunKeepsTheInputItWasLaunchedWith(t *testing.T) {
 		t.Fatal(err)
 	}
 	// This daemon announces no structured input: the Run still has the FIFO it was launched with.
-	if h := f.e.handleOf(adapter, r, parseSpec(r.Spec)); h.InputPath != l.InputPath || !f.e.launchedWithInput(k) {
+	if h, _ := f.e.handleOf(adapter, r, parseSpec(r.Spec)); h.InputPath != l.InputPath || !launched(t, f, k) {
 		t.Errorf("a Run launched with input has %q", h.InputPath)
 	}
+}
+
+func launched(t *testing.T, f *fixture, k state.Key) bool {
+	t.Helper()
+	ok, err := f.e.launchedWithInput(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ok
 }
 
 // A secret split by a character that does not print is still redacted: that

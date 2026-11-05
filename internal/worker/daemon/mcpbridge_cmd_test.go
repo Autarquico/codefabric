@@ -230,3 +230,48 @@ func TestTheBridgeAcksUntilADaemonRecordsIt(t *testing.T) {
 	eventually(t, "the ack", func() bool { return d.seen(func(r *recorder) bool { return len(r.acks) == 1 }) })
 	a.wait(time.Second)
 }
+
+// Under permissions: ask, Claude Code may hand AskUserQuestion to the bridge as
+// well as write it to its stream. The stream is what makes it a prompt (with
+// its answer through the FIFO): the bridge lets the tool run without asking the
+// daemon, so that one question is one prompt in the inbox.
+func TestAQuestionIsNotAskedAgainAsAPermission(t *testing.T) {
+	d := &recorder{answer: "deny", acking: true}
+	path, srv := bridgeSocket(t, d)
+	defer srv.Close()
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- serveMCP(ctx, inR, outW, newSocketAsker(&inputsock.Client{Path: path, Wait: 10 * time.Millisecond}))
+		_ = outW.Close()
+	}()
+	const question = `{"questions":[{"question":"which one?","options":[{"label":"a"},{"label":"b"}]}]}`
+	go func() {
+		_, _ = io.WriteString(inW, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"AskUserQuestion","input":`+question+`}}}`+"\n")
+	}()
+	out := bufio.NewScanner(outR)
+	if !out.Scan() {
+		t.Fatalf("no result: %v", out.Err())
+	}
+	var r struct {
+		Result struct {
+			Content []struct{ Text string } `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil || len(r.Result.Content) != 1 {
+		t.Fatalf("result %s: %v", out.Bytes(), err)
+	}
+	if got := r.Result.Content[0].Text; got != `{"behavior":"allow","updatedInput":`+question+`}` {
+		t.Errorf("result = %s", got)
+	}
+	_ = inW.Close()
+	if err := <-done; err != nil {
+		t.Errorf("serveMCP: %v", err)
+	}
+	if d.seen(func(r *recorder) bool { return len(r.requests) != 0 }) {
+		t.Error("the bridge asked the daemon about a question: it would be a second prompt")
+	}
+}
