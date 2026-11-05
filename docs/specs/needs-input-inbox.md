@@ -6,14 +6,14 @@ status: active
 priority: P1
 size: L
 issue: 97
-prs: []
+prs: [110]
 related_issues: [97]
 sub_issues: []
 depends_on: [claude-code-adapter, client-subscriptions]
 supersedes: []
 related_specs: [codefabric-spec, phase-3-tui]
 created: 2026-10-10
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # Needs-input e Inbox
