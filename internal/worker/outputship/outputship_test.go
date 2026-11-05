@@ -391,7 +391,7 @@ func TestShip_ARunThatNeverWroteIsClosedEmpty(t *testing.T) {
 }
 
 func TestShip_ARefusedLeaseStopsTheOutputForGood(t *testing.T) {
-	for _, code := range []domain.Code{domain.CodeStaleLease, domain.CodeNotFound, domain.CodePolicyDenied, domain.CodeInvalidRequest} {
+	for _, code := range []domain.Code{domain.CodeStaleLease, domain.CodeNotFound, domain.CodePolicyDenied, domain.CodeInvalidRequest, domain.CodeInvalidTransition} {
 		f := newFixture(t)
 		k := f.run("run_a", state.PhaseRunning)
 		f.write(k, "x")
@@ -407,19 +407,21 @@ func TestShip_ARefusedLeaseStopsTheOutputForGood(t *testing.T) {
 			t.Errorf("%s: tried again", code)
 		}
 	}
-	// An error that may pass is retried.
-	f := newFixture(t)
-	k := f.run("run_a", state.PhaseRunning)
-	f.write(k, "x")
-	f.ctl.refuse["run_a"] = domain.CodeInternal
-	f.once()
-	if f.cursor(k).Done || f.cursor(k).Sent != 0 {
-		t.Fatalf("cursor = %+v", f.cursor(k))
-	}
-	delete(f.ctl.refuse, "run_a")
-	f.once()
-	if f.sent(k) != "x" {
-		t.Fatalf("sent %q", f.sent(k))
+	// An error that may pass is retried: CF_IN_PROGRESS is what the Controller says when its sealer is behind.
+	for _, code := range []domain.Code{domain.CodeInternal, domain.CodeInProgress} {
+		f := newFixture(t)
+		k := f.run("run_a", state.PhaseRunning)
+		f.write(k, "x")
+		f.ctl.refuse["run_a"] = code
+		f.once()
+		if f.cursor(k).Done || f.cursor(k).Sent != 0 {
+			t.Fatalf("%s: cursor = %+v", code, f.cursor(k))
+		}
+		delete(f.ctl.refuse, "run_a")
+		f.once()
+		if f.sent(k) != "x" {
+			t.Fatalf("%s: sent %q", code, f.sent(k))
+		}
 	}
 }
 

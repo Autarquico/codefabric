@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -17,6 +18,7 @@ import (
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" driver
 
+	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/controller/eventbus"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -36,6 +38,16 @@ type Options struct {
 	// Logger gets the debug line of a transaction that held the writer for
 	// long (see WithTx); it defaults to slog.Default().
 	Logger *slog.Logger
+	// Blobs is the content-addressed store where the output of Runs is sealed
+	// into segments: the Controller's own, the same instance the use cases get.
+	// Without it nothing is sealed: the hot tail keeps all the output of a
+	// (Run, epoch), up to OutputMaxBytes, and what was sealed cannot be read.
+	Blobs *blob.Store
+	// OutputMaxBytes is the most a Controller accepts for the output of one
+	// (Run, lease epoch); it defaults to DefaultOutputMaxBytes.
+	OutputMaxBytes uint64
+
+	manualSeal bool // tests only: segments are sealed by SealPending, not in the background
 
 	goMigrations []*goose.Migration // tests only: Go migrations to run after the embedded SQL
 }
@@ -43,13 +55,16 @@ type Options struct {
 // DB is the Controller's SQLite store: one serialised writer and a pool of
 // query-only readers over the same WAL database.
 type DB struct {
-	path     string
-	writer   *sql.DB
-	reader   *sql.DB
-	clock    clock.Clock
-	log      *slog.Logger
-	ids      *domain.IDGenerator
-	notifier *eventbus.Notifier
+	path      string
+	writer    *sql.DB
+	reader    *sql.DB
+	clock     clock.Clock
+	blobs     *blob.Store // Options.Blobs; nil when nothing is sealed
+	sealer    *sealer     // nil without blobs
+	outputMax uint64
+	log       *slog.Logger
+	ids       *domain.IDGenerator
+	notifier  *eventbus.Notifier
 	// output wakes the readers that follow the output of a Run. It carries a
 	// counter of this process: output has no sequence of its own.
 	output    *eventbus.Notifier
@@ -80,6 +95,8 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	if db.ids == nil {
 		db.ids = domain.NewIDGenerator(db.clock.Now, rand.Reader)
 	}
+	db.blobs = opts.Blobs
+	db.outputMax = cmp.Or(opts.OutputMaxBytes, DefaultOutputMaxBytes)
 	readerConns := opts.ReaderConns
 	if readerConns <= 0 {
 		readerConns = defaultReaderConns
@@ -99,6 +116,16 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	if err := db.loadState(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if db.blobs != nil {
+		db.sealer = newSealer(db)
+		if err := db.sealer.seed(ctx); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if !opts.manualSeal {
+			db.sealer.start()
+		}
 	}
 	return db, nil
 }
@@ -180,6 +207,9 @@ func (db *DB) loadState(ctx context.Context) error {
 
 // Close releases both pools.
 func (db *DB) Close() error {
+	if db.sealer != nil {
+		db.sealer.stop()
+	}
 	return errors.Join(db.reader.Close(), db.writer.Close())
 }
 

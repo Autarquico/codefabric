@@ -60,9 +60,10 @@ type PsResponse struct {
 	Runs []PsEntry `json:"runs"`
 }
 
-// Limits of the output of a Run (§20, #14). The Controller keeps the tail of
-// each (Run, lease epoch), at most OutputTailBytes, until the log storage of
-// Phase 4 replaces it.
+// Limits of the output of a Run (§20, #14). The Controller keeps all of it, in
+// immutable gzip segments and a hot tail; OutputTailBytes bounds what a client
+// may ask for as a tail, and the Worker's shipper still starts that far back
+// until it ships everything (logs-output-storage L2).
 const (
 	OutputTailBytes     = 1 << 20
 	OutputChunkBytes    = 64 << 10

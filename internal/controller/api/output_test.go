@@ -3,11 +3,17 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/controller/api"
+	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 func (f *schedulingFixture) acceptedRun(t *testing.T) {
@@ -166,3 +172,47 @@ func TestOutputRoutes_FollowCursorErrors(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// A sealed segment that is gone reaches a follower as CF_INTERNAL with a fixed
+// message: not the CF_NOT_FOUND of the blob store (which the SDK takes as final
+// and which names the digest), and none of the bytes it held.
+func TestOutputRoutes_FollowOverAMissingSegmentIsAnInternalError(t *testing.T) {
+	root := t.TempDir()
+	bs, err := blob.New(root, clock.Real{})
+	must(t, err)
+	f := &schedulingFixture{}
+	f.testController = buildController(t, time.Now(), nil, nil, bs, func(c *api.Config) { f.work = c.Work })
+	f.start()
+	f.acceptedRun(t)
+
+	const secret = "SEGMENT-SECRET-BYTES"
+	chunk := secret + strings.Repeat("z", v1.OutputChunkBytes-len(secret))
+	for off := uint64(0); off < 1<<20+v1.OutputChunkBytes; off += v1.OutputChunkBytes {
+		f.upload(t, off, chunk)
+	}
+	waitFor(t, func() bool {
+		var sealed uint64
+		must(t, f.db.Reader().QueryRowContext(t.Context(), `SELECT sealed_offset FROM run_output`).Scan(&sealed))
+		return sealed >= 1<<20
+	})
+	must(t, os.RemoveAll(filepath.Join(root, "blobs")))
+
+	s := f.mustStream(f.httpClientFor(f.ownerDir), "/v1/runs/"+f.run.ID+"/output?follow=true&offset=0", nil)
+	s.next(t) // retry
+	if fr := s.nextEvent(t); fr.Event != v1.SSEBegin {
+		t.Fatalf("begin = %+v", fr)
+	}
+	fr := s.nextEvent(t)
+	var got v1.StreamError
+	if fr.Event != v1.SSEError || json.Unmarshal([]byte(fr.Data), &got) != nil {
+		t.Fatalf("not an error frame: %+v", fr)
+	}
+	if got.Code != domain.CodeInternal || got.Details != nil {
+		t.Errorf("error = %+v, want CF_INTERNAL without details", got)
+	}
+	for _, leak := range []string{"sha256", root, secret, "blob not found"} {
+		if strings.Contains(fr.Data, leak) {
+			t.Errorf("the error frame shows %q: %s", leak, fr.Data)
+		}
+	}
+}

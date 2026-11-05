@@ -102,7 +102,11 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := store.Open(ctx, p.DatabaseFile(), store.Options{Clock: o.Clock, Logger: o.Logger})
+	blobs, err := blob.New(p.DataDir, o.Clock)
+	if err != nil {
+		return nil, fmt.Errorf("opening the blob store: %w", err)
+	}
+	db, err := store.Open(ctx, p.DatabaseFile(), store.Options{Clock: o.Clock, Logger: o.Logger, Blobs: blobs})
 	if err != nil {
 		return nil, err
 	}
@@ -129,12 +133,6 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	build := buildinfo.Get()
 	offlineTTL := cmp.Or(o.WorkerOfflineTTL, time.Duration(cfg.WorkerOfflineTTL))
 	startedAt := o.Clock.Now()
-	blobs, err := blob.New(p.DataDir, o.Clock)
-	if err != nil {
-		_ = ln.Close()
-		_ = db.Close()
-		return nil, fmt.Errorf("opening the blob store: %w", err)
-	}
 	services := app.New(db, o.Clock, domain.NewIDGenerator(o.Clock.Now, rand.Reader), app.Config{
 		Workers:        workers.Config{ControllerVersion: build.Version, OfflineTTL: offlineTTL, StartedAt: startedAt},
 		RunLostTimeout: cmp.Or(o.RunLostTimeout, time.Duration(cfg.RunLostTimeout)),

@@ -3,6 +3,7 @@ package runs
 import (
 	"context"
 	"errors"
+	"maps"
 	"time"
 	"unicode/utf8"
 
@@ -45,9 +46,10 @@ func (s *Service) AppendOutput(ctx context.Context, by pki.Session, batch v1.Out
 	}
 	out := v1.OutputBatchResponse{Acks: make([]v1.OutputAck, 0, len(batch.Entries))}
 	entries := batch.Entries
+	busy := map[outputRef]bool{}
 	if len(entries) == 0 {
 		// Nothing to apply, but the caller is still authorised: a transaction that does only that.
-		_, err := s.appendSome(ctx, by, nil)
+		_, err := s.appendSome(ctx, by, nil, busy)
 		return out, err
 	}
 	for len(entries) > 0 {
@@ -56,7 +58,7 @@ func (s *Service) AppendOutput(ctx context.Context, by pki.Session, batch v1.Out
 			size += len(entries[n].Data)
 			n++
 		}
-		acks, err := s.appendSome(ctx, by, entries[:n])
+		acks, err := s.appendSome(ctx, by, entries[:n], busy)
 		if err != nil {
 			return v1.OutputBatchResponse{}, err
 		}
@@ -66,24 +68,47 @@ func (s *Service) AppendOutput(ctx context.Context, by pki.Session, batch v1.Out
 	return out, nil
 }
 
-func (s *Service) appendSome(ctx context.Context, by pki.Session, entries []v1.OutputEntry) ([]v1.OutputAck, error) {
+// outputRef names the output of a lease inside a batch.
+type outputRef struct {
+	run   string
+	epoch uint64
+}
+
+// appendSome applies entries in one transaction. busy holds the outputs of the
+// batch that were refused as busy: an entry after one of those would leave a
+// hole in front of the bytes that were refused, so it is refused the same way
+// without being applied (the Worker sends both again, in order).
+func (s *Service) appendSome(ctx context.Context, by pki.Session, entries []v1.OutputEntry, busy map[outputRef]bool) ([]v1.OutputAck, error) {
 	acks := make([]v1.OutputAck, 0, len(entries))
+	var refused map[outputRef]bool
 	err := s.db.WithTx(ctx, func(tx *store.Tx) error {
 		acks = acks[:0]
+		refused = maps.Clone(busy)
 		now := s.clock.Now()
 		w, err := workerOfCaller(ctx, tx, by, now)
 		if err != nil {
 			return err
 		}
 		for _, e := range entries {
+			ref := outputRef{e.RunID, e.LeaseEpoch}
+			if refused[ref] {
+				acks = append(acks, busyAck(e))
+				continue
+			}
 			ack, err := s.appendEntry(ctx, tx, w, now, e)
 			if err != nil {
 				return err
+			}
+			if ack.Code == domain.CodeInProgress {
+				refused[ref] = true
 			}
 			acks = append(acks, ack)
 		}
 		return nil
 	})
+	if err == nil {
+		maps.Copy(busy, refused)
+	}
 	return acks, err
 }
 
@@ -119,11 +144,23 @@ func (s *Service) appendEntry(ctx context.Context, tx *store.Tx, w store.Worker,
 	return ack, nil
 }
 
+func busyAck(e v1.OutputEntry) v1.OutputAck {
+	err := outputError(store.ErrOutputBusy)
+	var coded *domain.Error
+	errors.As(err, &coded)
+	return v1.OutputAck{RunID: e.RunID, LeaseEpoch: e.LeaseEpoch, Code: coded.Code, Message: coded.Message}
+}
+
 // outputError says, in the terms of the API, what the store refused.
 func outputError(err error) error {
 	switch {
 	case errors.Is(err, store.ErrOutputClosed):
 		return domain.NewError(domain.CodeInvalidTransition, "the output of this lease is closed", nil)
+	case errors.Is(err, store.ErrOutputBusy):
+		// Not a refusal: the Worker keeps the bytes and sends them again (CF_IN_PROGRESS is not one of its final codes).
+		return domain.NewError(domain.CodeInProgress, "the output is waiting to be sealed; send it again", nil)
+	case errors.Is(err, store.ErrOutputUnreadable):
+		return domain.NewError(domain.CodeInternal, "the output already stored cannot be read back", nil)
 	case errors.Is(err, store.ErrOutputConflict), errors.Is(err, store.ErrOutputIncomplete), errors.Is(err, store.ErrOutputInvalid):
 		return domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
 	}
@@ -221,8 +258,8 @@ func (s *Service) runOf(ctx context.Context, q store.Querier, by pki.Session, re
 }
 
 // ReadOutput answers GET /v1/runs/{ref}/output: a page of the tail of the
-// output the Controller holds. Truncated says that older output was asked for
-// and the Controller no longer has it.
+// output the Controller holds. Truncated says that output below Start was asked
+// for: the Worker skipped it and it was never stored.
 func (s *Service) ReadOutput(ctx context.Context, by pki.Session, q OutputRead) (v1.RunOutput, error) {
 	if err := q.validate(); err != nil {
 		return v1.RunOutput{}, err
@@ -265,13 +302,13 @@ func (s *Service) ReadOutput(ctx context.Context, by pki.Session, q OutputRead) 
 		to := min(from+limit, o.End)
 		out.Offset = from
 		if to > from {
-			if out.Data, err = store.OutputRange(ctx, r, run.ID, epoch, from, to); err != nil {
+			if out.Data, err = s.db.OutputRange(ctx, r, run.ID, epoch, from, to); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
-	return out, err
+	return out, outputError(err)
 }
 
 // OutputFollow is GET /v1/runs/{ref}/output?follow=true: the same selection as a
@@ -364,7 +401,7 @@ func (f *OutputFollower) Run(ctx context.Context, sink OutputSink) error {
 			l, err = f.look(ctx, r)
 			return err
 		}); err != nil {
-			return err
+			return outputError(err)
 		}
 		if l.chunk != nil {
 			if err := sink.Chunk(*l.chunk); err != nil {
@@ -421,7 +458,7 @@ func (f *OutputFollower) look(ctx context.Context, r store.Querier) (outputLook,
 	}
 	if f.pos < o.End {
 		to := min(f.pos+v1.OutputPageBytes, o.End)
-		data, err := store.OutputRange(ctx, r, f.run, f.epoch, f.pos, to)
+		data, err := f.s.db.OutputRange(ctx, r, f.run, f.epoch, f.pos, to)
 		if err != nil {
 			return l, err
 		}
