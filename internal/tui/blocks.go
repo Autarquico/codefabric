@@ -359,11 +359,13 @@ type Confirm struct {
 	Action actions.Descriptor
 	Target Row
 	Values map[string]string // the inputs the person gave, if the action has any
+	Holds  string            // what those inputs would touch, when the view knows
 }
 
 func (cf Confirm) render(c RenderContext) []string {
 	lines := []string{margin + ansi.Truncate(c.Theme.Warning.Render(printable(cf.Action.Title)+"?"), c.inner(), "…")}
 	lines = append(lines, wrapped(c, "On", cf.on(), c.Theme.Text)...)
+	lines = append(lines, wrapped(c, "Holds now", cf.Holds, c.Theme.Text)...)
 	return append(lines, wrapped(c, "Command", commandLine(cf.Action, cf.Target.ID, cf.Values), c.Theme.Text)...)
 }
 

@@ -1,10 +1,14 @@
  CODEFABRIC                                                           ● healthy
- ──────────────── Models ──────────────────────────────────────────────────────
- PROVIDER        USAGE
- Anthropic       usage not reported
- OpenAI          usage not reported
+ ──────────────── Models · 2 ──────────────────────────────────────────────────
+   HARNESS          USAGE                WORKERS
+ › claude           usage not reported   linux, macbook
+   command          usage not reported   linux
 
- Quota and Fabric-attributed usage appear here once a provider reports them.
- Drill-down by Project, Worker, Workflow, Harness, Run and time comes later.
+ ──────────────── Detail ──────────────────────────────────────────────────────
+ Harness       claude
+ Usage         usage not reported
+ Workers       linux, macbook
+ Note          No harness reports quota to Fabric yet
+
  ──────────────────────────────────────────────────────────────────────────────
- [esc] Back [q] Quit
+ [↑↓] Move [/] Filter [esc] Back [q] Quit

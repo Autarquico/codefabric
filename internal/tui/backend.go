@@ -62,8 +62,9 @@ type WorkflowRow struct {
 
 // LogEvent is what a follow of output tells the Logs view. Exactly one of its
 // parts is set: Data (bytes of the output; Gap says that bytes before them were
-// never seen), Restart (a new connection or lease epoch begins: what was cut
-// in the middle of a line will not continue), or Ended (why no more output is
+// never seen), Restart (a new lease epoch begins: the line that was open in the
+// old one will not continue; a reconnect inside an epoch is no Restart, because
+// the follow resumes at the offset it had), or Ended (why no more output is
 // coming).
 type LogEvent struct {
 	Data    []byte
@@ -165,13 +166,14 @@ func followOutput(ctx context.Context, c *client.Client, run string, handle func
 	query := client.OutputQuery{}
 	for {
 		ending, err := c.FollowOutput(ctx, run, query, client.OutputHandler{
-			Begin: func(v1.OutputBegin) error { handle(LogEvent{Restart: true}); return nil },
+			Begin: func(v1.OutputBegin) error { return nil },
 			Chunk: func(ch v1.OutputChunk) error { handle(LogEvent{Data: ch.Data, Gap: ch.Gap}); return nil },
 		})
 		switch {
 		case err != nil:
 			return err
 		case ending.End != nil && ending.End.Reason == v1.EndNewerEpoch:
+			handle(LogEvent{Restart: true})
 			zero := uint64(0)
 			query = client.OutputQuery{Epoch: ending.End.LeaseEpoch, Offset: &zero}
 		case ending.End != nil:

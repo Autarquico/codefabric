@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli/actions"
 )
 
@@ -32,7 +33,7 @@ type screenEnv struct {
 func activityView() viewSpec {
 	return viewSpec{
 		route: RouteActivity, title: "Activity", kind: actions.None, readOnly: true,
-		columns: []Column{{"When", 7}, {"Subject", 16}, {"Event", 22}, {"Message", 0}},
+		columns: []Column{{"When", 7}, {"Subject", 16}, {"Message", 0}},
 		empty:   "No activity yet",
 		feed: func(s *State) feedInfo {
 			return feedInfo{Loaded: s.Loaded, Down: s.Connection == Disconnected}
@@ -52,7 +53,6 @@ func activityView() viewSpec {
 					Cells: []Cell{
 						{activityTime(e.ReceivedAt, c.Now, c.Loc), ToneFaint},
 						{subject, subjectTone},
-						{humanize(printable(string(e.Type))), ToneFaint},
 						{activityMessage(e), levelTone(e.Level)},
 					},
 				}
@@ -66,7 +66,8 @@ func activityView() viewSpec {
 				}
 				subject, _ := activitySubject(e)
 				return []Field{
-					{"Event", printable(string(e.Type)), ToneText},
+					{"Event", humanize(printable(string(e.Type))), ToneText},
+					{"Type", printable(string(e.Type)), ToneFaint},
 					{"Subject", subject, ToneText},
 					{"Message", activityMessage(e), levelTone(e.Level)},
 					{"Level", printable(e.Level), levelTone(e.Level)},
@@ -95,46 +96,75 @@ func levelTone(level string) Tone {
 	return ToneText
 }
 
-// providers are the model APIs that Fabric runs harnesses against. None of them
-// reports a quota to Fabric yet, so the panel says so instead of showing a
+// modelsView is the panel of §19.4. No provider reports a quota to Fabric yet,
+// so it lists only what the system knows, the harnesses that Workers announce,
+// and says their usage is not reported (as the home does). It never shows a
 // percentage it would have to invent (invariant 10 of the spec).
-var providers = []string{"Anthropic", "OpenAI"}
-
-// modelsView is the panel of §19.4: per provider, what is known of its usage.
 func modelsView() viewSpec {
+	const unreported = "usage not reported"
+	harnesses := func(s *State) []string {
+		var out []string
+		for _, w := range s.Workers.Items {
+			for _, h := range announcedHarnesses(w.Capabilities) {
+				if !slices.Contains(out, h) {
+					out = append(out, h)
+				}
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	workersOf := func(s *State, harness string) []string {
+		var names []string
+		for _, w := range s.Workers.Items {
+			if slices.Contains(announcedHarnesses(w.Capabilities), harness) {
+				names = append(names, w.Name)
+			}
+		}
+		return names
+	}
 	return viewSpec{
-		route: RouteModels, title: "Models",
-		open: func(screenEnv) Screen { return modelsScreen{} },
+		route: RouteModels, title: "Models", kind: actions.None, readOnly: true, needs: []Route{RouteWorkers},
+		columns: []Column{{"Harness", 16}, {"Usage", 20}, {"Workers", 0}},
+		empty:   unreported,
+		feed: func(s *State) feedInfo {
+			return feedInfo{Loaded: s.Workers.Loaded, Down: s.Workers.Down, Err: s.Workers.Err}
+		},
+		rows: func(c RenderContext) []Row {
+			var rows []Row
+			for _, h := range harnesses(c.State) {
+				rows = append(rows, Row{
+					ID: h, Label: printable(h), Stamp: h,
+					Cells: []Cell{{printable(h), ToneText}, {unreported, ToneFaint}, {printable(strings.Join(workersOf(c.State, h), ", ")), ToneFaint}},
+				})
+			}
+			return rows
+		},
+		detail: func(c RenderContext, id string) []Field {
+			return []Field{
+				{"Harness", printable(id), ToneText},
+				{"Usage", unreported, ToneFaint},
+				{"Workers", printable(strings.Join(workersOf(c.State, id), ", ")), ToneText},
+				{"Note", "No harness reports quota to Fabric yet", ToneFaint},
+			}
+		},
+		open: func(env screenEnv) Screen { return newBrowser(modelsView(), env.Backend) },
 	}
 }
 
-type modelsScreen struct{}
-
-func (m modelsScreen) Update(tea.Msg) (Screen, tea.Cmd, bool) { return m, nil, false }
-
-func (modelsScreen) Render(c RenderContext) string {
-	if c.Width <= 0 {
-		c.Width = defaultWidth
+// announcedHarnesses are the harnesses a Worker says it has, from its
+// capabilities (harness:<id>, with ":mode:…" and the like after the id).
+func announcedHarnesses(capabilities []string) []string {
+	var out []string
+	for _, c := range capabilities {
+		if rest, ok := strings.CutPrefix(c, "harness:"); ok {
+			id, _, _ := strings.Cut(rest, ":")
+			if id != "" && !slices.Contains(out, id) {
+				out = append(out, id)
+			}
+		}
 	}
-	if c.Height <= 0 {
-		c.Height = defaultHeight
-	}
-	if c.Width < minWidth {
-		return tooSmall(c)
-	}
-	lines := []string{
-		header(c), rule(c, "Models"),
-		margin + c.Theme.Faint.Render(fit("PROVIDER", 16)+"USAGE"),
-	}
-	for _, p := range providers {
-		lines = append(lines, margin+c.Theme.Text.Render(fit(p, 16))+c.Theme.Faint.Render("usage not reported"))
-	}
-	lines = append(lines, "",
-		margin+c.Theme.Faint.Render(ansi.Truncate("Quota and Fabric-attributed usage appear here once a provider reports them.", c.inner(), "…")),
-		margin+c.Theme.Faint.Render(ansi.Truncate("Drill-down by Project, Worker, Workflow, Harness, Run and time comes later.", c.inner(), "…")))
-	bottom := append([]string{rule(c, "")}, flow(keyHints(c, Hint{"esc", "Back"}, Hint{"q", "Quit"}), c.inner())...)
-	body := clip(lines, max(c.Height-len(bottom), 0))
-	return strings.Join(clip(append(body, bottom...), c.Height), "\n")
+	return out
 }
 
 // Logs: pick a Run, then follow its output (the API `cf logs --follow` uses).
@@ -153,62 +183,65 @@ type logLine struct {
 	note bool // said by the view, not by the Run
 }
 
+// The messages of a follow are addressed to the Logs screen that started it, so
+// they arrive while another screen is over it.
 type (
 	logMsg struct {
-		follow int
+		from
+		follow uint64
 		event  LogEvent
 	}
 	logFailedMsg struct {
-		follow int
+		from
+		follow uint64
 		err    error
 	}
 )
 
+var lastFollowID atomic.Uint64
+
 type logFollow struct {
-	id      int
+	id      uint64
 	run     Row
 	cancel  context.CancelFunc
 	lines   []logLine
 	partial []byte
 	dropped bool // older lines went out of the scrollback
-	back    int  // lines between the newest and the last one in view
+	back    int  // matching lines between the newest and the last one in view
 	ended   string
 	err     error
+	filter  string
+	typing  bool
+	wrap    bool // long lines continue on the next row instead of being cut
 }
 
 type logsScreen struct {
+	id     uint64
 	env    screenEnv
-	picker List
-	rows   []Row
-	state  *State
-	runs   viewDef[v1.Run]
-	next   int
+	picker *browser // the Runs, read only; enter follows one
 	follow *logFollow
-	flash  string
+}
+
+func (l *logsScreen) screenID() uint64 { return l.id }
+
+// logsPicker is the Runs view, read only, with enter to follow.
+func logsPicker() viewSpec {
+	spec := runsDef().spec()
+	spec.route, spec.title, spec.readOnly, spec.shortcuts = RouteLogs, "Logs · pick a Run", true, nil
+	spec.primary = "Follow"
+	return spec
 }
 
 func logsView() viewSpec {
-	return viewSpec{
-		route: RouteLogs, title: "Logs", needs: []Route{RouteRuns, RouteTasks},
-		open: func(env screenEnv) Screen { return &logsScreen{env: env, runs: runsDef()} },
+	spec := logsPicker()
+	spec.open = func(env screenEnv) Screen {
+		return &logsScreen{id: lastScreenID.Add(1), env: env, picker: newBrowser(logsPicker(), env.Backend)}
 	}
+	return spec
 }
 
 // Sync keeps the Runs the picker lists.
-func (l *logsScreen) Sync(c RenderContext) tea.Cmd {
-	l.state = c.State
-	l.rows = l.pickRows(c)
-	return nil
-}
-
-func (l *logsScreen) pickRows(c RenderContext) []Row {
-	items := c.State.Runs.Items
-	rows := make([]Row, len(items))
-	for i, r := range items {
-		rows[i] = l.runs.row(r, c)
-	}
-	return rows
-}
+func (l *logsScreen) Sync(c RenderContext) tea.Cmd { return l.picker.Sync(c) }
 
 // Close ends the follow when the screen leaves the stack.
 func (l *logsScreen) Close() { l.stop() }
@@ -237,61 +270,98 @@ func (l *logsScreen) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 }
 
 func (l *logsScreen) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
-	l.flash = ""
-	key := k.String()
+	l.picker.warn = ""
 	if f := l.follow; f != nil {
-		switch key {
-		case "esc":
-			l.stop()
-		case "up", "k":
-			f.scroll(1)
-		case "down", "j":
-			f.scroll(-1)
-		case "pgup":
-			f.scroll(pageLines)
-		case "pgdown":
-			f.scroll(-pageLines)
-		case "home", "g":
-			f.scroll(len(f.lines))
-		case "end", "G":
-			f.back = 0
-		default:
-			return l, nil, false
-		}
-		return l, nil, true
+		return l, nil, f.press(k, l)
 	}
-	if l.picker.press(l.rows, k) {
-		return l, nil, true
-	}
-	if key == "enter" {
-		if row, ok := l.picker.selected(l.rows); ok {
+	if k.String() == "enter" && !l.picker.list.typing {
+		if row, ok := l.picker.list.selected(l.picker.rows); ok {
 			l.start(row)
 		}
 		return l, nil, true
 	}
-	return l, nil, false
+	_, cmd, handled := l.picker.Update(k)
+	return l, cmd, handled
+}
+
+// press handles a key in a follow; it says whether the follow took it.
+func (f *logFollow) press(k tea.KeyPressMsg, l *logsScreen) bool {
+	key := k.String()
+	if f.typing {
+		switch key {
+		case "enter":
+			f.typing = false
+		case "esc":
+			f.typing, f.filter, f.back = false, "", 0
+		case "backspace":
+			if r := []rune(f.filter); len(r) > 0 {
+				f.filter, f.back = string(r[:len(r)-1]), 0
+			}
+		default:
+			f.filter, f.back = f.filter+printable(k.Text), 0
+		}
+		return true
+	}
+	switch key {
+	case "esc":
+		if f.filter != "" {
+			f.filter, f.back = "", 0
+		} else {
+			l.stop()
+		}
+	case "/":
+		f.typing = true
+	case "W":
+		f.wrap = !f.wrap
+	case "enter":
+		if f.err == nil {
+			return true
+		}
+		run := f.run
+		l.stop()
+		l.start(run)
+	case "up", "k":
+		f.scroll(1)
+	case "down", "j":
+		f.scroll(-1)
+	case "pgup":
+		f.scroll(pageLines)
+	case "pgdown":
+		f.scroll(-pageLines)
+	case "home", "g":
+		f.scroll(len(f.lines))
+	case "end", "G":
+		f.back = 0
+	default:
+		return false
+	}
+	return true
 }
 
 func (l *logsScreen) start(run Row) {
 	if l.env.Feeds.Output == nil {
-		l.flash = "Logs are not available: the shell has no source of output"
+		l.picker.warn = "Logs are not available: the shell has no source of output"
 		return
 	}
-	l.next++
 	ctx, cancel := context.WithCancel(l.env.ctx())
-	f := &logFollow{id: l.next, run: run, cancel: cancel}
+	f := &logFollow{id: lastFollowID.Add(1), run: run, cancel: cancel, wrap: true}
 	l.follow = f
-	source, send := l.env.Feeds.Output, l.env.send
+	source, send, asker := l.env.Feeds.Output, l.env.send, from(l.id)
+	tell := func(msg tea.Msg) {
+		if ctx.Err() == nil {
+			send(msg)
+		}
+	}
 	go func() {
 		// A panic in a follow must not end the process with the terminal in raw mode.
 		defer func() {
 			if r := recover(); r != nil {
-				send(logFailedMsg{f.id, fmt.Errorf("%v", r)})
+				tell(logFailedMsg{asker, f.id, fmt.Errorf("%v", r)})
 			}
 		}()
-		err := source(ctx, run.ID, func(e LogEvent) { send(logMsg{f.id, e}) })
-		if err != nil && ctx.Err() == nil {
-			send(logFailedMsg{f.id, err})
+		err := source(ctx, run.ID, func(e LogEvent) { tell(logMsg{asker, f.id, e}) })
+		if err != nil {
+			tell(logFailedMsg{asker, f.id, err})
 		}
 	}()
 }
@@ -300,7 +370,7 @@ func (l *logsScreen) start(run Row) {
 func (f *logFollow) apply(e LogEvent) {
 	switch {
 	case e.Restart:
-		f.partial = nil // what was cut in the middle of a line will not continue
+		f.flush() // the line open in the old epoch ends there
 	case e.Ended != "":
 		f.ended = e.Ended
 	default:
@@ -333,9 +403,32 @@ func (f *logFollow) flush() {
 
 func (f *logFollow) push(line logLine) {
 	f.lines = append(f.lines, line)
-	if f.back > 0 {
+	if f.back > 0 && f.matches(line) {
 		f.back++ // the person is reading; what arrives does not move the page
 	}
+}
+
+// matches says whether a line passes the filter; the notes of the view only
+// show when nothing is filtered.
+func (f *logFollow) matches(line logLine) bool {
+	if f.filter == "" {
+		return true
+	}
+	return !line.note && strings.Contains(strings.ToLower(line.text), strings.ToLower(f.filter))
+}
+
+// shown are the lines that pass the filter.
+func (f *logFollow) shown() []logLine {
+	if f.filter == "" {
+		return f.lines
+	}
+	var out []logLine
+	for _, line := range f.lines {
+		if f.matches(line) {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // trim drops the oldest lines beyond what the scrollback keeps.
@@ -344,10 +437,11 @@ func (f *logFollow) trim() {
 		f.lines = append([]logLine(nil), f.lines[extra:]...)
 		f.dropped = true
 	}
-	f.back = min(f.back, max(len(f.lines)-1, 0))
 }
 
-func (f *logFollow) scroll(by int) { f.back = min(max(f.back+by, 0), max(len(f.lines)-1, 0)) }
+func (f *logFollow) scroll(by int) {
+	f.back = min(max(f.back+by, 0), max(len(f.shown())-1, 0))
+}
 
 // cleanLine is a line of output as it may be shown: no escape sequence, no
 // control character, no invalid UTF-8, and a carriage return overwrites what
@@ -361,6 +455,9 @@ func cleanLine(raw []byte) string {
 }
 
 func (l *logsScreen) Render(c RenderContext) string {
+	if l.follow == nil {
+		return l.picker.Render(c)
+	}
 	if c.Width <= 0 {
 		c.Width = defaultWidth
 	}
@@ -370,46 +467,49 @@ func (l *logsScreen) Render(c RenderContext) string {
 	if c.Width < minWidth {
 		return tooSmall(c)
 	}
-	if l.follow != nil {
-		return l.renderFollow(c)
-	}
-	return l.renderPicker(c)
+	return l.renderFollow(c)
 }
 
-func (l *logsScreen) renderPicker(c RenderContext) string {
-	rows := l.pickRows(c)
-	info := feedInfo{Loaded: c.State.Runs.Loaded, Down: c.State.Runs.Down, Err: c.State.Runs.Err}
-	top := []string{header(c), rule(c, "Logs · pick a Run")}
-	switch {
-	case info.Err != nil:
-		top = append(top, banner(c, "Runs stopped following the Controller: "+info.Err.Error()))
-	case info.Down:
-		top = append(top, banner(c, bannerUnreachable))
+// rowsOf are the screen rows of a line: wrapped at the width, or cut.
+func (f *logFollow) rowsOf(line logLine, width int) []logLine {
+	if !f.wrap {
+		return []logLine{{ansi.Truncate(line.text, width, "…"), line.note}}
 	}
-	hints := []Hint{{"↑↓", "Move"}, {"/", "Filter"}, {"enter", "Follow"}, {"esc", "Back"}, {"q", "Quit"}}
-	if l.picker.typing {
-		hints = []Hint{{"enter", "Keep filter"}, {"esc", "Clear"}}
+	parts := strings.Split(ansi.Hardwrap(line.text, width, true), "\n")
+	out := make([]logLine, len(parts))
+	for i, p := range parts {
+		out[i] = logLine{p, line.note}
 	}
-	bottom := flow(keyHints(c, hints...), c.inner())
-	if l.flash != "" {
-		bottom = append([]string{margin + c.Theme.Warning.Render(ansi.Truncate(printable(l.flash), c.inner(), "…"))}, bottom...)
+	return out
+}
+
+// window is the screen rows of `room` rows that end at the line `back` lines
+// from the newest, or start at the first line when there are not that many
+// above; back is the one it actually shows.
+func (f *logFollow) window(lines []logLine, width, room int) (rows []logLine, back int) {
+	n := len(lines)
+	end := n - min(f.back, max(n-1, 0))
+	start, count := end, 0
+	for start > 0 && count < room {
+		start--
+		count += len(f.rowsOf(lines[start], width))
 	}
-	bottom = append([]string{rule(c, "")}, bottom...)
-	empty := "No runs yet"
-	switch {
-	case !info.Loaded:
-		empty = connectingText
-	case l.picker.filter != "":
-		empty = "Nothing matches the filter"
+	for _, line := range lines[start:end] {
+		rows = append(rows, f.rowsOf(line, width)...)
 	}
-	room := max(c.Height-len(top)-len(bottom), 2)
-	lines := append(top, l.picker.render(c, l.runs.columns, rows, room, empty)...)
-	lines = append(lines, bottom...)
-	return strings.Join(clip(lines, c.Height), "\n")
+	if len(rows) > room {
+		rows = rows[len(rows)-room:]
+	}
+	for end < n && len(rows) < room {
+		rows = append(rows, f.rowsOf(lines[end], width)...)
+		end++
+	}
+	return rows[:min(len(rows), room)], n - end
 }
 
 func (l *logsScreen) renderFollow(c RenderContext) string {
 	f := l.follow
+	shown := f.shown()
 	state := "following"
 	switch {
 	case f.err != nil:
@@ -419,27 +519,57 @@ func (l *logsScreen) renderFollow(c RenderContext) string {
 	case f.back > 0:
 		state = "paused"
 	}
-	top := []string{header(c), rule(c, ansi.Truncate("Logs · "+printable(f.run.Label)+" · "+state, max(c.inner()-18, 4), "…"))}
-	if f.err != nil {
-		top = append(top, banner(c, "The follow stopped: "+f.err.Error()))
+	title := "Logs · " + printable(f.run.Label) + " · " + state
+	if f.filter != "" {
+		title += " · " + strconv.Itoa(len(shown)) + "/" + strconv.Itoa(len(f.lines))
 	}
-	hints := []Hint{{"↑↓", "Scroll"}, {"G", "Follow"}, {"esc", "Runs"}, {"q", "Quit"}}
+	top := []string{header(c), rule(c, ansi.Truncate(title, max(c.inner()-18, 4), "…"))}
+	if f.typing || f.filter != "" {
+		caret := ""
+		if f.typing {
+			caret = "▌"
+		}
+		top = append(top, margin+c.Theme.Faint.Render("/ ")+c.Theme.Text.Render(ansi.Truncate(f.filter+caret, max(c.inner()-2, 1), "…")))
+	}
+	if f.err != nil {
+		top = append(top, banner(c, "The follow stopped: "+f.err.Error()+". Press enter to follow again or esc to pick another Run."))
+	}
+	var hints []Hint
+	switch {
+	case f.typing:
+		hints = []Hint{{"enter", "Keep filter"}, {"esc", "Clear"}}
+	default:
+		wrap := "Cut lines"
+		if !f.wrap {
+			wrap = "Wrap lines"
+		}
+		hints = []Hint{{"↑↓", "Scroll"}, {"/", "Filter"}, {"W", wrap}, {"G", "Follow"}, {"esc", "Pick a Run"}, {"q", "Quit"}}
+		if f.err != nil {
+			hints = append([]Hint{{"enter", "Retry"}}, hints...)
+		}
+		if f.filter != "" {
+			hints[len(hints)-2].Label = "Clear filter"
+		}
+	}
 	bottom := append([]string{rule(c, "")}, flow(keyHints(c, hints...), c.inner())...)
-	if status := f.status(); status != "" {
+	room := max(c.Height-len(top)-len(bottom)-1, 1) // one row for the status line
+	rows, back := f.window(shown, c.inner(), room)
+	if status := f.status(back); status != "" {
 		bottom = append([]string{margin + c.Theme.Faint.Render(ansi.Truncate(status, c.inner(), "…"))}, bottom...)
 	}
-	room := max(c.Height-len(top)-len(bottom), 1)
 	lines := top
-	if len(f.lines) == 0 {
+	switch {
+	case len(f.lines) == 0:
 		lines = append(lines, margin+c.Theme.Faint.Render("Waiting for output…"))
+	case len(shown) == 0:
+		lines = append(lines, margin+c.Theme.Faint.Render("Nothing matches the filter"))
 	}
-	end := len(f.lines) - f.back
-	for _, line := range f.lines[max(end-room, 0):max(end, 0)] {
+	for _, line := range rows {
 		style := c.Theme.Text
 		if line.note {
 			style = c.Theme.Faint
 		}
-		lines = append(lines, margin+style.Render(ansi.Truncate(line.text, c.inner(), "…")))
+		lines = append(lines, margin+style.Render(line.text))
 	}
 	for len(lines) < c.Height-len(bottom) {
 		lines = append(lines, "")
@@ -449,13 +579,13 @@ func (l *logsScreen) renderFollow(c RenderContext) string {
 }
 
 // status is the one line under the output: why it stopped, or where the page is.
-func (f *logFollow) status() string {
+func (f *logFollow) status(back int) string {
 	var parts []string
 	if f.ended != "" {
 		parts = append(parts, "Ended: "+f.ended)
 	}
-	if f.back > 0 {
-		parts = append(parts, strconv.Itoa(f.back)+" newer lines below")
+	if back > 0 {
+		parts = append(parts, strconv.Itoa(back)+" newer lines below")
 	}
 	if f.dropped {
 		parts = append(parts, "older lines than the last "+strconv.Itoa(maxLogLines)+" are not kept")

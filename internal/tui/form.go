@@ -49,8 +49,7 @@ type Form struct {
 }
 
 func newForm(d actions.Descriptor, target Row, inputs []string, suggest func(string) []string) *Form {
-	f := &Form{Action: d, Target: target, inputs: inputs, suggest: suggest, values: map[string]string{}, pick: -1}
-	return f
+	return &Form{Action: d, Target: target, inputs: inputs, suggest: suggest, values: map[string]string{}, pick: -1}
 }
 
 func (f *Form) suggestions() []string { return f.suggest(f.inputs[f.step]) }
@@ -71,7 +70,11 @@ func (f *Form) press(k tea.KeyPressMsg) formResult {
 		}
 	case "up", "down":
 		if options := f.suggestions(); len(options) > 0 {
-			f.pick = (f.pick + len(options) + map[string]int{"up": -1, "down": 1}[key]) % len(options)
+			step := 1
+			if key == "up" {
+				step = -1
+			}
+			f.pick = (f.pick + len(options) + step) % len(options)
 			f.text = options[f.pick]
 		}
 	case "backspace":
@@ -101,7 +104,11 @@ func (f *Form) hints() []Hint {
 }
 
 func (f *Form) render(c RenderContext) []string {
-	lines := []string{margin + ansi.Truncate(c.Theme.Title.Render(printable(f.Action.Title))+c.Theme.Faint.Render(" · "+printable(f.Target.Label)), c.inner(), "…")}
+	head := c.Theme.Title.Render(printable(f.Action.Title))
+	if f.Action.Target != actions.None { // an action with no target is not about the selected item
+		head += c.Theme.Faint.Render(" · " + printable(f.Target.Label))
+	}
+	lines := []string{margin + ansi.Truncate(head, c.inner(), "…")}
 	for i, name := range f.inputs[:f.step] {
 		lines = append(lines, margin+c.Theme.Faint.Render(fit(name, labelWidth))+"  "+c.Theme.Text.Render(ansi.Truncate(printable(f.values[f.inputs[i]]), max(c.inner()-labelWidth-2, 4), "…")))
 	}
