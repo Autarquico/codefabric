@@ -372,6 +372,7 @@ func (f *logFollow) apply(e LogEvent) {
 	case e.Restart:
 		f.flush() // the line open in the old epoch ends there
 	case e.Ended != "":
+		f.flush() // the last line may have no newline
 		f.ended = e.Ended
 	default:
 		if e.Gap {

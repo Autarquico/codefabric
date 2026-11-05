@@ -68,13 +68,14 @@ func workflowsDef() viewDef[WorkflowRow] {
 	}
 }
 
-// workflowCLINote is what the Workflows view leaves to the CLI, with the
-// commands for the selected Workflow: adopt and commit take a snapshot of the
+// workflowCLINote is what the Workflows view leaves to the CLI. Adopt makes a
+// new Workflow, so it takes a placeholder; commit, diff and explain use the
+// selected one. Adopt and commit take a snapshot of the
 // machine and need the review the CLI shows; diff and explain print plans.
 func workflowCLINote(row Row) string {
 	name := row.ID
 	target := " " + name + " --worker=<worker> --harness=<harness>"
-	return "cf workflow adopt " + name + " · cf workflow commit " + name +
+	return "cf workflow adopt <new-name> · cf workflow commit " + name +
 		" · cf workflow diff" + target + " · cf workflow explain" + target
 }
 

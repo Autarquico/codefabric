@@ -14,7 +14,7 @@
  v3    12:00   tighten the review skill
  v2    10:30   ~claude/skills +claude/hooks
  v1    09:00   adopted
- CLI only      cf workflow adopt default · cf workflow commit default · cf
+ CLI only      cf workflow adopt <new-name> · cf workflow commit default · cf
                workflow diff default --worker=<worker> --harness=<harness> · cf
                workflow explain default --worker=<worker> --harness=<harness>
 
