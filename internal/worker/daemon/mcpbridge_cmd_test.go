@@ -264,8 +264,9 @@ func TestAQuestionIsNotAskedAgainAsAPermission(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil || len(r.Result.Content) != 1 {
 		t.Fatalf("result %s: %v", out.Bytes(), err)
 	}
-	if got := r.Result.Content[0].Text; got != `{"behavior":"allow","updatedInput":`+question+`}` {
-		t.Errorf("result = %s", got)
+	var res struct{ Behavior, Message string }
+	if err := json.Unmarshal([]byte(r.Result.Content[0].Text), &res); err != nil || res.Behavior != "deny" || !strings.Contains(res.Message, "next user message") {
+		t.Errorf("result = %s, want a deny that defers the answer to the next user message", r.Result.Content[0].Text)
 	}
 	_ = inW.Close()
 	if err := <-done; err != nil {

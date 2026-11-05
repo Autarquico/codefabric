@@ -130,8 +130,8 @@ func TestRealCLI_AQuestionIsOnePromptAndItsAnswerReachesClaudeCode(t *testing.T)
 		}
 	}
 	// Each AskUserQuestion of the stream is a prompt, and the bridge adds none.
-	// The tool result of an allow says nobody answered, and the model may ask
-	// again in the same turn: that is its own second question, not the bridge's.
+	// The bridge defers the answer to the next user message; a model that asks
+	// again anyway asks its own second question, not the bridge's.
 	if asked == 0 {
 		t.Errorf("the stream asked no question\n%s", transcript)
 	}

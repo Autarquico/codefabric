@@ -25,9 +25,13 @@ const approveTool = "approve"
 
 // askUserQuestion is the tool Claude Code asks a person a question with. The
 // question reaches the inbox through the stream of the harness, and its answer
-// through the FIFO: the bridge lets the tool run without asking the daemon, so
-// that one question is one prompt. Allowing it allows nothing but the asking.
+// through the FIFO: the bridge answers the tool without asking the daemon, so
+// that one question is one prompt.
 const askUserQuestion = "AskUserQuestion"
+
+// questionDeferred is what the model is told when it asks: the person answers
+// through the inbox, and the answer arrives as the next user message.
+const questionDeferred = "The question was sent to the user; their answer will arrive as the next user message. Wait for it and do not ask again."
 
 // mcpProtocolVersion is answered to a client that names none.
 const mcpProtocolVersion = "2025-06-18"
@@ -262,7 +266,9 @@ func approve(ctx context.Context, a asker, params json.RawMessage) (result any, 
 		input = json.RawMessage(`{}`)
 	}
 	if p.Arguments.ToolName == askUserQuestion {
-		return allowed(input), true
+		// Not an allow: Claude would tell the model the user did not answer, and
+		// the model may ask again. The answer comes as the next user message.
+		return toolResult(mustJSON(map[string]any{"behavior": "deny", "message": questionDeferred}), false), true
 	}
 	decision, message, err := a.ask(ctx, p.Arguments.ToolName, input)
 	if err != nil {
