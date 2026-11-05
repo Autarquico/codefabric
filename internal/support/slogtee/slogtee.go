@@ -264,11 +264,43 @@ func (t *Tee) redactAny(v any) slog.Value {
 	if err != nil {
 		return slog.StringValue(t.redact(fmt.Sprint(v)))
 	}
-	s := t.redact(string(raw))
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var tree any
+	if err := dec.Decode(&tree); err != nil {
+		return slog.StringValue(t.redact(string(raw)))
+	}
+	out, err := json.Marshal(t.redactTree(tree))
+	if err != nil {
+		return slog.StringValue(t.redact(string(raw)))
+	}
+	s := t.redact(string(out))
 	if json.Valid([]byte(s)) {
 		return slog.AnyValue(json.RawMessage(s))
 	}
 	return slog.StringValue(s)
+}
+
+// redactTree redacts a decoded JSON value: whatever a key that names a secret
+// holds, at any depth, and every string.
+func (t *Tee) redactTree(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		for k, e := range v {
+			if sensitiveKey.MatchString(k) {
+				v[k] = redacted
+			} else {
+				v[k] = t.redactTree(e)
+			}
+		}
+	case []any:
+		for i, e := range v {
+			v[i] = t.redactTree(e)
+		}
+	case string:
+		return t.redact(v)
+	}
+	return v
 }
 
 func (t *Tee) note(key, value string) {

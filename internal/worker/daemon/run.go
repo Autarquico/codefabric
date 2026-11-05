@@ -274,7 +274,7 @@ func Run(ctx context.Context, o Options) error {
 func (d *daemon) teeLogs(ctx context.Context, db *state.DB, c *client.Client) (logs *journal.Logs, held *redact.Live, stop func()) {
 	fallback := d.log
 	held = &redact.Live{}
-	tee := slogtee.New(slogtee.Options{MaxMessageBytes: v1.LogMessageMaxBytes, MaxAttrsBytes: v1.LogAttrsMaxBytes, Redact: held.Text})
+	tee := slogtee.New(slogtee.Options{MaxMessageBytes: v1.LogMessageMaxBytes, MaxAttrsBytes: v1.LogAttrsMaxBytes, Redact: held.Text, Clock: d.clock})
 	d.log = slog.New(tee.Wrap(fallback.Handler()))
 	logs = journal.NewLogs(journal.LogsOptions{DB: db, Epoch: d.epoch, Shipper: c, Clock: d.clock, Log: fallback})
 	logCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))

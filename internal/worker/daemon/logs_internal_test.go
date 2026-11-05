@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -56,5 +57,46 @@ func TestTheLogsOfTheWorkerAreJournaledRedactedOfTheValuesOfItsRuns(t *testing.T
 	}
 	if r.RunID != "run_01" || r.Epoch != "EPOCH" {
 		t.Fatalf("journaled line = %+v", r)
+	}
+}
+
+// A write of the tee that does not return is cut by the clock of the daemon,
+// not by the wall clock: with a fake clock the shutdown returns once it moves.
+func TestTheTeeOfTheWorkerStopsOnTheClockOfTheDaemonWhenTheJournalIsBlocked(t *testing.T) {
+	ctx := t.Context()
+	db, err := state.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	clk := clock.NewFake(time.Unix(0, 0))
+	d := &daemon{log: slog.New(slog.NewTextHandler(io.Discard, nil)), clock: clk, epoch: "EPOCH"}
+	_, _, stop := d.teeLogs(ctx, db, nil)
+
+	// Hold the only connection of the journal: the write of the tee waits for it.
+	held, release := make(chan struct{}), make(chan struct{})
+	holding := make(chan error, 1)
+	go func() {
+		holding <- db.WithTx(context.WithoutCancel(ctx), func(*state.Tx) error { close(held); <-release; return nil })
+	}()
+	<-held
+	defer func() { close(release); <-holding }()
+
+	d.log.Info("stuck")
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := clk.BlockUntil(waitCtx, 1); err != nil { // the deadline of the write
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() { stop(); close(stopped) }()
+	if err := clk.BlockUntil(waitCtx, 2); err != nil { // and the one of the shutdown
+		t.Fatal(err)
+	}
+	clk.Advance(time.Minute)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tee did not stop on the clock of the daemon")
 	}
 }

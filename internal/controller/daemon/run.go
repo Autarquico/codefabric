@@ -93,7 +93,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 	// The store and the writer of the structured logs log through fallback, which
 	// is not teed: what they say about storing a line is not another line to store.
 	fallback := o.Logger
-	tee := slogtee.New(slogtee.Options{MaxMessageBytes: v1.LogMessageMaxBytes, MaxAttrsBytes: v1.LogAttrsMaxBytes})
+	tee := slogtee.New(slogtee.Options{MaxMessageBytes: v1.LogMessageMaxBytes, MaxAttrsBytes: v1.LogAttrsMaxBytes, Clock: o.Clock})
 	o.Logger = slog.New(tee.Wrap(fallback.Handler()))
 	p := o.Paths
 	cfg, err := config.LoadController(p)

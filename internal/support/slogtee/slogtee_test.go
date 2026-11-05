@@ -359,3 +359,44 @@ func TestAWriteIsBoundedByADeadline(t *testing.T) {
 		t.Fatal("the write was not cut by its deadline")
 	}
 }
+
+type nested struct {
+	Name   string            `json:"name"`
+	Secret string            `json:"client_secret"`
+	Inner  *nested           `json:"inner,omitempty"`
+	Extra  map[string]string `json:"extra,omitempty"`
+}
+
+func TestSensitiveKeysInsideCompositeValuesAreRedactedAtAnyDepth(t *testing.T) {
+	const leak = "opaque-value-123456"
+	tee := slogtee.New(slogtee.Options{})
+	log := slog.New(tee.Wrap(quiet))
+	var c collector
+	stop := run(t, tee, c.sink, slog.New(slog.DiscardHandler))
+
+	log.Info("composite",
+		"map", map[string]string{"api_token": leak, "ok": "fine"},
+		"struct", nested{Name: "n", Secret: leak},
+		"slice", []map[string]any{{"password": leak}, {"n": 42}},
+		"deep", map[string]any{"a": []any{map[string]any{"b": nested{Inner: &nested{Extra: map[string]string{"Authorization": leak}}}}}},
+	)
+	stop()
+
+	got := c.all()
+	if len(got) != 1 {
+		t.Fatalf("%d entries", len(got))
+	}
+	if strings.Contains(string(got[0].Attrs), leak) {
+		t.Fatalf("leaks: %s", got[0].Attrs)
+	}
+	m := attrs(t, got[0])
+	if m["map"].(map[string]any)["ok"] != "fine" {
+		t.Fatalf("the rest keeps its value: %s", got[0].Attrs)
+	}
+	if m["map"].(map[string]any)["api_token"] != "<redacted>" || m["struct"].(map[string]any)["client_secret"] != "<redacted>" {
+		t.Fatalf("attrs = %s", got[0].Attrs)
+	}
+	if s := m["slice"].([]any); s[0].(map[string]any)["password"] != "<redacted>" || s[1].(map[string]any)["n"] != float64(42) {
+		t.Fatalf("slice = %s", got[0].Attrs)
+	}
+}
