@@ -29,3 +29,19 @@ func ParseCommandLine(opts Options, path, args, names []string) (positional []st
 	}
 	return cmd.Flags().Args(), flags, nil
 }
+
+// FlagGiven reports whether args, read with the flag set of the command at
+// path, set the flag called name (a persistent flag of the root included). It
+// reads them the way the CLI does, so a flag hidden as the value of another
+// (`--name -- --controller x`) is seen, and a `--` that ends the flags is too.
+func FlagGiven(opts Options, path, args []string, name string) (bool, error) {
+	cmd, _, err := CommandTree(opts).Find(path)
+	if err != nil || cmd == nil || cmd.Parent() == nil {
+		return false, fmt.Errorf("there is no command %s", strings.Join(path, " "))
+	}
+	if err := cmd.ParseFlags(args); err != nil {
+		return false, err
+	}
+	f := cmd.Flags().Lookup(name)
+	return f != nil && f.Changed, nil
+}

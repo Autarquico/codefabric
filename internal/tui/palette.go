@@ -3,6 +3,8 @@ package tui
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -87,6 +89,8 @@ type palette struct {
 	notice   *Notice
 	busy     string
 	done     doneInfo
+	scroll   int    // first line of the output shown in modeDone
+	query    string // the search, kept while an action is being collected
 }
 
 type doneInfo struct {
@@ -206,15 +210,22 @@ func (p *palette) fail(title string, f *actions.Failure, detail string) {
 
 func (p *palette) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 	key := k.String()
+	if key == "ctrl+c" {
+		return p, nil, false // the shell quits, whatever the palette is doing
+	}
 	switch p.mode {
 	case modeBusy:
+		if key == "esc" {
+			// The action goes on; its answer reaches the shell when it comes.
+			return p, leave(""), true
+		}
 		return p, nil, true
 	case modeNotice:
 		p.notice = nil
 		p.mode = p.back
 		return p, nil, true
 	case modeDone:
-		return p, leave(""), true
+		return p.pressDone(key)
 	case modeConfirm:
 		cf := *p.confirm
 		p.confirm = nil
@@ -229,6 +240,31 @@ func (p *palette) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 		return p.pressColon(k)
 	}
 	return p.pressSearch(k)
+}
+
+// pressDone keeps the output until the person leaves: it scrolls, and enter
+// goes back to what the person was doing.
+func (p *palette) pressDone(key string) (Screen, tea.Cmd, bool) {
+	switch key {
+	case "esc":
+		return p, leave(""), true
+	case "enter":
+		p.scroll = 0
+		if p.fromLine {
+			p.mode, p.input, p.histPos = modeColon, "", len(p.hist.lines)
+		} else {
+			p.reset()
+		}
+	case "up", "k":
+		p.scroll = max(p.scroll-1, 0)
+	case "down", "j":
+		p.scroll++ // Render keeps it within the output
+	case "pgup":
+		p.scroll = max(p.scroll-5, 0)
+	case "pgdown":
+		p.scroll += 5
+	}
+	return p, nil, true
 }
 
 func leave(route Route) tea.Cmd { return func() tea.Msg { return leaveMsg{route} } }
@@ -271,7 +307,10 @@ func (p *palette) pressSearch(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 func (p *palette) pressColon(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 	switch k.String() {
 	case "esc":
-		return p, nil, false
+		if p.input == "" {
+			return p, nil, false // the shell goes back
+		}
+		p.input, p.histPos = "", len(p.hist.lines)
 	case "enter":
 		return p, p.runLine(strings.TrimSpace(p.input)), true
 	case "up":
@@ -339,7 +378,7 @@ func dropRune(s string) string {
 
 // reset goes back to the search with the action forgotten.
 func (p *palette) reset() {
-	p.mode, p.asks, p.asked, p.input = modeSearch, nil, 0, ""
+	p.mode, p.asks, p.asked, p.input = modeSearch, nil, 0, p.query
 	p.values, p.target = map[string]string{}, Row{}
 }
 
@@ -349,6 +388,7 @@ func (p *palette) choose(it paletteItem) tea.Cmd {
 		return leave(it.route)
 	}
 	d := it.action
+	p.query = p.input
 	p.pending, p.asks, p.asked, p.input = d, nil, 0, ""
 	p.values, p.target = map[string]string{}, Row{}
 	if d.Target != actions.None {
@@ -386,7 +426,7 @@ func (p *palette) run(d actions.Descriptor) tea.Cmd {
 		p.fail(d.Title+" is not available", unavailable("actions need a Controller connection"), "")
 		return nil
 	}
-	in := actions.Input{Target: p.target.ID, Values: maps(p.values)}
+	in := actions.Input{Target: p.target.ID, Values: maps.Clone(p.values)}
 	if slices.ContainsFunc(d.Args, func(a actions.Arg) bool { return a.Name == confirmedArg }) {
 		in.Values[confirmedArg] = "true"
 	}
@@ -439,14 +479,6 @@ func (p *palette) runLine(text string) tea.Cmd {
 
 func unavailable(message string) *actions.Failure {
 	return actions.FailureOf(domain.NewError(domain.CodeNotImplemented, message, nil))
-}
-
-func maps(m map[string]string) map[string]string {
-	out := make(map[string]string, len(m)+1)
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 // compactJSON is what a command wrote, on one line.
@@ -517,10 +549,27 @@ func (p *palette) body(c RenderContext, room int) []string {
 		return []string{margin + c.Theme.Faint.Render(ansi.Truncate(printable(p.busy), c.inner(), "…"))}
 	case modeDone:
 		lines := []string{margin + c.Theme.Success.Render(ansi.Truncate("✓ "+printable(p.done.title), c.inner(), "…"))}
-		lines = append(lines, clip(wrapped(c, "Output", p.done.output, c.Theme.Text), 6)...)
-		return lines
+		return append(lines, p.outputLines(c, room-1)...)
 	}
 	return p.searchBody(c, room)
+}
+
+// outputLines is the part of the output that fits room, scrolled to p.scroll,
+// with a line that says how much is out of view.
+func (p *palette) outputLines(c RenderContext, room int) []string {
+	all := wrapped(c, "Output", p.done.output, c.Theme.Text)
+	if len(all) <= room {
+		p.scroll = 0
+		return all
+	}
+	room = max(room-1, 1)
+	p.scroll = min(p.scroll, len(all)-room)
+	below := len(all) - p.scroll - room
+	more := fmt.Sprintf("%d more lines below", below)
+	if p.scroll > 0 {
+		more = fmt.Sprintf("%d above, %s", p.scroll, more)
+	}
+	return append(slices.Clone(all[p.scroll:p.scroll+room]), margin+c.Theme.Faint.Render("… +"+more+" · ↑↓ scroll"))
 }
 
 func (p *palette) searchBody(c RenderContext, room int) []string {
@@ -598,9 +647,9 @@ func (p *palette) footer(c RenderContext) []string {
 	case modeNotice:
 		hints = []Hint{{"any key", "Dismiss"}}
 	case modeDone:
-		hints = []Hint{{"any key", "Close"}}
+		hints = []Hint{{"↑↓", "Scroll"}, {"enter", "Again"}, {"esc", "Close"}}
 	case modeBusy:
-		hints = []Hint{{"…", "Working"}}
+		hints = []Hint{{"esc", "Close, it keeps running"}, {"ctrl+c", "Quit"}}
 	case modeConfirm:
 		hints = []Hint{{"y", p.pending.Title}, {"n", "Keep it as it is"}}
 	case modeAsk:

@@ -225,6 +225,11 @@ func (r Runner) Run(ctx context.Context, id string, in Input) Result {
 	if err != nil {
 		return Result{Failure: asFailure(err)}
 	}
+	return r.exec(ctx, argv)
+}
+
+// exec runs argv in a fresh command tree and classifies how it ended.
+func (r Runner) exec(ctx context.Context, argv []string) Result {
 	var stdout, stderr bytes.Buffer
 	code := cli.RunContextWith(ctx, r.Options, argv, strings.NewReader(""), &stdout, &stderr)
 	if code == 0 {

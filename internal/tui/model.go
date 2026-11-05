@@ -155,7 +155,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		// The answer of an asynchronous call goes to the screen that asked,
 		// wherever it is in the stack; if it is gone, nobody wants it. A prepared
 		// attach that nobody runs holds nothing (its process was never started).
-		cmd, _ := m.router.Deliver(msg.origin(), msg)
+		cmd, found := m.router.Deliver(msg.origin(), msg)
+		if done, ok := msg.(paletteDoneMsg); ok && !found {
+			m.status = done.summary()
+		}
 		return cmd
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height

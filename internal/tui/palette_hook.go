@@ -6,6 +6,9 @@ import tea "charm.land/bubbletea/v2"
 // the shell reaches it: Ctrl+P opens it from any view, ":" (a key no view took)
 // opens it as a command line, and it asks the shell to close it and open a view.
 
+// paletteHints are the keys that open the palette, for the key help of every screen.
+var paletteHints = []Hint{{"ctrl+p", "Actions"}, {":", "Command"}}
+
 // paletteHost is what the shell keeps for the palette between one opening and
 // the next.
 type paletteHost struct {
@@ -48,4 +51,12 @@ func (m *Model) paletteMsg(msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// summary says how an action ended after the palette that ran it was closed.
+func (d paletteDoneMsg) summary() string {
+	if f := d.result.Failure; f != nil {
+		return d.title + " failed: " + f.Message
+	}
+	return d.title + " finished"
 }

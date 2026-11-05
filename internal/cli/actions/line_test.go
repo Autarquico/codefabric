@@ -31,13 +31,18 @@ func TestParseLine_SplitsLikeAShellAndFindsTheAction(t *testing.T) {
 }
 
 func TestParseLine_Refuses(t *testing.T) {
-	for _, text := range []string{"", "   ", "task cancel 'x", `task cancel x\`, "controller run", "task list", "nope", "task cancel x --controller other:1", "task cancel x --controller=other:1"} {
+	for _, text := range []string{
+		"", "   ", "task cancel 'x", `task cancel x\`, "controller run", "task list", "nope", "task cancel x --controller other:1", "task cancel x --controller=other:1",
+		"task new --name -- --controller x p", "task new --name -- --controller=x p", "task new --name -- --controller x -- p", "task new --contr=x p", "task cancel --controller",
+	} {
 		if _, failure := actions.ParseLine(text); failure == nil {
 			t.Errorf("%q was accepted", text)
 		}
 	}
-	// After "--" the same text is a value, not the flag.
-	if _, failure := actions.ParseLine("task cancel -- --controller"); failure != nil {
-		t.Errorf("a value after -- was refused: %v", failure)
+	// After "--", or as the value of a flag, the same text is a value, not the flag.
+	for _, text := range []string{"task cancel -- --controller", "task new --name=--controller x", "task new --name --controller x"} {
+		if _, failure := actions.ParseLine(text); failure != nil {
+			t.Errorf("%q: a value was refused: %v", text, failure)
+		}
 	}
 }

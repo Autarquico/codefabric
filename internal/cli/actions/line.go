@@ -1,7 +1,6 @@
 package actions
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -76,15 +75,16 @@ func hasPrefix(words, prefix []string) bool {
 }
 
 // checkController refuses --controller: the TUI is bound to the Controller it
-// was opened with, and a line must not aim an action somewhere else.
+// was opened with, and a line must not aim an action somewhere else. The line
+// is read with the command's own flag set, so no spelling gets past it; a line
+// the flags cannot parse is refused too, as the CLI would fail on it.
 func (l Line) checkController() error {
-	for _, a := range l.Args {
-		if a == "--" {
-			return nil
-		}
-		if a == "--controller" || strings.HasPrefix(a, "--controller=") {
-			return invalid("the TUI is bound to its Controller: --controller is not accepted here")
-		}
+	given, err := cli.FlagGiven(cli.Options{}, l.Action.Path, l.Args, "controller")
+	if err != nil {
+		return invalid(err.Error())
+	}
+	if given {
+		return invalid("the TUI is bound to its Controller: --controller is not accepted here")
 	}
 	return nil
 }
@@ -111,12 +111,7 @@ func (r Runner) RunLine(ctx context.Context, l Line, controller string) Result {
 	if l.Action.Terminal {
 		return refused(domain.CodeInvalidRequest, l.Action.Title+" takes over the terminal: prepare it with AttachLine")
 	}
-	var stdout, stderr bytes.Buffer
-	code := cli.RunContextWith(ctx, r.Options, l.argv(controller), strings.NewReader(""), &stdout, &stderr)
-	if code == 0 {
-		return Result{Output: stdout.Bytes()}
-	}
-	return Result{Failure: failureOf(code, stdout.Bytes(), stderr.String())}
+	return r.exec(ctx, l.argv(controller))
 }
 
 // AttachLine prepares a line that takes over the terminal, with the checks of
