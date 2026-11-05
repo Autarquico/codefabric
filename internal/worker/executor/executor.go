@@ -226,6 +226,8 @@ type Executor struct {
 	// permissions, in this life of the daemon.
 	inputMu sync.Mutex
 	inputs  map[state.Key]*inputRun
+	// inputHandlers are the handlers of the sockets taken down, still running.
+	inputHandlers sync.WaitGroup
 
 	mu    sync.Mutex
 	memos map[state.Key]*runMemo
@@ -416,8 +418,9 @@ func (e *Executor) Run(ctx context.Context) error {
 		wg.Go(func() { e.supervise(ctx, k) })
 	}
 	e.mu.Unlock()
-	defer wg.Wait()
+	// The sockets go down once no supervisor can take one down any more.
 	defer e.closeInputs()
+	defer wg.Wait()
 
 	if err := e.recoverRuns(ctx); err != nil {
 		return err

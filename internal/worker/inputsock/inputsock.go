@@ -149,17 +149,30 @@ func Listen(path string, h Handler) (*Server, error) {
 	return s, nil
 }
 
-// Close stops accepting, drops the connections and removes the socket.
-func (s *Server) Close() {
+// Shutdown stops accepting, drops the connections and removes the socket,
+// without waiting for the handlers that are still running: one may be waiting
+// for what the caller holds.
+func (s *Server) Shutdown() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
 	_ = s.l.Close()
 	_ = os.Remove(s.path)
-	s.mu.Lock()
-	s.closed = true
 	for c := range s.conns {
 		_ = c.Close()
 	}
-	s.mu.Unlock()
-	s.wg.Wait()
+}
+
+// Wait returns once Shutdown was called and every handler has returned.
+func (s *Server) Wait() { s.wg.Wait() }
+
+// Close is Shutdown and Wait.
+func (s *Server) Close() {
+	s.Shutdown()
+	s.Wait()
 }
 
 func (s *Server) accept() {

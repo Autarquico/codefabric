@@ -237,26 +237,33 @@ func (e *Executor) inputOf(k state.Key) *inputRun {
 	return e.inputs[k]
 }
 
-// closeInput takes the socket of a Run down.
+// closeInput takes the socket of a Run down. It does not wait for the handlers
+// of the socket: the caller may hold the lock of the Run, which they take, so
+// closeInputs is the one that waits for them.
 func (e *Executor) closeInput(k state.Key) {
 	e.inputMu.Lock()
 	ir := e.inputs[k]
 	delete(e.inputs, k)
 	e.inputMu.Unlock()
 	if ir != nil {
-		ir.srv.Close()
+		ir.srv.Shutdown()
+		e.inputHandlers.Go(ir.srv.Wait)
 	}
 }
 
-// closeInputs takes every socket down: the executor ends.
+// closeInputs takes every socket down and waits for their handlers: the
+// executor ends.
 func (e *Executor) closeInputs() {
 	e.inputMu.Lock()
-	all := e.inputs
-	e.inputs = map[state.Key]*inputRun{}
-	e.inputMu.Unlock()
-	for _, ir := range all {
-		ir.srv.Close()
+	keys := make([]state.Key, 0, len(e.inputs))
+	for k := range e.inputs {
+		keys = append(keys, k)
 	}
+	e.inputMu.Unlock()
+	for _, k := range keys {
+		e.closeInput(k)
+	}
+	e.inputHandlers.Wait()
 }
 
 // dropInput gives up what waits for an answer of a Run that is not up any

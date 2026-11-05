@@ -1,15 +1,19 @@
 package executor
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codefabric/internal/worker/inputsock"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -90,4 +94,64 @@ func TestAnInputOrderForARunThatIsNotUpIsIgnored(t *testing.T) {
 // corruptDelivery makes the secrets of the run directory unreadable.
 func corruptDelivery(runDir string) error {
 	return os.WriteFile(filepath.Join(runDir, "secrets", "manifest.json"), []byte("{"), 0o600)
+}
+
+// socketDir is a directory whose sockets fit: t.TempDir() is too long on macOS.
+func socketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "cfs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// askSocket is a started Run with the socket of its bridge up.
+func askSocket(t *testing.T) (*fixture, state.Key, *inputsock.Client) {
+	t.Helper()
+	dir := socketDir(t)
+	f := newFixture(t, func(o *Options) { o.SocketDir = dir })
+	k := f.started("ask")
+	f.e.ensureSocket(t.Context(), f.run(k))
+	if f.e.inputOf(k) == nil {
+		t.Fatal("the socket of the Run is not up")
+	}
+	t.Cleanup(f.e.closeInputs)
+	path, err := inputsock.Path(dir, k.RunID, k.LeaseEpoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, k, &inputsock.Client{Path: path, Wait: 10 * time.Millisecond}
+}
+
+// The supervisor takes the socket of a Run down under the lock of the Run, and a
+// question of the bridge may be waiting for that lock: the supervisor does not
+// wait for it.
+func TestTakingTheSocketDownUnderTheLockOfTheRunDoesNotWaitForItsHandlers(t *testing.T) {
+	f, k, client := askSocket(t)
+	unlock := f.e.lock(k)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		_, _ = client.Ask(ctx, inputsock.Message{PromptID: "p1", Tool: "Bash", Input: json.RawMessage(`{}`)})
+	}()
+	waitFor(t, "a handler waiting for the lock", func() bool {
+		f.e.mu.Lock()
+		defer f.e.mu.Unlock()
+		l := f.e.locks[k]
+		return l != nil && l.refs == 2
+	})
+	done := make(chan struct{})
+	go func() {
+		f.e.dropInput(t.Context(), k)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("taking the socket down waited for a handler that waits for the lock it holds")
+	}
+	unlock()
+	cancel()
 }
