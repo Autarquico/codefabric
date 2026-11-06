@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -168,6 +169,19 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 		// of the Run decides (see settle).
 		next.InputRequired = next.InputRequired || final
 		if !final && inRun(r) {
+			if sawInit && !next.StartHeldAt.IsZero() {
+				// The Controller takes input_requested only from a running Run: the
+				// held start goes out first. The cursor does not move with it, so that
+				// a daemon that dies before the questions are opened reads them again.
+				held := cur
+				held.Model = next.Model
+				err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return e.releaseStart(ctx, tx, r.Key, held) })
+				if err != nil {
+					return false, err
+				}
+				e.o.Journal.Notify()
+				next.StartHeldAt = time.Time{}
+			}
 			if err := e.askedQuestions(ctx, r, cur.Consumed, asked); err != nil {
 				return false, err
 			}
