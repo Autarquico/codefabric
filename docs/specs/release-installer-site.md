@@ -84,7 +84,7 @@ Cada scenario se implementa como un test `TestScenario_*`, o como un job de CI q
 ### Scenario: Instalación verificada
 - **Given** una release firmada con la clave de prueba, servida por HTTP local
 - **When** se ejecuta `install.sh` con `CF_VERSION=vX.Y.Z` y `CF_INSTALL_DIR` en un directorio vacío
-- **Then** `cf` queda instalado allí, `cf version` dice `vX.Y.Z` y el instalador sale con 0
+- **Then** `cf` queda instalado allí, `cf version` informa `X.Y.Z` (sin la `v`, como inyecta GoReleaser) y el instalador sale con 0
 
 ### Scenario: Firma o checksum inválidos
 - **Given** una release con `checksums.txt` alterado, firmado con otra clave o con un archivo que no casa con su sha256
@@ -132,7 +132,6 @@ Cada scenario se implementa como un test `TestScenario_*`, o como un job de CI q
 - **`latest` sin canales:** se resuelve con la redirección de `releases/latest`, que no está firmada. Alguien capaz de alterar esa respuesta podría servir una release anterior, firmada y válida; el downgrade no se detecta. Se acepta hasta que haya canales firmados (followup). Fijar `CF_VERSION` lo evita.
 - **Custodia de la clave:** solo la tiene el owner y solo vive como secret del environment `release`. Ningún otro workflow referencia ese environment. Hay un check de CI con actionlint y un grep sobre `.github/workflows/` que lo comprueba.
 - **Acciones fijadas por SHA**, como en supermgmt.
-- **Versión en el binario:** GoReleaser inyecta `{{.Version}}` sin la `v` (`internal/buildinfo`). El scenario "Instalación verificada" fija qué imprime `cf version`, y la implementación debe hacer que coincida.
 - **El sitio no hace afirmaciones que no estén verificadas.** Lo que solo se probó contra fakeharness se dice así, con el tono de supermgmt.
 - **Pasos humanos (bloquean el tag v0.2.0, no los PRs):**
   - generar la clave;
