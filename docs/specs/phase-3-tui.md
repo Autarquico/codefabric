@@ -2,7 +2,7 @@
 codename: codefabric
 title: Fase 3 — TUI
 type: epic
-status: active
+status: shipped
 priority: P1
 size: XL
 issue: 93
@@ -13,7 +13,7 @@ depends_on: [phase-2-harnesses-workflows]
 supersedes: []
 related_specs: [codefabric-spec]
 created: 2026-10-10
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 # Fase 3 — TUI

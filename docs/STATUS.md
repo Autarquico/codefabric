@@ -17,9 +17,14 @@
 - #26 E2E v0.2
 - #82 Backend keyring de secrets
 - #83 Credencial de origin vía GIT_ASKPASS
+- #93 Fase 3 — TUI
 - #94 Suscripciones del Client SDK
 - #95 TUI: shell y home
 - #96 TUI: vistas y acciones
+- #97 Needs-input e Inbox
+- #98 Paleta, búsqueda y notificaciones
+- #99 E2E del TUI
+- #100 Almacenamiento de logs y output
 - #102 Flaky: TestWhatTheRedactionHoldsBackIsFlushedOnEveryEnd/cancellation (gitops)
 <!-- /pm-sync:done-this-week -->
 

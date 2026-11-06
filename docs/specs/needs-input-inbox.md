@@ -2,18 +2,18 @@
 codename: codefabric
 title: Needs-input e Inbox
 type: task
-status: active
+status: shipped
 priority: P1
 size: L
 issue: 97
-prs: [110]
+prs: [110, 119, 121]
 related_issues: [97]
 sub_issues: []
 depends_on: [claude-code-adapter, client-subscriptions]
 supersedes: []
 related_specs: [codefabric-spec, phase-3-tui]
 created: 2026-10-10
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Needs-input e Inbox
