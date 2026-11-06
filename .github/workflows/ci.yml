@@ -203,13 +203,21 @@ jobs:
   # The installer and the release chain, against an ephemeral key. Registered in
   # packaging/release/required-checks.txt: release.yml refuses to build without it.
   installer:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install prerequisites
+      - name: Install prerequisites (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y shellcheck openssh-client python3
+      - name: Install prerequisites (macOS)
+        if: runner.os == 'macOS'
+        run: brew install shellcheck
       - name: shellcheck
         run: git ls-files -z '*.sh' | xargs -0 shellcheck
       - run: make test-installer

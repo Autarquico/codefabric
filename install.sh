@@ -60,7 +60,7 @@ detect_platform() {
 }
 
 require_commands() {
-	for c in curl tar awk sed grep mktemp ssh-keygen cp chmod mv; do
+	for c in curl tar awk sed grep mktemp ssh-keygen cp chmod mv mkdir rm cat wc tr basename; do
 		have "$c" || die 4 "required command not found: $c"
 	done
 	have sha256sum || have shasum || die 4 'required command not found: sha256sum or shasum'
@@ -154,6 +154,7 @@ install_cf() {
 	dir=${CF_INSTALL_DIR:-$HOME/.local/bin}
 	dir=${dir%/}
 	mkdir -p "$dir" || die 4 "cannot create $dir"
+	[ ! -d "$dir/cf" ] || die 4 "$dir/cf is a directory (or a link to one); move it away and run the installer again"
 	TMP_BIN=$(mktemp "$dir/.cf.XXXXXX") || die 4 "cannot write to $dir"
 	{ cp "$WORK/unpacked/cf" "$TMP_BIN" && chmod 755 "$TMP_BIN" && mv -f "$TMP_BIN" "$dir/cf"; } || die 4 "cannot install into $dir"
 	TMP_BIN=
@@ -172,7 +173,7 @@ main() {
 	TMP_BIN=
 	detect_platform
 	require_commands
-	WORK=$(mktemp -d)
+	WORK=$(mktemp -d) || die 4 'cannot create a temporary directory'
 	trap 'rm -rf "$WORK"; [ -z "$TMP_BIN" ] || rm -f "$TMP_BIN"' EXIT
 	write_trust_roots
 	verify_the_verifier
