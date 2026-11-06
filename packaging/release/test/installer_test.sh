@@ -1,5 +1,5 @@
 # shellcheck shell=sh
-# shellcheck disable=SC2154
+# shellcheck disable=SC2154,SC2034
 # Installer scenarios. Each function is one test; its name is the spec scenario, its body the Then.
 
 TestScenario_VerifiedInstall() {
@@ -47,7 +47,7 @@ TestScenario_BadSignatureOrChecksum_tamperedChecksums() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "signature verification failed"
+	assert_out_contains "signature verification failed: checksums.txt"
 }
 
 TestScenario_BadSignatureOrChecksum_signedByOtherKey() {
@@ -56,7 +56,7 @@ TestScenario_BadSignatureOrChecksum_signedByOtherKey() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "signature verification failed"
+	assert_out_contains "signature verification failed: checksums.txt"
 }
 
 TestScenario_BadSignatureOrChecksum_archiveShaMismatch() {
@@ -65,7 +65,7 @@ TestScenario_BadSignatureOrChecksum_archiveShaMismatch() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "checksum mismatch"
+	assert_out_contains "checksum mismatch for cf_${BARE_VERSION}_linux_amd64.tar.gz"
 }
 
 TestScenario_BadSignatureOrChecksum_missingSignature() {
@@ -74,6 +74,7 @@ TestScenario_BadSignatureOrChecksum_missingSignature() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
+	assert_out_contains "download failed: .*checksums.txt.sig"
 }
 
 TestScenario_BadSignatureOrChecksum_revokedKey() {
@@ -84,7 +85,7 @@ TestScenario_BadSignatureOrChecksum_revokedKey() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$T/install-revoked.sh"
-	assert_out_contains "signature verification failed"
+	assert_out_contains "signature verification failed: checksums.txt"
 }
 
 TestScenario_BadSignatureOrChecksum_wrongPrincipal() {
@@ -94,7 +95,7 @@ TestScenario_BadSignatureOrChecksum_wrongPrincipal() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$T/install-principal.sh"
-	assert_out_contains "signature verification failed"
+	assert_out_contains "signature verification failed: checksums.txt"
 }
 
 TestScenario_BadSignatureOrChecksum_wrongNamespace() {
@@ -104,7 +105,7 @@ TestScenario_BadSignatureOrChecksum_wrongNamespace() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "signature verification failed"
+	assert_out_contains "signature verification failed: checksums.txt"
 }
 
 # --- Header for another version -----------------------------------------------
@@ -117,7 +118,7 @@ TestScenario_HeaderOtherVersion() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "another version"
+	assert_out_contains "checksums.txt is signed for .v9.9.9., not $VERSION"
 }
 
 # --- Unsupported platform ------------------------------------------------------
@@ -150,7 +151,7 @@ TestScenario_Placeholder() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$ROOT/install.sh"
-	assert_out_contains "signature verification failed"
+	assert_out_contains "signature verification failed: checksums.txt"
 }
 
 # --- Installer hardening -------------------------------------------------------
@@ -171,7 +172,7 @@ TestScenario_Hardening_duplicateChecksumEntry() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "exactly once"
+	assert_out_contains "cf_${BARE_VERSION}_linux_amd64.tar.gz is not listed exactly once"
 }
 
 TestScenario_Hardening_duplicateEntryWithDifferentHash() {
@@ -182,6 +183,7 @@ TestScenario_Hardening_duplicateEntryWithDifferentHash() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
+	assert_out_contains "$name is not listed exactly once"
 }
 
 TestScenario_Hardening_malformedLine() {
@@ -191,7 +193,7 @@ TestScenario_Hardening_malformedLine() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "malformed"
+	assert_out_contains "checksums.txt contains a malformed line"
 }
 
 TestScenario_Hardening_entryForPlatformMissing() {
@@ -200,6 +202,7 @@ TestScenario_Hardening_entryForPlatformMissing() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
+	assert_out_contains "cf_${BARE_VERSION}_linux_amd64.tar.gz is not listed exactly once"
 }
 
 # A tarball whose checksum is signed is still not trusted to write outside the work dir or to ship a non-cf.
@@ -210,6 +213,7 @@ tarball_variant_is_rejected() { # mode
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
+	assert_out_contains "cf_${BARE_VERSION}_linux_amd64.tar.gz"
 	[ ! -e "$T/evil" ] && [ ! -e "$T/dist/evil" ] || fail "a tar member escaped the work directory"
 }
 
@@ -245,6 +249,15 @@ TestScenario_Hardening_invalidVersion() {
 	assert_no_requests
 }
 
+TestScenario_Hardening_multiLineVersion() {
+	for bad in "$(printf 'v1.2.3\nv9.9.9')" "$(printf 'v1.2.3\ngarbage')" "$(printf 'garbage\nv1.2.3')"; do
+		INST_VERSION=$bad run_install "$KEY_A/install.sh"
+		assert_rc 2
+		assert_out_contains "invalid CF_VERSION"
+	done
+	assert_no_requests
+}
+
 TestScenario_Hardening_unexpectedArguments() {
 	run_install "$KEY_A/install.sh" --force
 	assert_rc 2
@@ -254,13 +267,13 @@ TestScenario_Hardening_unexpectedArguments() {
 TestScenario_Hardening_downloadFailureNotPublished() {
 	seed_old_cf
 	INST_VERSION=v8.8.8 assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "download failed"
+	assert_out_contains "download failed: .*v8.8.8/checksums.txt"
 }
 
 TestScenario_Hardening_downloadFailureServerDown() {
 	seed_old_cf
 	INST_BASE=http://127.0.0.1:1 assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "download failed"
+	assert_out_contains "download failed: http://127.0.0.1:1/"
 }
 
 TestScenario_Hardening_downloadFailureTarballMissing() {
@@ -269,5 +282,70 @@ TestScenario_Hardening_downloadFailureTarballMissing() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "download failed"
+	assert_out_contains "download failed: .*cf_${BARE_VERSION}_linux_amd64.tar.gz"
+}
+
+# --- Default path: CF_VERSION unset resolves the latest release ------------------
+
+# publish_latest TARGET: releases/latest answers 302 to TARGET, which serves a page, as github.com does.
+publish_latest() {
+	mkdir -p "$WWW/$TEST_NAME/releases/tag"
+	printf '%s\n' "$1" >"$WWW/$TEST_NAME/latest.redirect"
+	: >"$WWW/$TEST_NAME/releases/tag/${1##*/}"
+}
+
+TestScenario_LatestVersion_installsWhatLatestRedirectsTo() {
+	good_release "$KEY_A"
+	serve_dist
+	publish_latest "/$TEST_NAME/releases/tag/$VERSION"
+	INST_VERSION=latest run_install "$KEY_A/install.sh"
+	assert_rc 0
+	assert_out_contains "installing $VERSION"
+	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf version is wrong after installing latest"
+}
+
+TestScenario_LatestVersion_unsetMeansLatest() {
+	good_release "$KEY_A"
+	serve_dist
+	publish_latest "/$TEST_NAME/releases/tag/$VERSION"
+	rc=0
+	env -u CF_VERSION PATH="$SHIM:$PATH" HOME="$T/home" CF_RELEASE_BASE_URL="$URL/$TEST_NAME" CF_INSTALL_DIR="$T/bin" \
+		"$(command -v sh)" "$KEY_A/install.sh" >"$T/out" 2>&1 || rc=$?
+	assert_rc 0
+	assert_out_contains "installing $VERSION"
+}
+
+TestScenario_LatestVersion_malformedRedirectTarget() {
+	seed_old_cf
+	publish_latest "/$TEST_NAME/releases/tag/not-a-version"
+	INST_VERSION=latest assert_rejected_untouched "$KEY_A/install.sh"
+	assert_out_contains "could not resolve the latest release"
+}
+
+TestScenario_LatestVersion_noLatestRelease() {
+	seed_old_cf
+	INST_VERSION=latest assert_rejected_untouched "$KEY_A/install.sh"
+	assert_out_contains "download failed: .*/latest"
+}
+
+# --- Regression guards for the portable-awk fix ----------------------------------
+
+# mawk (the Debian/Ubuntu default awk) has no regex intervals; the installer must not depend on them.
+TestScenario_PortableAwk_installsWithMawk() {
+	if ! command -v mawk >/dev/null 2>&1; then
+		echo "SKIP: mawk not installed (brew install mawk | apt install mawk); the mawk guard did not run"
+		return 0
+	fi
+	good_release "$KEY_A"
+	serve_dist
+	mkdir -p "$T/mawkbin"
+	ln -s "$(command -v mawk)" "$T/mawkbin/awk"
+	INST_PATH="$T/mawkbin:$SHIM:$PATH" run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf was not installed with mawk as awk"
+}
+
+TestScenario_PortableAwk_noRegexIntervalInAwk() {
+	hits=$(grep -nE 'awk.*[^$]\{[0-9]+(,[0-9]*)?\}' "$ROOT/install.sh" "$RELEASE_DIR"/*.sh || true)
+	[ -z "$hits" ] || fail "regex interval inside awk (unsupported by mawk): $hits"
 }

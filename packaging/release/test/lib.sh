@@ -67,8 +67,7 @@ assert_install_dir_untouched() {
 
 # run_install INSTALL_SH [args...]; knobs: INST_VERSION INST_BASE INST_PATH FAKE_UNAME_S FAKE_UNAME_M.
 # Sets rc and writes the combined output to $T/out. The fake uname defaults to Linux x86_64 so the tests do not
-# depend on the host. CF_VERSION=latest is not covered: it needs the releases/latest redirect, which a static
-# file server does not give.
+# depend on the host. CF_VERSION=latest needs publish_latest (server.py redirects <base>/latest).
 run_install() {
 	script=$1
 	shift
