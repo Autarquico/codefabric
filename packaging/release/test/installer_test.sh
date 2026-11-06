@@ -38,6 +38,44 @@ TestScenario_VerifiedInstall_armLinux() {
 	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf version is wrong on linux/arm64"
 }
 
+TestScenario_VerifiedInstall_darwinArm64() {
+	good_release "$KEY_A"
+	serve_dist
+	FAKE_UNAME_S=Darwin FAKE_UNAME_M=arm64 run_install "$KEY_A/install.sh"
+	assert_rc 0
+	grep -q "\"GET /$TEST_NAME/$VERSION/cf_${BARE_VERSION}_darwin_arm64.tar.gz" "$TMP/server.log" || fail "the darwin_arm64 tarball was not requested"
+	! grep -q "\"GET /$TEST_NAME/.*linux_" "$TMP/server.log" || fail "a linux tarball was requested on darwin/arm64"
+	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf was not installed on darwin/arm64"
+}
+
+# The real cf, built with the GoReleaser ldflags and packed like its archive (LICENSE, README.md, cf), signed and
+# installed over HTTP: proves the version injection and the archive layout, which the fake fixtures cannot.
+TestScenario_VerifiedInstall_realBinary() {
+	command -v go >/dev/null 2>&1 || fail "go is required for the real-binary test (the CI installer job needs setup-go)"
+	goos=$(go env GOOS)
+	goarch=$(go env GOARCH)
+	case "$goos/$goarch" in
+		linux/amd64 | linux/arm64 | darwin/arm64) ;;
+		*) echo "SKIP: $goos/$goarch has no release tarball"; return 0 ;;
+	esac
+	pkg=github.com/Autarquico/codefabric/internal/buildinfo
+	mkdir -p "$T/real"
+	(cd "$ROOT" && CGO_ENABLED=0 go build -trimpath \
+		-ldflags "-s -w -X $pkg.version=$BARE_VERSION -X $pkg.commit=abc1234 -X $pkg.date=2026-01-01T00:00:00Z" \
+		-o "$T/real/cf" ./cmd/cf) || fail "go build failed"
+	cp "$ROOT/LICENSE" "$ROOT/README.md" "$T/real/"
+	make_dist "$T/dist"
+	tar -C "$T/real" -czf "$T/dist/cf_${BARE_VERSION}_${goos}_${goarch}.tar.gz" LICENSE README.md cf
+	finalize_dist "$T/dist" "$KEY_A"
+	serve_dist
+	rc=0
+	env PATH="$PATH" HOME="$T/home" CF_RELEASE_BASE_URL="$URL/$TEST_NAME" CF_INSTALL_DIR="$T/bin" CF_VERSION="$VERSION" \
+		"$(command -v sh)" "$KEY_A/install.sh" >"$T/out" 2>&1 || rc=$?
+	assert_rc 0
+	reported=$("$T/bin/cf" version --json | jq -r .version)
+	[ "$reported" = "$BARE_VERSION" ] || fail "cf version --json reports '$reported', want $BARE_VERSION"
+}
+
 # --- Bad signature or checksum ------------------------------------------------
 
 TestScenario_BadSignatureOrChecksum_tamperedChecksums() {
@@ -348,4 +386,44 @@ TestScenario_PortableAwk_installsWithMawk() {
 TestScenario_PortableAwk_noRegexIntervalInAwk() {
 	hits=$(grep -nE 'awk.*[^$]\{[0-9]+(,[0-9]*)?\}' "$ROOT/install.sh" "$RELEASE_DIR"/*.sh || true)
 	[ -z "$hits" ] || fail "regex interval inside awk (unsupported by mawk): $hits"
+}
+
+# --- Install target problems ----------------------------------------------------
+
+# $T/bin/cf is not a file: the installer must refuse (exit 4) instead of moving the binary inside it.
+assert_cf_dir_refused() { # dir that $T/bin/cf is or points to
+	run_install "$KEY_A/install.sh"
+	assert_rc 4
+	assert_out_contains "is a directory"
+	[ -z "$(ls -A "$1")" ] || fail "something landed inside the directory: $(ls -A "$1")"
+}
+
+TestScenario_InstallTarget_cfIsDirectory() {
+	good_release "$KEY_A"
+	serve_dist
+	mkdir -p "$T/bin/cf"
+	assert_cf_dir_refused "$T/bin/cf"
+	[ "$(ls -A "$T/bin")" = "cf" ] || fail "the install dir holds more than cf: $(ls -A "$T/bin")"
+}
+
+TestScenario_InstallTarget_cfIsSymlinkToDirectory() {
+	good_release "$KEY_A"
+	serve_dist
+	mkdir -p "$T/bin" "$T/elsewhere"
+	ln -s "$T/elsewhere" "$T/bin/cf"
+	assert_cf_dir_refused "$T/elsewhere"
+	[ "$(ls -A "$T/bin")" = "cf" ] || fail "the install dir holds more than cf: $(ls -A "$T/bin")"
+}
+
+TestScenario_InstallTarget_mktempFails() {
+	good_release "$KEY_A"
+	serve_dist
+	seed_old_cf
+	mkdir -p "$T/failbin"
+	printf '#!/bin/sh\nexit 1\n' >"$T/failbin/mktemp"
+	chmod 755 "$T/failbin/mktemp"
+	INST_PATH="$T/failbin:$SHIM:$PATH" run_install "$KEY_A/install.sh"
+	assert_rc 4
+	assert_out_contains "cannot create a temporary directory"
+	assert_install_dir_untouched
 }
