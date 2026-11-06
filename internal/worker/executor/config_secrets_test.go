@@ -20,6 +20,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/secretjit"
@@ -191,11 +192,16 @@ func TestAnotherPrepareRendersTheRotatedValueAndLeavesNoOldOne(t *testing.T) {
 // publication guard, and are released, rendered files included.
 func TestTheSecretsOfTheConfigurationAreRevokedGuardedAndReleased(t *testing.T) {
 	g := &fakeGit{head: headOID}
-	f := configFixture(t, newFakeStore(map[string]string{"team/token": tomlValue}), func(o *Options) { o.Git = g })
+	logSecrets := &redact.Live{}
+	f := configFixture(t, newFakeStore(map[string]string{"team/token": tomlValue}), func(o *Options) { o.Git, o.LogSecrets = g, logSecrets })
 	k := f.acceptedSpec(fakeSpec("do it", ""))
 	f.e.step(t.Context(), k)
 	if !f.delivered(k) {
 		t.Fatal("nothing was delivered")
+	}
+	// From the delivery to the release, a log line is redacted of the value.
+	if line := logSecrets.Text("rendering failed: " + tomlValue); strings.Contains(line, "sentinel-1234567890") {
+		t.Fatalf("a delivered value is not held for the logs: %q", line)
 	}
 	w := newWrapperProcess(t, "exit 0")
 	<-w.ended
@@ -228,6 +234,9 @@ func TestTheSecretsOfTheConfigurationAreRevokedGuardedAndReleased(t *testing.T) 
 	}
 	if f.delivered(k) {
 		t.Error("the delivery is left")
+	}
+	if line := logSecrets.Text(tomlValue); line != tomlValue {
+		t.Errorf("a released value is still held for the logs: %q", line)
 	}
 	if _, err := os.Lstat(scriptPath(f, k)); err == nil {
 		t.Error("the rendered file is left")

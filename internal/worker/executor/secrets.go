@@ -386,6 +386,7 @@ func (p *secretPrepare) deliver(ctx context.Context, dir string) (map[string][]b
 	if err := deliveryError(p.e.jit.Deliver(dir, p.attempt, needles, func() error { return p.current(ctx) })); err != nil {
 		return nil, err
 	}
+	p.e.loadForLogs(p.r.Key)
 	values := make(map[string][]byte, len(needles))
 	for _, n := range needles {
 		values[n.Ref] = n.Value
