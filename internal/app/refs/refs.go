@@ -45,28 +45,17 @@ func Resolve(ctx context.Context, db *store.DB, kind domain.Kind, ref, projectRe
 			return err
 		}
 		c, err := resolve(ctx, q, kind, ref, scope)
-		out = v1.Resolved{Kind: kind, ID: string(c.ID), Short: c.Short.String()}
+		out = v1.Resolved{Kind: kind, ID: string(c.ID)}
+		if c.Short.N != 0 { // Workflows have no short ID
+			out.Short = c.Short.String()
+		}
 		return err
 	})
 	return out, err
 }
 
 func resolve(ctx context.Context, q store.Querier, kind domain.Kind, ref string, scope domain.ID) (domain.Candidate, error) {
-	var (
-		cands []domain.Candidate
-		err   error
-	)
-	switch kind {
-	case domain.KindProject:
-		cands, err = store.ProjectCandidates(ctx, q)
-	case domain.KindTask:
-		cands, err = store.TaskCandidates(ctx, q)
-	case domain.KindRun:
-		cands, err = store.RunCandidates(ctx, q)
-	default:
-		return domain.Candidate{}, domain.NewError(domain.CodeInvalidRequest,
-			"kind must be project, task or run", map[string]any{"kind": string(kind)})
-	}
+	cands, err := Candidates(ctx, q, kind)
 	if err != nil {
 		return domain.Candidate{}, err
 	}
@@ -80,4 +69,23 @@ func resolve(ctx context.Context, q store.Querier, kind domain.Kind, ref string,
 		}
 	}
 	return domain.Candidate{ID: id}, nil // unreachable: Resolve picks from cands
+}
+
+// Candidates lists what a reference of kind can point to.
+func Candidates(ctx context.Context, q store.Querier, kind domain.Kind) ([]domain.Candidate, error) {
+	switch kind {
+	case domain.KindProject:
+		return store.ProjectCandidates(ctx, q)
+	case domain.KindTask:
+		return store.TaskCandidates(ctx, q)
+	case domain.KindRun:
+		return store.RunCandidates(ctx, q)
+	case domain.KindWorker:
+		return store.WorkerCandidates(ctx, q)
+	case domain.KindWorkflow:
+		return store.WorkflowCandidates(ctx, q)
+	default:
+		return nil, domain.NewError(domain.CodeInvalidRequest,
+			"kind must be project, task, run, worker or workflow", map[string]any{"kind": string(kind)})
+	}
 }

@@ -105,6 +105,10 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	if db.writer, err = openPool(ctx, writerDSN(abs), 1); err != nil {
 		return nil, fmt.Errorf("store: opening writer: %w", err)
 	}
+	if err := checkFTS5(ctx, db.writer); err != nil {
+		_ = db.writer.Close()
+		return nil, err
+	}
 	if err := db.migrate(ctx, opts.goMigrations); err != nil {
 		_ = db.writer.Close()
 		return nil, err
