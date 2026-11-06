@@ -85,7 +85,10 @@ fetch() { # url destination
 	fi
 }
 
-is_version() { printf '%s\n' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; }
+is_version() {
+	[ "$(printf '%s\n' "$1" | wc -l | tr -d ' ')" -eq 1 ] || return 1
+	printf '%s\n' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+}
 
 sha256_of() {
 	if have sha256sum; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi
@@ -117,19 +120,21 @@ resolve_version() {
 
 # The signed list: line 1 "version: vX.Y.Z", then "<sha256>  cf_<ver>_<os>_<arch>.tar.gz" lines only.
 check_checksums() {
-	[ "$(sed -n 1p "$WORK/checksums.txt")" = "version: $VERSION" ] || die 5 'signed checksums are for another version'
-	sed 1d "$WORK/checksums.txt" | awk '!/^[0-9a-f]{64}  cf_[0-9A-Za-z.+-]+_(linux|darwin)_(amd64|arm64)\.tar\.gz$/ { exit 1 }' ||
-		die 5 'signed checksums contain a malformed line'
+	header=$(sed -n 1p "$WORK/checksums.txt")
+	[ "$header" = "version: $VERSION" ] || die 5 "checksums.txt is signed for '${header#version: }', not $VERSION"
+	if sed 1d "$WORK/checksums.txt" | grep -Evq '^[0-9a-f]{64}  cf_[0-9A-Za-z.+-]+_(linux|darwin)_(amd64|arm64)\.tar\.gz$'; then
+		die 5 'checksums.txt contains a malformed line'
+	fi
 }
 
 # Only the regular file `cf` leaves the tarball, and it lands in WORK, never in the install dir.
 extract_cf() {
-	tar -tzf "$1" >"$WORK/members" || die 5 'the tarball is not readable'
-	if grep -Eq '(^/|(^|/)\.\.(/|$))' "$WORK/members"; then die 5 'the tarball has an unsafe member path'; fi
-	[ "$(grep -cx 'cf' "$WORK/members")" -eq 1 ] || die 5 'the tarball does not contain exactly one cf'
+	tar -tzf "$1" >"$WORK/members" || die 5 "$(basename "$1") is not readable"
+	if grep -Eq '(^/|(^|/)\.\.(/|$))' "$WORK/members"; then die 5 "$(basename "$1") has an unsafe member path"; fi
+	[ "$(grep -cx 'cf' "$WORK/members")" -eq 1 ] || die 5 "$(basename "$1") does not contain exactly one cf"
 	mkdir "$WORK/unpacked"
-	tar -xzf "$1" -C "$WORK/unpacked" cf || die 5 'could not extract cf'
-	if [ ! -f "$WORK/unpacked/cf" ] || [ -L "$WORK/unpacked/cf" ]; then die 5 'cf in the tarball is not a regular file'; fi
+	tar -xzf "$1" -C "$WORK/unpacked" cf || die 5 "could not extract cf from $(basename "$1")"
+	if [ ! -f "$WORK/unpacked/cf" ] || [ -L "$WORK/unpacked/cf" ]; then die 5 "cf in $(basename "$1") is not a regular file"; fi
 }
 
 download_tarball() {
@@ -147,17 +152,17 @@ download_tarball() {
 
 install_cf() {
 	dir=${CF_INSTALL_DIR:-$HOME/.local/bin}
+	dir=${dir%/}
 	mkdir -p "$dir" || die 4 "cannot create $dir"
-	tmp=$(mktemp "$dir/.cf.XXXXXX") || die 4 "cannot write to $dir"
-	TMP_BIN=$tmp
-	{ cp "$WORK/unpacked/cf" "$tmp" && chmod 755 "$tmp" && mv -f "$tmp" "$dir/cf"; } || die 4 "cannot install into $dir"
+	TMP_BIN=$(mktemp "$dir/.cf.XXXXXX") || die 4 "cannot write to $dir"
+	{ cp "$WORK/unpacked/cf" "$TMP_BIN" && chmod 755 "$TMP_BIN" && mv -f "$TMP_BIN" "$dir/cf"; } || die 4 "cannot install into $dir"
 	TMP_BIN=
 	log "installed $dir/cf ($VERSION)"
 	case ":$PATH:" in
 		*":$dir:"*) ;;
-		*) log "$dir is not on your PATH; add it with: export PATH=\"$dir:\$PATH\"" ;;
+		*) log "$dir is not on your PATH; add this line to your shell profile (~/.profile, ~/.zshrc): export PATH=\"$dir:\$PATH\"" ;;
 	esac
-	log "next: run 'cf setup' on this machine, or 'cf controller init' to host the controller"
+	log "next: 'cf controller init' on the machine that will be the Controller, or 'cf setup' to join an existing one"
 }
 
 main() {
