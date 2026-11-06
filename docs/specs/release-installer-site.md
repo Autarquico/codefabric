@@ -1,13 +1,13 @@
 ---
 codename: codefabric
-title: "Instalador firmado, release y sitio"
+title: Instalador firmado, release y sitio
 type: task
-status: draft
+status: active
 priority: P1
 size: L
-issue: null
+issue: 131
 prs: []
-related_issues: []
+related_issues: [131]
 depends_on: []
 supersedes: []
 related_specs: [codefabric-spec, binary-distribution-upgrade]
