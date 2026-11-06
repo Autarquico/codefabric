@@ -293,6 +293,9 @@ func (e *Executor) forbidden(local state.Run) (gitops.Forbidden, error) {
 	if errors.Is(err, secretjit.ErrNotDelivered) {
 		err = nil
 	}
+	if err == nil {
+		e.holdForLogs(local.Key, values)
+	}
 	spec := parseSpec(local.Spec)
 	switch {
 	case err != nil:

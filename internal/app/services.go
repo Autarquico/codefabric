@@ -9,6 +9,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app/events"
 	"github.com/Autarquico/codefabric/internal/app/inbox"
 	"github.com/Autarquico/codefabric/internal/app/leases"
+	"github.com/Autarquico/codefabric/internal/app/logs"
 	"github.com/Autarquico/codefabric/internal/app/projects"
 	"github.com/Autarquico/codefabric/internal/app/reconciliation"
 	"github.com/Autarquico/codefabric/internal/app/refs"
@@ -41,6 +42,8 @@ type Services struct {
 	Reconciliation *reconciliation.Service
 	// Events reads the event store: pages and follows (§20, §31.4).
 	Events *events.Service
+	// Logs are the structured logs of the Controller and the Workers (§34).
+	Logs *logs.Service
 	// Inbox is what needs a person: requests for input and failures to decide on (§19.5).
 	Inbox *inbox.Service
 
@@ -83,6 +86,7 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 			Hooks: cfg.ReconciliationHooks,
 		}),
 		Events:       events.New(db, clk),
+		Logs:         logs.New(db, clk),
 		Inbox:        inbox.New(db),
 		Workflows:    workflows.New(db, clk, ids, cfg.Blobs, blobLimit(cfg.MaxBlobBytes)...),
 		Environments: environments.New(db, clk),
