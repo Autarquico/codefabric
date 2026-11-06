@@ -2,7 +2,7 @@
 codename: codefabric
 title: "TUI: shell y home"
 type: task
-status: active
+status: shipped
 priority: P1
 size: M
 issue: 95
@@ -13,7 +13,7 @@ depends_on: [client-subscriptions]
 supersedes: []
 related_specs: [codefabric-spec, phase-3-tui]
 created: 2026-10-10
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 # TUI: shell y home

@@ -107,6 +107,7 @@ type WorkerCommand struct {
 	Assign    *AssignCommand           `json:"assign,omitempty"`
 	Publish   *PublishCommand          `json:"publish,omitempty"`
 	Stop      *StopCommand             `json:"stop,omitempty"`
+	Input     *InputCommand            `json:"input,omitempty"`
 }
 
 // AssignmentsResponse is GET /v1/worker/assignments: the orders the Worker has

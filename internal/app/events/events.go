@@ -308,47 +308,23 @@ func (s *Service) Latest() uint64 { return s.db.Notifier().Latest() }
 // before looking: a commit between the two is never missed. A commit that is
 // not for this stream only makes it look again, from where the last look ended.
 func (f *Follower) Run(ctx context.Context, deliver func(events []v1.Event, cursor string) error, idle func() error) error {
-	pacer := stream.NewPacer(f.s.clock, stream.KeepaliveEvery)
-	for {
-		seen := f.s.db.Notifier().Latest()
-		var page v1.EventPage
-		err := f.s.db.Read(ctx, func(r store.Querier) (err error) {
-			page, err = f.s.pageIn(ctx, r, f.by, f.filter, f.after, seen, v1.EventsDefaultLimit)
-			return err
-		})
-		if err != nil {
-			return err
-		}
-		f.after, _ = ParseCursor(page.Cursor)
-		if len(page.Events) > 0 {
-			if err := deliver(page.Events, page.Cursor); err != nil {
+	return stream.Follow(ctx, f.s.clock, f.s.db.Notifier(),
+		func(seen uint64) (bool, bool, error) {
+			var page v1.EventPage
+			err := f.s.db.Read(ctx, func(r store.Querier) (err error) {
+				page, err = f.s.pageIn(ctx, r, f.by, f.filter, f.after, seen, v1.EventsDefaultLimit)
 				return err
-			}
-			pacer.Wrote()
-		}
-		if page.HasMore {
-			continue
-		}
-		for {
-			due, err := pacer.Wait(ctx, f.s.db.Notifier().Changed(seen), 0)
+			})
 			if err != nil {
-				return err
+				return false, false, err
 			}
-			if !due {
-				break
+			f.after, _ = ParseCursor(page.Cursor)
+			if len(page.Events) == 0 {
+				return false, page.HasMore, nil
 			}
-			if err := f.s.authorize(ctx, f.by); err != nil {
-				return err
-			}
-			if err := idle(); err != nil {
-				return err
-			}
-			pacer.Wrote()
-			if f.s.db.Notifier().Latest() > seen {
-				break
-			}
-		}
-	}
+			return true, page.HasMore, deliver(page.Events, page.Cursor)
+		},
+		func() error { return f.s.authorize(ctx, f.by) }, idle)
 }
 
 func (s *Service) authorize(ctx context.Context, by pki.Session) error {

@@ -1,0 +1,446 @@
+// Package slogtee keeps a structured copy of what a process logs (§34): a
+// slog.Handler that hands each record to the handler it wraps, as before, and
+// puts a redacted JSON copy of it on a bounded queue. A background writer
+// drains the queue into a sink (a database), apart from the goroutine that
+// logged: logging never waits for the sink, and the sink may log through the
+// same logger without recursing or deadlocking, because what it logs is only
+// queued. What the writer itself has to say goes to a fallback logger, which
+// must not be teed.
+package slogtee
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"regexp"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unicode/utf8"
+
+	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codefabric/internal/support/redact"
+)
+
+// Entry is a record as the tee keeps it. Attrs is a JSON object; RunID, TaskID
+// and ProjectID are those named by top-level attributes run/run_id,
+// task/task_id and project/project_id, when they are canonical IDs.
+type Entry struct {
+	Time      time.Time
+	Level     string // debug, info, warn or error
+	Msg       string
+	Attrs     json.RawMessage
+	RunID     string
+	TaskID    string
+	ProjectID string
+}
+
+// Sink stores a batch of entries, in order.
+type Sink func(ctx context.Context, entries []Entry) error
+
+// Defaults of Options.
+const (
+	DefaultCapacity        = 4096
+	DefaultMaxMessageBytes = 4 << 10
+	DefaultMaxAttrsBytes   = 16 << 10
+)
+
+const (
+	batchSize    = 256
+	writeTimeout = 10 * time.Second // a write that is not under way at shutdown
+	drainTimeout = 2 * time.Second  // all that is left to write, and a write under way, once ctx ends
+	redacted     = "<redacted>"
+)
+
+// Options parameterise New. The zero value takes the defaults.
+type Options struct {
+	Capacity        int
+	MaxMessageBytes int
+	MaxAttrsBytes   int
+	// Redact, if set, runs on the message and on every string value before the
+	// blunt redaction of redact.Text: the place for the needles of known secrets.
+	Redact func(string) string
+	// Clock times the deadlines of the writer; the real one if nil.
+	Clock clock.Clock
+}
+
+// Tee is the queue and the writer that drains it.
+type Tee struct {
+	queue    chan Entry
+	dropped  atomic.Uint64
+	closed   atomic.Bool
+	extra    func(string) string
+	clk      clock.Clock
+	maxMsg   int
+	maxAttrs int
+
+	mu   sync.Mutex // the encoder: buf and cur are shared by every handler of the tee
+	buf  bytes.Buffer
+	cur  *ids
+	null ids
+}
+
+type ids struct{ run, task, project string }
+
+// New makes a tee; nothing is written until Run.
+func New(o Options) *Tee {
+	if o.Clock == nil {
+		o.Clock = clock.Real{}
+	}
+	t := &Tee{
+		clk: o.Clock, queue: make(chan Entry, positive(o.Capacity, DefaultCapacity)), extra: o.Redact,
+		maxMsg: positive(o.MaxMessageBytes, DefaultMaxMessageBytes), maxAttrs: positive(o.MaxAttrsBytes, DefaultMaxAttrsBytes),
+	}
+	t.cur = &t.null
+	return t
+}
+
+func positive(n, def int) int {
+	if n > 0 {
+		return n
+	}
+	return def
+}
+
+// Dropped is how many records did not fit the queue, or were lost by a sink
+// that failed, since the tee was made.
+func (t *Tee) Dropped() uint64 { return t.dropped.Load() }
+
+// Wrap tees inner: inner keeps getting every record, unchanged. A record is
+// encoded under a lock of the tee, so the LogValue, Error and String of its
+// values, and Options.Redact, must not log through the teed logger.
+func (t *Tee) Wrap(inner slog.Handler) slog.Handler {
+	enc := slog.NewJSONHandler(writerFunc(t.buf.Write), &slog.HandlerOptions{Level: slog.LevelDebug - 8, ReplaceAttr: t.replace})
+	return &handler{tee: t, inner: inner, base: enc}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (w writerFunc) Write(p []byte) (int, error) { return w(p) }
+
+type handler struct {
+	tee   *Tee
+	inner slog.Handler
+	base  slog.Handler // a JSON handler without attributes or groups
+	ops   []op         // the WithAttrs and WithGroup of this handler, raw: they are encoded with each record
+}
+
+// op is a WithAttrs (attrs) or a WithGroup (group). They are kept raw and
+// replayed on the encoder at each record, so that what is held as a secret
+// after they were made is redacted in them too.
+type op struct {
+	attrs []slog.Attr
+	group string
+}
+
+func (h *handler) with(o op) *handler {
+	n := *h
+	n.ops = append(h.ops[:len(h.ops):len(h.ops)], o)
+	return &n
+}
+
+func (h *handler) encoder() slog.Handler {
+	enc := h.base
+	for _, o := range h.ops {
+		if o.group != "" {
+			enc = enc.WithGroup(o.group)
+		} else {
+			enc = enc.WithAttrs(o.attrs)
+		}
+	}
+	return enc
+}
+
+func (h *handler) Enabled(ctx context.Context, l slog.Level) bool { return h.inner.Enabled(ctx, l) }
+
+func (h *handler) Handle(ctx context.Context, r slog.Record) error {
+	err := h.inner.Handle(ctx, r)
+	if h.tee.closed.Load() {
+		return err
+	}
+	e := h.tee.entry(ctx, h, r)
+	select {
+	case h.tee.queue <- e:
+	default:
+		h.tee.dropped.Add(1)
+	}
+	return err
+}
+
+func (h *handler) WithAttrs(as []slog.Attr) slog.Handler {
+	if len(as) == 0 {
+		return h
+	}
+	n := h.with(op{attrs: slices.Clone(as)})
+	n.inner = h.inner.WithAttrs(as)
+	return n
+}
+
+func (h *handler) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return h
+	}
+	n := h.with(op{group: name})
+	n.inner = h.inner.WithGroup(name)
+	return n
+}
+
+// entry encodes the attributes of r, redacted, with those of the handler.
+func (t *Tee) entry(ctx context.Context, h *handler, r slog.Record) Entry {
+	e := Entry{Time: r.Time, Level: levelName(r.Level), Msg: cut(t.redact(r.Message), t.maxMsg)}
+	if e.Time.IsZero() {
+		e.Time = time.Now()
+	}
+	// No time and no message: the JSON handler leaves the first out, replace the level and an empty message.
+	rec := slog.NewRecord(time.Time{}, r.Level, "", 0)
+	r.Attrs(func(a slog.Attr) bool { rec.AddAttrs(a); return true })
+
+	t.mu.Lock()
+	var found ids
+	t.cur = &found
+	t.buf.Reset()
+	encErr := h.encoder().Handle(ctx, rec)
+	var attrs []byte
+	if encErr == nil {
+		attrs, encErr = t.redactRecord(t.buf.Bytes())
+	}
+	t.cur = &t.null
+	t.mu.Unlock()
+
+	switch {
+	case encErr != nil:
+		attrs = []byte(`{"attrs_unencodable":true}`)
+	case len(attrs) > t.maxAttrs:
+		attrs = fmt.Appendf(nil, `{"attrs_truncated_bytes":%d}`, len(attrs))
+	}
+	e.Attrs = attrs
+	e.RunID, e.TaskID, e.ProjectID = found.run, found.task, found.project
+	return e
+}
+
+// sensitiveKey names the keys whose value is never kept, whatever it is: an
+// attribute, a field of a value or the name of a group.
+var sensitiveKey = regexp.MustCompile(`(?i)(secret|token|passw|authorization|credential|private.?key|api.?key|cookie)`)
+
+// replace is the ReplaceAttr of the encoder. It drops the level and the empty
+// message the encoder adds, notes the IDs and renders errors and Stringers as
+// text. Redaction is not its job: it sees an attribute without the groups
+// around it and without what the encoder makes of a composite value, so the
+// whole record is redacted once encoded (redactRecord).
+func (t *Tee) replace(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 {
+		switch a.Key {
+		case slog.LevelKey:
+			if _, ok := a.Value.Any().(slog.Level); ok {
+				return slog.Attr{}
+			}
+		case slog.MessageKey:
+			if a.Value.Kind() == slog.KindString && a.Value.String() == "" {
+				return slog.Attr{}
+			}
+		}
+	}
+	switch a.Value.Kind() {
+	case slog.KindString:
+		if len(groups) == 0 {
+			t.note(a.Key, a.Value.String())
+		}
+	case slog.KindAny:
+		if s, ok := a.Value.Any().(fmt.Stringer); ok {
+			return slog.String(a.Key, s.String())
+		}
+	}
+	return a
+}
+
+// redactRecord redacts an encoded record as a whole: the value of every key
+// that names a secret, at any depth and whatever it holds, is replaced, and
+// every key and string of what is left is redacted of the needles.
+func (t *Tee) redactRecord(encoded []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(encoded))
+	dec.UseNumber()
+	var tree any
+	if err := dec.Decode(&tree); err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(t.redactTree(tree)); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSpace(out.Bytes()), nil
+}
+
+func (t *Tee) redactTree(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			if sensitiveKey.MatchString(k) {
+				e = redacted
+			} else {
+				e = t.redactTree(e)
+			}
+			out[t.redact(k)] = e
+		}
+		return out
+	case []any:
+		for i, e := range v {
+			v[i] = t.redactTree(e)
+		}
+	case string:
+		return t.redact(v)
+	}
+	return v
+}
+
+// canonicalID is the form of the canonical ID of an entity: its kind, an
+// underscore and a ULID. Only such a value is kept as the Run, Task or Project
+// of a record; anything else stays an attribute, and is redacted with them.
+var canonicalID = regexp.MustCompile(`^(run|task|project)_[0-9A-HJKMNP-TV-Z]{26}$`)
+
+func (t *Tee) note(key, value string) {
+	m := canonicalID.FindStringSubmatch(value)
+	if m == nil || t.redact(value) != value {
+		return // not an ID, or one that holds a secret: never kept outside the attributes
+	}
+	switch {
+	case (key == "run" || key == "run_id") && m[1] == "run":
+		t.cur.run = value
+	case (key == "task" || key == "task_id") && m[1] == "task":
+		t.cur.task = value
+	case (key == "project" || key == "project_id") && m[1] == "project":
+		t.cur.project = value
+	}
+}
+
+func (t *Tee) redact(s string) string {
+	if t.extra != nil {
+		s = t.extra(s)
+	}
+	return redact.Text(s)
+}
+
+// cut keeps at most n bytes of s, at a character boundary.
+func cut(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+func levelName(l slog.Level) string {
+	switch {
+	case l < slog.LevelInfo:
+		return "debug"
+	case l < slog.LevelWarn:
+		return "info"
+	case l < slog.LevelError:
+		return "warn"
+	}
+	return "error"
+}
+
+// Run writes what is queued to sink until ctx ends; then it stops taking
+// records, writes what is left and returns. No write waits for ever: the sink
+// gets a context that ctx does not cancel but that ends writeTimeout after the
+// write began or, once ctx has ended, drainTimeout after that; what is left is
+// written within drainTimeout. Both are measured on the clock of Options. The
+// overflow of the queue is reported, as a warn entry before the next batch and
+// on fallback; so is a batch the sink failed to store, which is lost.
+func (t *Tee) Run(ctx context.Context, sink Sink, fallback *slog.Logger) {
+	w := writer{tee: t, sink: sink, log: fallback}
+	detached := context.WithoutCancel(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			t.closed.Store(true)
+			drain, cancel := t.bounded(detached, drainTimeout, nil)
+			for {
+				batch := t.collect(nil)
+				if len(batch) == 0 {
+					break
+				}
+				w.write(drain, batch)
+			}
+			w.write(drain, nil) // the overflow of the last moments
+			cancel()
+			return
+		case e := <-t.queue:
+			wctx, cancel := t.bounded(detached, writeTimeout, ctx.Done())
+			w.write(wctx, t.collect([]Entry{e}))
+			cancel()
+		}
+	}
+}
+
+// bounded is a context that ends d after now, or, once stop is closed, drainTimeout
+// after that, if sooner.
+func (t *Tee) bounded(parent context.Context, d time.Duration, stop <-chan struct{}) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	timer := t.clk.NewTimer(d)
+	go func() {
+		defer timer.Stop()
+		select {
+		case <-timer.C():
+		case <-ctx.Done():
+		case <-stop:
+			last := t.clk.NewTimer(drainTimeout)
+			defer last.Stop()
+			select {
+			case <-last.C():
+			case <-timer.C():
+			case <-ctx.Done():
+			}
+		}
+		cancel()
+	}()
+	return ctx, cancel
+}
+
+// collect takes what is queued, up to a batch, without waiting.
+func (t *Tee) collect(batch []Entry) []Entry {
+	for len(batch) < batchSize {
+		select {
+		case e := <-t.queue:
+			batch = append(batch, e)
+		default:
+			return batch
+		}
+	}
+	return batch
+}
+
+type writer struct {
+	tee      *Tee
+	sink     Sink
+	log      *slog.Logger
+	reported uint64
+}
+
+func (w *writer) write(ctx context.Context, batch []Entry) {
+	if dropped := w.tee.dropped.Load(); dropped > w.reported {
+		n := dropped - w.reported
+		w.reported = dropped
+		w.log.WarnContext(ctx, "log records were dropped: the queue of the structured logs was full", "dropped", n)
+		batch = append([]Entry{{
+			Time: time.Now(), Level: "warn", Msg: "log records were dropped: the queue of the structured logs was full",
+			Attrs: fmt.Appendf(nil, `{"dropped":%d}`, n),
+		}}, batch...)
+	}
+	if len(batch) == 0 {
+		return
+	}
+	if err := w.sink(ctx, batch); err != nil {
+		w.tee.dropped.Add(uint64(len(batch)))
+		w.reported += uint64(len(batch)) // said here, not again as an overflow
+		w.log.WarnContext(ctx, "storing the structured logs failed; they are lost", "entries", len(batch), "err", err)
+	}
+}

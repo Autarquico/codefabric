@@ -11,6 +11,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/events"
 	"github.com/Autarquico/codefabric/internal/app/runs"
+	"github.com/Autarquico/codefabric/internal/app/search"
 	"github.com/Autarquico/codefabric/internal/app/tasks"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -35,6 +36,8 @@ func (s *Server) registerWorkRoutes() {
 	s.handle("POST /v1/tasks/{ref}/cancel", clientsOnly, taskAction(s.work.Tasks.Cancel))
 	s.handle("POST /v1/tasks/{ref}/complete", clientsOnly, taskAction(s.work.Tasks.Complete))
 	s.handle("POST /v1/tasks/{ref}/archive", clientsOnly, taskAction(s.work.Tasks.Archive))
+	s.handle("POST /v1/tasks/{ref}/respond", clientsOnly, s.respondTask)
+	s.handle("GET /v1/inbox", clientsOnly, s.inbox)
 	s.handle("POST /v1/tasks/{ref}/defer", clientsOnly, notImplemented("defer"))
 	s.handle("POST /v1/tasks/{ref}/resume", clientsOnly, notImplemented("resume"))
 	s.handle("POST /v1/tasks/{ref}/move", clientsOnly, notImplemented("move"))
@@ -45,6 +48,7 @@ func (s *Server) registerWorkRoutes() {
 	s.handle("POST /v1/runs/{ref}/promote", clientsOnly, notImplemented("promote"))
 
 	s.handle("GET /v1/resolve", clientsOnly, s.resolve)
+	s.handle("GET /v1/search", clientsOnly, s.search)
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request, c caller) error {
@@ -211,6 +215,28 @@ func taskAction(act taskActionFunc) handlerFunc {
 	}
 }
 
+func (s *Server) respondTask(w http.ResponseWriter, r *http.Request, c caller) error {
+	var req v1.RespondRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		return err
+	}
+	out, err := s.work.Runs.Respond(r.Context(), c.Session, r.PathValue("ref"), r.URL.Query().Get("project"), req)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (s *Server) inbox(w http.ResponseWriter, r *http.Request, _ caller) error {
+	out, err := s.work.Inbox.List(r.Context())
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
 // notImplemented answers the operations that exist in the API surface before
 // their milestone does (§18.2): same route, CF_NOT_IMPLEMENTED.
 func notImplemented(operation string) handlerFunc {
@@ -242,6 +268,20 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request, _ caller) error 
 func (s *Server) resolve(w http.ResponseWriter, r *http.Request, _ caller) error {
 	q := r.URL.Query()
 	out, err := s.work.Resolve(r.Context(), domain.Kind(q.Get("kind")), q.Get("ref"), q.Get("project"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (s *Server) search(w http.ResponseWriter, r *http.Request, _ caller) error {
+	q := r.URL.Query()
+	limit, err := queryNumber(q.Get("limit"), 0, "limit")
+	if err != nil {
+		return err
+	}
+	out, err := s.work.Search.Search(r.Context(), search.Query{Text: q.Get("q"), Kind: q.Get("kind"), Project: q.Get("project"), Limit: int(min(limit, v1.SearchMaxLimit+1))})
 	if err != nil {
 		return err
 	}

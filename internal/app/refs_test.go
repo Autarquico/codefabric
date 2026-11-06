@@ -46,7 +46,7 @@ func TestResolve_AppliesTheReferenceOrderWithProjectScope(t *testing.T) {
 	wantCode(t, err, domain.CodeNotFound)
 	_, err = resolve(domain.KindTask, "run-1", "")
 	wantCode(t, err, domain.CodeNotFound)
-	_, err = resolve("worker", "x", "")
+	_, err = resolve(domain.KindPlan, "x", "")
 	wantCode(t, err, domain.CodeInvalidRequest)
 
 	run := e.mustTask("backend", "go", func(r *v1.CreateTaskRequest) { r.Name = "go" }).Run

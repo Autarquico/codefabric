@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: M
 issue: 98
-prs: [116]
+prs: [113, 116]
 related_issues: [98]
 sub_issues: []
 depends_on: [tui-views-actions]

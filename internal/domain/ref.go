@@ -41,8 +41,24 @@ const minULIDPrefixLength = 6
 // cands must already be filtered by kind. Names only match unarchived
 // candidates; scopeProject narrows a name only when it is ambiguous.
 func Resolve(ref string, kind Kind, scopeProject ID, cands []Candidate) (ID, error) {
-	if ref == "" {
+	matches := MatchRef(ref, kind, scopeProject, cands)
+	switch len(matches) {
+	case 0:
 		return "", notFound(ref, kind)
+	case 1:
+		return matches[0].ID, nil
+	default:
+		return "", NewError(CodeAmbiguousRef,
+			fmt.Sprintf("reference %q matches %d %ss", ref, len(matches), kind),
+			map[string]any{"ref": ref, "candidates": idsOf(matches)})
+	}
+}
+
+// MatchRef is the first step of the §3.13 order that matches anything, with all
+// the candidates it matched: one is a resolution, several are an ambiguity.
+func MatchRef(ref string, kind Kind, scopeProject ID, cands []Candidate) []Candidate {
+	if ref == "" {
+		return nil
 	}
 	steps := []func() []Candidate{
 		func() []Candidate { return matchCanonicalID(ref, kind, cands) },
@@ -51,18 +67,52 @@ func Resolve(ref string, kind Kind, scopeProject ID, cands []Candidate) (ID, err
 		func() []Candidate { return matchULIDPrefix(ref, cands) },
 	}
 	for _, step := range steps {
-		switch matches := step(); len(matches) {
-		case 0:
-			continue
-		case 1:
-			return matches[0].ID, nil
-		default:
-			return "", NewError(CodeAmbiguousRef,
-				fmt.Sprintf("reference %q matches %d %ss", ref, len(matches), kind),
-				map[string]any{"ref": ref, "candidates": idsOf(matches)})
+		if matches := step(); len(matches) > 0 {
+			return matches
 		}
 	}
-	return "", notFound(ref, kind)
+	return nil
+}
+
+// RefLevel says how a reference matched, best first (§3.13).
+type RefLevel int
+
+// The levels of the §3.13 order.
+const (
+	RefCanonicalID RefLevel = iota
+	RefShortID
+	RefName
+	RefULIDPrefix
+)
+
+// RefStep is one way a reference can be looked up: the level and the key to
+// look for (the ULID prefix is upper-cased).
+type RefStep struct {
+	Level RefLevel
+	Key   string
+}
+
+// RefSteps lists, in §3.13 order, the lookups that can apply to ref for kind,
+// so a store can answer each with a filtered query instead of loading every
+// candidate. Runs have no names, so they have no name step.
+func RefSteps(ref string, kind Kind) []RefStep {
+	if ref == "" {
+		return nil
+	}
+	var steps []RefStep
+	if parsed, _, err := ParseID(ref); err == nil && parsed == kind {
+		steps = append(steps, RefStep{RefCanonicalID, ref})
+	}
+	if short, err := ParseShortID(ref); err == nil && short.Kind == kind {
+		steps = append(steps, RefStep{RefShortID, ref})
+	}
+	if kind != KindRun {
+		steps = append(steps, RefStep{RefName, ref})
+	}
+	if len(ref) >= minULIDPrefixLength {
+		steps = append(steps, RefStep{RefULIDPrefix, strings.ToUpper(ref)})
+	}
+	return steps
 }
 
 func notFound(ref string, kind Kind) *Error {

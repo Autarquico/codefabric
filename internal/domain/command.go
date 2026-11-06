@@ -17,6 +17,11 @@ const (
 	// epoch (§10.7). It is durable and delivered again until acknowledged; the
 	// confirmation that nothing is left is RunStopped, never the acknowledgement.
 	CommandStop WorkerCommandType = "stop"
+	// CommandInput hands the answer to a prompt of a Run that waits for input
+	// (§11.6). It is only queued for a Worker that announces
+	// StructuredInputCapability for the harness of the Run: an order a Worker
+	// does not know blocks its queue.
+	CommandInput WorkerCommandType = "input"
 )
 
 // StopReason says why the Controller ordered a stop. There is one stop per
