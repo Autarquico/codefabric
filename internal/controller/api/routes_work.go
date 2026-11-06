@@ -36,6 +36,8 @@ func (s *Server) registerWorkRoutes() {
 	s.handle("POST /v1/tasks/{ref}/cancel", clientsOnly, taskAction(s.work.Tasks.Cancel))
 	s.handle("POST /v1/tasks/{ref}/complete", clientsOnly, taskAction(s.work.Tasks.Complete))
 	s.handle("POST /v1/tasks/{ref}/archive", clientsOnly, taskAction(s.work.Tasks.Archive))
+	s.handle("POST /v1/tasks/{ref}/respond", clientsOnly, s.respondTask)
+	s.handle("GET /v1/inbox", clientsOnly, s.inbox)
 	s.handle("POST /v1/tasks/{ref}/defer", clientsOnly, notImplemented("defer"))
 	s.handle("POST /v1/tasks/{ref}/resume", clientsOnly, notImplemented("resume"))
 	s.handle("POST /v1/tasks/{ref}/move", clientsOnly, notImplemented("move"))
@@ -211,6 +213,28 @@ func taskAction(act taskActionFunc) handlerFunc {
 		writeJSON(w, http.StatusOK, t)
 		return nil
 	}
+}
+
+func (s *Server) respondTask(w http.ResponseWriter, r *http.Request, c caller) error {
+	var req v1.RespondRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		return err
+	}
+	out, err := s.work.Runs.Respond(r.Context(), c.Session, r.PathValue("ref"), r.URL.Query().Get("project"), req)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (s *Server) inbox(w http.ResponseWriter, r *http.Request, _ caller) error {
+	out, err := s.work.Inbox.List(r.Context())
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
 }
 
 // notImplemented answers the operations that exist in the API surface before

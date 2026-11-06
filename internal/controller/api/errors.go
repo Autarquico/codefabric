@@ -31,6 +31,7 @@ var statusByCode = map[domain.Code]int{
 	domain.CodeNotImplemented:      http.StatusNotImplemented,
 	domain.CodeRepoConfigInvalid:   http.StatusUnprocessableEntity,
 	domain.CodeRunNotAttachable:    http.StatusConflict,
+	domain.CodeRunNotRespondable:   http.StatusConflict,
 	domain.CodeCursorExpired:       http.StatusConflict,
 	domain.CodeInProgress:          http.StatusTooManyRequests,
 	// Only a Controller that is shutting down says it: the stream a client asks

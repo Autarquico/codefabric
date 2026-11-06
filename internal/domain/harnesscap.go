@@ -32,6 +32,26 @@ const EnvironmentHostCapability = "environment-host:v1"
 // announces it: one that does not would fetch with whatever credentials it has.
 const OriginAskpassCapability = "origin-askpass:v1"
 
+// StructuredInputCapability is that of a Worker whose harness can be answered
+// while it runs: it reports input_requested and input_delivered and executes
+// the `input` order. The Worker announces it per harness
+// (HarnessStructuredInputCapability). It gates both the order and the report
+// kinds: the Controller never queues an input for a Worker or harness without
+// it, and never accepts those reports from one.
+const StructuredInputCapability = "structured-input:v1"
+
+// HarnessStructuredInputCapability says that a Worker can answer the harness
+// while a Run of it waits for input.
+func HarnessStructuredInputCapability(harness string) string {
+	return HarnessCapability(harness) + ":" + StructuredInputCapability
+}
+
+// HasStructuredInput reports whether a Worker with these capabilities can be
+// answered while it runs the harness.
+func HasStructuredInput(capabilities []string, harness string) bool {
+	return harness != "" && slices.Contains(capabilities, HarnessStructuredInputCapability(harness))
+}
+
 // legacyHarness is the only harness of the Workers that predate
 // HarnessModesMarker, and legacyModes the modes it ran in there.
 const legacyHarness = "command"

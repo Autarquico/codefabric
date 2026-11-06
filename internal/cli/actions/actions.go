@@ -42,6 +42,9 @@ type Arg struct {
 	Name     string
 	Flag     bool
 	Required bool
+	// OneOf names a group of flags of which the command takes exactly one, as
+	// --allow, --deny and --text of an answer; the command checks which.
+	OneOf string
 }
 
 // Descriptor says what an action is and which command runs it.
@@ -79,6 +82,14 @@ func required(names ...string) []Arg {
 	return args
 }
 
+func oneOf(group string, names ...string) []Arg {
+	args := flags(names...)
+	for i := range args {
+		args[i].OneOf = group
+	}
+	return args
+}
+
 func with(args []Arg, more ...Arg) []Arg { return append(more, args...) }
 
 // adopt are the inputs adopt and commit need without a terminal to ask on: the
@@ -104,6 +115,10 @@ var descriptors = []Descriptor{
 	{
 		ID: "task.move", Title: "Move task to another worker", Target: Task, Path: []string{"task", "move"},
 		Args: with(projectFlag, Arg{Name: "worker", Required: true}),
+	},
+	{
+		ID: "task.respond", Title: "Answer task", Target: Task, Path: []string{"task", "respond"},
+		Args: append(flags("prompt", "run", "request-id", "project"), oneOf("answer", "allow", "deny", "text")...),
 	},
 	{ID: "task.timeline", Title: "Task timeline", Target: Task, Path: []string{"task", "timeline"}, Args: flags("after", "limit", "project")},
 
