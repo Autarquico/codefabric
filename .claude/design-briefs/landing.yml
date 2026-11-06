@@ -11,7 +11,7 @@ layout:
     style: "four cards in a row on desktop, stacked on mobile: enrol → start → watch → answer"
     motif: "the cf command of each step in IBM Plex Mono, accent-coloured"
   terminal:
-    source: "internal/tui/testdata/*.golden (home.golden, inbox-80x24.golden)"
+    source: "internal/tui/testdata/*.golden (workers-80x24.golden, runs-80x24.golden)"
     caption: "Rendered by the TUI test suite with fixture data."
     container: "hairline frame, radius 0, own horizontal scroll"
   claims:

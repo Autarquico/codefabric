@@ -34,6 +34,7 @@ typography:
 
 iconography:
   set: "tabler"
+  notes: "The site ships no icons of its own yet: Starlight supplies its built-in UI glyphs (search, theme, menu). Any icon the site adds must come from Tabler."
 
 copy:
   tone: "precise, calm and honest; states what is verified and what is not"

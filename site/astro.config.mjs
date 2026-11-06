@@ -10,7 +10,8 @@ export default defineConfig({
     starlight({
       title: 'CodeFabric',
       description: 'Run coding agents across a pool of your own machines.',
-      customCss: ['./src/styles/theme.css'],
+      components: { Search: './src/components/Search.astro' },
+      customCss: ['./src/styles/fonts.css', './src/styles/theme.css'],
       expressiveCode: { defaultProps: { wrap: true, preserveIndent: true }, styleOverrides: { borderRadius: '0', codeFontFamily: 'var(--sl-font-mono)' } },
       social: [{ icon: 'github', label: 'GitHub', href: REPO_URL }],
       sidebar: [{ label: 'Guide', items: GUIDE_PAGES.map((file) => ({ slug: slugOf(file) })) }],

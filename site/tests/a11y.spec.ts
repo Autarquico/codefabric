@@ -10,9 +10,6 @@ const VIEWPORTS = [
   { name: '360px', width: 360, height: 780 },
   { name: 'desktop', width: 1280, height: 800 },
 ];
-// Starlight's own search button reads "Search" to assistive tech and "Search Ctrl K" on screen (its kbd hint).
-// That is upstream markup we do not override; every other node of that rule still fails the test.
-const STARLIGHT_SEARCH_BUTTON = 'button[data-open-modal=""]';
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
 async function open(page: Page, path: string, theme: (typeof THEMES)[number], width: number, height: number) {
@@ -38,15 +35,7 @@ for (const { name, path } of PAGES) {
 
         test('no serious or critical axe violation', async ({ page }) => {
           const { violations } = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
-          const blocking = violations
-            .filter(({ impact }) => impact === 'serious' || impact === 'critical')
-            .map((violation) => ({
-              ...violation,
-              nodes: violation.nodes.filter(
-                (node) => !(violation.id === 'label-content-name-mismatch' && node.target.join(' ') === STARLIGHT_SEARCH_BUTTON),
-              ),
-            }))
-            .filter(({ nodes }) => nodes.length > 0);
+          const blocking = violations.filter(({ impact }) => impact === 'serious' || impact === 'critical');
           expect(
             blocking.map(({ id, impact, nodes }) => `${impact} ${id}: ${nodes.map((n) => n.target.join(' ')).join(' | ')}`),
           ).toEqual([]);

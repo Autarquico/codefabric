@@ -40,34 +40,27 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       sha: ${{ steps.tag.outputs.sha }}
     steps:
-      - name: the tag is a release tag, published, and its commit was built by release.yml
+      # Tooling from main only: the script that judges the tag is never taken from the tag itself.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          sparse-checkout: |
+            site/scripts
+            site/.nvmrc
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: site/.nvmrc
+      - name: the tag is a release tag, published, and its commit is the one release.yml built
         id: tag
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
-          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          INPUT_TAG: ${{ inputs.tag }}
-        run: |
-          set -eu
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then tag="$INPUT_TAG"; else tag="$RUN_BRANCH"; fi
-          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
-            echo "not a release tag: '$tag'" >&2
-            exit 1
-          fi
-          draft="$(gh api "repos/$REPOSITORY/releases/tags/$tag" --jq '.draft')"
-          if [ "$draft" != false ]; then
-            echo "no published release for $tag (draft=$draft)" >&2
-            exit 1
-          fi
-          sha="$(gh api "repos/$REPOSITORY/commits/refs/tags/$tag" --jq '.sha')"
-          built="$(gh api "repos/$REPOSITORY/actions/workflows/release.yml/runs?event=push&status=success&head_sha=$sha" --jq '.total_count')"
-          if [ "${built:-0}" -lt 1 ]; then
-            echo "no successful release.yml run for $tag at $sha" >&2
-            exit 1
-          fi
-          echo "tag=$tag" >>"$GITHUB_OUTPUT"
-          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: node site/scripts/provenance.mjs
 
   # Builds and validates. Nothing is deployed unless the build, the script tests, the install-command
   # check and the axe run on the landing and a docs page all pass.
