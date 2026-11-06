@@ -129,6 +129,9 @@ func Requirements(r v1.Requirements) error {
 			}
 		}
 	}
+	if r.Permissions != "" && r.Permissions != v1.PermissionsAsk {
+		return Invalid("permissions must be %q or left out", v1.PermissionsAsk)
+	}
 	if err := Label("harness", r.Harness); err != nil {
 		return err
 	}

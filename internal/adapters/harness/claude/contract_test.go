@@ -75,6 +75,10 @@ func TestContract_FailsAnAdapterThatIgnoresJSONSubset(t *testing.T) {
 	}
 }
 
+// askedQuestionLine is what Claude Code prints when it asks a question: the
+// Run waits for the answer, which is why it comes after the result of the recording.
+const askedQuestionLine = `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which one?","options":[{"label":"A"},{"label":"B"}]}]}}]}}` + "\n"
+
 func contractFixture(t *testing.T) harnesstest.Fixture {
 	t.Helper()
 	recording, err := filepath.Abs(filepath.Join("testdata", "success-handbuilt.jsonl"))
@@ -130,6 +134,7 @@ func contractFixture(t *testing.T) harnesstest.Fixture {
 			if err != nil {
 				t.Fatal(err)
 			}
+			events = append(events, []byte(askedQuestionLine)...)
 			if err := os.WriteFile(h.EventsPath, events, 0o600); err != nil { //nolint:gosec // the RunDir of the check
 				t.Fatal(err)
 			}
@@ -142,6 +147,7 @@ func contractFixture(t *testing.T) harnesstest.Fixture {
 			{Kind: harness.EventUsage, Usage: &harness.UsageEvent{Model: "claude-haiku-5", InputTokens: i64(0), OutputTokens: i64(2), CacheReadTokens: i64(300)}},
 			{Kind: harness.EventUsage, Usage: &harness.UsageEvent{Model: "claude-opus-5-5", InputTokens: i64(5), OutputTokens: i64(40), CacheReadTokens: i64(7168), CacheWriteTokens: i64(0)}},
 			{Kind: harness.EventResult, Result: &harness.Result{Summary: "Created hello.txt"}},
+			{Kind: harness.EventInputRequired, Message: "Which one?", ID: "toolu_q1", Options: []string{"A", "B"}},
 		},
 		ExpectUsage: []harness.UsageEvent{
 			{Model: "claude-haiku-5", InputTokens: i64(0), OutputTokens: i64(2), CacheReadTokens: i64(300)},

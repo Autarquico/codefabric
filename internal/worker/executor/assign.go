@@ -124,6 +124,12 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 				stops = append(stops, *c.Stop)
 				continue
 			}
+			if c.Type == domain.CommandInput && c.Input != nil {
+				if err := e.persistInput(ctx, tx, c); err != nil {
+					return err
+				}
+				continue
+			}
 			if c.Type != domain.CommandAssign || c.Assign == nil {
 				blocked = true
 				e.setDegraded(reasonUnknownCommand)

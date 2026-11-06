@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -69,8 +71,20 @@ func checkInput(t *testing.T, f Fixture) {
 		isUnsupported(t, "SendInput", nil, err)
 		return
 	}
+	// A Run with structured input has a FIFO as its stdin, which the wrapper made
+	// and holds open for reading: here, a reader of the check.
+	h := handleOf(run)
+	h.InputPath = filepath.Join(run.RunDir, "input.fifo")
+	if err := syscall.Mkfifo(h.InputPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.OpenFile(h.InputPath, os.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // a FIFO of the check
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
 	e.homeUnchanged(t, "SendInput", func() {
-		err = e.a.SendInput(t.Context(), e.host, handleOf(run), harness.Input{Text: "harnesstest"})
+		err = e.a.SendInput(t.Context(), e.host, h, harness.Input{Text: "harnesstest"})
 	})
 	if err != nil {
 		t.Errorf("StructuredInput is declared but SendInput: %v", err)

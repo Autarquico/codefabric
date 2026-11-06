@@ -66,6 +66,8 @@ type Options struct {
 	RedactPipeArgv []string
 	// AskpassArgv replaces `<this binary> worker git-askpass`, for tests.
 	AskpassArgv []string
+	// PermissionServerArgv replaces `<this binary> worker mcp-bridge`, for tests.
+	PermissionServerArgv []string
 	// StopGrace replaces stop.grace (Appendix A), for tests.
 	StopGrace time.Duration
 	// GitPath replaces the git found on the PATH, for tests.
@@ -182,7 +184,8 @@ func Run(ctx context.Context, o Options) error {
 	eo := executor.Options{
 		DB: db, Controller: c, Workflows: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
 		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
-		LogSecrets: logSecrets,
+		PermissionServerArgv: o.PermissionServerArgv,
+		LogSecrets:           logSecrets,
 	}
 	eo.AskpassScript = d.writeAskpassScript(ctx, o)
 	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})
@@ -207,6 +210,7 @@ func Run(ctx context.Context, o Options) error {
 		}
 		// Here git is usable (gitops.New checked its version) and the Worker offers harnesses.
 		d.capabilities = withOriginAskpass(d.capabilities, eo.AskpassScript)
+		d.capabilities, eo.StructuredInput = d.withStructuredInput(ctx, d.capabilities, eo.Harnesses, o.PermissionServerArgv)
 	}
 	if err := d.startDoctor(ctx, o); err != nil {
 		return err
@@ -381,7 +385,10 @@ func (d *daemon) announce(ctx context.Context, h harness.Host, adapters []harnes
 		attrs := []any{"harness", found.ID, "status", found.Status, "modes", found.Modes}
 		switch found.Status {
 		case host.Offered:
-			d.log.InfoContext(ctx, "harness offered", append(attrs, "path", found.Path)...)
+			d.log.InfoContext(ctx, "harness offered", append(attrs, "path", found.Path, "structured_input", found.StructuredInput)...)
+			if found.InputErr != nil {
+				d.log.WarnContext(ctx, "harness offered without structured input: its Runs that ask permissions are refused", "harness", found.ID, "err", found.InputErr)
+			}
 			continue
 		case host.DetectFailed:
 			d.log.WarnContext(ctx, "harness not offered: detecting it failed", append(attrs, "err", found.Err)...)

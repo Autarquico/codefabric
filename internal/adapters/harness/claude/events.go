@@ -56,10 +56,14 @@ type model struct {
 // block is an element of the content of an assistant message.
 type block struct {
 	Type  string `json:"type"`
+	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Input struct {
 		Questions []struct {
 			Question string `json:"question"`
+			Options  []struct {
+				Label string `json:"label"`
+			} `json:"options"`
 		} `json:"questions"`
 	} `json:"input"`
 }
@@ -88,7 +92,9 @@ func parse(raw []byte) []harness.Event {
 		return inputRequired("")
 	case l.Type == "assistant" && l.Message != nil:
 		if q, ok := askedQuestion(l.Message.Content); ok {
-			return inputRequired(q)
+			ev := inputRequired(q.text)[0]
+			ev.ID, ev.Options = q.id, q.options
+			return []harness.Event{ev}
 		}
 	case l.Type == "result":
 		return result(l)
@@ -103,21 +109,32 @@ func inputRequired(question string) []harness.Event {
 	return []harness.Event{{Kind: harness.EventInputRequired, Message: question}}
 }
 
+// question is what an AskUserQuestion tool_use asks: the tool use that names
+// it, the first question and the labels of its options.
+type question struct {
+	id, text string
+	options  []string
+}
+
 // askedQuestion says whether the content has a tool_use of AskUserQuestion,
-// and the first question it carries.
-func askedQuestion(content json.RawMessage) (string, bool) {
+// and what it asks.
+func askedQuestion(content json.RawMessage) (question, bool) {
 	var blocks []block
 	if json.Unmarshal(content, &blocks) != nil { // a string content is plain text
-		return "", false
+		return question{}, false
 	}
 	i := slices.IndexFunc(blocks, func(b block) bool { return b.Type == "tool_use" && b.Name == askUserQuestion })
 	if i < 0 {
-		return "", false
+		return question{}, false
 	}
+	q := question{id: blocks[i].ID}
 	if qs := blocks[i].Input.Questions; len(qs) > 0 {
-		return qs[0].Question, true
+		q.text = qs[0].Question
+		for _, o := range qs[0].Options {
+			q.options = append(q.options, o.Label)
+		}
 	}
-	return "", true
+	return q, true
 }
 
 // result is the usage of the Run, then its end. An error result is a failed

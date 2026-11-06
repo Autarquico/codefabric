@@ -76,6 +76,11 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - Un `input` encolado se retira (`cancelled_at`) en cuanto se encola un stop del lease, sea cual sea la causa; el Worker (T4b) además ignora input de un Run terminado.
 - Inbox en esta fase: peticiones de input y fallos que requieren decisión; aprobaciones, conflictos de workflow y avisos de presupuesto quedan diferidos (sin productores).
 
+- Límites aceptados de `permissions: ask` (2026-11-05):
+  - El harness corre con el mismo usuario del SO que el Worker: puede alcanzar el socket del Run o el FIFO de entrada. `ask` revisa las llamadas a herramientas del modelo dentro del propio enforcement de Claude Code; no aísla al harness ni a los procesos que ya se le permitió lanzar.
+  - El modo se fija con `--permission-mode default` y `--setting-sources user`, pero el snapshot del Workflow es la fuente «user» (bajo `CLAUDE_CONFIG_DIR`): sus allow rules y hooks siguen aplicando. El Workflow lo controla el owner, así que se acepta. Claude además aprueba por sí mismo comandos de solo lectura sin consultar al puente.
+  - Un prompt retirado en el Worker (llamada MCP cancelada) sigue en el inbox hasta que termina el Run: avisar al Controller exige un tipo de informe nuevo (followup).
+
 ## Referencias
 
 - `docs/codefabric-spec.md` §11.6, §19.5, §20.1

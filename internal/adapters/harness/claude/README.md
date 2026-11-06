@@ -142,3 +142,13 @@ A Run configuration also gets a `.claude.json` that no snapshot has: the
 `mcpServers` of the snapshot and `hasCompletedOnboarding: true`, so that
 Claude Code does not stop at its first-run questions. That field is made up
 for the Run; a global apply never writes it.
+
+## Contract test against the real CLI
+
+`realcli_test.go` checks the flags structured input depends on
+(`--input-format`, `--mcp-config`, `--permission-prompt-tool`, ...) and the
+version floor (`MinStructuredInputVersion`) against the `claude` of the
+machine. It calls no model. It is off by default and not in CI: it runs only
+with `CF_REQUIRE_CLAUDE=1`, and then a missing `claude` fails it.
+
+    CF_REQUIRE_CLAUDE=1 go test -run TestRealCLI ./internal/adapters/harness/claude/

@@ -37,7 +37,7 @@ const OAuthTokenRef = //nolint:gosec // a secret ref, not a credential
 "claude/oauth-token"
 
 // Adapter is the harness `claude-code`: all of §7.2 but Resume,
-// Checkpoint, Stop and SendInput, which stay unsupported.
+// Checkpoint and Stop, which stay unsupported.
 type Adapter struct {
 	harness.Unsupported
 }
@@ -55,6 +55,8 @@ func (Adapter) ID() string { return ID }
 func (Adapter) Capabilities() harness.Capabilities {
 	return harness.Capabilities{
 		Modes:                  []domain.Mode{domain.ModeHeadless, domain.ModeInteractive},
+		NeedsInputSignal:       true,
+		StructuredInput:        true,
 		UsageEvents:            true,
 		ModelSelection:         true,
 		ConfigIsolation:        true,
