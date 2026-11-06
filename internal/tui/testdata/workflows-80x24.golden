@@ -20,4 +20,4 @@
 
  ──────────────────────────────────────────────────────────────────────────────
  [↑↓] Move [/] Filter [enter] Actions [A] Apply [s] Sync [R] Rollback
- [esc] Back [q] Quit
+ [ctrl+p] Actions [:] Command [esc] Back [q] Quit
