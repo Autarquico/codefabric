@@ -46,7 +46,7 @@ A harness is the program that drives the coding agent. CodeFabric does not repla
 
 A Worker offers the harnesses it has installed. `cf worker doctor` checks that they are present and logged in, and `cf worker join` can offer to install the missing ones.
 
-The adapters for `claude-code` and `codex` are tested against the real programs only when you opt in; the default test run uses recorded behaviour. The `command` harness is covered in the default run.
+The default tests use the `command` harness, a scripted fake harness and recorded Claude Code and Codex output. No automated test runs a session with the real Claude Code or Codex CLI; an opt-in check (`CF_REQUIRE_CLAUDE=1`) only confirms the flags the Claude Code adapter relies on.
 
 ## Configuration that travels
 

@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   site:
+    name: "TestScenario_SitioDesdeLaRelease: build, install commands (unreleased), goldens, axe"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

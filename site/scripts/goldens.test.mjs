@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -21,4 +21,12 @@ test('readGolden reads from the content root and fails clearly when the frame is
   writeFileSync(path.join(root, GOLDEN_DIR, 'home.golden'), ' CODEFABRIC\n');
   assert.equal(readGolden(root, 'home.golden'), ' CODEFABRIC');
   assert.throws(() => readGolden(root, 'nope.golden'), /nope\.golden not found/);
+});
+
+test('a golden that is a symbolic link is refused', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'cf-goldens-'));
+  mkdirSync(path.join(root, GOLDEN_DIR), { recursive: true });
+  writeFileSync(path.join(root, 'secret.txt'), 'secret\n');
+  symlinkSync(path.join(root, 'secret.txt'), path.join(root, GOLDEN_DIR, 'home.golden'));
+  assert.throws(() => readGolden(root, 'home.golden'), /not a regular file/);
 });

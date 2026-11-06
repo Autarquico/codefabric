@@ -30,7 +30,7 @@ Home shows the health of the Controller, counts of Tasks and Workers, the state 
 | `a` | Activity | The event stream. |
 | `l` | Logs | Pick a Run, then follow its output. |
 | `i` | Inbox | What needs you: answer without attaching. |
-| `/` | Search | Listed in the help, but not available yet; use `cf search`. |
+| `/` | Search | On home, listed in the help but not available yet; use `cf search`. Inside a list, `/` filters. |
 
 ## Keys that work everywhere
 
@@ -47,7 +47,7 @@ Home shows the health of the Controller, counts of Tasks and Workers, the state 
 | --- | --- |
 | `↑` `↓` (or `k` `j`) | Move. |
 | `/` | Filter the list; `enter` keeps the filter, `esc` clears it. |
-| `enter` | Open the actions for the selected item. |
+| `enter` | Open the actions for the selected item (not in the Inbox, where it opens the answer form for a question). |
 
 Each view adds its own keys, and shows them in its footer:
 

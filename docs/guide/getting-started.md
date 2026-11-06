@@ -138,6 +138,6 @@ It opens the TUI: home with live counts and activity, then views for Tasks, Work
 
 ## What is tested, and what is not
 
-The core flow above is covered by automated tests that use the generic `command` harness. The integrations with the real `claude` and `codex` programs are tested against the real binaries only when you opt in; they are not part of the default test run. Expect rough edges there, and run `cf worker doctor` first when something does not start.
+The core flow above is covered by automated tests. The default tests use the `command` harness, a scripted fake harness and recorded Claude Code and Codex output. No automated test runs a session with the real Claude Code or Codex CLI; an opt-in check (`CF_REQUIRE_CLAUDE=1`) only confirms the flags the Claude Code adapter relies on. Expect rough edges there, and run `cf worker doctor` first when something does not start.
 
 Several commands are present but say so in their help: `cf task defer`, `move` and `resume`, and `cf run fork` and `promote` are not implemented yet.

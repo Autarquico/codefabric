@@ -1,5 +1,5 @@
 // TUI frames come from the golden files the TUI test suite renders; the site never invents one.
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 export const GOLDEN_DIR = 'internal/tui/testdata';
@@ -16,6 +16,7 @@ export function sanitizeGolden(text) {
 export function readGolden(root, file) {
   const full = path.join(root, GOLDEN_DIR, file);
   try {
+    if (!lstatSync(full).isFile()) throw new Error(`golden frame ${GOLDEN_DIR}/${file} is not a regular file`);
     return sanitizeGolden(readFileSync(full, 'utf8'));
   } catch (error) {
     if (error.code === 'ENOENT') throw new Error(`golden frame ${GOLDEN_DIR}/${file} not found under ${root}`);

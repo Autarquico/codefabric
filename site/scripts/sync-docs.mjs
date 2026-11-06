@@ -1,6 +1,6 @@
 // Copies docs/guide/*.md into the Starlight content folder, adapting them for the website.
 // docs/guide is the only source: nothing else under docs/ is ever published.
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { siteVersion } from './version.mjs';
@@ -142,6 +142,7 @@ export function syncDocs({ root = contentRoot, out = outputDir, base = BASE, ref
   const pages = GUIDE_PAGES.map((file) => {
     const sourcePath = path.join(root, GUIDE_DIR, file);
     if (!existsSync(sourcePath)) throw new Error(`${GUIDE_DIR}/${file} is missing under ${root}`);
+    if (!lstatSync(sourcePath).isFile()) throw new Error(`${GUIDE_DIR}/${file} is not a regular file`);
     return { file, content: transformPage({ file, source: readFileSync(sourcePath, 'utf8'), base, ref, kindOf }) };
   });
   rmSync(out, { recursive: true, force: true });
