@@ -14,5 +14,5 @@
  Model         claude-opus
 
  ──────────────────────────────────────────────────────────────────────────────
- [↑↓] Move [/] Filter [enter] Actions [a] Attach [P] Publish [esc] Back
- [q] Quit
+ [↑↓] Move [/] Filter [enter] Actions [a] Attach [P] Publish [ctrl+p] Actions
+ [:] Command [esc] Back [q] Quit

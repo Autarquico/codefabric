@@ -17,4 +17,4 @@
 
  ──────────────────────────────────────────────────────────────────────────────
  [↑↓] Move [/] Filter [enter] Actions [d] Drain [u] Undrain [x] Remove
- [esc] Back [q] Quit
+ [ctrl+p] Actions [:] Command [esc] Back [q] Quit

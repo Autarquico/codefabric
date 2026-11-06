@@ -14,4 +14,5 @@
  12:29   infra             needs your input
  ──────────────────────────────────────────────────────────────────────
  [t] Tasks [w] Workers [m] Models [r] Runs [f] Workflows
- [p] Projects [a] Activity [l] Logs [/] Search [q] Quit
+ [p] Projects [a] Activity [l] Logs [/] Search [ctrl+p] Actions
+ [:] Command [q] Quit
