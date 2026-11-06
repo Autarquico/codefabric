@@ -220,14 +220,14 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 	case tea.KeyPressMsg:
 		return b.press(msg)
 	case actionDoneMsg:
-		b.busy = ""
+		b.busy, b.warn = "", ""
 		if f := msg.result.Failure; f != nil {
 			b.notice = &Notice{Title: msg.action.Title + " failed · " + msg.target.Label, Failure: f}
 		} else {
 			b.flash = "✓ " + msg.action.Title + " · " + msg.target.Label
 		}
 	case attachReadyMsg:
-		b.busy = ""
+		b.busy, b.warn = "", ""
 		if msg.failure != nil {
 			b.notice = &Notice{Title: "Attach failed", Failure: msg.failure}
 			return b, nil, false
@@ -239,7 +239,7 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 			return attachExitMsg{from: msg.from, target: msg.target, runErr: msg.runErr, finishErr: msg.session.Finish(msg.runErr)}
 		}, false
 	case attachExitMsg:
-		b.busy = ""
+		b.busy, b.warn = "", ""
 		if msg.finishErr != nil {
 			b.notice = &Notice{Title: "Attach ended with an error", Failure: actions.FailureOf(msg.finishErr), Detail: exitDetail(msg.runErr)}
 		} else {

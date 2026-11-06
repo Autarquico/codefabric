@@ -209,6 +209,10 @@ func TestScenario_NeedsInputInbox_SaysItIsBusy(t *testing.T) {
 	if got := frame(m); !strings.Contains(got, "Wait for") || len(be.ran) != 0 {
 		t.Errorf("silent while busy (ran %v):\n%s", be.ran, got)
 	}
+	drive(t, m, cmd) // the answer finishes: the warning must not outlive the wait
+	if got := frame(m); strings.Contains(got, "Wait for") || !strings.Contains(got, "✓") {
+		t.Errorf("a stale warning hides the result:\n%s", got)
+	}
 }
 
 func TestScenario_NeedsInputInbox_FooterShowsOnlyTheKeysThatApply(t *testing.T) {
