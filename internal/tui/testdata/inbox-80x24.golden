@@ -15,4 +15,5 @@
  Answer        y allows · n denies
 
  ──────────────────────────────────────────────────────────────────────────────
- [↑↓] Move [/] Filter [y] Allow [n] Deny [esc] Back [q] Quit
+ [↑↓] Move [/] Filter [y] Allow [n] Deny [ctrl+p] Actions [:] Command
+ [esc] Back [q] Quit

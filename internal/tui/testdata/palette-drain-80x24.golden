@@ -1,0 +1,24 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Command palette ─────────────────────────────────────────────
+ › drain▌
+ › Drain worker                    cf worker drain
+   Undrain worker                  cf worker undrain
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ asks for the worker
+ ──────────────────────────────────────────────────────────────────────────────
+ [↑↓] Move [enter] Choose [:] Command line [esc] Close

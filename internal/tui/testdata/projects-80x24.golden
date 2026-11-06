@@ -18,4 +18,5 @@
  Created       08:00
 
  ──────────────────────────────────────────────────────────────────────────────
- [↑↓] Move [/] Filter [enter] Actions [esc] Back [q] Quit
+ [↑↓] Move [/] Filter [enter] Actions [ctrl+p] Actions [:] Command [esc] Back
+ [q] Quit
