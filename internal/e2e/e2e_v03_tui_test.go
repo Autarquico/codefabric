@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -41,31 +40,31 @@ const (
 )
 
 // taskNamed is the Task with that name, as the API says it.
-func taskNamed(c *Cluster, name string) (v1.Task, bool) {
+func taskNamed(c *Cluster, name string) (v1.Task, bool, error) {
 	tasks, err := c.API.Tasks(c.H.Context(), client.TaskQuery{})
 	if err != nil {
-		return v1.Task{}, false
+		return v1.Task{}, false, err
 	}
 	for _, t := range tasks {
 		if t.Name == name {
-			return t, true
+			return t, true, nil
 		}
 	}
-	return v1.Task{}, false
+	return v1.Task{}, false, nil
 }
 
 // runOf is the only Run of the Task.
-func runOf(c *Cluster, task v1.Task) (v1.Run, bool) {
+func runOf(c *Cluster, task v1.Task) (v1.Run, bool, error) {
 	runs, err := c.API.Runs(c.H.Context(), client.RunQuery{})
 	if err != nil {
-		return v1.Run{}, false
+		return v1.Run{}, false, err
 	}
 	for _, r := range runs {
 		if r.TaskID == task.ID {
-			return r, true
+			return r, true, nil
 		}
 	}
-	return v1.Run{}, false
+	return v1.Run{}, false, nil
 }
 
 // waitTask waits for the Task of that name to be as ok says.
@@ -74,11 +73,17 @@ func waitTask(c *Cluster, name, what string, ok func(v1.Task, v1.Run) bool) (v1.
 	var task v1.Task
 	var run v1.Run
 	c.Eventually("Task "+name+" to be "+what, func() (bool, string) {
-		t, found := taskNamed(c, name)
+		t, found, err := taskNamed(c, name)
+		if err != nil {
+			return false, "API error listing Tasks: " + err.Error()
+		}
 		if !found {
 			return false, "no such Task"
 		}
-		r, found := runOf(c, t)
+		r, found, err := runOf(c, t)
+		if err != nil {
+			return false, "API error listing Runs: " + err.Error()
+		}
 		if !found {
 			return false, fmt.Sprintf("task %s state=%s, no Run", t.ID, t.State)
 		}
@@ -86,41 +91,6 @@ func waitTask(c *Cluster, name, what string, ok func(v1.Task, v1.Run) bool) (v1.
 		return ok(t, r), fmt.Sprintf("task state=%s; %s", t.State, RunStage(r))
 	})
 	return task, run
-}
-
-// cursorRow matches the row under the cursor of a list.
-func cursorRow(label string) *regexp.Regexp {
-	return regexp.MustCompile(`(?m)^\s*› .*\b` + regexp.QuoteMeta(label) + `\b`)
-}
-
-// SelectRow moves the cursor of the list in view down to the row of label.
-func (s *tuiSession) SelectRow(label string) {
-	s.c.t.Helper()
-	want := cursorRow(label)
-	for range 10 {
-		screen := s.WaitFor("the list of "+label, label)
-		if want.MatchString(screen) {
-			return
-		}
-		s.Keys("Down")
-		s.c.Eventually("the cursor to move", func() (bool, string) {
-			now := s.Screen()
-			return now != screen, now
-		})
-	}
-	s.c.t.Fatalf("e2e: the cursor never reached %q:\n%s", label, s.Screen())
-}
-
-// Colon runs a line of the command mode and waits for the screen to say it ran.
-func (s *tuiSession) Colon(line string) {
-	s.c.t.Helper()
-	s.Keys(":")
-	s.WaitFor("the command line", "Command line")
-	s.Type(line)
-	s.WaitFor("the line typed", line[:min(len(line), 20)])
-	s.Keys("Enter")
-	s.WaitFor("the line to run", "✓ cf ")
-	s.Back()
 }
 
 func TestScenario_E2eV03Tui_DoneDeFase3(t *testing.T) {
@@ -160,7 +130,7 @@ func TestScenario_E2eV03Tui_DoneDeFase3(t *testing.T) {
 	// The question is in the Inbox and is answered from it.
 	s.Keys("i")
 	inbox := s.WaitFor("the question in the Inbox", "Inbox · 1", "Which database?")
-	if !cursorRow("ask").MatchString(inbox) || !strings.Contains(inbox, "question") {
+	if !onCursor(inbox, "ask") || !strings.Contains(inbox, "question") {
 		t.Errorf("the Inbox does not show the question of ask under the cursor:\n%s", inbox)
 	}
 	s.Keys("Enter")
@@ -176,7 +146,7 @@ func TestScenario_E2eV03Tui_DoneDeFase3(t *testing.T) {
 	if raw, err := os.ReadFile(answers); err != nil || !strings.Contains(string(raw), "postgres") { //nolint:gosec // a file of the test
 		t.Errorf("the harness never read the answer: %q (%v)", raw, err)
 	}
-	s.Back()
+	s.Back("Inbox ·")
 
 	// Another Task is created, asks, and is cancelled from the Tasks view.
 	s.Colon(`task new "pick another" --harness claude-code --name doomed`)
@@ -194,15 +164,15 @@ func TestScenario_E2eV03Tui_DoneDeFase3(t *testing.T) {
 	if run.State != domain.RunCancelled {
 		t.Errorf("the Run of the cancelled Task %s is %s", task.ID, run.State)
 	}
-	if done, _ := taskNamed(p.Cluster, "ask"); done.State != domain.TaskCompleted {
+	if done, _, err := taskNamed(p.Cluster, "ask"); err != nil || done.State != domain.TaskCompleted {
 		t.Errorf("cancelling doomed touched ask: %s", done.State)
 	}
-	s.Back()
+	s.Back("Tasks · ")
 
 	// A Worker is drained from the Workers view.
 	s.Keys("w")
-	s.WaitFor("the Workers", "Workers · 2", "w1")
-	s.SelectRow("w1")
+	s.WaitFor("the Workers", "Workers · 2", p.a.Name)
+	s.SelectRow(p.a.Name)
 	s.Keys("d")
 	s.WaitFor("the Worker to be drained", "✓ Drain worker")
 	// An idle Worker passes from draining to drained at once: either is a drain.
@@ -216,7 +186,7 @@ func TestScenario_E2eV03Tui_DoneDeFase3(t *testing.T) {
 	if w, err := p.API.Worker(p.H.Context(), p.b.Name); err != nil || w.State != domain.WorkerOnline {
 		t.Errorf("draining w1 left w2 %s (%v)", w.State, err)
 	}
-	s.Back()
+	s.Back("Workers · ")
 
 	// The Workflow is applied to B from the Workflows view.
 	s.Keys("f")

@@ -5,6 +5,7 @@ package e2e
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -33,7 +34,7 @@ func openTUI(c *Cluster) *tuiSession {
 
 func (s *tuiSession) tmux(args ...string) string {
 	s.c.t.Helper()
-	cmd := exec.Command("tmux", append([]string{"-L", s.name}, args...)...) //nolint:gosec,noctx // tmux returns at once
+	cmd := exec.Command("tmux", append([]string{"-f", "/dev/null", "-L", s.name}, args...)...) //nolint:gosec,noctx // tmux returns at once
 	cmd.Env = s.box.Env()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -78,19 +79,74 @@ func (s *tuiSession) WaitFor(what string, texts ...string) string {
 
 // Alive says whether the TUI is still open in its pane.
 func (s *tuiSession) Alive() bool {
-	cmd := exec.Command("tmux", "-L", s.name, "has-session", "-t", s.name) //nolint:gosec,noctx // tmux returns at once
+	cmd := exec.Command("tmux", "-f", "/dev/null", "-L", s.name, "has-session", "-t", s.name) //nolint:gosec,noctx // tmux returns at once
 	cmd.Env = s.box.Env()
 	return cmd.Run() == nil
 }
 
-// Back presses Escape and waits for the screen to change. Waiting matters: an
-// Escape followed at once by another key reaches the TUI as that key with Alt.
-func (s *tuiSession) Back() {
+// Back presses Escape and waits until gone, a text only the screen being left
+// shows, is off the screen. Waiting for that effect, not for any change, matters:
+// a feed update also changes the screen, and an Escape followed at once by
+// another key reaches the TUI as that key with Alt.
+func (s *tuiSession) Back(gone string) {
 	s.c.t.Helper()
-	before := s.Screen()
 	s.Keys("Escape")
-	s.c.Eventually("the screen to change on Escape", func() (bool, string) {
+	s.c.Eventually(gone+" to close on Escape", func() (bool, string) {
 		now := s.Screen()
-		return now != before, now
+		return !strings.Contains(now, gone), now
 	})
+}
+
+var cursorLine = regexp.MustCompile(`^\s*› (.*)$`)
+
+// cursorAt is the line of the screen under the cursor of a list, -1 if none.
+func cursorAt(screen string) int {
+	for i, line := range strings.Split(screen, "\n") {
+		if cursorLine.MatchString(line) {
+			return i
+		}
+	}
+	return -1
+}
+
+// onCursor says whether the row under the cursor is the one of label.
+func onCursor(screen, label string) bool {
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(label) + `\b`)
+	for _, line := range strings.Split(screen, "\n") {
+		if m := cursorLine.FindStringSubmatch(line); m != nil {
+			return re.MatchString(m[1])
+		}
+	}
+	return false
+}
+
+// SelectRow moves the cursor of the list in view down to the row of label,
+// waiting after each Down for the cursor itself to change line.
+func (s *tuiSession) SelectRow(label string) {
+	s.c.t.Helper()
+	for range 10 {
+		screen := s.WaitFor("the list of "+label, label)
+		if onCursor(screen, label) {
+			return
+		}
+		from := cursorAt(screen)
+		s.Keys("Down")
+		s.c.Eventually("the cursor to leave line "+fmt.Sprint(from), func() (bool, string) {
+			now := s.Screen()
+			return cursorAt(now) != from, now
+		})
+	}
+	s.c.t.Fatalf("e2e: the cursor never reached %q:\n%s", label, s.Screen())
+}
+
+// Colon runs a line of the command mode and waits for the screen to say it ran.
+func (s *tuiSession) Colon(line string) {
+	s.c.t.Helper()
+	s.Keys(":")
+	s.WaitFor("the command line", "Command line")
+	s.Type(line)
+	s.WaitFor("the line typed", line[:min(len(line), 20)])
+	s.Keys("Enter")
+	s.WaitFor("the line to run", "✓ cf ")
+	s.Back("Command line")
 }
