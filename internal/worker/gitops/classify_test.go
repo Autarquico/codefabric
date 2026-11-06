@@ -28,6 +28,7 @@ func TestClassifyPushFailures(t *testing.T) {
 		"403":        {"", "fatal: unable to access 'https://h/': The requested URL returned error: 403", PushForbidden},
 		"401":        {"", "fatal: unable to access 'https://h/': The requested URL returned error: 401", PushPermanent},
 		"bad cert":   {"", "fatal: unable to access 'https://h/': SSL certificate problem: unable to get local issuer certificate", PushPermanent},
+		"git 2.56":   {"", "fatal: unable to access 'https://127.0.0.1:52675/p.git/': SSL certificate OpenSSL verify result: self-signed certificate (18)", PushPermanent},
 		"hook":       {"!\tabc:refs/heads/x\t[remote rejected] (pre-receive hook declined)\n", "remote: rejected by the CodeFabric relay", PushRefused},
 		"rejected":   {"!\tabc:refs/heads/x\t[rejected] (non-fast-forward)\n", "", PushRefused},
 		"local":      {"", "fatal: unable to write sha1 filename: No space left on device", PushLocal},

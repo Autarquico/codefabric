@@ -1,0 +1,14 @@
+ CODEFABRIC                                                           ● healthy
+ ──────────────── Models · 2 ──────────────────────────────────────────────────
+   HARNESS          USAGE                WORKERS
+ › claude           usage not reported   linux, macbook
+   command          usage not reported   linux
+
+ ──────────────── Detail ──────────────────────────────────────────────────────
+ Harness       claude
+ Usage         usage not reported
+ Workers       linux, macbook
+ Note          No harness reports quota to Fabric yet
+
+ ──────────────────────────────────────────────────────────────────────────────
+ [↑↓] Move [/] Filter [esc] Back [q] Quit

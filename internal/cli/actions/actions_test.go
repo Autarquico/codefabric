@@ -25,7 +25,7 @@ var notActions = map[string]string{
 	"cf client list": "read", "cf config paths": "read", "cf config show": "read", "cf doctor": "read",
 	"cf environment list": "read", "cf environment show": "read", "cf events": "read", "cf logs": "read",
 	"cf project explain": "read", "cf project list": "read", "cf project secrets list": "read", "cf project show": "read",
-	"cf inbox": "read", "cf ps": "read", "cf run explain": "read", "cf run list": "read", "cf run show": "read", "cf status": "read",
+	"cf inbox": "read", "cf ps": "read", "cf notify watch": "long-running foreground watcher", "cf notify test": "notifies this machine, not the cluster", "cf run explain": "read", "cf run list": "read", "cf run show": "read", "cf status": "read",
 	"cf task list": "read", "cf task show": "read", "cf version": "read", "cf worker list": "read", "cf worker show": "read",
 	"cf workflow diff": "read", "cf workflow explain": "read", "cf workflow history": "read", "cf workflow list": "read",
 	"cf workflow show": "read", "cf workflow status": "read",
@@ -225,5 +225,21 @@ func TestScenario_TuiViewsActions_Errores(t *testing.T) {
 		if f.Hint == "" {
 			t.Errorf("%s: %s has no recoverable hint", name, f.Code)
 		}
+	}
+}
+
+// A client with a person in front of it asks before these: they cannot be
+// undone from the same screen. A new destructive action is a decision to make
+// here, in the open.
+func TestScenario_TuiViewsActions_DestructiveActionsAreFlagged(t *testing.T) {
+	var got []string
+	for _, d := range actions.All() {
+		if d.Destructive {
+			got = append(got, d.ID)
+		}
+	}
+	want := "[task.cancel task.archive run.publish worker.remove workflow.rollback environment.apply]"
+	if fmt.Sprint(got) != want {
+		t.Errorf("destructive actions: %v, want %s", got, want)
 	}
 }
