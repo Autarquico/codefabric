@@ -12,8 +12,9 @@ export const GUIDE_DIR = 'docs/guide';
 export const GUIDE_PAGES = ['getting-started.md', 'concepts.md', 'cli.md', 'tui.md'];
 const NOT_PUBLIC = [/^docs\/codefabric-spec\.md$/, /^docs\/specs(\/|$)/, /^docs\/adr(\/|$)/, /^docs\/runbooks(\/|$)/];
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-export const siteRoot = path.resolve(scriptDir, '..');
+// Astro bundles TuiFrame (and this module) into dist/.prerender, so the module's own location is not the
+// site directory; every npm script runs from site/, which is.
+export const siteRoot = process.cwd();
 // The content (guide and golden frames) can come from another checkout, e.g. a release tag.
 export const contentRoot = path.resolve(process.env.CF_CONTENT_ROOT || path.join(siteRoot, '..'));
 const outputDir = path.join(siteRoot, 'src', 'content', 'docs');
@@ -59,23 +60,27 @@ function outsideInlineCode(line, transform) {
     .join('');
 }
 
-export function extractTitle(markdown, file) {
-  let title = null;
-  const body = mapLines(markdown, (line, inCode) => {
-    const heading = inCode ? null : line.match(/^# +(.+?) *#*$/);
-    if (!heading) return line;
-    if (title === null) {
-      title = heading[1].replaceAll('`', '');
-      return null;
-    }
-    return `#${line}`;
-  });
-  if (title === null) throw new Error(`${file}: no top-level "# " heading to use as the page title`);
-  return { title, body };
+// Guide pages carry Starlight front matter; title and description are required and passed through verbatim.
+export function splitFrontMatter(markdown, file) {
+  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!match) throw new Error(`${file}: front matter with "title" and "description" is required`);
+  for (const key of ['title', 'description']) {
+    const present = new RegExp(`^${key}:[ \\t]*\\S`, 'm').test(match[1]);
+    if (!present) throw new Error(`${file}: front matter is missing a non-empty "${key}"`);
+  }
+  return { frontMatter: match[0].replace(/\r?\n$/, ''), body: markdown.slice(match[0].length) };
+}
+
+// The page title is the front matter's, so any "# " heading in the body would be a second h1.
+function demoteH1(markdown) {
+  return mapLines(markdown, (line, inCode) => (!inCode && /^# +\S/.test(line) ? `#${line}` : line));
 }
 
 function rewriteDestination(destination, { file, base, ref, kindOf }) {
   if (destination.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(destination)) return destination;
+  // "../concepts/" is the site-relative spelling the guide uses between its pages (each page is a directory there).
+  const sibling = destination.match(/^\.\.\/([a-z0-9-]+)\/(#.*)?$/);
+  if (sibling && GUIDE_PAGES.includes(`${sibling[1]}.md`)) return `${routeFor(sibling[1], base)}${sibling[2] ?? ''}`;
   const hashAt = destination.indexOf('#');
   const target = hashAt === -1 ? destination : destination.slice(0, hashAt);
   const hash = hashAt === -1 ? '' : destination.slice(hashAt);
@@ -119,10 +124,9 @@ function wrapTables(markdown) {
 }
 
 export function transformPage({ file, source, base = BASE, ref, kindOf }) {
-  if (source.startsWith('---')) throw new Error(`${GUIDE_DIR}/${file}: front matter is not expected in guide pages`);
-  const { title, body } = extractTitle(source, `${GUIDE_DIR}/${file}`);
-  const rewritten = wrapTables(rewriteLinks(body, { file, base, ref, kindOf }));
-  return `---\ntitle: ${JSON.stringify(title)}\n---\n${rewritten.replace(/^\n+/, '\n')}`;
+  const { frontMatter, body } = splitFrontMatter(source, `${GUIDE_DIR}/${file}`);
+  const rewritten = wrapTables(rewriteLinks(demoteH1(body), { file, base, ref, kindOf }));
+  return `${frontMatter}\n${rewritten.replace(/^\n+/, '\n')}`;
 }
 
 function kindOnDisk(root) {
