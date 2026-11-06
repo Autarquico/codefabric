@@ -286,7 +286,22 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 		return false
 	}
 	f.model = cur.Model
-	f.inputRequired = cur.InputRequired && (errors.Is(orderErr, state.ErrNotFound) || order.Reason == ReasonInputRequired && order.Source == SourceWorker)
+	inputRequired := cur.InputRequired
+	if !inputRequired && f.started != nil {
+		// A Run answered through its input stream is input_required only for what
+		// is still unanswered when it ends.
+		structured, err := e.launchedWithInput(r.Key)
+		if err == nil && structured {
+			open, perr := state.OpenInputPrompts(ctx, e.o.DB.Reader(), r.Key)
+			err = perr
+			inputRequired = open > 0
+		}
+		if err != nil {
+			e.log.WarnContext(ctx, "reading the pending prompts of a Run failed; it will be tried again", "run", r.RunID, "err", err)
+			return false
+		}
+	}
+	f.inputRequired = inputRequired && (errors.Is(orderErr, state.ErrNotFound) || order.Reason == ReasonInputRequired && order.Source == SourceWorker)
 	spawned := f.started != nil
 	reportedStart := r.StartedAt != nil || spawned
 	// A Run whose harness ran is to be sealed (§22.6). The intent, which is all that sealing depends

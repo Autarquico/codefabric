@@ -163,8 +163,10 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 	if needsInput && structured {
 		// The Run is answered, not stopped: the questions become prompts, and the
 		// Run goes on when the answers reach it. Past the end of the harness there
-		// is nobody to answer.
-		next.InputRequired = true
+		// is nobody to answer: only a question read in the final drain is observed
+		// as the terminal reason; before that, what is still pending at the end
+		// of the Run decides (see settle).
+		next.InputRequired = next.InputRequired || final
 		if !final && inRun(r) {
 			if err := e.askedQuestions(ctx, r, cur.Consumed, asked); err != nil {
 				return false, err

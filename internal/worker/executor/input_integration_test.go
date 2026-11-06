@@ -192,6 +192,16 @@ func TestScenario_NeedsInputInbox_PreguntaPorFIFO(t *testing.T) {
 	if !delivered(f.reports(k), req.PromptID) {
 		t.Errorf("no input_delivered in %v", kinds(f.reports(k)))
 	}
+	// The question was answered and the harness exited 0: nothing is left to ask.
+	var exited *v1.RunReportEntry
+	for _, r := range f.reports(k) {
+		if r.Kind == v1.ReportExited {
+			exited = &r
+		}
+	}
+	if exited == nil || exited.EndReason != "" || exited.ExitCode == nil || *exited.ExitCode != 0 {
+		t.Errorf("exited report = %+v, want a clean exit with no end reason", exited)
+	}
 }
 
 func countKind(rs []v1.RunReportEntry, k v1.RunReportKind) int {
