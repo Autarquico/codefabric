@@ -249,7 +249,7 @@ func (e *Executor) ensureSocket(ctx context.Context, r state.Run) {
 		return
 	}
 	ir := &inputRun{e: e, ctx: ctx, key: r.Key, waiters: map[string]*waiter{}}
-	if ir.srv, err = inputsock.Listen(path, ir); err != nil {
+	if ir.srv, err = inputsock.Listen(path, ir, inputsock.WithClock(e.clock)); err != nil {
 		e.log.ErrorContext(ctx, "listening for the permission bridge of a Run failed; it is tried again", "run", r.RunID, "err", err)
 		return
 	}
@@ -346,18 +346,12 @@ func (e *Executor) permissionAsked(ir *inputRun, c *inputsock.Conn, m inputsock.
 		return
 	}
 	if _, err := state.InputPromptOf(ctx, e.o.DB.Reader(), k, m.PromptID); errors.Is(err, state.ErrNotFound) {
-		open, err := state.OpenInputPrompts(ctx, e.o.DB.Reader(), k)
-		if err != nil {
-			e.log.WarnContext(ctx, "counting the open prompts of a Run failed; the bridge asks again", "run", k.RunID, "err", err)
-			_ = c.Close()
-			return
-		}
-		if open >= v1.MaxOpenPrompts {
+		summary := "permission to use " + m.Tool + ": " + compactJSON(m.Input)
+		switch err := e.openPrompt(ctx, r, m.PromptID, domain.PromptPermission, summary, []string{domain.AnswerAllow, domain.AnswerDeny}, false); {
+		case errors.Is(err, errTooManyPrompts):
 			_ = c.Send(inputsock.Message{Op: inputsock.OpAnswer, PromptID: m.PromptID, Decision: domain.AnswerDeny, Message: "denied: too many questions are waiting for an answer"})
 			return
-		}
-		summary := "permission to use " + m.Tool + ": " + compactJSON(m.Input)
-		if err := e.openPrompt(ctx, r, m.PromptID, domain.PromptPermission, summary, []string{domain.AnswerAllow, domain.AnswerDeny}, false); err != nil {
+		case err != nil:
 			e.log.WarnContext(ctx, "recording a permission prompt failed; the bridge asks again", "run", k.RunID, "err", err)
 			_ = c.Close()
 			return
@@ -541,10 +535,16 @@ func (e *Executor) finishDelivery(ctx context.Context, k state.Key, o state.Inpu
 	return err
 }
 
+// errTooManyPrompts is what openPrompt answers a new prompt with when the Run
+// already has v1.MaxOpenPrompts open: the Controller would reject the report
+// and stall the journal behind it.
+var errTooManyPrompts = errors.New("executor: a Run has too many prompts open")
+
 // openPrompt writes a prompt and the report that asks the Controller for its
 // answer, once: the same ask seen again finds its row. The summary, and the
 // options unless they are fixed, are redacted of the secrets of the Run before
-// they are bounded or reported.
+// they are bounded or reported. A new prompt past v1.MaxOpenPrompts is not
+// written: errTooManyPrompts.
 func (e *Executor) openPrompt(ctx context.Context, r state.Run, id string, kind domain.PromptKind, summary string, options []string, redactOptions bool) error {
 	// What does not print goes first: removed after the redaction, it could
 	// join the halves of a secret the redaction did not see whole.
@@ -563,6 +563,16 @@ func (e *Executor) openPrompt(ctx context.Context, r state.Run, id string, kind 
 		}
 	}
 	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		if _, err := state.InputPromptOf(ctx, tx, r.Key, id); !errors.Is(err, state.ErrNotFound) {
+			return err // the same ask seen again, or a read that failed
+		}
+		open, err := state.OpenInputPrompts(ctx, tx, r.Key)
+		if err != nil {
+			return err
+		}
+		if open >= v1.MaxOpenPrompts {
+			return errTooManyPrompts
+		}
 		inserted, err := state.InsertInputPrompt(ctx, tx, state.InputPrompt{Key: r.Key, PromptID: id, Kind: kind, CreatedAt: e.clock.Now()})
 		if err != nil || !inserted {
 			return err
@@ -583,7 +593,12 @@ func (e *Executor) openPrompt(ctx context.Context, r state.Run, id string, kind 
 func (e *Executor) askedQuestions(ctx context.Context, r state.Run, offset uint64, evs []harness.Event) error {
 	for i, ev := range evs {
 		id := questionID(ev, offset, i)
-		if err := e.openPrompt(ctx, r, id, domain.PromptQuestion, ev.Message, ev.Options, true); err != nil {
+		switch err := e.openPrompt(ctx, r, id, domain.PromptQuestion, ev.Message, ev.Options, true); {
+		case errors.Is(err, errTooManyPrompts):
+			// Past the limit the question is dropped, not reported: the Controller
+			// would reject the batch and stall the journal behind it.
+			e.log.WarnContext(ctx, "a question is dropped: the Run has too many prompts open", "run", r.RunID, "prompt", id)
+		case err != nil:
 			return err
 		}
 	}

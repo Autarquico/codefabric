@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
 // MinStructuredInputVersion is the first Claude Code whose MCP permission
@@ -75,7 +76,12 @@ func triple(v string) (out [3]int, ok bool) {
 // open, so the message is not lost when nobody reads at that instant, and
 // closing this end never ends the input of the process. A Run whose wrapper is
 // gone has nobody on the other end: that is an error, not a wait.
-func (Adapter) SendInput(_ context.Context, _ harness.Host, h harness.Handle, in harness.Input) error {
+func (Adapter) SendInput(ctx context.Context, _ harness.Host, h harness.Handle, in harness.Input) error {
+	return sendInput(ctx, clock.Real{}, h, in)
+}
+
+// sendInput is SendInput on the clock that times its write.
+func sendInput(ctx context.Context, clk clock.Clock, h harness.Handle, in harness.Input) error {
 	if h.InputPath == "" {
 		return fmt.Errorf("claude-code: this Run was not started with structured input: %w", harness.ErrInputNotSent)
 	}
@@ -91,13 +97,34 @@ func (Adapter) SendInput(_ context.Context, _ harness.Host, h harness.Handle, in
 	}
 	f := os.NewFile(uintptr(fd), h.InputPath)
 	defer func() { _ = f.Close() }()
-	if err := f.SetWriteDeadline(time.Now().Add(inputWriteTimeout)); err != nil {
-		return fmt.Errorf("claude-code: writing the input of the Run: %w: %w", harness.ErrInputNotSent, err)
-	}
-	if n, err := f.WriteString(msg); n == 0 && err != nil {
+	if n, err := writeWithin(ctx, clk, f, msg); n == 0 && err != nil {
 		return fmt.Errorf("claude-code: writing the input of the Run: %w: %w", harness.ErrInputNotSent, err)
 	} else if err != nil {
 		return fmt.Errorf("claude-code: writing the input of the Run: %d of %d bytes written: %w", n, len(msg), err)
 	}
 	return nil
+}
+
+// writeWithin writes msg to the FIFO, and gives up when inputWriteTimeout passes
+// on clk or ctx ends: the deadline is set when either happens, not computed from
+// the system time, so that the clock of a test decides when a write has waited
+// long enough.
+func writeWithin(ctx context.Context, clk clock.Clock, f *os.File, msg string) (int, error) {
+	timer := clk.NewTimer(inputWriteTimeout)
+	defer timer.Stop()
+	written, expired := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(expired)
+		select {
+		case <-timer.C():
+		case <-ctx.Done():
+		case <-written:
+			return
+		}
+		_ = f.SetWriteDeadline(time.Unix(1, 0))
+	}()
+	n, err := f.WriteString(msg)
+	close(written)
+	<-expired
+	return n, err
 }

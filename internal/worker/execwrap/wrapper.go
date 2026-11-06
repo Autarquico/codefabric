@@ -462,9 +462,9 @@ func (w *wrapper) waitForGate() (stopped bool, err error) {
 func (w *wrapper) supervise(waited <-chan struct{}) bool {
 	var inputTick <-chan time.Time // the daemon's word that the input is over is a file
 	if w.input != nil {
-		t := time.NewTicker(inputPoll)
+		t := w.clock.NewTicker(inputPoll)
 		defer t.Stop()
-		inputTick = t.C
+		inputTick = t.C()
 	}
 	for {
 		select {

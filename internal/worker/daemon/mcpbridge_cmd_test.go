@@ -4,14 +4,17 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/inputsock"
 )
 
@@ -211,12 +214,13 @@ func TestTheBridgeAcksUntilADaemonRecordsIt(t *testing.T) {
 	path, srv := bridgeSocket(t, d)
 	a := newSocketAsker(&inputsock.Client{Path: path, Wait: 10 * time.Millisecond})
 	ctx, cancel := context.WithCancel(t.Context())
-	decision, _, err := a.ask(ctx, "Bash", json.RawMessage(`{}`))
+	ans, err := a.ask(ctx, "Bash", json.RawMessage(`{}`))
 	cancel() // the call is over: its context ends, the ack goes on
-	if err != nil || decision != "allow" {
-		t.Fatalf("ask: %s %v", decision, err)
+	if err != nil || ans.decision != "allow" {
+		t.Fatalf("ask: %+v %v", ans, err)
 	}
-	srv.Close() // the daemon goes down before it records the ack
+	ans.delivered() // the harness has been told
+	srv.Close()     // the daemon goes down before it records the ack
 	time.Sleep(100 * time.Millisecond)
 
 	d.mu.Lock()
@@ -229,6 +233,86 @@ func TestTheBridgeAcksUntilADaemonRecordsIt(t *testing.T) {
 	defer srv2.Close()
 	eventually(t, "the ack", func() bool { return d.seen(func(r *recorder) bool { return len(r.acks) == 1 }) })
 	a.wait(time.Second)
+}
+
+// fakeAsker answers every call with an allow, and counts the times the harness
+// was said to be told.
+type fakeAsker struct{ confirmed atomic.Int32 }
+
+func (f *fakeAsker) ask(context.Context, string, json.RawMessage) (answer, error) {
+	return answer{decision: "allow", delivered: func() { f.confirmed.Add(1) }}, nil
+}
+
+func (*fakeAsker) wait(time.Duration) {}
+
+const approveCall = `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Bash","input":{}}}}` + "\n"
+
+// gatedWriter blocks the write of the reply until it is let go.
+type gatedWriter struct {
+	entered chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (w *gatedWriter) Write(p []byte) (int, error) {
+	close(w.entered)
+	<-w.release
+	if w.err != nil {
+		return 0, w.err
+	}
+	return len(p), nil
+}
+
+// The daemon is told the answer reached the harness only after the reply was
+// written whole: not while the write waits.
+func TestTheBridgeConfirmsOnlyAfterTheReplyIsWritten(t *testing.T) {
+	a := &fakeAsker{}
+	w := &gatedWriter{entered: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { done <- serveMCP(t.Context(), strings.NewReader(approveCall), w, a) }()
+	<-w.entered
+	if n := a.confirmed.Load(); n != 0 {
+		t.Fatalf("confirmed %d times while the reply was still being written", n)
+	}
+	close(w.release)
+	if err := <-done; err != nil {
+		t.Fatalf("serveMCP: %v", err)
+	}
+	if n := a.confirmed.Load(); n != 1 {
+		t.Errorf("confirmed %d times, want 1", n)
+	}
+}
+
+// A reply that failed to be written never reached the harness: the daemon is
+// not told it did, and the failure is returned.
+func TestTheBridgeDoesNotConfirmAReplyThatFailedToBeWritten(t *testing.T) {
+	a := &fakeAsker{}
+	broken := errors.New("broken pipe")
+	w := &gatedWriter{entered: make(chan struct{}), release: make(chan struct{}), err: broken}
+	close(w.release)
+	err := serveMCP(t.Context(), strings.NewReader(approveCall), w, a)
+	if !errors.Is(err, broken) {
+		t.Errorf("serveMCP = %v, want the write error", err)
+	}
+	if n := a.confirmed.Load(); n != 0 {
+		t.Errorf("confirmed %d times, want none", n)
+	}
+}
+
+// The wait for the confirmations is on the clock of the asker.
+func TestTheBridgeWaitsForItsConfirmationsOnItsClock(t *testing.T) {
+	a := newSocketAsker(&inputsock.Client{})
+	clk := clock.NewFake(time.Unix(1_700_000_000, 0))
+	a.clock = clk
+	a.confirms.Add(1) // a confirmation that never ends
+	defer a.confirms.Done()
+	done := make(chan struct{})
+	go func() { a.wait(confirmWait); close(done) }()
+	if err := clk.BlockUntil(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(confirmWait)
+	<-done
 }
 
 // Under permissions: ask, Claude Code may hand AskUserQuestion to the bridge as

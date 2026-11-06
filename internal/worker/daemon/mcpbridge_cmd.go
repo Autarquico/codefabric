@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -15,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/worker/inputsock"
 )
 
@@ -67,26 +69,38 @@ func newMCPBridgeCmd() *cobra.Command {
 	return cmd
 }
 
-// asker answers one permission: the tool and its input, the decision.
+// answer is what a person decided about one permission. delivered is called
+// once the harness has been told, and not before: it is when the daemon is told.
+type answer struct {
+	decision, message string
+	delivered         func()
+}
+
+// asker answers one permission: the tool and its input, the answer.
 type asker interface {
-	ask(ctx context.Context, tool string, input json.RawMessage) (decision, message string, err error)
+	ask(ctx context.Context, tool string, input json.RawMessage) (answer, error)
 	// wait gives the daemon up to d to hear that the answers reached the harness.
 	wait(d time.Duration)
 }
 
 type socketAsker struct {
 	client *inputsock.Client
+	// clock times the wait for the confirmations. The bridge is a process of its
+	// own, started by the harness, so it runs on the system clock; tests set theirs.
+	clock clock.Clock
 	// confirms (acks and withdrawals) outlive the call that made them, and the
 	// context of the server.
 	confirms sync.WaitGroup
 }
 
-func newSocketAsker(c *inputsock.Client) *socketAsker { return &socketAsker{client: c} }
+func newSocketAsker(c *inputsock.Client) *socketAsker {
+	return &socketAsker{client: c, clock: clock.Real{}}
+}
 
-func (a *socketAsker) ask(ctx context.Context, tool string, input json.RawMessage) (string, string, error) {
+func (a *socketAsker) ask(ctx context.Context, tool string, input json.RawMessage) (answer, error) {
 	id, err := newPromptID()
 	if err != nil {
-		return "", "", err
+		return answer{}, err
 	}
 	ans, err := a.client.Ask(ctx, inputsock.Message{PromptID: id, Tool: tool, Input: input})
 	life := context.WithoutCancel(ctx)
@@ -94,20 +108,22 @@ func (a *socketAsker) ask(ctx context.Context, tool string, input json.RawMessag
 		// The call was cancelled: its prompt is not to wait in the inbox, nor to
 		// hold the input of the harness open.
 		a.confirms.Go(func() { _ = a.client.Withdraw(life, id) })
-		return "", "", err
+		return answer{}, err
 	}
-	// The harness is about to be told; the daemon is told after, and as many
-	// times as it takes. It is not the harness's to wait for.
-	a.confirms.Go(func() { _ = a.client.Confirm(life, id) })
-	return ans.Decision, ans.Message, nil
+	// The daemon is told once the harness is, and as many times as it takes. It
+	// is not the harness's to wait for.
+	delivered := func() { a.confirms.Go(func() { _ = a.client.Confirm(life, id) }) }
+	return answer{decision: ans.Decision, message: ans.Message, delivered: delivered}, nil
 }
 
 func (a *socketAsker) wait(d time.Duration) {
 	done := make(chan struct{})
 	go func() { a.confirms.Wait(); close(done) }()
+	timer := a.clock.NewTimer(d)
+	defer timer.Stop()
 	select {
 	case <-done:
-	case <-time.After(d):
+	case <-timer.C():
 	}
 }
 
@@ -153,15 +169,20 @@ func serveMCP(ctx context.Context, in io.Reader, out io.Writer, a asker) error {
 		mu      sync.Mutex
 		pending = map[string]context.CancelFunc{}
 	)
-	reply := func(r rpcResponse) {
+	var writeErr error // the first failed write: the client is not reading
+	reply := func(r rpcResponse) error {
 		r.JSONRPC = "2.0"
 		raw, err := json.Marshal(r)
 		if err != nil {
-			return
+			return err
 		}
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		_, _ = out.Write(append(raw, '\n'))
+		if _, err := out.Write(append(raw, '\n')); err != nil {
+			writeErr = cmp.Or(writeErr, err)
+			return err
+		}
+		return nil
 	}
 	sc := bufio.NewScanner(in)
 	sc.Buffer(nil, inputsock.MaxLine)
@@ -173,11 +194,11 @@ func serveMCP(ctx context.Context, in io.Reader, out io.Writer, a asker) error {
 		notification := len(req.ID) == 0
 		switch req.Method {
 		case "initialize":
-			reply(rpcResponse{ID: req.ID, Result: initializeResult(req.Params)})
+			_ = reply(rpcResponse{ID: req.ID, Result: initializeResult(req.Params)})
 		case "ping":
-			reply(rpcResponse{ID: req.ID, Result: struct{}{}})
+			_ = reply(rpcResponse{ID: req.ID, Result: struct{}{}})
 		case "tools/list":
-			reply(rpcResponse{ID: req.ID, Result: map[string]any{"tools": []any{approveToolSpec()}}})
+			_ = reply(rpcResponse{ID: req.ID, Result: map[string]any{"tools": []any{approveToolSpec()}}})
 		case "tools/call":
 			callCtx, callCancel := context.WithCancel(ctx)
 			mu.Lock()
@@ -185,12 +206,16 @@ func serveMCP(ctx context.Context, in io.Reader, out io.Writer, a asker) error {
 			mu.Unlock()
 			calls.Go(func() {
 				defer callCancel()
-				res, ok := approve(callCtx, a, req.Params)
+				res, delivered, ok := approve(callCtx, a, req.Params)
 				mu.Lock()
 				delete(pending, string(req.ID))
 				mu.Unlock()
-				if ok {
-					reply(rpcResponse{ID: req.ID, Result: res})
+				if !ok {
+					return
+				}
+				// The harness is told only by a reply that was written whole.
+				if reply(rpcResponse{ID: req.ID, Result: res}) == nil && delivered != nil {
+					delivered()
 				}
 			})
 		case "notifications/cancelled":
@@ -206,7 +231,7 @@ func serveMCP(ctx context.Context, in io.Reader, out io.Writer, a asker) error {
 			}
 		default:
 			if !notification {
-				reply(rpcResponse{ID: req.ID, Error: &rpcError{Code: -32601, Message: "method not found"}})
+				_ = reply(rpcResponse{ID: req.ID, Error: &rpcError{Code: -32601, Message: "method not found"}})
 			}
 		}
 	}
@@ -214,7 +239,9 @@ func serveMCP(ctx context.Context, in io.Reader, out io.Writer, a asker) error {
 	cancel()
 	calls.Wait()
 	a.wait(confirmWait)
-	return sc.Err()
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	return errors.Join(sc.Err(), writeErr)
 }
 
 func initializeResult(params json.RawMessage) map[string]any {
@@ -249,8 +276,9 @@ func approveToolSpec() map[string]any {
 }
 
 // approve is one call of the tool. ok is false when the call was cancelled:
-// a cancelled request is not answered.
-func approve(ctx context.Context, a asker, params json.RawMessage) (result any, ok bool) {
+// a cancelled request is not answered. delivered, when not nil, is for the
+// caller to call once the result reached the harness.
+func approve(ctx context.Context, a asker, params json.RawMessage) (result any, delivered func(), ok bool) {
 	var p struct {
 		Name      string `json:"name"`
 		Arguments struct {
@@ -259,7 +287,7 @@ func approve(ctx context.Context, a asker, params json.RawMessage) (result any, 
 		} `json:"arguments"`
 	}
 	if json.Unmarshal(params, &p) != nil || p.Name != approveTool {
-		return toolResult(`{"behavior":"deny","message":"unknown tool"}`, true), true
+		return toolResult(`{"behavior":"deny","message":"unknown tool"}`, true), nil, true
 	}
 	input := p.Arguments.Input
 	if len(input) == 0 {
@@ -268,19 +296,19 @@ func approve(ctx context.Context, a asker, params json.RawMessage) (result any, 
 	if p.Arguments.ToolName == askUserQuestion {
 		// Not an allow: Claude would tell the model the user did not answer, and
 		// the model may ask again. The answer comes as the next user message.
-		return toolResult(mustJSON(map[string]any{"behavior": "deny", "message": questionDeferred}), false), true
+		return toolResult(mustJSON(map[string]any{"behavior": "deny", "message": questionDeferred}), false), nil, true
 	}
-	decision, message, err := a.ask(ctx, p.Arguments.ToolName, input)
+	ans, err := a.ask(ctx, p.Arguments.ToolName, input)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
-	if decision == domain.AnswerAllow {
-		return allowed(input), true
+	if ans.decision == domain.AnswerAllow {
+		return allowed(input), ans.delivered, true
 	}
-	if message == "" {
-		message = "denied"
+	if ans.message == "" {
+		ans.message = "denied"
 	}
-	return toolResult(mustJSON(map[string]any{"behavior": "deny", "message": message}), false), true
+	return toolResult(mustJSON(map[string]any{"behavior": "deny", "message": ans.message}), false), ans.delivered, true
 }
 
 // allowed is an allow that changes nothing: the input goes back as it came.

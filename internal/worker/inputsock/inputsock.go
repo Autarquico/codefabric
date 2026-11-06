@@ -38,11 +38,24 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/Autarquico/codefabric/internal/support/clock"
 )
+
+// clockOrReal is the clock a zero value runs on.
+func clockOrReal(c clock.Clock) clock.Clock {
+	if c == nil {
+		return clock.Real{}
+	}
+	return c
+}
 
 // MaxPath is the longest socket path accepted. The path of a unix socket must
 // fit in sun_path, 104 bytes on macOS (103 and the terminator) and 108 on Linux.
 const MaxPath = 100
+
+// writeTimeout bounds one write to a peer that does not read.
+const writeTimeout = 5 * time.Second
 
 // MaxLine bounds one line of the conversation.
 const MaxLine = 1 << 20
@@ -86,8 +99,9 @@ func Path(dir, run string, leaseEpoch uint64) (string, error) {
 
 // Conn is one connection; Send is safe to call from several goroutines.
 type Conn struct {
-	c  net.Conn
-	mu sync.Mutex
+	c     net.Conn
+	clock clock.Clock
+	mu    sync.Mutex
 }
 
 // Send writes one message.
@@ -98,8 +112,27 @@ func (c *Conn) Send(m Message) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_ = c.c.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	_, err = c.c.Write(append(raw, '\n'))
+	return writeWithin(clockOrReal(c.clock), c.c, append(raw, '\n'))
+}
+
+// writeWithin writes b, and gives up when writeTimeout passes on clk: the
+// deadline is set when the timer fires, not computed from the system time, so
+// that the clock of a test decides when a write has waited long enough.
+func writeWithin(clk clock.Clock, nc net.Conn, b []byte) error {
+	timer := clk.NewTimer(writeTimeout)
+	defer timer.Stop()
+	written, expired := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(expired)
+		select {
+		case <-timer.C():
+			_ = nc.SetWriteDeadline(time.Unix(1, 0))
+		case <-written:
+		}
+	}()
+	_, err := nc.Write(b)
+	close(written)
+	<-expired
 	return err
 }
 
@@ -123,6 +156,7 @@ type Server struct {
 	l    net.Listener
 	path string
 	h    Handler
+	clk  clock.Clock
 	wg   sync.WaitGroup
 
 	mu     sync.Mutex
@@ -133,9 +167,15 @@ type Server struct {
 // maxConns bounds the connections a Server serves at once.
 const maxConns = 32
 
+// Option tunes a Server.
+type Option func(*Server)
+
+// WithClock makes the Server time its writes on clk; the default is the system clock.
+func WithClock(clk clock.Clock) Option { return func(s *Server) { s.clk = clk } }
+
 // Listen makes the socket at path, 0600 in a 0700 directory, replacing the
 // one a daemon that died left, and serves it until Close.
-func Listen(path string, h Handler) (*Server, error) {
+func Listen(path string, h Handler, opts ...Option) (*Server, error) {
 	if len(path) > MaxPath {
 		return nil, fmt.Errorf("inputsock: the socket path is %d bytes, over the %d a unix socket takes", len(path), MaxPath)
 	}
@@ -154,6 +194,9 @@ func Listen(path string, h Handler) (*Server, error) {
 		return nil, fmt.Errorf("inputsock: %w", err)
 	}
 	s := &Server{l: l, path: path, h: h, conns: map[*Conn]struct{}{}}
+	for _, o := range opts {
+		o(s)
+	}
 	s.wg.Go(s.accept)
 	return s, nil
 }
@@ -219,7 +262,7 @@ func (s *Server) accept() {
 			_ = nc.Close()
 			continue
 		}
-		c := &Conn{c: nc}
+		c := &Conn{c: nc, clock: s.clk}
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
@@ -266,6 +309,8 @@ type Client struct {
 	Path string
 	// Wait is how long to wait before dialling again; zero is 200 ms.
 	Wait time.Duration
+	// Clock times the waits and the writes; nil is the system clock.
+	Clock clock.Clock
 }
 
 func (c *Client) wait(ctx context.Context) bool {
@@ -273,12 +318,12 @@ func (c *Client) wait(ctx context.Context) bool {
 	if d <= 0 {
 		d = 200 * time.Millisecond
 	}
-	t := time.NewTimer(d)
+	t := clockOrReal(c.Clock).NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-ctx.Done():
 		return false
-	case <-t.C:
+	case <-t.C():
 		return true
 	}
 }
@@ -294,7 +339,7 @@ func (c *Client) exchange(ctx context.Context, first Message, done func(Message)
 	defer func() { _ = nc.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = nc.Close() })
 	defer stop()
-	conn := &Conn{c: nc}
+	conn := &Conn{c: nc, clock: c.Clock}
 	if err := conn.Send(first); err != nil {
 		return Message{}, err
 	}

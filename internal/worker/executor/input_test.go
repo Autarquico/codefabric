@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -296,4 +298,71 @@ func TestOpenPromptRedactsASecretSplitByAFormatCharacter(t *testing.T) {
 	if strings.Contains(got.Summary, secret) || slices.ContainsFunc(got.Options, func(o string) bool { return strings.Contains(o, secret) }) {
 		t.Errorf("input_requested = %+v", got)
 	}
+}
+
+// Past v1.MaxOpenPrompts a question is dropped, not reported: the Controller
+// would reject the batch, and every report behind it with it.
+func TestQuestionsPastTheLimitOfOpenPromptsAreDroppedAndTheJournalGoesOn(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("ask")
+	var asked []harness.Event
+	for i := range v1.MaxOpenPrompts + 1 {
+		asked = append(asked, harness.Event{Kind: harness.EventInputRequired, ID: fmt.Sprintf("q%d", i), Message: "which?"})
+	}
+	for range 2 { // read again after a restart
+		if err := f.e.askedQuestions(t.Context(), f.run(k), 0, asked); err != nil {
+			t.Fatalf("askedQuestions: %v", err)
+		}
+	}
+	if n, err := state.OpenInputPrompts(t.Context(), f.db.Reader(), k); err != nil || n != v1.MaxOpenPrompts {
+		t.Errorf("open prompts = %d (%v), want %d", n, err, v1.MaxOpenPrompts)
+	}
+	if got := requestedCount(f.reports(k)); got != v1.MaxOpenPrompts {
+		t.Errorf("input_requested reports = %d, want %d", got, v1.MaxOpenPrompts)
+	}
+}
+
+// A permission past the limit is denied, the same limit as the questions.
+func TestAPermissionPastTheLimitOfOpenPromptsIsDenied(t *testing.T) {
+	f, k, client := askSocket(t)
+	for i := range v1.MaxOpenPrompts {
+		id := fmt.Sprintf("q-%d", i)
+		if err := f.e.openPrompt(t.Context(), f.run(k), id, domain.PromptQuestion, "which?", nil, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ans, err := client.Ask(t.Context(), inputsock.Message{PromptID: "p1", Tool: "Bash", Input: json.RawMessage(`{}`)})
+	if err != nil || ans.Decision != domain.AnswerDeny {
+		t.Errorf("answer = %+v (%v)", ans, err)
+	}
+}
+
+// SEC-2: a secret inside the input of a tool leaves the Worker redacted, in the
+// report the Controller turns into the event and the inbox.
+func TestAPermissionRedactsTheSecretsInTheInputOfTheTool(t *testing.T) {
+	f, k, client := askSocket(t)
+	const secret = "s3cr3t-value-9f2c"
+	if err := f.e.jit.Deliver(f.runDir(k), 1, []redact.Needle{{Ref: "github.personal", Value: []byte(secret)}}, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		_, _ = client.Ask(ctx, inputsock.Message{PromptID: "p1", Tool: "Bash", Input: json.RawMessage(`{"command":"curl -H 'token: ` + secret + `'"}`)})
+	}()
+	waitFor(t, "the prompt", func() bool { return requestedCount(f.reports(k)) == 1 })
+	rs := f.reports(k)
+	if got := rs[len(rs)-1].Summary; strings.Contains(got, secret) || !strings.Contains(got, "curl") {
+		t.Errorf("summary = %q", got)
+	}
+}
+
+func requestedCount(rs []v1.RunReportEntry) int {
+	n := 0
+	for _, r := range rs {
+		if r.Kind == v1.ReportInputRequested {
+			n++
+		}
+	}
+	return n
 }

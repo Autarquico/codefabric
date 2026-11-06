@@ -45,12 +45,12 @@ const (
 // and leaves a mark that it was asked.
 type fixedAsker struct{ decision, mark string }
 
-func (a fixedAsker) ask(_ context.Context, tool string, _ json.RawMessage) (string, string, error) {
+func (a fixedAsker) ask(_ context.Context, tool string, _ json.RawMessage) (answer, error) {
 	_ = os.WriteFile(a.mark, []byte(tool), 0o600)
 	if a.decision == domain.AnswerAllow {
-		return domain.AnswerAllow, "", nil
+		return answer{decision: domain.AnswerAllow}, nil
 	}
-	return domain.AnswerDeny, liveDenial, nil
+	return answer{decision: domain.AnswerDeny, message: liveDenial}, nil
 }
 
 func (fixedAsker) wait(time.Duration) {}
