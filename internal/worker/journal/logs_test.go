@@ -340,7 +340,7 @@ func TestAControllerWithoutTheRouteIsToldOnceAndAskedAgainOnlyAfterALongWhile(t 
 	ctl.knows = true // upgraded
 	ctl.mu.Unlock()
 	clk.Advance(10 * time.Minute)
-	waitFor("sent once upgraded", func() bool { _, sent := ctl.state(); return sent == 3 })
+	waitFor("sent and confirmed once upgraded", func() bool { _, sent := ctl.state(); return sent == 3 && pendingLogs(t, db) == 0 })
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -350,9 +350,6 @@ func TestAControllerWithoutTheRouteIsToldOnceAndAskedAgainOnlyAfterALongWhile(t 
 	out := fallback.String()
 	if strings.Count(out, "does not take structured logs") != 1 || strings.Contains(out, "level=WARN") || !strings.Contains(out, "level=INFO") {
 		t.Fatalf("fallback = %q", out)
-	}
-	if pendingLogs(t, db) != 0 {
-		t.Fatalf("%d pending", pendingLogs(t, db))
 	}
 }
 
