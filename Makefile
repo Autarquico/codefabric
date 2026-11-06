@@ -11,7 +11,7 @@ TARGETS  := linux/amd64 linux/arm64 darwin/arm64
 
 export CGO_ENABLED := 0
 
-.PHONY: build test test-race test-integration test-e2e test-e2e-property test-e2e-race e2e-reap bench lint fmt cover cross release-snapshot clean
+.PHONY: build test test-race test-integration test-e2e test-e2e-property test-e2e-race e2e-reap bench lint fmt cover cross release-snapshot test-installer clean
 
 build:
 	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/cf ./cmd/cf
@@ -73,6 +73,9 @@ cross:
 
 release-snapshot:
 	$(GORELEASER) release --snapshot --clean
+
+test-installer:
+	sh packaging/release/test/run.sh
 
 clean:
 	rm -rf bin dist coverage.out
