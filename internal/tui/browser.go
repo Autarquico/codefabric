@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"maps"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -402,6 +403,13 @@ func (b *browser) start(d actions.Descriptor, row Row, values map[string]string)
 	b.busy = d.Title + "…"
 	backend, asker := b.backend, from(b.id)
 	in := actions.Input{Target: row.ID, Values: values}
+	if row.Target != "" {
+		in.Target = row.Target
+	}
+	if len(row.Values) > 0 {
+		in.Values = maps.Clone(row.Values)
+		maps.Copy(in.Values, values)
+	}
 	if d.Target == actions.None {
 		in.Target = ""
 	}

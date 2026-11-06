@@ -43,6 +43,7 @@ type State struct {
 	Workers   Feed[v1.Worker]
 	Workflows Feed[WorkflowRow]
 	Projects  Feed[v1.Project]
+	Inbox     Feed[v1.InboxItem]
 }
 
 // Feed is the list that a view follows: the items of the last snapshot, whether
