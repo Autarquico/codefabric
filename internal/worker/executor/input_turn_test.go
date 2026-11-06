@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -59,6 +60,22 @@ func bridgeOf(t *testing.T, f *fixture, k state.Key) *inputsock.Client {
 		t.Fatal(err)
 	}
 	return &inputsock.Client{Path: path, Wait: 10 * time.Millisecond}
+}
+
+// holdInputFIFO makes the FIFO of the Run, and holds it open as the wrapper does.
+// It has to be a FIFO: the write deadline of a regular file is refused on Linux
+// (no poller takes it), which the adapter reads as an input not sent.
+func holdInputFIFO(t *testing.T, f *fixture, k state.Key) {
+	t.Helper()
+	path := filepath.Join(f.runDir(k), InputFIFO)
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Close(fd) })
 }
 
 func (f *fixture) inputEnded(k state.Key) bool {
@@ -166,9 +183,7 @@ func TestTheSupervisorEndsTheInputOfAnIdleHarness(t *testing.T) {
 // does not end the input under it.
 func TestAnAnsweredQuestionKeepsTheInputOpenForTheTurnItBegins(t *testing.T) {
 	f, k := streamedFixture(t)
-	if err := os.WriteFile(filepath.Join(f.runDir(k), InputFIFO), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	holdInputFIFO(t, f, k)
 	f.appendEvents(k, "ask\nresult\n")
 	f.e.step(t.Context(), k)
 	if f.inputEnded(k) {
