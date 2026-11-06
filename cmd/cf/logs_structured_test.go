@@ -195,3 +195,26 @@ func TestLogsOutputStorage_TailOfARunWithAHugeLineIsBounded(t *testing.T) {
 		t.Fatalf("exit %d, %d bytes, stderr %q", code, len(out), errOut)
 	}
 }
+
+// A clipped tail keeps its bytes exactly in --raw and --json, even when they are not UTF-8.
+func TestLogsOutputStorage_ClippedTailKeepsNonUTF8BytesInRawAndJSON(t *testing.T) {
+	host, _ := bringUpController(t)
+	r := newWorkerRun(t, host)
+	use(t, host)
+	const piece = 64 << 10
+	offset := uint64(0)
+	for range 80 { // 5 MiB of continuation bytes with no newline
+		r.upload(t, offset, strings.Repeat("\x80", piece))
+		offset += piece
+	}
+	r.upload(t, offset, "end\n")
+
+	code, out, _ := cf(t, "", "logs", "--run", r.run.Short, "--tail", "1", "--raw")
+	if code != 0 || len(out) != 4<<20 || !strings.HasPrefix(out, "\x80\x80") {
+		t.Fatalf("raw: exit %d, %d bytes", code, len(out))
+	}
+	page := ok[v1.RunOutput](t, "logs", "--run", r.run.Short, "--tail", "1")
+	if len(page.Data) != 4<<20 || page.Data[0] != 0x80 {
+		t.Fatalf("json: %d bytes", len(page.Data))
+	}
+}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -16,8 +17,8 @@ func TestPrintLogKeepsEveryFieldOnOneLineAndFreeOfEscapes(t *testing.T) {
 		Attrs: []byte(`{"k":"\u001b"}`),
 	}
 	var safe, raw bytes.Buffer
-	printLog(&safe, l, false)
-	printLog(&raw, l, true)
+	_ = printLog(&safe, l, false)
+	_ = printLog(&raw, l, true)
 	if got := safe.String(); strings.ContainsAny(got, "\x1b\x07\r") || strings.Count(got, "\n") != 1 ||
 		!strings.Contains(got, "worker:w/run1  a b c!  {") {
 		t.Errorf("sanitised: %q", got)
@@ -35,6 +36,7 @@ func TestLogsFlagsAreCheckedBeforeAnythingIsAsked(t *testing.T) {
 		{"logs", "--since", "yesterday"},
 		{"logs", "--after", "5", "--tail", "3"},
 		{"logs", "--limit", "5", "--tail", "3"},
+		{"logs", "--limit", "-1"},
 	} {
 		if code, _, _ := run(t, args...); code != 2 {
 			t.Errorf("%v: exit %d, want a usage error", args, code)
@@ -92,5 +94,27 @@ func TestParseSince(t *testing.T) {
 		if _, err := parseSince(bad, now); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+type failingWriter struct{}
+
+var errBrokenPipe = errors.New("broken pipe")
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errBrokenPipe }
+
+func TestPrintLogReturnsTheWriteError(t *testing.T) {
+	if err := printLog(failingWriter{}, v1.Log{Sequence: 1, Message: "m"}, false); !errors.Is(err, errBrokenPipe) {
+		t.Errorf("err = %v, want the write error", err)
+	}
+}
+
+func TestStartAtRuneDropsCutCharactersOnlyWhenSanitising(t *testing.T) {
+	cut := []byte("\x80\x80ab")
+	if got := startAtRune(cut, false); string(got) != "ab" {
+		t.Errorf("sanitised: %q", got)
+	}
+	if got := startAtRune(cut, true); !bytes.Equal(got, cut) {
+		t.Errorf("kept: %q", got)
 	}
 }

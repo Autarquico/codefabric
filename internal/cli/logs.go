@@ -58,6 +58,9 @@ func newLogsCmd() *cobra.Command {
 			if tailSet && tail < 1 {
 				return domain.NewError(domain.CodeInvalidRequest, "--tail is a number of lines of at least 1", nil)
 			}
+			if f.Changed("limit") && q.Limit < 0 {
+				return domain.NewError(domain.CodeInvalidRequest, "--limit is a number of logs of at least 0", nil)
+			}
 			filtered := false
 			for _, name := range []string{"worker", flagProject, "task", "level", "since", "after", "limit"} {
 				filtered = filtered || f.Changed(name)
@@ -102,7 +105,9 @@ func newLogsCmd() *cobra.Command {
 			}
 			return emit(cmd, page, func(out io.Writer) error {
 				for _, l := range page.Logs {
-					printLog(out, l, raw)
+					if err := printLog(out, l, raw); err != nil {
+						return err
+					}
 				}
 				return nil
 			})
@@ -138,17 +143,18 @@ func terminalSafe(s string, raw bool) string {
 	}, string((&sanitizer{}).Filter([]byte(s))))
 }
 
-func printLog(out io.Writer, l v1.Log, raw bool) {
+func printLog(out io.Writer, l v1.Log, raw bool) error {
 	safe := func(s string) string { return terminalSafe(s, raw) }
 	source := safe(l.Source)
 	if l.RunID != "" {
 		source += "/" + safe(l.RunID)
 	}
-	fmt.Fprintf(out, "%d  %s  %-5s  %s  %s", l.Sequence, l.ReceivedAt.Local().Format(time.TimeOnly), safe(l.Level), source, safe(l.Message))
+	line := fmt.Sprintf("%d  %s  %-5s  %s  %s", l.Sequence, l.ReceivedAt.Local().Format(time.TimeOnly), safe(l.Level), source, safe(l.Message))
 	if len(l.Attrs) > 0 && string(l.Attrs) != "{}" {
-		fmt.Fprintf(out, "  %s", safe(string(l.Attrs)))
+		line += "  " + safe(string(l.Attrs))
 	}
-	fmt.Fprintln(out)
+	_, err := io.WriteString(out, line+"\n")
+	return err
 }
 
 // followStructuredLogs shows the tail and then the stream from the cursor of
@@ -161,8 +167,7 @@ func followStructuredLogs(cmd *cobra.Command, c *client.Client, q client.LogQuer
 		if asJSON {
 			return encodeJSON(out, l)
 		}
-		printLog(out, l, raw)
-		return nil
+		return printLog(out, l, raw)
 	}
 	ctx := cmd.Context()
 	if q.After == "" {
@@ -180,8 +185,11 @@ func followStructuredLogs(cmd *cobra.Command, c *client.Client, q client.LogQuer
 	q.Tail, q.Limit = 0, 0
 	for {
 		err := c.FollowLogs(ctx, q, func(l v1.Log) error {
+			if err := show(l); err != nil {
+				return err
+			}
 			q.After = strconv.FormatUint(l.Sequence, 10)
-			return show(l)
+			return nil
 		})
 		var coded *domain.Error
 		switch {
@@ -253,12 +261,19 @@ func readTail(ctx context.Context, c *client.Client, run string, lines int) (pag
 	tail = lastLines(data, lines)
 	if len(tail) > maxTailBytes { // a few very long lines: the end of them
 		tail = tail[len(tail)-maxTailBytes:]
-		for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
-			tail = tail[1:]
-		}
 		clipped = true
 	}
 	return first, tail, clipped, nil
+}
+
+// startAtRune is data without the continuation bytes of a character that the
+// bound on the tail cut, for the sanitised rendering only: raw output and JSON
+// keep every byte. keep says the data was not cut or is not sanitised.
+func startAtRune(data []byte, keep bool) []byte {
+	for !keep && len(data) > 0 && !utf8.RuneStart(data[0]) {
+		data = data[1:]
+	}
+	return data
 }
 
 func showLogs(cmd *cobra.Command, c *client.Client, run string, lines int, follow, raw bool) error {
@@ -282,7 +297,7 @@ func showLogs(cmd *cobra.Command, c *client.Client, run string, lines int, follo
 		if err := encodeJSON(out, chunk); err != nil {
 			return err
 		}
-	} else if _, err := out.Write(san.Filter(data)); err != nil {
+	} else if _, err := out.Write(san.Filter(startAtRune(data, raw || !clipped))); err != nil {
 		return err
 	}
 	if page.Truncated && !asJSON {
