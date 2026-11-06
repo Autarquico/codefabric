@@ -467,6 +467,15 @@ func idPrefix(t *testing.T, kind, a, b string) string {
 	return pa
 }
 
+// distinctPrefix is the shortest prefix of a that b does not share.
+func distinctPrefix(a, b string) string {
+	n := 0
+	for n < len(a) && n < len(b) && a[n] == b[n] {
+		n++
+	}
+	return a[:n+1]
+}
+
 func TestSearch_ULIDPrefixOfProjectsWorkersAndWorkflows(t *testing.T) {
 	e := newWorkflowEnv(t, 0)
 	back := e.project("backend")
@@ -492,10 +501,10 @@ func TestSearch_ULIDPrefixOfProjectsWorkersAndWorkflows(t *testing.T) {
 	ambiguous("workflow", idPrefix(t, "workflow", wf1.WorkflowID, wf2.WorkflowID), wf1.WorkflowID, wf2.WorkflowID)
 
 	// A prefix longer than the shared part names one entity.
-	for _, c := range []struct{ kind, id string }{
-		{"project", back.ID}, {"worker", string(w1.ID)}, {"workflow", wf1.WorkflowID},
+	for _, c := range []struct{ kind, id, other string }{
+		{"project", back.ID, front.ID}, {"worker", string(w1.ID), string(w2.ID)}, {"workflow", wf1.WorkflowID, wf2.WorkflowID},
 	} {
-		long := strings.TrimPrefix(c.id, c.kind+"_")[:20]
+		long := distinctPrefix(strings.TrimPrefix(c.id, c.kind+"_"), strings.TrimPrefix(c.other, c.kind+"_"))
 		got := e.search(long, ofKind(c.kind))
 		if len(got) != 1 || got[0].ID != c.id || got[0].Match != v1.SearchMatchExact {
 			t.Errorf("%s prefix %q = %+v, want %s exact", c.kind, long, got, c.id)
