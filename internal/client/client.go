@@ -345,13 +345,31 @@ func (c *Client) sendOK(ctx context.Context, hc *http.Client, method, path strin
 func (c *Client) decodeError(status int, raw []byte) error {
 	var env v1.ErrorEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil || env.Error.Code == "" {
-		return domain.NewError(domain.CodeInternal, fmt.Sprintf("unexpected response from the Controller (HTTP %d)", status), nil)
+		return &bareStatus{status: status, err: domain.NewError(domain.CodeInternal, fmt.Sprintf("unexpected response from the Controller (HTTP %d)", status), nil)}
 	}
 	msg := env.Error.Message
 	if env.Error.Code == domain.CodeUnauthenticated && c.dir != "" {
 		msg += ": " + c.recovery
 	}
 	return domain.NewError(env.Error.Code, msg, env.Error.Details)
+}
+
+// ErrUnknownRoute is a 404 or a 405 without an error envelope. A Controller
+// that knows a route always answers it with an envelope; one older than the
+// route answers so.
+var ErrUnknownRoute = errors.New("client: the Controller does not know this route")
+
+// bareStatus is an answer without an error envelope: a CF_INTERNAL that also
+// remembers its HTTP status, for ErrUnknownRoute.
+type bareStatus struct {
+	status int
+	err    *domain.Error
+}
+
+func (e *bareStatus) Error() string { return e.err.Error() }
+func (e *bareStatus) Unwrap() error { return e.err }
+func (e *bareStatus) Is(target error) bool {
+	return target == ErrUnknownRoute && (e.status == http.StatusNotFound || e.status == http.StatusMethodNotAllowed)
 }
 
 const renewHint = "ask the owner for a new invitation (`cf controller token create`) and run `cf connect --force <invitation>`"

@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: M
 issue: 100
-prs: [104, 111]
+prs: [104, 111, 115]
 related_issues: [100]
 sub_issues: []
 depends_on: [observe-attach-events]
@@ -61,6 +61,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - Respetar las reglas de capas (ADR 0001) y las decisiones D1–D7 (ADR 0002).
 - Transacción única para estado, evento e idempotencia (§27.4); reloj inyectable en todo timeout.
 
+- Alcance por tramos: L1–L3 (PR #115) entregan almacenamiento y orden de los logs, ingesta de los Workers, logs estructurados del Worker y del Controller con redacción, y la lectura/follow por servicio, API y SDK (`Client.Logs`, `Client.FollowLogs`). L4 debe entregar todavía el comando `cf logs` (filtros y `--follow` en el CLI); hasta entonces el scenario de filtros y el de follow se cumplen en la API, no en el CLI.
 - Las migraciones de esta milestone se numeran en la secuencia común asignada al mergear (el store rechaza migraciones fuera de orden).
 
 ## Referencias

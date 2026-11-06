@@ -130,6 +130,7 @@ func (o *originAccess) credential(ctx context.Context) (*gitops.OriginAuth, erro
 	if err != nil {
 		return nil, fmt.Errorf("%s: reading back the credential of the origin: %w", domain.CodeSecretUnavailable, err)
 	}
+	e.holdForLogs(o.r.Key, retained)
 	o.auth = &gitops.OriginAuth{Askpass: e.o.AskpassScript, RunDir: dir, Needles: retained}
 	return o.auth, nil
 }
@@ -192,6 +193,9 @@ func (e *Executor) scrub(r state.Run, err error) error {
 	if errors.Is(loadErr, secretjit.ErrNotDelivered) {
 		return err
 	}
+	if loadErr == nil {
+		e.holdForLogs(r.Key, needles)
+	}
 	redactText := func(s string) string {
 		if loadErr != nil {
 			return "(the message is withheld: the secrets of the Run cannot be read to redact it)"
@@ -208,4 +212,28 @@ func (e *Executor) scrub(r state.Run, err error) error {
 		unwrap = &codedFailure{code: coded.code, msg: redactText(coded.msg)}
 	}
 	return &scrubbed{msg: redactText(err.Error()), err: err, unwrap: unwrap}
+}
+
+// holdForLogs has the logs redacted of what the Run k retains (Options.LogSecrets).
+// What cannot be held is said, by ref only: the stored copy of the logs then
+// relies on scrub alone for that Run.
+func (e *Executor) holdForLogs(k state.Key, retained []redact.Needle) {
+	if err := e.o.LogSecrets.Hold(e.runDir(k), retained); err != nil {
+		e.log.Warn("the logs cannot be redacted of the secrets of a Run", "run", k.RunID, "err", err)
+	}
+}
+
+// loadForLogs is holdForLogs with what the delivery of k retains now.
+func (e *Executor) loadForLogs(k state.Key) {
+	if e.o.LogSecrets == nil {
+		return
+	}
+	retained, err := secretjit.Load(e.runDir(k))
+	switch {
+	case errors.Is(err, secretjit.ErrNotDelivered):
+	case err != nil:
+		e.log.Warn("the logs cannot be redacted of the secrets of a Run: they cannot be read", "run", k.RunID, "err", err)
+	default:
+		e.holdForLogs(k, retained)
+	}
 }

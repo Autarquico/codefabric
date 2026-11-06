@@ -28,6 +28,8 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 	"github.com/Autarquico/codefabric/internal/support/envutil"
+	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codefabric/internal/support/slogtee"
 	"github.com/Autarquico/codefabric/internal/worker/applier"
 	"github.com/Autarquico/codefabric/internal/worker/authsync"
 	"github.com/Autarquico/codefabric/internal/worker/doctor"
@@ -159,6 +161,8 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+	logJournal, logSecrets, stopLogs := d.teeLogs(ctx, db, c)
+	defer stopLogs() // before the database closes: what is left is written to it
 	if d.generation, err = db.StartGeneration(ctx); err != nil {
 		return err
 	}
@@ -178,6 +182,7 @@ func Run(ctx context.Context, o Options) error {
 	eo := executor.Options{
 		DB: db, Controller: c, Workflows: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
 		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
+		LogSecrets: logSecrets,
 	}
 	eo.AskpassScript = d.writeAskpassScript(ctx, o)
 	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})
@@ -241,11 +246,44 @@ func Run(ctx context.Context, o Options) error {
 	g.Go(func() error { return ex.Run(gctx) })
 	g.Go(func() error { return broker.Run(gctx) })
 	g.Go(func() error { return sender.Run(gctx) })
+	g.Go(func() error { return logJournal.Run(gctx) })
 	shipper := outputship.New(outputship.Options{
 		DB: db, Uploader: c, Paths: o.Paths, Clock: d.clock, Log: d.log, Interval: o.OutputInterval,
 	})
 	g.Go(func() error { return shipper.Run(gctx) })
 	return g.Wait()
+}
+
+// teeLogs keeps a structured copy of what the daemon logs from here on in the
+// log journal of state.db, which sends it to the Controller (§34); stderr
+// still gets every line. The journal, and the writer of the tee, log only to
+// the logger the daemon was given: what they say about a line is not another
+// line. stop writes what is left and waits; it runs before db is closed.
+//
+// The daemon does hold secret values: the executor reads them from the
+// keyring to deliver them to a Run (secretjit) and to render its
+// configuration, and reads the credential of an origin for git-askpass. So
+// before a line is stored it is redacted of every value a Run of this daemon
+// retains: the executor holds them in held from the delivery until the
+// release (executor.Options.LogSecrets), and again for a Run a previous daemon
+// delivered to, once it touches it. Then come redact.Text and the keys that
+// name secrets. This does not replace the scrubbing at each site (e.scrub on
+// the errors of a prepare, OriginAuth.Needles on the output of git): stderr
+// gets the line as it is. A value read from the keyring and not yet delivered
+// is in no set: the paths between the read and the delivery log refs only.
+func (d *daemon) teeLogs(ctx context.Context, db *state.DB, c *client.Client) (logs *journal.Logs, held *redact.Live, stop func()) {
+	fallback := d.log
+	held = &redact.Live{}
+	tee := slogtee.New(slogtee.Options{MaxMessageBytes: v1.LogMessageMaxBytes, MaxAttrsBytes: v1.LogAttrsMaxBytes, Redact: held.Text, Clock: d.clock})
+	d.log = slog.New(tee.Wrap(fallback.Handler()))
+	logs = journal.NewLogs(journal.LogsOptions{DB: db, Epoch: d.epoch, Shipper: c, Clock: d.clock, Log: fallback})
+	logCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tee.Run(logCtx, logs.Store, fallback)
+	}()
+	return logs, held, func() { cancel(); <-done }
 }
 
 // orderTaker is the applier as the daemon sees it.

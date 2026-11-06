@@ -1,5 +1,6 @@
 // Package stream is what the use cases that follow something for as long as a
-// client listens have in common: how long a quiet stream may stay silent.
+// client listens have in common: how long a quiet stream may stay silent, and
+// the loop that looks and waits without missing a commit.
 package stream
 
 import (
@@ -47,4 +48,60 @@ func (p *Pacer) Wait(ctx context.Context, changed <-chan struct{}, atMost time.D
 	case <-timer.C():
 	}
 	return p.clock.Now().Sub(p.last) >= p.every, nil
+}
+
+// Marks is what Follow needs of a notifier: the mark of the newest commit
+// announced, and a channel that closes once a later one is.
+type Marks interface {
+	Latest() uint64
+	Changed(after uint64) <-chan struct{}
+}
+
+// Follow looks, and only if there is nothing more waits, from the mark it read
+// before looking: a commit between the two is announced above that mark, so
+// none is missed. A commit that is not for this stream only makes it look
+// again, from where the last look ended.
+//
+// look delivers what it found since the last look, reports whether it
+// delivered anything and whether more is ready already; seen is the mark read
+// before it. When the stream has been quiet for KeepaliveEvery, authorize is
+// asked whether the caller is still valid, then idle is called. Follow returns
+// when ctx ends or any of them fails.
+func Follow(ctx context.Context, clk clock.Clock, marks Marks,
+	look func(seen uint64) (delivered, more bool, err error),
+	authorize func() error, idle func() error,
+) error {
+	pacer := NewPacer(clk, KeepaliveEvery)
+	for {
+		seen := marks.Latest()
+		delivered, more, err := look(seen)
+		if err != nil {
+			return err
+		}
+		if delivered {
+			pacer.Wrote()
+		}
+		if more {
+			continue
+		}
+		for {
+			due, err := pacer.Wait(ctx, marks.Changed(seen), 0)
+			if err != nil {
+				return err
+			}
+			if !due {
+				break
+			}
+			if err := authorize(); err != nil {
+				return err
+			}
+			if err := idle(); err != nil {
+				return err
+			}
+			pacer.Wrote()
+			if marks.Latest() > seen {
+				break
+			}
+		}
+	}
 }
