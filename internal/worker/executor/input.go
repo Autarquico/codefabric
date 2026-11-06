@@ -385,8 +385,8 @@ func (e *Executor) permissionAcked(ir *inputRun, c *inputsock.Conn, m inputsock.
 }
 
 // permissionWithdrawn closes a prompt whose harness stopped waiting for the
-// answer: it no longer counts against v1.MaxOpenPrompts nor holds the input of
-// the harness open, and an answer that comes for it is dropped.
+// answer: it no longer holds the input of the harness open (it still counts
+// against v1.MaxOpenPrompts: the Controller is not told), and an answer that comes for it is dropped.
 func (e *Executor) permissionWithdrawn(ir *inputRun, c *inputsock.Conn, m inputsock.Message) {
 	ctx, k := ir.ctx, ir.key
 	unlock := e.lock(k)
@@ -566,11 +566,11 @@ func (e *Executor) openPrompt(ctx context.Context, r state.Run, id string, kind 
 		if _, err := state.InputPromptOf(ctx, tx, r.Key, id); !errors.Is(err, state.ErrNotFound) {
 			return err // the same ask seen again, or a read that failed
 		}
-		open, err := state.OpenInputPrompts(ctx, tx, r.Key)
+		held, err := state.ControllerHeldInputPrompts(ctx, tx, r.Key)
 		if err != nil {
 			return err
 		}
-		if open >= v1.MaxOpenPrompts {
+		if held >= v1.MaxOpenPrompts {
 			return errTooManyPrompts
 		}
 		inserted, err := state.InsertInputPrompt(ctx, tx, state.InputPrompt{Key: r.Key, PromptID: id, Kind: kind, CreatedAt: e.clock.Now()})

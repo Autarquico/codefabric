@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -316,6 +317,35 @@ func TestQuestionsPastTheLimitOfOpenPromptsAreDroppedAndTheJournalGoesOn(t *test
 	}
 	if n, err := state.OpenInputPrompts(t.Context(), f.db.Reader(), k); err != nil || n != v1.MaxOpenPrompts {
 		t.Errorf("open prompts = %d (%v), want %d", n, err, v1.MaxOpenPrompts)
+	}
+	if got := requestedCount(f.reports(k)); got != v1.MaxOpenPrompts {
+		t.Errorf("input_requested reports = %d, want %d", got, v1.MaxOpenPrompts)
+	}
+}
+
+// A withdrawal is not reported, so the Controller still counts the prompt: the
+// slot it frees locally is not reusable, or the Controller would reject the
+// report and stall the journal.
+func TestWithdrawnPromptsStillCountAgainstTheLimitOfOpenPrompts(t *testing.T) {
+	f := newFixture(t)
+	k := f.started("ask")
+	for i := range v1.MaxOpenPrompts {
+		id := fmt.Sprintf("q-%d", i)
+		if err := f.e.openPrompt(t.Context(), f.run(k), id, domain.PromptQuestion, "which?", nil, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+			_, err := state.WithdrawInputPrompt(t.Context(), tx, k, id)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := state.OpenInputPrompts(t.Context(), f.db.Reader(), k); err != nil || n != 0 {
+		t.Errorf("open prompts = %d (%v), want 0", n, err)
+	}
+	if err := f.e.openPrompt(t.Context(), f.run(k), "q-extra", domain.PromptQuestion, "which?", nil, true); !errors.Is(err, errTooManyPrompts) {
+		t.Errorf("openPrompt = %v, want errTooManyPrompts", err)
 	}
 	if got := requestedCount(f.reports(k)); got != v1.MaxOpenPrompts {
 		t.Errorf("input_requested reports = %d, want %d", got, v1.MaxOpenPrompts)

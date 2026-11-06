@@ -75,6 +75,18 @@ func OpenInputPrompts(ctx context.Context, q Querier, k Key) (int, error) {
 	return n, nil
 }
 
+// ControllerHeldInputPrompts counts the prompts of the Run the Controller still
+// holds open: those open and those withdrawn, since a withdrawal is never
+// reported to it.
+func ControllerHeldInputPrompts(ctx context.Context, q Querier, k Key) (int, error) {
+	var n int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM input_prompts WHERE run_id = ? AND lease_epoch = ? AND state IN (?, ?)`,
+		k.RunID, k.LeaseEpoch, PromptOpen, PromptWithdrawn).Scan(&n); err != nil {
+		return 0, fmt.Errorf("state: counting the input prompts the Controller holds open: %w", err)
+	}
+	return n, nil
+}
+
 // AcknowledgeInputPrompt closes a prompt whose answer reached the harness;
 // changed is false when it was not open.
 func AcknowledgeInputPrompt(ctx context.Context, tx *Tx, k Key, promptID string) (changed bool, err error) {
