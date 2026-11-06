@@ -20,6 +20,7 @@ const (
 	RouteProjects  Route = "projects"
 	RouteActivity  Route = "activity"
 	RouteLogs      Route = "logs"
+	RouteInbox     Route = "inbox"
 	RouteSearch    Route = "search"
 )
 
@@ -41,6 +42,7 @@ var bindings = [][]binding{
 		{Hint{"p", "Projects"}, RouteProjects},
 		{Hint{"a", "Activity"}, RouteActivity},
 		{Hint{"l", "Logs"}, RouteLogs},
+		{Hint{"i", "Inbox"}, RouteInbox},
 		{Hint{"/", "Search"}, RouteSearch},
 	},
 }

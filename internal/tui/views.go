@@ -19,7 +19,7 @@ import (
 func specs() map[Route]viewSpec {
 	all := []viewSpec{
 		tasksDef().spec(), runsDef().spec(), workersDef().spec(), workflowsDef().spec(), projectsDef().spec(),
-		activityView(), modelsView(), logsView(),
+		activityView(), modelsView(), logsView(), inboxSpec(),
 	}
 	byRoute := make(map[Route]viewSpec, len(all))
 	for _, spec := range all {

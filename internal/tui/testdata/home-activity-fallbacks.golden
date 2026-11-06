@@ -11,5 +11,5 @@
  12:00   task-12           task → running
  ──────────────────────────────────────────────────────────────────────
  [t] Tasks [w] Workers [m] Models [r] Runs [f] Workflows
- [p] Projects [a] Activity [l] Logs [/] Search [ctrl+p] Actions
- [:] Command [q] Quit
+ [p] Projects [a] Activity [l] Logs [i] Inbox [/] Search
+ [ctrl+p] Actions [:] Command [q] Quit
