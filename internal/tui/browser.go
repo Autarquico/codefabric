@@ -521,12 +521,12 @@ func (b *browser) emptyText(info feedInfo) string {
 
 func (b *browser) statusLine(c RenderContext) string {
 	switch {
-	case b.busy != "":
-		return margin + c.Theme.Faint.Render(b.busy)
 	case b.warn != "":
 		return margin + c.Theme.Warning.Render(ansi.Truncate(printable(b.warn), c.inner(), "…"))
 	case b.flash != "":
 		return margin + c.Theme.Success.Render(ansi.Truncate(printable(b.flash), c.inner(), "…"))
+	case b.busy != "":
+		return margin + c.Theme.Faint.Render(b.busy)
 	case c.Status != "":
 		return margin + c.Theme.Warning.Render(printable(c.Status))
 	}

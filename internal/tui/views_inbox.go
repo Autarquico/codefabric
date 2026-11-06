@@ -40,7 +40,10 @@ func inboxDef() viewDef[v1.InboxItem] {
 func inboxSpec() viewSpec {
 	spec := inboxDef().spec()
 	spec.readOnly, spec.primary = true, "Answer"
-	spec.open = func(env screenEnv) Screen { return inboxScreen{newBrowser(inboxSpec(), env.Backend)} }
+	spec.open = func(env screenEnv) Screen {
+		b := newBrowser(inboxSpec(), env.Backend)
+		return &inboxScreen{browser: b, shortcuts: b.spec.shortcuts}
+	}
 	return spec
 }
 
@@ -56,7 +59,7 @@ func inboxKey(it v1.InboxItem) string {
 func inboxRow(it v1.InboxItem, c RenderContext) Row {
 	kind, tone, text := it.Kind, ToneDanger, "ended: "+printable(string(it.EndReason))
 	if it.Prompt != nil {
-		kind, tone, text = string(it.Prompt.Kind), ToneText, firstLine(printable(it.Prompt.Summary))
+		kind, tone, text = string(it.Prompt.Kind), ToneText, oneLine(it.Prompt.Summary)
 		if it.Prompt.Kind == domain.PromptPermission {
 			tone = ToneWarning
 		}
@@ -98,7 +101,7 @@ func inboxDetail(it v1.InboxItem, c RenderContext) []Field {
 	}
 	fields = append(fields,
 		Field{"Asks", printable(string(p.Kind)), ToneText},
-		Field{"Prompt", printable(p.Summary), ToneText},
+		Field{"Prompt", allLines(p.Summary), ToneText},
 		Field{"Options", strings.Join(options, ", "), ToneFaint},
 	)
 	switch {
@@ -110,11 +113,39 @@ func inboxDetail(it v1.InboxItem, c RenderContext) []Field {
 	return append(fields, Field{"Answer", "enter to type an answer", ToneFaint})
 }
 
-// inboxScreen is the browser of the Inbox with the keys that answer.
-type inboxScreen struct{ *browser }
+// oneLine is the first line of a server text, drawn safely; a mark says that
+// more lines follow. The lines are split before printable drops the newlines.
+func oneLine(text string) string {
+	line := printable(firstLine(text))
+	if strings.Contains(strings.TrimSpace(text), "\n") {
+		line += " …"
+	}
+	return line
+}
 
-func (s inboxScreen) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
-	if k, ok := msg.(tea.KeyPressMsg); ok && !s.modal() && !s.list.typing {
+// allLines is every line of a server text, drawn safely, with the boundaries
+// kept visible: what a person allows must read as it is.
+func allLines(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	for i, l := range lines {
+		lines[i] = printable(l)
+	}
+	return strings.Join(lines, " ⏎ ")
+}
+
+// inboxScreen is the browser of the Inbox with the keys that answer. Answering
+// is bound to what the person chose: the item the cursor was on when they last
+// pressed a key or saw the list. When the feed moves another item under the
+// cursor, a key does not answer it.
+type inboxScreen struct {
+	*browser
+	shortcuts []shortcut // all the answer keys; the footer shows those that apply
+	chosen    string     // key of the item the person has chosen; "" until they see one
+}
+
+func (s *inboxScreen) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
+	k, isKey := msg.(tea.KeyPressMsg)
+	if isKey && !s.modal() && !s.list.typing {
 		switch key := k.String(); key {
 		case "y", "n", "enter":
 			s.flash, s.warn = "", ""
@@ -122,13 +153,46 @@ func (s inboxScreen) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 		}
 	}
 	_, cmd, handled := s.browser.Update(msg)
+	if isKey {
+		if row, ok := s.list.selected(s.rows); ok {
+			s.chosen = row.ID
+		}
+	}
 	return s, cmd, handled
 }
 
-// answer runs the key on the selected item, or says why it cannot.
-func (s inboxScreen) answer(key string) tea.Cmd {
+// Render offers only the keys that answer the selected item, and takes the
+// item on screen as the person's choice when they have none.
+func (s *inboxScreen) Render(c RenderContext) string {
+	s.spec.shortcuts, s.spec.primary = nil, ""
+	if row, ok := s.list.selected(s.rows); ok {
+		if s.chosen == "" {
+			s.chosen = row.ID
+		}
+		if it, found := s.item(row.ID); found && it.Prompt != nil && it.Run.Respondable {
+			if it.Prompt.Kind == domain.PromptPermission {
+				s.spec.shortcuts = s.shortcuts
+			} else {
+				s.spec.primary = "Answer"
+			}
+		}
+	}
+	return s.browser.Render(c)
+}
+
+// answer runs the key on the item the person chose, or says why it cannot.
+func (s *inboxScreen) answer(key string) tea.Cmd {
 	row, ok := s.list.selected(s.rows)
 	if !ok {
+		return nil
+	}
+	if s.busy != "" {
+		s.flash = "Wait for " + s.busy
+		return nil
+	}
+	if row.ID != s.chosen {
+		s.chosen = ""
+		s.warn = "The list changed: check the selected item and press again"
 		return nil
 	}
 	it, ok := s.item(row.ID)
@@ -163,7 +227,7 @@ func (s inboxScreen) answer(key string) tea.Cmd {
 	return nil
 }
 
-func (s inboxScreen) item(key string) (v1.InboxItem, bool) {
+func (s *inboxScreen) item(key string) (v1.InboxItem, bool) {
 	if s.state == nil {
 		return v1.InboxItem{}, false
 	}

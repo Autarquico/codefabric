@@ -1,7 +1,7 @@
  CODEFABRIC                                                           ● healthy
  ──────────────── Inbox · 4 ───────────────────────────────────────────────────
    KIND       TASK           RUN       SINCE   PROMPT
- › permission auth-refactor  r-8a1b    12:40   Bash: rm -rf build/[2J
+ › permission auth-refactor  r-8a1b    12:40   Bash: echo ok …
    question   infra          r-3c9d    12:10   Which region?
    permission payments       r-7e2f    11:30   Edit: billing.go
    failed     migrations     r-1f0a    10:15   ended: exit_code
@@ -11,8 +11,8 @@
  Run           r-8a1b · waiting_input · claude
  Since         12:40
  Asks          permission
- Prompt        Bash: rm -rf build/[2J
+ Prompt        Bash: echo ok ⏎ rm -rf build/[2J
  Answer        y allows · n denies
 
  ──────────────────────────────────────────────────────────────────────────────
- [↑↓] Move [/] Filter [enter] Answer [y] Allow [n] Deny [esc] Back [q] Quit
+ [↑↓] Move [/] Filter [y] Allow [n] Deny [esc] Back [q] Quit

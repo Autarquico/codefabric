@@ -15,7 +15,7 @@ func inboxFixture() []v1.InboxItem {
 			Kind: v1.InboxNeedsInput, Since: at("12:40"),
 			Task:   v1.InboxTask{ID: "tsk_1", Short: "t-4k2m", Name: "auth-refactor"},
 			Run:    v1.InboxRun{ID: "run_1", Short: "r-8a1b", State: domain.RunWaitingInput, Harness: "claude", Respondable: true},
-			Prompt: &v1.InboxPrompt{ID: "p1", Kind: domain.PromptPermission, Summary: "Bash: rm -rf build/\x1b[2J"},
+			Prompt: &v1.InboxPrompt{ID: "p1", Kind: domain.PromptPermission, Summary: "Bash: echo ok\nrm -rf build/\x1b[2J"},
 		},
 		{
 			Kind: v1.InboxNeedsInput, Since: at("12:10"),
@@ -44,6 +44,7 @@ func openInbox(t *testing.T, be Backend, items []v1.InboxItem) *Model {
 	m := viewShellWith(t, be, "i")
 	feed(t, m, feedMsg{RouteInbox, client.Update[[]v1.InboxItem]{Kind: client.UpdateSnapshot, State: items}})
 	feed(t, m, feedMsg{RouteInbox, client.Update[[]v1.InboxItem]{Kind: client.UpdateConnected}})
+	frame(m) // the person sees the list before pressing a key
 	return m
 }
 
@@ -155,5 +156,64 @@ func TestScenario_NeedsInputInbox_FollowsTheFeedLive(t *testing.T) {
 	feed(t, m, feedMsg{RouteInbox, client.Update[[]v1.InboxItem]{Kind: client.UpdateSnapshot, State: inboxFixture()[:1]}})
 	if got := frame(m); !strings.Contains(got, "auth-refactor") || strings.Contains(got, "Nothing needs you") {
 		t.Errorf("the new item did not appear:\n%s", got)
+	}
+}
+
+func TestScenario_NeedsInputInbox_MultiLinePromptKeepsItsLines(t *testing.T) {
+	m := openInbox(t, newBackend(), inboxFixture())
+	got := frame(m)
+	if !strings.Contains(got, "echo ok …") || !strings.Contains(got, "echo ok ⏎ rm -rf build/") {
+		t.Errorf("the lines of the prompt run together:\n%s", got)
+	}
+}
+
+func TestScenario_NeedsInputInbox_DoesNotAnswerWhatSlidUnderTheCursor(t *testing.T) {
+	be := newBackend()
+	items := inboxFixture()
+	m := openInbox(t, be, items)
+	// the person looks at the first permission; it is answered elsewhere and
+	// the next permission-like item takes its place before the key arrives
+	rest := append([]v1.InboxItem{}, items[2:]...)
+	rest[0].Run.Respondable = true
+	feed(t, m, feedMsg{RouteInbox, client.Update[[]v1.InboxItem]{Kind: client.UpdateSnapshot, State: rest}})
+	press(t, m, "y")
+	if len(be.ran) != 0 {
+		t.Fatalf("answered an item the person never selected: %v", be.ran)
+	}
+	if got := frame(m); !strings.Contains(got, "The list changed") {
+		t.Errorf("said nothing:\n%s", got)
+	}
+	press(t, m, "y") // now it has been seen
+	if len(be.ran) != 1 || be.inputs[0].Values["prompt"] != "p3" {
+		t.Errorf("ran %v %v", be.ran, be.inputs)
+	}
+}
+
+func TestScenario_NeedsInputInbox_SaysItIsBusy(t *testing.T) {
+	be := newBackend()
+	m := openInbox(t, be, inboxFixture())
+	_, cmd := m.Update(key("y")) // not driven: the answer is still running
+	if cmd == nil {
+		t.Fatal("no command")
+	}
+	press(t, m, "n")
+	if got := frame(m); !strings.Contains(got, "Wait for") || len(be.ran) != 0 {
+		t.Errorf("silent while busy (ran %v):\n%s", be.ran, got)
+	}
+}
+
+func TestScenario_NeedsInputInbox_FooterShowsOnlyTheKeysThatApply(t *testing.T) {
+	m := openInbox(t, newBackend(), inboxFixture())
+	if got := frame(m); !strings.Contains(got, "[y] Allow") || !strings.Contains(got, "[n] Deny") {
+		t.Errorf("a permission lacks y/n:\n%s", got)
+	}
+	press(t, m, "down")
+	if got := frame(m); strings.Contains(got, "[y] Allow") || !strings.Contains(got, "[enter] Answer") {
+		t.Errorf("a question:\n%s", got)
+	}
+	press(t, m, "down")
+	press(t, m, "down")
+	if got := frame(m); strings.Contains(got, "[y] Allow") || strings.Contains(got, "[enter] Answer") {
+		t.Errorf("a failure:\n%s", got)
 	}
 }
