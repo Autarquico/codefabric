@@ -15,6 +15,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app/refs"
 	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/scheduler"
+	"github.com/Autarquico/codefabric/internal/app/search"
 	"github.com/Autarquico/codefabric/internal/app/tasks"
 	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/app/workflows"
@@ -44,6 +45,8 @@ type Services struct {
 	Events *events.Service
 	// Logs are the structured logs of the Controller and the Workers (§34).
 	Logs *logs.Service
+	// Search finds entities by reference and by text (§37).
+	Search *search.Service
 	// Inbox is what needs a person: requests for input and failures to decide on (§19.5).
 	Inbox *inbox.Service
 
@@ -87,6 +90,7 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 		}),
 		Events:       events.New(db, clk),
 		Logs:         logs.New(db, clk),
+		Search:       search.New(db),
 		Inbox:        inbox.New(db),
 		Workflows:    workflows.New(db, clk, ids, cfg.Blobs, blobLimit(cfg.MaxBlobBytes)...),
 		Environments: environments.New(db, clk),

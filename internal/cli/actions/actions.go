@@ -122,6 +122,11 @@ var descriptors = []Descriptor{
 	},
 	{ID: "task.timeline", Title: "Task timeline", Target: Task, Path: []string{"task", "timeline"}, Args: flags("after", "limit", "project")},
 
+	{
+		ID: "search", Title: "Search", Path: []string{"search"},
+		Args: with(flags("kind", "project", "limit"), Arg{Name: "query", Required: true}),
+	},
+
 	{ID: "run.attach", Title: "Attach to run", Target: Run, Path: []string{"attach"}, Terminal: true, Args: flags("read-only", "ssh-target", "project")},
 	{ID: "run.fork", Title: "Fork run", Target: Run, Path: []string{"run", "fork"}},
 	{ID: "run.promote", Title: "Promote run", Target: Run, Path: []string{"run", "promote"}},
