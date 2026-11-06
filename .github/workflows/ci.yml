@@ -199,3 +199,35 @@ jobs:
           go-version: "1.27.x"
           check-latest: true
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # The installer and the release chain, against an ephemeral key. Registered in
+  # packaging/release/required-checks.txt: release.yml refuses to build without it.
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install prerequisites
+        run: sudo apt-get update && sudo apt-get install -y shellcheck openssh-client python3
+      - name: shellcheck
+        run: git ls-files -z '*.sh' | xargs -0 shellcheck
+      - run: make test-installer
+
+  # The release workflow is the only place that may touch the signing key.
+  workflow-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+      - name: only release.yml names the release environment or the signing key
+        run: |
+          # the brackets keep this very line from matching its own patterns
+          others="$(grep -rlE -e 'environment:[[:space:]]*releas[e]' -e 'CF_RELEASE_SIGNING_KE[Y]' .github | grep -vx '.github/workflows/release.yml' || true)"
+          if [ -n "$others" ]; then printf 'release environment or signing key referenced outside release.yml:\n%s\n' "$others" >&2; exit 1; fi
