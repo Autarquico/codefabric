@@ -55,6 +55,11 @@ type Row struct {
 	Label string
 	Stamp string
 	Cells []Cell
+	// Target, when set, is what actions target instead of ID, and Values are
+	// inputs they take besides the ones the person gives: for a row that is
+	// not itself the thing an action acts on (an Inbox item acts on its Task).
+	Target string
+	Values map[string]string
 }
 
 func (r Row) text() string {

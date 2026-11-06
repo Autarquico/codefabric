@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"maps"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -219,14 +220,14 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 	case tea.KeyPressMsg:
 		return b.press(msg)
 	case actionDoneMsg:
-		b.busy = ""
+		b.busy, b.warn = "", ""
 		if f := msg.result.Failure; f != nil {
 			b.notice = &Notice{Title: msg.action.Title + " failed · " + msg.target.Label, Failure: f}
 		} else {
 			b.flash = "✓ " + msg.action.Title + " · " + msg.target.Label
 		}
 	case attachReadyMsg:
-		b.busy = ""
+		b.busy, b.warn = "", ""
 		if msg.failure != nil {
 			b.notice = &Notice{Title: "Attach failed", Failure: msg.failure}
 			return b, nil, false
@@ -238,7 +239,7 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 			return attachExitMsg{from: msg.from, target: msg.target, runErr: msg.runErr, finishErr: msg.session.Finish(msg.runErr)}
 		}, false
 	case attachExitMsg:
-		b.busy = ""
+		b.busy, b.warn = "", ""
 		if msg.finishErr != nil {
 			b.notice = &Notice{Title: "Attach ended with an error", Failure: actions.FailureOf(msg.finishErr), Detail: exitDetail(msg.runErr)}
 		} else {
@@ -369,7 +370,7 @@ func (b *browser) offered(d actions.Descriptor) bool {
 // after the person confirms it when it is destructive.
 func (b *browser) invoke(d actions.Descriptor, row Row) tea.Cmd {
 	if b.busy != "" {
-		b.flash = "Wait for " + b.busy
+		b.warn = "Wait for " + b.busy
 		return nil
 	}
 	if inputs := formInputs(d); len(inputs) > 0 {
@@ -402,6 +403,13 @@ func (b *browser) start(d actions.Descriptor, row Row, values map[string]string)
 	b.busy = d.Title + "…"
 	backend, asker := b.backend, from(b.id)
 	in := actions.Input{Target: row.ID, Values: values}
+	if row.Target != "" {
+		in.Target = row.Target
+	}
+	if len(row.Values) > 0 {
+		in.Values = maps.Clone(row.Values)
+		maps.Copy(in.Values, values)
+	}
 	if d.Target == actions.None {
 		in.Target = ""
 	}
@@ -513,12 +521,12 @@ func (b *browser) emptyText(info feedInfo) string {
 
 func (b *browser) statusLine(c RenderContext) string {
 	switch {
-	case b.busy != "":
-		return margin + c.Theme.Faint.Render(b.busy)
 	case b.warn != "":
 		return margin + c.Theme.Warning.Render(ansi.Truncate(printable(b.warn), c.inner(), "…"))
 	case b.flash != "":
 		return margin + c.Theme.Success.Render(ansi.Truncate(printable(b.flash), c.inner(), "…"))
+	case b.busy != "":
+		return margin + c.Theme.Faint.Render(b.busy)
 	case c.Status != "":
 		return margin + c.Theme.Warning.Render(printable(c.Status))
 	}

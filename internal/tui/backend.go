@@ -48,6 +48,7 @@ type Feeds struct {
 	Workers   FeedSource[v1.Worker]
 	Workflows FeedSource[WorkflowRow]
 	Projects  FeedSource[v1.Project]
+	Inbox     FeedSource[v1.InboxItem]
 	// Output follows the output of one Run; the Logs view starts it when a Run
 	// is picked and ends it when the person leaves that Run.
 	Output OutputSource
@@ -96,6 +97,9 @@ func SubscribeFeeds(c *client.Client) Feeds {
 		},
 		Projects: func(ctx context.Context, h func(client.Update[[]v1.Project])) error {
 			return client.Subscribe(ctx, c, projectsView(), h)
+		},
+		Inbox: func(ctx context.Context, h func(client.Update[[]v1.InboxItem])) error {
+			return client.Subscribe(ctx, c, inboxView(), h)
 		},
 		Output: func(ctx context.Context, run string, h func(LogEvent)) error {
 			return followOutput(ctx, c, run, h)
@@ -279,3 +283,20 @@ type sdkAttachment struct {
 func (a sdkAttachment) Cmd() *exec.Cmd { return a.session.Cmd }
 
 func (a sdkAttachment) Finish(runErr error) error { return a.session.Finish(a.ctx, runErr) }
+
+// inboxView is what needs a person. Any event about a Task or a Run can change
+// it (a prompt asked or answered, a failure), so those read it again.
+func inboxView() client.View[[]v1.InboxItem] {
+	return client.View[[]v1.InboxItem]{
+		Snapshot: func(ctx context.Context, c *client.Client) ([]v1.InboxItem, string, error) {
+			cursor, err := eventCursor(ctx, c)
+			if err != nil {
+				return nil, "", err
+			}
+			out, err := c.Inbox(ctx)
+			return out.Items, cursor, err
+		},
+		Invalidates: func(e v1.Event) bool { return e.TaskID != "" || e.RunID != "" },
+		Refresh:     client.RefreshEvery,
+	}
+}
