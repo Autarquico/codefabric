@@ -15,8 +15,14 @@ import (
 // Run under the lease's epoch (§10.7). The order is durable and delivered until
 // the Worker acknowledges it; that the processes are gone is RunStopped, which
 // it reports afterwards. There is one stop per Worker, Run and epoch: if there
-// is one already, whatever its reason, nothing is queued and it says so.
+// is one already, whatever its reason, nothing is queued and it says so. Either
+// way the input orders of the lease not yet acknowledged are withdrawn.
 func OrderStopIn(ctx context.Context, tx *store.Tx, act mutation.Act, run store.Run, task store.Task, l store.Lease, reason domain.StopReason) (bool, error) {
+	// A Run that is being stopped is answered no more: an input order still
+	// queued would reach the Worker before the stop.
+	if _, err := tx.CancelInputOrders(ctx, l.ID, act.Now); err != nil {
+		return false, err
+	}
 	payload, err := orderJSON(v1.StopCommand{
 		RunID: string(run.ID), LeaseID: string(l.ID), Epoch: l.Epoch, Reason: reason, RunShort: shortID(run.Short),
 		TaskID: string(task.ID), ProjectID: string(task.ProjectID), Branch: branchOf(task, run), Spec: json.RawMessage(run.Spec),
