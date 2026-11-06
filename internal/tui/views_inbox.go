@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli/actions"
@@ -99,9 +100,15 @@ func inboxDetail(it v1.InboxItem, c RenderContext) []Field {
 	for i, o := range p.Options {
 		options[i] = printable(o)
 	}
+	fields = append(fields, Field{"Asks", printable(string(p.Kind)), ToneText})
+	for i, line := range promptLines(c, p.Summary) {
+		label := ""
+		if i == 0 {
+			label = "Prompt"
+		}
+		fields = append(fields, Field{label, line, ToneText})
+	}
 	fields = append(fields,
-		Field{"Asks", printable(string(p.Kind)), ToneText},
-		Field{"Prompt", allLines(p.Summary), ToneText},
 		Field{"Options", strings.Join(options, ", "), ToneFaint},
 	)
 	switch {
@@ -133,6 +140,11 @@ func allLines(text string) string {
 	return strings.Join(lines, " ⏎ ")
 }
 
+// promptLines is the whole prompt cut to the width of a field, not truncated.
+func promptLines(c RenderContext, summary string) []string {
+	return strings.Split(ansi.Wrap(allLines(summary), max(c.inner()-labelWidth-2, 8), ""), "\n")
+}
+
 // inboxScreen is the browser of the Inbox with the keys that answer. Answering
 // is bound to what the person chose: the item the cursor was on when they last
 // pressed a key or saw the list. When the feed moves another item under the
@@ -141,6 +153,8 @@ type inboxScreen struct {
 	*browser
 	shortcuts []shortcut // all the answer keys; the footer shows those that apply
 	chosen    string     // key of the item the person has chosen; "" until they see one
+	shown     string     // key of the permission whose whole prompt the last frame drew
+	refused   bool       // a key was refused: no item is chosen until another key is pressed
 }
 
 func (s *inboxScreen) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
@@ -148,12 +162,16 @@ func (s *inboxScreen) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 	if isKey && !s.modal() && !s.list.typing {
 		switch key := k.String(); key {
 		case "y", "n", "enter":
+			if k.IsRepeat {
+				return s, nil, true
+			}
 			s.flash, s.warn = "", ""
 			return s, s.answer(key), true
 		}
 	}
 	_, cmd, handled := s.browser.Update(msg)
 	if isKey {
+		s.refused = false
 		if row, ok := s.list.selected(s.rows); ok {
 			s.chosen = row.ID
 		}
@@ -164,9 +182,10 @@ func (s *inboxScreen) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 // Render offers only the keys that answer the selected item, and takes the
 // item on screen as the person's choice when they have none.
 func (s *inboxScreen) Render(c RenderContext) string {
-	s.spec.shortcuts, s.spec.primary = nil, ""
-	if row, ok := s.list.selected(s.rows); ok {
-		if s.chosen == "" {
+	s.spec.shortcuts, s.spec.primary, s.shown = nil, "", ""
+	row, selected := s.list.selected(s.rows)
+	if selected {
+		if s.chosen == "" && !s.refused {
 			s.chosen = row.ID
 		}
 		if it, found := s.item(row.ID); found && it.Prompt != nil && it.Run.Respondable {
@@ -177,7 +196,34 @@ func (s *inboxScreen) Render(c RenderContext) string {
 			}
 		}
 	}
-	return s.browser.Render(c)
+	out := s.browser.Render(c)
+	if selected {
+		if it, found := s.item(row.ID); found && it.Prompt != nil && promptIsDrawn(c, it.Prompt.Summary, out) {
+			s.shown = row.ID
+		}
+	}
+	return out
+}
+
+// promptIsDrawn says whether every line of the prompt is in the frame, in
+// order: y allows only what the person could read whole.
+func promptIsDrawn(c RenderContext, summary, frame string) bool {
+	if c.Width <= 0 {
+		c.Width = defaultWidth
+	}
+	var pieces []string
+	for _, p := range promptLines(c, summary) {
+		if p = strings.TrimSpace(p); p != "" {
+			pieces = append(pieces, p)
+		}
+	}
+	next := 0
+	for _, line := range strings.Split(ansi.Strip(frame), "\n") {
+		if next < len(pieces) && strings.HasSuffix(strings.TrimRight(line, " "), pieces[next]) {
+			next++
+		}
+	}
+	return next == len(pieces)
 }
 
 // answer runs the key on the item the person chose, or says why it cannot.
@@ -187,12 +233,12 @@ func (s *inboxScreen) answer(key string) tea.Cmd {
 		return nil
 	}
 	if s.busy != "" {
-		s.flash = "Wait for " + s.busy
+		s.warn = "Wait for " + s.busy
 		return nil
 	}
 	if row.ID != s.chosen {
-		s.chosen = ""
-		s.warn = "The list changed: check the selected item and press again"
+		s.chosen, s.refused = "", true
+		s.warn = "The list changed: check the selected item, move once and press again"
 		return nil
 	}
 	it, ok := s.item(row.ID)
@@ -207,6 +253,8 @@ func (s *inboxScreen) answer(key string) tea.Cmd {
 		s.warn = "Press y to allow or n to deny"
 	case key != "enter" && it.Prompt.Kind != domain.PromptPermission:
 		s.warn = "This asks for text: press enter to answer"
+	case key != "enter" && s.shown != row.ID:
+		s.warn = "The prompt does not fit on screen: enlarge the terminal"
 	default:
 		d, found := actions.Lookup(respondAction)
 		if !found {

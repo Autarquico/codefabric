@@ -370,7 +370,7 @@ func (b *browser) offered(d actions.Descriptor) bool {
 // after the person confirms it when it is destructive.
 func (b *browser) invoke(d actions.Descriptor, row Row) tea.Cmd {
 	if b.busy != "" {
-		b.flash = "Wait for " + b.busy
+		b.warn = "Wait for " + b.busy
 		return nil
 	}
 	if inputs := formInputs(d); len(inputs) > 0 {
