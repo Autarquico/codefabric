@@ -23,8 +23,8 @@ import (
 )
 
 // lineAdapter is a harness whose stream has one line per event: "model <name>"
-// is session_started and "ask" is input_required. It remembers every line it
-// was given.
+// is session_started, "ask" is input_required and "result" is the end of a
+// turn. It remembers every line it was given.
 type lineAdapter struct {
 	fakeharness.Adapter
 	seen *linesSeen
@@ -63,6 +63,8 @@ func (a lineAdapter) Events(_ context.Context, _ harness.Handle, src io.ReadClos
 			out <- harness.Event{Kind: harness.EventSessionStarted, Model: strings.TrimPrefix(line, "model ")}
 		case line == "ask":
 			out <- harness.Event{Kind: harness.EventInputRequired, Message: "which one?"}
+		case line == "result":
+			out <- harness.Event{Kind: harness.EventResult}
 		}
 	}
 	close(out)
@@ -95,11 +97,17 @@ func (f *fixture) cursor(k state.Key) state.EventCursor {
 func eventsFixture(t *testing.T) (*fixture, lineAdapter, state.Key, *helper) {
 	t.Helper()
 	a := newLineAdapter()
+	f, k, w := eventsFixtureOf(t, a)
+	return f, a, k, w
+}
+
+func eventsFixtureOf(t *testing.T, a harness.Adapter, mutate ...func(*Options)) (*fixture, state.Key, *helper) {
+	t.Helper()
 	g := &fakeGit{head: headOID}
-	f := newFixture(t, func(o *Options) {
+	f := newFixture(t, append([]func(*Options){func(o *Options) {
 		o.Harnesses, o.Git = registry(t, a), g
 		o.RelayTLS = RelayTLS{Cert: "/c/cert.pem", Key: "/c/key.pem", CA: "/c/ca.pem"}
-	})
+	}}, mutate...)...)
 	k := f.acceptedSpec(fakeSpec("do it", ""))
 	if f.e.step(t.Context(), k) {
 		t.Fatalf("the Run ended: %+v", f.reports(k))
@@ -107,7 +115,7 @@ func eventsFixture(t *testing.T) (*fixture, lineAdapter, state.Key, *helper) {
 	w := newTrappingWrapperProcess(t, "trap 'exit 0' TERM", "while :; do sleep 0.05; done")
 	f.writeWrapper(k, w.w)
 	f.writeStarted(k, w.w, t0)
-	return f, a, k, w
+	return f, k, w
 }
 
 func TestTheModelTheHarnessSaysIsKeptAndWholeLinesOnlyAreRead(t *testing.T) {

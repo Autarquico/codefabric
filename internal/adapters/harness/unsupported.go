@@ -10,6 +10,9 @@ import (
 // (§7.2), always with a zero value.
 var ErrUnsupported = errors.New("harness: unsupported")
 
+// ErrInputNotSent is a SendInput that wrote nothing of its input.
+var ErrInputNotSent = errors.New("harness: the input was not sent")
+
 // ErrUnsupportedMode is a mode outside Capabilities().Modes
 // (CF_HARNESS_UNAVAILABLE). It is ErrUnsupported.
 var ErrUnsupportedMode = &UnsupportedError{Op: "mode"}

@@ -33,7 +33,7 @@ import (
 // CLI merges it with the administration commands of the same name.
 func Command() *cobra.Command {
 	cmd := &cobra.Command{Use: "worker"}
-	cmd.AddCommand(newJoinCmd(), newRunCmd(), newExecCmd(), newRedactPipeCmd(), newGitAskpassCmd(), newInstallServiceCmd(), newUninstallServiceCmd(), newSecretsCmd(), newDoctorCmd())
+	cmd.AddCommand(newJoinCmd(), newRunCmd(), newExecCmd(), newRedactPipeCmd(), newGitAskpassCmd(), newMCPBridgeCmd(), newInstallServiceCmd(), newUninstallServiceCmd(), newSecretsCmd(), newDoctorCmd())
 	return cmd
 }
 

@@ -21,12 +21,15 @@ type Script struct {
 
 // Step is one thing the program does. Exactly one field is set.
 type Step struct {
-	Emit          *Line     `json:"emit,omitempty"`
-	EmitEnv       *EmitEnv  `json:"emit_env,omitempty"`
-	Record        *Recorder `json:"record,omitempty"`
-	WaitFile      *WaitFile `json:"wait_file,omitempty"`
-	ReadLine      *ReadLine `json:"read_line,omitempty"`
-	IgnoreSignals bool      `json:"ignore_signals,omitempty"`
+	Emit     *Line     `json:"emit,omitempty"`
+	EmitEnv  *EmitEnv  `json:"emit_env,omitempty"`
+	Record   *Recorder `json:"record,omitempty"`
+	WaitFile *WaitFile `json:"wait_file,omitempty"`
+	ReadLine *ReadLine `json:"read_line,omitempty"`
+	// Permission asks the permission bridge's socket whether a tool may run, as
+	// Claude Code does through the MCP tool, and waits for the answer.
+	Permission    *Permission `json:"permission,omitempty"`
+	IgnoreSignals bool        `json:"ignore_signals,omitempty"`
 	// Exit ends the program with its code, 0 to 255.
 	Exit *int `json:"exit,omitempty"`
 }
@@ -44,6 +47,21 @@ type Line struct {
 	Result *Result `json:"result,omitempty"`
 	// Message is set on an error or input_required line.
 	Message string `json:"message,omitempty"`
+	// ID and Options are set on an input_required line that names its question
+	// and offers answers.
+	ID      string   `json:"id,omitempty"`
+	Options []string `json:"options,omitempty"`
+}
+
+// Permission is a permission step: the program asks over the socket it was
+// given (--permission-socket) whether Tool may run with Input, writes the
+// decision it got (allow or deny) to To, and acks it.
+type Permission struct {
+	Tool  string          `json:"tool"`
+	Input json.RawMessage `json:"input,omitempty"`
+	// To is the file the decision is written to, atomically.
+	To        string `json:"to"`
+	TimeoutMS int64  `json:"timeout_ms"`
 }
 
 // Usage is the usage of a usage line. A field left out is unknown; one that
@@ -149,7 +167,7 @@ func ParseScript(b []byte) (Script, error) {
 
 func (s Step) check() error {
 	set := 0
-	for _, isSet := range []bool{s.Emit != nil, s.EmitEnv != nil, s.Record != nil, s.WaitFile != nil, s.ReadLine != nil, s.IgnoreSignals, s.Exit != nil} {
+	for _, isSet := range []bool{s.Emit != nil, s.EmitEnv != nil, s.Record != nil, s.WaitFile != nil, s.ReadLine != nil, s.Permission != nil, s.IgnoreSignals, s.Exit != nil} {
 		if isSet {
 			set++
 		}
@@ -173,6 +191,11 @@ func (s Step) check() error {
 		return checkTimeout("wait_file", s.WaitFile.TimeoutMS)
 	case s.ReadLine != nil:
 		return checkTimeout("read_line", s.ReadLine.TimeoutMS)
+	case s.Permission != nil:
+		if s.Permission.Tool == "" || s.Permission.To == "" {
+			return errors.New("permission: no tool or no file to write the decision to")
+		}
+		return checkTimeout("permission", s.Permission.TimeoutMS)
 	case s.Exit != nil:
 		if *s.Exit < 0 || *s.Exit > 255 {
 			return fmt.Errorf("exit: code %d is not 0 to 255", *s.Exit)
@@ -244,7 +267,7 @@ func event(b []byte) (harness.Event, bool) {
 	case harness.EventResult:
 		ev.Result = &harness.Result{Failed: l.Result.Failed, Summary: l.Result.Summary}
 	case harness.EventError, harness.EventInputRequired:
-		ev.Message = l.Message
+		ev.Message, ev.ID, ev.Options = l.Message, l.ID, l.Options
 	}
 	return ev, true
 }

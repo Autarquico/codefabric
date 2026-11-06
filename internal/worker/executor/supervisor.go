@@ -231,6 +231,9 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 		// is the same on every rebuild of the Handle.
 		run.EventsPath = filepath.Join(dir, execwrap.EventsFile)
 	}
+	if err := e.inputOfLaunch(r, spec, dir, &run); err != nil {
+		return err
+	}
 	launch, err := adapter.Start(ctx, e.o.Host, run)
 	if err != nil {
 		return err
@@ -238,6 +241,9 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	l := execwrap.Launch{
 		Argv: launch.Argv, Env: launch.Env, Dir: worktree, Mode: spec.Mode, Grace: e.grace,
 		StructuredStdout: launch.StructuredStdout && spec.Mode != execwrap.ModeInteractive,
+	}
+	if run.StructuredInput {
+		l.InputPath, l.InitialInput = launch.InputPath, launch.InitialInput
 	}
 	env, extra, err := launchSecretEnv(spec, launch.SecretEnv)
 	if err != nil {
@@ -395,6 +401,9 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 		if fresh, err := state.RunBy(ctx, e.o.DB.Reader(), r.Key); err == nil {
 			r = fresh
 		}
+	}
+	if m.started != nil {
+		e.serveInput(ctx, r, m.exit == nil)
 	}
 	if m.exit == nil && r.Phase.Live() {
 		e.releaseStartIfDue(ctx, r)

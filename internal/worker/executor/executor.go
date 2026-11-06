@@ -137,6 +137,18 @@ type Options struct {
 	// EnvironmentTimeouts are the limits of the scripts of an Environment; zero
 	// is the default of each.
 	EnvironmentTimeouts EnvironmentTimeouts
+	// StructuredInput are the IDs of the harnesses for which this Worker
+	// announces domain.StructuredInputCapability: their Runs are answered while
+	// they run. A harness that is not here keeps stopForInput.
+	StructuredInput []string
+	// PermissionServerArgv is the command of the MCP server that answers the
+	// permissions of a Run that asks them, to which --socket <path> is added. It
+	// defaults to this binary with `worker mcp-bridge`.
+	PermissionServerArgv []string
+	// SocketDir is where the sockets of the permission bridges are made. It
+	// defaults to inputsock.Dir of the data directory of the Worker; a path
+	// over the limit of a unix socket (macOS: 104 bytes) is refused.
+	SocketDir string
 }
 
 // AuthSync is told which auth copies a live Run has, and when it is over.
@@ -215,6 +227,13 @@ type Executor struct {
 	backoffMu sync.Mutex
 	pubMemos  map[state.Key]*pubMemo // what the publisher remembers of a publication between turns
 
+	// inputs are the sockets of the permission bridges of the Runs that ask
+	// permissions, in this life of the daemon.
+	inputMu sync.Mutex
+	inputs  map[state.Key]*inputRun
+	// inputHandlers are the handlers of the sockets taken down, still running.
+	inputHandlers sync.WaitGroup
+
 	mu    sync.Mutex
 	memos map[state.Key]*runMemo
 	// authPending is when the Broker first failed to keep the last refresh of
@@ -273,7 +292,7 @@ func New(o Options) (*Executor, error) {
 	}
 	e := &Executor{
 		o: o, harnesses: o.Harnesses, clock: o.Clock, log: o.Log, wrapper: o.WrapperArgv, redactPipe: o.RedactPipeArgv, grace: o.StopGrace, jit: secretjit.New().DiscardingConfig(configTree, authCopiesOf),
-		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), reconcileWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, authPending: map[state.Key]time.Time{}, locks: map[state.Key]*runLock{},
+		wake: make(chan struct{}, 1), pubWake: make(chan struct{}, 1), reconcileWake: make(chan struct{}, 1), pubMemos: map[state.Key]*pubMemo{}, memos: map[state.Key]*runMemo{}, inputs: map[state.Key]*inputRun{}, authPending: map[state.Key]time.Time{}, locks: map[state.Key]*runLock{},
 	}
 	e.reconcileGen.Store(1) // the start asks for a reconciliation
 	if e.clock == nil {
@@ -285,10 +304,13 @@ func New(o Options) (*Executor, error) {
 	if e.grace <= 0 {
 		e.grace = domain.Defaults().StopGrace
 	}
-	if len(e.wrapper) == 0 || len(e.redactPipe) == 0 {
+	if len(e.wrapper) == 0 || len(e.redactPipe) == 0 || len(o.PermissionServerArgv) == 0 {
 		self, err := os.Executable()
 		if err != nil {
 			return nil, fmt.Errorf("executor: locating this binary: %w", err)
+		}
+		if len(o.PermissionServerArgv) == 0 {
+			e.o.PermissionServerArgv = []string{self, "worker", "mcp-bridge"}
 		}
 		if len(e.wrapper) == 0 {
 			e.wrapper = []string{self, "worker", "exec"}
@@ -401,6 +423,8 @@ func (e *Executor) Run(ctx context.Context) error {
 		wg.Go(func() { e.supervise(ctx, k) })
 	}
 	e.mu.Unlock()
+	// The sockets go down once no supervisor can take one down any more.
+	defer e.closeInputs()
 	defer wg.Wait()
 
 	if err := e.recoverRuns(ctx); err != nil {
@@ -516,13 +540,7 @@ func (e *Executor) runtimeHandle(k state.Key) *v1.RuntimeHandle {
 // (controls and format characters), what is not UTF-8, and cuts at a character
 // boundary to at most v1.MaxReportMessageLen bytes.
 func reportable(msg string) string {
-	msg = strings.ToValidUTF8(msg, "")
-	msg = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return -1
-		}
-		return r
-	}, msg)
+	msg = reportableUnbounded(msg)
 	if len(msg) <= v1.MaxReportMessageLen {
 		return msg
 	}
@@ -531,6 +549,18 @@ func reportable(msg string) string {
 		cut--
 	}
 	return msg[:cut]
+}
+
+// reportableUnbounded is msg without what does not print: controls and format
+// characters, and what is not UTF-8.
+func reportableUnbounded(msg string) string {
+	msg = strings.ToValidUTF8(msg, "")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, msg)
 }
 
 // fileExists says whether a marker file is there.

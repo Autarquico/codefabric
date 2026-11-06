@@ -171,6 +171,9 @@ type specRequirements struct {
 	Capabilities []string      `json:"capabilities"`
 	Resources    specResources `json:"resources"`
 	Workers      specWorkers   `json:"workers"`
+	// Permissions is v1.PermissionsAsk or absent: a Run that leaves the harness
+	// its default keeps the spec, and so the digest, it always had.
+	Permissions string `json:"permissions,omitempty"`
 }
 
 type specResources struct {
@@ -226,6 +229,7 @@ func newSpec(in Inherited, origins Origins, snapshot string, source Source, envi
 			Workers: specWorkers{
 				Prefer: slices.Clone(orEmpty(r.Workers.Prefer)), Avoid: set(r.Workers.Avoid), Require: set(r.Workers.Require),
 			},
+			Permissions: r.Permissions,
 		},
 		Completion: in.Completion,
 		Retry:      specRetry{OnFailed: in.Retry.OnFailed, OnLost: in.Retry.OnLost, MaxAttempts: in.Retry.MaxAttempts},
@@ -323,6 +327,10 @@ func PlacementOf(spec []byte) (domain.Placement, error) {
 	}
 	if stored.Origin != nil {
 		capabilities = append(slices.Clone(capabilities), domain.OriginAskpassCapability)
+	}
+	if r.Permissions == v1.PermissionsAsk && r.Harness != "" {
+		// Its permissions are answered by a person: only a Worker that can be answered runs it.
+		capabilities = append(slices.Clone(capabilities), domain.HarnessStructuredInputCapability(r.Harness))
 	}
 	if len(capabilities) > len(r.Capabilities) {
 		capabilities = set(capabilities)

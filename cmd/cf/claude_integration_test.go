@@ -260,14 +260,24 @@ func TestScenario_ClaudeCodeAdapter_InputRequerido(t *testing.T) {
 	s.daemon.interrupt()
 }
 
-// The same, when Claude Code goes on after asking: the Worker stops it.
+// A Claude Code that asks and then waits is not stopped: this Worker answers
+// while the Run lives (structured-input:v1), so the Run waits for the person,
+// with its harness up. The question follows the start in the Controller's log:
+// it takes input_requested from a running Run only.
 func TestScenario_ClaudeCodeAdapter_InputRequeridoSigueVivo(t *testing.T) {
 	pidFile, _ := fakeClaude(t, claudeAsks, true)
 	s := newClaudeStack(t, true)
 
-	got := s.awaitPublished(t, s.run(t, "pick a database").Run.ID)
-	s.assertInputRequired(t, got)
-
+	id := s.run(t, "pick a database").Run.ID
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("worker daemon:\n%s", s.daemon.out.String())
+		}
+	})
+	eventually(t, "the Run to wait for input", func() bool {
+		r, err := s.admin.Run(t.Context(), id)
+		return err == nil && r.State == domain.RunWaitingInput
+	})
 	raw, err := os.ReadFile(pidFile) //nolint:gosec // a file of the test
 	if err != nil {
 		t.Fatal(err)
@@ -276,7 +286,12 @@ func TestScenario_ClaudeCodeAdapter_InputRequeridoSigueVivo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the harness to be gone", func() bool { return syscall.Kill(pid, 0) != nil })
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Errorf("the harness of a Run that waits for an answer is gone: %v", err)
+	}
+	if got := eventData(t, s.host, id, domain.EventRunStarted)["model"]; got != "claude-opus-5-5" {
+		t.Errorf("RunStarted.data.model = %v", got)
+	}
 	s.daemon.interrupt()
 }
 

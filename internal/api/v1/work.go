@@ -37,7 +37,16 @@ type Requirements struct {
 	// SecretEnv are the environment variables of the harness that carry a
 	// secret: the Run uses their refs, and the Project must allow them.
 	SecretEnv []SecretEnv `json:"secret_env,omitempty"`
+	// Permissions is PermissionsAsk to have the harness ask what it is not
+	// allowed to do instead of skipping its permission prompts (the default);
+	// what it asks goes to the inbox. The Run is placed only on a Worker that
+	// announces structured input for the harness.
+	Permissions string `json:"permissions,omitempty"`
 }
+
+// PermissionsAsk is the value of Requirements.Permissions that leaves the
+// permission prompts of the harness to a person.
+const PermissionsAsk = "ask"
 
 // ProjectDefaults are inherited by Tasks and Runs (§3.1, §3.3). Unset fields
 // fall back to the global defaults (Appendix A).

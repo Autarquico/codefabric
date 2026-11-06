@@ -2,6 +2,7 @@ package fakeharness
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/support/atomicfile"
 	"github.com/Autarquico/codefabric/internal/support/treedigest"
+	"github.com/Autarquico/codefabric/internal/worker/inputsock"
 )
 
 // The exit codes of the program besides 0 and those of exit steps.
@@ -79,6 +81,7 @@ func Main(argv, env []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.String("model", "", "the model of the Run")
 	fs.String("mode", "", "the mode of the Run")
 	fs.String("resume", "", "the session to resume")
+	permissionSocket := fs.String("permission-socket", "", "the socket of the permission bridge, for permission steps")
 	if err := fs.Parse(argv); err != nil {
 		return ExitScriptError
 	}
@@ -95,7 +98,7 @@ func Main(argv, env []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, err)
 		return ExitScriptError
 	}
-	r := &runner{argv: append([]string{name}, argv...), env: env, stdin: bufio.NewReader(stdin), stdout: stdout}
+	r := &runner{argv: append([]string{name}, argv...), env: env, stdin: bufio.NewReader(stdin), stdout: stdout, socket: *permissionSocket}
 	for i, st := range script.Steps {
 		if code, done := r.step(st); done {
 			if code != 0 && st.Exit == nil {
@@ -150,6 +153,7 @@ type runner struct {
 	env    []string
 	stdin  *bufio.Reader
 	stdout io.Writer
+	socket string
 	err    error
 }
 
@@ -169,6 +173,8 @@ func (r *runner) step(st Step) (code int, done bool) {
 		err = waitFile(*st.WaitFile)
 	case st.ReadLine != nil:
 		err = r.readLine(*st.ReadLine)
+	case st.Permission != nil:
+		err = r.permission(*st.Permission)
 	case st.IgnoreSignals:
 		signal.Ignore(syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	case st.Exit != nil:
@@ -268,6 +274,24 @@ func waitFile(w WaitFile) error {
 		}
 		time.Sleep(pollInterval)
 	}
+}
+
+func (r *runner) permission(p Permission) error {
+	if r.socket == "" {
+		return errors.New("permission: the Run has no permission socket (--permission-socket)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(p.TimeoutMS)*time.Millisecond)
+	defer cancel()
+	id := fmt.Sprintf("fake-%d", time.Now().UnixNano())
+	c := &inputsock.Client{Path: r.socket, Wait: 20 * time.Millisecond}
+	ans, err := c.Ask(ctx, inputsock.Message{PromptID: id, Tool: p.Tool, Input: p.Input})
+	if err != nil {
+		return fmt.Errorf("permission: %w after %dms", errTimeout, p.TimeoutMS)
+	}
+	if err := atomicfile.Write(p.To, []byte(ans.Decision), 0o600); err != nil {
+		return err
+	}
+	return c.Confirm(ctx, id)
 }
 
 func (r *runner) readLine(rl ReadLine) error {

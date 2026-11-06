@@ -9,7 +9,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 )
@@ -155,12 +158,19 @@ func (a Adapter) launch(host harness.Host, run harness.RunSpec, session string) 
 	if session != "" {
 		argv = append(argv, "--resume", session)
 	}
+	var inputPath string
+	if run.StructuredInput && a.Caps.StructuredInput {
+		inputPath = run.InputPath
+		if i := slices.Index(run.PermissionServer, "--socket"); run.AskPermissions && i >= 0 && i+1 < len(run.PermissionServer) {
+			argv = append(argv, "--permission-socket", run.PermissionServer[i+1])
+		}
+	}
 	configDir := globalDir(host)
 	if a.Caps.ConfigIsolation && run.ConfigDir != "" {
 		configDir = run.ConfigDir
 	}
 	env := append([]string{ConfigDirEnv + "=" + configDir}, a.Env...)
-	return harness.Launch{Argv: argv, Env: env, SecretEnv: a.SecretEnv}, nil
+	return harness.Launch{Argv: argv, Env: env, SecretEnv: a.SecretEnv, InputPath: inputPath, StructuredStdout: inputPath != "" && a.Caps.NeedsInputSignal}, nil
 }
 
 // Checkpoint is the last session the Run started, from its events.
@@ -183,10 +193,14 @@ func (a Adapter) Checkpoint(_ context.Context, _ harness.Host, h harness.Handle)
 	return harness.Checkpoint{Harness: a.ID(), Format: CheckpointFormat, Data: []byte(session)}, nil
 }
 
-// SendInput appends the text and a newline to InputFile in the RunDir.
+// SendInput appends the text and a newline to InputFile in the RunDir, or
+// writes them to the FIFO that is the stdin of the Run if it has one.
 func (a Adapter) SendInput(_ context.Context, _ harness.Host, h harness.Handle, in harness.Input) error {
 	if !a.Caps.StructuredInput {
 		return a.unsupported("send input")
+	}
+	if h.InputPath != "" {
+		return writeFIFO(h.InputPath, in.Text+"\n")
 	}
 	if h.RunDir == "" {
 		return errors.New("fakeharness: send input: no RunDir")
@@ -305,6 +319,26 @@ func eachEvent(path string, fn func(harness.Event)) error {
 	}
 	if err := sc.Err(); err != nil {
 		return fmt.Errorf("fakeharness: reading %s: %w", path, err)
+	}
+	return nil
+}
+
+// writeFIFO writes text to the FIFO at path without waiting for a reader that
+// is not there: whoever made the FIFO holds it open.
+func writeFIFO(path, text string) error {
+	fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("fakeharness: send input: %w: %w", harness.ErrInputNotSent, err)
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer func() { _ = f.Close() }()
+	if err := f.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return fmt.Errorf("fakeharness: send input: %w: %w", harness.ErrInputNotSent, err)
+	}
+	if n, err := f.WriteString(text); n == 0 && err != nil {
+		return fmt.Errorf("fakeharness: send input: %w: %w", harness.ErrInputNotSent, err)
+	} else if err != nil {
+		return fmt.Errorf("fakeharness: send input: %w", err)
 	}
 	return nil
 }
