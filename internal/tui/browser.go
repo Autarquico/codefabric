@@ -544,7 +544,7 @@ func (b *browser) footer(c RenderContext, compact bool) []string {
 			hints = append([]Hint{{"enter", b.spec.primary}}, hints...)
 		}
 	case compact:
-		hints = []Hint{{"enter", "Actions"}, {"esc", "Back"}, {"q", "Quit"}}
+		hints = []Hint{{"enter", "Actions"}, {"ctrl+p", "Palette"}, {"esc", "Back"}, {"q", "Quit"}}
 	default:
 		hints = []Hint{{"↑↓", "Move"}, {"/", "Filter"}}
 		switch {
@@ -556,6 +556,7 @@ func (b *browser) footer(c RenderContext, compact bool) []string {
 		for _, s := range b.spec.shortcuts {
 			hints = append(hints, Hint{s.Key, s.Label})
 		}
+		hints = append(hints, paletteHints...)
 		hints = append(hints, Hint{"esc", "Back"}, Hint{"q", "Quit"})
 	}
 	return keyHints(c, hints...)

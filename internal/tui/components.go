@@ -106,6 +106,7 @@ func footer(c RenderContext) string {
 			}
 		}
 		if i == len(bindings)-1 {
+			cells = append(cells, keyHints(c, paletteHints...)...)
 			cells = append(cells, c.Theme.Accent.Render("[q]")+" "+c.Theme.Text.Render("Quit"))
 		}
 		lines = append(lines, flow(cells, c.inner())...)
