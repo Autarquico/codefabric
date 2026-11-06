@@ -1,0 +1,30 @@
+# CodeFabric landing (layer 3). Overrides base.yml for the landing page only.
+layout:
+  structure: [hero, how-it-works, terminal, claims, install, footer]
+  rule: "one idea per section; statement hero, then cards and terminal frames on hairlines"
+  hero:
+    style: statement
+    headline_font: "Fraunces"   # large, italic allowed for one word
+    elements: [version_badge, one_liner, primary_cta_docs, secondary_cta_github]
+    version_badge: "<release tag or 'Unreleased build'> · early development"
+  how_it_works:
+    style: "four cards in a row on desktop, stacked on mobile: enrol → start → watch → answer"
+    motif: "the cf command of each step in IBM Plex Mono, accent-coloured"
+  terminal:
+    source: "internal/tui/testdata/*.golden (home.golden, inbox-80x24.golden)"
+    caption: "Rendered by the TUI test suite with fixture data."
+    container: "hairline frame, radius 0, own horizontal scroll"
+  claims:
+    style: "two columns: verified | not verified"
+    rule: "what only ran against the fake harness is said so"
+  install:
+    one_liner: "curl -fsSL https://github.com/Autarquico/codefabric/releases/latest/download/install.sh | sh"
+    pinned: "same line with CF_VERSION=<tag>, injected at build from SITE_VERSION"
+density: breathable
+motion:
+  page_load: none
+color:
+  hero_background: "neutral surface, no gradient, no image"
+copy:
+  cta_primary: "Read the docs"
+  cta_secondary: "View on GitHub"

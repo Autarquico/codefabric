@@ -1,0 +1,58 @@
+# CodeFabric — project design brief (layer 2). Absent keys inherit ~/.claude/design-system.yml.
+project:
+  name: "CodeFabric"
+  url: "https://autarquico.github.io/codefabric/"
+  audience: "developers who run coding agents (Claude Code, Codex CLI) and own more than one machine"
+  one_liner: "CodeFabric runs coding agents across a pool of your own machines"
+
+aesthetic:
+  family: tech-clinical
+  reference: []
+
+mode:
+  override: ""            # light and dark equal (global)
+
+color:
+  accent:
+    name: "loom indigo"
+    hex_light: "#4338ca"
+    hex_dark: "#818cf8"
+    note: "single accent: links, primary button, focus ring, command names; never for status"
+  neutrals_override: ""   # cold (global)
+
+typography:
+  headings:
+    family: "Fraunces"
+    weights: [500]
+    italic_allowed: true
+  body:
+    family: "IBM Plex Sans"
+    weights: [400, 500, 600]
+  mono:
+    family: "IBM Plex Mono"
+    usage_in_ui: true     # commands, install lines and terminal frames are first-class content
+
+iconography:
+  set: "tabler"
+
+copy:
+  tone: "precise, calm and honest; states what is verified and what is not"
+  voice_examples:
+    - "Your agents, on your machines."
+    - "The end-to-end tests drive a scripted fake harness, not the real agents."
+  forbidden_local:
+    - "milestone or phase codes, task IDs, finding IDs in public copy"
+    - "claims of behaviour that only ran against a fake harness"
+  vocabulary_local:
+    worker: "a machine that runs Runs"
+    task: "a unit of work on a Project; Tasks belong to CodeFabric"
+    run: "one execution of a Task on a Worker"
+
+assets:
+  logo_light: ""
+  logo_dark: ""
+  favicon: "site/public/favicon.svg"
+
+notes: |
+  Public copy is English. Terminal frames on the site come from the TUI golden files, never mock-ups.
+  Fonts are self-hosted through @fontsource packages: no Google Fonts CDN.
