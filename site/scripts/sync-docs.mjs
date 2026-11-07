@@ -9,7 +9,7 @@ export const SITE = 'https://autarquico.github.io';
 export const BASE = '/codefabric/';
 export const REPO_URL = 'https://github.com/Autarquico/codefabric';
 export const GUIDE_DIR = 'docs/guide';
-export const GUIDE_PAGES = ['getting-started.md', 'concepts.md', 'cli.md', 'tui.md'];
+export const GUIDE_PAGES = ['getting-started.md', 'concepts.md', 'cli.md', 'mcp.md', 'tui.md'];
 const NOT_PUBLIC = [/^docs\/codefabric-spec\.md$/, /^docs\/specs(\/|$)/, /^docs\/adr(\/|$)/, /^docs\/runbooks(\/|$)/];
 
 // Astro bundles TuiFrame (and this module) into dist/.prerender, so the module's own location is not the
