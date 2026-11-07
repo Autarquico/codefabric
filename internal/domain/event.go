@@ -97,6 +97,9 @@ const (
 type ActorRef struct {
 	Kind ActorKind
 	ID   string
+	// Session is the MCP session of a mcp actor; empty for any other. It is
+	// tagged apart from Kind and ID, which travel untagged.
+	Session string `json:"Session,omitempty"`
 }
 
 // Event is §20.2. Unset IDs and strings are empty; WorkerSeq is nil when the

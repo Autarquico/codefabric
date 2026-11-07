@@ -78,7 +78,43 @@ func (s *Server) authenticate(r *http.Request) (caller, error) {
 	if err != nil {
 		return caller{}, err
 	}
+	if session.MCPSession, err = mcpSession(r, session.Principal); err != nil {
+		return caller{}, err
+	}
 	return caller{session}, nil
+}
+
+const mcpSessionHeader = "CF-MCP-Session"
+
+// mcpSession reads the session a client declares in CF-MCP-Session. Only a
+// client identity may declare one, once, in a plain format: the value labels
+// the actor of its changes and takes part in nothing else.
+func mcpSession(r *http.Request, p domain.Principal) (string, error) {
+	values := r.Header.Values(mcpSessionHeader)
+	if len(values) == 0 {
+		return "", nil
+	}
+	switch {
+	case p.Kind != domain.KindClient:
+		return "", domain.NewError(domain.CodeInvalidRequest, mcpSessionHeader+" may only be sent by a client identity", nil)
+	case len(values) != 1 || !validMCPSession(values[0]):
+		return "", domain.NewError(domain.CodeInvalidRequest, mcpSessionHeader+" must be a single value of 8 to 64 letters, digits or '-'", nil)
+	}
+	return values[0], nil
+}
+
+func validMCPSession(id string) bool {
+	if len(id) < 8 || len(id) > 64 {
+		return false
+	}
+	for _, c := range []byte(id) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func contains(kinds []domain.Kind, k domain.Kind) bool {

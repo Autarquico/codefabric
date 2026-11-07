@@ -34,9 +34,9 @@ var ErrInvalidEvent = errors.New("invalid event")
 
 const insertEvent = `
 INSERT INTO events (id, schema_version, ts, received_at, source, worker_epoch, worker_seq,
-    request_id, type, level, actor_kind, actor_id, project_id, plan_id, task_id, run_id,
+    request_id, type, level, actor_kind, actor_id, actor_session, project_id, plan_id, task_id, run_id,
     worker_id, workflow_id, message, data)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (worker_id, worker_epoch, worker_seq) DO NOTHING
 RETURNING sequence`
 
@@ -85,7 +85,7 @@ func (t *Tx) AppendEvent(ctx context.Context, e domain.Event) (seq uint64, dup b
 	err = t.QueryRow(ctx, insertEvent,
 		string(e.ID), e.SchemaVersion, e.Timestamp.UnixNano(), receivedAt.UnixNano(), e.Source,
 		nullable(e.WorkerEpoch), workerSeq, nullable(e.RequestID), string(e.Type), e.Level,
-		string(e.Actor.Kind), e.Actor.ID,
+		string(e.Actor.Kind), e.Actor.ID, nullable(e.Actor.Session),
 		nullable(string(e.ProjectID)), nullable(string(e.PlanID)), nullable(string(e.TaskID)),
 		nullable(string(e.RunID)), nullable(string(e.WorkerID)), nullable(string(e.WorkflowID)),
 		e.Message, data,
@@ -162,7 +162,7 @@ type EventFilter struct {
 }
 
 const eventColumns = `sequence, id, schema_version, ts, received_at, source,
-    COALESCE(worker_epoch, ''), worker_seq, COALESCE(request_id, ''), type, level, actor_kind, actor_id,
+    COALESCE(worker_epoch, ''), worker_seq, COALESCE(request_id, ''), type, level, actor_kind, actor_id, COALESCE(actor_session, ''),
     COALESCE(project_id, ''), COALESCE(plan_id, ''), COALESCE(task_id, ''), COALESCE(run_id, ''),
     COALESCE(worker_id, ''), COALESCE(workflow_id, ''), message, data`
 
@@ -298,7 +298,7 @@ func scanEvent(rows *sql.Rows) (domain.Event, error) {
 		data                 sql.NullString
 	)
 	err := rows.Scan(&e.Sequence, &e.ID, &e.SchemaVersion, &ts, &receivedAt, &e.Source,
-		&e.WorkerEpoch, &workerSeq, &e.RequestID, &eventType, &e.Level, &actorKind, &e.Actor.ID,
+		&e.WorkerEpoch, &workerSeq, &e.RequestID, &eventType, &e.Level, &actorKind, &e.Actor.ID, &e.Actor.Session,
 		&ids[0], &ids[1], &ids[2], &ids[3], &ids[4], &ids[5], &e.Message, &data)
 	if err != nil {
 		return domain.Event{}, fmt.Errorf("store: scanning event: %w", err)

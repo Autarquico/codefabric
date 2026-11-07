@@ -316,6 +316,9 @@ type Session struct {
 	Principal   domain.Principal
 	Certificate *x509.Certificate // the certificate presented on the request
 	Superseded  bool
+	// MCPSession is the session a human client declared in CF-MCP-Session,
+	// already validated. It only labels the actor of what the session changes.
+	MCPSession string
 }
 
 // Session builds the session of an identity that has just been issued a
