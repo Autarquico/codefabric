@@ -1,0 +1,31 @@
+class Codefabric < Formula
+  desc "Control plane for coding agents running on your own machines"
+  homepage "https://github.com/Autarquico/codefabric"
+  license "Apache-2.0"
+
+  on_macos do
+    on_arm do
+      url "@BASE_URL@/v@VERSION@/cf_@VERSION@_darwin_arm64.tar.gz"
+      sha256 "@SHA_DARWIN_ARM64@"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "@BASE_URL@/v@VERSION@/cf_@VERSION@_linux_arm64.tar.gz"
+      sha256 "@SHA_LINUX_ARM64@"
+    end
+    on_intel do
+      url "@BASE_URL@/v@VERSION@/cf_@VERSION@_linux_amd64.tar.gz"
+      sha256 "@SHA_LINUX_AMD64@"
+    end
+  end
+
+  def install
+    bin.install "cf"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/cf version")
+  end
+end
