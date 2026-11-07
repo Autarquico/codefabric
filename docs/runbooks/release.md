@@ -107,7 +107,8 @@ done
 "$repo/packaging/release/verify-asset.sh" install.sh "$repo/install.sh"
 ```
 
-El conjunto completo se comprueba con `"$repo/packaging/release/verify-release.sh" vX.Y.Z "$repo/install.sh"`
+El conjunto completo se comprueba, con el mismo `repo=` definido arriba, con
+`"$repo/packaging/release/verify-release.sh" vX.Y.Z "$repo/install.sh"`
 (necesita `gh`; el segundo argumento es el `install.sh` del repo, no el descargado).
 Salida 5 en cualquiera de ellos = firma o checksum inválidos: no instales.
 
@@ -117,12 +118,14 @@ CI no tiene token del tap; es un paso humano. Si `autarquico/homebrew-tap` no ex
 una carpeta `Formula/`).
 
 ```sh
-# en un checkout del repo, en el commit del tag
-gh release download vX.Y.Z -p 'checksums.txt*' --dir "$d"
-packaging/release/brew-formula.sh "$d/checksums.txt" install.sh vX.Y.Z > "$d/codefabric.rb"
+repo=/ruta/al/checkout-en-el-commit-del-tag   # raíz de confianza: nunca el install.sh descargado
+f=$(mktemp -d)
+gh release download vX.Y.Z -p 'checksums.txt*' --dir "$f"
+"$repo/packaging/release/brew-formula.sh" "$f/checksums.txt" "$repo/install.sh" vX.Y.Z > "$f/codefabric.rb"
+echo "$f/codefabric.rb"
 ```
 
-`checksums.txt` y `checksums.txt.sig` deben estar juntos; `install.sh` es el del repo en el commit del tag
+`checksums.txt` y `checksums.txt.sig` deben estar juntos; `$repo/install.sh` es el del repo en el commit del tag
 (nunca el de la release; tras una revocación, el de `main`). El script
 verifica la firma antes de leer nada y rechaza versiones con sufijo, plataformas que faltan o repetidas, y una
 cabecera distinta de `vX.Y.Z`. No emite nada si falla.
@@ -131,9 +134,10 @@ Después, en el tap. `brew audit` e `install` resuelven la fórmula desde el tap
 dentro de ese checkout para probar el fichero recién copiado:
 
 ```sh
+rb=/ruta/absoluta/al/codefabric.rb   # la que imprimió el bloque anterior
 brew tap autarquico/tap
 cd "$(brew --repository autarquico/tap)"
-cp "$d/codefabric.rb" Formula/codefabric.rb
+cp "$rb" Formula/codefabric.rb
 brew audit --strict --online autarquico/tap/codefabric
 brew install autarquico/tap/codefabric && brew test autarquico/tap/codefabric
 git add Formula/codefabric.rb && git commit -m "codefabric X.Y.Z" && git push
@@ -169,7 +173,7 @@ e imprime `--- PASS: TestScenario_*`).
 | Puertas de la release | `ReleaseGates_*` (`gates_test.sh`: `require-checks.sh` y `tag-in-main.sh`) | `gates` y `sign-publish` (paso «tag must point into main») de `release.yml`; `installer` ejecuta los tests |
 | Conjunto publicado | `PublishedSet_*` (`published_test.sh`: `check.sh` y `verify-release.sh`) | `sign-publish` de `release.yml` (`check.sh`, `verify-release.sh`); `installer` ejecuta los tests |
 | Fórmula derivada | `FormulaDerivada_valid`, `_validWithoutExplicitVersion`, `_invalidSignature`, `_tamperedChecksums`, `_suffixedVersion`, `_suffixedRequestedVersion`, `_missingPlatform`, `_duplicatedPlatform`, `_invalidDigest`, `_headerVersionMismatch` (`brew_test.sh`) | `installer` |
-| Sitio desde la release | `TestScenario_SitioDesdeLaRelease` (nombre de los jobs): tests unitarios de `site/scripts`, build, comandos de instalación con el tag y axe (serious/critical) sobre la landing y una página de docs | `site` de `site.yml` (en PRs) y `build` de `pages.yml` (en la release) |
+| Sitio desde la release | `TestScenario_SitioDesdeLaRelease` (nombre de los jobs): tests unitarios de `site/scripts`, build, comandos de instalación (sin publicar en PRs, con el tag en la release), goldens y axe (serious/critical) sobre la landing y una página de docs | `site` de `site.yml` (en PRs) y `build` de `pages.yml` (en la release) |
 
 Lo que no se ha ejercitado con una release real: la firma con la clave del owner, el environment `release` y el
 despliegue de Pages. La cadena completa solo se ha probado con una clave efímera de tests.

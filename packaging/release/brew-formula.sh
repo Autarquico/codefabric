@@ -19,7 +19,15 @@ base_url=${CF_RELEASE_BASE_URL:-https://github.com/Autarquico/codefabric/release
 
 fail() { echo "brew-formula: $*" >&2; exit 1; }
 
+printf '%s\n' "$base_url" | grep -Eq '^https://[A-Za-z0-9./_-]+$' || fail "CF_RELEASE_BASE_URL must be an https URL"
 [ -f "$checksums" ] || fail "$checksums is missing"
+# Verify and read one private copy, so the bytes read are the bytes verified.
+work=$(mktemp -d)
+out=$work/formula
+trap 'rm -rf "$work"' EXIT
+cp "$checksums" "$work/checksums.txt"
+cp "$checksums.sig" "$work/checksums.txt.sig" 2>/dev/null || fail "$checksums.sig is missing"
+checksums=$work/checksums.txt
 "$here/verify-asset.sh" "$checksums" "$trust" >/dev/null || fail "checksums signature does not verify"
 
 tag=$(sed -n 's/^version: //p;1q' "$checksums")
@@ -43,8 +51,6 @@ darwin_arm64=$(digest_of darwin_arm64)
 linux_arm64=$(digest_of linux_arm64)
 linux_amd64=$(digest_of linux_amd64)
 
-out=$(mktemp)
-trap 'rm -f "$out"' EXIT
 sed -e "s|@BASE_URL@|$base_url|g" \
 	-e "s|@VERSION@|$version|g" \
 	-e "s|@SHA_DARWIN_ARM64@|$darwin_arm64|" \
