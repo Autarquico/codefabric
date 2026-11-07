@@ -21,7 +21,7 @@ Do not use it to run commands on this machine. For that, use your own tools.
 3. `events_wait` with `types` (`RunCompleted`, `RunFailed`, `TaskNeedsInput`), `filter` (`task`) and `after_cursor` set to the cursor of step 1. Without `after_cursor` the wait starts from now, and an event emitted before that call would be lost.
 4. Each answer carries a `cursor`. Pass it as `after_cursor` in the next `events_wait`, so no event is lost between calls.
 5. On `RunCompleted` or `RunFailed`, read the result with `runs_get` and the output with `runs_logs`.
-6. On `TaskNeedsInput`, read `inbox_list` to see what is asked, then call `tasks_respond` with the answer and a `request_id`. Then go back to step 3 with the cursor you have, until `RunCompleted` or `RunFailed`.
+6. On `TaskNeedsInput`, read `inbox_list` to see what is asked, then call `tasks_respond` with the answer and a `request_id`. Then call `events_wait` again with the same filters and `after_cursor` set to the latest cursor you received (not the one from step 1), until `RunCompleted` or `RunFailed`.
 
 Never poll. Do not call `tasks_get` or `runs_get` in a loop to see if something changed: `events_wait` blocks until there is an event or the timeout (5 min by default, 10 min at most). If it returns no events, read `tasks_get` once, in case the Task already finished, and then call `events_wait` again with the cursor it gave you.
 
