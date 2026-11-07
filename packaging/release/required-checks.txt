@@ -1,0 +1,18 @@
+# Check runs that must have succeeded on the exact tag commit before release.yml builds anything
+# (require-checks.sh). One name per line, as GitHub reports it: a job id, plus the matrix values in
+# parentheses for matrix jobs. This is the required status checks of main minus pm-policy/ready (not an
+# Actions check-run), plus the jobs that guard the release itself. govulncheck is deliberately excluded:
+# main does not require it, and a new advisory must not block a release of unchanged code.
+lint
+unit (ubuntu-latest)
+unit (macos-latest)
+cross-build
+integration (ubuntu-latest)
+integration (macos-latest)
+e2e (ubuntu-latest)
+e2e (macos-latest)
+service-units (ubuntu-latest)
+service-units (macos-latest)
+installer (ubuntu-latest)
+installer (macos-latest)
+workflow-policy
