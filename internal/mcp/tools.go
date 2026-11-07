@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
-	"os"
+	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -16,6 +18,7 @@ import (
 type tools struct {
 	c   Client
 	clk clock.Clock
+	dir string
 }
 
 // Inputs. A field without omitempty is required by the schema the SDK derives.
@@ -47,6 +50,7 @@ type (
 		IncludeRemoved bool `json:"include_removed,omitempty"`
 	}
 	workflowsDiffInput struct {
+		RequestID  string   `json:"request_id" jsonschema:"any unique string; repeating a call with the same request_id has one effect"`
 		Worker     string   `json:"worker"`
 		Harness    string   `json:"harness"`
 		Workflow   string   `json:"workflow"`
@@ -88,7 +92,7 @@ type (
 		SourceRef   string `json:"source_ref,omitempty" jsonschema:"branch or ref to start from; the Project default if empty"`
 		Workflow    string `json:"workflow,omitempty"`
 		Environment string `json:"environment,omitempty"`
-		Harness     string `json:"harness,omitempty" jsonschema:"harness that runs the prompt: claude-code, codex or command (the prompt as a POSIX shell script). Required unless no_start; a Run with no harness is rejected by every Worker and never starts"`
+		Harness     string `json:"harness,omitempty" jsonschema:"harness that runs the prompt: claude-code or codex. Required unless no_start; a Run with no harness is rejected by every Worker and never starts"`
 		Model       string `json:"model,omitempty" jsonschema:"model the harness runs with; the harness default if empty"`
 		Permissions string `json:"permissions,omitempty" jsonschema:"set to ask so the harness asks before what it is not allowed to do (you get TaskNeedsInput and answer with tasks_respond); empty skips its permission prompts"`
 		Completion  string `json:"completion,omitempty" jsonschema:"completion policy: first_success, promote or manual; the Project default if empty"`
@@ -113,6 +117,11 @@ type (
 	}
 )
 
+// agentHarnesses are the harnesses a model may start. The others, `command`
+// among them, run the prompt as a shell script on the Worker: the model has no
+// shell (spec, "Sin shell").
+var agentHarnesses = []string{"claude-code", "codex"}
+
 // request is the CreateTaskRequest of `cf task new`. Like the CLI it sends the
 // harness and the rest as given and leaves their values to the Controller; unlike
 // it, it refuses a Task that starts with no harness, which no Worker accepts and
@@ -120,7 +129,11 @@ type (
 func (in tasksCreateInput) request() (v1.CreateTaskRequest, error) {
 	if in.Harness == "" && !in.NoStart {
 		return v1.CreateTaskRequest{}, domain.NewError(domain.CodeInvalidRequest,
-			"harness is required to start a Task: claude-code, codex or command (or set no_start)", nil)
+			"harness is required to start a Task: claude-code or codex (or set no_start)", nil)
+	}
+	if in.Harness != "" && !slices.Contains(agentHarnesses, in.Harness) {
+		return v1.CreateTaskRequest{}, domain.NewError(domain.CodeInvalidRequest,
+			fmt.Sprintf("harness %q is not offered to a model: use claude-code or codex", in.Harness), nil)
 	}
 	return v1.CreateTaskRequest{
 		RequestID: in.RequestID, Project: in.Project, Name: in.Name, Prompt: in.Prompt, NoStart: in.NoStart,
@@ -181,13 +194,11 @@ func (t tools) read(s *sdk.Server) {
 		})
 	add(s, wire("workflows.get"), "Show a Workflow version.", entity,
 		func(ctx context.Context, in idInput) (any, error) { return t.c.ShowWorkflow(ctx, in.Ref) })
-	add(s, wire("workflows.diff"), "Preview what applying a Workflow to a Worker would change. Changes nothing.",
-		objectOf(map[string]string{"noop": "boolean"}),
-		func(ctx context.Context, in workflowsDiffInput) (any, error) {
-			return t.c.ApplyWorkflow(ctx, v1.ApplyWorkflowRequest{
-				Worker: in.Worker, Harness: in.Harness, Workflow: in.Workflow, Components: in.Components, DryRun: true,
-			})
-		})
+	add(s, wire("workflows.diff"), "Preview what applying a Workflow to a Worker would change. It records a dry-run order on the Worker, "+
+		"replacing any earlier dry-run of that Worker and harness, and waits up to 2m for the Worker to report: it applies nothing. "+
+		"Result: {apply: order}, whose result is the plan.",
+		objectOf(map[string]string{"apply": "object"}),
+		t.workflowsDiff)
 	add(s, wire("inbox.list"), "List what waits for a person: Tasks that need input and Tasks that failed. Result: {items: [InboxItem]}.",
 		objectOf(map[string]string{"items": "array"}),
 		func(ctx context.Context, _ none) (any, error) {
@@ -230,15 +241,11 @@ func (t tools) execute(s *sdk.Server) {
 			if err := requireRequestID(in.RequestID); err != nil {
 				return nil, err
 			}
-			dir, err := os.Getwd()
-			if err != nil {
-				return nil, err
-			}
 			req, err := in.request()
 			if err != nil {
 				return nil, err
 			}
-			return t.c.NewTask(ctx, dir, req)
+			return t.c.NewTask(ctx, t.dir, req)
 		})
 	add(s, wire("tasks.respond"), "Answer what a Task waits for: allow or deny a permission, or answer a question.",
 		objectOf(map[string]string{"task_id": "string", "run_id": "string", "prompt_id": "string", "state": "string"}),
@@ -296,4 +303,70 @@ func (t tools) runLogs(ctx context.Context, in runsLogsInput) (any, error) {
 		"run_id": out.RunID, "start": out.Start, "end": out.End, "offset": out.Offset,
 		"text": strings.ToValidUTF8(string(out.Data), "�"), "truncated": out.Truncated, "closed": out.Closed,
 	}, nil
+}
+
+const (
+	diffTimeout = 2 * time.Minute
+	diffPoll    = 500 * time.Millisecond
+)
+
+// workflowsDiff records a dry-run order and waits, as `cf workflow diff` does,
+// until the Worker closes it: the plan is in the order that settles, not in the
+// answer that creates it.
+func (t tools) workflowsDiff(ctx context.Context, in workflowsDiffInput) (any, error) {
+	if err := requireRequestID(in.RequestID); err != nil {
+		return nil, err
+	}
+	resp, err := t.c.ApplyWorkflow(ctx, v1.ApplyWorkflowRequest{
+		RequestID: in.RequestID, Worker: in.Worker, Harness: in.Harness, Workflow: in.Workflow, Components: in.Components, DryRun: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Apply == nil {
+		return nil, domain.NewError(domain.CodeInternal, "the Controller recorded no order for the diff", nil)
+	}
+	order, err := t.settle(ctx, *resp.Apply)
+	if err != nil {
+		return nil, err
+	}
+	switch order.State {
+	case v1.ApplyStateFailed:
+		return nil, domain.NewError(domain.CodeInternal, fmt.Sprintf("%s on %s failed: %s", order.ID, order.Worker, order.Error),
+			map[string]any{"apply": order.ID})
+	case v1.ApplyStateSuperseded:
+		return nil, domain.NewError(domain.CodeInvalidTransition, fmt.Sprintf("%s on %s was superseded by a newer order", order.ID, order.Worker),
+			map[string]any{"apply": order.ID})
+	}
+	return map[string]any{"apply": order}, nil
+}
+
+// settle polls the order until the Worker closes it or diffTimeout runs out,
+// both measured with the clock of the server.
+func (t tools) settle(ctx context.Context, a v1.WorkflowApply) (v1.WorkflowApply, error) {
+	deadline := t.clk.NewTimer(diffTimeout)
+	defer deadline.Stop()
+	tick := t.clk.NewTicker(diffPoll)
+	defer tick.Stop()
+	for !closedOrder(a.State) {
+		select {
+		case <-ctx.Done():
+			return a, ctx.Err()
+		case <-deadline.C():
+			return a, domain.NewError(domain.CodeInProgress,
+				fmt.Sprintf("the Worker has not finished %s after %s; it keeps going", a.ID, diffTimeout),
+				map[string]any{"apply": a.ID, "state": a.State})
+		case <-tick.C():
+		}
+		next, err := t.c.WorkflowApply(ctx, a.ID)
+		if err != nil {
+			return a, err
+		}
+		a = next
+	}
+	return a, nil
+}
+
+func closedOrder(state string) bool {
+	return state == v1.ApplyStateApplied || state == v1.ApplyStateFailed || state == v1.ApplyStateSuperseded
 }

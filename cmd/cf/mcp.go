@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -41,13 +42,17 @@ func newMCPCommand(open func(session, controller string) (mcp.Client, error)) *c
 				return err
 			}
 			controller, _ := cmd.Flags().GetString("controller")
+			dir, err := os.Getwd()
+			if err != nil {
+				return err
+			}
 			c, err := open(session, controller)
 			if err != nil {
 				return err
 			}
 			cmd.SilenceUsage = true
 			fmt.Fprintf(cmd.ErrOrStderr(), "cf mcp: serving profile %s, session %s\n", p, session)
-			return mcp.Serve(cmd.Context(), mcp.NewServer(p, c, clock.Real{}), cmd.InOrStdin(), cmd.OutOrStdout())
+			return mcp.Serve(cmd.Context(), mcp.NewServer(p, c, clock.Real{}, dir), cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
 	serve.Flags().StringVar(&profile, "profile", string(mcp.Execute), "what the model may do: read, execute or modify")

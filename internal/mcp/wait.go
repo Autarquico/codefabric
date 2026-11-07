@@ -75,7 +75,9 @@ func (t tools) eventsWait(ctx context.Context, in eventsWaitInput) (any, error) 
 	if len(events) == 0 {
 		select {
 		case <-timedOut:
-			err = nil
+			if errors.Is(err, context.Canceled) {
+				err = nil
+			}
 		default:
 		}
 	}

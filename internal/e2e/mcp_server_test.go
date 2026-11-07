@@ -316,17 +316,51 @@ func (c *Cluster) purgeEventsThrough(seq uint64) {
 	}
 }
 
+// quietClaude is a `claude -p` that prints a line and ends successfully.
+const quietClaude = `#!/bin/sh
+case "$1" in --version) echo "2.1.314 (Claude Code)"; exit 0 ;; esac
+echo '{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-5-5","tools":[]}'
+echo mcp-master-output >&2
+echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"done","session_id":"s1","usage":{"input_tokens":1,"output_tokens":2},"modelUsage":{"claude-opus-5-5":{"inputTokens":1,"outputTokens":2}}}'
+`
+
+// claudeCluster is a cluster whose Worker has the fake claude script and the
+// token that harness needs, so that a Run of claude-code starts on it.
+func claudeCluster(t *testing.T, script string) *Cluster {
+	t.Helper()
+	c := NewCluster(t, Opts{Prepare: func(_ string, b *Box) {
+		b.InstallHarnesses()
+		b.Install("claude", script)
+	}})
+	w := c.Workers[0]
+	if res := c.CFInput(w.Box, claudeTokenValue, "worker", "secrets", "set", claudeTokenRef); res.Code != 0 {
+		t.Fatalf("e2e: %s", res)
+	}
+	c.mustCF(c.Ctl, "project", "secrets", "allow", "e2e", claudeTokenRef)
+	c.Eventually("the Controller to know the Claude token of the Worker", func() (bool, string) {
+		got, err := c.API.Worker(c.H.Context(), w.Name)
+		if err != nil {
+			return false, err.Error()
+		}
+		return slices.ContainsFunc(got.Secrets, func(s v1.SecretMeta) bool { return s.Ref == claudeTokenRef }), fmt.Sprintf("%+v", got.Secrets)
+	})
+	return c
+}
+
 // Given a cluster with a Worker and an MCP client connected to `cf mcp serve`,
-// When the model runs a Task and waits for its end with events_wait,
+// When the model creates a Task with tasks_create, waits for its end with events_wait,
 // Then it receives RunCompleted, and runs_get and runs_logs give the result and the output.
 func TestScenario_MCP_Master(t *testing.T) {
-	c := NewCluster(t, Opts{})
+	c := claudeCluster(t, quietClaude)
 	s := c.ServeMCP("execute")
 	cursor := s.Cursor()
 
-	// The model has no way to choose a harness yet (see the next test): the Task
-	// is created with the CLI, everything else is the model's.
-	created := c.Do("echo mcp-master-output; echo master > result.txt")
+	created := call[v1.CreateTaskResponse](s, "tasks_create", map[string]any{
+		"request_id": "master-create", "prompt": "say something", "harness": "claude-code",
+	})
+	if created.Run == nil {
+		t.Fatalf("tasks_create started no Run: %+v", created.Task)
+	}
 
 	got := s.Wait(cursor, []string{"RunCompleted"}, created.Task.ID, 30*time.Second)
 	if len(got.Events) != 1 || got.Events[0].Type != domain.EventRunCompleted || got.Events[0].RunID != created.Run.ID {
@@ -345,31 +379,6 @@ func TestScenario_MCP_Master(t *testing.T) {
 			Text string `json:"text"`
 		}](s, "runs_logs", map[string]any{"ref": created.Run.ID})
 		return strings.Contains(out.Text, "mcp-master-output"), out.Text
-	})
-}
-
-// Given the same cluster, When the model calls tasks_create with a harness and waits,
-// Then the Run it created completes.
-func TestScenario_MCP_Master_TasksCreateRunsATask(t *testing.T) {
-	c := NewCluster(t, Opts{})
-	s := c.ServeMCP("execute")
-	cursor := s.Cursor()
-
-	created := call[v1.CreateTaskResponse](s, "tasks_create", map[string]any{
-		"request_id": "master-create", "prompt": "echo created-by-the-model", "harness": "command",
-	})
-	if created.Run == nil {
-		t.Fatalf("tasks_create started no Run: %+v", created.Task)
-	}
-	got := s.Wait(cursor, []string{"RunCompleted"}, created.Task.ID, 30*time.Second)
-	if len(got.Events) != 1 || got.Events[0].RunID != created.Run.ID {
-		t.Fatalf("events_wait = %+v, want the RunCompleted of %s", got, created.Run.ID)
-	}
-	c.Eventually("the output of the Run to reach runs_logs", func() (bool, string) {
-		out := call[struct {
-			Text string `json:"text"`
-		}](s, "runs_logs", map[string]any{"ref": created.Run.ID})
-		return strings.Contains(out.Text, "created-by-the-model"), out.Text
 	})
 }
 
@@ -407,23 +416,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"resul
 // Then the Run continues and the event of the answer has the actor mcp with the ID of the session.
 func TestScenario_MCP_NeedsInputDesdeElModelo(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "approved")
-	c := NewCluster(t, Opts{Prepare: func(_ string, b *Box) {
-		b.InstallHarnesses()
-		b.Install("claude", permissionClaude(marker))
-	}})
-	w := c.Workers[0]
-	if res := c.CFInput(w.Box, claudeTokenValue, "worker", "secrets", "set", claudeTokenRef); res.Code != 0 {
-		t.Fatalf("e2e: %s", res)
-	}
-	c.mustCF(c.Ctl, "project", "secrets", "allow", "e2e", claudeTokenRef)
-	c.Eventually("the Controller to know the Claude token of the Worker", func() (bool, string) {
-		got, err := c.API.Worker(c.H.Context(), w.Name)
-		if err != nil {
-			return false, err.Error()
-		}
-		return slices.ContainsFunc(got.Secrets, func(s v1.SecretMeta) bool { return s.Ref == claudeTokenRef }), fmt.Sprintf("%+v", got.Secrets)
-	})
-
+	c := claudeCluster(t, permissionClaude(marker))
 	s := c.ServeMCP("execute")
 	cursor := s.Cursor()
 	created := call[v1.CreateTaskResponse](s, "tasks_create", map[string]any{
@@ -604,6 +597,13 @@ func TestScenario_MCP_SinShell(t *testing.T) {
 			// "execute" is a profile, not a tool: none of the tools is named after it.
 			if forbidden.MatchString(name) {
 				t.Errorf("profile %s offers %q, which looks like shell, files or secrets", profile, name)
+			}
+		}
+		if profile != "read" {
+			// harness command would run the prompt as a shell script on a Worker.
+			res := s.refuses("tasks_create", map[string]any{"request_id": "no-shell", "prompt": "id", "harness": "command"})
+			if !strings.Contains(res, "harness") {
+				t.Errorf("profile %s: tasks_create{harness:command} says %q, want it to name the harness", profile, res)
 			}
 		}
 		for _, name := range []string{"shell", "bash", "exec", "run_command", "secrets_list", "secrets_get", "secrets_set", "read_file", "write_file"} {

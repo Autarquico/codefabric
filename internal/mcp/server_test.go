@@ -52,7 +52,7 @@ func connect(t *testing.T, profile mcp.Profile, c mcp.Client, clk clock.Clock) *
 	t.Helper()
 	ctx := t.Context()
 	serverSide, clientSide := sdk.NewInMemoryTransports()
-	server := mcp.NewServer(profile, c, clk)
+	server := mcp.NewServer(profile, c, clk, "/work")
 	if _, err := server.Connect(ctx, serverSide, nil); err != nil {
 		t.Fatal(err)
 	}

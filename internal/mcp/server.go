@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -48,8 +49,10 @@ func (p Profile) rank() int {
 		return 0
 	case Execute:
 		return 1
-	default:
+	case Modify:
 		return 2
+	default:
+		return -1 // an unknown profile is offered nothing
 	}
 }
 
@@ -66,6 +69,7 @@ type Client interface {
 	Worker(ctx context.Context, ref string) (v1.Worker, error)
 	ListWorkflows(ctx context.Context) ([]v1.WorkflowSummary, error)
 	ShowWorkflow(ctx context.Context, ref string) (v1.WorkflowVersion, error)
+	WorkflowApply(ctx context.Context, id string) (v1.WorkflowApply, error)
 	ApplyWorkflow(ctx context.Context, req v1.ApplyWorkflowRequest) (v1.ApplyWorkflowResponse, error)
 	Inbox(ctx context.Context) (v1.InboxResponse, error)
 	Search(ctx context.Context, q client.SearchQuery) (v1.SearchResponse, error)
@@ -89,11 +93,14 @@ const (
 // NewServer builds the MCP server of a profile. Only the tools the profile
 // allows are registered, so asking for another is an unknown tool. Wire names
 // have no dots (the Anthropic API admits ^[a-zA-Z0-9_-]{1,128}$); the
-// permissions and the docs keep the names of §17.2.
-func NewServer(profile Profile, c Client, clk clock.Clock) *sdk.Server {
+// permissions and the docs keep the names of §17.2. dir is the directory that
+// decides the Project of a Task the model creates without naming one.
+func NewServer(profile Profile, c Client, clk clock.Clock, dir string) *sdk.Server {
 	s := sdk.NewServer(&sdk.Implementation{Name: "codefabric", Version: buildinfo.Get().Version}, nil)
-	t := tools{c: c, clk: clk}
-	t.read(s)
+	t := tools{c: c, clk: clk, dir: dir}
+	if profile.rank() >= Read.rank() {
+		t.read(s)
+	}
 	if profile.rank() >= Execute.rank() {
 		t.execute(s)
 	}
@@ -106,8 +113,9 @@ func NewServer(profile Profile, c Client, clk clock.Clock) *sdk.Server {
 // add registers a tool whose handler returns its result as any value. The
 // output schema is declared by hand and kept small: the SDK would derive one
 // from the Go type and fail on the first field it cannot describe. A
-// *domain.Error comes back as a tool error that keeps its code and details;
-// the SDK handles the unexpected ones.
+// *domain.Error comes back as a tool error that keeps its code and details; any
+// other error is CF_INTERNAL for the model, and its text goes to stderr, since
+// it can carry URLs and local paths.
 func add[In any](s *sdk.Server, name, description string, out *jsonschema.Schema, h func(context.Context, In) (any, error)) {
 	sdk.AddTool(s, &sdk.Tool{Name: name, Description: description, OutputSchema: out},
 		func(ctx context.Context, _ *sdk.CallToolRequest, in In) (*sdk.CallToolResult, any, error) {
@@ -116,7 +124,11 @@ func add[In any](s *sdk.Server, name, description string, out *jsonschema.Schema
 			if errors.As(err, &coded) {
 				return toolError(coded), nil, nil
 			}
-			return nil, res, err
+			if err != nil {
+				log.Printf("cf mcp: %s: %v", name, err)
+				return toolError(domain.NewError(domain.CodeInternal, "unexpected error; see the stderr of cf mcp serve", nil)), nil, nil
+			}
+			return nil, res, nil
 		})
 }
 
