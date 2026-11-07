@@ -20,9 +20,15 @@ type Tx struct {
 	tx     *sql.Tx
 	maxSeq uint64 // highest event sequence inserted by this transaction
 	output bool   // the transaction changed the output of a Run
+	// actorSession is the MCP session of the caller the transaction runs for.
+	actorSession string
 	// sealDue are the outputs that this transaction left with bytes to seal.
 	sealDue []outputKey
 }
+
+// SetActorSession says which MCP session the transaction acts for, so that the
+// audit entries of an mcp actor carry it without each use case passing it on.
+func (t *Tx) SetActorSession(id string) { t.actorSession = id }
 
 // WithTx runs fn inside BEGIN IMMEDIATE on the writer. It commits when fn
 // returns nil, rolls back when fn returns an error, and rolls back and

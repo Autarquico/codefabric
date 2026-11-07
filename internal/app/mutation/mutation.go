@@ -69,10 +69,9 @@ func Do[T any](ctx context.Context, db *store.DB, clk clock.Clock, by pki.Sessio
 			}
 			return nil
 		}
-		if out, err = fn(tx, Act{
-			Actor:     domain.ActorRef{Kind: by.Principal.ActorKind(), ID: string(by.Principal.ID)},
-			RequestID: requestID, Now: now,
-		}); err != nil {
+		actor := actorOf(by)
+		tx.SetActorSession(actor.Session)
+		if out, err = fn(tx, Act{Actor: actor, RequestID: requestID, Now: now}); err != nil {
 			return err
 		}
 		response, err := json.Marshal(out)
@@ -85,6 +84,17 @@ func Do[T any](ctx context.Context, db *store.DB, clk clock.Clock, by pki.Sessio
 		return zero, err
 	}
 	return out, nil
+}
+
+// actorOf is the actor of a change made by by: the principal of the
+// certificate, as mcp when the client declared an MCP session. The ID is always
+// the certificate's.
+func actorOf(by pki.Session) domain.ActorRef {
+	actor := domain.ActorRef{Kind: by.Principal.ActorKind(), ID: string(by.Principal.ID)}
+	if by.MCPSession != "" && by.Principal.Kind == domain.KindClient {
+		actor.Kind, actor.Session = domain.ActorMCP, by.MCPSession
+	}
+	return actor
 }
 
 func validRequestID(id string) bool {

@@ -108,7 +108,7 @@ func TestProjectsTasksRunsApi_RoundTripThroughTheSDK(t *testing.T) {
 	if task, err := c.UpdateTask(ctx, created.Task.ID, "", v1.UpdateTaskRequest{Name: &name}); err != nil || task.Name != "renamed" {
 		t.Fatalf("UpdateTask = %+v, %v", task, err)
 	}
-	cancelled, err := c.CancelTask(ctx, "renamed", "backend")
+	cancelled, err := c.CancelTask(ctx, "renamed", "backend", "")
 	must(t, err)
 	if cancelled.State != domain.TaskCancelled {
 		t.Errorf("cancelled = %+v", cancelled)
@@ -281,7 +281,7 @@ func TestScenario_TuiViewsActions_Timeline(t *testing.T) {
 	makeTasks(t, tc, "other")
 	created, err := tc.owner.CreateTask(ctx, v1.CreateTaskRequest{Project: "backend", Name: "subject", Prompt: "x", ResolvedRef: "main", SourceCommit: commitA})
 	must(t, err)
-	if _, err := tc.owner.CancelTask(ctx, "subject", created.Task.ProjectID); err != nil {
+	if _, err := tc.owner.CancelTask(ctx, "subject", created.Task.ProjectID, ""); err != nil {
 		t.Fatal(err)
 	}
 

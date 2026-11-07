@@ -18,8 +18,12 @@ import (
 func newWorkerCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "worker", Short: "Run and administer Workers"}
 	cmd.AddCommand(newWorkerListCmd(), newWorkerShowCmd(),
-		newWorkerActionCmd("drain", "Stop a Worker from taking new Runs", "Draining", (*client.Client).DrainWorker),
-		newWorkerActionCmd("undrain", "Let a drained Worker take Runs again", "Undrained", (*client.Client).UndrainWorker),
+		newWorkerActionCmd("drain", "Stop a Worker from taking new Runs", "Draining", func(c *client.Client, ctx context.Context, ref string) (v1.Worker, error) {
+			return c.DrainWorker(ctx, ref, "")
+		}),
+		newWorkerActionCmd("undrain", "Let a drained Worker take Runs again", "Undrained", func(c *client.Client, ctx context.Context, ref string) (v1.Worker, error) {
+			return c.UndrainWorker(ctx, ref, "")
+		}),
 		newWorkerActionCmd("remove", "Remove a Worker and revoke its credentials (only without active Runs)", "Removed", (*client.Client).RemoveWorker))
 	return cmd
 }
