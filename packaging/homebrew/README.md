@@ -14,7 +14,8 @@ packaging/release/brew-formula.sh checksums.txt install.sh vX.Y.Z > codefabric.r
 ```
 
 - Verifica la firma de `checksums.txt` (`checksums.txt.sig`, vía `verify-asset.sh`) antes de leer nada.
-  `TRUST` es un fichero `allowed_signers` o el `install.sh` de la release.
+  `TRUST` es un fichero `allowed_signers` o el `install.sh` del checkout del repo en el commit del tag
+  (nunca el `install.sh` descargado de la release: la verificación sería circular).
 - La cabecera `version: vX.Y.Z` debe coincidir con `VERSION` (opcional) y no puede llevar sufijo
   (`-rc.1`, etc.): las prereleases no tienen fórmula.
 - Cada plataforma debe aparecer exactamente una vez con un sha256 de 64 hex.

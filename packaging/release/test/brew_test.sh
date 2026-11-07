@@ -7,7 +7,7 @@ BREW_BASE=https://example.invalid/releases/download
 # brew_formula [VERSION]: sets rc, $T/out (stdout) and $T/err (stderr).
 brew_formula() {
 	rc=0
-	CF_RELEASE_BASE_URL=$BREW_BASE sh "$RELEASE_DIR/brew-formula.sh" "$T/dist/checksums.txt" "$KEY_A/install.sh" "$@" \
+	CF_RELEASE_BASE_URL=$BREW_BASE "$RELEASE_DIR/brew-formula.sh" "$T/dist/checksums.txt" "$KEY_A/install.sh" "$@" \
 		>"$T/out" 2>"$T/err" || rc=$?
 }
 
@@ -18,9 +18,6 @@ assert_brew_rejects() { # error-substring
 	assert_no_stdout
 	grep -q -- "$1" "$T/err" || { sed 's/^/    | /' "$T/err"; fail "stderr lacks: $1"; }
 }
-
-# resign_with_checksums: $T/dist/checksums.txt is rewritten by the caller; sign it again with KEY_A.
-resign_with_checksums() { sign_checksums "$KEY_A"; }
 
 TestScenario_FormulaDerivada_valid() {
 	good_release "$KEY_A"
@@ -33,7 +30,7 @@ TestScenario_FormulaDerivada_valid() {
 	done
 	grep -q '^class Codefabric < Formula' "$T/out" || fail "not the codefabric formula"
 	grep -q 'bin.install "cf"' "$T/out" || fail "does not install cf"
-	grep -q '@[A-Z_]*@' "$T/out" && fail "unrendered placeholder"
+	grep -q '@[A-Z_0-9]*@' "$T/out" && fail "unrendered placeholder"
 	if command -v ruby >/dev/null 2>&1; then
 		cp "$T/out" "$T/codefabric.rb"
 		ruby -c "$T/codefabric.rb" >/dev/null || fail "ruby -c rejects the formula"
@@ -66,7 +63,7 @@ TestScenario_FormulaDerivada_tamperedChecksums() {
 TestScenario_FormulaDerivada_suffixedVersion() {
 	good_release "$KEY_A"
 	sed '1s/.*/version: v1.2.3-rc.1/' "$T/dist/checksums.txt" >"$T/new" && mv "$T/new" "$T/dist/checksums.txt"
-	resign_with_checksums
+	sign_checksums "$KEY_A"
 	brew_formula
 	assert_brew_rejects "not a plain vX.Y.Z"
 }
@@ -80,7 +77,7 @@ TestScenario_FormulaDerivada_suffixedRequestedVersion() {
 TestScenario_FormulaDerivada_missingPlatform() {
 	good_release "$KEY_A"
 	grep -v linux_arm64 "$T/dist/checksums.txt" >"$T/new" && mv "$T/new" "$T/dist/checksums.txt"
-	resign_with_checksums
+	sign_checksums "$KEY_A"
 	brew_formula "$VERSION"
 	assert_brew_rejects "cf_${BARE_VERSION}_linux_arm64.tar.gz is not listed exactly once"
 }
@@ -89,7 +86,7 @@ TestScenario_FormulaDerivada_duplicatedPlatform() {
 	good_release "$KEY_A"
 	grep linux_amd64 "$T/dist/checksums.txt" >"$T/dup"
 	cat "$T/dup" >>"$T/dist/checksums.txt"
-	resign_with_checksums
+	sign_checksums "$KEY_A"
 	brew_formula "$VERSION"
 	assert_brew_rejects "cf_${BARE_VERSION}_linux_amd64.tar.gz is not listed exactly once"
 }
@@ -97,7 +94,7 @@ TestScenario_FormulaDerivada_duplicatedPlatform() {
 TestScenario_FormulaDerivada_invalidDigest() {
 	good_release "$KEY_A"
 	sed 's/^[0-9a-f]*  \(cf_.*darwin_arm64\)/zz  \1/' "$T/dist/checksums.txt" >"$T/new" && mv "$T/new" "$T/dist/checksums.txt"
-	resign_with_checksums
+	sign_checksums "$KEY_A"
 	brew_formula "$VERSION"
 	assert_brew_rejects "has no sha256 digest"
 }

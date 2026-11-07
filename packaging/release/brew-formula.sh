@@ -1,7 +1,8 @@
 #!/bin/sh
 # Render the Homebrew formula from the signed checksums.txt of a vX.Y.Z release.
 # The formula is a derived artifact: version and digests come only from checksums.txt, and its
-# signature is verified first (see verify-asset.sh for TRUST). Suffixed versions are refused.
+# signature is verified first. TRUST is an allowed_signers file or the install.sh of the repo checkout
+# at the tag commit, never the install.sh downloaded from the release (that would be circular). Suffixed versions are refused.
 # The formula is rendered to a temporary file and printed only when complete: a failure never
 # leaves partial output on stdout.
 # Usage: brew-formula.sh CHECKSUMS TRUST [VERSION]    Env: CF_RELEASE_BASE_URL (tests and mirrors)
@@ -19,7 +20,7 @@ base_url=${CF_RELEASE_BASE_URL:-https://github.com/Autarquico/codefabric/release
 fail() { echo "brew-formula: $*" >&2; exit 1; }
 
 [ -f "$checksums" ] || fail "$checksums is missing"
-"$here/verify-asset.sh" "$checksums" "$trust" >/dev/null 2>&1 || fail "checksums signature does not verify"
+"$here/verify-asset.sh" "$checksums" "$trust" >/dev/null || fail "checksums signature does not verify"
 
 tag=$(sed -n 's/^version: //p;1q' "$checksums")
 stable='^v[0-9]+\.[0-9]+\.[0-9]+$'
