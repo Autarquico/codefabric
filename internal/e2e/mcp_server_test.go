@@ -349,23 +349,17 @@ func TestScenario_MCP_Master(t *testing.T) {
 }
 
 // Given the same cluster, When the model calls tasks_create with a harness and waits,
-// Then the Run it created completes. Today tasks_create takes no harness, and a
-// Run with none is rejected by the Worker over and over: this test says so and
-// goes on by itself once the tool takes one.
+// Then the Run it created completes.
 func TestScenario_MCP_Master_TasksCreateRunsATask(t *testing.T) {
 	c := NewCluster(t, Opts{})
 	s := c.ServeMCP("execute")
 	cursor := s.Cursor()
 
-	res, err := s.tryCall("tasks_create", map[string]any{
+	created := call[v1.CreateTaskResponse](s, "tasks_create", map[string]any{
 		"request_id": "master-create", "prompt": "echo created-by-the-model", "harness": "command",
 	})
-	if err != nil || res.IsError {
-		t.Skipf("tasks_create takes no harness, so a Task of the model cannot run (Open Questions of m2qa-r1): %v %v", err, textOrNil(res))
-	}
-	var created v1.CreateTaskResponse
-	if err := remarshal(res.StructuredContent, &created); err != nil || created.Run == nil {
-		t.Fatalf("tasks_create = %v (%v)", res.StructuredContent, err)
+	if created.Run == nil {
+		t.Fatalf("tasks_create started no Run: %+v", created.Task)
 	}
 	got := s.Wait(cursor, []string{"RunCompleted"}, created.Task.ID, 30*time.Second)
 	if len(got.Events) != 1 || got.Events[0].RunID != created.Run.ID {
@@ -377,13 +371,6 @@ func TestScenario_MCP_Master_TasksCreateRunsATask(t *testing.T) {
 		}](s, "runs_logs", map[string]any{"ref": created.Run.ID})
 		return strings.Contains(out.Text, "created-by-the-model"), out.Text
 	})
-}
-
-func textOrNil(res *sdk.CallToolResult) string {
-	if res == nil {
-		return ""
-	}
-	return toolText(res)
 }
 
 // permissionClaude is a `claude -p` that asks the permission bridge of its Run
@@ -439,9 +426,11 @@ func TestScenario_MCP_NeedsInputDesdeElModelo(t *testing.T) {
 
 	s := c.ServeMCP("execute")
 	cursor := s.Cursor()
-	created := JSON[v1.CreateTaskResponse](c, c.Ctl, "do", "write a file", "--harness", "claude-code", "--permissions", "ask", "--name", "ask")
+	created := call[v1.CreateTaskResponse](s, "tasks_create", map[string]any{
+		"request_id": "ask-create", "prompt": "write a file", "harness": "claude-code", "permissions": "ask", "name": "ask",
+	})
 	if created.Run == nil {
-		t.Fatalf("cf do created no Run: %+v", created.Task)
+		t.Fatalf("tasks_create created no Run: %+v", created.Task)
 	}
 
 	// The model is told, and reads what is asked.

@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"context"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -309,4 +310,46 @@ func TestEventsWaitExpiredCursor(t *testing.T) {
 	if got["code"] != string(domain.CodeCursorExpired) || details["purged_through"] != float64(10) || details["latest"] != float64(20) {
 		t.Errorf("structured = %v", got)
 	}
+}
+
+func TestTasksCreateMapsHarnessModelPermissionsAndCompletion(t *testing.T) {
+	var got v1.CreateTaskRequest
+	c := &createFake{create: func(req v1.CreateTaskRequest) { got = req }}
+	s := connect(t, mcp.Execute, c, clock.Real{})
+	res := call(t, s, "tasks_create", map[string]any{
+		"request_id": "r1", "prompt": "p", "harness": "claude-code", "model": "opus", "permissions": "ask", "completion": "manual",
+	})
+	if res.IsError {
+		t.Fatalf("tasks_create failed: %s", res.Content)
+	}
+	want := v1.Requirements{Harness: "claude-code", Model: "opus", Permissions: "ask"}
+	if !reflect.DeepEqual(got.Requirements, want) || got.Completion != domain.CompletionManual || got.RequestID != "r1" || got.Prompt != "p" {
+		t.Fatalf("request = %+v", got)
+	}
+}
+
+func TestTasksCreateWithoutHarnessIsRefusedUnlessNoStart(t *testing.T) {
+	calls := 0
+	c := &createFake{create: func(v1.CreateTaskRequest) { calls++ }}
+	s := connect(t, mcp.Execute, c, clock.Real{})
+	res, err := s.CallTool(t.Context(), &sdk.CallToolParams{Name: "tasks_create", Arguments: map[string]any{"request_id": "r1", "prompt": "p"}})
+	if err == nil && !res.IsError {
+		t.Fatal("tasks_create with no harness succeeded")
+	}
+	if calls != 0 {
+		t.Fatalf("NewTask called %d times for an invalid request", calls)
+	}
+	if res := call(t, s, "tasks_create", map[string]any{"request_id": "r2", "prompt": "p", "no_start": true}); res.IsError || calls != 1 {
+		t.Fatalf("no_start without harness: error=%v calls=%d", res.IsError, calls)
+	}
+}
+
+type createFake struct {
+	mcp.Client
+	create func(v1.CreateTaskRequest)
+}
+
+func (f *createFake) NewTask(_ context.Context, _ string, req v1.CreateTaskRequest) (v1.CreateTaskResponse, error) {
+	f.create(req)
+	return v1.CreateTaskResponse{}, nil
 }

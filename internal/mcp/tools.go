@@ -88,6 +88,10 @@ type (
 		SourceRef   string `json:"source_ref,omitempty" jsonschema:"branch or ref to start from; the Project default if empty"`
 		Workflow    string `json:"workflow,omitempty"`
 		Environment string `json:"environment,omitempty"`
+		Harness     string `json:"harness,omitempty" jsonschema:"harness that runs the prompt: claude-code, codex or command (the prompt as a POSIX shell script). Required unless no_start; a Run with no harness is rejected by every Worker and never starts"`
+		Model       string `json:"model,omitempty" jsonschema:"model the harness runs with; the harness default if empty"`
+		Permissions string `json:"permissions,omitempty" jsonschema:"set to ask so the harness asks before what it is not allowed to do (you get TaskNeedsInput and answer with tasks_respond); empty skips its permission prompts"`
+		Completion  string `json:"completion,omitempty" jsonschema:"completion policy: first_success, promote or manual; the Project default if empty"`
 	}
 	tasksRespondInput struct {
 		RequestID string `json:"request_id" jsonschema:"any unique string; repeating a call with the same request_id has one effect"`
@@ -108,6 +112,23 @@ type (
 		Ref       string `json:"ref" jsonschema:"the Worker"`
 	}
 )
+
+// request is the CreateTaskRequest of `cf task new`. Like the CLI it sends the
+// harness and the rest as given and leaves their values to the Controller; unlike
+// it, it refuses a Task that starts with no harness, which no Worker accepts and
+// would stay queued for ever.
+func (in tasksCreateInput) request() (v1.CreateTaskRequest, error) {
+	if in.Harness == "" && !in.NoStart {
+		return v1.CreateTaskRequest{}, domain.NewError(domain.CodeInvalidRequest,
+			"harness is required to start a Task: claude-code, codex or command (or set no_start)", nil)
+	}
+	return v1.CreateTaskRequest{
+		RequestID: in.RequestID, Project: in.Project, Name: in.Name, Prompt: in.Prompt, NoStart: in.NoStart,
+		SourceRef: in.SourceRef, Workflow: in.Workflow, Environment: in.Environment,
+		Completion:   domain.Completion(in.Completion),
+		Requirements: v1.Requirements{Harness: in.Harness, Model: in.Model, Permissions: in.Permissions},
+	}, nil
+}
 
 // wire is the tool of §17.2 under the name that goes on the wire.
 func wire(name string) string { return strings.ReplaceAll(name, ".", "_") }
@@ -213,10 +234,11 @@ func (t tools) execute(s *sdk.Server) {
 			if err != nil {
 				return nil, err
 			}
-			return t.c.NewTask(ctx, dir, v1.CreateTaskRequest{
-				RequestID: in.RequestID, Project: in.Project, Name: in.Name, Prompt: in.Prompt, NoStart: in.NoStart,
-				SourceRef: in.SourceRef, Workflow: in.Workflow, Environment: in.Environment,
-			})
+			req, err := in.request()
+			if err != nil {
+				return nil, err
+			}
+			return t.c.NewTask(ctx, dir, req)
 		})
 	add(s, wire("tasks.respond"), "Answer what a Task waits for: allow or deny a permission, or answer a question.",
 		objectOf(map[string]string{"task_id": "string", "run_id": "string", "prompt_id": "string", "state": "string"}),
