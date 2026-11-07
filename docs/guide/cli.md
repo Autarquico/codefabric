@@ -92,6 +92,14 @@ Two different things, never mixed:
 
 Escape sequences and control characters are removed so a Run cannot act on your terminal; `--raw` passes them through.
 
+## `cf mcp`
+
+Use CodeFabric from Claude Code or Codex. See [Use cf from Claude Code or Codex](../mcp/).
+
+- `cf mcp serve [--profile read|execute|modify]`: the MCP server, over stdio. Default profile: `execute`. Standard output carries only the protocol; `--json` is rejected. The tool starts it; you rarely run it.
+- `cf mcp install --claude|--codex [--scope user|project] [--profile …] [--dry-run]`: register the server and write the `codefabric` skill. Idempotent.
+- `cf mcp uninstall --claude|--codex [--scope user|project]`: remove both. With `--codex --scope project` only the repository's skill goes: the Codex server is user-wide and stays registered (`cf mcp uninstall --codex` removes it).
+
 ## `cf notify`
 
 Desktop notifications and hooks for the events that need you. `cf notify watch` notifies as events happen, until interrupted; `cf notify test` sends a sample through the native channel and the hook.
