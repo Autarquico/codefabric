@@ -1,0 +1,378 @@
+---
+import '../styles/fonts.css';
+import '../styles/theme.css';
+import { BASE, REPO_URL, repoRef, routeFor } from '../../scripts/sync-docs.mjs';
+import { UNRELEASED_NOTE, installCommands, siteVersion } from '../../scripts/version.mjs';
+import TuiFrame from '../components/TuiFrame.astro';
+
+const version = siteVersion();
+const commands = installCommands(version);
+const description =
+	'CodeFabric runs coding agents (Claude Code, Codex CLI) across a pool of your own machines. Early development: what is verified and what is not is stated on the page.';
+
+const steps = [
+	{ title: 'Start the Controller', command: 'cf controller init', text: 'Run the Controller on one machine. Other machines join it with an invitation, through cf setup.' },
+	{ title: 'Start a Task', command: 'cf do', text: "Create a Task from this directory's repository and start it on a Worker." },
+	{ title: 'Watch it run', command: 'cf ps', text: 'See the Runs that are live and where they are. Attach to one; closing the terminal does not end the Run.' },
+	{ title: 'Answer what needs you', command: 'cf inbox', text: 'Tasks waiting for input and failures to decide on are listed in one place.' },
+];
+
+const verified = [
+	'The Controller, the Workers and the TUI are covered by unit and integration tests. The integration tests need git and tmux.',
+	'The terminal frames on this page are rendered by the TUI test suite, not drawn by hand.',
+	"The installer's signature and checksum checks are tested in CI against a throwaway key.",
+];
+const notVerified = [
+	{ text: 'The end-to-end tests drive a scripted fake harness. Sessions with the real Claude Code and Codex CLI are not part of the automated suite.', href: `${REPO_URL}/tree/${repoRef()}/internal/testutil/fakeharness`, link: 'The fake harness' },
+	{ text: 'The installer has not yet been run on a clean machine against a published release.' },
+	{ text: 'CodeFabric is in early development. Expect rough edges and changes between versions.' },
+	{ text: 'The latest-release install command follows the newest GitHub release. Pin a version if you need to stay on one.' },
+];
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>CodeFabric</title>
+		<meta name="description" content={description} />
+		<link rel="icon" href={`${BASE}favicon.svg`} type="image/svg+xml" />
+		<script is:inline>
+			(() => {
+				try {
+					const stored = localStorage.getItem('starlight-theme');
+					const dark = stored ? stored === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+					document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+				} catch {
+					document.documentElement.dataset.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				}
+			})();
+		</script>
+	</head>
+	<body>
+		<a class="skip" href="#main">Skip to content</a>
+		<header>
+			<a class="wordmark" href={BASE}>CodeFabric</a>
+			<nav aria-label="Primary">
+				<a href={routeFor('getting-started')}>Docs</a>
+				<a href={REPO_URL}>GitHub</a>
+			</nav>
+		</header>
+
+		<main id="main">
+			<section class="hero" aria-labelledby="hero-title">
+				<p class="badge">{version ? `Release ${version}` : 'Unreleased build'} · early development</p>
+				<h1 id="hero-title">Your agents, on <em>your</em> machines.</h1>
+				<p class="lead">CodeFabric runs coding agents (Claude Code, Codex CLI) across a pool of your own machines. You think in Projects and Tasks; it picks the Worker, runs the agent and publishes each Run as a branch.</p>
+				<div class="actions">
+					<a class="button primary" href={routeFor('getting-started')}>Read the docs</a>
+					<a class="button" href={REPO_URL}>View on GitHub</a>
+				</div>
+			</section>
+
+			<section aria-labelledby="how-title">
+				<h2 id="how-title">How it works</h2>
+				<ol class="steps">
+					{steps.map(({ title, command, text }) => (
+						<li>
+							<h3>{title}</h3>
+							<p><code>{command}</code></p>
+							<p>{text}</p>
+						</li>
+					))}
+				</ol>
+			</section>
+
+			<section aria-labelledby="tui-title">
+				<h2 id="tui-title">A terminal UI for the pool</h2>
+				<div class="frames">
+					<TuiFrame file="workers-80x24.golden" title="Workers" text="The Workers view: health, load and the detail of the selected Worker." />
+					<TuiFrame file="runs-80x24.golden" title="Runs" text="The Runs view: where each Run is, and the branch it publishes." />
+				</div>
+			</section>
+
+			<section aria-labelledby="claims-title">
+				<h2 id="claims-title">What is verified, and what is not</h2>
+				<div class="claims">
+					<div>
+						<h3>Verified</h3>
+						<ul>{verified.map((text) => <li>{text}</li>)}</ul>
+					</div>
+					<div>
+						<h3>Not verified</h3>
+						<ul>
+							{notVerified.map(({ text, href, link }) => (
+								<li>
+									{text}
+									{href && <> <a href={href}>{link}</a>.</>}
+								</li>
+							))}
+						</ul>
+					</div>
+				</div>
+			</section>
+
+			<section aria-labelledby="install-title">
+				<h2 id="install-title">Install</h2>
+				<p class="intro">
+					{version ? <>Release <code>{version}</code>.</> : UNRELEASED_NOTE} The installer verifies the release signature and the archive checksum, then puts <code>cf</code> in <code>~/.local/bin</code>. It needs OpenSSH 8.2 or newer. Linux (amd64, arm64) and macOS (arm64).
+				</p>
+				<h3>Latest release</h3>
+				<div class="scroll" role="region" aria-label="Install the latest release" tabindex="0"><pre><code>{commands.latest}</code></pre></div>
+				<h3>A specific version</h3>
+				<div class="scroll" role="region" aria-label="Install a pinned version" tabindex="0"><pre><code>{commands.pinned}</code></pre></div>
+				<p class="intro"><a href={routeFor('getting-started')}>Getting started: set up your first machine</a></p>
+			</section>
+		</main>
+
+		<footer>
+			<p>CodeFabric is open source under the <a href={`${REPO_URL}/blob/${repoRef()}/LICENSE`}>Apache-2.0 licence</a>.</p>
+			<p><a href={REPO_URL}>GitHub</a> · <a href={routeFor('getting-started')}>Docs</a> · Font licences: <a href={`${BASE}licenses/fonts/fraunces.txt`}>Fraunces</a> · <a href={`${BASE}licenses/fonts/ibm-plex-sans.txt`}>IBM Plex Sans</a> · <a href={`${BASE}licenses/fonts/ibm-plex-mono.txt`}>IBM Plex Mono</a></p>
+		</footer>
+	</body>
+</html>
+
+<style is:global>
+	html {
+		background: var(--cf-bg);
+		color: var(--cf-text);
+		font-family: var(--cf-font-body);
+		font-size: 100%;
+		line-height: 1.5;
+	}
+	body {
+		margin: 0;
+		background: var(--cf-bg);
+	}
+</style>
+
+<style>
+	.skip {
+		position: absolute;
+		left: var(--cf-space-4);
+		top: -4rem;
+		padding: var(--cf-space-3) var(--cf-space-4);
+		background: var(--cf-accent);
+		color: var(--cf-on-accent);
+		border-radius: var(--cf-radius-control);
+	}
+	.skip:focus {
+		top: var(--cf-space-4);
+	}
+	a {
+		color: var(--cf-accent);
+		text-underline-offset: 0.2em;
+	}
+	a:hover {
+		color: var(--cf-accent-hover);
+	}
+	a:focus-visible {
+		outline: 2px solid var(--cf-accent);
+		outline-offset: 2px;
+	}
+	header,
+	main,
+	footer {
+		width: min(100% - 2 * var(--cf-space-4), 64rem);
+		margin-inline: auto;
+	}
+	header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		min-height: 4rem;
+		border-bottom: 1px solid var(--cf-border);
+	}
+	.wordmark {
+		display: inline-flex;
+		align-items: center;
+		min-height: var(--cf-tap-target);
+		font-family: var(--cf-font-heading);
+		font-size: var(--sl-text-xl);
+		font-weight: 500;
+		color: var(--cf-text-strong);
+		text-decoration: none;
+	}
+	nav {
+		display: flex;
+		gap: var(--cf-space-4);
+	}
+	nav a {
+		display: inline-flex;
+		align-items: center;
+		min-height: var(--cf-tap-target);
+		color: var(--cf-text);
+	}
+	main > section {
+		padding-block: var(--cf-space-8);
+		border-bottom: 1px solid var(--cf-border);
+	}
+	main > section:last-child {
+		border-bottom: 0;
+	}
+	h1,
+	h2,
+	h3 {
+		color: var(--cf-text-strong);
+		line-height: var(--sl-line-height-headings);
+	}
+	h1,
+	h2 {
+		font-family: var(--cf-font-heading);
+		font-weight: 500;
+		letter-spacing: -0.01em;
+		margin: 0 0 var(--cf-space-5);
+	}
+	h1 {
+		font-size: clamp(2.375rem, 7vw, 3.75rem);
+		max-width: 16ch;
+	}
+	h1 em {
+		font-style: italic;
+		color: var(--cf-accent);
+	}
+	h2 {
+		font-size: var(--sl-text-4xl);
+	}
+	h3 {
+		margin: var(--cf-space-5) 0 var(--cf-space-3);
+		font-size: var(--sl-text-lg);
+		font-weight: 600;
+	}
+	code {
+		font-family: var(--cf-font-mono);
+		font-size: 0.9em;
+	}
+	.badge {
+		display: inline-block;
+		margin: 0 0 var(--cf-space-5);
+		padding: var(--cf-space-1) var(--cf-space-3);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-pill);
+		font-family: var(--cf-font-mono);
+		font-size: var(--sl-text-sm);
+		color: var(--cf-text);
+	}
+	.lead {
+		max-width: 40rem;
+		margin: 0 0 var(--cf-space-6);
+		font-size: var(--sl-text-xl);
+		line-height: 1.5;
+	}
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--cf-space-3);
+	}
+	.button {
+		display: inline-flex;
+		align-items: center;
+		min-height: var(--cf-tap-target);
+		padding-inline: var(--cf-space-5);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-control);
+		color: var(--cf-text-strong);
+		text-decoration: none;
+		font-weight: 500;
+		transition: background-color var(--cf-duration-instant) var(--cf-ease);
+	}
+	.button:hover {
+		color: var(--cf-text-strong);
+		background: var(--cf-surface);
+	}
+	.button.primary {
+		background: var(--cf-accent);
+		border-color: var(--cf-accent);
+		color: var(--cf-on-accent);
+	}
+	.button.primary:hover {
+		background: var(--cf-accent-hover);
+		color: var(--cf-on-accent);
+	}
+	.steps {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+		gap: var(--cf-space-4);
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.steps li {
+		min-width: 0;
+		padding: var(--cf-space-5);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-surface);
+		background: var(--cf-surface);
+	}
+	.steps h3 {
+		margin-top: 0;
+	}
+	.steps p {
+		margin: 0 0 var(--cf-space-3);
+	}
+	.steps code {
+		color: var(--cf-accent);
+		font-weight: 500;
+	}
+	.frames {
+		display: grid;
+		gap: var(--cf-space-6);
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.claims {
+		display: grid;
+		gap: var(--cf-space-4);
+		grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+	}
+	.claims > div {
+		min-width: 0;
+		padding: var(--cf-space-5);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-surface);
+	}
+	.claims h3 {
+		margin-top: 0;
+	}
+	.claims ul {
+		margin: 0;
+		padding-left: var(--cf-space-5);
+		display: grid;
+		gap: var(--cf-space-3);
+	}
+	.intro {
+		max-width: 40rem;
+		margin: 0 0 var(--cf-space-5);
+	}
+	.scroll {
+		overflow-x: auto;
+		margin-bottom: var(--cf-space-4);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-surface);
+		background: var(--cf-surface);
+	}
+	.scroll pre {
+		margin: 0;
+		padding: var(--cf-space-4);
+		width: max-content;
+		color: var(--cf-text-strong);
+	}
+	footer {
+		padding-block: var(--cf-space-7);
+		border-top: 1px solid var(--cf-border);
+		color: var(--cf-text-muted);
+	}
+	footer p {
+		margin: 0 0 var(--cf-space-2);
+	}
+	footer a {
+		display: inline-flex;
+		align-items: center;
+		min-height: var(--cf-tap-target);
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.button {
+			transition: none;
+		}
+	}
+</style>

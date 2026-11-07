@@ -1,0 +1,65 @@
+---
+import { REPO_URL, contentRoot, repoRef } from '../../scripts/sync-docs.mjs';
+import { GOLDEN_DIR, readGolden } from '../../scripts/goldens.mjs';
+
+interface Props {
+	file: string;
+	title: string;
+	text: string;
+}
+const { file, title, text } = Astro.props;
+const frame = readGolden(contentRoot, file);
+const source = `${REPO_URL}/blob/${repoRef()}/${GOLDEN_DIR}/${file}`;
+---
+
+<figure>
+	<p class="text">{text}</p>
+	<div class="scroll" role="region" aria-label={`${title}, terminal frame`} tabindex="0">
+		<pre>{frame}</pre>
+	</div>
+	<figcaption>
+		Rendered by the TUI test suite with fixture data. Source: <a href={source}><code>{file}</code></a>
+	</figcaption>
+</figure>
+
+<style>
+	figure {
+		margin: 0;
+		min-width: 0;
+	}
+	.text {
+		max-width: 40rem;
+		margin: 0 0 var(--cf-space-4);
+		line-height: 1.5;
+	}
+	.scroll {
+		overflow-x: auto;
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-surface);
+		background: var(--cf-surface);
+	}
+	pre {
+		margin: 0;
+		padding: var(--cf-space-4);
+		width: max-content;
+		font-family: var(--cf-font-mono);
+		font-size: var(--sl-text-sm);
+		line-height: 1.3;
+		font-variant-ligatures: none;
+		color: var(--cf-text-strong);
+	}
+	figcaption {
+		margin-top: var(--cf-space-3);
+		font-size: var(--sl-text-sm);
+		color: var(--cf-text-muted);
+	}
+	figcaption a {
+		color: var(--cf-accent);
+		display: inline-flex;
+		align-items: center;
+		min-height: var(--cf-tap-target);
+	}
+	figcaption code {
+		font-family: var(--cf-font-mono);
+	}
+</style>
