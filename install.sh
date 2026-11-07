@@ -22,7 +22,7 @@ die() { code=$1; shift; log "error: $*"; exit "$code"; }
 write_trust_roots() {
 	cat >"$WORK/allowed_signers" <<'TRUST'
 # BEGIN allowed_signers
-release@codefabric namespaces="codefabric-release" ssh-ed25519 PLACEHOLDER
+release@codefabric namespaces="codefabric-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOZwPPPOq0JVZPk3SPcMUDHnCNq5WLxZwBXDdpGq8s1p
 # END allowed_signers
 TRUST
 	cat >"$WORK/revoked_keys" <<'TRUST'
