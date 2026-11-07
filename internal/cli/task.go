@@ -74,7 +74,7 @@ func newCreateTaskCmd(use, short string) *cobra.Command {
 	f.BoolVar(&req.NoStart, "no-start", false, "create the Task without a Run")
 	f.BoolVarP(&interactive, "interactive", "i", false, "run it interactively instead of headless")
 	f.StringVar(&completion, "completion", "", "completion policy: first_success, promote or manual")
-	f.StringVar(&req.Requirements.Harness, "harness", "", "harness to run it with; the only one Workers offer so far is `command`, which runs the prompt as a POSIX shell script (a Run with no harness is rejected by every Worker)")
+	f.StringVar(&req.Requirements.Harness, "harness", "", "harness to run it with: claude-code, codex or command (the prompt as a POSIX shell script); a Worker offers the ones it has installed, and a Run with no harness is rejected by every Worker")
 	f.StringVar(&req.Requirements.Model, "model", "", "model to run it with")
 	f.StringVar(&req.Requirements.Permissions, "permissions", "", "`ask` to have the harness ask what it is not allowed to do, answered with cf task respond (default: it skips its permission prompts)")
 	f.StringArrayVar(&secretEnv, "secret-env", nil, "NAME=ref: the harness gets the secret ref, held by the Worker, in variable NAME; repeatable (see cf project secrets)")

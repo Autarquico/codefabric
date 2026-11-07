@@ -1,0 +1,51 @@
+name: site
+
+# The same build and checks that gate pages.yml, on pull requests that touch the site or the guide.
+# Not a required check. Builds are unreleased (no SITE_VERSION), so the install section says so.
+on:
+  pull_request:
+    paths:
+      - "site/**"
+      - "docs/guide/**"
+      - "internal/tui/testdata/**"
+      - ".github/workflows/site.yml"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  site:
+    name: "TestScenario_SitioDesdeLaRelease: build, install commands (unreleased), goldens, axe"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: site/.nvmrc
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: install
+        working-directory: site
+        run: npm ci
+      - name: unit tests of the site scripts
+        working-directory: site
+        run: npm test
+      - name: build
+        working-directory: site
+        run: npm run build
+      - name: the install commands are present and say the build is unreleased
+        working-directory: site
+        run: npm run check:install
+      - name: axe on the landing and a docs page
+        working-directory: site
+        run: |
+          npx --no-install playwright install --with-deps chromium
+          npm run test:a11y

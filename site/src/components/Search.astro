@@ -1,0 +1,13 @@
+---
+import Default from '@astrojs/starlight/components/Search.astro';
+---
+
+<Default {...Astro.props}><slot /></Default>
+
+{/* Starlight labels the button "Search" while the visible text also carries the keyboard hint ("Search Ctrl K"),
+    which fails WCAG 2.5.3 (label in name). The accessible name is widened to the visible text. */}
+<script>
+  const button = document.querySelector<HTMLButtonElement>('site-search button[data-open-modal]');
+  const visible = button?.textContent?.replace(/\s+/g, ' ').trim();
+  if (button && visible) button.setAttribute('aria-label', visible);
+</script>
