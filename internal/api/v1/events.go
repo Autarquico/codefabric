@@ -35,6 +35,8 @@ type Event struct {
 type EventActor struct {
 	Kind domain.ActorKind `json:"kind"`
 	ID   string           `json:"id"`
+	// Session is the MCP session of a mcp actor.
+	Session string `json:"session,omitempty"`
 }
 
 // EventPage is GET /v1/events. Cursor is opaque: pass it back as `after` to

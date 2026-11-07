@@ -15,6 +15,7 @@ type AuditEntry struct {
 	Time           time.Time // defaults to the store's clock
 	ActorKind      domain.ActorKind
 	ActorID        string
+	ActorSession   string // the MCP session of an mcp actor; defaults to the one of the transaction
 	Action         string
 	ResourceKind   string
 	ResourceID     string
@@ -38,11 +39,14 @@ func (t *Tx) AppendAudit(ctx context.Context, e AuditEntry) error {
 	if err != nil {
 		return err
 	}
+	if e.ActorSession == "" && e.ActorKind == domain.ActorMCP {
+		e.ActorSession = t.actorSession
+	}
 	_, err = t.Exec(ctx,
-		`INSERT INTO audit_entries (ts, actor_kind, actor_id, action, resource_kind, resource_id,
+		`INSERT INTO audit_entries (ts, actor_kind, actor_id, actor_session, action, resource_kind, resource_id,
 		     before, after, result, confirmation_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.Time.UnixNano(), string(e.ActorKind), e.ActorID, e.Action, e.ResourceKind, e.ResourceID,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.Time.UnixNano(), string(e.ActorKind), e.ActorID, nullable(e.ActorSession), e.Action, e.ResourceKind, e.ResourceID,
 		before, after, e.Result, nullable(e.ConfirmationID))
 	if err != nil {
 		return fmt.Errorf("store: appending audit entry: %w", err)

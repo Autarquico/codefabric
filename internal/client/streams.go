@@ -193,6 +193,7 @@ func (c *Client) connect(ctx context.Context, spec streamSpec, lastID *string) (
 		req.Header[k] = v
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	c.stamp(req)
 
 	// Only the wait for the headers is bounded by this timer; the watchdog takes over after.
 	headers := c.clock.NewTimer(c.timing.header)

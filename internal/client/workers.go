@@ -36,16 +36,16 @@ func (c *Client) Worker(ctx context.Context, ref string) (v1.Worker, error) {
 }
 
 // DrainWorker stops a Worker from taking new Runs.
-func (c *Client) DrainWorker(ctx context.Context, ref string) (v1.Worker, error) {
+func (c *Client) DrainWorker(ctx context.Context, ref, requestID string) (v1.Worker, error) {
 	var out v1.Worker
-	err := c.do(ctx, http.MethodPost, refPath("workers", ref, "drain"), v1.ActionRequest{}, &out)
+	err := c.do(ctx, http.MethodPost, refPath("workers", ref, "drain"), v1.ActionRequest{RequestID: requestID}, &out)
 	return out, err
 }
 
 // UndrainWorker lets a drained Worker take Runs again.
-func (c *Client) UndrainWorker(ctx context.Context, ref string) (v1.Worker, error) {
+func (c *Client) UndrainWorker(ctx context.Context, ref, requestID string) (v1.Worker, error) {
 	var out v1.Worker
-	err := c.do(ctx, http.MethodPost, refPath("workers", ref, "undrain"), v1.ActionRequest{}, &out)
+	err := c.do(ctx, http.MethodPost, refPath("workers", ref, "undrain"), v1.ActionRequest{RequestID: requestID}, &out)
 	return out, err
 }
 

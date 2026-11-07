@@ -258,7 +258,7 @@ func view(e domain.Event) v1.Event {
 	return v1.Event{
 		Sequence: e.Sequence, ID: string(e.ID), SchemaVersion: e.SchemaVersion, Timestamp: e.Timestamp, ReceivedAt: e.ReceivedAt,
 		Source: e.Source, WorkerEpoch: e.WorkerEpoch, WorkerSeq: e.WorkerSeq, RequestID: e.RequestID,
-		Type: e.Type, Level: e.Level, Actor: v1.EventActor{Kind: e.Actor.Kind, ID: e.Actor.ID},
+		Type: e.Type, Level: e.Level, Actor: v1.EventActor{Kind: e.Actor.Kind, ID: e.Actor.ID, Session: e.Actor.Session},
 		ProjectID: string(e.ProjectID), PlanID: string(e.PlanID), TaskID: string(e.TaskID), RunID: string(e.RunID),
 		WorkerID: string(e.WorkerID), WorkflowID: string(e.WorkflowID), Message: e.Message, Data: e.Data,
 	}

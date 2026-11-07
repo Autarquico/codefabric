@@ -166,7 +166,7 @@ func TestWorkers_AdministrationThroughTheSDK(t *testing.T) {
 	wantCode(t, err, domain.CodeNotFound)
 
 	// Drain, then the heartbeat finishes it; undrain brings it back.
-	if w, err := tc.owner.DrainWorker(ctx, "box"); err != nil || w.State != domain.WorkerDraining {
+	if w, err := tc.owner.DrainWorker(ctx, "box", ""); err != nil || w.State != domain.WorkerDraining {
 		t.Fatalf("drain: %+v, %v", w, err)
 	}
 	resp, err = worker.Heartbeat(ctx, heartbeat(epoch))
@@ -174,7 +174,7 @@ func TestWorkers_AdministrationThroughTheSDK(t *testing.T) {
 	if resp.State != domain.WorkerDrained {
 		t.Fatalf("heartbeat while draining answered %s", resp.State)
 	}
-	if w, err := tc.owner.UndrainWorker(ctx, "box"); err != nil || w.State != domain.WorkerOnline {
+	if w, err := tc.owner.UndrainWorker(ctx, "box", ""); err != nil || w.State != domain.WorkerOnline {
 		t.Fatalf("undrain: %+v, %v", w, err)
 	}
 
