@@ -62,8 +62,9 @@ type Client struct {
 	stream  atomic.Pointer[http.Client]
 	renewMu sync.Mutex
 
-	clock  clock.Clock // the timers of streams
-	timing streamTiming
+	clock      clock.Clock // the timers of streams
+	mcpSession string      // sent as CF-MCP-Session on every request; empty sends nothing
+	timing     streamTiming
 }
 
 // Option adjusts Open.
@@ -71,6 +72,7 @@ type Option func(*options)
 
 type options struct {
 	controller, recovery string
+	mcpSession           string
 	clock                clock.Clock
 }
 
@@ -92,6 +94,18 @@ func WithController(addr string) Option {
 // watchdog and the reconnection backoff) another clock, for tests.
 func WithClock(clk clock.Clock) Option {
 	return func(o *options) { o.clock = clk }
+}
+
+// MCPSessionHeader names the session of an MCP server in the audit trail. The
+// Controller accepts it from a client identity only and never lets it widen
+// what that identity may do.
+const MCPSessionHeader = "CF-MCP-Session"
+
+// WithMCPSession makes the client act on behalf of the MCP session id: every
+// request it sends, a reconnection of a stream included, carries id in
+// CF-MCP-Session, and the Controller records the actor of its changes as mcp.
+func WithMCPSession(id string) Option {
+	return func(o *options) { o.mcpSession = id }
 }
 
 // Open loads the credentials in dir and returns a client authenticated with them.
@@ -122,6 +136,7 @@ func Open(dir string, opts ...Option) (*Client, error) {
 	if o.clock != nil {
 		c.clock = o.clock
 	}
+	c.mcpSession = o.mcpSession
 	return c, nil
 }
 
@@ -261,6 +276,13 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	return c.doLimited(ctx, maxResponse, method, path, in, out)
 }
 
+// stamp adds what every request of this client carries.
+func (c *Client) stamp(req *http.Request) {
+	if c.mcpSession != "" {
+		req.Header.Set(MCPSessionHeader, c.mcpSession)
+	}
+}
+
 // doLimited is do for an answer of up to limit bytes.
 func (c *Client) doLimited(ctx context.Context, limit int64, method, path string, in, out any) error {
 	var body io.Reader
@@ -278,6 +300,7 @@ func (c *Client) doLimited(ctx context.Context, limit int64, method, path string
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	c.stamp(req)
 	resp, err := c.http.Load().Do(req)
 	if err != nil {
 		return c.transportError(ctx, err)
@@ -314,6 +337,7 @@ func (c *Client) send(ctx context.Context, hc *http.Client, method, path string,
 		req.ContentLength = size
 		req.Header.Set("Content-Type", "application/octet-stream")
 	}
+	c.stamp(req)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, c.transportError(ctx, err)

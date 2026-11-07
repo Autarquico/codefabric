@@ -19,7 +19,9 @@ func newTaskCmd() *cobra.Command {
 	cmd.AddCommand(
 		newCreateTaskCmd("new", "Create a Task and, unless --no-start, its first Run"),
 		newTaskListCmd(), newTaskShowCmd(), newTaskTimelineCmd(), newTaskSetCmd(), newTaskRespondCmd(),
-		newTaskActionCmd("cancel", "Cancel a Task and its live Runs", (*client.Client).CancelTask),
+		newTaskActionCmd("cancel", "Cancel a Task and its live Runs", func(c *client.Client, ctx context.Context, ref, project string) (v1.Task, error) {
+			return c.CancelTask(ctx, ref, project, "")
+		}),
 		newTaskActionCmd("complete", "Mark a Task completed by hand", (*client.Client).CompleteTask),
 		newTaskActionCmd("archive", "Archive a Task, which frees its name", (*client.Client).ArchiveTask),
 		newFutureTaskCmd("defer", "Suspend a Task's Run with a checkpoint", 1, (*client.Client).DeferTask),
