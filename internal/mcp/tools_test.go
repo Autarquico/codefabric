@@ -1,8 +1,10 @@
 package mcp_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -328,6 +330,45 @@ func TestEventsWaitReportsAFollowErrorThatRacesTheTimer(t *testing.T) {
 	res := <-done
 	if res == nil || !res.IsError || structured(t, res)["code"] != string(domain.CodeCursorExpired) {
 		t.Fatalf("result = %+v, want the CF_CURSOR_EXPIRED of the follow", res)
+	}
+}
+
+func TestCancelledEventsWaitIsNotAnUnexpectedError(t *testing.T) {
+	started := make(chan struct{})
+	f := &fake{follow: func(ctx context.Context, _ client.EventQuery, _ func(v1.Event) error) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	var diag bytes.Buffer
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	serverSide, clientSide := sdk.NewInMemoryTransports()
+	if _, err := mcp.NewServer(mcp.Read, f, clock.Real{}, "/work", &diag).Connect(ctx, serverSide, nil); err != nil {
+		t.Fatal(err)
+	}
+	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, clientSide, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	callCtx, cancelCall := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		res, err := session.CallTool(callCtx, &sdk.CallToolParams{Name: "events_wait", Arguments: map[string]any{"after_cursor": "1"}})
+		if err == nil && res.IsError {
+			err = errors.New("tool error: " + res.Content[0].(*sdk.TextContent).Text)
+		}
+		done <- err
+	}()
+	<-started
+	cancelCall()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled call returned %v, want the cancellation", err)
+	}
+	if diag.Len() != 0 {
+		t.Errorf("cancellation logged as unexpected: %q", diag.String())
 	}
 }
 

@@ -2,6 +2,8 @@ package mcp_test
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"reflect"
 	"regexp"
 	"slices"
@@ -52,7 +54,7 @@ func connect(t *testing.T, profile mcp.Profile, c mcp.Client, clk clock.Clock) *
 	t.Helper()
 	ctx := t.Context()
 	serverSide, clientSide := sdk.NewInMemoryTransports()
-	server := mcp.NewServer(profile, c, clk, "/work")
+	server := mcp.NewServer(profile, c, clk, "/work", io.Discard)
 	if _, err := server.Connect(ctx, serverSide, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +120,58 @@ func TestToolsByProfile(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestSchemasAreFlat: clients that cap schemas reject null in a type, unions and
+// references, for the input and the output of every tool of every profile.
+func TestSchemasAreFlat(t *testing.T) {
+	for _, profile := range []mcp.Profile{mcp.Read, mcp.Execute, mcp.Modify} {
+		for tool, err := range connect(t, profile, &fake{}, clock.Real{}).Tools(t.Context(), nil) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			for kind, schema := range map[string]any{"input": tool.InputSchema, "output": tool.OutputSchema} {
+				raw, err := json.Marshal(schema)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var tree any
+				if err := json.Unmarshal(raw, &tree); err != nil {
+					t.Fatal(err)
+				}
+				if bad := forbidden(tree); bad != "" {
+					t.Errorf("%s: %s %s schema has %s: %s", profile, tool.Name, kind, bad, raw)
+				}
+			}
+		}
+	}
+}
+
+// forbidden names the first thing a flat schema may not hold, or "".
+func forbidden(node any) string {
+	switch n := node.(type) {
+	case map[string]any:
+		for k, v := range n {
+			switch k {
+			case "oneOf", "anyOf", "$ref":
+				return k
+			case "type":
+				if list, ok := v.([]any); ok && slices.Contains(list, any("null")) || v == "null" {
+					return "null in type"
+				}
+			}
+			if bad := forbidden(v); bad != "" {
+				return bad
+			}
+		}
+	case []any:
+		for _, v := range n {
+			if bad := forbidden(v); bad != "" {
+				return bad
+			}
+		}
+	}
+	return ""
 }
 
 func TestToolOutsideTheProfileIsUnknown(t *testing.T) {

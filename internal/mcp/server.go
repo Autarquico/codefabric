@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -94,10 +94,11 @@ const (
 // allows are registered, so asking for another is an unknown tool. Wire names
 // have no dots (the Anthropic API admits ^[a-zA-Z0-9_-]{1,128}$); the
 // permissions and the docs keep the names of §17.2. dir is the directory that
-// decides the Project of a Task the model creates without naming one.
-func NewServer(profile Profile, c Client, clk clock.Clock, dir string) *sdk.Server {
+// decides the Project of a Task the model creates without naming one; diag
+// receives the text of the errors the model is not shown.
+func NewServer(profile Profile, c Client, clk clock.Clock, dir string, diag io.Writer) *sdk.Server {
 	s := sdk.NewServer(&sdk.Implementation{Name: "codefabric", Version: buildinfo.Get().Version}, nil)
-	t := tools{c: c, clk: clk, dir: dir}
+	t := tools{c: c, clk: clk, dir: dir, diag: diag}
 	if profile.rank() >= Read.rank() {
 		t.read(s)
 	}
@@ -112,12 +113,20 @@ func NewServer(profile Profile, c Client, clk clock.Clock, dir string) *sdk.Serv
 
 // add registers a tool whose handler returns its result as any value. The
 // output schema is declared by hand and kept small: the SDK would derive one
-// from the Go type and fail on the first field it cannot describe. A
-// *domain.Error comes back as a tool error that keeps its code and details; any
-// other error is CF_INTERNAL for the model, and its text goes to stderr, since
-// it can carry URLs and local paths.
-func add[In any](s *sdk.Server, name, description string, out *jsonschema.Schema, h func(context.Context, In) (any, error)) {
-	sdk.AddTool(s, &sdk.Tool{Name: name, Description: description, OutputSchema: out},
+// from the Go type and fail on the first field it cannot describe. The input
+// schema is derived from In without null: a model that sends null for an
+// optional field is mistaken, and clients reject schemas with unions. A
+// *domain.Error comes back as a tool error that keeps its code and details; a
+// cancelled call propagates as a cancellation; any other error is CF_INTERNAL
+// for the model, and its text goes to t.diag, since it can carry URLs and
+// local paths.
+func add[In any](t tools, s *sdk.Server, name, description string, out *jsonschema.Schema, h func(context.Context, In) (any, error)) {
+	in, err := jsonschema.For[In](nil)
+	if err != nil {
+		panic(fmt.Sprintf("mcp: input schema of %s: %v", name, err))
+	}
+	withoutNull(in)
+	sdk.AddTool(s, &sdk.Tool{Name: name, Description: description, InputSchema: in, OutputSchema: out},
 		func(ctx context.Context, _ *sdk.CallToolRequest, in In) (*sdk.CallToolResult, any, error) {
 			res, err := h(ctx, in)
 			var coded *domain.Error
@@ -125,11 +134,34 @@ func add[In any](s *sdk.Server, name, description string, out *jsonschema.Schema
 				return toolError(coded), nil, nil
 			}
 			if err != nil {
-				log.Printf("cf mcp: %s: %v", name, err)
+				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+					return nil, nil, ctx.Err()
+				}
+				fmt.Fprintf(t.diag, "cf mcp: %s: %v\n", name, err)
 				return toolError(domain.NewError(domain.CodeInternal, "unexpected error; see the stderr of cf mcp serve", nil)), nil, nil
 			}
 			return nil, res, nil
 		})
+}
+
+// withoutNull removes "null" from the types of a schema and of everything
+// inside it, so the field that Go derives as nullable (a slice, a pointer) is
+// described by its plain type.
+func withoutNull(s *jsonschema.Schema) {
+	if s == nil {
+		return
+	}
+	if s.Types != nil {
+		s.Types = slices.DeleteFunc(s.Types, func(t string) bool { return t == "null" })
+		if len(s.Types) == 1 {
+			s.Type, s.Types = s.Types[0], nil
+		}
+	}
+	for _, p := range s.Properties {
+		withoutNull(p)
+	}
+	withoutNull(s.Items)
+	withoutNull(s.AdditionalProperties)
 }
 
 func toolError(e *domain.Error) *sdk.CallToolResult {

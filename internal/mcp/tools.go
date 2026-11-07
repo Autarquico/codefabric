@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -16,9 +17,10 @@ import (
 )
 
 type tools struct {
-	c   Client
-	clk clock.Clock
-	dir string
+	c    Client
+	clk  clock.Clock
+	dir  string
+	diag io.Writer
 }
 
 // Inputs. A field without omitempty is required by the schema the SDK derives.
@@ -147,15 +149,15 @@ func (in tasksCreateInput) request() (v1.CreateTaskRequest, error) {
 func wire(name string) string { return strings.ReplaceAll(name, ".", "_") }
 
 func (t tools) read(s *sdk.Server) {
-	add(s, wire("projects.list"), "List the Projects. Result: {projects: [Project]}.",
+	add(t, s, wire("projects.list"), "List the Projects. Result: {projects: [Project]}.",
 		objectOf(map[string]string{"projects": "array"}),
 		func(ctx context.Context, _ none) (any, error) {
 			ps, err := t.c.Projects(ctx)
 			return map[string]any{"projects": nonNil(ps)}, err
 		})
-	add(s, wire("projects.get"), "Show a Project.", entity,
+	add(t, s, wire("projects.get"), "Show a Project.", entity,
 		func(ctx context.Context, in idInput) (any, error) { return t.c.Project(ctx, in.Ref) })
-	add(s, wire("tasks.list"), "List Tasks. Result: {tasks: [Task]}.",
+	add(t, s, wire("tasks.list"), "List Tasks. Result: {tasks: [Task]}.",
 		objectOf(map[string]string{"tasks": "array"}),
 		func(ctx context.Context, in tasksListInput) (any, error) {
 			q := client.TaskQuery{Project: in.Project, All: in.All}
@@ -165,53 +167,53 @@ func (t tools) read(s *sdk.Server) {
 			ts, err := t.c.Tasks(ctx, q)
 			return map[string]any{"tasks": nonNil(ts)}, err
 		})
-	add(s, wire("tasks.get"), "Show a Task.", entity,
+	add(t, s, wire("tasks.get"), "Show a Task.", entity,
 		func(ctx context.Context, in refInput) (any, error) { return t.c.Task(ctx, in.Ref, in.Project) })
-	add(s, wire("runs.list"), "List Runs, optionally of one Task. Result: {runs: [Run]}.",
+	add(t, s, wire("runs.list"), "List Runs, optionally of one Task. Result: {runs: [Run]}.",
 		objectOf(map[string]string{"runs": "array"}),
 		func(ctx context.Context, in runsListInput) (any, error) {
 			rs, err := t.c.Runs(ctx, client.RunQuery{Task: in.Task, Project: in.Project})
 			return map[string]any{"runs": nonNil(rs)}, err
 		})
-	add(s, wire("runs.get"), "Show a Run.", entity,
+	add(t, s, wire("runs.get"), "Show a Run.", entity,
 		func(ctx context.Context, in idInput) (any, error) { return t.c.Run(ctx, in.Ref) })
-	add(s, wire("runs.logs"), "Read the output of a Run: the last 64 KiB unless tail or offset say otherwise.",
+	add(t, s, wire("runs.logs"), "Read the output of a Run: the last 64 KiB unless tail or offset say otherwise.",
 		objectOf(map[string]string{"run_id": "string", "start": "integer", "end": "integer", "offset": "integer", "text": "string", "truncated": "boolean", "closed": "boolean"}),
 		t.runLogs)
-	add(s, wire("workers.list"), "List the Workers. Result: {workers: [Worker]}.",
+	add(t, s, wire("workers.list"), "List the Workers. Result: {workers: [Worker]}.",
 		objectOf(map[string]string{"workers": "array"}),
 		func(ctx context.Context, in workersListInput) (any, error) {
 			ws, err := t.c.Workers(ctx, in.IncludeRemoved)
 			return map[string]any{"workers": nonNil(ws)}, err
 		})
-	add(s, wire("workers.get"), "Show a Worker, its capacity included.", entity,
+	add(t, s, wire("workers.get"), "Show a Worker, its capacity included.", entity,
 		func(ctx context.Context, in idInput) (any, error) { return t.c.Worker(ctx, in.Ref) })
-	add(s, wire("workflows.list"), "List the Workflows. Result: {workflows: [Workflow]}.",
+	add(t, s, wire("workflows.list"), "List the Workflows. Result: {workflows: [Workflow]}.",
 		objectOf(map[string]string{"workflows": "array"}),
 		func(ctx context.Context, _ none) (any, error) {
 			ws, err := t.c.ListWorkflows(ctx)
 			return map[string]any{"workflows": nonNil(ws)}, err
 		})
-	add(s, wire("workflows.get"), "Show a Workflow version.", entity,
+	add(t, s, wire("workflows.get"), "Show a Workflow version.", entity,
 		func(ctx context.Context, in idInput) (any, error) { return t.c.ShowWorkflow(ctx, in.Ref) })
-	add(s, wire("workflows.diff"), "Preview what applying a Workflow to a Worker would change. It records a dry-run order on the Worker, "+
+	add(t, s, wire("workflows.diff"), "Preview what applying a Workflow to a Worker would change. It records a dry-run order on the Worker, "+
 		"replacing any earlier dry-run of that Worker and harness, and waits up to 2m for the Worker to report: it applies nothing. "+
 		"Result: {apply: order}, whose result is the plan.",
 		objectOf(map[string]string{"apply": "object"}),
 		t.workflowsDiff)
-	add(s, wire("inbox.list"), "List what waits for a person: Tasks that need input and Tasks that failed. Result: {items: [InboxItem]}.",
+	add(t, s, wire("inbox.list"), "List what waits for a person: Tasks that need input and Tasks that failed. Result: {items: [InboxItem]}.",
 		objectOf(map[string]string{"items": "array"}),
 		func(ctx context.Context, _ none) (any, error) {
 			in, err := t.c.Inbox(ctx)
 			return map[string]any{"items": nonNil(in.Items)}, err
 		})
-	add(s, "search", "Find entities by reference and by text. Result: {results: [...]}.",
+	add(t, s, "search", "Find entities by reference and by text. Result: {results: [...]}.",
 		objectOf(map[string]string{"results": "array"}),
 		func(ctx context.Context, in searchInput) (any, error) {
 			res, err := t.c.Search(ctx, client.SearchQuery{Text: in.Text, Kind: in.Kind, Project: in.Project, Limit: in.Limit})
 			return map[string]any{"results": nonNil(res.Results)}, err
 		})
-	add(s, wire("logs.query"), "Read the structured logs. Result: {logs: [Log], cursor, has_more}.",
+	add(t, s, wire("logs.query"), "Read the structured logs. Result: {logs: [Log], cursor, has_more}.",
 		objectOf(map[string]string{"logs": "array", "cursor": "string", "has_more": "boolean"}),
 		func(ctx context.Context, in logsQueryInput) (any, error) {
 			page, err := t.c.Logs(ctx, client.LogQuery{
@@ -221,7 +223,7 @@ func (t tools) read(s *sdk.Server) {
 			page.Logs = nonNil(page.Logs)
 			return page, err
 		})
-	add(s, wire("events.query"), "Read events. Result: {events: [Event], cursor, has_more}. To wait for events, use events_wait.",
+	add(t, s, wire("events.query"), "Read events. Result: {events: [Event], cursor, has_more}. To wait for events, use events_wait.",
 		objectOf(map[string]string{"events": "array", "cursor": "string", "has_more": "boolean"}),
 		func(ctx context.Context, in eventsQueryInput) (any, error) {
 			page, err := t.c.Events(ctx, client.EventQuery{
@@ -231,11 +233,11 @@ func (t tools) read(s *sdk.Server) {
 			page.Events = nonNil(page.Events)
 			return page, err
 		})
-	add(s, wire("events.wait"), waitDescription, objectOf(map[string]string{"events": "array", "cursor": "string"}), t.eventsWait)
+	add(t, s, wire("events.wait"), waitDescription, objectOf(map[string]string{"events": "array", "cursor": "string"}), t.eventsWait)
 }
 
 func (t tools) execute(s *sdk.Server) {
-	add(s, wire("tasks.create"), "Create a Task and start a Run. Result: {task, run}.",
+	add(t, s, wire("tasks.create"), "Create a Task and start a Run. Result: {task, run}.",
 		objectOf(map[string]string{"task": "object"}),
 		func(ctx context.Context, in tasksCreateInput) (any, error) {
 			if err := requireRequestID(in.RequestID); err != nil {
@@ -247,7 +249,7 @@ func (t tools) execute(s *sdk.Server) {
 			}
 			return t.c.NewTask(ctx, t.dir, req)
 		})
-	add(s, wire("tasks.respond"), "Answer what a Task waits for: allow or deny a permission, or answer a question.",
+	add(t, s, wire("tasks.respond"), "Answer what a Task waits for: allow or deny a permission, or answer a question.",
 		objectOf(map[string]string{"task_id": "string", "run_id": "string", "prompt_id": "string", "state": "string"}),
 		func(ctx context.Context, in tasksRespondInput) (any, error) {
 			if err := requireRequestID(in.RequestID); err != nil {
@@ -264,21 +266,21 @@ func (t tools) execute(s *sdk.Server) {
 }
 
 func (t tools) modify(s *sdk.Server) {
-	add(s, wire("tasks.cancel"), "Cancel a Task and stop its Run.", entity,
+	add(t, s, wire("tasks.cancel"), "Cancel a Task and stop its Run.", entity,
 		func(ctx context.Context, in tasksCancelInput) (any, error) {
 			if err := requireRequestID(in.RequestID); err != nil {
 				return nil, err
 			}
 			return t.c.CancelTask(ctx, in.Ref, in.Project, in.RequestID)
 		})
-	add(s, wire("workers.drain"), "Stop a Worker from taking new work; what it runs finishes.", entity,
+	add(t, s, wire("workers.drain"), "Stop a Worker from taking new work; what it runs finishes.", entity,
 		func(ctx context.Context, in workersActionInput) (any, error) {
 			if err := requireRequestID(in.RequestID); err != nil {
 				return nil, err
 			}
 			return t.c.DrainWorker(ctx, in.Ref, in.RequestID)
 		})
-	add(s, wire("workers.undrain"), "Let a drained Worker take work again.", entity,
+	add(t, s, wire("workers.undrain"), "Let a drained Worker take work again.", entity,
 		func(ctx context.Context, in workersActionInput) (any, error) {
 			if err := requireRequestID(in.RequestID); err != nil {
 				return nil, err
