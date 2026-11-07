@@ -31,6 +31,7 @@ var notActions = map[string]string{
 	"cf workflow show": "read", "cf workflow status": "read",
 	// This machine's identity and setup, not something the TUI does to the cluster.
 	"cf connect": "enrols this machine", "cf client remove": "revokes a client identity", "cf client renew": "renews this machine's credentials",
+	"cf mcp install": "registers cf in this machine's model CLIs", "cf mcp uninstall": "removes cf from this machine's model CLIs",
 	// Same command as an action that exists.
 	"cf do": "shortcut of task.new, which needs the working directory of a shell",
 }
