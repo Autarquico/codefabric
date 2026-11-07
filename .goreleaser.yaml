@@ -8,6 +8,7 @@ builds:
     binary: cf
     env:
       - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
     ldflags:
@@ -23,10 +24,17 @@ builds:
 
 archives:
   - formats: [tar.gz]
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "cf_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
 
+# Nothing is checksummed, signed or published here: packaging/release/finalize.sh and release.yml do that.
 checksum:
-  name_template: checksums.txt
+  disable: true
+
+release:
+  disable: true
 
 changelog:
-  use: github
+  disable: true

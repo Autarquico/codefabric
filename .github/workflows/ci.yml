@@ -199,3 +199,61 @@ jobs:
           go-version: "1.27.x"
           check-latest: true
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # The installer and the release chain, against an ephemeral key. Registered in
+  # packaging/release/required-checks.txt: release.yml refuses to build without it.
+  installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+      - name: Install prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y shellcheck openssh-client python3
+      - name: Install prerequisites (macOS)
+        if: runner.os == 'macOS'
+        run: brew install shellcheck
+      - name: shellcheck
+        run: git ls-files -z '*.sh' | xargs -0 shellcheck
+      - run: make test-installer
+
+  # The release workflow is the only place that may touch the signing key.
+  workflow-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+      - name: only release.yml/sign-publish names the release environment or the signing key
+        run: |
+          # yq (checked against go.sum and the checksum database) reads every job's environment, whatever its YAML form
+          bad=""
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -e "$f" ] || continue
+            skip=""
+            [ "$f" != .github/workflows/release.yml ] || skip=sign-publish
+            yq="go run github.com/mikefarah/yq/v4@v4.54.2"
+            hits="$(SKIP="$skip" $yq -r '
+              .jobs | to_entries | .[] | select(.key != strenv(SKIP))
+                | select((.value.environment | (.name // .) | to_json | test("release|[$][{][{]"))
+                         or (.value | to_json | contains("CF_RELEASE_SIGNING_KE" + "Y")))
+                | .key' "$f")" || exit 1
+            top="$($yq -r 'del(.jobs) | to_json | contains("CF_RELEASE_SIGNING_KE" + "Y")' "$f")" || exit 1
+            [ "$top" = false ] || hits="$hits workflow-level reference"
+            [ -z "$hits" ] || bad="$bad$f:\n$hits\n"
+          done
+          if [ -n "$bad" ]; then printf 'release custody violated (only release.yml/sign-publish may use the release environment or signing key):\n%b' "$bad" >&2; exit 1; fi
