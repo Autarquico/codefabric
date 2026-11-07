@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { GUIDE_PAGES, splitFrontMatter, syncDocs, transformPage } from './sync-docs.mjs';
 
-const known = new Set(['docs/guide/cli.md', 'docs/guide/tui.md', 'docs/guide/concepts.md', 'docs/guide/getting-started.md', 'docs/codefabric-spec.md', 'internal/tui', 'README.md']);
+const known = new Set(['docs/guide/cli.md', 'docs/guide/tui.md', 'docs/guide/mcp.md', 'docs/guide/concepts.md', 'docs/guide/getting-started.md', 'docs/codefabric-spec.md', 'internal/tui', 'README.md']);
 const kindOf = (p) => (!known.has(p) ? null : p === 'internal/tui' ? 'dir' : 'file');
 const FM = '---\ntitle: T\ndescription: D\n---\n';
 const page = (source, file = 'concepts.md') => transformPage({ file, source: source.startsWith('---') ? source : FM + source, base: '/codefabric/', ref: 'v0.2.0', kindOf });
