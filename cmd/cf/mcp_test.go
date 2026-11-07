@@ -106,3 +106,17 @@ func TestMCPServeRejectsWhatItCannotServe(t *testing.T) {
 		}
 	}
 }
+
+// The binary's serve and the CLI's install|uninstall meet under one mcp command.
+func TestMCPCommandListsServeInstallAndUninstall(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.RunContextWith(t.Context(), cli.Options{}, []string{"mcp", "--help"}, strings.NewReader(""), &out, &errOut, commands()...)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	for _, sub := range []string{"serve", "install", "uninstall"} {
+		if !regexp.MustCompile(`(?m)^\s+` + sub + `\s`).MatchString(out.String()) {
+			t.Errorf("cf mcp --help does not list %q:\n%s", sub, out.String())
+		}
+	}
+}
