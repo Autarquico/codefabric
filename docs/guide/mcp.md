@@ -61,14 +61,14 @@ A profile is fixed when the server starts. A tool outside the profile is not lis
 ## The flow: create, wait, respond
 
 1. The model calls `events_query` with `tail: 1` and keeps the `cursor`: it marks the present, before the Task exists.
-2. It calls `tasks_create` with the prompt, the project and a `request_id`.
+2. It calls `tasks_create` with the prompt, the project, the `harness` and a `request_id`. A Task that starts needs a harness: without one the call fails with `CF_INVALID_REQUEST`.
 3. It calls `events_wait` for `RunCompleted`, `RunFailed` or `TaskNeedsInput`, filtered to that Task, with the cursor from step 1 as `after_cursor`. It blocks until there is a matching event or the timeout, without polling.
 4. On `RunCompleted` or `RunFailed`, it reads `runs_get` and `runs_logs`.
 5. On `TaskNeedsInput`, it reads `inbox_list` to see what is asked and calls `tasks_respond` with the answer and a `request_id`. Then it waits again with the cursor it has, until `RunCompleted` or `RunFailed`.
 
 Every `events_wait` answer carries a `cursor`. Passing it as `after_cursor` in the next call means no event is lost between calls. Taking the first cursor before `tasks_create` closes the gap at the start: without `after_cursor` the wait starts from now, and an event emitted between `tasks_create` and that call would be missed. After a wait that returns no events, the model reads `tasks_get` once, in case the Task already finished, and waits again. A cursor older than the retention window fails with `CF_CURSOR_EXPIRED`.
 
-To try it, ask the model something like: "Run the tests of this repository on CodeFabric and tell me what fails." To see the needs-input step, create a Task yourself with `cf task create --permissions ask ...` (`tasks_create` has no permissions option) and ask the model to follow it and answer what it asks; see [Getting started](../getting-started/).
+To try it, ask the model something like: "Run the tests of this repository on CodeFabric and tell me what fails." To see the needs-input step, ask the model to create the Task with `permissions: ask` and answer what it asks; see [Getting started](../getting-started/).
 
 ## request_id
 

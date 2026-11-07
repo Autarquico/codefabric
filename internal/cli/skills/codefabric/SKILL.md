@@ -17,7 +17,7 @@ Do not use it to run commands on this machine. For that, use your own tools.
 ## The flow
 
 1. `events_query` with `tail: 1`. Keep the `cursor` it returns: it marks the present, before the Task exists.
-2. `tasks_create` with the prompt, the project and a `request_id`. It returns the Task.
+2. `tasks_create` with the prompt, the project, the `harness` (required to start a Run) and a `request_id`; `model`, `permissions` and `completion` are optional, as in `cf task new`. It returns the Task.
 3. `events_wait` with `types` (`RunCompleted`, `RunFailed`, `TaskNeedsInput`), `filter` (`task`) and `after_cursor` set to the cursor of step 1. Without `after_cursor` the wait starts from now, and an event emitted before that call would be lost.
 4. Each answer carries a `cursor`. Pass it as `after_cursor` in the next `events_wait`, so no event is lost between calls.
 5. On `RunCompleted` or `RunFailed`, read the result with `runs_get` and the output with `runs_logs`.
