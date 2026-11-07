@@ -42,7 +42,7 @@ Owner previsto en el bucle Develop: backend-eng (mcp, SDK, API) y qa-tester.
 - **`cf mcp serve [--profile read|execute|modify]`.** Perfil por defecto: `execute`.
   - Servidor MCP por stdio en `internal/mcp`, que usa solo `internal/client` y `internal/api/v1` (ADR 0001).
   - Se cablea desde `cmd/cf`, o desde `internal/cli` si se amplía su allow-list (se decide en el plan).
-- **Tools, mapeadas 1:1 al Client SDK con los nombres de §17.2.** Hay tres alias:
+- **Tools, mapeadas 1:1 al Client SDK con los nombres de §17.2.** En el cable, el `.` pasa a `_` (`tasks.create` → `tasks_create`), porque la API de Anthropic solo admite `^[a-zA-Z0-9_-]{1,128}$` en los nombres de tool. Los permisos y la doc siguen usando el nombre de §17.2. Hay tres alias:
   - `runs.logs` es la salida del Run.
   - `workflows.diff` es un apply en dry-run.
   - `inbox.list` y `search` añaden el Inbox y la búsqueda de §18.2.
