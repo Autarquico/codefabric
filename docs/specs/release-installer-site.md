@@ -2,7 +2,7 @@
 codename: codefabric
 title: Instalador firmado, release y sitio
 type: task
-status: active
+status: shipped
 priority: P1
 size: L
 issue: 131
@@ -12,7 +12,7 @@ depends_on: []
 supersedes: []
 related_specs: [codefabric-spec, binary-distribution-upgrade]
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-07
 ---
 
 # Instalador firmado, release y sitio

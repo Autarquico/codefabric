@@ -12,7 +12,6 @@
 - #17 Fase 2 — Claude/Codex y Workflows
 - #20 Adapter de Claude Code
 - #22 Workflows: apply, drift y lock de configuración
-- #24 Config del repo y Environment host
 - #25 Doctor y wizard de join
 - #26 E2E v0.2
 - #82 Backend keyring de secrets
@@ -26,6 +25,8 @@
 - #99 E2E del TUI
 - #100 Almacenamiento de logs y output
 - #102 Flaky: TestWhatTheRedactionHoldsBackIsFlushedOnEveryEnd/cancellation (gitops)
+- #131 Instalador firmado, release y sitio
+- #136 Servidor MCP
 <!-- /pm-sync:done-this-week -->
 
 ---
