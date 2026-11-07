@@ -184,11 +184,14 @@ TestScenario_UnsupportedPlatform_unknownArch() {
 # --- Placeholder ---------------------------------------------------------------
 
 TestScenario_Placeholder() {
-	grep -q 'ssh-ed25519 PLACEHOLDER' "$ROOT/install.sh" || fail "the repo install.sh no longer carries the placeholder; this test needs updating"
+	# The repo carries the real key now; an install.sh still holding the placeholder must fail closed.
+	sed 's|^\(release@codefabric namespaces="codefabric-release"\) ssh-ed25519 [A-Za-z0-9+/=]*$|\1 ssh-ed25519 PLACEHOLDER|' \
+		"$ROOT/install.sh" >"$T/placeholder-install.sh"
+	grep -q 'ssh-ed25519 PLACEHOLDER' "$T/placeholder-install.sh" || fail "could not put the placeholder back into install.sh"
 	good_release "$KEY_A"
 	serve_dist
 	seed_old_cf
-	assert_rejected_untouched "$ROOT/install.sh"
+	assert_rejected_untouched "$T/placeholder-install.sh"
 	assert_out_contains "signature verification failed: checksums.txt"
 }
 
