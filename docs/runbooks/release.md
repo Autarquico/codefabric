@@ -120,7 +120,7 @@ una carpeta `Formula/`).
 ```sh
 repo=/ruta/al/checkout-en-el-commit-del-tag   # raíz de confianza: nunca el install.sh descargado
 f=$(mktemp -d)
-gh release download vX.Y.Z -p 'checksums.txt*' --dir "$f"
+gh release download vX.Y.Z -R Autarquico/codefabric -p 'checksums.txt*' --dir "$f"
 "$repo/packaging/release/brew-formula.sh" "$f/checksums.txt" "$repo/install.sh" vX.Y.Z > "$f/codefabric.rb"
 echo "$f/codefabric.rb"
 ```
