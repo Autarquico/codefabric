@@ -40,6 +40,12 @@ type mcpTool struct {
 	skillsDir   string // relative to the home or to the repo root
 	// scoped says whether the CLI takes --scope for the registration.
 	scoped bool
+	// userServer says the registration is always for the user: a project
+	// scope only moves the skill.
+	userServer bool
+	// configTimeout says the tool cuts a call at 60 s unless its config
+	// file sets tool_timeout_sec.
+	configTimeout bool
 }
 
 var (
@@ -48,7 +54,7 @@ var (
 		installHint: "install Claude Code (https://docs.claude.com/en/docs/claude-code) and run this again",
 	}
 	codexTool = mcpTool{
-		name: "codex", skillsDir: filepath.Join(".agents", "skills"),
+		name: "codex", skillsDir: filepath.Join(".agents", "skills"), userServer: true, configTimeout: true,
 		installHint: "install Codex (npm install -g @openai/codex) and run this again",
 	}
 )
@@ -181,10 +187,11 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 		return res, err
 	}
 	res.Binary = bin
-	skillPath, err := skillFilePath(tool, f.scope)
+	base, err := scopeBase(f.scope)
 	if err != nil {
 		return res, err
 	}
+	skillPath := skillFilePath(tool, base)
 	res.Skill.Path = skillPath
 	cliPath, err := lookTool(tool, f.dryRun)
 	if err != nil {
@@ -194,11 +201,11 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 		removeArgs(tool, f.scope),
 		addArgs(tool, f.scope, bin, f.profile),
 	}
-	if tool == codexTool && f.scope == "project" {
+	if tool.userServer && f.scope == "project" {
 		res.Notes = append(res.Notes, "Codex has no project scope for MCP servers: the server is registered for the user, only the skill goes to the repository")
 	}
 	var cfgPath string
-	if tool == codexTool {
+	if tool.configTimeout {
 		if cfgPath, err = codexConfigPath(); err != nil {
 			return res, err
 		}
@@ -208,13 +215,14 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 		res.Skill.State = "would write"
 		return res, nil
 	}
-	if err := runRemove(ctx, cliPath, res.Commands[0]); err != nil {
+	dir := cliDir(tool, f.scope, base)
+	if err := runRemove(ctx, cliPath, dir, res.Commands[0]); err != nil {
 		return res, err
 	}
-	if err := runCLI(ctx, cliPath, res.Commands[1]); err != nil {
+	if err := runCLI(ctx, cliPath, dir, res.Commands[1]); err != nil {
 		return res, err
 	}
-	if tool == codexTool {
+	if tool.configTimeout {
 		changed, err := setCodexToolTimeout(cfgPath, codexToolTimeoutSec)
 		if err != nil {
 			return res, err
@@ -227,18 +235,22 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 
 func uninstallMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult, error) {
 	res := mcpInstallResult{Tool: tool.name, Scope: f.scope}
-	skillPath, err := skillFilePath(tool, f.scope)
+	base, err := scopeBase(f.scope)
 	if err != nil {
 		return res, err
 	}
+	skillPath := skillFilePath(tool, base)
 	res.Skill.Path = skillPath
-	res.Commands = [][]string{removeArgs(tool, f.scope)}
-	if cliPath, err := exec.LookPath(tool.name); err == nil {
-		if err := runRemove(ctx, cliPath, res.Commands[0]); err != nil {
+	switch cliPath, lookErr := exec.LookPath(tool.name); {
+	case tool.userServer && f.scope == "project":
+		res.Notes = append(res.Notes, "the "+tool.name+" server is registered for the user, not for this repository, so it was left alone; to remove it for every repository run `cf mcp uninstall --"+tool.name+"`")
+	case lookErr != nil:
+		res.Notes = append(res.Notes, tool.name+" is not in PATH: the registration was not touched")
+	default:
+		res.Commands = [][]string{removeArgs(tool, f.scope)}
+		if err := runRemove(ctx, cliPath, cliDir(tool, f.scope, base), res.Commands[0]); err != nil {
 			return res, err
 		}
-	} else {
-		res.Notes = append(res.Notes, tool.name+" is not in PATH: the registration was not touched")
 	}
 	res.Skill.State, err = removeSkill(skillPath)
 	return res, err
@@ -306,8 +318,8 @@ func sameFile(a, b string) bool {
 	return err == nil && os.SameFile(ia, ib)
 }
 
-func runCLI(ctx context.Context, cliPath string, argv []string) error {
-	out, err := runOutput(ctx, cliPath, argv)
+func runCLI(ctx context.Context, cliPath, dir string, argv []string) error {
+	out, err := runOutput(ctx, cliPath, dir, argv)
 	if err != nil {
 		return fmt.Errorf("%s failed: %w: %s", strings.Join(argv, " "), err, strings.TrimSpace(out))
 	}
@@ -315,35 +327,49 @@ func runCLI(ctx context.Context, cliPath string, argv []string) error {
 }
 
 // runRemove runs a `mcp remove`; a server that was not registered is fine.
-func runRemove(ctx context.Context, cliPath string, argv []string) error {
-	out, err := runOutput(ctx, cliPath, argv)
+func runRemove(ctx context.Context, cliPath, dir string, argv []string) error {
+	out, err := runOutput(ctx, cliPath, dir, argv)
 	if err != nil && !strings.Contains(strings.ToLower(out), "no mcp server") {
 		return fmt.Errorf("%s failed: %w: %s", strings.Join(argv, " "), err, strings.TrimSpace(out))
 	}
 	return nil
 }
 
-func runOutput(ctx context.Context, cliPath string, argv []string) (string, error) {
+func runOutput(ctx context.Context, cliPath, dir string, argv []string) (string, error) {
 	cmd := exec.CommandContext(ctx, cliPath, argv[1:]...) //nolint:gosec // cliPath comes from LookPath of a fixed name; the arguments are built here
+	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
 // --- skill ---
 
-// skillFilePath is where the tool reads the skill: under the home for the
-// user, under the root of the git repository of the cwd for the project.
-func skillFilePath(tool mcpTool, scope string) (string, error) {
-	base, err := os.UserHomeDir()
+// scopeBase is the directory a scope lives under: the home for the user, the
+// root of the git repository of the cwd for the project.
+func scopeBase(scope string) (string, error) {
+	if scope == "project" {
+		return repoRoot()
+	}
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("finding the home directory: %w", err)
 	}
-	if scope == "project" {
-		if base, err = repoRoot(); err != nil {
-			return "", err
-		}
+	return home, nil
+}
+
+// skillFilePath is where the tool reads the skill under a scope base.
+func skillFilePath(tool mcpTool, base string) string {
+	return filepath.Join(base, tool.skillsDir, skillName, "SKILL.md")
+}
+
+// cliDir is where the CLI of the tool runs. Claude writes .mcp.json of the
+// project scope in its cwd, which has to be the root of the repository, where
+// the skill goes. Otherwise the cwd is of no consequence.
+func cliDir(tool mcpTool, scope, base string) string {
+	if tool.scoped && scope == "project" {
+		return base
 	}
-	return filepath.Join(base, tool.skillsDir, skillName, "SKILL.md"), nil
+	return ""
 }
 
 // repoRoot is the closest ancestor of the cwd that has a .git (a directory,
@@ -474,7 +500,19 @@ func writeAtomic(path string, data []byte, perm fs.FileMode) error {
 		_ = os.Remove(name)
 		return err
 	}
+	syncDir(filepath.Dir(path))
 	return nil
+}
+
+// syncDir makes a rename durable. It is best effort: not every filesystem
+// can sync a directory, and the old content is still there if it is lost.
+func syncDir(dir string) {
+	d, err := os.Open(dir) //nolint:gosec // the directory of a file just written
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
 
 // --- codex config.toml ---
@@ -516,38 +554,129 @@ func setCodexToolTimeout(path string, seconds int) (bool, error) {
 }
 
 var (
-	tomlHeader  = regexp.MustCompile(`^\s*\[\[?[A-Za-z0-9_.'" -]+\]\]?\s*(#.*)?$`)
 	tomlCfTable = regexp.MustCompile(`^\s*\[\s*mcp_servers\s*\.\s*(cf|"cf"|'cf')\s*\]\s*(#.*)?$`)
 	tomlTimeout = regexp.MustCompile(`^\s*tool_timeout_sec\s*=`)
 )
 
-// withToolTimeout edits only the lines of the [mcp_servers.cf] table.
+// tomlLine says what a line of a TOML file is, as far as this file needs.
+type tomlLine struct {
+	header  bool // opens a table: [x], [[x]], with or without a comment
+	inValue bool // continues a multi-line array or string
+}
+
+// classifyTOML marks the table headers. A header is any line that starts
+// with `[`, whatever its name holds ([projects."/a b/ç"]), unless a multi-line
+// array or string is open: there a `[` belongs to the value.
+func classifyTOML(lines []string) []tomlLine {
+	var open tomlValue
+	kinds := make([]tomlLine, len(lines))
+	for i, l := range lines {
+		kinds[i].inValue = open.pending()
+		if !open.pending() && strings.HasPrefix(strings.TrimSpace(l), "[") {
+			kinds[i].header = true
+			continue
+		}
+		open.feed(l)
+	}
+	return kinds
+}
+
+// tomlValue follows the multi-line values that hide a header from view.
+type tomlValue struct {
+	multi string // the closing delimiter of an open multi-line string
+	depth int    // open brackets of a multi-line array
+}
+
+func (v *tomlValue) pending() bool { return v.multi != "" || v.depth > 0 }
+
+func (v *tomlValue) feed(line string) {
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if v.multi != "" {
+			switch {
+			case c == '\\' && v.multi == `"""`:
+				i++
+			case strings.HasPrefix(line[i:], v.multi):
+				v.multi = ""
+				i += 2
+			}
+			continue
+		}
+		switch {
+		case c == '#':
+			return
+		case strings.HasPrefix(line[i:], `"""`), strings.HasPrefix(line[i:], `'''`):
+			v.multi = line[i : i+3]
+			i += 2
+		case c == '"' || c == '\'':
+			i = endOfTOMLString(line, i)
+		case c == '[':
+			v.depth++
+		case c == ']' && v.depth > 0:
+			v.depth--
+		}
+	}
+}
+
+// endOfTOMLString is the index of the quote that closes the string opened at i.
+func endOfTOMLString(line string, i int) int {
+	quote := line[i]
+	for i++; i < len(line); i++ {
+		switch {
+		case line[i] == '\\' && quote == '"':
+			i++
+		case line[i] == quote:
+			return i
+		}
+	}
+	return len(line)
+}
+
+// withToolTimeout edits only the lines of the [mcp_servers.cf] table. The key
+// goes after the last key of the table, so the comments that introduce the next
+// table stay with it.
 func withToolTimeout(content string, seconds int) (string, error) {
 	lines := strings.Split(content, "\n")
-	start := slices.IndexFunc(lines, tomlCfTable.MatchString)
+	kinds := classifyTOML(lines)
+	start := -1
+	for i, l := range lines {
+		if kinds[i].header && tomlCfTable.MatchString(l) {
+			start = i
+			break
+		}
+	}
 	if start < 0 {
 		return "", errors.New("no [mcp_servers.cf] table: `codex mcp add` did not write it")
 	}
 	end := len(lines)
 	for i := start + 1; i < len(lines); i++ {
-		if tomlHeader.MatchString(lines[i]) {
+		if kinds[i].header {
 			end = i
 			break
 		}
 	}
-	line := fmt.Sprintf("tool_timeout_sec = %d", seconds)
+	eol := ""
+	if strings.HasSuffix(lines[start], "\r") {
+		eol = "\r"
+	}
+	line := fmt.Sprintf("tool_timeout_sec = %d", seconds) + eol
 	for i := start + 1; i < end; i++ {
-		if tomlTimeout.MatchString(lines[i]) {
+		if !kinds[i].inValue && tomlTimeout.MatchString(lines[i]) {
 			lines[i] = line
 			return strings.Join(lines, "\n"), nil
 		}
 	}
 	last := end - 1
-	for last > start && strings.TrimSpace(lines[last]) == "" {
+	for last > start && isBlankOrComment(lines[last]) {
 		last--
 	}
 	lines = slices.Insert(lines, last+1, line)
 	return strings.Join(lines, "\n"), nil
+}
+
+func isBlankOrComment(line string) bool {
+	t := strings.TrimSpace(line)
+	return t == "" || strings.HasPrefix(t, "#")
 }
 
 // --- output ---

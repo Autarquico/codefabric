@@ -30,7 +30,9 @@ esac
 
 // A fake codex 0.160.1: `add` rewrites the [mcp_servers.cf] table of
 // $CODEX_HOME/config.toml with command and args on one line each (and so drops
-// any tool_timeout_sec); `remove` deletes the table. Other tables stay.
+// any tool_timeout_sec); `remove` deletes the table. Other tables stay. The
+// table goes before the first [projects.*] table, in the middle of the file, as
+// in a config that has trusted projects.
 const mcpFakeCodex = `#!/bin/sh
 echo "codex $*" >> "$FAKE_LOG"
 cfg="$CODEX_HOME/config.toml"
@@ -47,12 +49,21 @@ add)
 	shift
 	args=""
 	for a in "$@"; do args="$args${args:+, }\"$a\""; done
-	printf '[mcp_servers.cf]\ncommand = "%s"\nargs = [%s]\n' "$cmd" "$args" >> "$cfg"
+	[ -e "$cfg" ] || : > "$cfg"
+	printf '[mcp_servers.cf]\ncommand = "%s"\nargs = [%s]\n' "$cmd" "$args" > "$cfg.tbl"
+	/usr/bin/awk -v f="$cfg.tbl" 'function emit(  l) { while ((getline l < f) > 0) print l; print "" }
+		/^\[projects\./ && !done { emit(); done = 1 }
+		{ print }
+		END { if (!done) emit() }' "$cfg" > "$cfg.new" && /bin/mv "$cfg.new" "$cfg" && /bin/rm "$cfg.tbl"
 	;;
 esac
 `
 
-const mcpOtherTables = "[model_providers.local]\nname = \"local\"\n\n[mcp_servers.other]\ncommand = \"other\"\nargs = [\"x\"]\n"
+const (
+	mcpProjectsHeader = `[projects."/Users/dev/my repo"]`
+	mcpOtherTables    = "[model_providers.local]\nname = \"local\"\n\n[mcp_servers.other]\ncommand = \"other\"\nargs = [\"x\"]\n\n" +
+		mcpProjectsHeader + "\ntrust_level = \"trusted\"\n"
+)
 
 // mcpBox is a machine of its own: temporary HOME and CODEX_HOME, a PATH with
 // only the fakes, and a git repository for the project scope.
@@ -207,6 +218,21 @@ func mcpTable(config, header string) []string {
 	return table
 }
 
+// mcpWithoutTable is the config with one table taken out, up to the next header.
+func mcpWithoutTable(config, header string) string {
+	var kept []string
+	skip := false
+	for _, line := range strings.Split(config, "\n") {
+		if strings.HasPrefix(line, "[") {
+			skip = strings.TrimSpace(line) == header
+		}
+		if !skip {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
 func TestScenario_MCP_Instalacion_ClaudeUserYProject(t *testing.T) {
 	b := newMCPBox(t, "claude")
 	b.mustCF("mcp", "install", "--claude", "--scope", "user")
@@ -248,8 +274,11 @@ func TestScenario_MCP_Instalacion_CodexFijaElTimeoutSinTocarOtrasTablas(t *testi
 		"codex mcp add cf -- " + binary + " mcp serve --profile execute",
 	})
 	config := mcpRead(t, b.codexConfig())
-	if !strings.HasPrefix(config, mcpOtherTables) {
+	if got := mcpWithoutTable(config, "[mcp_servers.cf]"); got != mcpOtherTables {
 		t.Errorf("the tables the user had changed:\n%s", config)
+	}
+	if got := mcpTable(config, mcpProjectsHeader); !slices.Equal(got, []string{`trust_level = "trusted"`}) {
+		t.Errorf("%s = %q: the timeout landed in the wrong table", mcpProjectsHeader, got)
 	}
 	want := []string{
 		`command = "` + binary + `"`,
@@ -314,8 +343,11 @@ func TestScenario_MCP_Instalacion_ReinstalarConOtroPerfilNoDuplicaNiReescribeLaS
 	if got := mcpTable(config, "[mcp_servers.cf]"); !slices.Equal(got, want) {
 		t.Errorf("[mcp_servers.cf]:\n got %q\nwant %q", got, want)
 	}
-	if !strings.HasPrefix(config, mcpOtherTables) {
+	if got := mcpWithoutTable(config, "[mcp_servers.cf]"); got != mcpOtherTables {
 		t.Errorf("the tables the user had changed:\n%s", config)
+	}
+	if got := mcpTable(config, mcpProjectsHeader); !slices.Equal(got, []string{`trust_level = "trusted"`}) {
+		t.Errorf("%s = %q: the timeout landed in the wrong table", mcpProjectsHeader, got)
 	}
 	for i, path := range skills {
 		info, err := os.Stat(path)

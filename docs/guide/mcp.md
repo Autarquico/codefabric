@@ -27,11 +27,13 @@ What it writes:
 
 | | Claude Code | Codex |
 | --- | --- | --- |
-| Registration | `claude mcp add --scope <scope> cf -- cf mcp serve --profile <profile>` | `codex mcp add cf -- cf mcp serve --profile <profile>` |
+| Registration | `claude mcp add --scope <scope> cf -- <path of cf> mcp serve --profile <profile>` | `codex mcp add cf -- <path of cf> mcp serve --profile <profile>` |
 | Skill, `user` scope | `~/.claude/skills/codefabric/SKILL.md` | `~/.agents/skills/codefabric/SKILL.md` |
 | Skill, `project` scope | `.claude/skills/codefabric/SKILL.md` in the repository root | `.agents/skills/codefabric/SKILL.md` in the repository root |
 
-Codex has no project scope for MCP servers. With `--scope project` the server is still registered for your user, and only the skill goes to the repository; the command says so. For Codex, the command also sets `tool_timeout_sec = 660` in the `[mcp_servers.cf]` table of `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default). Codex cuts a tool call at 60 seconds unless told otherwise, and `events_wait` can block for up to 10 minutes. Re-adding the server with `codex mcp add` drops that setting, so run `cf mcp install --codex` again instead of adding by hand.
+With Claude Code and `--scope project`, `claude mcp add` runs in the repository root, wherever you run `cf`, so `.mcp.json` and the skill end up together. Codex has no project scope for MCP servers. With `--scope project` the server is still registered for your user, and only the skill goes to the repository; the command says so. For Codex, the command also sets `tool_timeout_sec = 660` in the `[mcp_servers.cf]` table of `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default). Codex cuts a tool call at 60 seconds unless told otherwise, and `events_wait` can block for up to 10 minutes. Re-adding the server with `codex mcp add` drops that setting, so run `cf mcp install --codex` again instead of adding by hand.
+
+`<path of cf>` is the absolute path of the `cf` in your `PATH` when it is the binary you are running, and the path of the running binary otherwise. Claude Code and Codex load MCP servers and skills when a session starts: open a new session after an install, or after changing `--profile`, for it to take effect.
 
 The skill is embedded in the `cf` binary. After you update `cf`, run `cf mcp install` again to refresh it.
 
@@ -42,7 +44,7 @@ cf mcp uninstall --claude
 cf mcp uninstall --codex
 ```
 
-It removes the registration and the `SKILL.md` it wrote, and the `codefabric` directory only if it is then empty. Other skills are not touched. `--scope` selects the same scope as in the install.
+It removes the registration and the `SKILL.md` it wrote, and the `codefabric` directory only if it is then empty. Other skills are not touched. `--scope` selects the same scope as in the install, with one exception. Codex registers MCP servers for the user, not for a repository, so `cf mcp uninstall --codex --scope project` removes only the skill of the repository, leaves the server registered, and says so. To remove the server for every repository, run `cf mcp uninstall --codex`.
 
 ## Profiles and tools
 
@@ -58,14 +60,15 @@ A profile is fixed when the server starts. A tool outside the profile is not lis
 
 ## The flow: create, wait, respond
 
-1. The model calls `tasks_create` with the prompt, the project and a `request_id`.
-2. It calls `events_wait` for `RunCompleted`, `RunFailed` or `TaskNeedsInput`, filtered to that Task. It blocks until there is a matching event or the timeout, without polling.
-3. On `RunCompleted` or `RunFailed`, it reads `runs_get` and `runs_logs`.
-4. On `TaskNeedsInput`, it reads `inbox_list` to see what is asked and calls `tasks_respond` with the answer and a `request_id`.
+1. The model calls `events_query` with `tail: 1` and keeps the `cursor`: it marks the present, before the Task exists.
+2. It calls `tasks_create` with the prompt, the project and a `request_id`.
+3. It calls `events_wait` for `RunCompleted`, `RunFailed` or `TaskNeedsInput`, filtered to that Task, with the cursor from step 1 as `after_cursor`. It blocks until there is a matching event or the timeout, without polling.
+4. On `RunCompleted` or `RunFailed`, it reads `runs_get` and `runs_logs`.
+5. On `TaskNeedsInput`, it reads `inbox_list` to see what is asked and calls `tasks_respond` with the answer and a `request_id`. Then it waits again with the cursor it has, until `RunCompleted` or `RunFailed`.
 
-Every `events_wait` answer carries a `cursor`. Passing it as `after_cursor` in the next call means no event is lost between calls. Without `after_cursor` the wait starts from now, so call it right after `tasks_create`. A cursor older than the retention window fails with `CF_CURSOR_EXPIRED`.
+Every `events_wait` answer carries a `cursor`. Passing it as `after_cursor` in the next call means no event is lost between calls. Taking the first cursor before `tasks_create` closes the gap at the start: without `after_cursor` the wait starts from now, and an event emitted between `tasks_create` and that call would be missed. After a wait that returns no events, the model reads `tasks_get` once, in case the Task already finished, and waits again. A cursor older than the retention window fails with `CF_CURSOR_EXPIRED`.
 
-To try it, ask the model something like: "Run the tests of this repository on CodeFabric and tell me what fails." A Task created with `--permissions ask` is the way to see the needs-input step; see [Getting started](../getting-started/).
+To try it, ask the model something like: "Run the tests of this repository on CodeFabric and tell me what fails." To see the needs-input step, create a Task yourself with `cf task create --permissions ask ...` (`tasks_create` has no permissions option) and ask the model to follow it and answer what it asks; see [Getting started](../getting-started/).
 
 ## request_id
 
