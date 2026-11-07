@@ -16,6 +16,7 @@ done
 
 TMP=$(mktemp -d)
 server_pid=
+# shellcheck disable=SC2317 # invoked by the EXIT trap
 cleanup() {
 	[ -z "$server_pid" ] || kill "$server_pid" 2>/dev/null || true
 	rm -rf "$TMP"

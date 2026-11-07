@@ -3,7 +3,7 @@
 # Usage: tag-in-main.sh COMMIT [REF]      (REF defaults to origin/main; run it in the repository)
 set -eu
 
-[ $# -ge 1 ] && [ $# -le 2 ] || { echo "usage: tag-in-main.sh COMMIT [REF]" >&2; exit 2; }
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then echo "usage: tag-in-main.sh COMMIT [REF]" >&2; exit 2; fi
 commit=$1
 ref=${2:-origin/main}
 

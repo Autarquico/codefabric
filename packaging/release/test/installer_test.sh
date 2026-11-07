@@ -252,7 +252,7 @@ tarball_variant_is_rejected() { # mode
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
 	assert_out_contains "cf_${BARE_VERSION}_linux_amd64.tar.gz"
-	[ ! -e "$T/evil" ] && [ ! -e "$T/dist/evil" ] || fail "a tar member escaped the work directory"
+	if [ -e "$T/evil" ] || [ -e "$T/dist/evil" ]; then fail "a tar member escaped the work directory"; fi
 }
 
 TestScenario_Hardening_tarMemberWithDotDot() { tarball_variant_is_rejected dotdot; }

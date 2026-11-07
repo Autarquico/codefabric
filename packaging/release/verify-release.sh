@@ -4,7 +4,7 @@
 # Usage: verify-release.sh TAG INSTALL_SH [REPO]      (REPO defaults to Autarquico/codefabric; needs gh)
 set -eu
 
-[ $# -ge 2 ] && [ $# -le 3 ] || { echo "usage: verify-release.sh TAG INSTALL_SH [REPO]" >&2; exit 2; }
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then echo "usage: verify-release.sh TAG INSTALL_SH [REPO]" >&2; exit 2; fi
 tag=$1
 trust=$2
 repo=${3:-Autarquico/codefabric}
