@@ -1,0 +1,172 @@
+/* CodeFabric theme: global signature -> base.yml -> landing.yml. Tokens first, Starlight mapping second. */
+
+:root {
+  /* spacing scale (4 8 12 16 24 32 48 64 96 128) */
+  --cf-space-1: 0.25rem;
+  --cf-space-2: 0.5rem;
+  --cf-space-3: 0.75rem;
+  --cf-space-4: 1rem;
+  --cf-space-5: 1.5rem;
+  --cf-space-6: 2rem;
+  --cf-space-7: 3rem;
+  --cf-space-8: 4rem;
+  --cf-space-9: 6rem;
+
+  /* radius: squared structure, soft controls */
+  --cf-radius-surface: 0;
+  --cf-radius-control: 6px;
+  --cf-radius-pill: 9999px;
+
+  /* motion */
+  --cf-duration-instant: 100ms;
+  --cf-duration-short: 150ms;
+  --cf-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* type */
+  --cf-font-heading: 'Fraunces Variable', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  --cf-font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --cf-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --cf-tap-target: 2.75rem;
+
+  /* cold neutrals (hue 220) */
+  --cf-neutral-0: hsl(220 30% 99%);
+  --cf-neutral-50: hsl(220 25% 97%);
+  --cf-neutral-100: hsl(220 22% 94%);
+  --cf-neutral-200: hsl(220 18% 88%);
+  --cf-neutral-300: hsl(220 14% 78%);
+  --cf-neutral-400: hsl(220 11% 60%);
+  --cf-neutral-500: hsl(220 10% 44%);
+  --cf-neutral-600: hsl(220 12% 34%);
+  --cf-neutral-700: hsl(220 15% 25%);
+  --cf-neutral-800: hsl(220 20% 16%);
+  --cf-neutral-900: hsl(220 24% 10%);
+  --cf-neutral-950: hsl(220 28% 6%);
+
+  /* loom indigo, dark mode (Starlight's default before its script runs) */
+  --cf-accent: #818cf8;
+  --cf-accent-hover: #a5b4fc;
+  --cf-accent-low: hsl(243 40% 18%);
+  --cf-on-accent: var(--cf-neutral-950);
+  --cf-border: var(--cf-neutral-800);
+  --cf-surface: var(--cf-neutral-900);
+  --cf-bg: var(--cf-neutral-950);
+  --cf-text: var(--cf-neutral-300);
+  --cf-text-strong: var(--cf-neutral-50);
+  --cf-text-muted: var(--cf-neutral-400);
+
+  --cf-success: #34d399;
+  --cf-warning: #fbbf24;
+  --cf-danger: #fb7185;
+  --cf-info: #38bdf8;
+
+  /* Starlight mapping */
+  --sl-font: var(--cf-font-body);
+  --sl-font-mono: var(--cf-font-mono);
+  --sl-color-white: var(--cf-text-strong);
+  --sl-color-gray-1: var(--cf-neutral-100);
+  --sl-color-gray-2: var(--cf-neutral-300);
+  --sl-color-gray-3: var(--cf-neutral-400);
+  --sl-color-gray-4: var(--cf-neutral-500);
+  --sl-color-gray-5: var(--cf-neutral-800);
+  --sl-color-gray-6: var(--cf-neutral-900);
+  --sl-color-black: var(--cf-neutral-950);
+  --sl-color-accent: var(--cf-accent);
+  --sl-color-accent-high: var(--cf-accent);
+  --sl-color-accent-low: var(--cf-accent-low);
+  --sl-color-text-accent: var(--cf-accent);
+  --sl-color-text-invert: var(--cf-on-accent);
+  --sl-color-bg-nav: var(--cf-bg);
+  --sl-color-bg-sidebar: var(--cf-bg);
+  --sl-color-bg-inline-code: var(--cf-neutral-900);
+  --sl-color-hairline: var(--cf-border);
+  --sl-color-hairline-light: var(--cf-border);
+  --sl-color-hairline-shade: var(--cf-border);
+  --sl-color-green: var(--cf-success);
+  --sl-color-orange: var(--cf-warning);
+  --sl-color-red: var(--cf-danger);
+  --sl-color-blue: var(--cf-info);
+  --sl-shadow-sm: none;
+  --sl-shadow-md: none;
+  --sl-shadow-lg: none;
+
+  /* type scale: 12 14 16 18 20 24 30 38 48 60 */
+  --sl-text-2xs: 0.75rem;
+  --sl-text-xs: 0.875rem;
+  --sl-text-sm: 0.875rem;
+  --sl-text-base: 1rem;
+  --sl-text-lg: 1.125rem;
+  --sl-text-xl: 1.25rem;
+  --sl-text-2xl: 1.5rem;
+  --sl-text-3xl: 1.875rem;
+  --sl-text-4xl: 2.375rem;
+  --sl-text-5xl: 3rem;
+  --sl-text-6xl: 3.75rem;
+  --sl-line-height: 1.7;
+  --sl-line-height-headings: 1.15;
+}
+
+:root[data-theme='light'] {
+  --cf-accent: #4338ca;
+  --cf-accent-hover: #3730a3;
+  --cf-accent-low: hsl(243 80% 94%);
+  --cf-on-accent: #ffffff;
+  --cf-border: var(--cf-neutral-200);
+  --cf-surface: var(--cf-neutral-50);
+  --cf-bg: var(--cf-neutral-0);
+  --cf-text: var(--cf-neutral-700);
+  --cf-text-strong: var(--cf-neutral-900);
+  --cf-text-muted: var(--cf-neutral-500);
+
+  --cf-success: #047857;
+  --cf-warning: #b45309;
+  --cf-danger: #be123c;
+  --cf-info: #0369a1;
+
+  --sl-color-white: var(--cf-text-strong);
+  --sl-color-gray-1: var(--cf-neutral-800);
+  --sl-color-gray-2: var(--cf-neutral-700);
+  --sl-color-gray-3: var(--cf-neutral-600);
+  --sl-color-gray-4: var(--cf-neutral-500);
+  --sl-color-gray-5: var(--cf-neutral-200);
+  --sl-color-gray-6: var(--cf-neutral-100);
+  --sl-color-gray-7: var(--cf-neutral-50);
+  --sl-color-black: var(--cf-neutral-0);
+  --sl-color-bg-inline-code: var(--cf-neutral-100);
+}
+
+/* Starlight: headings in the serif, squared surfaces, instant motion */
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.sl-markdown-content h4,
+.site-title,
+h1#_top {
+  font-family: var(--cf-font-heading);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.sl-markdown-content :not(pre) > code {
+  font-size: 0.9em;
+}
+
+.sl-markdown-content a:focus-visible,
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--cf-accent);
+  outline-offset: 2px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

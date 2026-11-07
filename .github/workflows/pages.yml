@@ -1,0 +1,138 @@
+name: pages
+
+# The website follows releases. Its content (docs/guide and the TUI golden frames) comes from a release
+# tag and is treated as data; the tooling (site/) always comes from main, so a fix to the website never
+# needs a new release. It runs after the `release` workflow succeeds for a tag push. A release created
+# with the workflow token does not fire `release: published`, hence workflow_run.
+# Manual dispatch rebuilds the site for an explicit, already published tag with the same checks.
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag to build the site for (vX.Y.Z or vX.Y.Z-suffix)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.path == '.github/workflows/release.yml' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      sha: ${{ steps.tag.outputs.sha }}
+    steps:
+      # Tooling from main only: the script that judges the tag is never taken from the tag itself.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          sparse-checkout: |
+            site/scripts
+            site/.nvmrc
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: site/.nvmrc
+      - name: the tag is a release tag, published, and its commit is the one release.yml built
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: node site/scripts/provenance.mjs
+
+  # Builds and validates. Nothing is deployed unless the build, the script tests, the install-command
+  # check and the axe run on the landing and a docs page all pass.
+  build:
+    name: "TestScenario_SitioDesdeLaRelease: build from the tag, install commands, goldens, axe"
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      SITE_VERSION: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - name: site tooling from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: content from the release tag, as data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          path: release
+          persist-credentials: false
+      - name: the tag still points at the commit the release was built from
+        env:
+          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -eu
+          if [ -z "$EXPECTED_SHA" ] || [ "$(git -C release rev-parse HEAD)" != "$EXPECTED_SHA" ]; then
+            echo "tag moved: HEAD is $(git -C release rev-parse HEAD), release ran on '$EXPECTED_SHA'" >&2
+            exit 1
+          fi
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: site/.nvmrc
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: install
+        working-directory: site
+        run: npm ci
+      - name: unit tests of the site scripts
+        working-directory: site
+        run: npm test
+      - name: build for this tag
+        working-directory: site
+        env:
+          CF_CONTENT_ROOT: ${{ github.workspace }}/release
+        run: npm run build
+      - name: the install commands carry the tag
+        working-directory: site
+        run: npm run check:install
+      - name: axe on the landing and a docs page
+        working-directory: site
+        run: |
+          npx --no-install playwright install --with-deps chromium
+          npm run test:a11y
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site/dist
+
+  # Publishes the artifact and nothing else: no checkout, no npm, no secrets.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
