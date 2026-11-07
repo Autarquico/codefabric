@@ -157,17 +157,22 @@ func TestMCPSession_TheSessionIsNotPartOfTheIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestRequestID_ARepeatedCancelHasOneEffect(t *testing.T) {
+// A cancelled Task cannot be reopened, so no sequence tells the deduplication
+// of a repeated cancel from its natural idempotency. This test shows that the
+// request_id reaches the Controller and that the repeat answers what was stored.
+func TestRequestID_ARepeatedCancelAnswersTheStoredResponse(t *testing.T) {
 	tc := newController(t, time.Now())
 	ctx := t.Context()
 	makeTasks(t, tc, "subject")
 
-	for range 2 {
-		if _, err := tc.owner.CancelTask(ctx, "subject", "backend", "cancel-1"); err != nil {
-			t.Fatal(err)
-		}
-	}
+	first, err := tc.owner.CancelTask(ctx, "subject", "backend", "cancel-1")
+	must(t, err)
+	again, err := tc.owner.CancelTask(ctx, "subject", "backend", "cancel-1")
+	must(t, err)
 
+	if again.ID != first.ID || again.State != first.State || !again.CancelledAt.Equal(*first.CancelledAt) {
+		t.Errorf("the repeat answered %+v, the first %+v", again, first)
+	}
 	if got := eventsWithRequest(t, tc.owner, client.EventQuery{Project: "backend"}, "cancel-1"); len(got) == 0 {
 		t.Fatal("the request_id never reached the Controller")
 	}
@@ -180,19 +185,30 @@ func TestRequestID_ARepeatedCancelHasOneEffect(t *testing.T) {
 	}
 }
 
+// Between the two drains the Worker is undrained, so a repeat that was not
+// deduplicated would drain it again.
 func TestRequestID_ARepeatedDrainHasOneEffect(t *testing.T) {
 	tc := newController(t, time.Now())
 	ctx := t.Context()
 	worker, _ := tc.enrollRealWorker("box")
-	_, err := worker.Heartbeat(ctx, heartbeat(newEpoch()))
+	epoch := newEpoch()
+	_, err := worker.Heartbeat(ctx, heartbeat(epoch))
 	must(t, err)
 
-	for range 2 {
-		if _, err := tc.owner.DrainWorker(ctx, "box", "drain-1"); err != nil {
-			t.Fatal(err)
-		}
-	}
+	_, err = tc.owner.DrainWorker(ctx, "box", "drain-1")
+	must(t, err)
+	_, err = worker.Heartbeat(ctx, heartbeat(epoch)) // finishes the drain
+	must(t, err)
+	_, err = tc.owner.UndrainWorker(ctx, "box", "")
+	must(t, err)
+	_, err = tc.owner.DrainWorker(ctx, "box", "drain-1")
+	must(t, err)
 
+	w, err := tc.owner.Worker(ctx, "box")
+	must(t, err)
+	if w.State != domain.WorkerOnline {
+		t.Errorf("the repeat left the Worker %s, want online", w.State)
+	}
 	got := eventsWithRequest(t, tc.owner, client.EventQuery{Types: []string{string(domain.EventWorkerDraining)}}, "drain-1")
 	if len(got) != 1 {
 		t.Errorf("%d WorkerDraining events for one request_id, want 1", len(got))
