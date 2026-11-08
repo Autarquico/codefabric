@@ -175,9 +175,13 @@ func (db *DB) PurgeLogs(ctx context.Context, scope LogScope, cutoff time.Time, l
 
 // An order is purgeable once it was delivered or withdrawn and no Run that can
 // still need it holds it: the reconciliation reads the assign (and the stops)
-// of an open lease back from here, for a Worker that lost its disk.
+// of an open lease back from here, for a Worker that lost its disk. A lease
+// whose reservation is still open stays so even when its Run is settled and
+// stopped: the reservation outlives the Run while an evaluation or a
+// publication is pending.
 const commandsToPurge = `FROM worker_commands WHERE created_at < ? AND (acked_at IS NOT NULL OR cancelled_at IS NOT NULL)
-	AND (run_id IS NULL OR EXISTS (SELECT 1 FROM runs r WHERE r.id = worker_commands.run_id AND r.state IN ` + settledRuns + ` AND r.runtime = 'stopped'))`
+	AND (run_id IS NULL OR EXISTS (SELECT 1 FROM runs r WHERE r.id = worker_commands.run_id AND r.state IN ` + settledRuns + ` AND r.runtime = 'stopped'))
+	AND (lease_id IS NULL OR NOT EXISTS (SELECT 1 FROM reservations res WHERE res.lease_id = worker_commands.lease_id AND res.released_at IS NULL))`
 
 // CommandsPurgeable counts the orders created before cutoff that the Worker
 // acknowledged or the Controller withdrew, and that belong to no Run still

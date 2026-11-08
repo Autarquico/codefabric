@@ -152,6 +152,9 @@ func (c commit) run(ctx context.Context) (commitOutcome, error) {
 			fmt.Sprintf("nothing to commit: the manifest is that of version %d of %q", head.Version, w.Name),
 			map[string]any{"nothing_to_commit": true, "head": head.Version})
 	}
+	if err := c.stillUploaded(ctx); err != nil {
+		return commitOutcome{}, err
+	}
 	changed, err := changedAgainst(head.Manifest, c.req.Manifest)
 	if err != nil {
 		return commitOutcome{}, err
@@ -187,6 +190,27 @@ func (c commit) run(ctx context.Context) (commitOutcome, error) {
 		return commitOutcome{}, err
 	}
 	return commitOutcome{Version: out}, nil
+}
+
+// stillUploaded rejects a manifest that names a blob the GC collected after
+// verify looked at it: the GC drops the row in the transaction that holds the
+// writer, so either it sees this version or this commit sees the row gone.
+func (c commit) stillUploaded(ctx context.Context) error {
+	seen := map[string]bool{}
+	for _, comp := range c.req.Manifest.Components {
+		for _, f := range comp.Files {
+			if seen[f.SHA256] {
+				continue
+			}
+			seen[f.SHA256] = true
+			if _, err := store.BlobMeta(ctx, c.tx, f.SHA256); errors.Is(err, store.ErrNotFound) {
+				return input.Invalid("component %s/%s: file %q: blob %s is no longer stored: upload it again", comp.Harness, comp.Name, f.Path, f.SHA256)
+			} else if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // target finds the Workflow the commit is for and its head (zero when it has

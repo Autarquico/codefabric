@@ -200,8 +200,12 @@ func (s *Service) deleteBatch(ctx context.Context, batch []garbage, notAfter tim
 	defer release()
 	err = s.db.WithTx(ctx, func(tx *store.Tx) error {
 		gone = gone[:0]
-		// The mark is older than this batch: a commit or a seal may have named a
-		// blob since. Holding the writer, nothing can name one while this reads.
+		// The mark is older than this batch: a commit may have named a blob
+		// since. Holding the writer, this reads every version written so far,
+		// and a commit that verified a blob earlier but writes after this
+		// transaction finds its row gone (workflows.commit.stillUploaded). A
+		// seal needs no check: it refreshes the segment's mtime before it
+		// indexes it, and Delete keeps what is newer than the grace.
 		live, err := s.referencedNow(ctx, tx)
 		if err != nil {
 			return err

@@ -249,8 +249,9 @@ func TestPurgeCommands_KeepsTheOrdersOfARunThatIsStillAlive(t *testing.T) {
 		return l
 	}
 	lease := order(live)
-	order(done)
+	doneLease := order(done)
 	f.exec(`UPDATE runs SET state = 'failed', runtime = 'stopped', finished_at = ? WHERE id = ?`, epoch0.UnixNano(), string(done.ID))
+	f.exec(`UPDATE reservations SET released_at = ?, release_reason = 'completed' WHERE lease_id = ?`, epoch0.UnixNano(), string(doneLease.ID))
 	cutoff := epoch0.Add(time.Hour)
 
 	if n, err := f.db.PurgeCommands(ctx, cutoff, 10); err != nil || n != 1 {
@@ -295,5 +296,35 @@ func TestManifestDigests_ListsEveryFileOfEveryVersion(t *testing.T) {
 	}
 	if len(got) != 2 || !got[a] || !got[b] {
 		t.Fatalf("digests = %v", got)
+	}
+}
+
+func TestPurgeCommands_KeepsTheAssignOfALeaseWhoseReservationIsOpen(t *testing.T) {
+	f := newLeaseFixture(t)
+	ctx := t.Context()
+	run := f.queuedRun(1)
+	l := f.assign(run, f.alpha, v1.Capacity{})
+	f.tx(func(tx *Tx) error {
+		if _, err := tx.EnqueueCommand(ctx, WorkerCommand{
+			WorkerID: f.alpha.ID, Type: domain.CommandAssign, RunID: l.RunID, LeaseID: l.ID,
+			Epoch: l.Epoch, Payload: []byte(`{}`), CreatedAt: epoch0,
+		}); err != nil {
+			return err
+		}
+		return tx.AckAssign(ctx, l.ID, epoch0)
+	})
+	f.exec(`UPDATE leases SET state = 'accepted' WHERE id = ?`, string(l.ID))
+	f.exec(`UPDATE runs SET state = 'completed', runtime = 'stopped', publication = 'pending', finished_at = ? WHERE id = ?`, epoch0.UnixNano(), string(run.ID))
+	cutoff := epoch0.Add(time.Hour)
+
+	var counted int64
+	if err := f.db.Read(ctx, func(q Querier) (err error) { counted, err = CommandsPurgeable(ctx, q, cutoff); return err }); err != nil || counted != 0 {
+		t.Fatalf("purgeable = %d, %v; the reservation is open", counted, err)
+	}
+	if n, err := f.db.PurgeCommands(ctx, cutoff, 10); err != nil || n != 0 {
+		t.Fatalf("purged %d, %v; want none", n, err)
+	}
+	if err := f.db.Read(ctx, func(q Querier) error { _, err := AssignOf(ctx, q, l.ID); return err }); err != nil {
+		t.Fatalf("the assign of a lease with an open reservation: %v", err)
 	}
 }
