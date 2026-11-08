@@ -87,7 +87,7 @@ func TestScenario_RestoreOnAnotherHostKeepsIdsAndDigestsAndChangesTheAddress(t *
 	}
 	srcInfo, _ := os.Stat(filepath.Join(src.DataDir, "blobs"))
 	dstInfo, _ := os.Stat(filepath.Join(dst.DataDir, "blobs"))
-	if !srcInfo.ModTime().Truncate(time.Second).Equal(dstInfo.ModTime()) { // tar keeps whole seconds
+	if !srcInfo.ModTime().Round(time.Second).Equal(dstInfo.ModTime()) { // tar rounds to the nearest second
 		t.Errorf("blobs mtime %v, want %v", dstInfo.ModTime(), srcInfo.ModTime())
 	}
 	for _, rel := range []string{"worker", filepath.Join("relay", "tmp")} {
