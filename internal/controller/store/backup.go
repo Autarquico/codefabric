@@ -117,8 +117,10 @@ func ReadBackupInfo(ctx context.Context, path string) (BackupInfo, error) {
 //
 //   - workers.last_command_seq, the sequence of the orders of each Worker, becomes
 //     at least the Unix microseconds of at;
-//   - runs.lease_epoch of every queued Run without a lease, the only Runs that
-//     can be given a new lease, becomes at least the same value.
+//   - runs.lease_epoch of every queued Run without a lease becomes at least the
+//     same value;
+//   - the join tokens not yet used are deleted: one redeemed after the backup
+//     would be valid again.
 //
 // The value comes from the clock because it grows between restores, which a
 // fixed jump cannot: restoring the same backup twice, or an older one after a
@@ -126,7 +128,10 @@ func ReadBackupInfo(ctx context.Context, path string) (BackupInfo, error) {
 // the second happens more than one microsecond per order issued after the first.
 // Microseconds since 1970 are about 2^51 until the year 2200, far below the
 // 2^62 bound that the reconcile request and the epochs accept. A Run that holds
-// a live lease keeps its epoch, which is that lease's. The counters never go down.
+// a live lease keeps its epoch, which is that lease's; if that lease ends and the
+// Run is offered again to a Worker that saw a later epoch, the Worker sets the
+// order aside (the lease runs out and the next epoch is higher). The counters
+// never go down.
 func AdvancePastRestore(ctx context.Context, path string, at time.Time) (err error) {
 	floor := at.UnixMicro()
 	if floor <= 0 {
@@ -156,6 +161,9 @@ func AdvancePastRestore(ctx context.Context, path string, at time.Time) (err err
 		`UPDATE runs SET lease_epoch = MAX(COALESCE(lease_epoch, 0), ?) WHERE state = ? AND lease_id IS NULL`,
 		floor, string(domain.RunQueued)); err != nil {
 		return fmt.Errorf("store: advancing the lease epochs: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM join_tokens WHERE used_at IS NULL`); err != nil {
+		return fmt.Errorf("store: dropping the join tokens: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("store: advancing the counters: %w", err)

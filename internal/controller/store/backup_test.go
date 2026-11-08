@@ -191,3 +191,57 @@ func TestAdvancePastRestore_MovesSequencesAndEpochsToTheClockAndNeverBackAndLeav
 		t.Errorf("side files left next to the copy: %v", left)
 	}
 }
+
+func TestAdvancePastRestore_DropsTheJoinTokensNotYetUsed(t *testing.T) {
+	f := newLeaseFixture(t)
+	ctx := t.Context()
+	var path string
+	if err := f.db.Read(ctx, func(q Querier) error {
+		return q.QueryRow(ctx, `SELECT file FROM pragma_database_list WHERE name = 'main'`).Scan(&path)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_900_000_000, 0)
+	if err := f.db.WithTx(ctx, func(tx *Tx) error {
+		if err := tx.InsertJoinToken(ctx, "unused", domain.KindWorker, "owner", now, now.Add(time.Hour)); err != nil {
+			return err
+		}
+		if err := tx.InsertJoinToken(ctx, "used", domain.KindWorker, "owner", now, now.Add(time.Hour)); err != nil {
+			return err
+		}
+		_, _, err := tx.ConsumeJoinToken(ctx, "used", now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(t.TempDir(), "copy.db")
+	if err := VacuumInto(ctx, path, copyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := AdvancePastRestore(ctx, copyPath, now); err != nil {
+		t.Fatal(err)
+	}
+	db := reopen(t, copyPath, Options{})
+	defer func() { _ = db.Close() }()
+	var left []string
+	if err := db.Read(ctx, func(q Querier) error {
+		rows, err := q.Query(ctx, `SELECT hash FROM join_tokens`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var h string
+			if err := rows.Scan(&h); err != nil {
+				return err
+			}
+			left = append(left, h)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0] != "used" {
+		t.Errorf("join tokens after the restore = %v, want only the used one", left)
+	}
+}
