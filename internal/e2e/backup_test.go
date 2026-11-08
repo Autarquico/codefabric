@@ -371,6 +371,7 @@ func TestScenario_Backup_HoldsNoSecretValueAnywhere(t *testing.T) {
 func TestScenario_Restore_WithoutPassphraseTheBackupHasNoCAAndRestoreSaysToJoinAgain(t *testing.T) {
 	c := NewCluster(t, Opts{Workers: 1})
 	w := c.Workers[0]
+	oldWorker := w.ID
 	oldCA, err := os.ReadFile(filepath.Join(c.Ctl.Paths.PKIDir(), "ca.pem")) //nolint:gosec // the test's own cluster
 	if err != nil {
 		t.Fatal(err)
@@ -398,8 +399,10 @@ func TestScenario_Restore_WithoutPassphraseTheBackupHasNoCAAndRestoreSaysToJoinA
 	c.Controller.Kill9()
 
 	host, restored := c.Restore("ctl2", file)
-	if !strings.Contains(restored.Stderr, "join again") {
-		t.Errorf("restore said %q, want it to say that clients and Workers must join again", restored.Stderr)
+	for _, want := range []string{host.Addr, "token create", "connect --force", "worker join --force"} {
+		if !strings.Contains(restored.Stdout, want) {
+			t.Errorf("restore said %q, want the next steps to mention %q", restored.Stdout, want)
+		}
 	}
 	newCA, err := os.ReadFile(filepath.Join(host.Box.Paths.PKIDir(), "ca.pem")) //nolint:gosec // the test's own cluster
 	if err != nil {
@@ -427,6 +430,38 @@ func TestScenario_Restore_WithoutPassphraseTheBackupHasNoCAAndRestoreSaysToJoinA
 	}
 	if now, _ := os.ReadFile(controllerFile); !bytes.Equal(was, now) { //nolint:gosec // the test's own cluster
 		t.Errorf("the address of the Worker changed to %q", now)
+	}
+
+	// The owner that restore left on the new host administers the Controller and
+	// invites everyone back: a client and the Worker join again, and a Run goes through.
+	c.mustCF(host.Box, "status")
+	invite := func(kind string) string {
+		return strings.TrimSpace(c.mustCF(host.Box, "controller", "token", "create", "--"+kind).Stdout)
+	}
+	c.mustCF(c.Observer, "connect", "--force", invite("client"), "--name", "observer")
+	c.mustCF(c.Observer, "status")
+	c.mustCF(c.Ctl, "connect", "--force", invite("client"), "--name", "owner-again") // the machine where the Tasks are made
+	// The old record of the Worker is in the restored database under its name: the new identity takes another.
+	w.Name += "-again"
+	c.mustCF(w.Box, "worker", "join", "--force", invite("worker"), "--name", w.Name, "--disk-min-free", "1MiB")
+	api, err := client.Open(host.Box.Paths.CredentialsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.API, c.Addr, c.Controller = api, host.Addr, host.Controller
+	c.RestartWorker(w)
+	// The old record of the Worker stays as the backup had it until the Controller notices its silence;
+	// a Run is only offered to the new one once it has.
+	c.Eventually("the Worker of the old identity to be offline", func() (bool, string) {
+		for _, listed := range c.ListWorkers(c.Observer) {
+			if listed.ID == oldWorker {
+				return listed.State == domain.WorkerOffline, string(listed.State)
+			}
+		}
+		return false, "not listed"
+	})
+	if next := runToEnd(c, ""); next.WorkerID != w.ID || next.WorkerID == oldWorker {
+		t.Errorf("the Run after the re-join ran on %q, want the new Worker %s, not %s", next.WorkerID, w.ID, oldWorker)
 	}
 }
 
@@ -466,9 +501,8 @@ func TestScenario_Restore_RunsOfAnOlderBackupAreNotKnownByTheRestoredController(
 	c.Ledger.Release(token)
 
 	// The Controller is still sound: a new Run goes through the same Worker.
-	// (The Worker's cursor in the queue of orders is ahead of the restored
-	// Controller's, which lost the orders given after the backup, so it may never
-	// hear of the new one: that is a finding, not a hang of the test.)
+	// The Worker's cursor in the queue of orders is ahead of the one in the backup;
+	// the restored Controller numbers its orders above it, so the Worker hears of this one.
 	token = c.Ledger.Token()
 	created = c.Do(c.Ledger.Script(token))
 	started := false
@@ -488,6 +522,30 @@ func TestScenario_Restore_RunsOfAnOlderBackupAreNotKnownByTheRestoredController(
 	}
 	if got := runIDs(c.Ps(c.Observer)); slices.Contains(got, live) {
 		t.Errorf("cf ps lists Run %s, which the restored Controller never knew: %v", live, got)
+	}
+}
+
+// TestScenario_Restore_TheSameBackupTwiceInARow: the second restore, of the same
+// file and after the Worker followed orders of the first, still reaches the Worker.
+func TestScenario_Restore_TheSameBackupTwiceInARow(t *testing.T) {
+	c := NewCluster(t, Opts{Workers: 1})
+	w := c.Workers[0]
+	file, _ := c.Backup("twice", "--passphrase-file", c.writePassphraseFile())
+	c.Controller.Kill9()
+
+	first, _ := c.Restore("ctl2", file, "--passphrase-file", c.writePassphraseFile())
+	first.Start(c)
+	first.Adopt(c)
+	for range 2 {
+		runToEnd(c, "")
+	}
+	first.Controller.Kill9()
+
+	second, _ := c.Restore("ctl3", file, "--passphrase-file", c.writePassphraseFile())
+	second.Start(c)
+	second.Adopt(c)
+	if next := runToEnd(c, ""); next.WorkerID != w.ID {
+		t.Errorf("the Run after the second restore ran on %q, want %s", next.WorkerID, w.ID)
 	}
 }
 
