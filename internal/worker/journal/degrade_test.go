@@ -327,6 +327,29 @@ func TestDegrade_ATruncationIsSealedAtMostOnceAMinuteSoTheControllerIsNotFlooded
 	}
 }
 
+func TestDegrade_ADiscardInsideTheWindowIsSealedOnceItEndsWithoutAnotherDiscard(t *testing.T) {
+	f := newDegradeFixture(t)
+	f.out.unsent = 2000 // over max_size: the pass gives up output
+	f.once()
+	if len(f.sealed()) != 1 {
+		t.Fatalf("%d sealed after the first pass, want 1", len(f.sealed()))
+	}
+
+	f.clock.Advance(20 * time.Second)
+	f.out.unsent = 2000
+	f.once()
+	if len(f.sealed()) != 1 {
+		t.Fatalf("%d sealed 20 s later, want still 1", len(f.sealed()))
+	}
+
+	f.clock.Advance(time.Minute)
+	f.once() // nothing more to give up
+	got := f.sealed()
+	if len(got) != 2 || got[1].OutputBytes == 0 {
+		t.Fatalf("sealed = %+v, want a second one with the output given up inside the window", got)
+	}
+}
+
 func TestDegrade_HardMaxWithNothingGivenUpReportsNoTruncation(t *testing.T) {
 	f := newDegradeFixture(t)
 	f.reports(30, 150)

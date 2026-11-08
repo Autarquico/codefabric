@@ -232,17 +232,25 @@ func countLines(data []byte) int {
 	return n
 }
 
+// outputReader is what readTail needs of the Controller.
+type outputReader interface {
+	RunOutput(ctx context.Context, ref string, q client.OutputQuery) (v1.RunOutput, error)
+}
+
 // readTail gathers the last lines of the output: the tail in bytes, and pages
 // further back while there are fewer lines than asked for, the Controller still
-// has older bytes and less than maxTailBytes has been read. clipped says that
-// the lines asked for were not all reached, or were cut, because of that bound.
-func readTail(ctx context.Context, c *client.Client, run string, lines int) (page v1.RunOutput, tail []byte, clipped bool, err error) {
+// has older bytes and less than maxTailBytes has been read. The tail is one run
+// of bytes: it does not cross a gap the Worker left when it discarded output,
+// and gap says there is output before one. clipped says that the lines asked
+// for were not all reached, or were cut, because of the bound on the bytes.
+func readTail(ctx context.Context, c outputReader, run string, lines int) (page v1.RunOutput, tail []byte, clipped, gap bool, err error) {
 	first, err := c.RunOutput(ctx, run, client.OutputQuery{})
 	if err != nil {
-		return first, nil, false, err
+		return first, nil, false, false, err
 	}
 	data, from := first.Data, first.Offset
-	for countLines(data) <= lines && from > first.Start {
+	gap = first.Truncated && from > first.Start // the Controller began the tail after a gap
+	for !gap && countLines(data) <= lines && from > first.Start {
 		if len(data) >= maxTailBytes {
 			clipped = true
 			break
@@ -252,7 +260,11 @@ func readTail(ctx context.Context, c *client.Client, run string, lines int) (pag
 		offset := from
 		older, err := c.RunOutput(ctx, run, client.OutputQuery{Epoch: first.LeaseEpoch, Offset: &offset, Limit: to - from})
 		if err != nil {
-			return first, nil, false, err
+			return first, nil, false, false, err
+		}
+		if older.Offset >= to || older.Truncated { // the page began in a gap: nothing before it is contiguous
+			gap = true
+			break
 		}
 		data = append(append(make([]byte, 0, len(older.Data)+len(data)), older.Data...), data...)
 		from = older.Offset
@@ -263,7 +275,7 @@ func readTail(ctx context.Context, c *client.Client, run string, lines int) (pag
 		tail = tail[len(tail)-maxTailBytes:]
 		clipped = true
 	}
-	return first, tail, clipped, nil
+	return first, tail, clipped, gap, nil
 }
 
 // startAtRune is data without the continuation bytes of a character that the
@@ -281,7 +293,7 @@ func showLogs(cmd *cobra.Command, c *client.Client, run string, lines int, follo
 	asJSON, _ := cmd.Flags().GetBool(flagJSON)
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
-	page, data, clipped, err := readTail(ctx, c, run, lines)
+	page, data, clipped, gap, err := readTail(ctx, c, run, lines)
 	if err != nil {
 		return err
 	}
@@ -300,7 +312,10 @@ func showLogs(cmd *cobra.Command, c *client.Client, run string, lines int, follo
 	} else if _, err := out.Write(san.Filter(startAtRune(data, raw || !clipped))); err != nil {
 		return err
 	}
-	if page.Truncated && !asJSON {
+	switch {
+	case gap && !asJSON:
+		fmt.Fprintln(errOut, "note: there is older output before a gap: the Worker discarded output when its journal degraded")
+	case page.Truncated && !asJSON:
 		fmt.Fprintln(errOut, "note: older output is no longer held by the Controller")
 	}
 	if clipped && !asJSON {

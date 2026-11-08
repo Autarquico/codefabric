@@ -142,10 +142,8 @@ func (d *Degrader) Once(ctx context.Context) error {
 		total -= min(freed, total)
 	}
 	hard := total >= limits.HardMax
-	if hard || shed > 0 {
-		if err := d.seal(ctx); err != nil {
-			return err
-		}
+	if err := d.seal(ctx); err != nil {
+		return err
 	}
 	if hard {
 		d.warnHardMax(ctx, total)
