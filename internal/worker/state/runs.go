@@ -154,13 +154,15 @@ func collectRuns(ctx context.Context, q Querier, query string, args ...any) ([]R
 
 // InsertAssigned stores an assignment in phase assigned. An assignment of the
 // same lease already stored is left as it is, since the Controller delivers an
-// order again until it is acknowledged; inserted says which happened.
+// order again until it is acknowledged; so is one whose (Run, epoch) is already
+// stored under another lease, which cannot be kept and must not block the queue.
+// inserted says which happened.
 func InsertAssigned(ctx context.Context, tx *Tx, r Run) (inserted bool, err error) {
 	res, err := tx.exec(ctx,
 		`INSERT INTO local_runs (run_id, lease_epoch, lease_id, run_short, task_id, project_id, command_seq, accept_by,
 		     source_commit, cpu, memory_mb, spec, harness, mode, phase, created_at, updated_at, branch, repo)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (lease_id) DO NOTHING`,
+		 ON CONFLICT DO NOTHING`,
 		r.RunID, r.LeaseEpoch, r.LeaseID, r.RunShort, r.TaskID, r.ProjectID, r.CommandSeq, r.AcceptBy.UnixNano(),
 		r.SourceCommit, r.CPU, r.MemoryMB, string(r.Spec), r.Harness, r.Mode, string(PhaseAssigned),
 		r.CreatedAt.UnixNano(), r.CreatedAt.UnixNano(), r.Branch, r.Repo)
@@ -294,6 +296,35 @@ func SetCursor(ctx context.Context, tx *Tx, seq uint64) error {
 		return fmt.Errorf("state: storing the cursor: %w", err)
 	}
 	return nil
+}
+
+// AdoptQueueOwner records the identity the queue of orders belongs to. The
+// cursor and the input orders are Seqs of that queue; when the identity is not
+// the one that owned it, they point into a queue this Worker no longer reads
+// and are forgotten, so the new identity starts at the beginning of its own.
+// With no owner recorded (a Worker that predates this) the current identity is
+// adopted and nothing is forgotten. forgot says whether the queue was dropped.
+func AdoptQueueOwner(ctx context.Context, tx *Tx, identity string) (forgot bool, err error) {
+	var owner string
+	err = tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'queue_owner'`).Scan(&owner)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return false, fmt.Errorf("state: reading the owner of the queue: %w", err)
+	case owner == identity:
+		return false, nil
+	default:
+		for _, q := range []string{`DELETE FROM meta WHERE key = 'commands_cursor'`, `DELETE FROM input_orders`} {
+			if _, err := tx.exec(ctx, q); err != nil {
+				return false, fmt.Errorf("state: forgetting the queue of %s: %w", owner, err)
+			}
+		}
+		forgot = true
+	}
+	if _, err := tx.exec(ctx, `INSERT INTO meta (key, value) VALUES ('queue_owner', ?1) ON CONFLICT (key) DO UPDATE SET value = ?1`, identity); err != nil {
+		return false, fmt.Errorf("state: recording the owner of the queue: %w", err)
+	}
+	return forgot, nil
 }
 
 // StopOrder is a stop that was ordered. Source is "controller" or "worker".

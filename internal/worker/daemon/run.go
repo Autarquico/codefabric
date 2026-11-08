@@ -163,6 +163,9 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+	if err := adoptIdentity(ctx, db, o.Paths.WorkerCredentialsDir(), d.log); err != nil {
+		return err
+	}
 	logJournal, logSecrets, stopLogs := d.teeLogs(ctx, db, c)
 	defer stopLogs() // before the database closes: what is left is written to it
 	if d.generation, err = db.StartGeneration(ctx); err != nil {
@@ -669,3 +672,20 @@ func (d *daemon) writeAskpassScript(ctx context.Context, o Options) string {
 
 // newExecutor builds the executor of the daemon; a test replaces it to see the options.
 var newExecutor = executor.New
+
+// adoptIdentity has the state follow the identity of the credentials: a Worker
+// that joined again is a new identity with a queue of orders of its own, which
+// the cursor of the previous one would skip.
+func adoptIdentity(ctx context.Context, db *state.DB, credentialsDir string, log *slog.Logger) error {
+	info, err := client.Describe(credentialsDir)
+	if err != nil {
+		return err
+	}
+	return db.WithTx(ctx, func(tx *state.Tx) error {
+		forgot, err := state.AdoptQueueOwner(ctx, tx, info.IdentityID)
+		if forgot {
+			log.Info("this Worker has a new identity: its queue of orders starts again", "identity", info.IdentityID)
+		}
+		return err
+	})
+}

@@ -10,6 +10,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -17,7 +18,7 @@ import (
 // (join, run) are composed into it by cmd/cf, since they need the Worker packages.
 func newWorkerCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "worker", Short: "Run and administer Workers"}
-	cmd.AddCommand(newWorkerListCmd(), newWorkerShowCmd(),
+	cmd.AddCommand(newWorkerListCmd(), newWorkerShowCmd(), newWorkerSetControllerCmd(),
 		newWorkerActionCmd("drain", "Stop a Worker from taking new Runs", "Draining", func(c *client.Client, ctx context.Context, ref string) (v1.Worker, error) {
 			return c.DrainWorker(ctx, ref, "")
 		}),
@@ -59,6 +60,25 @@ func newWorkerListCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "include removed Workers")
 	return cmd
+}
+
+// newWorkerSetControllerCmd changes the address stored in the Worker's credentials.
+// The daemon reads it when it starts, so a running one has to be restarted.
+func newWorkerSetControllerCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-controller <host:port>",
+		Short: "Point this machine's Worker at another Controller address (restart the daemon to apply it)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			paths, err := config.ResolveFromEnv()
+			if err != nil {
+				return err
+			}
+			return rebindCredentials(cmd, client.RebindWorker, paths.WorkerCredentialsDir(), args[0],
+				"Restart the Worker daemon or its service for the change to take effect.\n",
+				client.WithRecoveryHint(client.WorkerRecoveryHint))
+		},
+	}
 }
 
 func newWorkerShowCmd() *cobra.Command {

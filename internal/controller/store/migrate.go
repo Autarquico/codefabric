@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/pressly/goose/v3"
 )
@@ -17,6 +19,24 @@ import (
 //
 //go:embed migrations/*.sql
 var embeddedMigrations embed.FS
+
+// LatestSchemaVersion is the newest migration this binary carries.
+func LatestSchemaVersion() (int64, error) {
+	entries, err := embeddedMigrations.ReadDir("migrations")
+	if err != nil {
+		return 0, fmt.Errorf("store: embedded migrations: %w", err)
+	}
+	var latest int64
+	for _, e := range entries {
+		number, _, _ := strings.Cut(e.Name(), "_")
+		version, err := strconv.ParseInt(number, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("store: migration %s has no version: %w", e.Name(), err)
+		}
+		latest = max(latest, version)
+	}
+	return latest, nil
+}
 
 func (db *DB) migrate(ctx context.Context, goMigrations []*goose.Migration) error {
 	sqlMigrations, err := fs.Sub(embeddedMigrations, "migrations")

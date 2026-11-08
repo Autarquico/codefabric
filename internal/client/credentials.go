@@ -1,6 +1,8 @@
 package client
 
 import (
+	"cmp"
+	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -274,4 +276,75 @@ func Describe(dir string) (Info, error) {
 		return Info{}, err
 	}
 	return Info{Controller: b.Controller, IdentityID: b.leaf.Subject.CommonName, NotAfter: b.leaf.NotAfter}, nil
+}
+
+// Rebind points the bundle in dir at another Controller address. The new
+// address is first asked for GET /v1/status over the pinned CA and the stored
+// client certificate; only an answer lets the `controller` file be replaced
+// (atomically, keeping its mode). Any failure leaves the bundle untouched.
+func Rebind(ctx context.Context, dir, controller string, opts ...Option) (Info, error) {
+	return rebind(dir, controller, opts, func(c *Client) error {
+		_, err := c.Status(ctx)
+		return err
+	})
+}
+
+// RebindWorker is Rebind for the bundle of a Worker, which may not call
+// /v1/status. It asks instead for the Worker's own orders without waiting
+// (GET /v1/worker/assignments, which only reads), so the address must answer
+// to the Worker identity as well as to the pinned CA.
+func RebindWorker(ctx context.Context, dir, controller string, opts ...Option) (Info, error) {
+	return rebind(dir, controller, opts, func(c *Client) error {
+		_, err := c.Assignments(ctx, 0, 0, 1)
+		return err
+	})
+}
+
+func rebind(dir, controller string, opts []Option, probe func(*Client) error) (Info, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if !validControllerAddress(controller) {
+		return Info{}, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("%q is not a host:port address", controller), nil)
+	}
+	if exists, err := CredentialsExist(dir); err != nil {
+		return Info{}, err
+	} else if !exists {
+		return Info{}, domain.NewError(domain.CodeUnauthenticated, "no credentials found; "+cmp.Or(o.recovery, renewHint), nil)
+	}
+	c, err := Open(dir, append(opts, WithController(controller))...)
+	if err != nil {
+		return Info{}, err
+	}
+	if err := probe(c); err != nil {
+		return Info{}, unchangedBecause(controller, cmp.Or(o.recovery, renewHint), err)
+	}
+	path := filepath.Join(dir, controllerFile)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return Info{}, fmt.Errorf("client: inspecting %s: %w", path, err)
+	}
+	if err := atomicfile.Write(path, []byte(controller+"\n"), info.Mode().Perm()); err != nil {
+		return Info{}, err
+	}
+	return Describe(dir)
+}
+
+// unchangedBecause says what to check, keeping the code of err when it has one.
+// A certificate from a CA other than the pinned one means this is not the
+// Controller these credentials know, and the way out is to join again.
+func unchangedBecause(controller, rejoin string, err error) error {
+	advice := "the credentials are unchanged. Check the address, and that it is the same Controller (or a restore of it) " +
+		"presenting a certificate from the CA pinned at connect time that covers that host"
+	var de *domain.Error
+	if errors.As(err, &de) && de.Code == domain.CodeUnauthenticated && strings.Contains(de.Message, "is not trusted by the CA") {
+		advice = "the credentials are unchanged. The certificate comes from a CA these credentials do not know, so this is not " +
+			"the Controller they were issued by (a Controller restored from a backup without its CA is a new one); " +
+			"join it again: " + rejoin
+	}
+	if de != nil {
+		return domain.NewError(de.Code, fmt.Sprintf("%s: %s; %s", controller, de.Message, advice), de.Details)
+	}
+	return fmt.Errorf("%s did not answer (%w); %s", controller, err, advice)
 }
