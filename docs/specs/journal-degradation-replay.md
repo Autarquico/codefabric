@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: M
 issue: 148
-prs: []
+prs: [152]
 related_issues: [148]
 sub_issues: []
 depends_on: [logs-output-storage]
