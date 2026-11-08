@@ -325,3 +325,23 @@ func TestRestoreCommand_ReadsThePassphraseFromAFile(t *testing.T) {
 		t.Errorf("a backup with its CA warned: %q", stderr.String())
 	}
 }
+
+func TestRestore_GoesIntoExistingEmptyDirectories(t *testing.T) {
+	src, backup := backupFile(t, "")
+	dst := newPaths(t)
+	for _, d := range []string{dst.DataDir, dst.ConfigDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := daemon.Restore(t.Context(), daemon.RestoreOptions{Paths: dst, Backup: backup}); err != nil {
+		t.Fatal(err)
+	}
+	if controllerID(t, dst) != controllerID(t, src) {
+		t.Error("the restored Controller is not the one of the backup")
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(dst.DataDir), ".cf-restore-*")); len(left) > 0 {
+		t.Errorf("staging left behind: %v", left)
+	}
+}

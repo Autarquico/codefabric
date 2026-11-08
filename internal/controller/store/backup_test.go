@@ -113,3 +113,42 @@ func TestReadBackupInfo_NamesTheControllerAndItsSchema(t *testing.T) {
 		t.Fatalf("info = %+v, want controller %s at a schema above 0", info, db.ControllerID())
 	}
 }
+
+func TestAdvanceCommandSeqs_MovesEveryWorkerQueueForwardByTheJumpAndLeavesNoSideFiles(t *testing.T) {
+	f := newLeaseFixture(t)
+	ctx := t.Context()
+	var path string
+	if err := f.db.Read(ctx, func(q Querier) error {
+		return q.QueryRow(ctx, `SELECT file FROM pragma_database_list WHERE name = 'main'`).Scan(&path)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(t.TempDir(), "copy.db")
+	if err := VacuumInto(ctx, path, copyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := AdvanceCommandSeqs(ctx, copyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := AdvanceCommandSeqs(ctx, copyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if left, _ := filepath.Glob(copyPath + "-*"); len(left) > 0 {
+		t.Errorf("side files left next to the copy: %v", left)
+	}
+	db := reopen(t, copyPath, Options{})
+	var alpha, beta uint64
+	if err := db.Read(ctx, func(q Querier) error {
+		if err := q.QueryRow(ctx, `SELECT last_command_seq FROM workers WHERE id = ?`, string(f.alpha.ID)).Scan(&alpha); err != nil {
+			return err
+		}
+		return q.QueryRow(ctx, `SELECT last_command_seq FROM workers WHERE id = ?`, string(f.beta.ID)).Scan(&beta)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := 2 * CommandSeqJump; alpha != want || beta != want {
+		t.Errorf("last_command_seq = %d and %d, want %d", alpha, beta, want)
+	}
+}
