@@ -9,6 +9,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 // Scenario: Consistencia. Given writes in progress, when a backup is made,
@@ -51,7 +55,7 @@ func TestScenario_BackupIsConsistentWithConcurrentWriters(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("copy mode = %v, %v; want 0600", info, err)
 	}
-	if err := integrityCheckFile(t.Context(), dst); err != nil {
+	if err := CheckIntegrity(t.Context(), dst); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -94,7 +98,7 @@ func TestIntegrityCheckFile_RejectsACorruptDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := integrityCheckFile(t.Context(), dst); err == nil {
+	if err := CheckIntegrity(t.Context(), dst); err == nil {
 		t.Fatal("a corrupted copy passed integrity_check")
 	}
 }
@@ -114,7 +118,7 @@ func TestReadBackupInfo_NamesTheControllerAndItsSchema(t *testing.T) {
 	}
 }
 
-func TestAdvanceCommandSeqs_MovesEveryWorkerQueueForwardByTheJumpAndLeavesNoSideFiles(t *testing.T) {
+func TestAdvancePastRestore_MovesSequencesAndEpochsToTheClockAndNeverBackAndLeavesNoSideFiles(t *testing.T) {
 	f := newLeaseFixture(t)
 	ctx := t.Context()
 	var path string
@@ -123,32 +127,67 @@ func TestAdvanceCommandSeqs_MovesEveryWorkerQueueForwardByTheJumpAndLeavesNoSide
 	}); err != nil {
 		t.Fatal(err)
 	}
+	fresh, leased := f.queuedRun(1), f.queuedRun(2)
+	f.assign(leased, f.alpha, v1.Capacity{})
 	copyPath := filepath.Join(t.TempDir(), "copy.db")
 	if err := VacuumInto(ctx, path, copyPath); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := AdvanceCommandSeqs(ctx, copyPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := AdvanceCommandSeqs(ctx, copyPath); err != nil {
-		t.Fatal(err)
+	first := time.Unix(1_900_000_000, 0)
+	second := first.Add(time.Minute)
+	read := func() (alpha, beta, freshEpoch, leasedEpoch uint64) {
+		db := reopen(t, copyPath, Options{})
+		defer func() {
+			if err := db.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		if err := db.Read(ctx, func(q Querier) error {
+			for id, dst := range map[domain.ID]*uint64{f.alpha.ID: &alpha, f.beta.ID: &beta} {
+				if err := q.QueryRow(ctx, `SELECT last_command_seq FROM workers WHERE id = ?`, string(id)).Scan(dst); err != nil {
+					return err
+				}
+			}
+			if err := q.QueryRow(ctx, `SELECT lease_epoch FROM runs WHERE id = ?`, string(fresh.ID)).Scan(&freshEpoch); err != nil {
+				return err
+			}
+			return q.QueryRow(ctx, `SELECT lease_epoch FROM runs WHERE id = ?`, string(leased.ID)).Scan(&leasedEpoch)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return
 	}
 
-	if left, _ := filepath.Glob(copyPath + "-*"); len(left) > 0 {
-		t.Errorf("side files left next to the copy: %v", left)
-	}
-	db := reopen(t, copyPath, Options{})
-	var alpha, beta uint64
-	if err := db.Read(ctx, func(q Querier) error {
-		if err := q.QueryRow(ctx, `SELECT last_command_seq FROM workers WHERE id = ?`, string(f.alpha.ID)).Scan(&alpha); err != nil {
-			return err
-		}
-		return q.QueryRow(ctx, `SELECT last_command_seq FROM workers WHERE id = ?`, string(f.beta.ID)).Scan(&beta)
-	}); err != nil {
+	if err := AdvancePastRestore(ctx, copyPath, first); err != nil {
 		t.Fatal(err)
 	}
-	if want := 2 * CommandSeqJump; alpha != want || beta != want {
-		t.Errorf("last_command_seq = %d and %d, want %d", alpha, beta, want)
+	alpha1, beta1, fresh1, leased1 := read()
+	for name, got := range map[string]uint64{"alpha": alpha1, "beta": beta1, "queued run": fresh1} {
+		if got != uint64(first.UnixMicro()) {
+			t.Errorf("%s = %d, want the microseconds of the restore, %d", name, got, first.UnixMicro())
+		}
+	}
+	if leased1 != 1 {
+		t.Errorf("a Run with a live lease has epoch %d, want 1: it is the lease's", leased1)
+	}
+
+	// The same backup restored again, later: strictly above what the first restore handed out.
+	if err := AdvancePastRestore(ctx, copyPath, second); err != nil {
+		t.Fatal(err)
+	}
+	alpha2, _, fresh2, _ := read()
+	if alpha2 <= alpha1 || fresh2 <= fresh1 {
+		t.Errorf("second restore: seq %d -> %d, epoch %d -> %d; both must grow", alpha1, alpha2, fresh1, fresh2)
+	}
+	// A clock that went back does not take anything down.
+	if err := AdvancePastRestore(ctx, copyPath, first); err != nil {
+		t.Fatal(err)
+	}
+	if alpha3, _, fresh3, _ := read(); alpha3 != alpha2 || fresh3 != fresh2 {
+		t.Errorf("a restore with an earlier clock moved %d, %d to %d, %d", alpha2, fresh2, alpha3, fresh3)
+	}
+	if left, _ := filepath.Glob(copyPath + "-*"); len(left) > 0 {
+		t.Errorf("side files left next to the copy: %v", left)
 	}
 }

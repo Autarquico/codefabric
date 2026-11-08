@@ -7,6 +7,9 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 // VacuumInto writes a consistent copy of the database at src to dst, which
@@ -43,15 +46,15 @@ func VacuumInto(ctx context.Context, src, dst string) (err error) {
 	if err = os.Chmod(dst, 0o600); err != nil {
 		return fmt.Errorf("store: restricting %s: %w", dst, err)
 	}
-	if err = integrityCheckFile(ctx, dst); err != nil {
+	if err = CheckIntegrity(ctx, dst); err != nil {
 		return fmt.Errorf("store: the copy failed verification: %w", err)
 	}
 	return syncFile(dst)
 }
 
-// integrityCheckFile succeeds only when PRAGMA integrity_check, over the
+// CheckIntegrity succeeds only when PRAGMA integrity_check, over the
 // quiescent file at path, reports exactly "ok".
-func integrityCheckFile(ctx context.Context, path string) error {
+func CheckIntegrity(ctx context.Context, path string) error {
 	pool, err := sql.Open("sqlite", immutableDSN(path))
 	if err != nil {
 		return err
@@ -107,18 +110,28 @@ func ReadBackupInfo(ctx context.Context, path string) (BackupInfo, error) {
 	return info, nil
 }
 
-// CommandSeqJump is how far AdvanceCommandSeqs moves the queue of every Worker.
-// The Worker cursor and the Seq are both bounded by 2^62 (the reconcile
-// request is refused above it), so 2^40 leaves room for any cursor a Worker
-// can hold after a backup and for many restores in a row.
-const CommandSeqJump = uint64(1) << 40
-
-// AdvanceCommandSeqs moves the command sequence of every Worker in the
-// quiescent database at path forward by CommandSeqJump, in one statement. A
-// restored Controller then numbers every new order above the cursor of any
-// Worker that was ahead of the backup, while the orders the backup holds keep
-// their Seq: the cursor is monotonic, so those it covers were delivered.
-func AdvanceCommandSeqs(ctx context.Context, path string) (err error) {
+// AdvancePastRestore moves every counter that a Worker may already have seen
+// beyond anything the backup holds, in the quiescent database at path, so that
+// nothing issued after a restore collides with what a Worker saw after the
+// backup was taken:
+//
+//   - workers.last_command_seq, the sequence of the orders of each Worker, becomes
+//     at least the Unix microseconds of at;
+//   - runs.lease_epoch of every queued Run without a lease, the only Runs that
+//     can be given a new lease, becomes at least the same value.
+//
+// The value comes from the clock because it grows between restores, which a
+// fixed jump cannot: restoring the same backup twice, or an older one after a
+// newer, still starts above everything the first restore handed out, as long as
+// the second happens more than one microsecond per order issued after the first.
+// Microseconds since 1970 are about 2^51 until the year 2200, far below the
+// 2^62 bound that the reconcile request and the epochs accept. A Run that holds
+// a live lease keeps its epoch, which is that lease's. The counters never go down.
+func AdvancePastRestore(ctx context.Context, path string, at time.Time) (err error) {
+	floor := at.UnixMicro()
+	if floor <= 0 {
+		return fmt.Errorf("store: the restore time %v is not after 1970", at)
+	}
 	pool, err := sql.Open("sqlite", buildDSN(path, url.Values{
 		"_pragma": {fmt.Sprintf("busy_timeout(%d)", busyTimeoutMillis), "journal_mode(DELETE)"},
 	}))
@@ -131,8 +144,21 @@ func AdvanceCommandSeqs(ctx context.Context, path string) (err error) {
 		}
 	}()
 	pool.SetMaxOpenConns(1)
-	if _, err = pool.ExecContext(ctx, `UPDATE workers SET last_command_seq = last_command_seq + ?`, CommandSeqJump); err != nil {
+	tx, err := pool.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: advancing the counters: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, `UPDATE workers SET last_command_seq = MAX(last_command_seq, ?)`, floor); err != nil {
 		return fmt.Errorf("store: advancing the command sequences: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE runs SET lease_epoch = MAX(COALESCE(lease_epoch, 0), ?) WHERE state = ? AND lease_id IS NULL`,
+		floor, string(domain.RunQueued)); err != nil {
+		return fmt.Errorf("store: advancing the lease epochs: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("store: advancing the counters: %w", err)
 	}
 	return nil
 }
