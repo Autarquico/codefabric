@@ -507,6 +507,12 @@ func TestScenario_Restore_WithoutCAAWorkerWithARunInFlightCanBeRetiredAndJoinAga
 	if !strings.Contains(listed, w.Name) || strings.Contains(listed, string(oldWorker)) {
 		t.Errorf("worker list = %q, want %s under a new identity, not %s", listed, w.Name, oldWorker)
 	}
+	invitation := strings.TrimSpace(c.mustCF(host.Box, "controller", "token", "create", "--client").Stdout)
+	c.mustCF(c.Ctl, "connect", "--force", invitation, "--name", "owner-again")
+	// This Worker had orders under its old identity: the new one hears of its own.
+	if next := runToEnd(c, ""); next.WorkerID == oldWorker {
+		t.Errorf("the Run after the re-join ran on the old Worker %s", oldWorker)
+	}
 }
 
 func TestScenario_Restore_RunsOfAnOlderBackupAreNotKnownByTheRestoredController(t *testing.T) {

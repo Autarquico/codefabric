@@ -5,11 +5,15 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
+	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
 // JoinOptions parameterise Join.
@@ -38,5 +42,26 @@ func Join(ctx context.Context, o JoinOptions) (client.Connected, error) {
 				"(the old Worker stays registered at its Controller until a client removes it)", dir)
 		}
 	}
-	return client.Connect(ctx, o.Invitation, o.Name, dir, client.AsWorker(o.Settings))
+	joined, err := client.Connect(ctx, o.Invitation, o.Name, dir, client.AsWorker(o.Settings))
+	if err != nil {
+		return client.Connected{}, err
+	}
+	if err := forgetOrderCursor(ctx, o.Paths.WorkerStateFile()); err != nil {
+		return client.Connected{}, err
+	}
+	return joined, nil
+}
+
+// forgetOrderCursor makes a new identity start at the beginning of its own
+// queue of orders, which the cursor of the previous one would skip.
+func forgetOrderCursor(ctx context.Context, path string) error {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	db, err := state.Open(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	return db.WithTx(ctx, func(tx *state.Tx) error { return state.ResetCursor(ctx, tx) })
 }

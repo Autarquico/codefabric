@@ -298,6 +298,15 @@ func SetCursor(ctx context.Context, tx *Tx, seq uint64) error {
 	return nil
 }
 
+// ResetCursor forgets the cursor: the queue it pointed into belonged to an
+// identity this Worker no longer has.
+func ResetCursor(ctx context.Context, tx *Tx) error {
+	if _, err := tx.exec(ctx, `DELETE FROM meta WHERE key = 'commands_cursor'`); err != nil {
+		return fmt.Errorf("state: resetting the cursor: %w", err)
+	}
+	return nil
+}
+
 // StopOrder is a stop that was ordered. Source is "controller" or "worker".
 // Payload is the order of the Controller as it came (empty for the Worker's
 // own); WasRunning that the process of the Run was alive when it arrived;
