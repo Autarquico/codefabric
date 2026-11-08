@@ -39,6 +39,8 @@ func TestFilters_Health(t *testing.T) {
 		{"harness and workflow of another harness", domain.WorkerDegraded, []v1.ComponentHealth{comp("harness:codex", fail, "x"), comp("workflow:codex", fail, "y")}, "claude", true, ""},
 		{"another harness and a global failure", domain.WorkerDegraded, []v1.ComponentHealth{comp("auth:codex", fail, "x"), comp("disk", fail, "full")}, "claude", false, "disk: full"},
 		{"degraded for the daemon's own reason plus another harness", domain.WorkerDegraded, []v1.ComponentHealth{comp("auth:codex", fail, "x"), comp("daemon", fail, "executor unhealthy")}, "claude", false, "daemon: executor unhealthy"},
+		{"journal over max_size keeps every harness off", domain.WorkerDegraded, []v1.ComponentHealth{comp("journal", fail, "holds 1100 bytes")}, "claude", false, "journal: holds 1100 bytes"},
+		{"journal over max_size beside the daemon component", domain.WorkerDegraded, []v1.ComponentHealth{comp("daemon", fail, "journal over max_size"), comp("journal", fail, "holds 1100 bytes")}, "claude", false, "daemon: journal over max_size"},
 		{"a Run without a harness ignores harness failures", domain.WorkerDegraded, []v1.ComponentHealth{comp("auth:codex", fail, "x")}, "", true, ""},
 		{"online with a failing component of its harness", domain.WorkerOnline, []v1.ComponentHealth{comp("auth:claude", fail, "no login")}, "claude", false, "auth:claude: no login"},
 		{"draining stays out", domain.WorkerDraining, []v1.ComponentHealth{comp("auth:codex", fail, "x")}, "claude", false, "draining"},

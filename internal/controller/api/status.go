@@ -56,6 +56,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request, _ caller) error 
 	} else {
 		st.Database.OK = true
 	}
+	if s.work.Workers != nil {
+		workers, err := s.work.Workers.WithJournalBacklog(r.Context())
+		if err != nil {
+			return err
+		}
+		st.Workers = workers
+	}
 	writeJSON(w, http.StatusOK, st)
 	return nil
 }

@@ -29,6 +29,14 @@ const (
 	maxMemoryMB       = int64(1) << 40
 	maxDiskMB         = int64(1) << 40
 	maxConcurrentRuns = 1024
+
+	// maxJournalValue bounds the counts a Worker claims about its journal, so that
+	// they fit the store and their sums cannot overflow.
+	maxJournalValue = uint64(1) << 62
+	// truncationsPerBeat is how many truncations of a Worker become events in one
+	// heartbeat: a daemon cannot flood the event store, and the ones left are
+	// taken in the beats that follow, since only those taken are acknowledged.
+	truncationsPerBeat = 4
 )
 
 // Heartbeat records a sign of life from the Worker that the caller's identity
@@ -80,6 +88,10 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 			if err := syncSecrets(ctx, tx, act, w, current, req, verdict); err != nil {
 				return v1.HeartbeatResponse{}, err
 			}
+			journalAck, err := syncJournal(ctx, tx, act, &w, req.Journal)
+			if err != nil {
+				return v1.HeartbeatResponse{}, err
+			}
 			report := store.WorkerReport{
 				Epoch: req.Epoch, DaemonVersion: req.DaemonVersion, Hostname: req.Hostname,
 				OS: req.OS, Arch: req.Arch, Capabilities: req.Capabilities,
@@ -97,9 +109,93 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 			return v1.HeartbeatResponse{
 				WorkflowApplies: orders,
 				State:           w.State, MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, Allocatable: resources.Allocatable,
+				JournalAck:        journalAck,
 				ReconcileRequired: w.ReconciledEpoch != req.Epoch || w.ReconciledAt == nil || w.ReconciledAt.Before(s.started),
 			}, nil
 		})
+}
+
+// syncJournal keeps the backlog the Worker reports and writes a JournalTruncated
+// for each truncation it has not told before (§1.3), oldest first. It answers
+// the highest truncation id the Controller has, which the response acknowledges.
+// A daemon without a journal report (an older one) changes nothing.
+func syncJournal(ctx context.Context, tx *store.Tx, act mutation.Act, w *store.Worker, j *v1.JournalReport) (uint64, error) {
+	if j == nil {
+		return w.LastTruncationID, nil
+	}
+	last, taken := w.LastTruncationID, 0
+	for _, t := range j.Truncations {
+		if t.ID <= last {
+			continue // told before
+		}
+		if taken == truncationsPerBeat {
+			break
+		}
+		data := map[string]any{
+			"truncation_id": t.ID, "at": t.At.UTC().Format(time.RFC3339Nano),
+			"logs_from_seq": t.LogsFromSeq, "logs_to_seq": t.LogsToSeq, "log_lines": t.LogLines, "output_bytes": t.OutputBytes,
+		}
+		if err := emit(ctx, tx, act, domain.EventJournalTruncated, *w, "the Worker discarded logs and output it could not send", data); err != nil {
+			return 0, err
+		}
+		last, taken = t.ID, taken+1
+	}
+	var at *time.Time
+	if taken > 0 {
+		at = &act.Now
+	}
+	if err := tx.RecordJournal(ctx, w.ID, j.BacklogBytes, last, at); err != nil {
+		return 0, err
+	}
+	w.JournalBacklogBytes, w.LastTruncationID = j.BacklogBytes, last
+	return last, nil
+}
+
+// WithJournalBacklog lists the Workers whose journal holds bytes the Controller
+// has not confirmed, for `cf status` (§1.3).
+func (s *Service) WithJournalBacklog(ctx context.Context) ([]v1.StatusWorker, error) {
+	var out []v1.StatusWorker
+	err := s.db.Read(ctx, func(q store.Querier) error {
+		rows, err := store.Workers(ctx, q, false)
+		for _, w := range rows {
+			if w.JournalBacklogBytes > 0 {
+				out = append(out, v1.StatusWorker{
+					ID: string(w.ID), Name: w.Name, JournalBacklogBytes: w.JournalBacklogBytes, JournalTruncatedAt: w.JournalTruncatedAt,
+				})
+			}
+		}
+		return err
+	})
+	return out, err
+}
+
+func validateJournal(j *v1.JournalReport) error {
+	if j == nil {
+		return nil
+	}
+	if j.BacklogBytes > maxJournalValue {
+		return input.Invalid("journal.backlog_bytes is out of range")
+	}
+	if len(j.Truncations) > v1.MaxJournalTruncations {
+		return input.Invalid("journal.truncations has at most %d entries", v1.MaxJournalTruncations)
+	}
+	var previous uint64
+	for _, t := range j.Truncations {
+		switch {
+		case t.ID == 0 || t.ID <= previous:
+			return input.Invalid("journal.truncations ids must be positive and grow")
+		case t.LogsFromSeq > t.LogsToSeq:
+			return input.Invalid("journal.truncations logs_from_seq is after logs_to_seq")
+		case t.LogLines == 0 && t.OutputBytes == 0:
+			return input.Invalid("journal.truncations must have discarded some logs or output")
+		case t.ID > maxJournalValue || t.LogsToSeq > maxJournalValue || t.LogLines > maxJournalValue || t.OutputBytes > maxJournalValue:
+			return input.Invalid("journal.truncations values are out of range")
+		case t.At.IsZero():
+			return input.Invalid("journal.truncations needs an at")
+		}
+		previous = t.ID
+	}
+	return nil
 }
 
 // workflowOrders are the live orders to apply Workflow configuration to the
@@ -292,7 +388,7 @@ func validateHeartbeat(req v1.HeartbeatRequest) error {
 			checks = append(checks, input.Invalid("capabilities cannot be empty"))
 		}
 	}
-	checks = append(checks, validateSecrets(req))
+	checks = append(checks, validateSecrets(req), validateJournal(req.Journal))
 	return input.First(checks...)
 }
 

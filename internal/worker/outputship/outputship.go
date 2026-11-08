@@ -395,7 +395,15 @@ loop:
 	if it.prefixLen > cur.PrefixLen && uint64(it.prefixLen) <= cur.Sent { //nolint:gosec // a small length
 		cur.PrefixLen, cur.PrefixSum = it.prefixLen, it.prefixSum
 	}
-	return s.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.SaveOutputCursor(ctx, tx, cur) })
+	return s.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		// Output may have been shed since the pass planned: the cursor never goes back.
+		if now, err := state.OutputCursorOf(ctx, tx, cur.Key); err != nil {
+			return err
+		} else if now.Sent > cur.Sent {
+			cur.Sent = now.Sent
+		}
+		return state.SaveOutputCursor(ctx, tx, cur)
+	})
 }
 
 // fingerprint is the sha256 of the first n bytes of the file, read from the

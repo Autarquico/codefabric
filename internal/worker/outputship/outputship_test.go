@@ -36,6 +36,9 @@ type controller struct {
 	// capAt: by run, the entry that would pass this offset gets CF_INVALID_TRANSITION (the Controller closed the output).
 	capAt map[string]uint64
 	fail  error
+	// duringUpload, if set, runs while a request is being answered, as the world
+	// goes on while the Worker waits for the Controller.
+	duringUpload func()
 }
 
 type held struct {
@@ -49,6 +52,9 @@ func (c *controller) UploadOutput(_ context.Context, b v1.OutputBatch) (v1.Outpu
 		return v1.OutputBatchResponse{}, c.fail
 	}
 	c.batches = append(c.batches, b.Entries)
+	if c.duringUpload != nil {
+		c.duringUpload()
+	}
 	var out v1.OutputBatchResponse
 	for _, e := range b.Entries {
 		ack := v1.OutputAck{RunID: e.RunID, LeaseEpoch: e.LeaseEpoch}

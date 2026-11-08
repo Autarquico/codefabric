@@ -111,6 +111,7 @@ func (s *Service) view(w store.Worker, secrets []v1.SecretMeta) v1.Worker {
 		Resources: w.Resources, Health: w.Health,
 		LastHeartbeatAt: w.LastHeartbeatAt, CreatedAt: w.CreatedAt, RemovedAt: w.RemovedAt,
 		SSHTarget: w.Report.SSHTarget, AttachBinaries: w.Report.AttachBinaries, Secrets: secrets,
+		JournalBacklogBytes: w.JournalBacklogBytes, JournalTruncatedAt: w.JournalTruncatedAt,
 	}
 }
 
