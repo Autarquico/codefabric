@@ -74,13 +74,6 @@ func (c *Cluster) Backup(name string, flags ...string) (file string, res Result)
 func (c *Cluster) Restore(box, backup string, flags ...string) (*restoredHost, Result) {
 	c.t.Helper()
 	h := &restoredHost{Box: c.H.Box(box), Addr: freeAddr(c.t)}
-	// A box is made with its directories; a new machine has none. See
-	// TestScenario_Restore_IntoTheEmptyDirectoriesOfANewMachine for why they go.
-	for _, dir := range []string{h.Box.Paths.DataDir, h.Box.Paths.ConfigDir} {
-		if err := os.Remove(dir); err != nil {
-			c.t.Fatal(err)
-		}
-	}
 	args := append([]string{"restore", backup, "--advertise", h.Addr, "--listen", h.Addr}, flags...)
 	res := c.CF(h.Box, args...)
 	if res.Code != 0 {
@@ -114,14 +107,7 @@ func (h *restoredHost) Adopt(c *Cluster) {
 	}
 	c.API, c.Addr, c.Controller = api, h.Addr, h.Controller
 	for _, w := range c.Workers {
-		if res := c.CF(w.Box, "worker", "set-controller", h.Addr); res.Code != 0 {
-			c.t.Errorf("cf worker set-controller on the restored Controller: %s", res)
-			// Carry on with the address written by hand, to test what follows.
-			file := filepath.Join(w.Box.Paths.WorkerCredentialsDir(), "controller")
-			if err := os.WriteFile(file, []byte(h.Addr+"\n"), 0o600); err != nil {
-				c.t.Fatal(err)
-			}
-		}
+		c.mustCF(w.Box, "worker", "set-controller", h.Addr)
 		c.RestartWorker(w) // the daemon reads the address when it starts
 	}
 }
@@ -432,8 +418,12 @@ func TestScenario_Restore_WithoutPassphraseTheBackupHasNoCAAndRestoreSaysToJoinA
 	})
 	controllerFile := filepath.Join(w.Box.Paths.WorkerCredentialsDir(), "controller")
 	was, _ := os.ReadFile(controllerFile) //nolint:gosec // the test's own cluster
-	if res := c.CF(w.Box, "worker", "set-controller", host.Addr); res.Code == 0 {
+	res = c.CF(w.Box, "worker", "set-controller", host.Addr)
+	if res.Code == 0 {
 		t.Errorf("set-controller accepted a Controller with another CA: %s", res)
+	}
+	if strings.Contains(res.String(), "CF_POLICY_DENIED") {
+		t.Errorf("set-controller was refused by policy, not because the CA is not the pinned one: %s", res)
 	}
 	if now, _ := os.ReadFile(controllerFile); !bytes.Equal(was, now) { //nolint:gosec // the test's own cluster
 		t.Errorf("the address of the Worker changed to %q", now)
