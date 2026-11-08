@@ -40,8 +40,6 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **Given** journal en `max_size`
 - **When** sigue llegando output
 - **Then** se descarta primero raw output y después logs
-- **And** lo que el Controller ya aceptó del output sigue legible: el descarte deja un hueco marcado (`cf logs` lo señala) y un Run que termina sin más escrituras cierra su output
-- **And** cada pasada que descarta algo lo reporta como `JournalTruncated` (aviso en el log del Worker), sin esperar a `hard_max`
 
 ### Scenario: Etapa 2
 - **Given** events + usage siguen creciendo
@@ -52,8 +50,6 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **Given** `hard_max`
 - **When** se alcanza
 - **Then** `JournalTruncated` con rango y los eventos de estado de Run se conservan
-- **And** el evento (nivel `warn`) dice cuántas líneas, qué rango de seq y cuántos bytes se descartaron, y los Runs afectados; `cf worker show` y `cf status` lo muestran aunque el backlog ya esté a cero
-- **And** ningún reporte se descarta (todos son estado de Run): en `hard_max` el Worker lo registra como error y queda `degraded` sin aceptar Runs, que es lo que acota el crecimiento
 
 ### Scenario: Replay (e2e #4)
 - **Given** una partición de 10 min
