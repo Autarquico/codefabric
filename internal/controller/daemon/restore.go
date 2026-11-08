@@ -3,23 +3,24 @@ package daemon
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
@@ -44,7 +45,8 @@ type RestoreOptions struct {
 	// Advertise is the host:port the restored Controller is reached at; its host
 	// goes into the new server certificate. Empty keeps the one of the backup.
 	Advertise string
-	// Listen is the address the restored Controller binds. Empty keeps the one of the backup.
+	// Listen is the host:port the restored Controller binds. Empty keeps the one of the
+	// backup, except that its port follows Advertise when that names another port.
 	Listen string
 	// Passphrase opens the CA of the backup. Required when the backup holds one.
 	Passphrase string
@@ -57,6 +59,11 @@ type RestoreResult struct {
 	ControllerID  string `json:"controller_id"`
 	SchemaVersion int64  `json:"schema_version"`
 	Advertise     string `json:"advertise"`
+	// Listen is where the daemon will bind.
+	Listen string `json:"listen"`
+	// OwnerID is the owner created for the operator of this host; its credentials
+	// are in the config directory, as `cf controller init` leaves them.
+	OwnerID string `json:"owner_id"`
 	// CARestored is false when the backup had no CA: a new one was made, and every
 	// client and Worker must join again.
 	CARestored bool `json:"ca_restored"`
@@ -67,11 +74,16 @@ type RestoreResult struct {
 // keeps the IDs and digests of the backup (the database and the blobs are the
 // same bytes); only the address and the server certificate are new. The
 // certificate is issued by the restored CA, so the Workers that pinned that CA
-// only need the new address. It does not start the daemon.
+// only need the new address. A new owner is created, with its credentials in
+// the config directory, so that the operator can administer the Controller of
+// this host with or without the CA of the backup: the credentials are never in
+// a backup. It does not start the daemon.
 //
 // Nothing is written to the data or config directory until everything has been
 // extracted, decrypted and verified in a staging directory next to each; the
-// last step is two renames. A restore that fails leaves them as it found them.
+// last step is two renames. A restore that fails leaves them as it found them; a
+// crash between the two renames leaves the data directory filled, and it must be
+// emptied before trying again.
 func Restore(ctx context.Context, o RestoreOptions) (_ RestoreResult, err error) {
 	if o.Clock == nil {
 		o.Clock = clock.Real{}
@@ -84,14 +96,14 @@ func Restore(ctx context.Context, o RestoreOptions) (_ RestoreResult, err error)
 			return RestoreResult{}, err
 		}
 	}
-	p := o.Paths
-	if within(p.ConfigDir, p.DataDir) || within(p.DataDir, p.ConfigDir) {
-		return RestoreResult{}, domain.NewError(domain.CodeInvalidRequest, "the data and config directories must not contain each other", nil)
-	}
-	for _, dir := range []string{p.DataDir, p.ConfigDir} {
-		if err := requireEmpty(dir); err != nil {
-			return RestoreResult{}, err
+	if o.Listen != "" {
+		if _, _, err := splitHostPort(o.Listen); err != nil {
+			return RestoreResult{}, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("--listen must be host:port, got %q", o.Listen), nil)
 		}
+	}
+	p := o.Paths
+	if err := RequireRestorable(p); err != nil {
+		return RestoreResult{}, err
 	}
 	file, err := os.Open(o.Backup)
 	if err != nil {
@@ -105,7 +117,7 @@ func Restore(ctx context.Context, o RestoreOptions) (_ RestoreResult, err error)
 	}
 	defer stage.remove()
 
-	x, err := extract(ctx, file, stage, o.MaxBytes)
+	x, err := extract(ctx, file, stage, o.MaxBytes, o.Passphrase != "")
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -117,6 +129,20 @@ func Restore(ctx context.Context, o RestoreOptions) (_ RestoreResult, err error)
 		return RestoreResult{}, err
 	}
 	return res, nil
+}
+
+// RequireRestorable fails unless a restore into p can start: the data and
+// config directories are separate, and each is absent or empty.
+func RequireRestorable(p config.Paths) error {
+	if within(p.ConfigDir, p.DataDir) || within(p.DataDir, p.ConfigDir) {
+		return domain.NewError(domain.CodeInvalidRequest, "the data and config directories must not contain each other", nil)
+	}
+	for _, dir := range []string{p.DataDir, p.ConfigDir} {
+		if err := requireEmpty(dir); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // requireEmpty accepts a directory that is absent or has nothing in it.
@@ -134,11 +160,43 @@ func requireEmpty(dir string) error {
 }
 
 func splitAdvertise(advertise string) (host string, err error) {
-	host, port, splitErr := net.SplitHostPort(advertise)
-	if n, convErr := strconv.Atoi(port); splitErr != nil || host == "" || convErr != nil || n < 1 || n > 65535 {
+	host, _, err = splitHostPort(advertise)
+	if err != nil || host == "" {
 		return "", domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("--advertise must be host:port, got %q", advertise), nil)
 	}
 	return host, nil
+}
+
+// splitHostPort is net.SplitHostPort with a port that is a number in 1..65535.
+func splitHostPort(addr string) (host, port string, err error) {
+	host, port, err = net.SplitHostPort(addr)
+	if err != nil {
+		return "", "", err
+	}
+	if n, convErr := strconv.Atoi(port); convErr != nil || n < 1 || n > 65535 {
+		return "", "", fmt.Errorf("port %q is not in 1..65535", port)
+	}
+	return host, port, nil
+}
+
+// listenFor is the address the restored daemon binds. An explicit --listen wins.
+// Otherwise the one of the backup stays, unless the advertised port is another
+// one: then the daemon follows it (as `cf controller init` does), keeping the
+// host of the old address only if it is a wildcard, since a concrete IP of the
+// old host means nothing on this one.
+func listenFor(explicit, advertise, backedUp string) string {
+	if explicit != "" {
+		return explicit
+	}
+	_, advPort, _ := splitHostPort(advertise)
+	host, port, err := splitHostPort(backedUp)
+	if err == nil && port == advPort {
+		return backedUp
+	}
+	if err != nil || (host != "" && host != "0.0.0.0" && host != "::") {
+		host = "0.0.0.0"
+	}
+	return net.JoinHostPort(host, advPort)
 }
 
 // staging is where a restore is built before it is put in place.
@@ -177,7 +235,8 @@ func (s *staging) remove() {
 
 // install puts the staged directories in place. An absent target is renamed
 // over; an empty one is removed first (rename cannot replace a directory on
-// every platform), so a failure of the second undoes the first.
+// every platform). A failure of the second undoes the first, and a target that
+// was there empty is there empty again.
 func (s *staging) install(p config.Paths) error {
 	_, statErr := os.Stat(p.DataDir)
 	dataExisted := statErr == nil
@@ -195,12 +254,41 @@ func (s *staging) install(p config.Paths) error {
 }
 
 // replaceEmptyDir renames from to target, which is absent or an empty
-// directory. os.Remove refuses a directory that has anything in it.
+// directory (os.Remove refuses a directory that has anything in it). If the
+// rename fails, an empty target that was there is put back.
 func replaceEmptyDir(from, target string) error {
-	if err := os.Remove(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	removed := true
+	if err := os.Remove(target); errors.Is(err, fs.ErrNotExist) {
+		removed = false
+	} else if err != nil {
 		return err
 	}
-	return os.Rename(from, target)
+	if err := os.Rename(from, target); err != nil {
+		if removed {
+			_ = os.Mkdir(target, dirMode)
+		}
+		return err
+	}
+	return nil
+}
+
+// readManifest reads the first entry of the backup at path.
+func readManifest(path string) (m BackupManifest, err error) {
+	f, err := os.Open(path) //nolint:gosec // the backup the operator named
+	if err != nil {
+		return m, err
+	}
+	defer func() { _ = f.Close() }()
+	tr := tar.NewReader(f)
+	hdr, err := tr.Next()
+	if err != nil || hdr.Name != BackupManifestEntry {
+		return m, badBackup("it has no manifest")
+	}
+	body, err := readSmall(tr, hdr)
+	if err != nil {
+		return m, err
+	}
+	return m, json.Unmarshal(body, &m)
 }
 
 // extracted is what extract found beyond the files it wrote.
@@ -210,10 +298,12 @@ type extracted struct {
 }
 
 // extract writes the entries of the backup into the staging directories. It
-// accepts exactly what Backup writes: the manifest first, then directories and
-// regular files below data/ and config/, then the sealed CA. Anything else, an
-// unsafe name or a second entry of the same name stops the restore.
-func extract(ctx context.Context, r io.Reader, s *staging, maxBytes int64) (extracted, error) {
+// accepts exactly what Backup writes (see allowedEntry): the manifest first,
+// then directories and regular files at the listed places of data/ and
+// config/, then the sealed CA. Anything else, an unsafe name or a second entry
+// of the same name stops the restore, and so does an encrypted CA when
+// havePassphrase is false, before the rest of the file is read.
+func extract(ctx context.Context, r io.Reader, s *staging, maxBytes int64, havePassphrase bool) (extracted, error) {
 	var (
 		x       extracted
 		seen    = map[string]bool{}
@@ -253,11 +343,13 @@ func extract(ctx context.Context, r io.Reader, s *staging, maxBytes int64) (extr
 				x.sealedCA = body
 			} else if err := json.Unmarshal(body, &x.manifest); err != nil || x.manifest.Format != BackupFormat {
 				return extracted{}, badBackup("not a %s file", BackupFormat)
+			} else if x.manifest.CA == BackupCAEncrypted && !havePassphrase {
+				return extracted{}, errNeedsPassphrase
 			}
 			continue
 		}
 		root, rel, ok := s.locate(name)
-		if !ok {
+		if !ok || !allowedEntry(name, hdr.Typeflag == tar.TypeDir) {
 			return extracted{}, badBackup("unexpected entry %s", name)
 		}
 		dest := filepath.Join(root, filepath.FromSlash(rel))
@@ -271,7 +363,18 @@ func extract(ctx context.Context, r io.Reader, s *staging, maxBytes int64) (extr
 			if written += hdr.Size; hdr.Size < 0 || written > maxBytes {
 				return extracted{}, badBackup("it is larger than the %d bytes a restore accepts", maxBytes)
 			}
-			if err := writeFile(dest, tr, hdr); err != nil {
+			var body io.Reader = tr
+			if isRepoConfig(name) {
+				raw, err := readSmall(tr, hdr)
+				if err != nil {
+					return extracted{}, err
+				}
+				if err := checkRepoConfig(raw); err != nil {
+					return extracted{}, badBackup("%s: %v", name, err)
+				}
+				body = bytes.NewReader(raw)
+			}
+			if err := writeFile(dest, body, hdr); err != nil {
 				return extracted{}, err
 			}
 		default:
@@ -292,6 +395,9 @@ func extract(ctx context.Context, r io.Reader, s *staging, maxBytes int64) (extr
 	return x, nil
 }
 
+var errNeedsPassphrase = domain.NewError(domain.CodeInvalidRequest,
+	"the backup holds the CA, encrypted: give --passphrase or --passphrase-file; nothing was written", nil)
+
 type dirTime struct {
 	path  string
 	mtime time.Time
@@ -305,6 +411,114 @@ func (s *staging) locate(name string) (root, rel string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// repoTopLevel are the entries of a bare repository of the relay that a restore
+// accepts. Not hooks/, which git runs, nor anything else that Backup does not
+// write; config is accepted only if checkRepoConfig does.
+var repoTopLevel = map[string]bool{
+	"HEAD": false, "packed-refs": false, "config": false, "description": false, // files
+	"objects": true, "refs": true, "logs": true, "info": true, // directories
+}
+
+// allowedEntry says whether Backup writes name, a cleaned entry name below data/
+// or config/. This is the whole list:
+//
+//	data/controller.db                  config/controller.json
+//	data/blobs/...                      data/relay (directory)
+//	data/relay/<project>.git/{HEAD,packed-refs,config,description}
+//	data/relay/<project>.git/{objects,refs,logs}/...
+//	data/relay/<project>.git/info/exclude
+//
+// except objects/info/alternates and http-alternates, which would point the
+// repository at objects elsewhere. The relay-level hooks/ and the hooks/ of a
+// repository are not on it: the Controller writes the first itself when it
+// starts, and git would run whatever else is there.
+func allowedEntry(name string, isDir bool) bool {
+	parts := strings.Split(name, "/")
+	switch {
+	case name == BackupDatabaseEntry || name == BackupConfigPrefix+"controller.json":
+		return !isDir
+	case parts[0] == "data" && len(parts) >= 2 && parts[1] == "blobs":
+		return true
+	case parts[0] == "data" && len(parts) >= 2 && parts[1] == "relay":
+		if len(parts) == 2 {
+			return isDir
+		}
+		if !strings.HasSuffix(parts[2], ".git") || len(parts[2]) == len(".git") {
+			return false
+		}
+		return allowedRepoEntry(parts[3:], isDir)
+	}
+	return false
+}
+
+func allowedRepoEntry(parts []string, isDir bool) bool {
+	if len(parts) == 0 {
+		return isDir
+	}
+	dirOnly, known := repoTopLevel[parts[0]]
+	switch {
+	case !known:
+		return false
+	case len(parts) == 1:
+		return isDir == dirOnly
+	case !dirOnly:
+		return false
+	case parts[0] == "info":
+		return len(parts) == 2 && parts[1] == "exclude" && !isDir
+	case parts[0] == "objects" && len(parts) >= 3 && parts[1] == "info":
+		return parts[2] != "alternates" && parts[2] != "http-alternates"
+	}
+	return true
+}
+
+// isRepoConfig says whether name is the config file of a bare repository of the relay.
+func isRepoConfig(name string) bool {
+	parts := strings.Split(name, "/")
+	return len(parts) == 4 && parts[1] == "relay" && parts[3] == "config"
+}
+
+// safeRepoConfig lists, lowercased, the keys a repository of the relay may
+// have, and which values each takes. Everything else in a git config can run a
+// program (core.hooksPath, core.fsmonitor, core.sshCommand, filter.*, include...).
+var safeRepoConfig = map[string]func(string) bool{
+	"core.repositoryformatversion": anyValue, "core.filemode": anyValue, "core.bare": anyValue,
+	"core.logallrefupdates": anyValue, "core.ignorecase": anyValue, "core.precomposeunicode": anyValue,
+	"core.fsmonitor":              func(v string) bool { return v == "false" },
+	"receive.denynonfastforwards": anyValue, "receive.denydeletes": anyValue, "receive.fsckobjects": anyValue,
+	"receive.advertisepushoptions": anyValue, "gc.auto": anyValue, "uploadpack.allowfilter": anyValue,
+}
+
+var (
+	configSection = regexp.MustCompile(`^\[([A-Za-z]+)\]$`)
+	configPair    = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9]*)\s*=\s*([A-Za-z0-9._-]+)$`)
+)
+
+func anyValue(string) bool { return true }
+
+// checkRepoConfig accepts a git config made only of sections without
+// subsections and of the keys of safeRepoConfig, with plain values.
+func checkRepoConfig(raw []byte) error {
+	section := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if m := configSection.FindStringSubmatch(line); m != nil {
+			section = strings.ToLower(m[1])
+			continue
+		}
+		m := configPair.FindStringSubmatch(line)
+		if m == nil || section == "" {
+			return fmt.Errorf("the line %q is not one a repository of the relay has", line)
+		}
+		if check, ok := safeRepoConfig[section+"."+strings.ToLower(m[1])]; !ok || !check(m[2]) {
+			return fmt.Errorf("the setting %s.%s = %s is not one a repository of the relay has", section, m[1], m[2])
+		}
+	}
+	return nil
 }
 
 // cleanName returns the slash-separated name of an entry, refusing every
@@ -369,10 +583,11 @@ func badBackup(format string, args ...any) error {
 
 // finish turns the extracted files into a Controller: it verifies the
 // database, puts the CA in place (or makes one), reissues the server
-// certificate and rewrites controller.json.
+// certificate, creates the owner of this host, moves the counters past
+// anything a Worker may have seen and rewrites controller.json.
 func (s *staging) finish(ctx context.Context, x extracted, o RestoreOptions) (RestoreResult, error) {
 	db := filepath.Join(s.data, "controller.db")
-	if err := integrityCheck(ctx, db); err != nil {
+	if err := store.CheckIntegrity(ctx, db); err != nil {
 		return RestoreResult{}, fmt.Errorf("restore: the database of the backup failed verification: %w", err)
 	}
 	info, err := store.ReadBackupInfo(ctx, db)
@@ -381,10 +596,6 @@ func (s *staging) finish(ctx context.Context, x extracted, o RestoreOptions) (Re
 	}
 	if info.ControllerID != x.manifest.ControllerID {
 		return RestoreResult{}, badBackup("the manifest and the database name different Controllers")
-	}
-
-	if err := store.AdvanceCommandSeqs(ctx, db); err != nil {
-		return RestoreResult{}, err
 	}
 
 	ca, restored, err := s.certificateAuthority(o, x)
@@ -397,26 +608,63 @@ func (s *staging) finish(ctx context.Context, x extracted, o RestoreOptions) (Re
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	cfg.Advertise = cmpOr(o.Advertise, cfg.Advertise)
-	cfg.Listen = cmpOr(o.Listen, cfg.Listen)
+	cfg.Advertise = cmp.Or(o.Advertise, cfg.Advertise)
 	host, err := splitAdvertise(cfg.Advertise)
 	if err != nil {
 		return RestoreResult{}, err
 	}
+	cfg.Listen = listenFor(o.Listen, cfg.Advertise, cfg.Listen)
 	if _, err := ca.LoadServerCert(staged.PKIDir(), host, o.Clock.Now()); err != nil {
+		return RestoreResult{}, err
+	}
+	owner, err := s.createOwner(ctx, staged, ca, cfg.Advertise, o.Clock)
+	if err != nil {
 		return RestoreResult{}, err
 	}
 	if err := config.SaveController(staged, cfg); err != nil {
 		return RestoreResult{}, err
 	}
-	return RestoreResult{ControllerID: info.ControllerID, SchemaVersion: info.SchemaVersion, Advertise: cfg.Advertise, CARestored: restored}, nil
+	// Last, and with the database closed: it leaves no side files.
+	if err := store.AdvancePastRestore(ctx, db, o.Clock.Now()); err != nil {
+		return RestoreResult{}, err
+	}
+	return RestoreResult{
+		ControllerID: info.ControllerID, SchemaVersion: info.SchemaVersion, Advertise: cfg.Advertise, Listen: cfg.Listen,
+		OwnerID: string(owner), CARestored: restored,
+	}, nil
 }
 
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
+// createOwner does what `cf controller init` does for the first owner: an
+// identity signed by ca, with its credentials in the config directory. The
+// owner can create the join tokens of everything else, which is what a Controller
+// whose CA is new needs: no identity of the old one is valid there.
+func (s *staging) createOwner(ctx context.Context, staged config.Paths, ca *pki.CA, advertise string, clk clock.Clock) (_ domain.ID, err error) {
+	host, port, err := net.SplitHostPort(advertise)
+	if err != nil {
+		return "", err
 	}
-	return b
+	db, err := store.Open(ctx, staged.DatabaseFile(), store.Options{Clock: clk})
+	if err != nil {
+		return "", fmt.Errorf("restore: opening the restored database: %w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	key, csr, err := client.GenerateKeyAndCSR()
+	if err != nil {
+		return "", err
+	}
+	keyPEM, err := client.EncodeKey(key)
+	if err != nil {
+		return "", err
+	}
+	hostname, _ := os.Hostname()
+	owner, err := newAuthority(db, ca, clk, host, port).BootstrapOwner(ctx, csr, config.MachineName(hostname, "owner"))
+	if err != nil {
+		return "", err
+	}
+	err = client.SaveCredentials(staged.CredentialsDir(), client.Credentials{
+		Controller: advertise, CertPEM: owner.Certificate, KeyPEM: keyPEM, CAPEM: ca.CertPEM(),
+	})
+	return owner.ID, err
 }
 
 // certificateAuthority saves the CA of the backup in the staged pki directory,
@@ -431,7 +679,7 @@ func (s *staging) certificateAuthority(o RestoreOptions, x extracted) (ca *pki.C
 		return ca, false, err
 	}
 	if o.Passphrase == "" {
-		return nil, false, domain.NewError(domain.CodeInvalidRequest, "the backup holds the CA, encrypted: give --passphrase or --passphrase-file", nil)
+		return nil, false, errNeedsPassphrase
 	}
 	payload, err := DecryptCA(bytes.NewReader(x.sealedCA), o.Passphrase)
 	if err != nil {
@@ -447,35 +695,4 @@ func (s *staging) certificateAuthority(o RestoreOptions, x extracted) (ca *pki.C
 	}
 	ca, err = pki.LoadCA(dir) // the pair must be a CA, and match
 	return ca, true, err
-}
-
-// integrityCheck succeeds only when PRAGMA integrity_check reports exactly "ok"
-// for the quiescent database at path.
-func integrityCheck(ctx context.Context, path string) error {
-	dsn := "file:" + (&url.URL{Path: path}).EscapedPath() + "?" + url.Values{"mode": {"ro"}, "immutable": {"1"}}.Encode()
-	pool, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = pool.Close() }()
-	rows, err := pool.QueryContext(ctx, `PRAGMA integrity_check`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-	var lines []string
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
-			return err
-		}
-		lines = append(lines, line)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if len(lines) != 1 || lines[0] != "ok" {
-		return fmt.Errorf("integrity_check: %s", strings.Join(lines, "; "))
-	}
-	return nil
 }

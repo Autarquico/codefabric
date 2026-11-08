@@ -7,16 +7,19 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 func readFile(t *testing.T, path string) []byte {
@@ -275,7 +278,7 @@ func TestScenario_RestoreWithAWrongOrMissingPassphraseLeavesNothingBehind(t *tes
 	}
 }
 
-func TestScenario_RestoreWithoutACAWarnsThatWorkersMustJoinAgain(t *testing.T) {
+func TestScenario_RestoreWithoutACAExplainsHowToJoinAgain(t *testing.T) {
 	src, backup := backupFile(t, "")
 	dst := newPaths(t)
 	t.Setenv("CF_CONFIG_DIR", dst.ConfigDir)
@@ -283,16 +286,17 @@ func TestScenario_RestoreWithoutACAWarnsThatWorkersMustJoinAgain(t *testing.T) {
 	addr := freeAddr(t)
 
 	cmd := daemon.RestoreCommand()
-	var stderr bytes.Buffer
-	cmd.SetErr(&stderr)
-	cmd.SetOut(io.Discard)
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
 	cmd.SetArgs([]string{backup, "--advertise", addr})
 	if err := cmd.ExecuteContext(t.Context()); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 
-	if !strings.Contains(stderr.String(), "join again") {
-		t.Errorf("stderr = %q", stderr.String())
+	for _, want := range []string{addr, "cf controller run", "cf controller token create", "cf connect --force", "cf worker join --force", dst.CredentialsDir()} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("the next steps do not mention %q:\n%s", want, stdout.String())
+		}
 	}
 	if controllerID(t, dst) != controllerID(t, src) {
 		t.Error("another Controller")
@@ -302,7 +306,65 @@ func TestScenario_RestoreWithoutACAWarnsThatWorkersMustJoinAgain(t *testing.T) {
 	if err != nil || newCA.Fingerprint() == oldCA.Fingerprint() {
 		t.Errorf("expected a new CA: %v", err)
 	}
-	start(t, dst)
+	assertOwnerAdministers(t, dst)
+}
+
+// assertOwnerAdministers starts the restored Controller and checks that the
+// credentials left in its config directory reach /v1/status and create a join token.
+func assertOwnerAdministers(t *testing.T, p config.Paths) {
+	t.Helper()
+	start(t, p)
+	c, err := client.Open(p.CredentialsDir())
+	if err != nil {
+		t.Fatalf("the restore left no usable credentials: %v", err)
+	}
+	if _, err := c.Status(t.Context()); err != nil {
+		t.Errorf("Status: %v", err)
+	}
+	for _, kind := range []domain.Kind{domain.KindClient, domain.KindWorker} {
+		if _, err := c.CreateToken(t.Context(), kind, time.Hour); err != nil {
+			t.Errorf("CreateToken(%s): %v", kind, err)
+		}
+	}
+}
+
+func TestScenario_RestoreWithTheCALeavesAnOwnerThatAdministersTheController(t *testing.T) {
+	_, backup := backupFile(t, "correct horse")
+	dst := newPaths(t)
+	res, err := daemon.Restore(t.Context(), daemon.RestoreOptions{Paths: dst, Backup: backup, Advertise: freeAddr(t), Passphrase: "correct horse"})
+	if err != nil || !res.CARestored || res.OwnerID == "" {
+		t.Fatalf("Restore = %+v, %v", res, err)
+	}
+	assertOwnerAdministers(t, dst)
+}
+
+func TestRestore_ListenFollowsTheAdvertisedPortAndIsValidated(t *testing.T) {
+	src, backup := backupFile(t, "")
+	oldCfg, err := config.LoadController(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, oldPort, _ := net.SplitHostPort(oldCfg.Listen)
+
+	dst := newPaths(t)
+	res, err := daemon.Restore(t.Context(), daemon.RestoreOptions{Paths: dst, Backup: backup, Advertise: "127.0.0.1:28443"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Listen != "0.0.0.0:28443" {
+		t.Errorf("listen = %q, want the advertised port on a wildcard (the backup's was on port %s, of a concrete IP)", res.Listen, oldPort)
+	}
+	if cfg, _ := config.LoadController(dst); cfg.Listen != res.Listen {
+		t.Errorf("controller.json listen = %q, result %q", cfg.Listen, res.Listen)
+	}
+
+	for _, bad := range []string{"garbage", "127.0.0.1", "127.0.0.1:0", "127.0.0.1:99999"} {
+		other := newPaths(t)
+		if _, err := daemon.Restore(t.Context(), daemon.RestoreOptions{Paths: other, Backup: backup, Listen: bad}); err == nil {
+			t.Errorf("--listen %q was accepted", bad)
+		}
+		leavesNothing(t, other)
+	}
 }
 
 func TestRestoreCommand_ReadsThePassphraseFromAFile(t *testing.T) {
@@ -324,6 +386,92 @@ func TestRestoreCommand_ReadsThePassphraseFromAFile(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Errorf("a backup with its CA warned: %q", stderr.String())
 	}
+}
+
+func TestScenario_RestoreRefusesWhatBackupNeverWrites(t *testing.T) {
+	reg := func(name string) tar.Header { return tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o700} }
+	for name, h := range map[string]tar.Header{
+		"relay hook":              reg("data/relay/hooks/pre-receive"),
+		"relay hook update":       reg("data/relay/hooks/update"),
+		"repository hook":         reg("data/relay/x.git/hooks/post-receive"),
+		"repository hook dir":     {Name: "data/relay/x.git/hooks", Typeflag: tar.TypeDir, Mode: 0o700},
+		"alternates":              reg("data/relay/x.git/objects/info/alternates"),
+		"info attributes":         reg("data/relay/x.git/info/attributes"),
+		"file in relay":           reg("data/relay/notes"),
+		"unknown file of a repo":  reg("data/relay/x.git/gc.pid"),
+		"credentials":             reg("config/credentials/ca.pem"),
+		"worker secrets":          reg("config/worker/secrets.json"),
+		"worker data":             reg("data/worker/state.db"),
+		"server key":              reg("data/pki/server.key"),
+		"database side file":      reg("data/controller.db-wal"),
+		"a directory as database": {Name: "data/controller.db", Typeflag: tar.TypeDir, Mode: 0o700},
+		"nameless repository":     reg("data/relay/.git/HEAD"),
+		"other config":            reg("config/other.json"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dst := newPaths(t)
+			if _, err := daemon.Restore(t.Context(), daemon.RestoreOptions{Paths: dst, Backup: tarOf(t, h)}); err == nil {
+				t.Fatal("Restore accepted it")
+			}
+			leavesNothing(t, dst)
+		})
+	}
+}
+
+func TestScenario_RestoreRefusesAGitConfigThatRunsSomething(t *testing.T) {
+	configOf := func(body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "evil.tar")
+		f, err := os.Create(path) //nolint:gosec // a path of the test
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = f.Close() }()
+		tw := tar.NewWriter(f)
+		manifest, _ := json.Marshal(daemon.BackupManifest{Format: daemon.BackupFormat, CA: daemon.BackupCAAbsent, CreatedAt: time.Now()})
+		for _, e := range []struct {
+			name string
+			body []byte
+		}{{daemon.BackupManifestEntry, manifest}, {"data/relay/x.git/config", []byte(body)}} {
+			if err := tw.WriteHeader(&tar.Header{Name: e.name, Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(len(e.body))}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tw.Write(e.body); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for name, body := range map[string]string{
+		"hooks path":      "[core]\n\thooksPath = /tmp/evil\n",
+		"fsmonitor":       "[core]\n\tfsmonitor = /tmp/evil\n",
+		"ssh command":     "[core]\n\tsshCommand = touch /tmp/x\n",
+		"include":         "[include]\n\tpath = /tmp/evil\n",
+		"subsection":      "[filter \"x\"]\n\tsmudge = evil\n",
+		"continuation":    "[gc]\n\tauto = 0\\\n[core]\n",
+		"key before head": "auto = 0\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dst := newPaths(t)
+			if _, err := daemon.Restore(t.Context(), daemon.RestoreOptions{Paths: dst, Backup: configOf(body)}); err == nil || !strings.Contains(err.Error(), "config") {
+				t.Fatalf("Restore = %v, want the config refused", err)
+			}
+			leavesNothing(t, dst)
+		})
+	}
+}
+
+func TestRestore_AsksForThePassphraseBeforeReadingTheRestOfTheBackup(t *testing.T) {
+	_, backup := backupFile(t, "correct horse")
+	dst := newPaths(t)
+	_, err := daemon.Restore(t.Context(), daemon.RestoreOptions{Paths: dst, Backup: backup})
+	if err == nil || !strings.Contains(err.Error(), "--passphrase") || !strings.Contains(err.Error(), "nothing was written") {
+		t.Fatalf("err = %v", err)
+	}
+	leavesNothing(t, dst)
 }
 
 func TestRestore_GoesIntoExistingEmptyDirectories(t *testing.T) {
