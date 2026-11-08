@@ -180,6 +180,9 @@ func New(c Config) (*Server, error) {
 	if s.work.Logs != nil {
 		s.registerLogRoutes()
 	}
+	if s.work.GC != nil {
+		s.registerGCRoutes()
+	}
 	return s, nil
 }
 

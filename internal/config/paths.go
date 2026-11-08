@@ -76,6 +76,10 @@ func (p Paths) ControllerConfigFile() string { return filepath.Join(p.ConfigDir,
 // DatabaseFile is the Controller's SQLite database.
 func (p Paths) DatabaseFile() string { return filepath.Join(p.DataDir, "controller.db") }
 
+// GCLockFile is the lock that the garbage collector holds while it deletes blobs
+// and that a backup holds while it copies them.
+func (p Paths) GCLockFile() string { return filepath.Join(p.DataDir, "gc.lock") }
+
 // PKIDir holds the CA and the server certificate.
 func (p Paths) PKIDir() string { return filepath.Join(p.DataDir, "pki") }
 

@@ -252,6 +252,9 @@ func (e *Executor) sweep(ctx context.Context) {
 	if err := e.sweepSecrets(ctx); err != nil && ctx.Err() == nil {
 		e.log.WarnContext(ctx, "the janitor of the secrets did not finish; it sweeps again", "err", err)
 	}
+	if err := e.sweepWorktrees(ctx); err != nil && ctx.Err() == nil {
+		e.log.WarnContext(ctx, "the janitor of the worktrees did not finish; it sweeps again", "err", err)
+	}
 }
 
 // releaseLoop releases the secrets of the Runs that are done: those queued on

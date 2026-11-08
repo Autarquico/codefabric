@@ -285,6 +285,12 @@ func (c *Client) stamp(req *http.Request) {
 
 // doLimited is do for an answer of up to limit bytes.
 func (c *Client) doLimited(ctx context.Context, limit int64, method, path string, in, out any) error {
+	return c.doOver(ctx, c.http.Load(), limit, method, path, in, out)
+}
+
+// doOver is doLimited over hc: c.stream has no overall timeout, for a request
+// that is slow by nature.
+func (c *Client) doOver(ctx context.Context, hc *http.Client, limit int64, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
@@ -301,7 +307,7 @@ func (c *Client) doLimited(ctx context.Context, limit int64, method, path string
 		req.Header.Set("Content-Type", "application/json")
 	}
 	c.stamp(req)
-	resp, err := c.http.Load().Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return c.transportError(ctx, err)
 	}

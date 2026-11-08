@@ -421,7 +421,7 @@ func TestPurgeIdempotency_RemovesOnlyExpiredKeys(t *testing.T) {
 	clk.Advance(25 * time.Hour)
 	put("new")
 
-	purged, err := db.PurgeIdempotency(t.Context(), clk.Now().Add(-domain.Defaults().IdempotencyTTL))
+	purged, err := db.PurgeIdempotency(t.Context(), clk.Now().Add(-domain.Defaults().IdempotencyTTL), 100)
 	if err != nil || purged != 1 {
 		t.Fatalf("purged = (%d, %v), want (1, nil)", purged, err)
 	}

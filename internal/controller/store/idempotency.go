@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -77,22 +76,4 @@ func (t *Tx) SaveResponse(ctx context.Context, key IdemKey, payload, response []
 func hashOf(payload []byte) string {
 	digest := sha256.Sum256(payload)
 	return hex.EncodeToString(digest[:])
-}
-
-// PurgeIdempotency deletes keys created before olderThan (idempotency.ttl,
-// §27.4) and reports how many it removed.
-func (db *DB) PurgeIdempotency(ctx context.Context, olderThan time.Time) (int64, error) {
-	var purged int64
-	err := db.WithTx(ctx, func(tx *Tx) error {
-		res, err := tx.Exec(ctx, `DELETE FROM idempotency_keys WHERE created_at < ?`, olderThan.UnixNano())
-		if err != nil {
-			return err
-		}
-		purged, err = res.RowsAffected()
-		return err
-	})
-	if err != nil {
-		return 0, fmt.Errorf("store: purging idempotency keys: %w", err)
-	}
-	return purged, nil
 }

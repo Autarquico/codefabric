@@ -7,6 +7,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/environments"
 	"github.com/Autarquico/codefabric/internal/app/events"
+	"github.com/Autarquico/codefabric/internal/app/gc"
 	"github.com/Autarquico/codefabric/internal/app/inbox"
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/logs"
@@ -49,6 +50,9 @@ type Services struct {
 	Search *search.Service
 	// Inbox is what needs a person: requests for input and failures to decide on (§19.5).
 	Inbox *inbox.Service
+	// GC collects what retention and references leave behind (§20.5, §29). It
+	// needs the blob store and the data directory, so the daemon sets it after New.
+	GC *gc.Service
 
 	db *store.DB
 }

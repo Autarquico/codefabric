@@ -26,7 +26,7 @@ test-integration:
 	CGO_ENABLED=1 go test -race -tags integration -count=1 -timeout 20m ./...
 
 bench:
-	CF_LOAD_FLOOR=1 go test -tags integration -run TestLoad -v ./internal/controller/store/
+	CF_LOAD_FLOOR=1 go test -tags integration -run TestLoad -v ./internal/controller/store/ ./internal/app/gc/
 
 # End-to-end suite. E2E_SEEDS random seeds run after the fixed corpus of
 # internal/e2e/testdata/seeds.txt (0: the corpus alone); E2E_SEED runs exactly

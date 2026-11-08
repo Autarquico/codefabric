@@ -79,6 +79,26 @@ Apply and inspect Environments. Subcommands: `apply` (make the definition in a f
 
 Show the events of the Controller (the last 20 by default) and follow them with `-f, --follow`. Filters: `--project`, `--task`, `--run`, `--worker`, `--type` (repeatable), `--level`, `--since` (`2h` or an RFC 3339 time). `--after` resumes from a cursor, and `--limit` sizes the page. With `--json --follow` the output is JSON Lines.
 
+## `cf gc`
+
+Collect garbage in the Controller: history past its retention (events, logs, delivered orders, the output of finished Runs), the blobs nothing refers to, and the branches and orphan refs that the git relay keeps for archived Tasks. `--dry-run` shows counts (and bytes, where it can measure them) by kind of what a pass would delete, and deletes nothing. It deletes in small batches, so it does not stall the Controller; the Controller also runs it by itself, hourly. A pass started by a Client leaves an entry in the audit trail (who, how it ended, how much it deleted), also when it fails; a dry run leaves none. It does not touch Workers: each cleans its own machine.
+
+Retention is set in `controller.json`, as text such as `"30d"` or `"45s"` (at least 1s). What you leave out takes the default:
+
+| Key | Default | Keeps |
+| --- | --- | --- |
+| `retention.system` | `30d` | logs that belong to no Run |
+| `retention.events` | `180d` | events (those of a Run that has not ended stay) |
+| `retention.run_logs` | `30d` | logs of a Run, and orders already delivered to its Worker (those of a Run that is still alive stay) |
+| `retention.raw_output` | `7d` | the output of a finished Run |
+| `retention.relay_branches` | `30d` | branches and orphan refs of an archived Task, counted from its archiving |
+| `gc.batch_size` | `500` | most rows one transaction touches |
+| `gc.interval` | `1h` | time between two automatic passes |
+| `gc.blob_grace` | `24h` | how long a blob nothing refers to is left alone |
+| `max_storage` | none | a number of **bytes**; only measured, nothing is deleted for it |
+
+A Worker keeps the worktree of a published Run for `retention.worktrees` in its own `worker/config.json` (default `7d`).
+
 ## `cf inbox`
 
 List what needs you: Tasks waiting for input and failures to decide on. Answer with `cf task respond`.
@@ -127,6 +147,10 @@ Set up this machine step by step: ask what it is for and chain `cf connect` (cli
 ## `cf status`
 
 Show the Controller's version, uptime and database health.
+
+## `cf storage`
+
+Inspect what the Controller stores. `cf storage stats` shows the bytes by category (output and Workflow blobs, blobs nothing refers to, database with the part that is logs, relay) and what a `cf gc` pass would free: bytes for blobs and logs, counts for the rest. Purged rows of the database are reused, so its file does not shrink. It changes nothing. `max_storage` only shows here and as a warning in the Controller's log; nothing is deleted for it.
 
 ## `cf task`
 

@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: M
 issue: 146
-prs: []
+prs: [153]
 related_issues: [146]
 sub_issues: []
 depends_on: [logs-output-storage, git-relay-publication]

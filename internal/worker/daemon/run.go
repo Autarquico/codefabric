@@ -186,6 +186,7 @@ func Run(ctx context.Context, o Options) error {
 		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
 		PermissionServerArgv: o.PermissionServerArgv,
 		LogSecrets:           logSecrets,
+		WorktreeRetention:    time.Duration(d.settings.Retention.Worktrees),
 	}
 	eo.AskpassScript = d.writeAskpassScript(ctx, o)
 	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})
@@ -217,7 +218,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 	ap := d.applier(ctx, o, eo.Host, c)
 	eo.GlobalConfig = ap
-	ex, err := executor.New(eo)
+	ex, err := newExecutor(eo)
 	if err != nil {
 		return err
 	}
@@ -665,3 +666,6 @@ func (d *daemon) writeAskpassScript(ctx context.Context, o Options) string {
 	}
 	return path
 }
+
+// newExecutor builds the executor of the daemon; a test replaces it to see the options.
+var newExecutor = executor.New

@@ -21,3 +21,6 @@ func WatchStore(t *testing.T, seen func(store.Options, *store.DB)) {
 	}
 	t.Cleanup(func() { openStore = open })
 }
+
+// GCPolicy is the policy that controller.json makes for the GC.
+var GCPolicy = gcPolicy

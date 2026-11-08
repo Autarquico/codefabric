@@ -254,6 +254,22 @@ func (g *Git) fetch(ctx context.Context, bare, repo, refspec string, f originFet
 	return err
 }
 
+// RemoveWorktree takes away the worktree of a Run of the Project, and its local
+// branch, for the janitor. The path must be a worktree of this Worker.
+func (g *Git) RemoveWorktree(ctx context.Context, project, worktree, branch string) error {
+	if !isProject(project) {
+		return fmt.Errorf("gitops: %q is not a Project ID", project)
+	}
+	root := filepath.Join(g.o.Paths.WorkerDataDir(), "worktrees") + string(filepath.Separator)
+	if !strings.HasPrefix(filepath.Clean(worktree), root) {
+		return fmt.Errorf("gitops: %q is not a worktree of this Worker", worktree)
+	}
+	unlock := g.projectLock(project)
+	defer unlock()
+	g.removeWorktree(ctx, g.o.Paths.WorkerRepoDir(project), worktree, branch)
+	return nil
+}
+
 // removeWorktree takes away a worktree and its branch, ignoring what is not there.
 func (g *Git) removeWorktree(ctx context.Context, bare, worktree, branch string) {
 	env := isolatedEnv(bare)
