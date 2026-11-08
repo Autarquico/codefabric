@@ -75,6 +75,9 @@ type BackupOptions struct {
 	Out string
 	// Passphrase, when set, puts the CA in the backup, encrypted with it.
 	Passphrase string
+	// BetweenRelayPasses, for tests, runs in each repository of the relay after
+	// its refs are copied and before the rest is. gc.lock is held when it runs.
+	BetweenRelayPasses func(repo string)
 }
 
 // BackupResult is what Backup tells the operator.
@@ -154,7 +157,7 @@ func Backup(ctx context.Context, o BackupOptions) (_ BackupResult, err error) {
 		func() error { return w.addJSON(BackupManifestEntry, manifest) },
 		func() error { return w.addFile(BackupDatabaseEntry, copyPath) },
 		func() error { return w.addTree(BackupDataPrefix+"blobs", filepath.Join(p.DataDir, "blobs"), nil) },
-		func() error { return w.addRelay(p.RelayDir()) },
+		func() error { return w.addRelay(p.RelayDir(), o.BetweenRelayPasses) },
 		func() error { return w.addFile(BackupConfigPrefix+"controller.json", p.ControllerConfigFile()) },
 	}
 	for _, step := range steps {
@@ -372,10 +375,10 @@ func (a *archive) addTree(prefix, root string, want func(rel string, d fs.DirEnt
 }
 
 // addRelay copies the relay: for each bare repository, the refs first and then
-// the rest, since objects are only ever added while the backup runs (the
+// the rest (never the refs again), since objects are only ever added while the backup runs (the
 // relay's own gc is off and the collector is held by gc.lock) and a ref is
 // written after the objects it names. The relay's scratch directory is left out.
-func (a *archive) addRelay(root string) error {
+func (a *archive) addRelay(root string, betweenPasses func(repo string)) error {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -398,7 +401,10 @@ func (a *archive) addRelay(root string) error {
 			if err := a.addTree(sub, path, isRef); err != nil {
 				return err
 			}
-			if err := a.addTree(sub, path, nil); err != nil {
+			if betweenPasses != nil {
+				betweenPasses(path)
+			}
+			if err := a.addTree(sub, path, notRef); err != nil {
 				return err
 			}
 		default:
@@ -421,6 +427,11 @@ func isRef(rel string, d fs.DirEntry) bool {
 	}
 	return false
 }
+
+// notRef selects the rest of a bare repository. The refs are not copied a
+// second time: one created since the first pass could name objects that the
+// walk of objects/ has already gone past.
+func notRef(rel string, d fs.DirEntry) bool { return !isRef(rel, d) }
 
 // within says whether path is dir or below it.
 func within(path, dir string) bool {

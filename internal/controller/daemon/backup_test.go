@@ -207,6 +207,62 @@ func TestBackup_WithAPassphraseCarriesTheCAEncrypted(t *testing.T) {
 	}
 }
 
+func TestBackup_HoldsTheGarbageCollectorsLockUntilTheRelayIsCopied(t *testing.T) {
+	p := newPaths(t)
+	initController(t, p)
+	plantState(t, p)
+	var gotLock chan struct{}
+	var held bool
+	hook := func(string) {
+		gotLock = make(chan struct{})
+		go func() {
+			release, err := flock.Lock(p.GCLockFile())
+			if err == nil {
+				release()
+			}
+			close(gotLock)
+		}()
+		select {
+		case <-gotLock:
+			held = false
+		case <-time.After(300 * time.Millisecond):
+			held = true
+		}
+	}
+	_, err := daemon.Backup(t.Context(), daemon.BackupOptions{Paths: p, Out: filepath.Join(t.TempDir(), "b.tar"), BetweenRelayPasses: hook})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !held {
+		t.Error("the collector got gc.lock while the relay was being copied")
+	}
+	select {
+	case <-gotLock:
+	case <-time.After(5 * time.Second):
+		t.Error("gc.lock was not released when Backup finished")
+	}
+}
+
+func TestBackup_ARefPushedBetweenThePassesIsNotCopiedWithoutItsObjects(t *testing.T) {
+	p := newPaths(t)
+	initController(t, p)
+	plantState(t, p)
+	repo := filepath.Join(p.RelayDir(), "project_X.git")
+	push := func(string) {
+		write(t, filepath.Join(repo, "refs", "heads", "late"), "bb\n", 0o600)
+		write(t, filepath.Join(repo, "objects", "bb", "late"), "late object", 0o600)
+	}
+	out := filepath.Join(t.TempDir(), "b.tar")
+	if _, err := daemon.Backup(t.Context(), daemon.BackupOptions{Paths: p, Out: out, BetweenRelayPasses: push}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names(readBackup(t, out)) {
+		if strings.HasSuffix(name, "refs/heads/late") {
+			t.Errorf("%s is in the backup, and the object it names may not be", name)
+		}
+	}
+}
+
 func TestBackup_WaitsForTheGarbageCollectorsLock(t *testing.T) {
 	p := newPaths(t)
 	initController(t, p)
