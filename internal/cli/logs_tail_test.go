@@ -17,6 +17,7 @@ type gappedOutput struct {
 	before, after []byte
 	gapTo         uint64 // the gap is [len(before), gapTo)
 	requests      int
+	tail          uint64 // when set, a default read is this many bytes, not everything after the gap
 }
 
 func (g *gappedOutput) end() uint64 { return g.gapTo + uint64(len(g.after)) }
@@ -32,10 +33,16 @@ func (g *gappedOutput) RunOutput(_ context.Context, _ string, q client.OutputQue
 		from, limit = *q.Offset, *q.Offset+q.Limit
 	}
 	out.Truncated = q.Offset == nil // the tail began after the gap
+	if q.Offset == nil && g.tail > 0 {
+		from, out.Truncated = max(g.gapTo, g.end()-g.tail), false
+	}
 	if from >= uint64(len(g.before)) && from < g.gapTo {
 		from, out.Truncated = g.gapTo, true
 	}
 	to := min(limit, g.end())
+	if from < uint64(len(g.before)) { // like ReadOutput: a page stops where the gap begins
+		to = min(to, uint64(len(g.before)))
+	}
 	out.Offset = from
 	switch {
 	case from < uint64(len(g.before)):
@@ -67,5 +74,25 @@ func TestReadTailDoesNotCrossAGapLargerThanAPage(t *testing.T) {
 				t.Errorf("tail = %q repeats or crosses the gap", tail)
 			}
 		})
+	}
+}
+
+func TestReadTailDoesNotPrependAPageThatEndsBeforeTheBytesRead(t *testing.T) {
+	tail := uint64(v1.OutputDefaultTail)
+	g := &gappedOutput{
+		before: []byte(strings.Repeat("before\n", 300)),
+		after:  []byte(strings.Repeat("a", int(tail)+500) + "\n"),
+		gapTo:  uint64(7*300 + 1000), // a gap smaller than a page
+		tail:   tail,
+	}
+	_, got, _, gap, err := readTail(t.Context(), g, "run", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gap {
+		t.Error("gap = false, want the note about output before a gap")
+	}
+	if strings.Contains(string(got), "before") {
+		t.Errorf("tail holds bytes from before the gap")
 	}
 }

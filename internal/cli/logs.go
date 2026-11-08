@@ -262,7 +262,7 @@ func readTail(ctx context.Context, c outputReader, run string, lines int) (page 
 		if err != nil {
 			return first, nil, false, false, err
 		}
-		if older.Offset >= to || older.Truncated { // the page began in a gap: nothing before it is contiguous
+		if older.Truncated || older.Offset+uint64(len(older.Data)) != to { // the page does not end where the bytes read begin: a gap lies between
 			gap = true
 			break
 		}
