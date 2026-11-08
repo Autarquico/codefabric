@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"crypto/x509"
+	"database/sql"
 	"encoding/json"
 	"encoding/pem"
 	"io"
@@ -471,6 +472,28 @@ func TestRestore_AsksForThePassphraseBeforeReadingTheRestOfTheBackup(t *testing.
 	_, err := daemon.Restore(t.Context(), daemon.RestoreOptions{Paths: dst, Backup: backup})
 	if err == nil || !strings.Contains(err.Error(), "--passphrase") || !strings.Contains(err.Error(), "nothing was written") {
 		t.Fatalf("err = %v", err)
+	}
+	leavesNothing(t, dst)
+}
+
+func TestRestore_RefusesABackupOfANewerSchemaThanThisBinary(t *testing.T) {
+	src := newPaths(t)
+	initController(t, src)
+	plantState(t, src)
+	pool, err := sql.Open("sqlite", src.DatabaseFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pool.Close() }()
+	if _, err := pool.ExecContext(t.Context(), `INSERT INTO goose_db_version (version_id, is_applied) VALUES (999999, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	res, _ := backupOf(t, src, "")
+
+	dst := newPaths(t)
+	_, err = daemon.Restore(t.Context(), daemon.RestoreOptions{Paths: dst, Backup: res.Path})
+	if err == nil || !strings.Contains(err.Error(), "at least as new") {
+		t.Fatalf("Restore = %v, want a refusal that says to use a newer cf", err)
 	}
 	leavesNothing(t, dst)
 }

@@ -606,6 +606,14 @@ func (s *staging) finish(ctx context.Context, x extracted, o RestoreOptions) (Re
 	if info.ControllerID != x.manifest.ControllerID {
 		return RestoreResult{}, badBackup("the manifest and the database name different Controllers")
 	}
+	latest, err := store.LatestSchemaVersion()
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if info.SchemaVersion > latest {
+		return RestoreResult{}, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf(
+			"restore: the backup has schema %d and this cf only knows up to %d: restore it with a cf at least as new as the one that made it", info.SchemaVersion, latest), nil)
+	}
 
 	ca, restored, err := s.certificateAuthority(o, x)
 	if err != nil {
