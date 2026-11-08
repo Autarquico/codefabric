@@ -11,6 +11,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/e2e/netproxy"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
@@ -31,8 +32,10 @@ const recoveryStep = time.Second
 // history is read again: the output has to flow again, not only exist.
 const recoveryGrowth = 2
 
-// history is what an observer can read of a Run: its events, its structured
-// logs and its output, each in the order the Controller shows them.
+// history is what an observer can read of a Run or of a Worker: events,
+// structured logs and output, each in the order the Controller shows them (for
+// a Worker, only its logs: the stream keeps growing and several components
+// write to it, but what was read once stays where it was).
 type history struct {
 	events []string
 	logs   []string
@@ -51,7 +54,7 @@ func (h history) String() string {
 // other one is killed too; then a daemon killed while the other Worker is cut
 // off; then the Controller killed again while two harnesses end. No Run is
 // lost or run twice, each ends as it should, and what an observer read before
-// each cut (events, logs, output) is a prefix of what it reads afterwards: no
+// each cut (events, logs of the Run and of its Worker, output) is a prefix of what it reads afterwards: no
 // gap, no repetition, same order.
 func TestScenario_E2eV03_DoneDeFase4(t *testing.T) {
 	c := NewCluster(t, Opts{Workers: 2, MaxConcurrent: 2, Proxied: true})
@@ -135,12 +138,15 @@ func TestScenario_E2eV03_DoneDeFase4(t *testing.T) {
 	// The end: the full history of each Run extends what was read before.
 	var after map[string]history
 	c.Eventually("the whole output of every Run to arrive", func() (bool, string) {
-		after = recoveryRead(c, runs, tokens)
 		for i, run := range runs {
 			out := c.mustCF(c.Observer, "logs", "--run", run, "--tail", "1000").Stdout
 			if !strings.Contains(out, "e2e: finished "+tokens[i]) {
 				return false, "the end of the output of " + run + " is missing"
 			}
+		}
+		// Read only once the end is there, so that the reading includes it.
+		after = recoveryRead(c, runs, tokens)
+		for _, run := range runs {
 			if len(after[run].logs) == 0 {
 				return false, "no structured log of " + run + " yet"
 			}
@@ -206,42 +212,112 @@ func recoveryLines(c *Cluster, run, token string) []string {
 	return out
 }
 
-// recoveryRead is what an observer reads of each Run now, by Run.
+// recoveryRead is what an observer reads now: the history of each Run, by
+// Run, and the logs of each Worker, by Worker. Everything is read once.
 func recoveryRead(c *Cluster, runs, tokens []string) map[string]history {
 	c.t.Helper()
 	snap := c.ControllerSnapshot()
 	out := map[string]history{}
 	for i, run := range runs {
 		var h history
+		var events []EventRow
 		for _, e := range snap.Events {
 			if e.RunID == run {
-				seq := "-"
-				if e.WorkerSeq != nil {
-					seq = strconv.FormatInt(*e.WorkerSeq, 10)
-				}
-				h.events = append(h.events, fmt.Sprintf("#%d %s %s/%s/%s", e.Sequence, e.Type, e.WorkerID, e.WorkerEpoch, seq))
+				events = append(events, e)
 			}
 		}
-		for _, l := range runLogs(c, run) {
+		logs := runLogs(c, run)
+		for _, e := range events {
 			seq := "-"
-			if l.WorkerSeq != nil {
-				seq = strconv.FormatUint(*l.WorkerSeq, 10)
+			if e.WorkerSeq != nil {
+				seq = strconv.FormatInt(*e.WorkerSeq, 10)
 			}
-			h.logs = append(h.logs, fmt.Sprintf("#%d %s/%s/%s %s", l.Sequence, l.WorkerID, l.WorkerEpoch, seq, l.Message))
+			h.events = append(h.events, fmt.Sprintf("#%d %s %s/%s/%s", e.Sequence, e.Type, e.WorkerID, e.WorkerEpoch, seq))
 		}
+		h.logs = logLines(logs)
 		h.lines = recoveryLines(c, run, tokens[i])
-		h.problems = recoveryProblems(snap, c, run, h)
+		h.problems = recoveryProblems(events, logs, h.lines)
 		out[run] = h
+	}
+	for _, w := range c.Workers {
+		logs := workerLogs(c, w.ID)
+		out[w.ID] = history{logs: logLines(logs), problems: append(logProblems("Worker log", logs), workerLogGaps(logs)...)}
 	}
 	return out
 }
 
-// recoveryProblems says what is wrong with a history by itself: output lines
-// that are not 1, 2, 3, ... (a gap, a repetition, another order), an event or
-// log twice, a worker_seq that does not grow within its epoch.
-func recoveryProblems(snap ControllerSnapshot, c *Cluster, run string, h history) []string {
+// workerLogs pages through the logs of a Worker in the order of the API (its
+// sequence), not of their time.
+func workerLogs(c *Cluster, worker string) []v1.Log {
+	c.t.Helper()
+	var all []v1.Log
+	after := ""
+	for {
+		page, err := c.API.Logs(c.H.Context(), client.LogQuery{Worker: worker, After: after, Limit: 500})
+		if err != nil {
+			c.t.Fatal(err)
+		}
+		all = append(all, page.Logs...)
+		if !page.HasMore {
+			return all
+		}
+		after = page.Cursor
+	}
+}
+
+func logLines(logs []v1.Log) []string {
+	var out []string
+	for _, l := range logs {
+		seq := "-"
+		if l.WorkerSeq != nil {
+			seq = strconv.FormatUint(*l.WorkerSeq, 10)
+		}
+		out = append(out, fmt.Sprintf("#%d %s/%s/%s %s", l.Sequence, l.WorkerID, l.WorkerEpoch, seq, l.Message))
+	}
+	return out
+}
+
+// logProblems says which logs are there twice, by their emitter's triple.
+func logProblems(what string, logs []v1.Log) []string {
 	var found []string
-	for i, l := range h.lines {
+	seen := map[string]bool{}
+	for _, l := range logs {
+		if l.WorkerSeq == nil {
+			continue
+		}
+		key := fmt.Sprintf("%s/%s/%d", l.WorkerID, l.WorkerEpoch, *l.WorkerSeq)
+		if seen[key] {
+			found = append(found, what+" "+key+" twice")
+		}
+		seen[key] = true
+	}
+	return found
+}
+
+// workerLogGaps says where the logs of a Worker skip a worker_seq within an
+// epoch. A prefix check cannot see a line lost after the read, a hole can.
+func workerLogGaps(logs []v1.Log) []string {
+	var found []string
+	last := map[string]uint64{}
+	for _, l := range logs {
+		if l.WorkerSeq == nil {
+			continue
+		}
+		epoch := l.WorkerID + "/" + l.WorkerEpoch
+		if prev, ok := last[epoch]; ok && *l.WorkerSeq != prev+1 {
+			found = append(found, fmt.Sprintf("Worker log %s: worker_seq %d after %d: a line is missing or out of order", epoch, *l.WorkerSeq, prev))
+		}
+		last[epoch] = *l.WorkerSeq
+	}
+	return found
+}
+
+// recoveryProblems says what is wrong with what was read of a Run by itself:
+// output lines that are not 1, 2, 3, ... (a gap, a repetition, another order),
+// an event or log twice, a worker_seq that does not grow within its epoch.
+func recoveryProblems(events []EventRow, logs []v1.Log, lines []string) []string {
+	var found []string
+	for i, l := range lines {
 		if want := fmt.Sprintf(" line %d", i+1); !strings.HasSuffix(l, want) {
 			found = append(found, fmt.Sprintf("output line %d is %q: a gap, a repetition or a swap", i+1, l))
 			break
@@ -250,10 +326,7 @@ func recoveryProblems(snap ControllerSnapshot, c *Cluster, run string, h history
 	seen := map[string]bool{}
 	last := map[string]int64{}
 	prev := int64(0)
-	for _, e := range snap.Events {
-		if e.RunID != run {
-			continue
-		}
+	for _, e := range events {
 		if e.Sequence <= prev {
 			found = append(found, fmt.Sprintf("event #%d after #%d", e.Sequence, prev))
 		}
@@ -272,25 +345,14 @@ func recoveryProblems(snap ControllerSnapshot, c *Cluster, run string, h history
 		}
 		last[epoch] = *e.WorkerSeq
 	}
-	seenLogs := map[string]bool{}
-	for _, l := range runLogs(c, run) {
-		if l.WorkerSeq == nil {
-			continue
-		}
-		key := fmt.Sprintf("%s/%s/%d", l.WorkerID, l.WorkerEpoch, *l.WorkerSeq)
-		if seenLogs[key] {
-			found = append(found, "log "+key+" twice")
-		}
-		seenLogs[key] = true
-	}
-	return found
+	return append(found, logProblems("log", logs)...)
 }
 
 func recoveryRequireSane(t *testing.T, when string, now map[string]history) {
 	t.Helper()
 	for run, h := range now {
 		for _, p := range h.problems {
-			t.Errorf("%s: Run %s: %s", when, run, p)
+			t.Errorf("%s: %s: %s", when, run, p)
 		}
 	}
 }
@@ -306,7 +368,7 @@ func recoveryRequirePrefix(t *testing.T, when string, before, after map[string]h
 			was, now []string
 		}{{"events", b.events, a.events}, {"logs", b.logs, a.logs}, {"output", b.lines, a.lines}} {
 			if len(part.now) < len(part.was) || !slices.Equal(part.was, part.now[:len(part.was)]) {
-				t.Errorf("%s: Run %s: the %s read before are not a prefix of those now (%d before, %d now); first difference: %s",
+				t.Errorf("%s: %s: the %s read before are not a prefix of those now (%d before, %d now); first difference: %s",
 					when, run, part.name, len(part.was), len(part.now), firstDifference(part.was, part.now))
 			}
 		}
