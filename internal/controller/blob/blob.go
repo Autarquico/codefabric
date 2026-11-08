@@ -80,6 +80,8 @@ type Store struct {
 	root       string
 	clock      clock.Clock
 	installing sync.RWMutex
+
+	afterStat func() // test seam of Delete: between the look at the mtime and the unlink
 }
 
 // New prepares root and removes temporary files abandoned by earlier crashes.

@@ -161,17 +161,27 @@ func LogsPurgeable(ctx context.Context, q Querier, scope LogScope, cutoff time.T
 	return countRows(ctx, q, `SELECT COUNT(*) FROM logs WHERE received_at < ? AND `+scope.predicate(), cutoff.UnixNano())
 }
 
+// LogsBytes is the size of the text of the logs of the scope received before
+// cutoff (their message and attributes: the rest is a few bytes of keys).
+func LogsBytes(ctx context.Context, q Querier, scope LogScope, cutoff time.Time) (int64, error) {
+	return countRows(ctx, q, `SELECT COALESCE(SUM(length(msg) + length(attrs)), 0) FROM logs WHERE received_at < ? AND `+scope.predicate(), cutoff.UnixNano())
+}
+
 // PurgeLogs deletes at most limit of them.
 func (db *DB) PurgeLogs(ctx context.Context, scope LogScope, cutoff time.Time, limit int) (int64, error) {
 	return db.purgeBatch(ctx, `DELETE FROM logs WHERE sequence IN
 		(SELECT sequence FROM logs WHERE received_at < ? AND `+scope.predicate()+` ORDER BY sequence LIMIT ?)`, cutoff.UnixNano(), limit)
 }
 
-const commandsToPurge = `FROM worker_commands WHERE created_at < ? AND (acked_at IS NOT NULL OR cancelled_at IS NOT NULL)`
+// An order is purgeable once it was delivered or withdrawn and no Run that can
+// still need it holds it: the reconciliation reads the assign (and the stops)
+// of an open lease back from here, for a Worker that lost its disk.
+const commandsToPurge = `FROM worker_commands WHERE created_at < ? AND (acked_at IS NOT NULL OR cancelled_at IS NOT NULL)
+	AND (run_id IS NULL OR EXISTS (SELECT 1 FROM runs r WHERE r.id = worker_commands.run_id AND r.state IN ` + settledRuns + ` AND r.runtime = 'stopped'))`
 
 // CommandsPurgeable counts the orders created before cutoff that the Worker
-// acknowledged or the Controller withdrew: they keep copies of prompts for no
-// one (§10.4).
+// acknowledged or the Controller withdrew, and that belong to no Run still
+// alive: they keep copies of prompts for no one (§10.4).
 func CommandsPurgeable(ctx context.Context, q Querier, cutoff time.Time) (int64, error) {
 	return countRows(ctx, q, `SELECT COUNT(*) `+commandsToPurge, cutoff.UnixNano())
 }

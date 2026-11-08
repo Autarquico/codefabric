@@ -73,6 +73,9 @@ func (s *Store) Delete(d Digest, notAfter time.Time) (bool, error) {
 	case info.ModTime().After(notAfter):
 		return false, nil
 	}
+	if s.afterStat != nil {
+		s.afterStat()
+	}
 	if err := os.Remove(s.path(d)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, fmt.Errorf("blob: removing %s: %w", d, err)
 	}

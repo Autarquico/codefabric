@@ -128,7 +128,13 @@ func (s *Service) plan(ctx context.Context) (v1.GCReport, blobScan, error) {
 			if err != nil {
 				return err
 			}
-			rep.Items = append(rep.Items, v1.GCCount{Kind: st.kind, Count: n})
+			item := v1.GCCount{Kind: st.kind, Count: n}
+			if st.size != nil && n > 0 {
+				if item.Bytes, err = st.size(ctx, q); err != nil {
+					return err
+				}
+			}
+			rep.Items = append(rep.Items, item)
 			if st.held != nil {
 				rep.HeldBack = st.held()
 			}
@@ -194,7 +200,16 @@ func (s *Service) deleteBatch(ctx context.Context, batch []garbage, notAfter tim
 	defer release()
 	err = s.db.WithTx(ctx, func(tx *store.Tx) error {
 		gone = gone[:0]
+		// The mark is older than this batch: a commit or a seal may have named a
+		// blob since. Holding the writer, nothing can name one while this reads.
+		live, err := s.referencedNow(ctx, tx)
+		if err != nil {
+			return err
+		}
 		for _, g := range batch {
+			if live[string(g.digest)] {
+				continue
+			}
 			if s.hooks.BeforeUnlink != nil {
 				s.hooks.BeforeUnlink(g.digest)
 			}
@@ -213,6 +228,20 @@ func (s *Service) deleteBatch(ctx context.Context, batch []garbage, notAfter tim
 		return nil
 	})
 	return gone, err
+}
+
+// referencedNow reads, in tx, the digests that a Workflow version or an output
+// segment names at this moment.
+func (s *Service) referencedNow(ctx context.Context, tx *store.Tx) (map[string]bool, error) {
+	live := map[string]bool{}
+	mark := func(d string) { live[d] = true }
+	if err := store.ManifestDigests(ctx, tx, mark); err != nil {
+		return nil, err
+	}
+	if err := store.LogsIndexDigests(ctx, tx, false, time.Time{}, mark); err != nil {
+		return nil, err
+	}
+	return live, nil
 }
 
 func chunks[T any](all []T, size int) func(yield func([]T) bool) {
@@ -240,6 +269,21 @@ func (s *Service) Stats(ctx context.Context) (v1.StorageStats, error) {
 		UnreferencedBlobBytes: scan.unreferencedBytes,
 		MaxStorageBytes:       s.policy.MaxStorage,
 		Reclaimable:           rep,
+	}
+	for _, it := range rep.Items {
+		st.ReclaimableBytes += it.Bytes
+	}
+	if err := s.db.Read(ctx, func(q store.Querier) error {
+		for _, scope := range []store.LogScope{store.SystemLogs, store.RunLogs} {
+			n, err := store.LogsBytes(ctx, q, scope, s.clock.Now().Add(day))
+			if err != nil {
+				return err
+			}
+			st.LogBytes += n
+		}
+		return nil
+	}); err != nil {
+		return v1.StorageStats{}, err
 	}
 	if s.databasePath != "" {
 		if st.DatabaseBytes, err = fileBytes(s.databasePath, s.databasePath+"-wal"); err != nil {

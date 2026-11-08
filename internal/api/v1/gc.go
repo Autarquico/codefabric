@@ -33,15 +33,17 @@ type GCReport struct {
 // Blobs are the content-addressed files: the output of the Runs, the files of
 // the Workflows, and the ones nothing refers to (yet: the GC waits a grace
 // period before deleting them). The database and the relay are measured on
-// disk. MaxStorageBytes is max_storage, 0 if none; it only measures.
+// disk; the purged rows of the database are reused, so the file does not shrink. MaxStorageBytes is max_storage, 0 if none; it only measures.
 type StorageStats struct {
 	OutputBlobBytes       int64    `json:"output_blob_bytes"`
 	WorkflowBlobBytes     int64    `json:"workflow_blob_bytes"`
 	UnreferencedBlobBytes int64    `json:"unreferenced_blob_bytes"`
 	DatabaseBytes         int64    `json:"database_bytes"`
+	LogBytes              int64    `json:"log_bytes"` // the text of the structured logs: inside DatabaseBytes, not added to the total
 	RelayBytes            int64    `json:"relay_bytes"`
 	TotalBytes            int64    `json:"total_bytes"`
 	MaxStorageBytes       int64    `json:"max_storage_bytes,omitempty"`
 	OverMaxStorage        bool     `json:"over_max_storage"`
 	Reclaimable           GCReport `json:"reclaimable"`
+	ReclaimableBytes      int64    `json:"reclaimable_bytes"` // of the Reclaimable items that are measured in bytes
 }

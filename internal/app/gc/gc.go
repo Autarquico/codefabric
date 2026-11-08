@@ -119,9 +119,19 @@ func New(db *store.DB, clk clock.Clock, blobs Blobs, policy Policy, opts ...Opti
 	return s
 }
 
-// Run does a pass, or with dryRun reports what it would do. The report lists the
-// same things either way, in the order a pass does them.
+// systemActor is who runs the periodic passes.
+var systemActor = domain.ActorRef{Kind: domain.ActorSystem, ID: "controller"}
+
+// Run does a pass as the system, or with dryRun reports what it would do. The
+// report lists the same things either way, in the order a pass does them.
 func (s *Service) Run(ctx context.Context, dryRun bool) (v1.GCReport, error) {
+	return s.RunAs(ctx, systemActor, dryRun)
+}
+
+// RunAs is Run on behalf of by. A pass that deletes leaves an entry in the audit
+// trail with who ran it, how it ended and what it deleted, also when it fails;
+// a dry run changes nothing and leaves none.
+func (s *Service) RunAs(ctx context.Context, by domain.ActorRef, dryRun bool) (v1.GCReport, error) {
 	if dryRun {
 		rep, _, err := s.plan(ctx)
 		return rep, err
@@ -129,6 +139,14 @@ func (s *Service) Run(ctx context.Context, dryRun bool) (v1.GCReport, error) {
 	s.pass.Lock()
 	defer s.pass.Unlock()
 
+	rep, err := s.passOnce(ctx)
+	if auditErr := s.audit(ctx, by, rep, err); err == nil {
+		err = auditErr
+	}
+	return rep, err
+}
+
+func (s *Service) passOnce(ctx context.Context) (v1.GCReport, error) {
 	rep := v1.GCReport{}
 	if err := s.purgeHistory(ctx, &rep); err != nil {
 		return rep, err
@@ -142,6 +160,23 @@ func (s *Service) Run(ctx context.Context, dryRun bool) (v1.GCReport, error) {
 	return rep, s.sweepRelay(ctx, &rep)
 }
 
+// audit records the pass in a transaction of its own, which outlives a
+// cancelled ctx: what a pass deleted must be recorded even if it was cut short.
+func (s *Service) audit(ctx context.Context, by domain.ActorRef, rep v1.GCReport, passErr error) error {
+	result := "ok"
+	if passErr != nil {
+		result = "failed"
+	}
+	ctx = context.WithoutCancel(ctx)
+	return s.db.WithTx(ctx, func(tx *store.Tx) error {
+		return tx.AppendAudit(ctx, store.AuditEntry{
+			ActorKind: by.Kind, ActorID: by.ID, ActorSession: by.Session,
+			Action: "gc.run", ResourceKind: "controller", ResourceID: "gc",
+			After: rep, Result: result,
+		})
+	})
+}
+
 // RunLoop does a pass every Policy.Interval until ctx ends.
 func (s *Service) RunLoop(ctx context.Context, log *slog.Logger) {
 	ticker := s.clock.NewTicker(s.policy.Interval)
@@ -152,7 +187,10 @@ func (s *Service) RunLoop(ctx context.Context, log *slog.Logger) {
 			return
 		case <-ticker.C():
 			rep, err := s.Run(ctx, false)
-			if err != nil && ctx.Err() == nil {
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
 				log.ErrorContext(ctx, "garbage collection failed", "err", err)
 				continue
 			}
@@ -189,6 +227,8 @@ type step struct {
 	kind  string
 	due   func(ctx context.Context, q store.Querier) (int64, error)
 	batch func(ctx context.Context, limit int) (rows int64, more bool, err error)
+	// size, if set, says after due how many bytes those rows take.
+	size func(ctx context.Context, q store.Querier) (int64, error)
 	// held, if set, says after due how many rows the step leaves although they are old enough.
 	held func() int64
 }
@@ -205,6 +245,17 @@ func (s *Service) steps(now time.Time) []step {
 			return n, n >= int64(limit), err
 		}}
 	}
+	logs := func(scope store.LogScope, kind string, cutoff time.Time) step {
+		st := rows(kind,
+			func(ctx context.Context, q store.Querier) (int64, error) {
+				return store.LogsPurgeable(ctx, q, scope, cutoff)
+			},
+			func(ctx context.Context, n int) (int64, error) { return s.db.PurgeLogs(ctx, scope, cutoff, n) })
+		st.size = func(ctx context.Context, q store.Querier) (int64, error) {
+			return store.LogsBytes(ctx, q, scope, cutoff)
+		}
+		return st
+	}
 	return []step{
 		rows("idempotency_keys",
 			func(ctx context.Context, q store.Querier) (int64, error) {
@@ -219,20 +270,8 @@ func (s *Service) steps(now time.Time) []step {
 				return store.ReceiptsPurgeable(ctx, q, by(p.Events))
 			},
 			func(ctx context.Context, n int) (int64, error) { return s.db.PurgeReceipts(ctx, by(p.Events), n) }),
-		rows("system_logs",
-			func(ctx context.Context, q store.Querier) (int64, error) {
-				return store.LogsPurgeable(ctx, q, store.SystemLogs, by(p.System))
-			},
-			func(ctx context.Context, n int) (int64, error) {
-				return s.db.PurgeLogs(ctx, store.SystemLogs, by(p.System), n)
-			}),
-		rows("run_logs",
-			func(ctx context.Context, q store.Querier) (int64, error) {
-				return store.LogsPurgeable(ctx, q, store.RunLogs, by(p.RunLogs))
-			},
-			func(ctx context.Context, n int) (int64, error) {
-				return s.db.PurgeLogs(ctx, store.RunLogs, by(p.RunLogs), n)
-			}),
+		logs(store.SystemLogs, "system_logs", by(p.System)),
+		logs(store.RunLogs, "run_logs", by(p.RunLogs)),
 		rows("worker_commands",
 			func(ctx context.Context, q store.Querier) (int64, error) {
 				return store.CommandsPurgeable(ctx, q, by(p.RunLogs))
@@ -274,7 +313,7 @@ func (s *Service) eventsStep(cutoff time.Time) step {
 				}); err != nil {
 					return 0, false, err
 				}
-				through = p.Through
+				through, held = p.Through, p.Held
 			}
 			n, err := s.db.PurgeEvents(ctx, through, limit)
 			return n, n >= int64(limit), err
@@ -284,12 +323,29 @@ func (s *Service) eventsStep(cutoff time.Time) step {
 
 func (s *Service) purgeHistory(ctx context.Context, rep *v1.GCReport) error {
 	for _, st := range s.steps(s.clock.Now()) {
+		// The bytes are measured before the first batch, as a dry run measures them.
+		var bytes int64
+		if st.size != nil {
+			if err := s.db.Read(ctx, func(q store.Querier) (err error) { bytes, err = st.size(ctx, q); return err }); err != nil {
+				return err
+			}
+		}
 		var total int64
+		record := func() {
+			item := v1.GCCount{Kind: st.kind, Count: total}
+			if total > 0 {
+				item.Bytes = bytes
+			}
+			rep.Items = append(rep.Items, item)
+			if st.held != nil {
+				rep.HeldBack = st.held()
+			}
+		}
 		for {
 			rows, more, err := st.batch(ctx, s.policy.BatchSize)
 			total += rows
 			if err != nil {
-				rep.Items = append(rep.Items, v1.GCCount{Kind: st.kind, Count: total})
+				record()
 				return err
 			}
 			if s.hooks.AfterBatch != nil {
@@ -299,11 +355,11 @@ func (s *Service) purgeHistory(ctx context.Context, rep *v1.GCReport) error {
 				break
 			}
 			if err := yield(ctx); err != nil {
-				rep.Items = append(rep.Items, v1.GCCount{Kind: st.kind, Count: total})
+				record()
 				return err
 			}
 		}
-		rep.Items = append(rep.Items, v1.GCCount{Kind: st.kind, Count: total})
+		record()
 	}
 	return nil
 }

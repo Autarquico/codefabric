@@ -12,9 +12,9 @@ import (
 func newGCCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gc",
-		Short: "Collect garbage in the Controller: expired history and blobs nothing refers to",
+		Short: "Collect garbage in the Controller: expired history, blobs nothing refers to and relay refs of archived Tasks",
 		Long: "Runs a pass of the garbage collector of the Controller (not of the Workers, which clean their own " +
-			"machines). With --dry-run it lists what the pass would delete and changes nothing.",
+			"machines). With --dry-run it shows what the pass would delete and changes nothing.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -92,6 +92,7 @@ func printStorageStats(out io.Writer, st v1.StorageStats) error {
 		{"workflow blobs", st.WorkflowBlobBytes},
 		{"unreferenced blobs", st.UnreferencedBlobBytes},
 		{"database", st.DatabaseBytes},
+		{"  of which logs", st.LogBytes},
 		{"git relay", st.RelayBytes},
 		{"total", st.TotalBytes},
 	} {
@@ -108,7 +109,12 @@ func printStorageStats(out io.Writer, st v1.StorageStats) error {
 		fmt.Fprintf(out, "max_storage %s: %s it (the GC only warns).\n", byteSize(st.MaxStorageBytes), state)
 	}
 	fmt.Fprintln(out, "\nA GC pass would free:")
-	return printItems(out, "Would delete", st.Reclaimable)
+	if err := printItems(out, "Would delete", st.Reclaimable); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(out, "Reclaimable: %s measured in bytes. Purged rows are reused by the database, whose file does not shrink.\n",
+		byteSize(st.ReclaimableBytes))
+	return err
 }
 
 // byteSize writes n in the largest binary unit that keeps it above 1.

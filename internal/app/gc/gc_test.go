@@ -315,6 +315,9 @@ func TestScenario_RetentionGc_EventsOfARunThatHasNotEndedAreKept(t *testing.T) {
 	if items(rep)["events"] != 1 {
 		t.Fatalf("purged %d events, want only the one before the live Run's", items(rep)["events"])
 	}
+	if rep.HeldBack != 3 {
+		t.Fatalf("a real pass reports %d events held back, want the 3 behind the live Run's", rep.HeldBack)
+	}
 	var purged uint64
 	if err := f.db.Read(t.Context(), func(q store.Querier) (err error) {
 		_, purged, err = store.EventBounds(t.Context(), q)
@@ -407,6 +410,35 @@ func TestScenario_RetentionGc_PutDuringSweepKeepsTheBlob(t *testing.T) {
 	}
 }
 
+// A commit that lands after the mark and names an old blob must keep it: the
+// sweep reads the references again in the transaction that deletes.
+func TestSweep_KeepsABlobAManifestNamedAfterTheMark(t *testing.T) {
+	f := newFixture(t)
+	a, b := f.blob("old and unreferenced a", 5*day), f.blob("old and unreferenced b", 5*day)
+	policy := shortPolicy
+	policy.BatchSize = 1
+	var named blob.Digest
+	hooks := gc.Hooks{AfterBatch: func(kind string, _ int64) {
+		if kind != "blobs" || named != "" {
+			return
+		}
+		named = a
+		if !f.has(a) {
+			named = b
+		}
+		f.exec(`INSERT OR IGNORE INTO workflows (id, name, created_by, created_at) VALUES ('wf_1', 'w', 'me', 1)`)
+		f.exec(`INSERT INTO workflow_versions (workflow_id, version, digest, manifest, author_kind, author_id, origin, changed, created_at)
+			VALUES ('wf_1', 1, ?, ?, 'user', 'me', 'client', '[]', 1)`, string(digestOf("m")),
+			fmt.Sprintf(`{"schema_version":1,"components":[{"files":[{"sha256":%q}]}]}`, named))
+	}}
+	if _, err := f.service(policy, gc.WithHooks(hooks)).Run(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	if named == "" || !f.has(named) {
+		t.Fatalf("the blob a manifest named after the mark was deleted (named %q)", named)
+	}
+}
+
 func TestScenario_RetentionGc_StorageStats(t *testing.T) {
 	f := newFixture(t)
 	f.clk.Advance(30 * day)
@@ -422,6 +454,7 @@ func TestScenario_RetentionGc_StorageStats(t *testing.T) {
 	for range 3 {
 		f.event("")
 	}
+	f.exec(`INSERT INTO logs (ts, received_at, source, level, msg) VALUES (1, ?, 'controller', 'info', 'twelve bytes')`, epoch.Add(30*day).UnixNano()) // 12 + 2 of attrs, old once the clock moves
 	f.clk.Advance(10 * day)
 	f.event("")
 	f.blob("fresh", time.Minute) // 5 bytes, unreferenced but inside the grace period
@@ -451,6 +484,9 @@ func TestScenario_RetentionGc_StorageStats(t *testing.T) {
 	if bytes := st.Reclaimable.Items[len(st.Reclaimable.Items)-1].Bytes; bytes != 8 {
 		t.Fatalf("reclaimable bytes = %d, want 8", bytes)
 	}
+	if st.LogBytes != 14 || st.ReclaimableBytes != 8+14 {
+		t.Fatalf("log bytes = %d, reclaimable bytes = %d; want 14 and 8+14", st.LogBytes, st.ReclaimableBytes)
+	}
 	if items(st.Reclaimable)["events"] != 3 {
 		t.Fatalf("reclaimable events = %d", items(st.Reclaimable)["events"])
 	}
@@ -470,5 +506,74 @@ func TestStats_FlagsStorageOverMaxStorage(t *testing.T) {
 	}
 	if f.count("events") != 0 || len(st.Reclaimable.Items) == 0 {
 		t.Fatal("unexpected state")
+	}
+}
+
+type brokenBlobs struct{ *blob.Store }
+
+func (brokenBlobs) Walk(context.Context, func(blob.Entry) error) error {
+	return fmt.Errorf("disk gone")
+}
+
+func (f *fixture) audit() (rows []struct{ kind, id, action, result, after string }) {
+	f.t.Helper()
+	r, err := f.db.Reader().QueryContext(f.t.Context(), `SELECT actor_kind, actor_id, action, result, COALESCE(after, '') FROM audit_entries ORDER BY id`)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	for r.Next() {
+		var row struct{ kind, id, action, result, after string }
+		if err := r.Scan(&row.kind, &row.id, &row.action, &row.result, &row.after); err != nil {
+			f.t.Fatal(err)
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func TestRun_AuditsEveryRealPassAndNoDryRun(t *testing.T) {
+	f := newFixture(t)
+	f.blob("garbage", 5*day)
+	svc := f.service(shortPolicy)
+	client := domain.ActorRef{Kind: domain.ActorHuman, ID: "client_1"}
+
+	if _, err := svc.RunAs(t.Context(), client, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.audit()); n != 0 {
+		t.Fatalf("a dry run left %d audit entries", n)
+	}
+	if _, err := svc.RunAs(t.Context(), client, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Run(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	got := f.audit()
+	if len(got) != 2 {
+		t.Fatalf("audit = %+v, want one entry per real pass", got)
+	}
+	if got[0].kind != "human" || got[0].id != "client_1" || got[0].action != "gc.run" || got[0].result != "ok" ||
+		!strings.Contains(got[0].after, `"blobs"`) || !strings.Contains(got[0].after, `"count":1`) {
+		t.Errorf("client pass entry = %+v", got[0])
+	}
+	if got[1].kind != "system" {
+		t.Errorf("periodic pass entry = %+v, want the system actor", got[1])
+	}
+}
+
+func TestRun_AuditsAPassThatFails(t *testing.T) {
+	f := newFixture(t)
+	f.event("")
+	svc := gc.New(f.db, f.clk, brokenBlobs{f.blobs}, shortPolicy)
+	client := domain.ActorRef{Kind: domain.ActorHuman, ID: "client_1"}
+
+	if _, err := svc.RunAs(t.Context(), client, false); err == nil {
+		t.Fatal("the pass should fail")
+	}
+	got := f.audit()
+	if len(got) != 1 || got[0].result != "failed" || got[0].id != "client_1" {
+		t.Fatalf("audit = %+v, want one failed entry", got)
 	}
 }

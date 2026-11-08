@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -227,6 +228,37 @@ func TestPurgeCommands_RemovesOnlyOrdersTheWorkerHasAckedOrTheControllerWithdrew
 	}
 	if left := count(t, f.db, "worker_commands"); left != 1 {
 		t.Fatalf("%d orders left, want the pending one", left)
+	}
+}
+
+func TestPurgeCommands_KeepsTheOrdersOfARunThatIsStillAlive(t *testing.T) {
+	f := newLeaseFixture(t)
+	ctx := t.Context()
+	live, done := f.queuedRun(1), f.queuedRun(2)
+	order := func(run Run) Lease {
+		l := f.assign(run, f.alpha, v1.Capacity{})
+		f.tx(func(tx *Tx) error {
+			if _, err := tx.EnqueueCommand(ctx, WorkerCommand{
+				WorkerID: f.alpha.ID, Type: domain.CommandAssign, RunID: l.RunID, LeaseID: l.ID,
+				Epoch: l.Epoch, Payload: []byte(`{}`), CreatedAt: epoch0,
+			}); err != nil {
+				return err
+			}
+			return tx.AckAssign(ctx, l.ID, epoch0)
+		})
+		return l
+	}
+	lease := order(live)
+	order(done)
+	f.exec(`UPDATE runs SET state = 'failed', runtime = 'stopped', finished_at = ? WHERE id = ?`, epoch0.UnixNano(), string(done.ID))
+	cutoff := epoch0.Add(time.Hour)
+
+	if n, err := f.db.PurgeCommands(ctx, cutoff, 10); err != nil || n != 1 {
+		t.Fatalf("purged %d, %v; want the order of the finished Run only", n, err)
+	}
+	var got WorkerCommand
+	if err := f.db.Read(ctx, func(q Querier) (err error) { got, err = AssignOf(ctx, q, lease.ID); return err }); err != nil || got.RunID != live.ID {
+		t.Fatalf("the assign of the open lease: %+v, %v", got, err)
 	}
 }
 

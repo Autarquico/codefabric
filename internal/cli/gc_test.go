@@ -10,7 +10,7 @@ import (
 
 func TestScenario_RetentionGc_StorageStatsTextShowsEveryCategoryAndWhatIsReclaimable(t *testing.T) {
 	st := v1.StorageStats{
-		OutputBlobBytes: 2048, WorkflowBlobBytes: 7, UnreferencedBlobBytes: 3 * 1024 * 1024, DatabaseBytes: 512, RelayBytes: 100,
+		OutputBlobBytes: 2048, WorkflowBlobBytes: 7, UnreferencedBlobBytes: 3 * 1024 * 1024, DatabaseBytes: 512, LogBytes: 300, ReclaimableBytes: 3 * 1024 * 1024, RelayBytes: 100,
 		TotalBytes: 2048 + 7 + 3*1024*1024 + 512 + 100,
 		Reclaimable: v1.GCReport{Items: []v1.GCCount{
 			{Kind: "events", Count: 12}, {Kind: "blobs", Count: 4, Bytes: 3 * 1024 * 1024}, {Kind: "relay_refs", Count: 2},
@@ -23,7 +23,7 @@ func TestScenario_RetentionGc_StorageStatsTextShowsEveryCategoryAndWhatIsReclaim
 	text := out.String()
 	for _, want := range []string{
 		"output blobs", "2.0 KiB", "workflow blobs", "7 B", "unreferenced blobs", "3.0 MiB", "database", "512 B",
-		"git relay", "100 B", "total", "A GC pass would free:", "Would delete", "events", "12", "blobs", "relay_refs",
+		"of which logs", "300 B", "git relay", "100 B", "Reclaimable: 3.0 MiB", "total", "A GC pass would free:", "Would delete", "events", "12", "blobs", "relay_refs",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("output lacks %q:\n%s", want, text)
