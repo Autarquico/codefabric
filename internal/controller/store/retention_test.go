@@ -251,7 +251,8 @@ func TestPurgeCommands_KeepsTheOrdersOfARunThatIsStillAlive(t *testing.T) {
 	lease := order(live)
 	doneLease := order(done)
 	f.exec(`UPDATE runs SET state = 'failed', runtime = 'stopped', finished_at = ? WHERE id = ?`, epoch0.UnixNano(), string(done.ID))
-	f.exec(`UPDATE reservations SET released_at = ?, release_reason = 'completed' WHERE lease_id = ?`, epoch0.UnixNano(), string(doneLease.ID))
+	// Both reservations are released: only the state of the Run protects the live order here.
+	f.exec(`UPDATE reservations SET released_at = ?, release_reason = 'completed' WHERE lease_id IN (?, ?)`, epoch0.UnixNano(), string(doneLease.ID), string(lease.ID))
 	cutoff := epoch0.Add(time.Hour)
 
 	if n, err := f.db.PurgeCommands(ctx, cutoff, 10); err != nil || n != 1 {
