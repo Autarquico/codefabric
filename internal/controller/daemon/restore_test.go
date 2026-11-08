@@ -294,7 +294,7 @@ func TestScenario_RestoreWithoutACAExplainsHowToJoinAgain(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 
-	for _, want := range []string{addr, "cf controller run", "cf controller token create", "cf connect --force", "cf worker join --force", "cf worker list", "cf worker remove", dst.CredentialsDir()} {
+	for _, want := range []string{addr, "cf controller run", "cf controller token create", "cf connect --force", "cf worker join --force", "cf worker list", "cf worker remove", "then restart the Worker", dst.CredentialsDir()} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("the next steps do not mention %q:\n%s", want, stdout.String())
 		}

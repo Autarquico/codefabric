@@ -36,8 +36,8 @@ func RestoreCommand() *cobra.Command {
 			"  3. without the CA, nobody keeps an identity: create invitations here with\n" +
 			"     cf controller token create --client|--worker, and join again with cf connect --force <invitation>.\n" +
 			"     A Worker keeps its name in the restored database: see it with cf worker list, retire it with\n" +
-			"     cf worker remove <worker>, and then cf worker join --force <invitation>; or join under another\n" +
-			"     name with --name. Its Runs that were active in the backup are lost, and its reservations released.\n" +
+			"     cf worker remove <worker>, and then cf worker join --force <invitation>, then restart the Worker;\n" +
+			"     or join under another name with --name. Its Runs that were active in the backup are lost, and its reservations released.\n" +
 			"Restore only backups you trust: the archive is not signed, and what it holds becomes the Controller.\n" +
 			"Join tokens not yet used are discarded: create them again.\n" +
 			"Orders and leases issued after the backup was taken are not in it; the Workers reconcile with what the\n" +
@@ -98,7 +98,8 @@ func printNextSteps(out io.Writer, res RestoreResult, paths config.Paths) {
 	fmt.Fprintln(out, "     client and per Worker:  cf controller token create --client   |   cf controller token create --worker")
 	fmt.Fprintln(out, "  3. On each client:        cf connect --force <invitation>")
 	fmt.Fprintln(out, "     On each Worker:        cf worker list, then cf worker remove <worker> (its old identity, here)")
-	fmt.Fprintln(out, "                            and cf worker join --force <invitation>  (or join under another --name)")
+	fmt.Fprintln(out, "                            and cf worker join --force <invitation>  (or join under another --name),")
+	fmt.Fprintln(out, "                            then restart the Worker")
 }
 
 // restorePassphrase is readPassphrase, but asks once: a wrong passphrase is refused anyway.
