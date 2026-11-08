@@ -132,9 +132,12 @@ func (s *Service) appendEntry(ctx context.Context, tx *store.Tx, w store.Worker,
 		o   store.Output
 		err error
 	)
-	if e.EOF {
+	switch {
+	case e.EOF:
 		o, err = tx.CloseOutput(ctx, domain.ID(e.RunID), e.LeaseEpoch, *e.FinalOffset, e.Note, now)
-	} else {
+	case e.Skip:
+		o, err = tx.SkipOutput(ctx, domain.ID(e.RunID), e.LeaseEpoch, e.Offset, now)
+	default:
 		o, err = tx.AppendOutput(ctx, domain.ID(e.RunID), e.LeaseEpoch, e.Offset, e.Data, now)
 	}
 	if err != nil {
@@ -175,13 +178,15 @@ func validateOutputEntry(e v1.OutputEntry) error {
 		return input.Invalid("lease_epoch must be at least 1")
 	case e.Offset > v1.OutputMaxOffset:
 		return input.Invalid("offset is out of range")
+	case e.Skip && (e.EOF || len(e.Data) > 0 || e.FinalOffset != nil || e.Note != ""):
+		return input.Invalid("a skip entry has an offset and nothing else")
 	case e.EOF && (len(e.Data) > 0 || e.FinalOffset == nil):
 		return input.Invalid("an eof entry has a final_offset and no data")
 	case e.EOF && *e.FinalOffset > v1.OutputMaxOffset:
 		return input.Invalid("final_offset is out of range")
 	case !e.EOF && (e.FinalOffset != nil || e.Note != ""):
 		return input.Invalid("final_offset and note belong to an eof entry")
-	case !e.EOF && len(e.Data) == 0:
+	case !e.EOF && !e.Skip && len(e.Data) == 0:
 		return input.Invalid("an entry has data or is an eof")
 	case len(e.Data) > v1.OutputChunkBytes:
 		return input.Invalid("an entry carries at most %d bytes", v1.OutputChunkBytes)
@@ -299,7 +304,28 @@ func (s *Service) ReadOutput(ctx context.Context, by pki.Session, q OutputRead) 
 			out.Truncated = from < o.Start
 		}
 		from = min(max(from, o.Start), o.End)
+		if !asked {
+			// A tail is one run of bytes: it starts after the last gap it would cross.
+			if g, found, err := store.LastGapBefore(ctx, r, run.ID, epoch, o.End); err != nil {
+				return err
+			} else if found && g.To > from {
+				from, out.Truncated = g.To, true
+			}
+		}
+		g, ahead, err := store.NextGap(ctx, r, run.ID, epoch, from)
+		if err != nil {
+			return err
+		}
+		if ahead && g.From <= from { // inside a gap: the bytes resume after it
+			from, out.Truncated = g.To, true
+			if g, ahead, err = store.NextGap(ctx, r, run.ID, epoch, from); err != nil {
+				return err
+			}
+		}
 		to := min(from+limit, o.End)
+		if ahead {
+			to = min(to, g.From)
+		}
 		out.Offset = from
 		if to > from {
 			if out.Data, err = s.db.OutputRange(ctx, r, run.ID, epoch, from, to); err != nil {
@@ -456,8 +482,26 @@ func (f *OutputFollower) look(ctx context.Context, r store.Querier) (outputLook,
 	if f.pos < o.Start {
 		f.pos, f.gap = o.Start, true
 	}
+	g, ahead, err := store.NextGap(ctx, r, f.run, f.epoch, f.pos)
+	if err != nil {
+		return l, err
+	}
+	jumped := ahead && g.From <= f.pos
+	if jumped { // the Worker discarded these bytes: resume after them
+		f.pos, f.gap = g.To, true
+		if g, ahead, err = store.NextGap(ctx, r, f.run, f.epoch, f.pos); err != nil {
+			return l, err
+		}
+	}
+	if jumped && f.pos >= o.End { // nothing follows the gap yet: the chunk that says so has no bytes
+		l.chunk = &v1.OutputChunk{RunID: string(f.run), LeaseEpoch: f.epoch, Offset: f.pos, Data: []byte{}, Gap: true}
+		f.gap = false
+	}
 	if f.pos < o.End {
 		to := min(f.pos+v1.OutputPageBytes, o.End)
+		if ahead {
+			to = min(to, g.From)
+		}
 		data, err := f.s.db.OutputRange(ctx, r, f.run, f.epoch, f.pos, to)
 		if err != nil {
 			return l, err

@@ -21,6 +21,9 @@ import (
 // "controller" and "version", it concerns every Run.
 const daemonComponent = "daemon"
 
+// journalComponent is the component of a journal over journal.max_size (§1.3).
+const journalComponent = "journal"
+
 // doctorTimeout bounds one pass of the checks, which start processes.
 const doctorTimeout = 15 * time.Second
 

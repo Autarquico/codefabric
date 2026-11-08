@@ -56,6 +56,14 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request, _ caller) error 
 	} else {
 		st.Database.OK = true
 	}
+	// An informative section: the diagnosis answers even when it cannot be read.
+	if s.work.Workers != nil && st.Database.OK {
+		workers, err := s.work.Workers.WithJournalBacklog(r.Context())
+		if err != nil {
+			s.log.WarnContext(r.Context(), "the journal of the Workers cannot be read for the status", "err", err)
+		}
+		st.Workers = workers
+	}
 	writeJSON(w, http.StatusOK, st)
 	return nil
 }

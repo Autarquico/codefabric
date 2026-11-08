@@ -571,3 +571,55 @@ func TestOutput_ABigBatchIsAppliedInSeveralTransactionsInOrder(t *testing.T) {
 		t.Fatalf("end %d, want %d", got.End, want.Len())
 	}
 }
+
+func skipEntry(o outputRun, offset uint64) v1.OutputEntry {
+	return v1.OutputEntry{RunID: o.run.ID, LeaseEpoch: o.lease.Epoch, Skip: true, Offset: offset}
+}
+
+func TestOutput_ASkipKeepsWhatWasAcceptedAndReadersAreToldOfTheGap(t *testing.T) {
+	e := newEnv(t)
+	o := e.outputRun("alpha")
+	e.send(o.worker, entry(o, 0, "0123456789"))
+	if acks := e.send(o.worker, skipEntry(o, 5000)); acks[0].Code != "" || acks[0].End != 5000 || acks[0].Start != 0 {
+		t.Fatalf("skip ack = %+v", acks[0])
+	}
+	e.send(o.worker, entry(o, 5000, "after"))
+
+	if got := e.readOutput(runs.OutputRead{Ref: o.run.ID, HasOffset: true, Offset: 0}); string(got.Data) != "0123456789" || got.Truncated {
+		t.Fatalf("read before the gap = %+v", got)
+	}
+	if got := e.readOutput(runs.OutputRead{Ref: o.run.ID, HasOffset: true, Offset: 10}); string(got.Data) != "after" || got.Offset != 5000 || !got.Truncated {
+		t.Fatalf("read from inside the gap = %+v", got)
+	}
+	if got := e.readOutput(runs.OutputRead{Ref: o.run.ID, HasTail: true, Tail: 4000}); string(got.Data) != "after" || !got.Truncated {
+		t.Fatalf("tail across the gap = %+v", got)
+	}
+	s, _ := e.followOutput(runs.OutputFollow{Ref: o.run.ID, HasOffset: true, Offset: 0})
+	waitUntil(t, "both sides of the gap", func() bool { return s.text() == "0123456789after" })
+	s.mu.Lock()
+	gaps := s.gaps
+	s.mu.Unlock()
+	if len(gaps) != 1 || gaps[0] != 5000 {
+		t.Fatalf("gaps = %v, want one at 5000", gaps)
+	}
+}
+
+func TestOutput_AnOutputThatEndsInAGapClosesAndTheFollowSaysSo(t *testing.T) {
+	e := newEnv(t)
+	o := e.outputRun("alpha")
+	e.send(o.worker, entry(o, 0, "head"))
+	s, _ := e.followOutput(runs.OutputFollow{Ref: o.run.ID, HasOffset: true, Offset: 0})
+	waitUntil(t, "head", func() bool { return s.text() == "head" })
+
+	acks := e.send(o.worker, skipEntry(o, 900), eofEntry(o, 900))
+	if acks[0].Code != "" || acks[1].Code != "" || !acks[1].Closed {
+		t.Fatalf("acks = %+v", acks)
+	}
+	<-s.stopped
+	s.mu.Lock()
+	gaps := s.gaps
+	s.mu.Unlock()
+	if eof, _ := s.done(); eof == nil || eof.FinalOffset != 900 || len(gaps) != 1 || gaps[0] != 900 {
+		t.Fatalf("eof = %+v, gaps = %v, want the end at 900 after a gap", eof, gaps)
+	}
+}

@@ -80,12 +80,15 @@ const (
 // or the end of it. The output of an epoch is append-only: the Worker sends it
 // in order and again, unchanged, until the Controller has it. With EOF, the
 // Worker says that no more will come; FinalOffset is where it ends, and Note
-// why it ended there when the file was replaced or truncated.
+// why it ended there when the file was replaced or truncated. With Skip, the
+// Worker says that it discarded the bytes between what it sent and Offset, and
+// will not send them: the Controller keeps what it holds and resumes at Offset.
 type OutputEntry struct {
 	RunID       string  `json:"run_id"`
 	LeaseEpoch  uint64  `json:"lease_epoch"`
 	Offset      uint64  `json:"offset"`
 	Data        []byte  `json:"data,omitempty"`
+	Skip        bool    `json:"skip,omitempty"`
 	EOF         bool    `json:"eof,omitempty"`
 	FinalOffset *uint64 `json:"final_offset,omitempty"`
 	Note        string  `json:"note,omitempty"`

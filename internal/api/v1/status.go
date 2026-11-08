@@ -10,6 +10,18 @@ type Status struct {
 	StartedAt     time.Time      `json:"started_at"`
 	UptimeSeconds int64          `json:"uptime_seconds"`
 	Database      DatabaseStatus `json:"database"`
+	// Workers are those whose journal has a backlog (§1.3): bytes of reports,
+	// logs and output the Controller has not confirmed. Absent when none has.
+	Workers []StatusWorker `json:"workers,omitempty"`
+}
+
+// StatusWorker is a Worker with a backlog in its journal. TruncatedAt is when
+// it last had to discard logs or output.
+type StatusWorker struct {
+	ID                  string     `json:"id"`
+	Name                string     `json:"name"`
+	JournalBacklogBytes uint64     `json:"journal_backlog_bytes"`
+	JournalTruncatedAt  *time.Time `json:"journal_truncated_at,omitempty"`
 }
 
 // DatabaseStatus is the outcome of the integrity check. A failing database is

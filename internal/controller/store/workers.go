@@ -47,6 +47,13 @@ type Worker struct {
 	ReconcileStartedAt *time.Time
 	ReconciledEpoch    string
 	ReconciledAt       *time.Time
+
+	// JournalBacklogBytes is what the latest heartbeat said the Worker's journal
+	// holds unconfirmed; JournalTruncatedAt when it last discarded logs or output;
+	// LastTruncationID the latest truncation turned into an event (§1.3).
+	JournalBacklogBytes uint64
+	JournalTruncatedAt  *time.Time
+	LastTruncationID    uint64
 }
 
 // ReconciledSince says whether the Worker completed a reconciliation of the
@@ -92,7 +99,8 @@ const workerSelect = `SELECT w.id, w.short_n, w.name, w.identity_id, w.state, CO
     (SELECT COUNT(*) FROM reservations lr JOIN leases ll ON ll.id = lr.lease_id
       WHERE lr.worker_id = w.id AND lr.released_at IS NULL AND ll.state = 'accepted'),
     w.reconcile_started_at, COALESCE(w.reconciled_epoch, ''), w.reconciled_at,
-    COALESCE(w.ssh_target, ''), COALESCE(w.attach, '')
+    COALESCE(w.ssh_target, ''), COALESCE(w.attach, ''),
+    w.journal_backlog_bytes, w.journal_truncated_at, w.last_truncation_id
   FROM workers w LEFT JOIN worker_heartbeats h ON h.worker_id = w.id
   LEFT JOIN (SELECT worker_id, SUM(cpu) AS cpu, SUM(memory_mb) AS memory_mb, SUM(disk_mb) AS disk_mb, COUNT(*) AS n
              FROM reservations WHERE released_at IS NULL GROUP BY worker_id) rv ON rv.worker_id = w.id`
@@ -115,13 +123,15 @@ func scanWorker(row rowScanner) (Worker, error) {
 		payload                 sql.NullString
 		state, beforeOff, avail string
 		attach                  string
+		truncatedAt             sql.NullInt64
 	)
 	if err := row.Scan(&id, &w.Short, &w.Name, &identity, &state, &beforeOff,
 		&w.Report.Epoch, &w.Report.DaemonVersion, &w.Report.Hostname, &w.Report.OS, &w.Report.Arch,
 		&capabilities, &w.Settings.CPUMax, &w.Settings.MemoryMaxMB, &w.Settings.DiskMaxMB, &w.Settings.MaxConcurrentRuns,
 		&avail, &heartbeat, &created, &removed, &payload, &w.ActiveRuns,
 		&w.Reserved.CPU, &w.Reserved.MemoryMB, &w.Reserved.DiskMB, &w.Reservations, &w.LastCommandSeq,
-		&w.LiveLeases, &reconcileStarted, &w.ReconciledEpoch, &reconciledAt, &w.Report.SSHTarget, &attach); err != nil {
+		&w.LiveLeases, &reconcileStarted, &w.ReconciledEpoch, &reconciledAt, &w.Report.SSHTarget, &attach,
+		&w.JournalBacklogBytes, &truncatedAt, &w.LastTruncationID); err != nil {
 		return Worker{}, scanErr(err, "worker")
 	}
 	if err := json.Unmarshal([]byte(capabilities), &w.Report.Capabilities); err != nil {
@@ -145,6 +155,7 @@ func scanWorker(row rowScanner) (Worker, error) {
 	w.Settings.Availability = domain.AvailabilityPolicy(avail)
 	w.LastHeartbeatAt, w.RemovedAt = timePtr(heartbeat), timePtr(removed)
 	w.ReconcileStartedAt, w.ReconciledAt = timePtr(reconcileStarted), timePtr(reconciledAt)
+	w.JournalTruncatedAt = timePtr(truncatedAt)
 	w.CreatedAt = time.Unix(0, created).UTC()
 	return w, nil
 }
@@ -319,4 +330,17 @@ func (t *Tx) SetReconcileStarted(ctx context.Context, id domain.ID, at time.Time
 func (t *Tx) SetReconciled(ctx context.Context, id domain.ID, epoch string, at time.Time) error {
 	res, err := t.Exec(ctx, `UPDATE workers SET reconciled_epoch = ?, reconciled_at = ? WHERE id = ?`, epoch, at.UnixNano(), string(id))
 	return changedOne(res, err, "recording a reconciliation")
+}
+
+// RecordJournal keeps what a heartbeat said of the journal of a Worker: its
+// backlog, and the latest truncation turned into an event with the time it
+// happened (nil when the heartbeat had none new). Both are validated by the caller.
+func (t *Tx) RecordJournal(ctx context.Context, id domain.ID, backlog, lastTruncation uint64, truncatedAt *time.Time) error {
+	if _, err := t.Exec(ctx,
+		`UPDATE workers SET journal_backlog_bytes = ?, last_truncation_id = MAX(last_truncation_id, ?),
+		     journal_truncated_at = COALESCE(?, journal_truncated_at) WHERE id = ?`,
+		backlog, lastTruncation, nanosOrNil(truncatedAt), string(id)); err != nil {
+		return fmt.Errorf("store: recording the journal of a worker: %w", err)
+	}
+	return nil
 }

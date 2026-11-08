@@ -148,11 +148,8 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 	o, err := OutputOf(ctx, t, run, epoch)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		o = Output{RunID: run, Epoch: epoch, Start: offset, End: offset, Sealed: offset}
-		if _, err := t.Exec(ctx,
-			`INSERT INTO run_output (run_id, lease_epoch, start_offset, end_offset, sealed_offset, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			string(run), epoch, offset, offset, offset, at.UnixNano()); err != nil {
-			return Output{}, fmt.Errorf("store: starting output: %w", err)
+		if o, err = t.openOutput(ctx, run, epoch, offset, at); err != nil {
+			return Output{}, err
 		}
 	case err != nil:
 		return Output{}, err
@@ -208,6 +205,110 @@ func (t *Tx) AppendOutput(ctx context.Context, run domain.ID, epoch, offset uint
 	t.MarkOutput()
 	t.markSealDue(o)
 	return o, nil
+}
+
+// openOutput starts the output of an epoch, empty, at offset.
+func (t *Tx) openOutput(ctx context.Context, run domain.ID, epoch, offset uint64, at time.Time) (Output, error) {
+	if _, err := t.Exec(ctx,
+		`INSERT INTO run_output (run_id, lease_epoch, start_offset, end_offset, sealed_offset, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		string(run), epoch, offset, offset, offset, at.UnixNano()); err != nil {
+		return Output{}, fmt.Errorf("store: starting output: %w", err)
+	}
+	return Output{RunID: run, Epoch: epoch, Start: offset, End: offset, Sealed: offset}, nil
+}
+
+// SkipOutput records that the Worker discarded the bytes between what the store
+// holds and offset, and will not send them: End moves to offset and the range is
+// a gap, which readers jump over. What was accepted is kept (unlike the hole an
+// append leaves, which drops what the Worker abandoned), so a Worker that gives
+// up output it has not sent takes nothing back from what it has. It is
+// idempotent: an offset the store has already reached changes nothing. An output
+// that holds nothing simply starts at offset. A closed output refuses it.
+func (t *Tx) SkipOutput(ctx context.Context, run domain.ID, epoch, offset uint64, at time.Time) (Output, error) {
+	if epoch < 1 || offset > v1.OutputMaxOffset {
+		return Output{}, fmt.Errorf("%w: skip to %d of epoch %d", ErrOutputInvalid, offset, epoch)
+	}
+	o, err := OutputOf(ctx, t, run, epoch)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return t.openOutput(ctx, run, epoch, offset, at)
+	case err != nil:
+		return Output{}, err
+	case o.Closed:
+		return Output{}, ErrOutputClosed
+	case offset <= o.End:
+		return o, nil
+	}
+	if o.Start == o.End {
+		o.Start, o.End, o.Sealed = offset, offset, offset
+	} else {
+		if err := t.addGap(ctx, o, offset); err != nil {
+			return Output{}, err
+		}
+		o.End = offset
+		if t.db.sealer != nil {
+			t.sealDue = append(t.sealDue, outputKey{string(o.RunID), o.Epoch}) // what precedes a gap is sealed whole
+		}
+	}
+	if _, err := t.Exec(ctx,
+		`UPDATE run_output SET start_offset = ?, end_offset = ?, sealed_offset = ?, updated_at = ? WHERE run_id = ? AND lease_epoch = ?`,
+		o.Start, o.End, o.Sealed, at.UnixNano(), string(run), epoch); err != nil {
+		return Output{}, fmt.Errorf("store: skipping output: %w", err)
+	}
+	o.UpdatedAt = at
+	t.MarkOutput()
+	return o, nil
+}
+
+// addGap records the gap [o.End, to), joined to the one that ends at o.End.
+func (t *Tx) addGap(ctx context.Context, o Output, to uint64) error {
+	res, err := t.Exec(ctx,
+		`UPDATE run_output_gaps SET to_offset = ? WHERE run_id = ? AND lease_epoch = ? AND to_offset = ?`, to, string(o.RunID), o.Epoch, o.End)
+	if err != nil {
+		return fmt.Errorf("store: extending a gap: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	if _, err := t.Exec(ctx,
+		`INSERT INTO run_output_gaps (run_id, lease_epoch, from_offset, to_offset) VALUES (?, ?, ?, ?)`, string(o.RunID), o.Epoch, o.End, to); err != nil {
+		return fmt.Errorf("store: recording a gap: %w", err)
+	}
+	return nil
+}
+
+// Gap is a range of an output that the Worker discarded and never sent.
+type Gap struct{ From, To uint64 }
+
+// NextGap is the first gap of the output that ends after pos: the one pos lies
+// in, or the next one ahead of it.
+func NextGap(ctx context.Context, q Querier, run domain.ID, epoch, pos uint64) (Gap, bool, error) {
+	var g Gap
+	err := q.QueryRow(ctx,
+		`SELECT from_offset, to_offset FROM run_output_gaps WHERE run_id = ? AND lease_epoch = ? AND to_offset > ? ORDER BY from_offset LIMIT 1`,
+		string(run), epoch, pos).Scan(&g.From, &g.To)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Gap{}, false, nil
+	case err != nil:
+		return Gap{}, false, fmt.Errorf("store: finding a gap: %w", err)
+	}
+	return g, true, nil
+}
+
+// LastGapBefore is the last gap that starts before pos.
+func LastGapBefore(ctx context.Context, q Querier, run domain.ID, epoch, pos uint64) (Gap, bool, error) {
+	var g Gap
+	err := q.QueryRow(ctx,
+		`SELECT from_offset, to_offset FROM run_output_gaps WHERE run_id = ? AND lease_epoch = ? AND from_offset < ? ORDER BY from_offset DESC LIMIT 1`,
+		string(run), epoch, pos).Scan(&g.From, &g.To)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Gap{}, false, nil
+	case err != nil:
+		return Gap{}, false, fmt.Errorf("store: finding a gap: %w", err)
+	}
+	return g, true, nil
 }
 
 // overBackpressure says that the output holds MaxUnsealedBytes waiting to be sealed.

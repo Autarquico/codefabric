@@ -36,11 +36,15 @@ type controller struct {
 	// capAt: by run, the entry that would pass this offset gets CF_INVALID_TRANSITION (the Controller closed the output).
 	capAt map[string]uint64
 	fail  error
+	// duringUpload, if set, runs while a request is being answered, as the world
+	// goes on while the Worker waits for the Controller.
+	duringUpload func()
 }
 
 type held struct {
 	start, end uint64
-	data       []byte
+	data       []byte // what it holds, without the gaps
+	gaps       [][2]uint64
 	closed     bool
 }
 
@@ -49,6 +53,9 @@ func (c *controller) UploadOutput(_ context.Context, b v1.OutputBatch) (v1.Outpu
 		return v1.OutputBatchResponse{}, c.fail
 	}
 	c.batches = append(c.batches, b.Entries)
+	if c.duringUpload != nil {
+		c.duringUpload()
+	}
 	var out v1.OutputBatchResponse
 	for _, e := range b.Entries {
 		ack := v1.OutputAck{RunID: e.RunID, LeaseEpoch: e.LeaseEpoch}
@@ -74,8 +81,20 @@ func (c *controller) UploadOutput(_ context.Context, b v1.OutputBatch) (v1.Outpu
 			c.outputs[k] = h
 		}
 		switch {
+		case e.EOF && h.end < *e.FinalOffset: // CloseOutput: the store must hold the output up to its end
+			ack.Code = domain.CodeInvalidRequest
+			out.Acks = append(out.Acks, ack)
+			continue
 		case e.EOF:
 			h.closed = true
+		case e.Skip && e.Offset > h.end:
+			if h.end > h.start {
+				h.gaps = append(h.gaps, [2]uint64{h.end, e.Offset})
+			} else {
+				h.start = e.Offset
+			}
+			h.end = e.Offset
+		case e.Skip:
 		case e.Offset > h.end:
 			h.start, h.end, h.data = e.Offset, e.Offset+uint64(len(e.Data)), append([]byte(nil), e.Data...)
 		case e.Offset+uint64(len(e.Data)) > h.end:

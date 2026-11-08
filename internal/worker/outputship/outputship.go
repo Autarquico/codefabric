@@ -38,7 +38,8 @@ import (
 )
 
 // Limits and timings. The Controller keeps the whole output (sealed segments and
-// a hot tail), so every byte is sent, from the cursor on. A batch carries at most
+// a hot tail), so every byte is sent, from the cursor on, but the ones a shed gave
+// up (the Controller is told with a skip entry). A batch carries at most
 // batchBytes of output, which is base64 of at most 4/3 of that in a body the
 // Controller reads up to v1.OutputBatchBytes; perRunBytes (the least each Run is
 // offered; a lone Run is offered the whole batch) and the rotation keep one large
@@ -238,6 +239,7 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 		return nil, nil // the Controller asked to wait; the Runs after it use its room
 	}
 	it := &item{cursor: cur}
+	sent := cur.Resume() // what was discarded counts as sent: the Controller is told with a skip
 	entry := func(e v1.OutputEntry) {
 		e.RunID, e.LeaseEpoch = r.RunID, r.LeaseEpoch
 		it.entries = append(it.entries, e)
@@ -247,6 +249,10 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 		it.closing = true
 	}
 
+	if cur.SkipTo > cur.Sent {
+		entry(v1.OutputEntry{Skip: true, Offset: cur.SkipTo})
+	}
+
 	path := filepath.Join(s.o.Paths.WorkerRunDir(r.RunID, r.LeaseEpoch), execwrap.OutputLog)
 	f, err := openLog(path)
 	switch {
@@ -254,12 +260,12 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 		if !isFinal(r) {
 			return nil, nil // the harness has not written yet
 		}
-		closeAt(cur.Sent, "") // it never wrote: the output is empty
+		closeAt(sent, "") // it never wrote: the output is empty
 		return it, nil
 	case err != nil:
 		// A symlink, a device, a pipe where the log should be: not read, and said so.
 		s.o.Log.WarnContext(ctx, "output.log is not a regular file: closing its output", "run", r.RunID, "err", err)
-		closeAt(cur.Sent, noteReplaced)
+		closeAt(sent, noteReplaced)
 		return it, nil
 	}
 	defer func() { _ = f.Close() }()
@@ -270,8 +276,8 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 	dev, ino := identityOf(info)
 	size := uint64(info.Size()) //nolint:gosec // a regular file's size is not negative
 	it.size = size
-	if cur.HasFile && (cur.Dev != dev || cur.Ino != ino || size < cur.Sent) {
-		closeAt(cur.Sent, noteReplaced)
+	if cur.HasFile && (cur.Dev != dev || cur.Ino != ino || size < sent) {
+		closeAt(sent, noteReplaced)
 		return it, nil
 	}
 	// The inode of a file that is removed and made again is reused at once (Linux),
@@ -279,7 +285,7 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 	// bytes. What was sent is the start of this file or the file is not the same.
 	if cur.PrefixLen > 0 {
 		if sum, err := fingerprint(f, cur.PrefixLen); err != nil || !bytes.Equal(sum, cur.PrefixSum) {
-			closeAt(cur.Sent, noteReplaced)
+			closeAt(sent, noteReplaced)
 			return it, nil
 		}
 	}
@@ -287,7 +293,7 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 		it.cursor.HasFile, it.cursor.Dev, it.cursor.Ino = true, dev, ino
 	}
 
-	pos := cur.Sent
+	pos := sent
 	for size > pos && room > 0 {
 		buf := make([]byte, min(uint64(room), size-pos, v1.OutputChunkBytes))
 		n, err := f.ReadAt(buf, int64(pos)) //nolint:gosec // below the file's size
@@ -322,7 +328,7 @@ func (s *Shipper) plan(ctx context.Context, r state.Run, room int) (*item, error
 			it.cursor.PrefixLen, it.cursor.PrefixSum = it.prefixLen, it.prefixSum
 		}
 		if !cur.HasFile || learnt {
-			return nil, s.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.SaveOutputCursor(ctx, tx, it.cursor) })
+			return nil, s.saveCursor(ctx, it.cursor)
 		}
 		return nil, nil
 	}
@@ -395,7 +401,20 @@ loop:
 	if it.prefixLen > cur.PrefixLen && uint64(it.prefixLen) <= cur.Sent { //nolint:gosec // a small length
 		cur.PrefixLen, cur.PrefixSum = it.prefixLen, it.prefixSum
 	}
-	return s.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.SaveOutputCursor(ctx, tx, cur) })
+	return s.saveCursor(ctx, cur)
+}
+
+// saveCursor stores the cursor of a pass. Output may have been shed since the
+// pass planned: the cursor never goes back.
+func (s *Shipper) saveCursor(ctx context.Context, cur state.OutputCursor) error {
+	return s.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		now, err := state.OutputCursorOf(ctx, tx, cur.Key)
+		if err != nil {
+			return err
+		}
+		cur.Sent, cur.SkipTo = max(cur.Sent, now.Sent), max(cur.SkipTo, now.SkipTo)
+		return state.SaveOutputCursor(ctx, tx, cur)
+	})
 }
 
 // fingerprint is the sha256 of the first n bytes of the file, read from the

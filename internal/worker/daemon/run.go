@@ -233,6 +233,7 @@ func Run(ctx context.Context, o Options) error {
 		takeApplies(r)
 		// A heartbeat taken is this daemon held as the current one: it may ask for grants.
 		ex.HeartbeatTaken()
+		d.ackJournal(gctx, r.JournalAck)
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
 		if r.ReconcileRequired && ex.Reconciled() {
 			// The Controller restarted, or lost what it knew of this epoch: reconcile again.
@@ -240,6 +241,18 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	d.executorHealth = ex.Health
+	shipper := outputship.New(outputship.Options{
+		DB: db, Uploader: c, Paths: o.Paths, Clock: d.clock, Log: d.log, Interval: o.OutputInterval,
+	})
+	maxSize, hardMax, limitsErr := doctor.JournalLimits(o.Paths)
+	if limitsErr != nil {
+		d.log.WarnContext(ctx, "the journal sizes of the Worker config are not used: the defaults apply", "err", limitsErr)
+	}
+	degrader := journal.NewDegrader(journal.DegradeOptions{
+		DB: db, Output: shipper, Clock: d.clock, Log: d.log, Limits: journal.Limits{MaxSize: maxSize, HardMax: hardMax},
+		OnDegraded: ex.SetJournalDegraded,
+	})
+	d.journalBacklog = degrader.Backlog
 	sender := &journal.Sender{
 		DB: db, Reporter: c, Journal: jrn, Clock: d.clock, Log: d.log, OnView: ex.ConfirmView,
 		// A fence is settled by a reconciliation: one is asked for at once, not at the next restart.
@@ -251,10 +264,8 @@ func Run(ctx context.Context, o Options) error {
 	g.Go(func() error { return broker.Run(gctx) })
 	g.Go(func() error { return sender.Run(gctx) })
 	g.Go(func() error { return logJournal.Run(gctx) })
-	shipper := outputship.New(outputship.Options{
-		DB: db, Uploader: c, Paths: o.Paths, Clock: d.clock, Log: d.log, Interval: o.OutputInterval,
-	})
 	g.Go(func() error { return shipper.Run(gctx) })
+	g.Go(func() error { return degrader.Run(gctx) })
 	return g.Wait()
 }
 
@@ -431,6 +442,7 @@ type daemon struct {
 	attachBinaries map[string]string // runtime name to the absolute path that attaches
 	onResponse     func(v1.HeartbeatResponse)
 	executorHealth func() v1.Health
+	journalBacklog func() journal.Backlog // nil: the journal says nothing in the heartbeat
 
 	lastMeasured    sysinfo.Info
 	hasLastMeasured bool
@@ -500,6 +512,7 @@ func (d *daemon) heartbeat(ctx context.Context) (v1.HeartbeatRequest, error) {
 		health = v1.Health{Status: v1.HealthDegraded, Message: problem}
 	}
 	health = d.withComponents(ctx, health)
+	jr, health := d.journalStatus(ctx, health)
 	return v1.HeartbeatRequest{
 		Epoch: d.epoch, Generation: d.generation, DaemonVersion: d.version,
 		Hostname: info.Hostname, OS: info.OS, Arch: info.Arch,
@@ -507,8 +520,48 @@ func (d *daemon) heartbeat(ctx context.Context) (v1.HeartbeatRequest, error) {
 		Total:        v1.Capacity{CPU: info.CPU, MemoryMB: info.MemoryMB, DiskMB: info.DiskMB},
 		Health:       health,
 		SSHTarget:    d.announcedSSHTarget(info.Hostname), AttachBinaries: d.attachBinaries,
-		Secrets: &report,
+		Secrets: &report, Journal: jr,
 	}, nil
+}
+
+// journalStatus is what the journal tells in the heartbeat: its backlog and the
+// truncations the Controller has not acknowledged. A journal over max_size also
+// makes the "journal" component fail, which keeps new Runs off the Worker.
+func (d *daemon) journalStatus(ctx context.Context, health v1.Health) (*v1.JournalReport, v1.Health) {
+	if d.journalBacklog == nil || d.stateDB == nil {
+		return nil, health
+	}
+	b := d.journalBacklog()
+	report := &v1.JournalReport{BacklogBytes: b.Bytes}
+	truncations, err := state.SealedTruncations(ctx, d.stateDB.Reader(), v1.MaxJournalTruncations)
+	if err != nil {
+		d.log.WarnContext(ctx, "the truncations of the journal cannot be read", "err", err)
+	}
+	for _, t := range truncations {
+		report.Truncations = append(report.Truncations, v1.JournalTruncation{
+			ID: t.ID, At: t.At, LogsFromSeq: t.LogsFrom, LogsToSeq: t.LogsTo, LogLines: t.LogLines, OutputBytes: t.OutputBytes, RunIDs: t.RunIDs,
+		})
+	}
+	if b.Reason != "" {
+		health.Components = append(slices.Clone(health.Components), doctor.CleanComponent(v1.ComponentHealth{
+			Name: journalComponent, Status: v1.ComponentFail, Message: b.Reason,
+			Action: "restore the connection to the Controller or free the disk of the Worker",
+		}))
+		if health.Status == v1.HealthOK {
+			health.Status, health.Message = v1.HealthDegraded, b.Reason
+		}
+	}
+	return report, health
+}
+
+// ackJournal forgets the truncations the Controller says it has.
+func (d *daemon) ackJournal(ctx context.Context, upTo uint64) {
+	if upTo == 0 || d.stateDB == nil {
+		return
+	}
+	if err := d.stateDB.WithTx(ctx, func(tx *state.Tx) error { return state.AckTruncations(ctx, tx, upTo) }); err != nil && ctx.Err() == nil {
+		d.log.WarnContext(ctx, "forgetting the truncations the Controller has failed", "err", err)
+	}
 }
 
 // announcedSSHTarget is the target the heartbeat carries. The default is the
