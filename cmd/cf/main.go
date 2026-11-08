@@ -122,5 +122,5 @@ func (f failedAdopter) Commit(context.Context, string, *workflowadopt.Prepared, 
 }
 
 func commands() []*cobra.Command {
-	return []*cobra.Command{daemon.Command(), workerdaemon.Command(), relay.Command(), mcpCommand(), newSetupCmd(binarySetupSteps())}
+	return []*cobra.Command{daemon.Command(), daemon.BackupCommand(), daemon.RestoreCommand(), workerdaemon.Command(), relay.Command(), mcpCommand(), newSetupCmd(binarySetupSteps())}
 }
