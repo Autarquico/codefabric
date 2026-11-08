@@ -79,6 +79,10 @@ Apply and inspect Environments. Subcommands: `apply` (make the definition in a f
 
 Show the events of the Controller (the last 20 by default) and follow them with `-f, --follow`. Filters: `--project`, `--task`, `--run`, `--worker`, `--type` (repeatable), `--level`, `--since` (`2h` or an RFC 3339 time). `--after` resumes from a cursor, and `--limit` sizes the page. With `--json --follow` the output is JSON Lines.
 
+## `cf gc`
+
+Collect garbage in the Controller: history past its retention (events, logs, delivered orders, the output of finished Runs) and the blobs nothing refers to. `--dry-run` lists what a pass would delete and deletes nothing. It deletes in small batches, so it does not stall the Controller; the Controller also runs it by itself, hourly. Retention and the batch size are set in `controller.json` (`retention`, `gc`). It does not touch Workers: each cleans its own machine.
+
 ## `cf inbox`
 
 List what needs you: Tasks waiting for input and failures to decide on. Answer with `cf task respond`.
@@ -127,6 +131,10 @@ Set up this machine step by step: ask what it is for and chain `cf connect` (cli
 ## `cf status`
 
 Show the Controller's version, uptime and database health.
+
+## `cf storage`
+
+Inspect what the Controller stores. `cf storage stats` shows the bytes by category (output and Workflow blobs, blobs nothing refers to, database, relay) and how much a `cf gc` pass would free. It changes nothing. `max_storage` only shows here and as a warning in the Controller's log; nothing is deleted for it.
 
 ## `cf task`
 

@@ -14,6 +14,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app"
+	"github.com/Autarquico/codefabric/internal/app/gc"
 	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/app/workflows"
@@ -148,6 +149,8 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		RunLostTimeout: cmp.Or(o.RunLostTimeout, time.Duration(cfg.RunLostTimeout)),
 		Blobs:          blobs, MaxBlobBytes: workflows.DefaultMaxBlobBytes,
 	}, runOpts...)
+	services.GC = gc.New(db, o.Clock, blobs, gcPolicy(cfg),
+		gc.WithLockFile(p.GCLockFile()), gc.WithDisk(p.DatabaseFile(), p.RelayDir()))
 	stopLogs := runLogs(ctx, tee, services, fallback)
 	// §27.1: the stops that are owed are resumed before anything is served.
 	if err := services.Reconciliation.Startup(ctx, o.Logger); err != nil {
@@ -179,6 +182,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 			}, srv.SetServerCert, o.Logger)
 		})
 		background.Go(func() { services.Workers.RunSweeper(runCtx, o.Logger) })
+		background.Go(func() { services.GC.RunLoop(runCtx, o.Logger) })
 		background.Go(func() { services.Reconciliation.RunGate(runCtx, o.Logger) })
 		background.Go(func() { services.Reconciliation.RunLostSweeper(runCtx, o.Logger) })
 		background.Go(func() {
@@ -191,6 +195,17 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		c.err = errors.Join(serveErr, db.Close())
 	}()
 	return c, nil
+}
+
+// gcPolicy is what controller.json says about retention and the GC; what it
+// leaves unset takes the defaults of the spec.
+func gcPolicy(cfg config.Controller) gc.Policy {
+	return gc.Policy{
+		System: time.Duration(cfg.Retention.System), Events: time.Duration(cfg.Retention.Events),
+		RunLogs: time.Duration(cfg.Retention.RunLogs), RawOutput: time.Duration(cfg.Retention.RawOutput),
+		BlobGrace: time.Duration(cfg.GC.BlobGrace), BatchSize: cfg.GC.BatchSize,
+		Interval: time.Duration(cfg.GC.Interval), MaxStorage: cfg.MaxStorage,
+	}
 }
 
 // runLogs writes the structured logs of the Controller into its store until

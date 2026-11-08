@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -68,8 +69,17 @@ func (d Digest) String() string { return string(d) }
 func (d Digest) hex() string { return strings.TrimPrefix(string(d), digestPrefix) }
 
 // Store keeps blobs below a root directory.
+//
+// installing is what makes Delete safe against a concurrent Put of the same
+// digest. Put holds it for reading while it installs (or finds installed) a
+// blob and refreshes its mtime; Delete holds it for writing while it looks at
+// the mtime and unlinks. So a Put either finishes before Delete looks, and the
+// fresh mtime saves the blob, or starts after the unlink and installs it anew.
+// It is a lock of this process: only the Controller's daemon writes blobs.
 type Store struct {
-	root string
+	root       string
+	clock      clock.Clock
+	installing sync.RWMutex
 }
 
 // New prepares root and removes temporary files abandoned by earlier crashes.
@@ -78,7 +88,7 @@ func New(root string, clk clock.Clock) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("blob: resolving root: %w", err)
 	}
-	s := &Store{root: root}
+	s := &Store{root: root, clock: clk}
 	if err := os.MkdirAll(s.tmpDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("blob: preparing %s: %w", root, err)
 	}
@@ -148,7 +158,8 @@ func (s *Store) Open(d Digest) (io.ReadCloser, error) {
 // Put stores the content of r and returns its digest and size. If want is not
 // empty and the content hashes to something else, nothing is stored and
 // ErrDigestMismatch is returned. Putting content that is already stored is a
-// successful no-op.
+// successful no-op that refreshes the blob's mtime, which is what the garbage
+// collector reads as "used just now".
 func (s *Store) Put(ctx context.Context, r io.Reader, want Digest) (_ Digest, _ int64, err error) {
 	if want != "" {
 		if err := want.validate(); err != nil {
@@ -176,6 +187,8 @@ func (s *Store) Put(ctx context.Context, r io.Reader, want Digest) (_ Digest, _ 
 	if err := tmp.Sync(); err != nil {
 		return "", 0, fmt.Errorf("blob: syncing temporary: %w", err)
 	}
+	s.installing.RLock()
+	defer s.installing.RUnlock()
 	if err := s.install(tmp.Name(), got, size); err != nil {
 		return "", 0, err
 	}
@@ -237,6 +250,10 @@ func (s *Store) install(tmp string, d Digest, size int64) error {
 	case errors.Is(err, fs.ErrExist):
 		if err := s.verifyInstalled(dst, d, size); err != nil {
 			return err
+		}
+		now := s.clock.Now()
+		if err := os.Chtimes(dst, now, now); err != nil {
+			return fmt.Errorf("blob: refreshing %s: %w", d, err)
 		}
 	default:
 		return fmt.Errorf("blob: installing %s: %w", d, err)
