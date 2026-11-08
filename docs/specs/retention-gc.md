@@ -54,7 +54,12 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Latencia
 - **Given** un GC grande
 - **When** corre en paralelo con escrituras
-- **Then** la latencia p95 de escritura no se degrada
+- **Then** cada lote de borrado afecta como máximo a `gc.batch_size` filas en su propia transacción y cede entre lotes, de modo que ninguna escritura espera más de un lote. Es un invariante determinista en CI; el p95 real de escritura se mide en `make bench`
+
+### Scenario: Storage stats
+- **Given** blobs, logs y ramas en el relay del Controller
+- **When** se ejecuta `cf storage stats`
+- **Then** muestra los bytes por categoría y cuánto es recuperable por GC, sin modificar nada
 
 ## Notas técnicas / riesgos
 
