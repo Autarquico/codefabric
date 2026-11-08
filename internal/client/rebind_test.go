@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,9 @@ func TestRebind_ADestinationWithAnotherCAIsRejectedAndTheBundleIsUntouched(t *te
 	_, err := client.Rebind(context.Background(), dir, net.JoinHostPort(host, port))
 	if err == nil {
 		t.Fatal("a Controller of another CA was accepted")
+	}
+	if !strings.Contains(err.Error(), "join it again: ask the owner") {
+		t.Errorf("the error does not say to join again: %v", err)
 	}
 	if after, _ := os.ReadFile(filepath.Clean(file)); string(after) != string(before) {
 		t.Errorf("controller file changed: %q -> %q", before, after)
@@ -131,5 +135,19 @@ func TestRebindWorker_ARejectedIdentityWritesNothing(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Clean(filepath.Join(dir, "controller"))); string(got) != "127.0.0.1:1\n" {
 		t.Errorf("controller file = %q", got)
+	}
+}
+
+func TestRebind_ARefusalNamesTheRightThing(t *testing.T) {
+	dir := savedBundle(t, func() client.Credentials { return makeBundle(t, newCA(t), "127.0.0.1:1") })
+	_, err := client.Rebind(context.Background(), dir, "noport")
+	if err == nil || strings.Contains(err.Error(), "--controller") || !strings.Contains(err.Error(), "host:port") {
+		t.Errorf("a malformed address: %v", err)
+	}
+
+	empty := filepath.Join(t.TempDir(), "none")
+	_, err = client.RebindWorker(context.Background(), empty, "127.0.0.1:1", client.WithRecoveryHint(client.WorkerRecoveryHint))
+	if err == nil || !strings.Contains(err.Error(), "cf worker join") || strings.Contains(err.Error(), "cf connect") {
+		t.Errorf("no Worker credentials: %v", err)
 	}
 }

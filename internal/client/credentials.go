@@ -1,6 +1,7 @@
 package client
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
@@ -300,12 +301,24 @@ func RebindWorker(ctx context.Context, dir, controller string, opts ...Option) (
 }
 
 func rebind(dir, controller string, opts []Option, probe func(*Client) error) (Info, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if !validControllerAddress(controller) {
+		return Info{}, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("%q is not a host:port address", controller), nil)
+	}
+	if exists, err := CredentialsExist(dir); err != nil {
+		return Info{}, err
+	} else if !exists {
+		return Info{}, domain.NewError(domain.CodeUnauthenticated, "no credentials found; "+cmp.Or(o.recovery, renewHint), nil)
+	}
 	c, err := Open(dir, append(opts, WithController(controller))...)
 	if err != nil {
 		return Info{}, err
 	}
 	if err := probe(c); err != nil {
-		return Info{}, unchangedBecause(controller, err)
+		return Info{}, unchangedBecause(controller, cmp.Or(o.recovery, renewHint), err)
 	}
 	path := filepath.Join(dir, controllerFile)
 	info, err := os.Lstat(path)
@@ -319,11 +332,18 @@ func rebind(dir, controller string, opts []Option, probe func(*Client) error) (I
 }
 
 // unchangedBecause says what to check, keeping the code of err when it has one.
-func unchangedBecause(controller string, err error) error {
+// A certificate from a CA other than the pinned one means this is not the
+// Controller these credentials know, and the way out is to join again.
+func unchangedBecause(controller, rejoin string, err error) error {
 	advice := "the credentials are unchanged. Check the address, and that it is the same Controller (or a restore of it) " +
 		"presenting a certificate from the CA pinned at connect time that covers that host"
 	var de *domain.Error
-	if errors.As(err, &de) {
+	if errors.As(err, &de) && de.Code == domain.CodeUnauthenticated && strings.Contains(de.Message, "is not trusted by the CA") {
+		advice = "the credentials are unchanged. The certificate comes from a CA these credentials do not know, so this is not " +
+			"the Controller they were issued by (a Controller restored from a backup without its CA is a new one); " +
+			"join it again: " + rejoin
+	}
+	if de != nil {
 		return domain.NewError(de.Code, fmt.Sprintf("%s: %s; %s", controller, de.Message, advice), de.Details)
 	}
 	return fmt.Errorf("%s did not answer (%w); %s", controller, err, advice)

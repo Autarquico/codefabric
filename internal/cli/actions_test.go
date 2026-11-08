@@ -144,7 +144,7 @@ func TestScenario_BackupRestore_RebindCommandsRefuseADestinationWithAnotherCA(t 
 			if code == 0 {
 				t.Fatal("a destination with another CA was accepted")
 			}
-			if !strings.Contains(errOut, "unchanged") {
+			if !strings.Contains(errOut, "unchanged") || !strings.Contains(errOut, "join it again") {
 				t.Errorf("the error is not actionable: %q", errOut)
 			}
 			if after, _ := os.ReadFile(filepath.Clean(file)); string(after) != string(before) {

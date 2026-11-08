@@ -75,7 +75,7 @@ func newWorkerSetControllerCmd() *cobra.Command {
 				return err
 			}
 			return rebindCredentials(cmd, client.RebindWorker, paths.WorkerCredentialsDir(), args[0],
-				"Restart the Worker daemon (`cf worker run`) for the change to take effect.\n",
+				"Restart the Worker daemon or its service for the change to take effect.\n",
 				client.WithRecoveryHint(client.WorkerRecoveryHint))
 		},
 	}
