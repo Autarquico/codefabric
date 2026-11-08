@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -274,4 +275,38 @@ func Describe(dir string) (Info, error) {
 		return Info{}, err
 	}
 	return Info{Controller: b.Controller, IdentityID: b.leaf.Subject.CommonName, NotAfter: b.leaf.NotAfter}, nil
+}
+
+// Rebind points the bundle in dir at another Controller address. The new
+// address is first asked for GET /v1/status over the pinned CA and the stored
+// client certificate; only an answer lets the `controller` file be replaced
+// (atomically, keeping its mode). Any failure leaves the bundle untouched.
+func Rebind(ctx context.Context, dir, controller string, opts ...Option) (Info, error) {
+	c, err := Open(dir, append(opts, WithController(controller))...)
+	if err != nil {
+		return Info{}, err
+	}
+	if _, err := c.Status(ctx); err != nil {
+		return Info{}, unchangedBecause(controller, err)
+	}
+	path := filepath.Join(dir, controllerFile)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return Info{}, fmt.Errorf("client: inspecting %s: %w", path, err)
+	}
+	if err := atomicfile.Write(path, []byte(controller+"\n"), info.Mode().Perm()); err != nil {
+		return Info{}, err
+	}
+	return Describe(dir)
+}
+
+// unchangedBecause says what to check, keeping the code of err when it has one.
+func unchangedBecause(controller string, err error) error {
+	advice := "the credentials are unchanged. Check the address, and that it is the same Controller (or a restore of it) " +
+		"presenting a certificate from the CA pinned at connect time that covers that host"
+	var de *domain.Error
+	if errors.As(err, &de) {
+		return domain.NewError(de.Code, fmt.Sprintf("%s: %s; %s", controller, de.Message, advice), de.Details)
+	}
+	return fmt.Errorf("%s did not answer (%w); %s", controller, err, advice)
 }
