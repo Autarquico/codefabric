@@ -10,7 +10,6 @@
 
 <!-- pm-sync:done-this-week -->
 - #17 Fase 2 — Claude/Codex y Workflows
-- #20 Adapter de Claude Code
 - #22 Workflows: apply, drift y lock de configuración
 - #25 Doctor y wizard de join
 - #26 E2E v0.2
@@ -27,6 +26,10 @@
 - #102 Flaky: TestWhatTheRedactionHoldsBackIsFlushedOnEveryEnd/cancellation (gitops)
 - #131 Instalador firmado, release y sitio
 - #136 Servidor MCP
+- #146 Retention y GC
+- #148 Degradación del journal y replay
+- #149 Backup y restore
+- #150 E2E v0.3 (recovery)
 <!-- /pm-sync:done-this-week -->
 
 ---

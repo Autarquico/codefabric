@@ -2,7 +2,7 @@
 codename: codefabric
 title: Degradación del journal y replay
 type: task
-status: active
+status: shipped
 priority: P1
 size: M
 issue: 148
