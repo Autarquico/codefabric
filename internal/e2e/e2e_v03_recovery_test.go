@@ -54,8 +54,9 @@ func (h history) String() string {
 // other one is killed too; then a daemon killed while the other Worker is cut
 // off; then the Controller killed again while two harnesses end. No Run is
 // lost or run twice, each ends as it should, and what an observer read before
-// each cut (events, logs of the Run and of its Worker, output) is a prefix of what it reads afterwards: no
-// gap, no repetition, same order.
+// each cut (events, logs of its Worker, output) is a prefix of what it reads
+// afterwards: no gap, no repetition, same order. A Run writes logs of its own
+// only as it ends, so those are checked at the end.
 func TestScenario_E2eV03_DoneDeFase4(t *testing.T) {
 	c := NewCluster(t, Opts{Workers: 2, MaxConcurrent: 2, Proxied: true})
 	sampler := c.StartSampler()
@@ -78,6 +79,12 @@ func TestScenario_E2eV03_DoneDeFase4(t *testing.T) {
 	}
 	for i := range runs {
 		recoveryWaitLines(c, runs[i], tokens[i], 3)
+	}
+	for _, w := range c.Workers {
+		c.Eventually("the Worker to have logs before any cut", func() (bool, string) {
+			logs := workerLogs(c, w.ID)
+			return len(logs) > 0, fmt.Sprintf("%s has %d logs", w.Name, len(logs))
+		})
 	}
 	before := recoveryRead(c, runs, tokens)
 	recoveryRequireSane(t, "before any cut", before)
