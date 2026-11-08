@@ -188,6 +188,29 @@ func TestPersistStoresAssignmentsWithTheCursorAndIgnoresRedelivery(t *testing.T)
 	}
 }
 
+func TestAnOrderWhoseRunAndEpochAreStoredUnderAnotherLeaseDoesNotBlockTheQueue(t *testing.T) {
+	f := newFixture(t)
+	a := func(lease string, run, epoch uint64) *v1.AssignCommand {
+		return &v1.AssignCommand{LeaseID: lease, RunID: runID(run), Epoch: epoch, AcceptBy: t0, Spec: specJSON("x", "command", "headless")}
+	}
+	blocked, err := f.e.persist(t.Context(), []v1.WorkerCommand{{Seq: 1, Type: domain.CommandAssign, Assign: a("lease_1", 1, 5)}})
+	if err != nil || blocked {
+		t.Fatalf("persist: %v %v", blocked, err)
+	}
+	blocked, err = f.e.persist(t.Context(), []v1.WorkerCommand{
+		{Seq: 2, Type: domain.CommandAssign, Assign: a("lease_other", 1, 5)},
+		{Seq: 3, Type: domain.CommandAssign, Assign: a("lease_3", 3, 1)},
+	})
+	if err != nil || blocked {
+		t.Fatalf("persist: %v %v", blocked, err)
+	}
+	live, _ := state.LiveRuns(t.Context(), f.db.Reader())
+	cursor, _ := state.Cursor(t.Context(), f.db.Reader())
+	if len(live) != 2 || cursor != 3 || live[0].LeaseID != "lease_1" {
+		t.Errorf("live = %+v, cursor = %d: the first lease must stay and the queue move on", live, cursor)
+	}
+}
+
 func TestAnUnknownOrderBlocksTheQueueAndDegradesTheWorker(t *testing.T) {
 	f := newFixture(t)
 	a := func(n uint64) *v1.AssignCommand {

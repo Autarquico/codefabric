@@ -146,14 +146,21 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 				continue
 			}
 			spec := parseSpec(a.Spec)
-			if _, err := state.InsertAssigned(ctx, tx, state.Run{
+			run := state.Run{
 				Key: state.Key{RunID: a.RunID, LeaseEpoch: a.Epoch}, LeaseID: a.LeaseID, RunShort: a.RunShort, TaskID: a.TaskID,
 				ProjectID: a.ProjectID, CommandSeq: c.Seq, AcceptBy: a.AcceptBy, SourceCommit: a.SourceCommit,
 				Branch: a.Branch, Repo: a.Repo,
 				CPU: a.Resources.CPU, MemoryMB: a.Resources.MemoryMB, Spec: a.Spec,
 				Harness: spec.Requirements.Harness, Mode: spec.Mode, CreatedAt: now,
-			}); err != nil {
+			}
+			inserted, err := state.InsertAssigned(ctx, tx, run)
+			if err != nil {
 				return err
+			}
+			if !inserted {
+				if err := e.warnIfOtherLease(ctx, tx, run); err != nil {
+					return err
+				}
 			}
 			if err := state.SetCursor(ctx, tx, c.Seq); err != nil {
 				return err
@@ -165,4 +172,18 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 		return blocked, nil
 	}
 	return blocked, err
+}
+
+// warnIfOtherLease tells of an order whose Run and epoch are stored under
+// another lease: it is set aside, the cursor moves on, the lease runs out on the
+// Controller and the Run comes again with a higher epoch.
+func (e *Executor) warnIfOtherLease(ctx context.Context, tx *state.Tx, r state.Run) error {
+	stored, err := state.RunBy(ctx, tx, r.Key)
+	if err != nil {
+		return err
+	}
+	if stored.LeaseID != r.LeaseID {
+		e.log.WarnContext(ctx, "an assignment repeats the epoch of one already stored under another lease; it is set aside", "run", r.RunID, "epoch", r.LeaseEpoch)
+	}
+	return nil
 }

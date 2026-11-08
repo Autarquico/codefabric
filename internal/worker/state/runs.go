@@ -154,13 +154,15 @@ func collectRuns(ctx context.Context, q Querier, query string, args ...any) ([]R
 
 // InsertAssigned stores an assignment in phase assigned. An assignment of the
 // same lease already stored is left as it is, since the Controller delivers an
-// order again until it is acknowledged; inserted says which happened.
+// order again until it is acknowledged; so is one whose (Run, epoch) is already
+// stored under another lease, which cannot be kept and must not block the queue.
+// inserted says which happened.
 func InsertAssigned(ctx context.Context, tx *Tx, r Run) (inserted bool, err error) {
 	res, err := tx.exec(ctx,
 		`INSERT INTO local_runs (run_id, lease_epoch, lease_id, run_short, task_id, project_id, command_seq, accept_by,
 		     source_commit, cpu, memory_mb, spec, harness, mode, phase, created_at, updated_at, branch, repo)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (lease_id) DO NOTHING`,
+		 ON CONFLICT DO NOTHING`,
 		r.RunID, r.LeaseEpoch, r.LeaseID, r.RunShort, r.TaskID, r.ProjectID, r.CommandSeq, r.AcceptBy.UnixNano(),
 		r.SourceCommit, r.CPU, r.MemoryMB, string(r.Spec), r.Harness, r.Mode, string(PhaseAssigned),
 		r.CreatedAt.UnixNano(), r.CreatedAt.UnixNano(), r.Branch, r.Repo)
