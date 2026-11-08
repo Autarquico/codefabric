@@ -36,8 +36,8 @@ func RestoreCommand() *cobra.Command {
 			"  3. without the CA, nobody keeps an identity: create invitations here with\n" +
 			"     cf controller token create --client|--worker, and join again with cf connect --force <invitation>.\n" +
 			"     A Worker keeps its name in the restored database: see it with cf worker list, retire it with\n" +
-			"     cf worker remove <worker> (only without active Runs), and then cf worker join --force <invitation>;\n" +
-			"     or join under another name with --name.\n" +
+			"     cf worker remove <worker>, and then cf worker join --force <invitation>; or join under another\n" +
+			"     name with --name. Its Runs that were active in the backup are lost, and its reservations released.\n" +
 			"Restore only backups you trust: the archive is not signed, and what it holds becomes the Controller.\n" +
 			"Join tokens not yet used are discarded: create them again.\n" +
 			"Orders and leases issued after the backup was taken are not in it; the Workers reconcile with what the\n" +

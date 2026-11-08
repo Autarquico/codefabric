@@ -170,3 +170,37 @@ func AdvancePastRestore(ctx context.Context, path string, at time.Time) (err err
 	}
 	return nil
 }
+
+// ReleaseAcceptedReservations closes, for reason, every open reservation of an
+// accepted lease: what a Worker that cannot return still holds.
+func (t *Tx) ReleaseAcceptedReservations(ctx context.Context, reason string, at time.Time) error {
+	open, err := t.openAcceptedReservations(ctx)
+	if err != nil {
+		return err
+	}
+	for _, lease := range open {
+		if err := t.ReleaseReservation(ctx, lease, reason, at); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Tx) openAcceptedReservations(ctx context.Context) ([]domain.ID, error) {
+	rows, err := t.Query(ctx,
+		`SELECT r.lease_id FROM reservations r JOIN leases l ON l.id = r.lease_id
+		 WHERE r.released_at IS NULL AND l.state = ?`, string(domain.LeaseAccepted))
+	if err != nil {
+		return nil, fmt.Errorf("store: listing open reservations: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var open []domain.ID
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		open = append(open, domain.ID(id))
+	}
+	return open, rows.Err()
+}

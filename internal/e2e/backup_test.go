@@ -468,6 +468,47 @@ func TestScenario_Restore_WithoutPassphraseTheBackupHasNoCAAndRestoreSaysToJoinA
 	}
 }
 
+// A hot backup holds a Run in flight. Without the CA its Worker cannot return,
+// so nothing may wait for it: the Run is lost, the reservation is released, and
+// the steps restore prints retire the Worker and join it under its own name.
+func TestScenario_Restore_WithoutCAAWorkerWithARunInFlightCanBeRetiredAndJoinAgain(t *testing.T) {
+	c := NewCluster(t, Opts{Workers: 1})
+	w := c.Workers[0]
+	oldWorker := w.ID
+	token := c.Ledger.Token()
+	inFlight := c.Do(c.Ledger.Script(token)).Run.ID
+	waitHarness(c, token)
+
+	file, _ := c.Backup("inflight")
+	c.Controller.Kill9()
+	c.Ledger.Release(token)
+
+	host, _ := c.Restore("ctl2", file)
+	host.Controller = host.Box.CF(RoleController, "controller", "controller", "run")
+	c.Eventually("the restored Controller to be up", func() (bool, string) {
+		ok := host.Controller.Running() && strings.Contains(host.Controller.Log()+host.Controller.Stderr(), host.Addr)
+		return ok, host.Controller.Log() + host.Controller.Stderr()
+	})
+	if shown := c.mustCF(host.Box, "run", "show", inFlight).Stdout; !strings.Contains(shown, "lost") {
+		t.Errorf("run show %s = %q, want the Run lost", inFlight, shown)
+	}
+	invite := func() string {
+		return strings.TrimSpace(c.mustCF(host.Box, "controller", "token", "create", "--worker").Stdout)
+	}
+	c.mustCF(host.Box, "worker", "remove", w.Name)
+	c.mustCF(w.Box, "worker", "join", "--force", invite(), "--name", w.Name, "--disk-min-free", "1MiB")
+	api, err := client.Open(host.Box.Paths.CredentialsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.API, c.Addr, c.Controller = api, host.Addr, host.Controller
+	c.RestartWorker(w)
+	listed := c.mustCF(host.Box, "worker", "list").Stdout
+	if !strings.Contains(listed, w.Name) || strings.Contains(listed, string(oldWorker)) {
+		t.Errorf("worker list = %q, want %s under a new identity, not %s", listed, w.Name, oldWorker)
+	}
+}
+
 func TestScenario_Restore_RunsOfAnOlderBackupAreNotKnownByTheRestoredController(t *testing.T) {
 	c := NewCluster(t, Opts{Workers: 1})
 	w := c.Workers[0]

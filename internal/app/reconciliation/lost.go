@@ -63,7 +63,7 @@ func (s *Service) SweepLost(ctx context.Context) (int, error) {
 		failed []error
 	)
 	for _, run := range due {
-		done, err := s.loseIfDue(ctx, run)
+		done, err := s.loseIfDue(ctx, run, false)
 		switch {
 		case err != nil:
 			failed = append(failed, fmt.Errorf("reconciliation: losing %s: %w", run.ID, err))
@@ -74,7 +74,7 @@ func (s *Service) SweepLost(ctx context.Context) (int, error) {
 	return lost, errors.Join(failed...)
 }
 
-func (s *Service) loseIfDue(ctx context.Context, candidate store.Run) (bool, error) {
+func (s *Service) loseIfDue(ctx context.Context, candidate store.Run, identityGone bool) (bool, error) {
 	if h := s.cfg.Hooks.BeforeLose; h != nil {
 		h(candidate.ID)
 	}
@@ -94,7 +94,7 @@ func (s *Service) loseIfDue(ctx context.Context, candidate store.Run) (bool, err
 			return err
 		}
 		lastSeen, deadline := s.lostDeadline(w)
-		if !now.After(deadline) {
+		if !identityGone && !now.After(deadline) {
 			return nil
 		}
 		next, err := domain.NextRunState(domain.RunStatus{State: run.State}, domain.RunEventLostTimeout)
@@ -121,6 +121,9 @@ func (s *Service) loseIfDue(ctx context.Context, candidate store.Run) (bool, err
 			"short_id": domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(), "from": string(from),
 			"last_seen": lastSeen, "controller_started_at": s.cfg.StartedAt, "deadline": deadline,
 			"timeout": s.cfg.LostTimeout.String(), "publication": string(run.Publication),
+		}
+		if identityGone {
+			ev.Data["cause"] = "worker identity gone"
 		}
 		if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
 			return err
@@ -152,4 +155,34 @@ func (s *Service) RunLostSweeper(ctx context.Context, log *slog.Logger) {
 			}
 		}
 	}
+}
+
+// ReleaseReservationsOfGoneWorkers is the end of every Run and reservation that
+// waits for a Worker whose identity cannot come back, as after a restore with a
+// new CA: each live accepted Run is lost now, with no deadline, and every open
+// reservation of an accepted lease (those Runs' and the ones of Runs already
+// lost) is released for reason, so the Worker can be removed. Pending leases are
+// left to expire by themselves. It returns how many Runs it lost.
+func (s *Service) ReleaseReservationsOfGoneWorkers(ctx context.Context, reason string) (int, error) {
+	var live []store.Run
+	if err := s.db.Read(ctx, func(q store.Querier) (err error) {
+		live, err = store.LiveAcceptedRuns(ctx, q)
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	lost := 0
+	for _, run := range live {
+		done, err := s.loseIfDue(ctx, run, true)
+		if err != nil {
+			return lost, fmt.Errorf("reconciliation: losing %s: %w", run.ID, err)
+		}
+		if done {
+			lost++
+		}
+	}
+	err := s.db.WithTx(ctx, func(tx *store.Tx) error {
+		return tx.ReleaseAcceptedReservations(ctx, reason, s.clock.Now())
+	})
+	return lost, err
 }

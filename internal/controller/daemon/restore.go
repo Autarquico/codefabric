@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
@@ -631,6 +633,11 @@ func (s *staging) finish(ctx context.Context, x extracted, o RestoreOptions) (Re
 	if err := config.SaveController(staged, cfg); err != nil {
 		return RestoreResult{}, err
 	}
+	if !restored {
+		if err := s.releaseGoneWorkers(ctx, staged, o.Clock); err != nil {
+			return RestoreResult{}, err
+		}
+	}
 	// Last, and with the database closed: it leaves no side files.
 	if err := store.AdvancePastRestore(ctx, db, o.Clock.Now()); err != nil {
 		return RestoreResult{}, err
@@ -639,6 +646,27 @@ func (s *staging) finish(ctx context.Context, x extracted, o RestoreOptions) (Re
 		ControllerID: info.ControllerID, SchemaVersion: info.SchemaVersion, Advertise: cfg.Advertise, Listen: cfg.Listen,
 		OwnerID: string(owner), CARestored: restored,
 	}, nil
+}
+
+// releaseReasonRestoredWithoutCA is why the reservations of the Workers of a
+// backup without its CA are closed: no identity of theirs is valid any more.
+const releaseReasonRestoredWithoutCA = "restored_without_ca"
+
+// releaseGoneWorkers ends what the Workers of the backup still held when no
+// identity of theirs can come back: their live Runs are lost, as the
+// reconciliation loses them, and their reservations are released, so that
+// cf worker remove accepts them and nothing waits for them.
+func (s *staging) releaseGoneWorkers(ctx context.Context, staged config.Paths, clk clock.Clock) (err error) {
+	db, err := store.Open(ctx, staged.DatabaseFile(), store.Options{Clock: clk})
+	if err != nil {
+		return fmt.Errorf("restore: opening the restored database: %w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	services := app.New(db, clk, domain.NewIDGenerator(clk.Now, rand.Reader), app.Config{})
+	if _, err := services.Reconciliation.ReleaseReservationsOfGoneWorkers(ctx, releaseReasonRestoredWithoutCA); err != nil {
+		return fmt.Errorf("restore: releasing what the Workers held: %w", err)
+	}
+	return nil
 }
 
 // createOwner does what `cf controller init` does for the first owner: an
