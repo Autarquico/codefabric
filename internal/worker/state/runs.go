@@ -298,13 +298,33 @@ func SetCursor(ctx context.Context, tx *Tx, seq uint64) error {
 	return nil
 }
 
-// ResetCursor forgets the cursor: the queue it pointed into belonged to an
-// identity this Worker no longer has.
-func ResetCursor(ctx context.Context, tx *Tx) error {
-	if _, err := tx.exec(ctx, `DELETE FROM meta WHERE key = 'commands_cursor'`); err != nil {
-		return fmt.Errorf("state: resetting the cursor: %w", err)
+// AdoptQueueOwner records the identity the queue of orders belongs to. The
+// cursor and the input orders are Seqs of that queue; when the identity is not
+// the one that owned it, they point into a queue this Worker no longer reads
+// and are forgotten, so the new identity starts at the beginning of its own.
+// With no owner recorded (a Worker that predates this) the current identity is
+// adopted and nothing is forgotten. forgot says whether the queue was dropped.
+func AdoptQueueOwner(ctx context.Context, tx *Tx, identity string) (forgot bool, err error) {
+	var owner string
+	err = tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'queue_owner'`).Scan(&owner)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return false, fmt.Errorf("state: reading the owner of the queue: %w", err)
+	case owner == identity:
+		return false, nil
+	default:
+		for _, q := range []string{`DELETE FROM meta WHERE key = 'commands_cursor'`, `DELETE FROM input_orders`} {
+			if _, err := tx.exec(ctx, q); err != nil {
+				return false, fmt.Errorf("state: forgetting the queue of %s: %w", owner, err)
+			}
+		}
+		forgot = true
 	}
-	return nil
+	if _, err := tx.exec(ctx, `INSERT INTO meta (key, value) VALUES ('queue_owner', ?1) ON CONFLICT (key) DO UPDATE SET value = ?1`, identity); err != nil {
+		return false, fmt.Errorf("state: recording the owner of the queue: %w", err)
+	}
+	return forgot, nil
 }
 
 // StopOrder is a stop that was ordered. Source is "controller" or "worker".

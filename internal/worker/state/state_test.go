@@ -356,3 +356,83 @@ func TestEventCursorsResumeWhereTheyWere(t *testing.T) {
 		t.Errorf("cursor = %+v, %v", c, err)
 	}
 }
+
+func queuedUnder(t *testing.T, db *state.DB, owner string) {
+	t.Helper()
+	tx(t, db, func(x *state.Tx) error {
+		if _, err := state.AdoptQueueOwner(t.Context(), x, owner); err != nil {
+			return err
+		}
+		if err := state.SetCursor(t.Context(), x, 7); err != nil {
+			return err
+		}
+		return state.InsertInputOrder(t.Context(), x, state.InputOrder{
+			Key: state.Key{RunID: "run_1", LeaseEpoch: 1}, Seq: 7, LeaseID: "lease_run_1", PromptID: "p1", Kind: "text", CreatedAt: t0,
+		})
+	})
+}
+
+func adopt(t *testing.T, db *state.DB, identity string) (forgot bool) {
+	t.Helper()
+	tx(t, db, func(x *state.Tx) (err error) { forgot, err = state.AdoptQueueOwner(t.Context(), x, identity); return })
+	return forgot
+}
+
+func orderCount(t *testing.T, db *state.DB) (n int) {
+	t.Helper()
+	if err := db.Reader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM input_orders`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestANewIdentityStartsAtTheBeginningOfItsOwnQueue(t *testing.T) {
+	db, _ := open(t)
+	queuedUnder(t, db, "worker_A")
+	if !adopt(t, db, "worker_B") {
+		t.Error("the queue of A was not forgotten for B")
+	}
+	if n, _ := state.Cursor(t.Context(), db.Reader()); n != 0 {
+		t.Errorf("cursor = %d, want 0", n)
+	}
+	if n := orderCount(t, db); n != 0 {
+		t.Errorf("%d input orders of A remain", n)
+	}
+	// The order Seq 1 of B is not taken for a repeat of one of A's.
+	tx(t, db, func(x *state.Tx) error {
+		return state.InsertInputOrder(t.Context(), x, state.InputOrder{
+			Key: state.Key{RunID: "run_2", LeaseEpoch: 1}, Seq: 1, LeaseID: "lease_run_2", PromptID: "p1", Kind: "text", CreatedAt: t0,
+		})
+	})
+	if got, err := state.PendingInputOrders(t.Context(), db.Reader(), state.Key{RunID: "run_2", LeaseEpoch: 1}); err != nil || len(got) != 1 {
+		t.Errorf("pending orders of B = %v (%v), want its Seq 1", got, err)
+	}
+}
+
+func TestTheSameIdentityKeepsItsQueue(t *testing.T) {
+	db, _ := open(t)
+	queuedUnder(t, db, "worker_A")
+	if adopt(t, db, "worker_A") {
+		t.Error("the queue was forgotten for the identity that owns it")
+	}
+	if n, _ := state.Cursor(t.Context(), db.Reader()); n != 7 {
+		t.Errorf("cursor = %d, want 7", n)
+	}
+	if n := orderCount(t, db); n != 1 {
+		t.Errorf("%d input orders, want 1", n)
+	}
+}
+
+func TestAWorkerWithoutAnOwnerAdoptsTheIdentityAndKeepsItsQueue(t *testing.T) {
+	db, _ := open(t)
+	tx(t, db, func(x *state.Tx) error { return state.SetCursor(t.Context(), x, 7) })
+	if adopt(t, db, "worker_A") {
+		t.Error("a queue with no recorded owner was forgotten")
+	}
+	if n, _ := state.Cursor(t.Context(), db.Reader()); n != 7 {
+		t.Errorf("cursor = %d, want 7", n)
+	}
+	if !adopt(t, db, "worker_B") {
+		t.Error("the identity was not recorded: B did not displace A")
+	}
+}
