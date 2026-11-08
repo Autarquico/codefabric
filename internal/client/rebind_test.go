@@ -19,7 +19,7 @@ func answerStatus(w http.ResponseWriter, _ *http.Request) {
 }
 
 // savedBundle stores a bundle pointing at an address nobody listens on and returns its directory.
-func savedBundle(t *testing.T, ca interface{ CertPEM() []byte }, makeFor func() client.Credentials) string {
+func savedBundle(t *testing.T, makeFor func() client.Credentials) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "credentials")
 	if err := client.SaveCredentials(dir, makeFor()); err != nil {
@@ -30,17 +30,17 @@ func savedBundle(t *testing.T, ca interface{ CertPEM() []byte }, makeFor func() 
 
 func TestRebind_ADestinationWithAnotherCAIsRejectedAndTheBundleIsUntouched(t *testing.T) {
 	ca, other := newCA(t), newCA(t)
-	dir := savedBundle(t, ca, func() client.Credentials { return makeBundle(t, ca, "127.0.0.1:1") })
+	dir := savedBundle(t, func() client.Credentials { return makeBundle(t, ca, "127.0.0.1:1") })
 	f := startFake(t, serverChain(t, other, "127.0.0.1", time.Now()), answerStatus)
 	host, port := f.hostPort()
 	file := filepath.Join(dir, "controller")
-	before, _ := os.ReadFile(file)
+	before, _ := os.ReadFile(filepath.Clean(file))
 
 	_, err := client.Rebind(context.Background(), dir, net.JoinHostPort(host, port))
 	if err == nil {
 		t.Fatal("a Controller of another CA was accepted")
 	}
-	if after, _ := os.ReadFile(file); string(after) != string(before) {
+	if after, _ := os.ReadFile(filepath.Clean(file)); string(after) != string(before) {
 		t.Errorf("controller file changed: %q -> %q", before, after)
 	}
 	if f.requests.Load() != 0 {
@@ -50,11 +50,11 @@ func TestRebind_ADestinationWithAnotherCAIsRejectedAndTheBundleIsUntouched(t *te
 
 func TestRebind_AnUnreachableDestinationWritesNothing(t *testing.T) {
 	ca := newCA(t)
-	dir := savedBundle(t, ca, func() client.Credentials { return makeBundle(t, ca, "127.0.0.1:1") })
+	dir := savedBundle(t, func() client.Credentials { return makeBundle(t, ca, "127.0.0.1:1") })
 	if _, err := client.Rebind(context.Background(), dir, "127.0.0.1:2"); err == nil {
 		t.Fatal("an unreachable destination was accepted")
 	}
-	if got, _ := os.ReadFile(filepath.Join(dir, "controller")); string(got) != "127.0.0.1:1\n" {
+	if got, _ := os.ReadFile(filepath.Clean(filepath.Join(dir, "controller"))); string(got) != "127.0.0.1:1\n" {
 		t.Errorf("controller file = %q", got)
 	}
 }
@@ -62,7 +62,7 @@ func TestRebind_AnUnreachableDestinationWritesNothing(t *testing.T) {
 func TestRebind_AGoodDestinationChangesOnlyTheAddress(t *testing.T) {
 	ca := newCA(t)
 	creds := makeBundle(t, ca, "127.0.0.1:1")
-	dir := savedBundle(t, ca, func() client.Credentials { return creds })
+	dir := savedBundle(t, func() client.Credentials { return creds })
 	f := startFake(t, serverChain(t, ca, "127.0.0.1", time.Now()), answerStatus)
 	host, port := f.hostPort()
 	address := net.JoinHostPort(host, port)
