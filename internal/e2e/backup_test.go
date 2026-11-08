@@ -399,7 +399,7 @@ func TestScenario_Restore_WithoutPassphraseTheBackupHasNoCAAndRestoreSaysToJoinA
 	c.Controller.Kill9()
 
 	host, restored := c.Restore("ctl2", file)
-	for _, want := range []string{host.Addr, "token create", "connect --force", "worker join --force"} {
+	for _, want := range []string{host.Addr, "token create", "connect --force", "worker join --force", "worker list", "worker remove"} {
 		if !strings.Contains(restored.Stdout, want) {
 			t.Errorf("restore said %q, want the next steps to mention %q", restored.Stdout, want)
 		}
@@ -441,8 +441,16 @@ func TestScenario_Restore_WithoutPassphraseTheBackupHasNoCAAndRestoreSaysToJoinA
 	c.mustCF(c.Observer, "connect", "--force", invite("client"), "--name", "observer")
 	c.mustCF(c.Observer, "status")
 	c.mustCF(c.Ctl, "connect", "--force", invite("client"), "--name", "owner-again") // the machine where the Tasks are made
-	// The old record of the Worker is in the restored database under its name: the new identity takes another.
-	w.Name += "-again"
+	// The old record of the Worker is in the restored database under its name: the
+	// steps that restore printed retire it, and the Worker joins under its own name.
+	if listed := c.mustCF(host.Box, "worker", "list").Stdout; !strings.Contains(listed, w.Name) {
+		t.Errorf("worker list = %q, want the old record of %s", listed, w.Name)
+	}
+	taken := c.CF(w.Box, "worker", "join", "--force", invite("worker"), "--name", w.Name, "--disk-min-free", "1MiB")
+	if taken.Code == 0 || !strings.Contains(taken.String(), "--name") || !strings.Contains(taken.String(), "cf worker remove") {
+		t.Errorf("join under a name taken: %s, want a refusal that names --name and cf worker remove", taken)
+	}
+	c.mustCF(host.Box, "worker", "remove", w.Name)
 	c.mustCF(w.Box, "worker", "join", "--force", invite("worker"), "--name", w.Name, "--disk-min-free", "1MiB")
 	api, err := client.Open(host.Box.Paths.CredentialsDir())
 	if err != nil {
@@ -450,16 +458,11 @@ func TestScenario_Restore_WithoutPassphraseTheBackupHasNoCAAndRestoreSaysToJoinA
 	}
 	c.API, c.Addr, c.Controller = api, host.Addr, host.Controller
 	c.RestartWorker(w)
-	// The old record of the Worker stays as the backup had it until the Controller notices its silence;
-	// a Run is only offered to the new one once it has.
-	c.Eventually("the Worker of the old identity to be offline", func() (bool, string) {
-		for _, listed := range c.ListWorkers(c.Observer) {
-			if listed.ID == oldWorker {
-				return listed.State == domain.WorkerOffline, string(listed.State)
-			}
+	for _, listed := range c.ListWorkers(c.Observer) {
+		if listed.ID == oldWorker {
+			t.Errorf("the old record of the Worker is still listed: %+v", listed)
 		}
-		return false, "not listed"
-	})
+	}
 	if next := runToEnd(c, ""); next.WorkerID != w.ID || next.WorkerID == oldWorker {
 		t.Errorf("the Run after the re-join ran on %q, want the new Worker %s, not %s", next.WorkerID, w.ID, oldWorker)
 	}

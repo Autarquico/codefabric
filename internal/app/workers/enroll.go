@@ -27,7 +27,7 @@ func Enroll(ctx context.Context, tx *store.Tx, id domain.ID, name string, settin
 		return err
 	}
 	if taken {
-		return input.Invalid("a Worker named %q already exists", name)
+		return input.Invalid("a Worker named %q already exists: join with another --name, or retire it first with cf worker remove %s", name, name)
 	}
 	short, err := tx.NextShortID(ctx, domain.KindWorker)
 	if err != nil {

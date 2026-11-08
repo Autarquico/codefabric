@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -293,7 +294,7 @@ func TestScenario_RestoreWithoutACAExplainsHowToJoinAgain(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 
-	for _, want := range []string{addr, "cf controller run", "cf controller token create", "cf connect --force", "cf worker join --force", dst.CredentialsDir()} {
+	for _, want := range []string{addr, "cf controller run", "cf controller token create", "cf connect --force", "cf worker join --force", "cf worker list", "cf worker remove", dst.CredentialsDir()} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("the next steps do not mention %q:\n%s", want, stdout.String())
 		}
@@ -491,5 +492,38 @@ func TestRestore_GoesIntoExistingEmptyDirectories(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(dst.DataDir), ".cf-restore-*")); len(left) > 0 {
 		t.Errorf("staging left behind: %v", left)
+	}
+}
+
+func TestScenario_ARelayRepositoryMadeByGitSurvivesBackupAndRestore(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	src := newPaths(t)
+	initController(t, src)
+	repo := filepath.Join(src.RelayDir(), "project_X.git")
+	if out, err := exec.CommandContext(t.Context(), git, "init", "--bare", "--quiet", "--initial-branch=main", repo).CombinedOutput(); err != nil { //nolint:gosec // the test's own repository
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	// What a git of an older template or a git that was interrupted leaves behind.
+	write(t, filepath.Join(repo, "branches", "legacy"), "x", 0o600)
+	write(t, filepath.Join(repo, "HEAD.lock"), "ref: refs/heads/main\n", 0o600)
+	write(t, filepath.Join(repo, "refs", "heads", "main.lock"), "aa\n", 0o600)
+	write(t, filepath.Join(repo, "FETCH_HEAD"), "", 0o600)
+
+	res, _ := backupOf(t, src, "")
+	dst := newPaths(t)
+	if _, err := daemon.Restore(t.Context(), daemon.RestoreOptions{Paths: dst, Backup: res.Path, Advertise: freeAddr(t)}); err != nil {
+		t.Fatalf("Restore refused a backup that Backup wrote: %v", err)
+	}
+	restored := filepath.Join(dst.RelayDir(), "project_X.git")
+	if out, err := exec.CommandContext(t.Context(), git, "-C", restored, "symbolic-ref", "HEAD").CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "refs/heads/main" { //nolint:gosec // the test's own repository
+		t.Errorf("git cannot open the restored repository: %v\n%s", err, out)
+	}
+	for _, left := range []string{"branches", "HEAD.lock", "FETCH_HEAD", "hooks", filepath.Join("refs", "heads", "main.lock")} {
+		if _, err := os.Lstat(filepath.Join(restored, left)); err == nil {
+			t.Errorf("%s travelled in the backup", left)
+		}
 	}
 }
