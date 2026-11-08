@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Degradación del journal y replay"
+title: Degradación del journal y replay
 type: task
-status: draft
+status: active
 priority: P1
 size: M
-issue: null
-prs: []
-related_issues: []
+issue: 148
+prs: [152]
+related_issues: [148]
 sub_issues: []
 depends_on: [logs-output-storage]
 supersedes: []
 related_specs: [codefabric-spec, phase-4-recovery]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-08
 ---
 
 # Degradación del journal y replay

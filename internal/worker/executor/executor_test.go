@@ -211,6 +211,27 @@ func TestAnUnknownOrderBlocksTheQueueAndDegradesTheWorker(t *testing.T) {
 	}
 }
 
+func TestHealthKeepsEveryReasonThatDegradesTheExecutorAndClearsEachOnItsOwn(t *testing.T) {
+	f := newFixture(t)
+	if h := f.e.Health(); h.Status != v1.HealthOK {
+		t.Fatalf("health = %+v", h)
+	}
+	f.e.SetJournalDegraded("journal over max_size")
+	f.e.setDegraded(reasonUnknownCommand)
+	if h := f.e.Health(); h.Status != v1.HealthDegraded || h.Message != reasonUnknownCommand+"; journal over max_size" {
+		t.Fatalf("health = %+v, want both reasons", h)
+	}
+	// The assignment loop clearing its own reason leaves the journal's.
+	f.e.setDegraded("")
+	if h := f.e.Health(); h.Status != v1.HealthDegraded || h.Message != "journal over max_size" {
+		t.Fatalf("health = %+v, want the journal's reason alone", h)
+	}
+	f.e.SetJournalDegraded("")
+	if h := f.e.Health(); h.Status != v1.HealthOK {
+		t.Fatalf("health = %+v, want ok", h)
+	}
+}
+
 func TestAssignLoopPollsFromTheCursorAcknowledgesWhatItPersistedAndBlocksOnAnUnknownOrder(t *testing.T) {
 	f := newFixture(t)
 	a := func(n string) *v1.AssignCommand {

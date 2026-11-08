@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Backup y restore"
+title: Backup y restore
 type: task
-status: draft
+status: active
 priority: P1
 size: M
-issue: null
+issue: 149
 prs: []
-related_issues: []
+related_issues: [149]
 sub_issues: []
 depends_on: [retention-gc]
 supersedes: []
 related_specs: [codefabric-spec, phase-4-recovery]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-08
 ---
 
 # Backup y restore

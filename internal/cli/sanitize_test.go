@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 )
 
 func filterWhole(in string) string {
@@ -165,5 +167,19 @@ func TestSanitizer_DropsBidirectionalOverridesButKeepsJoiners(t *testing.T) {
 	}
 	if got := filterBy(in, 1); got != want {
 		t.Fatalf("byte by byte: %q", got)
+	}
+}
+
+func TestWriteChunk_SaysWhereTheOutputResumesAfterAGap(t *testing.T) {
+	var out, note bytes.Buffer
+	san := &sanitizer{}
+	if err := writeChunk(&out, &note, san, v1.OutputChunk{Offset: 5000, Data: []byte("after")}, false); err != nil || note.Len() != 0 {
+		t.Fatalf("a chunk without a gap: %q (%v)", note.String(), err)
+	}
+	if err := writeChunk(&out, &note, san, v1.OutputChunk{Offset: 9000, Data: []byte{}, Gap: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	if want := "note: some output was skipped (it resumes at byte 9000)\n"; note.String() != want || out.String() != "after" {
+		t.Errorf("note %q, out %q, want %q and the bytes only", note.String(), out.String(), want)
 	}
 }

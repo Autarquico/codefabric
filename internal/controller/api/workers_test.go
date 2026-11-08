@@ -211,6 +211,48 @@ func TestWorkers_AdministrationThroughTheSDK(t *testing.T) {
 	}
 }
 
+func TestStatus_ListsOnlyTheWorkersWhoseJournalHoldsABacklogAndTheHeartbeatCarriesTheTruncations(t *testing.T) {
+	tc := newController(t, time.Now())
+	busy, _ := tc.enrollRealWorker("busy")
+	idle, _ := tc.enrollRealWorker("idle")
+	req := heartbeat(newEpoch())
+	req.Journal = &v1.JournalReport{BacklogBytes: 4096, Truncations: []v1.JournalTruncation{
+		{ID: 1, At: tc.clock.Now(), LogsFromSeq: 1, LogsToSeq: 9, LogLines: 9, OutputBytes: 100},
+	}}
+	resp, err := busy.Heartbeat(t.Context(), req)
+	must(t, err)
+	if resp.JournalAck != 1 {
+		t.Fatalf("ack = %d, want 1", resp.JournalAck)
+	}
+	_, err = idle.Heartbeat(t.Context(), heartbeat(newEpoch()))
+	must(t, err)
+
+	st, err := tc.owner.Status(t.Context())
+	must(t, err)
+	if len(st.Workers) != 1 || st.Workers[0].Name != "busy" || st.Workers[0].JournalBacklogBytes != 4096 || st.Workers[0].JournalTruncatedAt == nil {
+		t.Fatalf("status workers = %+v", st.Workers)
+	}
+}
+
+func TestStatus_AnsweringDoesNotDependOnReadingTheWorkers(t *testing.T) {
+	tc := newController(t, time.Now())
+	busy, _ := tc.enrollRealWorker("busy")
+	req := heartbeat(newEpoch())
+	req.Journal = &v1.JournalReport{BacklogBytes: 4096}
+	_, err := busy.Heartbeat(t.Context(), req)
+	must(t, err)
+	must(t, tc.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(t.Context(), `ALTER TABLE workers RENAME COLUMN journal_backlog_bytes TO journal_backlog_gone`)
+		return err
+	}))
+
+	st, err := tc.owner.Status(t.Context())
+	must(t, err)
+	if !st.Database.OK || len(st.Workers) != 0 {
+		t.Fatalf("status = %+v, want it to answer with the database and no Workers", st)
+	}
+}
+
 func TestWorkers_ListIsAnEmptyArrayNotNull(t *testing.T) {
 	tc := newController(t, time.Now())
 	_, _, raw := tc.call(tc.httpClientFor(tc.ownerDir), http.MethodGet, "/v1/workers", "")

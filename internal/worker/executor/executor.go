@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -210,7 +211,7 @@ type Executor struct {
 	limits   Limits
 	haveLims bool
 
-	degraded atomic.Pointer[string]
+	degraded degradations
 
 	// The answers to leases wait for a reconciliation (§27.3). reconcileGen counts
 	// the requests for one (the start is the first); reconciledGen is the request
@@ -365,20 +366,57 @@ func (e *Executor) currentLimits() (Limits, bool) {
 }
 
 // Health is the part of the daemon's health that is the executor's: degraded
-// while an order it does not know blocks its queue.
+// while an order it does not know blocks its queue, or while the journal is
+// over its size.
 func (e *Executor) Health() v1.Health {
-	if reason := e.degraded.Load(); reason != nil {
-		return v1.Health{Status: v1.HealthDegraded, Message: *reason}
+	if reason := e.degraded.message(); reason != "" {
+		return v1.Health{Status: v1.HealthDegraded, Message: reason}
 	}
 	return v1.Health{Status: v1.HealthOK}
 }
 
-func (e *Executor) setDegraded(reason string) {
+// Sources of degradation. Each sets and clears its own reason, so that one
+// clearing does not hide another.
+const (
+	degradedByCommands = "commands"
+	degradedByJournal  = "journal"
+)
+
+// setDegraded is the reason the queue of orders is blocked; "" clears it.
+func (e *Executor) setDegraded(reason string) { e.degraded.set(degradedByCommands, reason) }
+
+// SetJournalDegraded is the reason the journal has the Worker degraded for;
+// "" clears it.
+func (e *Executor) SetJournalDegraded(reason string) { e.degraded.set(degradedByJournal, reason) }
+
+// degradations are the reasons the executor is degraded, by source.
+type degradations struct {
+	mu      sync.Mutex
+	reasons map[string]string
+}
+
+func (d *degradations) set(source, reason string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if reason == "" {
-		e.degraded.Store(nil)
+		delete(d.reasons, source)
 		return
 	}
-	e.degraded.Store(&reason)
+	if d.reasons == nil {
+		d.reasons = map[string]string{}
+	}
+	d.reasons[source] = reason
+}
+
+// message joins the reasons, in the order of their sources.
+func (d *degradations) message() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var parts []string
+	for _, source := range slices.Sorted(maps.Keys(d.reasons)) {
+		parts = append(parts, d.reasons[source])
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (e *Executor) kickDecider() {

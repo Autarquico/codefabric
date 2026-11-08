@@ -100,7 +100,41 @@ type HeartbeatRequest struct {
 	// knows of secrets always sends it; nil is one that predates them and
 	// holds none.
 	Secrets *SecretsReport `json:"secrets,omitempty"`
+	// Journal is what the Worker's journal holds that the Controller has not
+	// confirmed, and the ranges of logs and output it had to discard (§1.3). Nil
+	// is a daemon that predates it.
+	Journal *JournalReport `json:"journal,omitempty"`
 }
+
+// MaxJournalTruncations is the most truncations a heartbeat carries; a daemon
+// sends the oldest ones it has not seen acknowledged and the rest in later beats.
+const MaxJournalTruncations = 16
+
+// JournalReport is the journal as a heartbeat tells it. BacklogBytes is the
+// reports, log lines and output (bytes) the Controller has not confirmed.
+type JournalReport struct {
+	BacklogBytes uint64              `json:"backlog_bytes"`
+	Truncations  []JournalTruncation `json:"truncations,omitempty"`
+}
+
+// JournalTruncation is a range the Worker discarded at hard_max. ID grows with
+// each one and is what the Controller acknowledges (HeartbeatResponse.JournalAck):
+// a truncation is one JournalTruncated event, however many times it is sent.
+// The reports of Runs are never discarded; this is the log lines with a worker
+// seq from LogsFromSeq to LogsToSeq (LogLines of them) and OutputBytes of Run
+// output that was skipped, of the Runs in RunIDs (the first of them).
+type JournalTruncation struct {
+	ID          uint64    `json:"id"`
+	At          time.Time `json:"at"`
+	LogsFromSeq uint64    `json:"logs_from_seq,omitempty"`
+	LogsToSeq   uint64    `json:"logs_to_seq,omitempty"`
+	LogLines    uint64    `json:"log_lines,omitempty"`
+	OutputBytes uint64    `json:"output_bytes,omitempty"`
+	RunIDs      []string  `json:"run_ids,omitempty"`
+}
+
+// MaxTruncationRuns is the most Run ids a JournalTruncation names.
+const MaxTruncationRuns = 8
 
 // HeartbeatResponse tells the daemon the state the Controller holds it in.
 type HeartbeatResponse struct {
@@ -117,6 +151,9 @@ type HeartbeatResponse struct {
 	// WorkflowApplies are the live orders to apply Workflow configuration to
 	// this Worker (§8.6); the Worker executes each once and reports its result.
 	WorkflowApplies []WorkflowApplyOrder `json:"workflow_applies,omitempty"`
+	// JournalAck is the highest JournalTruncation.ID the Controller has: the
+	// Worker forgets those up to it.
+	JournalAck uint64 `json:"journal_ack,omitempty"`
 }
 
 // Worker is §3.5 as the API shows it. Compatible is the verdict of the upgrade
@@ -149,6 +186,11 @@ type Worker struct {
 	AttachBinaries map[string]string `json:"attach_binaries,omitempty"`
 	// Secrets are the secrets the Worker last said it holds, sorted by ref.
 	Secrets []SecretMeta `json:"secrets,omitempty"`
+	// JournalBacklogBytes is what the Worker's journal last said it holds that the
+	// Controller has not confirmed; JournalTruncatedAt when it last had to discard
+	// logs or output (§1.3). Both are absent when there is nothing to say.
+	JournalBacklogBytes uint64     `json:"journal_backlog_bytes,omitempty"`
+	JournalTruncatedAt  *time.Time `json:"journal_truncated_at,omitempty"`
 }
 
 // ListWorkersResponse is GET /v1/workers.

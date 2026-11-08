@@ -85,7 +85,8 @@ func newSealer(db *DB) *sealer {
 func (s *sealer) seed(ctx context.Context) error {
 	rows, err := s.db.reader.QueryContext(ctx,
 		`SELECT run_id, lease_epoch FROM run_output
-		 WHERE end_offset - sealed_offset >= ? OR (closed_at IS NOT NULL AND end_offset > sealed_offset)`, SegmentBytes)
+		 WHERE end_offset - sealed_offset >= ? OR (closed_at IS NOT NULL AND end_offset > sealed_offset)
+		    OR EXISTS (SELECT 1 FROM run_output_gaps g WHERE g.run_id = run_output.run_id AND g.lease_epoch = run_output.lease_epoch AND g.to_offset > run_output.sealed_offset)`, SegmentBytes)
 	if err != nil {
 		return fmt.Errorf("store: finding output to seal: %w", err)
 	}
@@ -307,20 +308,37 @@ type sealing struct {
 // the CAS. It holds no writer. It returns nil if there is nothing to seal.
 func (s *sealer) prepare(ctx context.Context, k outputKey) (*sealing, error) {
 	var (
-		o   Output
-		raw []byte
+		o      Output
+		raw    []byte
+		jumpTo uint64
 	)
 	err := s.db.Read(ctx, func(q Querier) (err error) {
 		if o, err = OutputOf(ctx, q, domain.ID(k.run), k.epoch); err != nil {
 			return err
 		}
-		if upTo := sealTarget(o); upTo > o.Sealed {
+		upTo := sealTarget(o)
+		gap, ahead, err := NextGap(ctx, q, o.RunID, o.Epoch, o.Sealed)
+		switch {
+		case err != nil:
+			return err
+		case ahead && gap.From <= o.Sealed:
+			jumpTo = gap.To // nothing to seal in a gap: the sealed offset moves over it
+			return nil
+		case ahead && upTo > o.Sealed:
+			upTo = min(upTo, gap.From)
+		case ahead:
+			upTo = gap.From // what precedes a gap is sealed whole, however little
+		}
+		if upTo > o.Sealed {
 			raw, err = hotRange(ctx, q, make([]byte, 0, upTo-o.Sealed), o.RunID, o.Epoch, o.Sealed, upTo)
 		}
 		return err
 	})
 	if err != nil {
 		return nil, err
+	}
+	if jumpTo > 0 {
+		return &sealing{key: k, first: o.Sealed, last: jumpTo}, nil
 	}
 	if len(raw) == 0 {
 		return nil, nil
@@ -349,11 +367,13 @@ func (s *sealer) install(ctx context.Context, p *sealing) (bool, error) {
 		case o.Sealed != p.first || o.End < p.last || o.Start > p.first:
 			return nil
 		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO logs_index (run_id, lease_epoch, seg_no, first_offset, last_offset, raw_bytes, digest)
-			 VALUES (?, ?, (SELECT COALESCE(MAX(seg_no) + 1, 0) FROM logs_index WHERE run_id = ? AND lease_epoch = ?), ?, ?, ?, ?)`,
-			p.key.run, p.key.epoch, p.key.run, p.key.epoch, p.first, p.last, p.rawBytes, p.digest); err != nil {
-			return fmt.Errorf("store: indexing a segment: %w", err)
+		if p.rawBytes > 0 { // none when the sealed offset only jumps over a gap
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO logs_index (run_id, lease_epoch, seg_no, first_offset, last_offset, raw_bytes, digest)
+				 VALUES (?, ?, (SELECT COALESCE(MAX(seg_no) + 1, 0) FROM logs_index WHERE run_id = ? AND lease_epoch = ?), ?, ?, ?, ?)`,
+				p.key.run, p.key.epoch, p.key.run, p.key.epoch, p.first, p.last, p.rawBytes, p.digest); err != nil {
+				return fmt.Errorf("store: indexing a segment: %w", err)
+			}
 		}
 		if err := tx.trimOutput(ctx, o.RunID, o.Epoch, p.last); err != nil {
 			return err
@@ -362,7 +382,11 @@ func (s *sealer) install(ctx context.Context, p *sealing) (bool, error) {
 			return fmt.Errorf("store: moving the sealed offset: %w", err)
 		}
 		o.Sealed = p.last
-		p.more = sealTarget(o) > p.last
+		_, gapAhead, err := NextGap(ctx, tx, o.RunID, o.Epoch, p.last)
+		if err != nil {
+			return err
+		}
+		p.more = sealTarget(o) > p.last || gapAhead
 		installed = true
 		return nil
 	})

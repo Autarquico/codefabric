@@ -278,3 +278,79 @@ func TestAppendOutput_ByteAtATimeAppendsFillTheLastChunk(t *testing.T) {
 		f.checkStorage(run, 1)
 	}
 }
+
+func (f *leaseFixture) skip(run domain.ID, epoch, offset uint64) (Output, error) {
+	f.t.Helper()
+	var o Output
+	err := f.db.WithTx(f.t.Context(), func(tx *Tx) (err error) {
+		o, err = tx.SkipOutput(f.t.Context(), run, epoch, offset, f.clk.Now())
+		return err
+	})
+	f.seal()
+	return o, err
+}
+
+func TestSkipOutput_KeepsWhatWasAcceptedAndLeavesAGap(t *testing.T) {
+	f, run := outputFixture(t)
+	if _, err := f.append(run, 1, 0, bytes.Repeat([]byte("a"), 100)); err != nil {
+		t.Fatal(err)
+	}
+	o, err := f.skip(run, 1, 500)
+	if err != nil || o.Start != 0 || o.End != 500 {
+		t.Fatalf("after the skip: %+v (%v), want 0..500", o, err)
+	}
+	if _, err := f.skip(run, 1, 300); err != nil { // already there: nothing changes
+		t.Fatal(err)
+	}
+	if _, err := f.append(run, 1, 500, []byte("tail")); err != nil {
+		t.Fatal(err)
+	}
+
+	err = f.db.Read(t.Context(), func(q Querier) error {
+		g, ok, err := NextGap(t.Context(), q, run, 1, 0)
+		if err != nil || !ok || g != (Gap{100, 500}) {
+			t.Errorf("gap = %+v %v (%v), want [100,500)", g, ok, err)
+		}
+		head, err := f.db.OutputRange(t.Context(), q, run, 1, 0, 100)
+		if err != nil || !bytes.Equal(head, bytes.Repeat([]byte("a"), 100)) {
+			t.Errorf("the accepted bytes = %q (%v), want them kept", head, err)
+		}
+		tail, err := f.db.OutputRange(t.Context(), q, run, 1, 500, 504)
+		if err != nil || string(tail) != "tail" {
+			t.Errorf("the tail = %q (%v)", tail, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o, _ := f.close(run, 1, 504, ""); !o.Closed {
+		t.Errorf("output = %+v, want it closed at its end", o)
+	}
+}
+
+func TestSkipOutput_AnOutputThatEndsInAGapClosesAtTheEndOfIt(t *testing.T) {
+	f, run := outputFixture(t)
+	if _, err := f.append(run, 1, 0, []byte("head")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.skip(run, 1, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.close(run, 1, 900, ""); !errors.Is(err, ErrOutputConflict) && !errors.Is(err, ErrOutputIncomplete) {
+		t.Errorf("closing inside the gap: %v, want a refusal", err)
+	}
+	o, err := f.close(run, 1, 1000, "")
+	if err != nil || !o.Closed || o.Start != 0 || o.End != 1000 {
+		t.Fatalf("close = %+v (%v), want closed 0..1000", o, err)
+	}
+	if o, _ = f.held2(run); o.Sealed != 1000 {
+		t.Errorf("sealed = %d, want 1000: the sealed offset jumps over a gap", o.Sealed)
+	}
+}
+
+func (f *leaseFixture) held2(run domain.ID) (Output, error) {
+	var o Output
+	err := f.db.Read(f.t.Context(), func(q Querier) (err error) { o, err = OutputOf(f.t.Context(), q, run, 1); return err })
+	return o, err
+}
