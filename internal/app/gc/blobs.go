@@ -11,7 +11,6 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/support/flock"
 )
 
 // What refers to a blob. A blob nothing refers to is garbage once the grace
@@ -144,6 +143,13 @@ func (s *Service) plan(ctx context.Context) (v1.GCReport, blobScan, error) {
 		return rep, blobScan{}, err
 	}
 	rep.Items = append(rep.Items, scan.report())
+	if s.relay != nil {
+		refs, err := s.planRelay(ctx, now)
+		if err != nil {
+			return rep, blobScan{}, err
+		}
+		rep.Items = append(rep.Items, refs)
+	}
 	return rep, scan, nil
 }
 
@@ -181,13 +187,11 @@ func (s *Service) sweepBlobs(ctx context.Context, rep *v1.GCReport) error {
 }
 
 func (s *Service) deleteBatch(ctx context.Context, batch []garbage, notAfter time.Time) (gone []garbage, err error) {
-	if s.lockPath != "" {
-		release, err := flock.Lock(s.lockPath)
-		if err != nil {
-			return nil, err
-		}
-		defer release()
+	release, err := s.lock()
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 	err = s.db.WithTx(ctx, func(tx *store.Tx) error {
 		gone = gone[:0]
 		for _, g := range batch {

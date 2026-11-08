@@ -31,6 +31,9 @@ type Policy struct {
 	System, Events, RunLogs, RawOutput time.Duration
 	// IdempotencyTTL is idempotency.ttl (§27.4).
 	IdempotencyTTL time.Duration
+	// RelayBranches is retention.relay_branches: how long after its Task is
+	// archived the relay keeps the branches and orphans of its Runs.
+	RelayBranches time.Duration
 	// BlobGrace is how long a blob nothing refers to is left alone.
 	BlobGrace time.Duration
 	// BatchSize is gc.batch_size: the most rows a transaction of the GC touches.
@@ -52,6 +55,7 @@ func (p Policy) withDefaults() Policy {
 	def(&p.RunLogs, 30*day)
 	def(&p.RawOutput, 7*day)
 	def(&p.IdempotencyTTL, domain.Defaults().IdempotencyTTL)
+	def(&p.RelayBranches, 30*day)
 	def(&p.BlobGrace, day)
 	def(&p.Interval, time.Hour)
 	if p.BatchSize <= 0 {
@@ -95,6 +99,7 @@ type Service struct {
 	db     *store.DB
 	clock  clock.Clock
 	blobs  Blobs
+	relay  Relay // nil: the relay is not collected
 	policy Policy
 	hooks  Hooks
 
@@ -128,8 +133,13 @@ func (s *Service) Run(ctx context.Context, dryRun bool) (v1.GCReport, error) {
 	if err := s.purgeHistory(ctx, &rep); err != nil {
 		return rep, err
 	}
-	err := s.sweepBlobs(ctx, &rep)
-	return rep, err
+	if err := s.sweepBlobs(ctx, &rep); err != nil {
+		return rep, err
+	}
+	if s.relay == nil {
+		return rep, nil
+	}
+	return rep, s.sweepRelay(ctx, &rep)
 }
 
 // RunLoop does a pass every Policy.Interval until ctx ends.
