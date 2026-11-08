@@ -83,14 +83,15 @@ func TestIntegrityCheckFile_RejectsACorruptDatabase(t *testing.T) {
 	if err := VacuumInto(t.Context(), path, dst); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(dst)
+	raw, err := os.ReadFile(dst) //nolint:gosec // a path of the test
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 4096; i < len(raw) && i < 8192; i++ {
 		raw[i] ^= 0xff
 	}
-	if err := os.WriteFile(dst, raw, 0o600); err != nil {
+	err = os.WriteFile(dst, raw, 0o600) //nolint:gosec // a path of the test
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := integrityCheckFile(t.Context(), dst); err == nil {
