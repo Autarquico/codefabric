@@ -2,7 +2,7 @@
 codename: codefabric
 title: Backup y restore
 type: task
-status: active
+status: shipped
 priority: P1
 size: M
 issue: 149

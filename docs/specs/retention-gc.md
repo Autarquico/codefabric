@@ -2,7 +2,7 @@
 codename: codefabric
 title: Retention y GC
 type: task
-status: active
+status: shipped
 priority: P1
 size: M
 issue: 146
