@@ -28,7 +28,7 @@ import (
 //	manifest.json              first entry; BackupManifest
 //	data/controller.db         the database, a VACUUM INTO copy; extracted to <data>/controller.db
 //	data/blobs/...             the blob store, extracted below <data>
-//	data/relay/...             the git relay (bare repositories and hooks), below <data>
+//	data/relay/...             the git relay (bare repositories, without hooks), below <data>
 //	config/controller.json     the Controller's settings, extracted below <config>
 //	pki/ca.age                 only with a passphrase: age(scrypt) of a CAPayload JSON
 //
@@ -377,7 +377,9 @@ func (a *archive) addTree(prefix, root string, want func(rel string, d fs.DirEnt
 // addRelay copies the relay: for each bare repository, the refs first and then
 // the rest (never the refs again), since objects are only ever added while the backup runs (the
 // relay's own gc is off and the collector is held by gc.lock) and a ref is
-// written after the objects it names. The relay's scratch directory is left out.
+// written after the objects it names. The relay's scratch directory is left out,
+// and so are the hooks: the relay writes its own when it starts and git would
+// run whatever a backup brought.
 func (a *archive) addRelay(root string, betweenPasses func(repo string)) error {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -395,7 +397,7 @@ func (a *archive) addRelay(root string, betweenPasses func(repo string)) error {
 	for _, e := range entries {
 		sub, path := prefix+"/"+e.Name(), filepath.Join(root, e.Name())
 		switch {
-		case e.Name() == "tmp":
+		case e.Name() == "tmp" || e.Name() == "hooks":
 			continue
 		case e.IsDir() && strings.HasSuffix(e.Name(), ".git"):
 			if err := a.addTree(sub, path, isRef); err != nil {
@@ -404,7 +406,7 @@ func (a *archive) addRelay(root string, betweenPasses func(repo string)) error {
 			if betweenPasses != nil {
 				betweenPasses(path)
 			}
-			if err := a.addTree(sub, path, notRef); err != nil {
+			if err := a.addTree(sub, path, restOfRepo); err != nil {
 				return err
 			}
 		default:
@@ -428,10 +430,12 @@ func isRef(rel string, d fs.DirEntry) bool {
 	return false
 }
 
-// notRef selects the rest of a bare repository. The refs are not copied a
-// second time: one created since the first pass could name objects that the
-// walk of objects/ has already gone past.
-func notRef(rel string, d fs.DirEntry) bool { return !isRef(rel, d) }
+// restOfRepo selects the rest of a bare repository, hooks aside. The refs are
+// not copied a second time: one created since the first pass could name objects
+// that the walk of objects/ has already gone past.
+func restOfRepo(rel string, d fs.DirEntry) bool {
+	return !isRef(rel, d) && rel != "hooks" && !strings.HasPrefix(rel, "hooks/")
+}
 
 // within says whether path is dir or below it.
 func within(path, dir string) bool {
