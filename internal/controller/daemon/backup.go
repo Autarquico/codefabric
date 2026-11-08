@@ -421,6 +421,9 @@ func (a *archive) addRelay(root string, betweenPasses func(repo string)) error {
 // isRef selects what names commits in a bare repository: HEAD, packed-refs and
 // refs/ (whose directories are listed too, so the walk reaches the files).
 func isRef(rel string, d fs.DirEntry) bool {
+	if !allowedRepoEntry(strings.Split(rel, "/"), d.IsDir()) {
+		return false
+	}
 	switch {
 	case rel == "HEAD" || rel == "packed-refs":
 		return !d.IsDir()
@@ -430,11 +433,13 @@ func isRef(rel string, d fs.DirEntry) bool {
 	return false
 }
 
-// restOfRepo selects the rest of a bare repository, hooks aside. The refs are
+// restOfRepo selects the rest of a bare repository: what Restore admits (see
+// allowedRepoEntry), which leaves out the hooks, branches/, lock files and the
+// like. The refs are
 // not copied a second time: one created since the first pass could name objects
 // that the walk of objects/ has already gone past.
 func restOfRepo(rel string, d fs.DirEntry) bool {
-	return !isRef(rel, d) && rel != "hooks" && !strings.HasPrefix(rel, "hooks/")
+	return !isRef(rel, d) && allowedRepoEntry(strings.Split(rel, "/"), d.IsDir())
 }
 
 // within says whether path is dir or below it.

@@ -453,9 +453,16 @@ func allowedEntry(name string, isDir bool) bool {
 	return false
 }
 
+// allowedRepoEntry says whether the entry at parts, below a bare repository of
+// the relay, travels in a backup. Backup and Restore both ask it, so that what
+// one writes is never refused by the other. Lock files and FETCH_HEAD are
+// transient and are not on the list.
 func allowedRepoEntry(parts []string, isDir bool) bool {
 	if len(parts) == 0 {
 		return isDir
+	}
+	if !isDir && strings.HasSuffix(parts[len(parts)-1], ".lock") {
+		return false
 	}
 	dirOnly, known := repoTopLevel[parts[0]]
 	switch {
