@@ -175,17 +175,32 @@ func (s *staging) remove() {
 	}
 }
 
-// install puts the staged directories in place. They replace empty directories
-// (rename does that atomically), so a failure of the second undoes the first.
+// install puts the staged directories in place. An absent target is renamed
+// over; an empty one is removed first (rename cannot replace a directory on
+// every platform), so a failure of the second undoes the first.
 func (s *staging) install(p config.Paths) error {
-	if err := os.Rename(s.data, p.DataDir); err != nil {
+	_, statErr := os.Stat(p.DataDir)
+	dataExisted := statErr == nil
+	if err := replaceEmptyDir(s.data, p.DataDir); err != nil {
 		return fmt.Errorf("restore: installing %s: %w", p.DataDir, err)
 	}
-	if err := os.Rename(s.config, p.ConfigDir); err != nil {
+	if err := replaceEmptyDir(s.config, p.ConfigDir); err != nil {
 		_ = os.Rename(p.DataDir, s.data)
+		if dataExisted {
+			_ = os.Mkdir(p.DataDir, dirMode)
+		}
 		return fmt.Errorf("restore: installing %s: %w", p.ConfigDir, err)
 	}
 	return nil
+}
+
+// replaceEmptyDir renames from to target, which is absent or an empty
+// directory. os.Remove refuses a directory that has anything in it.
+func replaceEmptyDir(from, target string) error {
+	if err := os.Remove(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return os.Rename(from, target)
 }
 
 // extracted is what extract found beyond the files it wrote.
@@ -366,6 +381,10 @@ func (s *staging) finish(ctx context.Context, x extracted, o RestoreOptions) (Re
 	}
 	if info.ControllerID != x.manifest.ControllerID {
 		return RestoreResult{}, badBackup("the manifest and the database name different Controllers")
+	}
+
+	if err := store.AdvanceCommandSeqs(ctx, db); err != nil {
+		return RestoreResult{}, err
 	}
 
 	ca, restored, err := s.certificateAuthority(o, x)
