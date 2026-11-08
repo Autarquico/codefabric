@@ -316,19 +316,7 @@ func showLogs(cmd *cobra.Command, c *client.Client, run string, lines int, follo
 	for {
 		ending, err := c.FollowOutput(ctx, run, query, client.OutputHandler{
 			Begin: func(v1.OutputBegin) error { san.Reset(); return nil },
-			Chunk: func(ch v1.OutputChunk) error {
-				if ch.Gap {
-					san.Reset()
-					if !asJSON {
-						fmt.Fprintln(errOut, "note: some output was skipped")
-					}
-				}
-				if asJSON {
-					return encodeJSON(out, ch)
-				}
-				_, err := out.Write(san.Filter(ch.Data))
-				return err
-			},
+			Chunk: func(ch v1.OutputChunk) error { return writeChunk(out, errOut, san, ch, asJSON) },
 		})
 		switch {
 		case err == nil && ending.End != nil && ending.End.Reason == v1.EndNewerEpoch:
@@ -345,4 +333,20 @@ func showLogs(cmd *cobra.Command, c *client.Client, run string, lines int, follo
 			return err
 		}
 	}
+}
+
+// writeChunk delivers a chunk of a follow, saying first that output is missing
+// before it when the Controller does not hold it (the Worker discarded it).
+func writeChunk(out, errOut io.Writer, san *sanitizer, ch v1.OutputChunk, asJSON bool) error {
+	if ch.Gap {
+		san.Reset()
+		if !asJSON {
+			fmt.Fprintf(errOut, "note: some output was skipped (it resumes at byte %d)\n", ch.Offset)
+		}
+	}
+	if asJSON {
+		return encodeJSON(out, ch)
+	}
+	_, err := out.Write(san.Filter(ch.Data))
+	return err
 }

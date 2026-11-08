@@ -36,9 +36,10 @@ func (s *Shipper) Unsent(ctx context.Context) (uint64, error) {
 
 // Shed gives up sending at least need bytes of output, the Runs with most
 // waiting first, by moving their cursors to the end of what their logs hold now.
-// The output.log files are not touched: the Controller sees a gap at the offset
-// where sending resumes, and the bytes skipped remain on this machine. It
-// records what it skipped in the open truncation and answers how many bytes.
+// The output.log files are not touched, and the bytes skipped remain on this
+// machine. The Controller is told with a skip entry (see plan), keeps what it
+// has, and shows a gap. It records what it skipped in the open truncation and
+// answers how many bytes.
 func (s *Shipper) Shed(ctx context.Context, need uint64) (uint64, error) {
 	pending, err := s.unsent(ctx)
 	if err != nil {
@@ -67,7 +68,7 @@ func (s *Shipper) Shed(ctx context.Context, need uint64) (uint64, error) {
 	return shed, nil
 }
 
-// skip moves the cursor of one assignment to the size its log had when it was
+// skip moves the cursor of one assignment past the size its log had when it was
 // measured, unless the cursor moved meanwhile. It answers the bytes skipped.
 func (s *Shipper) skip(ctx context.Context, u unsent) (uint64, error) {
 	var skipped uint64
@@ -76,18 +77,18 @@ func (s *Shipper) skip(ctx context.Context, u unsent) (uint64, error) {
 		if err != nil {
 			return err
 		}
-		if cur.Done || cur.Sent >= u.size {
+		if cur.Done || cur.Resume() >= u.size {
 			return nil
 		}
-		skipped = u.size - cur.Sent
-		cur.Sent = u.size
+		skipped = u.size - cur.Resume()
+		cur.SkipTo = u.size
 		if !cur.HasFile {
 			cur.HasFile, cur.Dev, cur.Ino = true, u.dev, u.ino
 		}
 		if err := state.SaveOutputCursor(ctx, tx, cur); err != nil {
 			return err
 		}
-		return state.RecordShed(ctx, tx, state.Shed{OutputBytes: skipped}, s.o.Clock.Now())
+		return state.RecordShed(ctx, tx, state.Shed{OutputBytes: skipped, RunIDs: []string{u.cursor.RunID}}, s.o.Clock.Now())
 	})
 	return skipped, err
 }
@@ -115,10 +116,10 @@ func (s *Shipper) unsent(ctx context.Context) ([]unsent, error) {
 		if cur.HasFile && (cur.Dev != dev || cur.Ino != ino) {
 			continue // another file: the shipper closes this output, there is nothing to skip
 		}
-		if size <= cur.Sent {
+		if size <= cur.Resume() {
 			continue
 		}
-		out = append(out, unsent{cursor: cur, size: size, bytes: size - cur.Sent, dev: dev, ino: ino})
+		out = append(out, unsent{cursor: cur, size: size, bytes: size - cur.Resume(), dev: dev, ino: ino})
 	}
 	return out, ctx.Err()
 }

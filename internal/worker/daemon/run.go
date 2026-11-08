@@ -539,7 +539,7 @@ func (d *daemon) journalStatus(ctx context.Context, health v1.Health) (*v1.Journ
 	}
 	for _, t := range truncations {
 		report.Truncations = append(report.Truncations, v1.JournalTruncation{
-			ID: t.ID, At: t.At, LogsFromSeq: t.LogsFrom, LogsToSeq: t.LogsTo, LogLines: t.LogLines, OutputBytes: t.OutputBytes,
+			ID: t.ID, At: t.At, LogsFromSeq: t.LogsFrom, LogsToSeq: t.LogsTo, LogLines: t.LogLines, OutputBytes: t.OutputBytes, RunIDs: t.RunIDs,
 		})
 	}
 	if b.Reason != "" {

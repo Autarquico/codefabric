@@ -46,3 +46,21 @@ func TestHumanBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintWorker_ShowsTheBacklogAndTheLastDiscardEvenWithNoBacklog(t *testing.T) {
+	at := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	if err := printWorker(&out, v1.Worker{Name: "box", JournalBacklogBytes: 0, JournalTruncatedAt: &at}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Journal       backlog 0 B, logs or output last discarded"; !strings.Contains(out.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, out.String())
+	}
+	out.Reset()
+	if err := printWorker(&out, v1.Worker{Name: "box", JournalBacklogBytes: 1536}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Journal       backlog 1.5 KiB\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, out.String())
+	}
+}

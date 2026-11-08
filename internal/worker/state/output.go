@@ -11,7 +11,10 @@ import (
 // Ino identify the file it was read from; HasFile says that they were taken.
 type OutputCursor struct {
 	Key
-	Sent    uint64
+	Sent uint64
+	// SkipTo is above Sent when the Worker discarded the bytes up to it and the
+	// Controller has not been told: sending resumes there, after a skip entry.
+	SkipTo  uint64
 	Done    bool
 	EOFSent bool
 	HasFile bool
@@ -28,8 +31,8 @@ func OutputCursorOf(ctx context.Context, q Querier, k Key) (OutputCursor, error)
 	c := OutputCursor{Key: k}
 	var dev, ino sql.NullInt64
 	err := q.QueryRowContext(ctx,
-		`SELECT sent, done, eof_sent, dev, ino, prefix_len, prefix_sum FROM output_cursors WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch).
-		Scan(&c.Sent, &c.Done, &c.EOFSent, &dev, &ino, &c.PrefixLen, &c.PrefixSum)
+		`SELECT sent, skip_to, done, eof_sent, dev, ino, prefix_len, prefix_sum FROM output_cursors WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch).
+		Scan(&c.Sent, &c.SkipTo, &c.Done, &c.EOFSent, &dev, &ino, &c.PrefixLen, &c.PrefixSum)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return c, nil
@@ -42,6 +45,9 @@ func OutputCursorOf(ctx context.Context, q Querier, k Key) (OutputCursor, error)
 	return c, nil
 }
 
+// Resume is where sending the output goes on: after the bytes sent, or after the ones discarded.
+func (c OutputCursor) Resume() uint64 { return max(c.Sent, c.SkipTo) }
+
 // SaveOutputCursor stores the cursor.
 func SaveOutputCursor(ctx context.Context, tx *Tx, c OutputCursor) error {
 	var dev, ino any
@@ -49,11 +55,11 @@ func SaveOutputCursor(ctx context.Context, tx *Tx, c OutputCursor) error {
 		dev, ino = int64(c.Dev), int64(c.Ino) //nolint:gosec // round-trips through the same conversion
 	}
 	_, err := tx.exec(ctx,
-		`INSERT INTO output_cursors (run_id, lease_epoch, sent, done, dev, ino, eof_sent, prefix_len, prefix_sum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (run_id, lease_epoch) DO UPDATE SET sent = excluded.sent, done = excluded.done,
+		`INSERT INTO output_cursors (run_id, lease_epoch, sent, skip_to, done, dev, ino, eof_sent, prefix_len, prefix_sum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (run_id, lease_epoch) DO UPDATE SET sent = excluded.sent, skip_to = excluded.skip_to, done = excluded.done,
 		     dev = excluded.dev, ino = excluded.ino, eof_sent = excluded.eof_sent,
 		     prefix_len = excluded.prefix_len, prefix_sum = excluded.prefix_sum`,
-		c.RunID, c.LeaseEpoch, c.Sent, c.Done, dev, ino, c.EOFSent, c.PrefixLen, c.PrefixSum)
+		c.RunID, c.LeaseEpoch, c.Sent, c.SkipTo, c.Done, dev, ino, c.EOFSent, c.PrefixLen, c.PrefixSum)
 	if err != nil {
 		return fmt.Errorf("state: saving an output cursor: %w", err)
 	}

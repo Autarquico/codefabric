@@ -13,7 +13,7 @@ func withJournal(j v1.JournalReport) func(*v1.HeartbeatRequest) {
 }
 
 func truncation(id uint64, at time.Time) v1.JournalTruncation {
-	return v1.JournalTruncation{ID: id, At: at, LogsFromSeq: 10, LogsToSeq: 40, LogLines: 31, OutputBytes: 2048}
+	return v1.JournalTruncation{ID: id, At: at, LogsFromSeq: 10, LogsToSeq: 40, LogLines: 31, OutputBytes: 2048, RunIDs: []string{"run_1", "run_2"}}
 }
 
 func TestJournal_ATruncationBecomesOneEventWithItsRangeHoweverManyTimesItIsSent(t *testing.T) {
@@ -41,6 +41,9 @@ func TestJournal_ATruncationBecomesOneEventWithItsRangeHoweverManyTimesItIsSent(
 	d := events[0].Data
 	if d["logs_from_seq"] != float64(10) || d["logs_to_seq"] != float64(40) || d["log_lines"] != float64(31) || d["output_bytes"] != float64(2048) {
 		t.Errorf("range = %+v", d)
+	}
+	if want := "the Worker discarded 31 log lines (seq 10-40) and 2.0 KiB of output (output of run_1, run_2)"; events[0].Message != want || events[0].Level != domain.LevelWarn {
+		t.Errorf("message %q at level %q, want %q at warn", events[0].Message, events[0].Level, want)
 	}
 	if events[0].WorkerID != domain.ID(e.worker("box").ID) {
 		t.Errorf("event of %s, want the Worker", events[0].WorkerID)
@@ -122,6 +125,23 @@ func TestJournal_ADaemonWithoutAJournalReportLeavesWhatIsKnown(t *testing.T) {
 	}
 }
 
+func TestJournal_ADiscardKeepsTheWorkerInTheStatusAfterTheBacklogDrains(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	w := e.join("box")
+	epoch := newEpoch()
+	e.beat(w, request(epoch, withJournal(v1.JournalReport{BacklogBytes: 0, Truncations: []v1.JournalTruncation{truncation(1, e.clock.Now())}})))
+
+	got, err := e.svc.WithJournalBacklog(t.Context())
+	must(t, err)
+	if len(got) != 1 || got[0].Name != "box" || got[0].JournalBacklogBytes != 0 || got[0].JournalTruncatedAt == nil {
+		t.Fatalf("status workers = %+v, want the Worker with its discard and no backlog", got)
+	}
+	e.clock.Advance(25 * time.Hour)
+	if got, err = e.svc.WithJournalBacklog(t.Context()); err != nil || len(got) != 0 {
+		t.Fatalf("status workers a day later = %+v (%v), want none", got, err)
+	}
+}
+
 func TestJournal_AReportThatIsNotWellFormedIsRefused(t *testing.T) {
 	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	with := func(mutate func(*v1.JournalTruncation)) v1.JournalReport {
@@ -141,6 +161,7 @@ func TestJournal_AReportThatIsNotWellFormedIsRefused(t *testing.T) {
 		"range backwards":      with(func(tr *v1.JournalTruncation) { tr.LogsFromSeq, tr.LogsToSeq = 9, 3 }),
 		"nothing discarded":    with(func(tr *v1.JournalTruncation) { tr.LogLines, tr.OutputBytes = 0, 0 }),
 		"values out of range":  with(func(tr *v1.JournalTruncation) { tr.OutputBytes = 1 << 63 }),
+		"too many runs":        with(func(tr *v1.JournalTruncation) { tr.RunIDs = make([]string, v1.MaxTruncationRuns+1) }),
 		"no time":              with(func(tr *v1.JournalTruncation) { tr.At = time.Time{} }),
 	}
 	e := newEnv(t, controllerVersion)

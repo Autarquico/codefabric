@@ -5,7 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
+
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 )
 
 // Backlog is what the journal holds that the Controller has not confirmed, in
@@ -37,6 +41,7 @@ type Shed struct {
 	LogsFrom, LogsTo uint64
 	LogLines         uint64
 	OutputBytes      uint64
+	RunIDs           []string // of the output skipped
 }
 
 // Empty says whether nothing was discarded.
@@ -98,13 +103,14 @@ func RecordShed(ctx context.Context, tx *Tx, s Shed, at time.Time) error {
 	var (
 		id                  int64
 		from, to, lines, by uint64
+		runs                string
 	)
 	err := tx.QueryRowContext(ctx,
-		`SELECT id, logs_from, logs_to, log_lines, output_bytes FROM journal_truncations WHERE sealed = 0`).Scan(&id, &from, &to, &lines, &by)
+		`SELECT id, logs_from, logs_to, log_lines, output_bytes, run_ids FROM journal_truncations WHERE sealed = 0`).Scan(&id, &from, &to, &lines, &by, &runs)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		_, err = tx.exec(ctx, `INSERT INTO journal_truncations (at, logs_from, logs_to, log_lines, output_bytes) VALUES (?, ?, ?, ?, ?)`,
-			at.UnixNano(), s.LogsFrom, s.LogsTo, s.LogLines, s.OutputBytes)
+		_, err = tx.exec(ctx, `INSERT INTO journal_truncations (at, logs_from, logs_to, log_lines, output_bytes, run_ids) VALUES (?, ?, ?, ?, ?, ?)`,
+			at.UnixNano(), s.LogsFrom, s.LogsTo, s.LogLines, s.OutputBytes, joinRuns(nil, s.RunIDs))
 	case err != nil:
 		return fmt.Errorf("state: reading the open truncation: %w", err)
 	default:
@@ -114,13 +120,30 @@ func RecordShed(ctx context.Context, tx *Tx, s Shed, at time.Time) error {
 			}
 			from, to = min(from, s.LogsFrom), max(to, s.LogsTo)
 		}
-		_, err = tx.exec(ctx, `UPDATE journal_truncations SET at = ?, logs_from = ?, logs_to = ?, log_lines = ?, output_bytes = ? WHERE id = ?`,
-			at.UnixNano(), from, to, lines+s.LogLines, by+s.OutputBytes, id)
+		_, err = tx.exec(ctx, `UPDATE journal_truncations SET at = ?, logs_from = ?, logs_to = ?, log_lines = ?, output_bytes = ?, run_ids = ? WHERE id = ?`,
+			at.UnixNano(), from, to, lines+s.LogLines, by+s.OutputBytes, joinRuns(splitRuns(runs), s.RunIDs), id)
 	}
 	if err != nil {
 		return fmt.Errorf("state: recording a truncation: %w", err)
 	}
 	return nil
+}
+
+// joinRuns adds the Run ids to the ones kept, up to v1.MaxTruncationRuns, as a list.
+func joinRuns(have, add []string) string {
+	for _, id := range add {
+		if len(have) < v1.MaxTruncationRuns && !slices.Contains(have, id) {
+			have = append(have, id)
+		}
+	}
+	return strings.Join(have, ",")
+}
+
+func splitRuns(list string) []string {
+	if list == "" {
+		return nil
+	}
+	return strings.Split(list, ",")
 }
 
 // Truncation is a range of logs and output the Worker discarded.
@@ -130,6 +153,27 @@ type Truncation struct {
 	LogsFrom, LogsTo uint64
 	LogLines         uint64
 	OutputBytes      uint64
+	RunIDs           []string
+}
+
+// OpenTruncation is what has been discarded and not yet sealed, if anything.
+func OpenTruncation(ctx context.Context, q Querier) (Truncation, bool, error) {
+	var (
+		t    Truncation
+		at   int64
+		runs string
+	)
+	err := q.QueryRowContext(ctx,
+		`SELECT id, at, logs_from, logs_to, log_lines, output_bytes, run_ids FROM journal_truncations WHERE sealed = 0`).
+		Scan(&t.ID, &at, &t.LogsFrom, &t.LogsTo, &t.LogLines, &t.OutputBytes, &runs)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Truncation{}, false, nil
+	case err != nil:
+		return Truncation{}, false, fmt.Errorf("state: reading the open truncation: %w", err)
+	}
+	t.At, t.RunIDs = time.Unix(0, at).UTC(), splitRuns(runs)
+	return t, true, nil
 }
 
 // SealTruncation closes the open truncation, if there is one, so that it is
@@ -146,7 +190,7 @@ func SealTruncation(ctx context.Context, tx *Tx) (bool, error) {
 // SealedTruncations lists up to limit sealed truncations, the oldest first.
 func SealedTruncations(ctx context.Context, q Querier, limit int) ([]Truncation, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT id, at, logs_from, logs_to, log_lines, output_bytes FROM journal_truncations WHERE sealed = 1 ORDER BY id LIMIT ?`, limit)
+		`SELECT id, at, logs_from, logs_to, log_lines, output_bytes, run_ids FROM journal_truncations WHERE sealed = 1 ORDER BY id LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("state: reading the truncations: %w", err)
 	}
@@ -154,13 +198,14 @@ func SealedTruncations(ctx context.Context, q Querier, limit int) ([]Truncation,
 	var out []Truncation
 	for rows.Next() {
 		var (
-			t  Truncation
-			at int64
+			t    Truncation
+			at   int64
+			runs string
 		)
-		if err := rows.Scan(&t.ID, &at, &t.LogsFrom, &t.LogsTo, &t.LogLines, &t.OutputBytes); err != nil {
+		if err := rows.Scan(&t.ID, &at, &t.LogsFrom, &t.LogsTo, &t.LogLines, &t.OutputBytes, &runs); err != nil {
 			return nil, fmt.Errorf("state: scanning the truncations: %w", err)
 		}
-		t.At = time.Unix(0, at).UTC()
+		t.At, t.RunIDs = time.Unix(0, at).UTC(), splitRuns(runs)
 		out = append(out, t)
 	}
 	return out, rows.Err()

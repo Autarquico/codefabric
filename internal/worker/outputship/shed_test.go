@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -52,7 +53,7 @@ func TestShed_SkipsTheRunWithMostWaitingFirstAndLeavesTheFileAndAGapForTheContro
 	if got := f.shed(500); got != 1000 {
 		t.Fatalf("shed %d, want the 1000 of the Run with most waiting", got)
 	}
-	if c := f.cursor(big); c.Sent != 1000 || !c.HasFile {
+	if c := f.cursor(big); c.Resume() != 1000 || !c.HasFile {
 		t.Errorf("cursor of the big Run = %+v", c)
 	}
 	if c := f.cursor(small); c.Sent != 0 {
@@ -68,8 +69,45 @@ func TestShed_SkipsTheRunWithMostWaitingFirstAndLeavesTheFileAndAGapForTheContro
 	if got := f.sent(big); got != "tail" {
 		t.Fatalf("the Controller holds %q of the big Run, want only the tail", got)
 	}
-	if h := f.ctl.outputs[big]; h.start != 1000 {
-		t.Errorf("the output starts at %d, want 1000", h.start)
+}
+
+func TestShed_WhatTheControllerAcceptedIsKeptAndTheGapIsMarked(t *testing.T) {
+	f := newFixture(t)
+	k := f.run("run_a", state.PhaseRunning)
+	f.write(k, strings.Repeat("a", 100))
+	f.once()
+	f.write(k, strings.Repeat("b", 400))
+	f.shed(1)
+	f.write(k, "tail")
+	f.once()
+
+	h := f.ctl.outputs[k]
+	if got := f.sent(k); got != strings.Repeat("a", 100)+"tail" {
+		t.Fatalf("the Controller holds %q, want what it had and the tail", got)
+	}
+	if h.start != 0 || len(h.gaps) != 1 || h.gaps[0] != [2]uint64{100, 500} {
+		t.Errorf("start = %d, gaps = %v, want 0 and [100,500)", h.start, h.gaps)
+	}
+}
+
+func TestShed_ARunThatStopsAfterTheShedStillClosesItsOutput(t *testing.T) {
+	f := newFixture(t)
+	k := f.run("run_a", state.PhaseRunning)
+	f.write(k, strings.Repeat("a", 100))
+	f.once()
+	f.write(k, strings.Repeat("b", 400))
+	f.shed(1)
+	f.phase(k, state.PhaseStopped)
+	for range 3 { // the log must stop growing for a settle before it is closed
+		f.once()
+		f.clk.Advance(time.Minute)
+	}
+
+	if h := f.ctl.outputs[k]; !h.closed || h.end != 500 {
+		t.Fatalf("output = %+v, want it closed at 500 with nothing sent after the shed", h)
+	}
+	if c := f.cursor(k); !c.Done {
+		t.Errorf("cursor = %+v, want done", c)
 	}
 }
 
@@ -133,12 +171,12 @@ func TestShed_ACursorThatMovedDuringARequestIsNotMovedBackWhenItIsSettled(t *tes
 	}
 	f.once()
 
-	if c := f.cursor(k); c.Sent != 150 {
-		t.Fatalf("sent = %d, want 150: the settle of the request moved the cursor back", c.Sent)
+	if c := f.cursor(k); c.Resume() != 150 {
+		t.Fatalf("resume = %d, want 150: the settle of the request moved the cursor back", c.Resume())
 	}
 	f.write(k, "tail")
 	f.once()
-	if h := f.ctl.outputs[k]; h.end != 154 || string(h.data) != "tail" {
-		t.Fatalf("the Controller holds %d..%d %q, want the tail after the gap", h.start, h.end, h.data)
+	if h := f.ctl.outputs[k]; h.end != 154 || string(h.data) != strings.Repeat("a", 100)+"tail" {
+		t.Fatalf("the Controller holds %d..%d %q, want the first 100 bytes and the tail after the gap", h.start, h.end, h.data)
 	}
 }

@@ -1,6 +1,7 @@
 package journal_test
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"strings"
@@ -17,6 +18,7 @@ import (
 type output struct {
 	unsent uint64
 	shed   uint64
+	db     *state.DB // where the real one records what it skipped, in the open truncation
 }
 
 func (o *output) Unsent(context.Context) (uint64, error) { return o.unsent, nil }
@@ -24,7 +26,12 @@ func (o *output) Unsent(context.Context) (uint64, error) { return o.unsent, nil 
 func (o *output) Shed(_ context.Context, need uint64) (uint64, error) {
 	n := min(need, o.unsent)
 	o.unsent, o.shed = o.unsent-n, o.shed+n
-	return n, nil
+	if o.db == nil || n == 0 {
+		return n, nil
+	}
+	return n, o.db.WithTx(context.Background(), func(tx *state.Tx) error {
+		return state.RecordShed(context.Background(), tx, state.Shed{OutputBytes: n, RunIDs: []string{"run_1"}}, time.Now())
+	})
 }
 
 type degradeFixture struct {
@@ -43,6 +50,7 @@ const (
 func newDegradeFixture(t *testing.T) *degradeFixture {
 	t.Helper()
 	f := &degradeFixture{fixture: newFixture(t), out: &output{}}
+	f.out.db = f.db
 	f.d = journal.NewDegrader(journal.DegradeOptions{
 		DB: f.db, Output: f.out, Clock: f.clock, Log: slog.New(slog.DiscardHandler),
 		Limits:     journal.Limits{MaxSize: maxSize, HardMax: hardMax},
@@ -170,8 +178,8 @@ func TestDegrade_Stage2ReportsAloneAtMaxSizeDegradeTheWorkerAndAreNeverGivenUp(t
 	if len(f.reasons) != 1 || f.reasons[0] == "" || f.d.Backlog().Reason != f.reasons[0] {
 		t.Fatalf("reasons = %v, backlog = %+v", f.reasons, f.d.Backlog())
 	}
-	if len(f.sealed()) != 0 {
-		t.Errorf("a truncation was reported below hard_max: %+v", f.sealed())
+	if got := f.sealed(); len(got) != 1 || got[0].LogLines != 4 || got[0].OutputBytes != 500 {
+		t.Errorf("truncations = %+v, want the 4 lines and 500 bytes of this pass sealed below hard_max", got)
 	}
 
 	// It says so once, not on every pass.
@@ -234,14 +242,15 @@ func TestDegrade_Stage3AtHardMaxSealsTheRangeOfWhatWasGivenUpAndKeepsEveryReport
 	f.reports(25, 150)
 	f.logLines(3, 100)
 	f.out.unsent += 300
+	f.clock.Advance(time.Minute) // the first pass already reported what it gave up
 
 	f.once()
 
 	sealed := f.sealed()
-	if len(sealed) != 1 {
-		t.Fatalf("%d truncations sealed, want 1", len(sealed))
+	if len(sealed) != 2 {
+		t.Fatalf("%d truncations sealed, want 2 (stage 1 and hard_max)", len(sealed))
 	}
-	got := sealed[0]
+	got := sealed[1]
 	if got.LogLines == 0 || got.LogsFrom == 0 || got.LogsFrom > got.LogsTo {
 		t.Errorf("truncation = %+v: it needs the range of the lines given up", got)
 	}
@@ -347,5 +356,38 @@ func TestDegrade_RunPassesOnTheClockAndStopsWithItsContext(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDegrade_APassThatGivesUpOutputBelowHardMaxIsReported(t *testing.T) {
+	f := newDegradeFixture(t)
+	f.out.unsent = 2000 // between max_size and hard_max
+	f.once()
+
+	got := f.sealed()
+	if len(got) != 1 || got[0].OutputBytes == 0 {
+		t.Fatalf("truncations = %+v, want one with output_bytes > 0", got)
+	}
+}
+
+func TestDegrade_AtHardMaxNothingIsDiscardedButItIsSaidAsAnErrorAndInTheReason(t *testing.T) {
+	f := newDegradeFixture(t)
+	var logs bytes.Buffer
+	f.d = journal.NewDegrader(journal.DegradeOptions{
+		DB: f.db, Output: f.out, Clock: f.clock, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+		Limits:     journal.Limits{MaxSize: maxSize, HardMax: hardMax},
+		OnDegraded: func(reason string) { f.reasons = append(f.reasons, reason) },
+	})
+	f.reports(30, 150)
+	f.once()
+
+	if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), "hard_max") {
+		t.Errorf("log = %q, want an error that names hard_max", logs.String())
+	}
+	if r := f.d.Backlog().Reason; !strings.Contains(r, "hard_max") {
+		t.Errorf("reason = %q, want it to name hard_max", r)
+	}
+	if n, _ := state.JournalCounts(t.Context(), f.db.Reader()); n[state.Key{RunID: "run_1", LeaseEpoch: 1}] != 30 {
+		t.Errorf("reports left = %v, want all 30", n)
 	}
 }

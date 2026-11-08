@@ -63,17 +63,23 @@ type Backlog struct {
 //     the file, leaving a gap), then the oldest log lines.
 //  2. If, with no output and no logs left, the reports alone are still at
 //     max_size, usage is compacted and the Worker is degraded.
-//  3. At hard_max what was given up is sealed in a truncation, which the next
-//     heartbeat carries to the Controller as JournalTruncated.
+//  3. What was given up is sealed in a truncation, which the next heartbeat
+//     carries to the Controller as JournalTruncated: when a pass gave something
+//     up, and at hard_max (at most once every sealEvery).
 //
-// No report is ever given up: each one is the state of a Run, or closes
-// something the Controller waits for.
+// No report is ever given up: all of them are the state of a Run (the kinds of
+// internal/api/v1/reports.go are Run lifecycle). What bounds the journal at
+// hard_max is the Worker, which takes no Runs while it is degraded; the reports
+// of the Runs it already has are the only growth left. At hard_max the Worker
+// says so in its log (error) and in its degraded reason.
 type Degrader struct {
 	o        DegradeOptions
 	mu       sync.Mutex
 	last     Backlog
 	reason   string
+	hard     bool // the reason is of a journal at hard_max
 	sealedAt time.Time
+	hardAt   time.Time
 }
 
 // NewDegrader makes the policy.
@@ -120,9 +126,10 @@ func (d *Degrader) Once(ctx context.Context) error {
 	total := uint64(backlog.Reports) + uint64(backlog.Logs) + output //nolint:gosec // sums of lengths
 	limits := d.o.Limits
 
+	var shed uint64
 	if total >= limits.MaxSize {
-		shed, err := d.shed(ctx, total-limits.MaxSize+1)
-		if err != nil {
+		var err error
+		if shed, err = d.shed(ctx, total-limits.MaxSize+1); err != nil {
 			return err
 		}
 		total -= min(shed, total)
@@ -134,12 +141,16 @@ func (d *Degrader) Once(ctx context.Context) error {
 		}
 		total -= min(freed, total)
 	}
-	if total >= limits.HardMax {
+	hard := total >= limits.HardMax
+	if hard || shed > 0 {
 		if err := d.seal(ctx); err != nil {
 			return err
 		}
 	}
-	d.publish(ctx, total, total >= limits.MaxSize)
+	if hard {
+		d.warnHardMax(ctx, total)
+	}
+	d.publish(ctx, total, total >= limits.MaxSize, hard)
 	return nil
 }
 
@@ -167,29 +178,55 @@ func (d *Degrader) seal(ctx context.Context) error {
 	if wait {
 		return nil
 	}
-	var sealed bool
+	var (
+		open   state.Truncation
+		sealed bool
+	)
 	err := d.o.DB.WithTx(ctx, func(tx *state.Tx) (err error) {
-		sealed, err = state.SealTruncation(ctx, tx)
+		if open, sealed, err = state.OpenTruncation(ctx, tx); err != nil || !sealed {
+			return err
+		}
+		_, err = state.SealTruncation(ctx, tx)
 		return err
 	})
 	if err == nil && sealed {
 		d.mu.Lock()
 		d.sealedAt = now
 		d.mu.Unlock()
-		d.o.Log.WarnContext(ctx, "the journal reached hard_max: what was given up of logs and output is reported to the Controller")
+		d.o.Log.WarnContext(ctx, "the journal discarded logs and output the Controller has not confirmed: it is reported to the Controller",
+			"log_lines", open.LogLines, "output_bytes", open.OutputBytes)
 	}
 	return err
 }
 
-func (d *Degrader) publish(ctx context.Context, total uint64, degraded bool) {
+// warnHardMax says, at most once every sealEvery, that the reports alone have
+// filled the journal: none is discarded, so only the Worker taking no Runs bounds it.
+func (d *Degrader) warnHardMax(ctx context.Context, total uint64) {
+	now := d.o.Clock.Now()
+	d.mu.Lock()
+	wait := !d.hardAt.IsZero() && now.Sub(d.hardAt) < sealEvery
+	if !wait {
+		d.hardAt = now
+	}
+	d.mu.Unlock()
+	if !wait {
+		d.o.Log.ErrorContext(ctx, "the journal is at hard_max: reports are never discarded, so it grows only with the Runs this Worker already has; no more are taken",
+			"bytes", total, "hard_max", d.o.Limits.HardMax)
+	}
+}
+
+func (d *Degrader) publish(ctx context.Context, total uint64, degraded, hard bool) {
 	reason := ""
-	if degraded {
+	switch {
+	case hard:
+		reason = fmt.Sprintf("the journal holds %d bytes the Controller has not confirmed (hard_max %d): reports are not discarded, so the Worker takes no Runs until they are confirmed", total, d.o.Limits.HardMax)
+	case degraded:
 		reason = fmt.Sprintf("the journal holds %d bytes the Controller has not confirmed (max_size %d): logs and output are discarded", total, d.o.Limits.MaxSize)
 	}
 	d.mu.Lock()
 	d.last = Backlog{Bytes: total, Reason: reason}
-	changed := (reason == "") != (d.reason == "")
-	d.reason = reason
+	changed := (reason == "") != (d.reason == "") || hard != d.hard
+	d.reason, d.hard = reason, hard
 	d.mu.Unlock()
 	if changed && d.o.OnDegraded != nil {
 		if degraded {

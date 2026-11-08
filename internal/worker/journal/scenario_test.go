@@ -78,14 +78,15 @@ func TestScenario_JournalDegradation_Etapa3(t *testing.T) {
 	f.reports(25, 150)
 	f.logLines(3, 100)
 	f.out.unsent += 300
+	f.clock.Advance(time.Minute) // the first pass already reported what it gave up
 
 	f.once() // hard_max
 
 	sealed := f.sealed()
-	if len(sealed) != 1 {
-		t.Fatalf("%d JournalTruncated to report, want 1", len(sealed))
+	if len(sealed) != 2 {
+		t.Fatalf("%d JournalTruncated to report, want 2 (stage 1 and hard_max)", len(sealed))
 	}
-	if got := sealed[0]; got.LogLines == 0 || got.LogsFrom == 0 || got.LogsFrom > got.LogsTo {
+	if got := sealed[1]; got.LogLines == 0 || got.LogsFrom == 0 || got.LogsFrom > got.LogsTo {
 		t.Errorf("truncation = %+v: it must carry the range of what was discarded", got)
 	}
 	counts, _ := state.JournalCounts(t.Context(), f.db.Reader())

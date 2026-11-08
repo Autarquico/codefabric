@@ -122,7 +122,7 @@ type JournalReport struct {
 // a truncation is one JournalTruncated event, however many times it is sent.
 // The reports of Runs are never discarded; this is the log lines with a worker
 // seq from LogsFromSeq to LogsToSeq (LogLines of them) and OutputBytes of Run
-// output that was skipped.
+// output that was skipped, of the Runs in RunIDs (the first of them).
 type JournalTruncation struct {
 	ID          uint64    `json:"id"`
 	At          time.Time `json:"at"`
@@ -130,7 +130,11 @@ type JournalTruncation struct {
 	LogsToSeq   uint64    `json:"logs_to_seq,omitempty"`
 	LogLines    uint64    `json:"log_lines,omitempty"`
 	OutputBytes uint64    `json:"output_bytes,omitempty"`
+	RunIDs      []string  `json:"run_ids,omitempty"`
 }
+
+// MaxTruncationRuns is the most Run ids a JournalTruncation names.
+const MaxTruncationRuns = 8
 
 // HeartbeatResponse tells the daemon the state the Controller holds it in.
 type HeartbeatResponse struct {

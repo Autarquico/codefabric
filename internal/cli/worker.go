@@ -151,14 +151,24 @@ Total         %s
 Allocatable   %s
 Free          %s
 Health        %s
+Journal       %s
 Capabilities  %s
 Last seen     %s
 Created       %s
 `, w.ID, w.Short, w.Name, stateOf(w), dash(w.Hostname), dash(w.OS), dash(w.Arch), dash(w.DaemonVersion), compatible,
 		dash(w.Epoch), w.Availability, w.ActiveRuns, w.MaxConcurrentRuns,
 		capacityOf(w.Resources.Total), capacityOf(w.Resources.Allocatable), capacityOf(w.Resources.Free),
-		healthOf(w.Health), dash(strings.Join(w.Capabilities, ", ")), lastSeen(w), local(w.CreatedAt))
+		healthOf(w.Health), journalOf(w), dash(strings.Join(w.Capabilities, ", ")), lastSeen(w), local(w.CreatedAt))
 	return err
+}
+
+// journalOf is the backlog the Worker last reported and when it last discarded logs or output.
+func journalOf(w v1.Worker) string {
+	line := "backlog " + humanBytes(w.JournalBacklogBytes)
+	if w.JournalTruncatedAt != nil {
+		line += ", logs or output last discarded " + local(*w.JournalTruncatedAt)
+	}
+	return line
 }
 
 func capacityOf(c v1.Capacity) string {

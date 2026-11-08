@@ -234,6 +234,25 @@ func TestStatus_ListsOnlyTheWorkersWhoseJournalHoldsABacklogAndTheHeartbeatCarri
 	}
 }
 
+func TestStatus_AnsweringDoesNotDependOnReadingTheWorkers(t *testing.T) {
+	tc := newController(t, time.Now())
+	busy, _ := tc.enrollRealWorker("busy")
+	req := heartbeat(newEpoch())
+	req.Journal = &v1.JournalReport{BacklogBytes: 4096}
+	_, err := busy.Heartbeat(t.Context(), req)
+	must(t, err)
+	must(t, tc.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		_, err := tx.Exec(t.Context(), `ALTER TABLE workers RENAME COLUMN journal_backlog_bytes TO journal_backlog_gone`)
+		return err
+	}))
+
+	st, err := tc.owner.Status(t.Context())
+	must(t, err)
+	if !st.Database.OK || len(st.Workers) != 0 {
+		t.Fatalf("status = %+v, want it to answer with the database and no Workers", st)
+	}
+}
+
 func TestWorkers_ListIsAnEmptyArrayNotNull(t *testing.T) {
 	tc := newController(t, time.Now())
 	_, _, raw := tc.call(tc.httpClientFor(tc.ownerDir), http.MethodGet, "/v1/workers", "")

@@ -3,6 +3,8 @@ package workers
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 	"unicode"
 
@@ -134,8 +136,12 @@ func syncJournal(ctx context.Context, tx *store.Tx, act mutation.Act, w *store.W
 		data := map[string]any{
 			"truncation_id": t.ID, "at": t.At.UTC().Format(time.RFC3339Nano),
 			"logs_from_seq": t.LogsFromSeq, "logs_to_seq": t.LogsToSeq, "log_lines": t.LogLines, "output_bytes": t.OutputBytes,
+			"run_ids": t.RunIDs,
 		}
-		if err := emit(ctx, tx, act, domain.EventJournalTruncated, *w, "the Worker discarded logs and output it could not send", data); err != nil {
+		ev := act.Event(domain.EventJournalTruncated, truncationMessage(t))
+		ev.Level = domain.LevelWarn // data was lost
+		ev.WorkerID, ev.Data = w.ID, data
+		if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
 			return 0, err
 		}
 		last, taken = t.ID, taken+1
@@ -151,14 +157,47 @@ func syncJournal(ctx context.Context, tx *store.Tx, act mutation.Act, w *store.W
 	return last, nil
 }
 
+// truncationMessage says what a truncation discarded and, for the output, which Runs lost some.
+func truncationMessage(t v1.JournalTruncation) string {
+	var parts []string
+	if t.LogLines > 0 {
+		parts = append(parts, fmt.Sprintf("%d log lines (seq %d-%d)", t.LogLines, t.LogsFromSeq, t.LogsToSeq))
+	}
+	if t.OutputBytes > 0 {
+		parts = append(parts, humanBytes(t.OutputBytes)+" of output")
+	}
+	msg := "the Worker discarded " + strings.Join(parts, " and ")
+	if len(t.RunIDs) > 0 {
+		msg += " (output of " + strings.Join(t.RunIDs, ", ") + ")"
+	}
+	return msg
+}
+
+func humanBytes(n uint64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := uint64(1024), 0
+	for m := n / 1024; m >= 1024; m /= 1024 {
+		div *= 1024
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// recentDiscard is how long a discard keeps its Worker in `cf status`, drained or not.
+const recentDiscard = 24 * time.Hour
+
 // WithJournalBacklog lists the Workers whose journal holds bytes the Controller
-// has not confirmed, for `cf status` (§1.3).
+// has not confirmed, or discarded logs or output lately, for `cf status` (§1.3).
 func (s *Service) WithJournalBacklog(ctx context.Context) ([]v1.StatusWorker, error) {
 	var out []v1.StatusWorker
 	err := s.db.Read(ctx, func(q store.Querier) error {
 		rows, err := store.Workers(ctx, q, false)
+		now := s.clock.Now()
 		for _, w := range rows {
-			if w.JournalBacklogBytes > 0 {
+			recent := w.JournalTruncatedAt != nil && now.Sub(*w.JournalTruncatedAt) < recentDiscard
+			if w.JournalBacklogBytes > 0 || recent {
 				out = append(out, v1.StatusWorker{
 					ID: string(w.ID), Name: w.Name, JournalBacklogBytes: w.JournalBacklogBytes, JournalTruncatedAt: w.JournalTruncatedAt,
 				})
@@ -182,6 +221,8 @@ func validateJournal(j *v1.JournalReport) error {
 	var previous uint64
 	for _, t := range j.Truncations {
 		switch {
+		case len(t.RunIDs) > v1.MaxTruncationRuns:
+			return input.Invalid("journal.truncations names at most %d runs", v1.MaxTruncationRuns)
 		case t.ID == 0 || t.ID <= previous:
 			return input.Invalid("journal.truncations ids must be positive and grow")
 		case t.LogsFromSeq > t.LogsToSeq:
