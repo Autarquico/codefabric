@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Retention y GC"
+title: Retention y GC
 type: task
-status: draft
+status: active
 priority: P1
 size: M
-issue: null
+issue: 146
 prs: []
-related_issues: []
+related_issues: [146]
 sub_issues: []
 depends_on: [logs-output-storage, git-relay-publication]
 supersedes: []
 related_specs: [codefabric-spec, phase-4-recovery]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-08
 ---
 
 # Retention y GC
