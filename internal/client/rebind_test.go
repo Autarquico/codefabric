@@ -88,3 +88,48 @@ func TestRebind_AGoodDestinationChangesOnlyTheAddress(t *testing.T) {
 		t.Errorf("controller file mode = %04o, want 0600", m)
 	}
 }
+
+// workerRoutes answers like a Controller does to a Worker: its own orders, and
+// CF_POLICY_DENIED for /v1/status.
+func workerRoutes(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/v1/worker/assignments" {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"CF_POLICY_DENIED","message":"this identity may not call this endpoint"}}`))
+		return
+	}
+	_ = json.NewEncoder(w).Encode(v1.AssignmentsResponse{Commands: []v1.WorkerCommand{}})
+}
+
+func TestRebindWorker_AsksForTheOrdersOfTheWorkerNotForTheStatus(t *testing.T) {
+	ca := newCA(t)
+	dir := savedBundle(t, func() client.Credentials { return makeBundle(t, ca, "127.0.0.1:1") })
+	f := startFake(t, serverChain(t, ca, "127.0.0.1", time.Now()), workerRoutes)
+	host, port := f.hostPort()
+	address := net.JoinHostPort(host, port)
+
+	if _, err := client.Rebind(context.Background(), dir, address); err == nil {
+		t.Fatal("the status probe passed against a Controller that denies it")
+	}
+	if _, err := client.RebindWorker(context.Background(), dir, address); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Clean(filepath.Join(dir, "controller"))); string(got) != address+"\n" {
+		t.Errorf("controller file = %q, want %q", got, address)
+	}
+}
+
+func TestRebindWorker_ARejectedIdentityWritesNothing(t *testing.T) {
+	ca := newCA(t)
+	dir := savedBundle(t, func() client.Credentials { return makeBundle(t, ca, "127.0.0.1:1") })
+	f := startFake(t, serverChain(t, ca, "127.0.0.1", time.Now()), func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":"CF_UNAUTHENTICATED","message":"unknown identity"}}`))
+	})
+	host, port := f.hostPort()
+	if _, err := client.RebindWorker(context.Background(), dir, net.JoinHostPort(host, port)); err == nil {
+		t.Fatal("a 401 was accepted")
+	}
+	if got, _ := os.ReadFile(filepath.Clean(filepath.Join(dir, "controller"))); string(got) != "127.0.0.1:1\n" {
+		t.Errorf("controller file = %q", got)
+	}
+}

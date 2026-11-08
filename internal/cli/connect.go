@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -70,13 +71,16 @@ func runRebind(cmd *cobra.Command, args []string, address string, force bool, na
 	if err != nil {
 		return err
 	}
-	return rebindCredentials(cmd, paths.CredentialsDir(), address, "")
+	return rebindCredentials(cmd, client.Rebind, paths.CredentialsDir(), address, "")
 }
+
+// rebindFunc is client.Rebind or client.RebindWorker.
+type rebindFunc func(ctx context.Context, dir, controller string, opts ...client.Option) (client.Info, error)
 
 // rebindCredentials points the bundle in dir at address once that address
 // answers over the pinned CA; otherwise nothing is written.
-func rebindCredentials(cmd *cobra.Command, dir, address, note string, opts ...client.Option) error {
-	info, err := client.Rebind(cmd.Context(), dir, address, opts...)
+func rebindCredentials(cmd *cobra.Command, rebind rebindFunc, dir, address, note string, opts ...client.Option) error {
+	info, err := rebind(cmd.Context(), dir, address, opts...)
 	if err != nil {
 		return err
 	}

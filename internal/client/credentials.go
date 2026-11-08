@@ -282,11 +282,29 @@ func Describe(dir string) (Info, error) {
 // client certificate; only an answer lets the `controller` file be replaced
 // (atomically, keeping its mode). Any failure leaves the bundle untouched.
 func Rebind(ctx context.Context, dir, controller string, opts ...Option) (Info, error) {
+	return rebind(dir, controller, opts, func(c *Client) error {
+		_, err := c.Status(ctx)
+		return err
+	})
+}
+
+// RebindWorker is Rebind for the bundle of a Worker, which may not call
+// /v1/status. It asks instead for the Worker's own orders without waiting
+// (GET /v1/worker/assignments, which only reads), so the address must answer
+// to the Worker identity as well as to the pinned CA.
+func RebindWorker(ctx context.Context, dir, controller string, opts ...Option) (Info, error) {
+	return rebind(dir, controller, opts, func(c *Client) error {
+		_, err := c.Assignments(ctx, 0, 0, 1)
+		return err
+	})
+}
+
+func rebind(dir, controller string, opts []Option, probe func(*Client) error) (Info, error) {
 	c, err := Open(dir, append(opts, WithController(controller))...)
 	if err != nil {
 		return Info{}, err
 	}
-	if _, err := c.Status(ctx); err != nil {
+	if err := probe(c); err != nil {
 		return Info{}, unchangedBecause(controller, err)
 	}
 	path := filepath.Join(dir, controllerFile)
