@@ -186,6 +186,7 @@ func Run(ctx context.Context, o Options) error {
 		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
 		PermissionServerArgv: o.PermissionServerArgv,
 		LogSecrets:           logSecrets,
+		WorktreeRetention:    time.Duration(d.settings.Retention.Worktrees),
 	}
 	eo.AskpassScript = d.writeAskpassScript(ctx, o)
 	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})

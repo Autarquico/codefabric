@@ -117,6 +117,9 @@ type Options struct {
 	// StopGrace is stop.grace (Appendix A): how long a harness has to end after
 	// it is asked to, before it is killed. It defaults to that of Appendix A.
 	StopGrace time.Duration
+	// WorktreeRetention is how long a published Run's worktree is kept; zero is
+	// DefaultWorktreeRetention.
+	WorktreeRetention time.Duration
 	// Git prepares, seals and pushes. Without one a Run gets an empty directory
 	// and its result is not published (tests).
 	Git Git

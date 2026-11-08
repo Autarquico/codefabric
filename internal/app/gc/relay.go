@@ -2,7 +2,6 @@ package gc
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -45,33 +44,20 @@ type archivedRefs struct {
 // whose publication is pending is left: its result may still be on its way.
 func archivedRuns(ctx context.Context, q store.Querier, cutoff time.Time) (archivedRefs, error) {
 	out := archivedRefs{branches: map[domain.ID]map[string]bool{}, runs: map[string]bool{}}
-	rows, err := q.Query(ctx,
-		`SELECT t.project_id, t.name, t.short_n, r.id, r.short_n, COALESCE(r.branch, '')
-		 FROM runs r JOIN tasks t ON t.id = r.task_id
-		 WHERE t.archived_at IS NOT NULL AND t.archived_at <= ? AND r.publication <> ?`,
-		cutoff.UnixNano(), string(domain.PublicationPending))
+	rows, err := store.ArchivedRuns(ctx, q, cutoff)
 	if err != nil {
-		return out, fmt.Errorf("gc: reading the archived Runs: %w", err)
+		return out, err
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var (
-			project, name, run, branch string
-			taskShort, runShort        uint64
-		)
-		if err := rows.Scan(&project, &name, &taskShort, &run, &runShort, &branch); err != nil {
-			return out, fmt.Errorf("gc: scanning an archived Run: %w", err)
+	for _, r := range rows {
+		branch := domain.RunBranch(r.Branch, r.TaskName,
+			domain.ShortID{Kind: domain.KindTask, N: r.TaskShort}, domain.ShortID{Kind: domain.KindRun, N: r.RunShort})
+		if out.branches[r.Project] == nil {
+			out.branches[r.Project] = map[string]bool{}
 		}
-		branch = domain.RunBranch(branch, name,
-			domain.ShortID{Kind: domain.KindTask, N: taskShort}, domain.ShortID{Kind: domain.KindRun, N: runShort})
-		id := domain.ID(project)
-		if out.branches[id] == nil {
-			out.branches[id] = map[string]bool{}
-		}
-		out.branches[id]["refs/heads/"+branch] = true
-		out.runs[run] = true
+		out.branches[r.Project]["refs/heads/"+branch] = true
+		out.runs[r.RunID] = true
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (a archivedRefs) owns(project domain.ID, name string) bool {

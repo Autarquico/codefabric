@@ -3,6 +3,7 @@ package daemon_test
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -93,5 +94,24 @@ func TestStart_SweepsSilentWorkersWithTheTTLOfTheConfiguration(t *testing.T) {
 	}
 	if resp, err := worker.Heartbeat(t.Context(), heartbeat()); err != nil || resp.State != domain.WorkerOnline {
 		t.Errorf("heartbeat after the silence: %+v, %v", resp, err)
+	}
+}
+
+// With the default configuration the Controller hands its git relay to the GC:
+// a pass reports the refs of the relay as an item of its own.
+func TestStart_GCCollectsTheRelayWithTheDefaultConfiguration(t *testing.T) {
+	p := newPaths(t)
+	initController(t, p)
+	start(t, p)
+	owner, err := client.Open(p.CredentialsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := owner.GC(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(rep.Items, func(c v1.GCCount) bool { return c.Kind == "relay_refs" }) {
+		t.Fatalf("the GC does not know the relay: %+v", rep.Items)
 	}
 }

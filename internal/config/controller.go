@@ -51,6 +51,9 @@ type Retention struct {
 	RunLogs Duration `json:"run_logs,omitempty"`
 	// RawOutput is how long the output of a finished Run is kept.
 	RawOutput Duration `json:"raw_output,omitempty"`
+	// RelayBranches is how long the branches and orphan refs of an archived
+	// Task stay in the git relay. Unset, it is 30d.
+	RelayBranches Duration `json:"relay_branches,omitempty"`
 }
 
 // GC tunes how and when the Controller collects garbage.

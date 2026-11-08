@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -44,7 +45,7 @@ func (e *Executor) sweepWorktrees(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	retention := DefaultWorktreeRetention
+	retention := cmp.Or(e.o.WorktreeRetention, DefaultWorktreeRetention)
 	runs, err := state.AllRuns(ctx, e.o.DB.Reader())
 	if err != nil {
 		return fmt.Errorf("listing the Runs: %w", err)

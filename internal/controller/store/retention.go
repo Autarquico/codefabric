@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 // Retention (§20.5). Every purge here comes as a pair: a count under the exact
@@ -335,4 +337,39 @@ func (t *Tx) DeleteBlobMeta(ctx context.Context, digest string) error {
 		return fmt.Errorf("store: forgetting a blob: %w", err)
 	}
 	return nil
+}
+
+// ArchivedRun is a Run of a Task archived long enough ago for its refs in the
+// relay to go.
+type ArchivedRun struct {
+	Project             domain.ID
+	TaskName            string
+	TaskShort, RunShort uint64
+	RunID               string
+	Branch              string // as stored; empty when the Run never recorded one
+}
+
+// ArchivedRuns lists the Runs of Tasks archived at or before cutoff. A Run whose
+// publication is pending is left: its result may still be on its way.
+func ArchivedRuns(ctx context.Context, q Querier, cutoff time.Time) ([]ArchivedRun, error) {
+	rows, err := q.Query(ctx,
+		`SELECT t.project_id, t.name, t.short_n, r.id, r.short_n, COALESCE(r.branch, '')
+		 FROM runs r JOIN tasks t ON t.id = r.task_id
+		 WHERE t.archived_at IS NOT NULL AND t.archived_at <= ? AND r.publication <> ?`,
+		cutoff.UnixNano(), string(domain.PublicationPending))
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the archived Runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []ArchivedRun
+	for rows.Next() {
+		var r ArchivedRun
+		var project string
+		if err := rows.Scan(&project, &r.TaskName, &r.TaskShort, &r.RunID, &r.RunShort, &r.Branch); err != nil {
+			return nil, fmt.Errorf("store: scanning an archived Run: %w", err)
+		}
+		r.Project = domain.ID(project)
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

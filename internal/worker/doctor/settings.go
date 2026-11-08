@@ -25,11 +25,19 @@ type Settings struct {
 	// is every installed one, as before the join wizard. The command adapter
 	// is not a harness of this list: it is always there.
 	Harnesses []string `json:"harnesses,omitzero"`
+	// Retention is how long this Worker keeps what it has already delivered.
+	Retention Retention `json:"retention,omitzero"`
 	// SetupPending says the join has not finished: the Worker reports the
 	// "setup" component failing and takes no Runs. Absent means done.
 	SetupPending bool `json:"setup_pending,omitempty"`
 	// Wizard is the progress of the join wizard, kept to resume it.
 	Wizard *Progress `json:"wizard,omitempty"`
+}
+
+// Retention of a Worker, as JSON such as "7d".
+type Retention struct {
+	// Worktrees is how long the worktree of a published Run is kept. Unset, 7d.
+	Worktrees config.Duration `json:"worktrees,omitempty"`
 }
 
 // Progress is where the join wizard stopped and the answers it needs to go on.
