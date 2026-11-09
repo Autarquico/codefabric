@@ -56,6 +56,8 @@ jobs:
           cache: false
       # go run verifies the module against go.sum / the checksum database; same version as the Makefile
       - name: build with GoReleaser
+        env:
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }} # an rc and its final release can share a commit
         run: go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --clean
       - name: record what was built
         id: manifest
