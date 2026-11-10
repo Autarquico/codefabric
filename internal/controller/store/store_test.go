@@ -791,6 +791,22 @@ func TestOpen_ReopenKeepsDataAndPrimesNotifier(t *testing.T) {
 	}
 }
 
+// A reader connection that has run quick_check reports a false FTS5 checksum
+// mismatch once the index changes, so Health must not run on a pooled one.
+func TestHealth_StaysOkAfterTheSearchIndexChanges(t *testing.T) {
+	db, _ := openTest(t, Options{ReaderConns: 1})
+	if err := db.Health(t.Context()); err != nil {
+		t.Fatalf("Health before the write: %v", err)
+	}
+	if _, err := db.writer.ExecContext(t.Context(),
+		`INSERT INTO search_index (rowid, name, body) VALUES (1000, 'omarch01', 'omarch01 linux amd64')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Health(t.Context()); err != nil {
+		t.Errorf("Health after the write: %v", err)
+	}
+}
+
 func TestOpen_PathWithSpecialCharacters(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "a b?c#d%e")
 	db, err := Open(t.Context(), filepath.Join(dir, "controller.db"), Options{})

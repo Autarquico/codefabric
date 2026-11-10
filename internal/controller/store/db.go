@@ -230,9 +230,16 @@ func (db *DB) OutputNotifier() *eventbus.Notifier { return db.output }
 // ControllerID is the identifier generated when the database was first created.
 func (db *DB) ControllerID() string { return db.controllerID }
 
-// Health runs SQLite's quick_check on the reader.
+// Health runs SQLite's quick_check on a connection of its own: a pooled
+// connection that has checked an FTS5 table once reports a checksum mismatch
+// after the next write to it, though the index is sound.
 func (db *DB) Health(ctx context.Context) error {
-	return quickCheck(ctx, db.reader)
+	pool, err := openPool(ctx, readerDSN(db.path), 1)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pool.Close() }()
+	return quickCheck(ctx, pool)
 }
 
 // quickCheck succeeds only when PRAGMA quick_check reports exactly "ok".
