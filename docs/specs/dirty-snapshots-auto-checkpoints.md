@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Snapshots dirty y checkpoints automáticos"
+title: Snapshots dirty y checkpoints automáticos
 type: task
-status: draft
+status: active
 priority: P1
 size: M
-issue: null
+issue: 162
 prs: []
-related_issues: []
+related_issues: [162]
 sub_issues: []
 depends_on: [checkpoint-capture]
 supersedes: []
 related_specs: [codefabric-spec, phase-5-handoff]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-11
 ---
 
 # Snapshots dirty y checkpoints automáticos
@@ -28,6 +28,8 @@ Owner previsto en el bucle Develop: backend-eng.
 
 **Entra:**
 - `cf do --snapshot`: commit temporal en el cliente y push a `refs/cf/snapshots/*`; checkpoints por intervalo y pre-destructivos
+- Relay para clientes: todo cliente autenticado del Controller accede a los Projects de ese Controller (no hay scoping por Project en el modelo, §16.8); lectura de la rama de la Task y de `refs/cf/checkpoints/*`, y create-only en `refs/cf/snapshots/<digest>`; ningún otro ref
+- El snapshot y `cf do` registran `source.branch` (la rama local de partida)
 
 **No entra:**
 - Nada fuera de lo indicado en la epic.
@@ -50,6 +52,11 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **Given** `drain --force`
 - **When** se ejecuta
 - **Then** checkpoint previo si el harness lo permite
+
+### Scenario: Ref fuera de la lista
+- **Given** un cliente autenticado
+- **When** empuja a un ref fuera de `refs/cf/snapshots/<digest>` o a un Project inexistente
+- **Then** rechazo y nada cambia
 
 ## Notas técnicas / riesgos
 

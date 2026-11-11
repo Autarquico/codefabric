@@ -22,7 +22,7 @@ updated: 2026-10-10
 
 Fase 5 del roadmap de `docs/codefabric-spec.md` (§43). Release objetivo: **v0.4**.
 
-**Done de la fase:** Una Task iniciada en A continúa mediante un Run nuevo en B con contexto y source preservados.
+**Done de la fase:** Una Task iniciada en A continúa mediante un Run nuevo en B con contexto y source preservados, y vuelve al checkout local del usuario con su sesión.
 
 ## Scope
 
@@ -34,6 +34,8 @@ Fase 5 del roadmap de `docs/codefabric-spec.md` (§43). Release objetivo: **v0.4
 | `defer-resume` | Defer y resume | M | `checkpoint-capture` |
 | `move-handoff` | Move y handoff | L | `defer-resume` |
 | `dirty-snapshots-auto-checkpoints` | Snapshots dirty y checkpoints automáticos | M | `checkpoint-capture` |
+| `session-pull` | Traer la Task al checkout local | L | `defer-resume`, `dirty-snapshots-auto-checkpoints` |
+| `claude-handto` | /handto desde Claude Code | M | `defer-resume`, `dirty-snapshots-auto-checkpoints` |
 
 **No entra:** lo asignado a otras fases en §43.
 
