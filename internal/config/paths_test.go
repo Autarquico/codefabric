@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -71,8 +73,49 @@ func TestControllerConfigRoundTripAndMissing(t *testing.T) {
 	if err := SaveController(p, want); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := LoadController(p); err != nil || got != want {
+	if got, err := LoadController(p); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestControllerConfigCheckpointExclude(t *testing.T) {
+	p := Paths{ConfigDir: t.TempDir(), DataDir: t.TempDir()}
+
+	// Unset, it stays out of the file and the defaults apply.
+	if err := SaveController(p, Controller{Listen: "a:1", Advertise: "b:2"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(p.ControllerConfigFile())
+	if err != nil || strings.Contains(string(raw), "checkpoint") {
+		t.Fatalf("file = %s (%v)", raw, err)
+	}
+	got, err := LoadController(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"**/.env*", "**/*.pem", "**/*.key"}; !slices.Equal(got.Checkpoint.Excluded(), want) {
+		t.Errorf("default = %v, want %v", got.Checkpoint.Excluded(), want)
+	}
+
+	// Set, it replaces the defaults and survives a round trip.
+	want := Controller{Listen: "a:1", Advertise: "b:2", Checkpoint: Checkpoint{Exclude: []string{"**/*.p12"}}}
+	if err := SaveController(p, want); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := LoadController(p); err != nil || !slices.Equal(got.Checkpoint.Excluded(), []string{"**/*.p12"}) {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestCheckpointExcludedIsACopy(t *testing.T) {
+	DefaultCheckpointExclude()[0] = "changed"
+	if got := (Checkpoint{}).Excluded()[0]; got != "**/.env*" {
+		t.Errorf("a caller changed the default: %q", got)
+	}
+	set := Checkpoint{Exclude: []string{"a"}}
+	set.Excluded()[0] = "changed"
+	if set.Exclude[0] != "a" {
+		t.Error("a caller changed the configured list")
 	}
 }
 
@@ -106,7 +149,7 @@ func TestControllerConfigWorkerOfflineTTL(t *testing.T) {
 	if err != nil || !strings.Contains(string(raw), `"worker_offline_ttl": "1m30s"`) {
 		t.Fatalf("file = %s (%v)", raw, err)
 	}
-	if got, err := LoadController(p); err != nil || got != want {
+	if got, err := LoadController(p); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v %v", got, err)
 	}
 
