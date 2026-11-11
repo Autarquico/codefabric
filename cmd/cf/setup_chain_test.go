@@ -18,6 +18,7 @@ import (
 func chained(t *testing.T, in io.Reader) (sawTerminal bool, adoptLine, joinAnswer string) {
 	t.Helper()
 	steps := binarySetupSteps()
+	steps.skill = nil // the offer of the /handto skill has its own test
 	steps.connect = func(context.Context, *cobra.Command, *prompt.Prompter) error { return nil }
 	steps.join = func(_ context.Context, _ *cobra.Command, p *prompt.Prompter) error {
 		var err error

@@ -72,6 +72,38 @@ func openDoctorStore(opts Options) func(*cobra.Command) (doctorStore, error) {
 type DoctorReport struct {
 	Controller DoctorController `json:"controller"`
 	Workers    []DoctorWorker   `json:"workers"`
+	// HandtoSkill is the /handto skill of Claude Code on this machine; absent
+	// when it could not be told.
+	HandtoSkill *DoctorSkill `json:"handto_skill,omitempty"`
+}
+
+// DoctorSkill is the skill as the doctor found it. A missing or stale one is
+// a warning, with the command that fixes it.
+type DoctorSkill struct {
+	State   string `json:"state"`
+	Version string `json:"version,omitempty"`
+	Warning string `json:"warning,omitempty"`
+	Action  string `json:"action,omitempty"`
+}
+
+func doctorSkill(s *ClaudeSkill) *DoctorSkill {
+	if s == nil {
+		return nil
+	}
+	d := &DoctorSkill{State: s.State, Version: s.Version}
+	switch s.State {
+	case skillMissing:
+		d.Warning = "la skill /handto de Claude Code no está instalada"
+	case skillOutdated:
+		d.Warning = "la skill /handto es de otra versión de cf (" + s.Version + ")"
+	case skillForeign:
+		d.Warning = "hay una skill handto que cf no escribió; cf claude install --force la reemplaza"
+		return d
+	default:
+		return d
+	}
+	d.Action = "cf claude install"
+	return d
 }
 
 // DoctorController is the Controller as the doctor found it.
@@ -113,6 +145,7 @@ func newDoctorCmd(open func(*cobra.Command) (doctorStore, error), probe sshProbe
 			if err != nil {
 				return err
 			}
+			rep.HandtoSkill = doctorSkill(userHandtoSkill())
 			return emit(cmd, rep, func(out io.Writer) error { return printDoctor(out, rep) })
 		},
 	}
@@ -183,6 +216,13 @@ func attachProblem(ctx context.Context, announced string, probe sshProbe) string
 
 func printDoctor(out io.Writer, rep DoctorReport) error {
 	fmt.Fprintf(out, "Controller  ok  %s  %s\n", dash(rep.Controller.Address), dash(rep.Controller.Version))
+	if d := rep.HandtoSkill; d != nil && d.Warning != "" {
+		fmt.Fprintf(out, "aviso: %s", d.Warning)
+		if d.Action != "" {
+			fmt.Fprintf(out, "  (acción: %s)", d.Action)
+		}
+		fmt.Fprintln(out)
+	}
 	if len(rep.Workers) == 0 {
 		_, err := fmt.Fprintln(out, "\nNo hay Workers.")
 		return err
