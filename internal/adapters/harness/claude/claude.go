@@ -36,8 +36,8 @@ const OAuthTokenEnv = //nolint:gosec // a variable name, not a credential
 const OAuthTokenRef = //nolint:gosec // a secret ref, not a credential
 "claude/oauth-token"
 
-// Adapter is the harness `claude-code`: all of §7.2 but Resume,
-// Checkpoint and Stop, which stay unsupported.
+// Adapter is the harness `claude-code`: all of §7.2 but Stop, which stays
+// unsupported.
 type Adapter struct {
 	harness.Unsupported
 }
@@ -50,11 +50,13 @@ var (
 // ID is "claude-code".
 func (Adapter) ID() string { return ID }
 
-// Capabilities are both modes, usage, model selection and a configuration
-// directory per Run, and Install.
+// Capabilities are both modes, usage, model selection, a configuration
+// directory per Run, Install, and Checkpoint and Resume of the native session.
 func (Adapter) Capabilities() harness.Capabilities {
 	return harness.Capabilities{
 		Modes:                  []domain.Mode{domain.ModeHeadless, domain.ModeInteractive},
+		Resume:                 true,
+		NativeCheckpoint:       true,
 		NeedsInputSignal:       true,
 		StructuredInput:        true,
 		UsageEvents:            true,

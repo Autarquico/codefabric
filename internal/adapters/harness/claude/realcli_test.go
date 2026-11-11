@@ -3,11 +3,14 @@ package claude_test
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 // The contract of the flags the structured input depends on, against the real
@@ -65,5 +68,59 @@ func TestRealCLI_TheDefaultPermissionModeIsAccepted(t *testing.T) {
 		if !strings.Contains(string(out), "--max-budget-usd") && accepted {
 			t.Errorf("--permission-mode %s did not reach the check of the budget: %s", mode, out)
 		}
+	}
+}
+
+// The round trip against the real CLI: a headless Run learns a word, its session
+// is checkpointed, and a Run in another directory, resumed from the checkpoint,
+// still knows it. It calls a model, so it needs CLAUDE_CODE_OAUTH_TOKEN too.
+//
+//	CF_REQUIRE_CLAUDE=1 CLAUDE_CODE_OAUTH_TOKEN=... go test -run TestRealCLI_CheckpointResume ./internal/adapters/harness/claude/
+func TestRealCLI_CheckpointResumeRoundTrip(t *testing.T) {
+	requireRealClaude(t)
+	if os.Getenv(claude.OAuthTokenEnv) == "" {
+		t.Fatalf("CF_REQUIRE_CLAUDE=1 and %s is not set", claude.OAuthTokenEnv)
+	}
+	host, err := localhost.New(localhost.Options{Home: t.TempDir(), Env: os.Environ()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(id domain.ID, prompt string, cp *harness.Checkpoint) (harness.RunSpec, string) {
+		root := t.TempDir()
+		spec := harness.RunSpec{
+			RunID: id, LeaseEpoch: 1, Mode: domain.ModeHeadless, Prompt: prompt, Model: "haiku",
+			ConfigDir: filepath.Join(root, "config"), Worktree: filepath.Join(root, "wt"),
+		}
+		if err := os.MkdirAll(spec.Worktree, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		var l harness.Launch
+		if cp == nil {
+			l, err = claude.Adapter{}.Start(t.Context(), host, spec)
+		} else {
+			l, err = claude.Adapter{}.Resume(t.Context(), host, spec, *cp)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.CommandContext(t.Context(), l.Argv[0], l.Argv[1:]...) //nolint:gosec // the claude of the machine
+		cmd.Dir = spec.Worktree
+		cmd.Env = append(os.Environ(), l.Env...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", l.Argv, err, out)
+		}
+		return spec, string(out)
+	}
+	first, _ := run("realcli-a", "Remember the word kiwi. Answer only OK.", nil)
+	cp, err := claude.Adapter{}.Checkpoint(t.Context(), host, harness.Handle{
+		RunID: first.RunID, LeaseEpoch: first.LeaseEpoch, ConfigDir: first.ConfigDir, Worktree: first.Worktree,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, out := run("realcli-b", "Which word did I ask you to remember? Answer with the word only.", &cp)
+	if !strings.Contains(strings.ToLower(out), "kiwi") {
+		t.Errorf("the resumed session forgot the word:\n%s", out)
 	}
 }
