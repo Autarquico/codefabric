@@ -28,6 +28,9 @@ Owner previsto en el bucle Develop: backend-eng.
 
 **Entra:**
 - `POST /v1/tasks/{ref}/defer|resume`; `cf task defer|resume [--worker]`; reescritura de ruta del cwd en Claude
+- `Prepare` del Worker desde el relay (hoy solo trae de `origin`): un Run que continúa un checkpoint o un snapshot ve sus commits sin push a `origin`
+- Semilla de sesión del cliente: `cf do|task resume --snapshot --session <id>` lleva una sesión local de Claude al Run que va a correr (`lineage.native_seed: {adapter, version, digest}`); sin Run sintético
+- Tras un `TaskPulled` posterior al último checkpoint, `resume` se rechaza salvo `--force` o semilla del mismo cliente (enmienda de §11.7: doble escritor)
 
 **No entra:**
 - Nada fuera de lo indicado en la epic.
@@ -50,6 +53,21 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **Given** `native_state` de otro major del adapter
 - **When** se reanuda
 - **Then** solo source + summary, con aviso
+
+### Scenario: Resume en otro Worker
+- **Given** una Task diferida en el Worker A con commits solo en el relay
+- **When** `resume --worker B`
+- **Then** el Run en B parte del commit del checkpoint sin que nada se publique en `origin`
+
+### Scenario: Semilla de sesión
+- **Given** una sesión local de Claude cerrada y un repo dirty
+- **When** `cf do --snapshot --session <id> --worker B`
+- **Then** el Run en B reanuda esa sesión sobre el snapshot y el árbol local queda intacto
+
+### Scenario: Resume tras pull
+- **Given** un `TaskPulled` posterior al último checkpoint
+- **When** `cf task resume` sin `--force`
+- **Then** error con la explicación y nada cambia
 
 ## Notas técnicas / riesgos
 
