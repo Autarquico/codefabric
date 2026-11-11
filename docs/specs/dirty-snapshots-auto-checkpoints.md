@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Snapshots dirty y checkpoints automáticos"
+title: Snapshots dirty y checkpoints automáticos
 type: task
-status: draft
+status: active
 priority: P1
 size: M
 issue: null
 prs: []
-related_issues: []
+related_issues: [162]
 sub_issues: []
 depends_on: [checkpoint-capture]
 supersedes: []
 related_specs: [codefabric-spec, phase-5-handoff]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-11
 ---
 
 # Snapshots dirty y checkpoints automáticos
