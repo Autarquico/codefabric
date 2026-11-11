@@ -99,3 +99,22 @@ func TestRunEpochAndSessionName_OneFormOnly(t *testing.T) {
 		t.Error("an empty run parsed")
 	}
 }
+
+func TestCheckpointRef_OneFormOnly(t *testing.T) {
+	id := ID("cp_01J00000000000000000000000")
+	ref := CheckpointRef(id)
+	if ref != "refs/cf/checkpoints/cp_01J00000000000000000000000" || !ValidCheckpointRef(ref) {
+		t.Fatalf("CheckpointRef = %q", ref)
+	}
+	for _, bad := range []string{
+		"", "refs/cf/checkpoints/", "refs/cf/checkpoints/../x", "refs/cf/checkpoints/cp_01J00000000000000000000000/x",
+		"refs/cf/checkpoints/cp_01J00000000000000000000000/", "refs/cf/checkpoints/cp_x", "refs/cf/checkpoints/cp_",
+		"refs/cf/checkpoints/run_01J00000000000000000000000", "refs/cf/checkpoints/01J00000000000000000000000",
+		"refs/cf/checkpoints/cp_01J000000000000000000000000", "refs/cf/orphans/cp_01J00000000000000000000000",
+		"refs/heads/cf/checkpoints/cp_01J00000000000000000000000", "refs/cf/checkpoints/cp_01J00000000000000000000000 ",
+	} {
+		if ValidCheckpointRef(bad) {
+			t.Errorf("%q is taken for a checkpoint ref", bad)
+		}
+	}
+}

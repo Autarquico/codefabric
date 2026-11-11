@@ -28,13 +28,19 @@ type relayClaims struct {
 	Epoch   uint64    `json:"e"`
 	Project domain.ID `json:"p"`
 	Expires int64     `json:"x"` // Unix nanoseconds
-	// Scope is "" for the token of a lease and scopeOrphan for that of an
-	// orphan, which may only create its ref at Commit.
+	// Scope is "" for the token of a lease, scopeOrphan for that of an orphan
+	// and scopeCheckpoint for that of a checkpoint; the last two may only
+	// create their ref at Commit.
 	Scope  string `json:"s,omitempty"`
 	Commit string `json:"c,omitempty"`
+	// Checkpoint is the checkpoint a scopeCheckpoint token creates the ref of.
+	Checkpoint domain.ID `json:"k,omitempty"`
 }
 
-const scopeOrphan = "orphan"
+const (
+	scopeOrphan     = "orphan"
+	scopeCheckpoint = "checkpoint"
+)
 
 // RelayGrant is what AuthorizeRelay concedes to one request.
 type RelayGrant struct {
@@ -203,8 +209,14 @@ func (s *Service) AuthorizeRelay(ctx context.Context, by pki.Session, project st
 	if kind, _, err := domain.ParseID(project); err != nil || kind != domain.KindProject {
 		return RelayGrant{}, errRelayDenied()
 	}
-	if claims.Scope == scopeOrphan {
+	switch claims.Scope {
+	case scopeOrphan:
 		return s.authorizeOrphan(ctx, by, claims, project, write, now)
+	case scopeCheckpoint:
+		return s.authorizeCheckpoint(ctx, by, claims, project, write, now)
+	case "":
+	default:
+		return RelayGrant{}, errRelayDenied()
 	}
 	var grant RelayGrant
 	err := s.db.Read(ctx, func(q store.Querier) error {
@@ -347,6 +359,90 @@ func (s *Service) authorizeOrphan(ctx context.Context, by pki.Session, claims re
 		}
 		grant = RelayGrant{
 			Project: t.ProjectID, Worker: w.ID, Write: true, Ref: domain.OrphanRef(claims.Run, claims.Epoch),
+			ExpectedOID: claims.Commit,
+		}
+		return nil
+	})
+	return grant, err
+}
+
+// checkpointOfRun finds the checkpoint a token is for, which must be one of the
+// Run the lease holds: a checkpoint of another Run is never reachable with it.
+func checkpointOfRun(ctx context.Context, q store.Querier, id, run domain.ID) error {
+	cp, err := store.CheckpointByID(ctx, q, id)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && cp.RunID != run) {
+		return domain.NewError(domain.CodeNotFound, "checkpoint not found", nil)
+	}
+	return err
+}
+
+// MintCheckpointToken gives a Worker a token that may only create the ref of a
+// checkpoint of the Run it holds under its live lease, at the commit it sealed
+// (§22.4): the Controller must have recorded the checkpoint for that Run. It
+// does not relax the tokens of a lease.
+func (s *Service) MintCheckpointToken(ctx context.Context, by pki.Session, runID string, epoch uint64, checkpoint domain.ID, commit string) (v1.RelayTokenResponse, error) {
+	if kind, _, err := domain.ParseID(runID); err != nil || kind != domain.KindRun {
+		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeNotFound, "run not found", nil)
+	}
+	if kind, _, err := domain.ParseID(string(checkpoint)); err != nil || kind != domain.KindCheckpoint ||
+		!domain.ValidCommitID(commit) || epoch == 0 {
+		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeInvalidRequest, "a checkpoint token needs a lease epoch, a checkpoint ID and a commit ID", nil)
+	}
+	if s.relay == nil {
+		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeInternal, "the Controller has no relay", nil)
+	}
+	var out v1.RelayTokenResponse
+	err := s.db.Read(ctx, func(q store.Querier) error {
+		now := s.clock.Now()
+		c, err := resolveChain(ctx, q, by, now, domain.ID(runID), epoch)
+		if err != nil {
+			return err
+		}
+		if err := checkpointOfRun(ctx, q, checkpoint, c.run.ID); err != nil {
+			return err
+		}
+		expires := now.Add(RelayTokenTTL)
+		out = v1.RelayTokenResponse{
+			Token: s.sign(relayClaims{
+				Worker: c.worker.ID, Run: c.run.ID, Epoch: epoch, Project: c.project, Expires: expires.UnixNano(),
+				Scope: scopeCheckpoint, Commit: commit, Checkpoint: checkpoint,
+			}),
+			ExpiresAt: expires, Path: v1.RelayPathPrefix + string(c.project) + ".git", Write: true,
+			Ref: domain.CheckpointRef(checkpoint),
+		}
+		return nil
+	})
+	return out, err
+}
+
+// authorizeCheckpoint decides a request made with a checkpoint's token: only a
+// push, by the Worker it was issued to, under the Run's live lease, of the one
+// ref of the checkpoint, created at the one commit.
+func (s *Service) authorizeCheckpoint(ctx context.Context, by pki.Session, claims relayClaims, project string, write bool, now time.Time) (RelayGrant, error) {
+	if !write {
+		return RelayGrant{}, errRelayDenied()
+	}
+	var grant RelayGrant
+	err := s.db.Read(ctx, func(q store.Querier) error {
+		c, err := resolveChain(ctx, q, by, now, claims.Run, claims.Epoch)
+		if err == nil {
+			err = checkpointOfRun(ctx, q, claims.Checkpoint, c.run.ID)
+		}
+		if err != nil {
+			var coded *domain.Error
+			if errors.As(err, &coded) && coded.Code == domain.CodeUnauthenticated {
+				return err
+			}
+			if errors.As(err, &coded) {
+				return errRelayDenied()
+			}
+			return err
+		}
+		if c.worker.ID != claims.Worker || c.project != domain.ID(project) {
+			return errRelayDenied()
+		}
+		grant = RelayGrant{
+			Project: c.project, Worker: c.worker.ID, Write: true, Ref: domain.CheckpointRef(claims.Checkpoint),
 			ExpectedOID: claims.Commit,
 		}
 		return nil
