@@ -1,13 +1,13 @@
 ---
 codename: codefabric
-title: "Traer la Task al checkout local"
+title: Traer la Task al checkout local
 type: task
-status: draft
+status: active
 priority: P1
 size: L
 issue: null
 prs: []
-related_issues: []
+related_issues: [163]
 sub_issues: []
 depends_on: [defer-resume, dirty-snapshots-auto-checkpoints]
 supersedes: []
