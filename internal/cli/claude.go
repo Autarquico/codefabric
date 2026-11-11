@@ -23,14 +23,15 @@ const handtoVersionVar = "{{cf-version}}"
 
 var (
 	handtoVersionRE = regexp.MustCompile(`^[A-Za-z0-9._+-]+$`)
-	handtoMarkerRE  = regexp.MustCompile(`(?m)^<!-- cf-version: (\S+) -->\r?$`)
+	handtoMarkerRE  = regexp.MustCompile(`^<!-- cf-version: (\S+) -->\r?(\n|$)`)
 )
 
 // Skill states, as `cf claude status` and `cf doctor` report them.
 const (
 	skillMissing  = "missing"
 	skillCurrent  = "current"  // written by this cf, byte for byte
-	skillOutdated = "outdated" // written by cf, of another version or edited since
+	skillOutdated = "outdated" // written by cf, of another version
+	skillModified = "modified" // written by this cf and edited since
 	skillForeign  = "foreign"  // a handto skill that cf did not write
 )
 
@@ -42,6 +43,23 @@ type ClaudeSkill struct {
 	Action  string `json:"action,omitempty"`
 	Version string `json:"version,omitempty"` // of the cf that wrote it, when it carries one
 	DryRun  bool   `json:"dry_run,omitempty"`
+}
+
+// handtoMarkerVersion is the cf version in the marker, which sits on the line
+// after the frontmatter. "" when the file does not have it there.
+func handtoMarkerVersion(file []byte) string {
+	rest, ok := bytes.CutPrefix(file, []byte("---\n"))
+	if !ok {
+		return ""
+	}
+	_, afterFrontmatter, ok := bytes.Cut(rest, []byte("\n---\n"))
+	if !ok {
+		return ""
+	}
+	if m := handtoMarkerRE.FindSubmatch(afterFrontmatter); m != nil {
+		return string(m[1])
+	}
+	return ""
 }
 
 // renderHandto is the SKILL.md that the cf of this version writes.
@@ -62,6 +80,10 @@ func handtoStatus(scope, base, version string) (ClaudeSkill, error) {
 	if err != nil {
 		return ClaudeSkill{}, err
 	}
+	return classifyHandto(scope, base, version, want)
+}
+
+func classifyHandto(scope, base, version string, want []byte) (ClaudeSkill, error) {
 	s := ClaudeSkill{Scope: scope, Path: handtoPath(base)}
 	have, err := readRegular(s.Path)
 	switch {
@@ -72,12 +94,15 @@ func handtoStatus(scope, base, version string) (ClaudeSkill, error) {
 	case bytes.Equal(have, want):
 		s.State, s.Version = skillCurrent, version
 	default:
-		m := handtoMarkerRE.FindSubmatch(have)
-		if m == nil {
+		s.Version = handtoMarkerVersion(have)
+		switch s.Version {
+		case "":
 			s.State = skillForeign
-			break
+		case version:
+			s.State = skillModified
+		default:
+			s.State = skillOutdated
 		}
-		s.State, s.Version = skillOutdated, string(m[1])
 	}
 	return s, nil
 }
@@ -89,7 +114,7 @@ func installHandto(scope, base, version string, force, dryRun bool) (ClaudeSkill
 	if err != nil {
 		return ClaudeSkill{}, err
 	}
-	s, err := handtoStatus(scope, base, version)
+	s, err := classifyHandto(scope, base, version, want)
 	if err != nil {
 		return ClaudeSkill{}, err
 	}
@@ -106,6 +131,8 @@ func installHandto(scope, base, version string, force, dryRun bool) (ClaudeSkill
 		s.Action = "replaced"
 	case skillOutdated:
 		s.Action = "updated"
+	case skillModified:
+		s.Action = "restored"
 	default:
 		s.Action = "created"
 	}
@@ -128,7 +155,7 @@ func uninstallHandto(scope, base string) (ClaudeSkill, error) {
 		s.State, s.Action = skillMissing, "absent"
 	case err != nil:
 		return ClaudeSkill{}, err
-	case !handtoMarkerRE.Match(have):
+	case handtoMarkerVersion(have) == "":
 		s.State, s.Action = skillForeign, "kept"
 	default:
 		if _, err := removeSkill(s.Path); err != nil {
@@ -175,10 +202,10 @@ func bindScope(cmd *cobra.Command, scope *string) {
 }
 
 func claudeBase(scope string) (string, error) {
-	if scope != "user" && scope != "project" {
-		return "", usageError(fmt.Errorf("--scope must be user or project, not %q", scope))
+	if err := validScope(scope); err != nil {
+		return "", err
 	}
-	return scopeBase(scope)
+	return skillsBase(scope, filepath.Join(".claude", "skills"))
 }
 
 func newClaudeInstallCmd() *cobra.Command {
@@ -262,12 +289,18 @@ func printClaudeSkill(out io.Writer, s ClaudeSkill) error {
 		if s.Version != "" {
 			verb += " (cf " + s.Version + ")"
 		}
-	case s.DryRun:
+	case s.DryRun && s.Action != "unchanged":
 		verb = "would be " + verb
 	}
 	_, err := fmt.Fprintf(out, "handto skill: %s  %s\n", verb, printable(s.Path))
-	if err == nil && s.State == skillOutdated {
+	if err != nil || s.Action != "" {
+		return err
+	}
+	switch s.State {
+	case skillOutdated:
 		_, err = fmt.Fprintln(out, "It is of another version: run `cf claude install` to update it.")
+	case skillModified:
+		_, err = fmt.Fprintln(out, "It was edited since cf wrote it: run `cf claude install` to restore it.")
 	}
 	return err
 }

@@ -29,7 +29,7 @@ Install into Claude Code what cf needs there: the `/handto` skill, which hands t
 
 - `cf claude install [--scope user|project] [--force] [--dry-run]`: write it to `~/.claude/skills/handto/SKILL.md` (`--scope project`: `.claude/skills/` of the repository). Idempotent: the same version changes nothing and another version updates it. A `handto` skill that cf did not write is not overwritten without `--force`.
 - `cf claude uninstall [--scope user|project]`: remove the skill that cf wrote. One it did not write stays.
-- `cf claude status [--scope user|project]`: `missing`, `current`, `outdated` (another version of cf) or `foreign`. With `--json`, the same as an object.
+- `cf claude status [--scope user|project]`: `missing`, `current`, `outdated` (another version of cf), `modified` (cf wrote it, then it was edited; `install` restores it) or `foreign`. With `--json`, the same as an object.
 
 `cf doctor` warns when the user skill is missing or of another version, and `cf setup` offers to install it to a client on a terminal. The skill needs `cf handoff`, which this page lists once it exists.
 

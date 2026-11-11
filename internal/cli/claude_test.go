@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Autarquico/codefabric/internal/domain"
 )
 
 func runClaude(t *testing.T, args ...string) (code int, stdout, stderr string) {
@@ -72,7 +75,7 @@ func TestScenario_InstallIdempotente(t *testing.T) {
 	}
 }
 
-func TestInstall_ForeignNeedsForce(t *testing.T) {
+func TestScenario_InstallIdempotente_Foreign(t *testing.T) {
 	home := t.TempDir()
 	mine := "---\nname: handto\n---\nmy own skill\n"
 	if err := os.MkdirAll(filepath.Dir(handtoPath(home)), 0o700); err != nil {
@@ -81,8 +84,10 @@ func TestInstall_ForeignNeedsForce(t *testing.T) {
 	if err := os.WriteFile(handtoPath(home), []byte(mine), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := installHandto("user", home, "v1", false, false); err == nil {
-		t.Fatal("a foreign skill was accepted without --force")
+	_, err := installHandto("user", home, "v1", false, false)
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.CodeConfirmationRequired {
+		t.Fatalf("a foreign skill without --force: %v", err)
 	}
 	if b, _ := os.ReadFile(handtoPath(home)); string(b) != mine {
 		t.Error("a foreign skill was overwritten without force")
@@ -92,10 +97,100 @@ func TestInstall_ForeignNeedsForce(t *testing.T) {
 	}
 }
 
+func TestHandtoStatus_EditedIsNotAnotherVersion(t *testing.T) {
+	home := t.TempDir()
+	if _, err := installHandto("user", home, "v1", false, false); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(handtoPath(home), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString("an edit\n")
+	_ = f.Close()
+	s, _ := handtoStatus("user", home, "v1")
+	if s.State != skillModified {
+		t.Fatalf("status = %+v", s)
+	}
+	var out bytes.Buffer
+	_ = printClaudeSkill(&out, s)
+	if strings.Contains(out.String(), "another version") || !strings.Contains(out.String(), "edited") {
+		t.Errorf("message: %s", out.String())
+	}
+	if d := doctorSkill(&s); d.Warning == "" || strings.Contains(d.Warning, "otra versión") || d.Action != "cf claude install" {
+		t.Errorf("doctor: %+v", d)
+	}
+	if s, err := installHandto("user", home, "v1", false, false); err != nil || s.Action != "restored" {
+		t.Fatalf("install: %+v, %v", s, err)
+	}
+}
+
+func TestHandtoStatus_MarkerOnlyCountsRightAfterTheFrontmatter(t *testing.T) {
+	home := t.TempDir()
+	body := "---\nname: handto\n---\nquoting:\n<!-- cf-version: v1 -->\n"
+	_ = os.MkdirAll(filepath.Dir(handtoPath(home)), 0o700)
+	_ = os.WriteFile(handtoPath(home), []byte(body), 0o600)
+	if s, _ := handtoStatus("user", home, "v1"); s.State != skillForeign {
+		t.Errorf("status = %+v", s)
+	}
+	if s, err := uninstallHandto("user", home); err != nil || s.Action != "kept" {
+		t.Errorf("uninstall: %+v, %v", s, err)
+	}
+}
+
+func TestHandtoSkill_NeverLetsTheModelOverrideAGuard(t *testing.T) {
+	out, _ := renderHandto("v1")
+	for _, want := range []string{
+		"Never add flags to `cf handoff`",
+		"run it themselves in their own terminal",
+		"do not run it yourself",
+		"do not retry",
+	} {
+		if !strings.Contains(strings.ToLower(string(out)), strings.ToLower(want)) {
+			t.Errorf("the skill lacks %q", want)
+		}
+	}
+}
+
+func TestClaudeProjectScope_RefusesSymlinkedClaudeDirs(t *testing.T) {
+	for _, link := range []string{".claude", filepath.Join(".claude", "skills")} {
+		t.Run(link, func(t *testing.T) {
+			repo := t.TempDir()
+			elsewhere := t.TempDir()
+			if err := os.Mkdir(filepath.Join(repo, ".git"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if link != ".claude" {
+				if err := os.Mkdir(filepath.Join(repo, ".claude"), 0o750); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(elsewhere, filepath.Join(repo, link)); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(repo)
+			for _, cmd := range []string{"install", "uninstall"} {
+				if code, _, errOut := runClaude(t, cmd, "--scope", "project"); code == 0 || !strings.Contains(errOut, "symlink") {
+					t.Errorf("%s: %d %s", cmd, code, errOut)
+				}
+			}
+			if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+				t.Errorf("something was written through the link: %v", entries)
+			}
+		})
+	}
+}
+
 func TestInstall_DryRunWritesNothing(t *testing.T) {
 	home := t.TempDir()
 	if s, err := installHandto("user", home, "v1", false, true); err != nil || s.Action != "created" || !s.DryRun {
 		t.Fatalf("%+v, %v", s, err)
+	}
+	var out bytes.Buffer
+	_ = printClaudeSkill(&out, ClaudeSkill{Action: "created", DryRun: true, Path: "p"})
+	_ = printClaudeSkill(&out, ClaudeSkill{Action: "unchanged", DryRun: true, Path: "p"})
+	if !strings.Contains(out.String(), "would be created") || strings.Contains(out.String(), "would be unchanged") {
+		t.Errorf("dry-run copy: %s", out.String())
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
 		t.Error("dry-run wrote something")

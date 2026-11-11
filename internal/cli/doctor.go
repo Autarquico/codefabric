@@ -96,6 +96,8 @@ func doctorSkill(s *ClaudeSkill) *DoctorSkill {
 		d.Warning = "la skill /handto de Claude Code no está instalada"
 	case skillOutdated:
 		d.Warning = "la skill /handto es de otra versión de cf (" + s.Version + ")"
+	case skillModified:
+		d.Warning = "la skill /handto fue editada después de que cf la escribiera"
 	case skillForeign:
 		d.Warning = "hay una skill handto que cf no escribió; cf claude install --force la reemplaza"
 		return d

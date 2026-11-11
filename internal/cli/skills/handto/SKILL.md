@@ -24,4 +24,4 @@ Workers known to CodeFabric right now:
    `cf handoff --session ${CLAUDE_SESSION_ID} --to $worker`
 
 3. If it succeeds, show the user the Task, the Worker and the `cf attach <task>` line that it prints. Then tell them to close this session with `/exit` and to continue with `cf attach <task>`. Do not keep working in this session: the Worker now has the work.
-4. If it fails, show the `CF_*` code and the message exactly as printed, and stop. Do not retry, do not try another command and do not change the arguments. If the error says that the session holds something that looks like a secret, or that it was already handed off, show the option that the message offers and let the user decide.
+4. If it fails, show the `CF_*` code and the message exactly as printed, and stop. Do not retry, do not try another command and do not change the arguments. Never add flags to `cf handoff`. If the error asks for an override, for example because the session holds something that looks like a secret or because it was already handed off, show the user the command with the flag that the message names so that they run it themselves in their own terminal, and do not run it yourself.

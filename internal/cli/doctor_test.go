@@ -33,7 +33,15 @@ func (f *fakeDoctor) Workers(context.Context, bool) ([]v1.Worker, error) {
 	return f.workers, nil
 }
 
+// runDoctor runs `cf doctor` with an empty home, so that it never reads the
+// skills of the developer.
 func runDoctor(t *testing.T, f *fakeDoctor, probe sshProbe, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	return runDoctorHere(t, f, probe, args...)
+}
+
+func runDoctorHere(t *testing.T, f *fakeDoctor, probe sshProbe, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	opts := Options{doctorStore: func(*cobra.Command) (doctorStore, error) { return f, nil }, sshProbe: probe}
 	var out, errOut bytes.Buffer
@@ -177,5 +185,30 @@ func TestDeadlineContext_ExpiresWhenTheFakeClockPassesIt(t *testing.T) {
 	case <-ctx.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("not cancelled after its deadline")
+	}
+}
+
+func TestDoctor_WarnsWhenTheHandtoSkillIsMissingAndNotOnceInstalled(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := &fakeDoctor{status: healthyController()}
+	probe := func(context.Context, domain.SSHTarget) error { return nil }
+	code, out, errOut := runDoctorHere(t, f, probe)
+	if code != 0 || !strings.Contains(out, "aviso:") || !strings.Contains(out, "(acción: cf claude install)") {
+		t.Fatalf("missing: %d %q %q", code, out, errOut)
+	}
+	_, out, _ = runDoctorHere(t, f, probe, "--json")
+	var rep struct {
+		Skill struct {
+			State string `json:"state"`
+		} `json:"handto_skill"`
+	}
+	if err := json.Unmarshal([]byte(out), &rep); err != nil || rep.Skill.State != "missing" {
+		t.Fatalf("json: %s %v", out, err)
+	}
+	if code, _, errOut := runClaude(t, "install"); code != 0 {
+		t.Fatalf("install: %s", errOut)
+	}
+	if _, out, _ := runDoctorHere(t, f, probe); strings.Contains(out, "handto") || strings.Contains(out, "aviso:") {
+		t.Errorf("installed, yet: %q", out)
 	}
 }
