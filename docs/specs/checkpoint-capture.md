@@ -72,7 +72,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Sesión tras settle
 - **Given** un Run de Claude con `native_state` activado
 - **When** se captura y el Run se asienta
-- **Then** el blob de `native_state` existe y su jsonl reanuda con `--resume`
+- **Then** el blob de `native_state` existe con manifest válido; que su jsonl reanude con `--resume` se comprueba con `CF_REQUIRE_CLAUDE=1`
 
 ### Scenario: Secreto en la sesión
 - **Given** un jsonl que contiene un valor de secreto del Run

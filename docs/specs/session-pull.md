@@ -33,6 +33,8 @@ Owner previsto en el bucle Develop: backend-eng.
   desde el relay, escribe la sesión en el directorio real de Claude e imprime el `claude --resume <id>` exacto;
   `--open` lo lanza.
 - Evento auditado `TaskPulled`.
+- Si el `lineage.native_seed` del Run procede de este cliente, la sesión vuelve con su `sessionId` original (regla prefijo/`.bak`) y se borra el marcador `handed-off`; si no, id nuevo.
+- Los cambios sin commitear del Worker llegan como el commit de sellado del checkpoint; la salida lo dice.
 - Rama local: fast-forward de la rama de partida si es ancestro; si no, `cf/<task>`; si `cf/<task>` diverge,
   `cf/<task>@<run-short>` y aviso. Nunca reset ni stash automáticos; sin checkout con el árbol dirty.
 
@@ -47,12 +49,32 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Clean
 - **Given** una Task `waiting(deferred)` y el repo local limpio
 - **When** `cf task pull`
-- **Then** la rama queda en el commit del checkpoint, con checkout, y se imprime el comando de resume
+- **Then** si la Task nació con `source.branch` y es ancestro, esa rama avanza; si no, `cf/<task>`; checkout hecho y se imprime el comando de resume
 
 ### Scenario: Run vivo
 - **Given** un Run `running`
 - **When** `pull` sin `--defer`
 - **Then** error con sugerencia y nada cambia
+
+### Scenario: Rama de partida no ancestro
+- **Given** `source.branch` local con commits que no están en el checkpoint
+- **When** `pull`
+- **Then** la rama de partida no se toca y se usa `cf/<task>`
+
+### Scenario: Run vivo con --defer
+- **Given** un Run `running`
+- **When** `pull --defer`
+- **Then** defer completo y luego pull del checkpoint nuevo
+
+### Scenario: Sin sesión
+- **Given** una Task con `native_state`
+- **When** `pull --no-session`
+- **Then** rama traída, `~/.claude` intacto y sin comando de resume
+
+### Scenario: Vuelta de una semilla propia
+- **Given** una Task sembrada desde este cliente con la sesión `s`
+- **When** `pull`
+- **Then** la sesión local `s` se actualiza (prefijo o `.bak`) y el marcador `handed-off` desaparece
 
 ### Scenario: Dirty
 - **Given** cambios sin commitear

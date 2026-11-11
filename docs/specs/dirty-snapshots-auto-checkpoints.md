@@ -28,7 +28,8 @@ Owner previsto en el bucle Develop: backend-eng.
 
 **Entra:**
 - `cf do --snapshot`: commit temporal en el cliente y push a `refs/cf/snapshots/*`; checkpoints por intervalo y pre-destructivos
-- Relay para clientes, autorizado por Project: lectura de la rama de la Task y de `refs/cf/checkpoints/*`, y create-only en `refs/cf/snapshots/<digest>`; ningún otro ref
+- Relay para clientes: todo cliente autenticado del Controller accede a los Projects de ese Controller (no hay scoping por Project en el modelo, §16.8); lectura de la rama de la Task y de `refs/cf/checkpoints/*`, y create-only en `refs/cf/snapshots/<digest>`; ningún otro ref
+- El snapshot y `cf do` registran `source.branch` (la rama local de partida)
 
 **No entra:**
 - Nada fuera de lo indicado en la epic.
@@ -52,10 +53,10 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **When** se ejecuta
 - **Then** checkpoint previo si el harness lo permite
 
-### Scenario: Relay de otro Project
-- **Given** un cliente sin acceso al Project P
-- **When** lee o empuja al relay de P
-- **Then** 403 y nada cambia
+### Scenario: Ref fuera de la lista
+- **Given** un cliente autenticado
+- **When** empuja a un ref fuera de `refs/cf/snapshots/<digest>` o a un Project inexistente
+- **Then** rechazo y nada cambia
 
 ## Notas técnicas / riesgos
 

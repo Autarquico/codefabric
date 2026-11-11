@@ -31,12 +31,14 @@ Owner previsto en el bucle Develop: backend-eng.
 **Entra:**
 - `cf handoff --session <id> --to <worker>`: sin Task ligada a la sesión, `cf do --snapshot --session <id> --worker <w>`;
   con Task ligada (registro local `session → task`), `cf task resume --worker <w> --snapshot --session <id>`.
-  Imprime la Task, el Worker y `cf attach <task>`.
+  El Run es interactivo (`--interactive`) y su prompt de continuación y el nombre de la Task salen de la sesión
+  (último mensaje del usuario, truncado). Imprime la Task, el Worker y `cf attach <task>`.
 - Sesión viva propia: se permite cuando el id es el de la sesión que llama; el export corta el jsonl tras el
   último `tool_use` (la propia llamada). Tras el éxito, marcador local `handed-off`.
-- `cf claude install [--project] [--force]`, `cf claude uninstall`, `cf claude status`: escriben la skill embebida
-  en el binario en `~/.claude/skills/handto/SKILL.md` (o `.claude/skills/` del repo con `--project`), marcada con
-  la versión de `cf`. No sobrescriben una skill `handto` ajena sin `--force`.
+- `cf claude install [--scope user|project] [--force] [--dry-run]`, `cf claude uninstall`, `cf claude status`:
+  escriben la skill embebida en el binario en `~/.claude/skills/handto/SKILL.md` (o `.claude/skills/` del repo con
+  `--scope project`), marcada con la versión de `cf`; reutilizan el instalador de skills de `cf mcp install` y su
+  vocabulario de flags. No sobrescriben una skill `handto` ajena sin `--force`.
 - `cf setup` (rol client) ofrece instalarla; `cf doctor` del cliente avisa si falta o es de otra versión.
 - Skill `handto`: `disable-model-invocation: true`, `argument-hint: <worker>`, `arguments: [worker]`,
   `allowed-tools` limitado a `cf handoff` y `cf worker list`; usa `${CLAUDE_SESSION_ID}`; en éxito pide cerrar con
@@ -54,7 +56,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Handto
 - **Given** una sesión abierta en un repo del Project y el Worker `w` online con `claude/oauth-token`
 - **When** `/handto w`
-- **Then** una Task `running` en `w` con la sesión sembrada; lo no commiteado viaja por snapshot, el árbol local queda intacto y se imprime `cf attach`
+- **Then** un Run interactivo `running` en `w` con la sesión sembrada; lo no commiteado viaja por snapshot, el árbol local queda intacto, se imprime `cf attach` y `cf attach` muestra la sesión reanudada
 
 ### Scenario: Worker desconocido
 - **Given** ningún Worker llamado `foo` u offline
@@ -74,7 +76,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Secreto en la sesión
 - **Given** un jsonl con un patrón sensible
 - **When** `/handto w`
-- **Then** bloqueo con las líneas y la opción explícita para continuar
+- **Then** bloqueo con las líneas; solo `--allow-sensitive-session` continúa
 
 ### Scenario: Install idempotente
 - **Given** la skill instalada de la misma versión
@@ -84,7 +86,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Ida y vuelta
 - **Given** `/handto w` y trabajo en `w`
 - **When** `cf task defer` y `cf task pull --open` en la máquina del usuario
-- **Then** la sesión recuerda lo dicho antes del handto y ve los commits de `w`
+- **Then** la sesión, con su id original, recuerda lo dicho antes del handto y ve los commits de `w`; el marcador `handed-off` desaparece
 
 ## Notas técnicas / riesgos
 
