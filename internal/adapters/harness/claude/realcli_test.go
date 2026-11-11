@@ -34,7 +34,7 @@ func TestRealCLI_TheFlagsOfStructuredInputExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude --help: %v\n%s", err, out)
 	}
-	for _, flag := range []string{"--input-format", "--output-format", "--mcp-config", "--permission-prompt-tool", "--permission-mode", "--disallowedTools", "--setting-sources"} {
+	for _, flag := range []string{"--input-format", "--output-format", "--mcp-config", "--permission-prompt-tool", "--permission-mode", "--disallowedTools", "--setting-sources", "--session-id", "--resume"} {
 		if !strings.Contains(string(out), flag) {
 			t.Errorf("claude --help does not mention %s", flag)
 		}

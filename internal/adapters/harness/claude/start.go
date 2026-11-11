@@ -35,7 +35,8 @@ const (
 // run.AskPermissions the Run is pinned to the default permission mode, reads
 // only the user settings (its own configuration directory), and every
 // permission it asks is the call of the MCP tool PermissionTool on
-// run.PermissionServer.
+// run.PermissionServer. Every Run, in both modes, names its session with
+// SessionID(run.RunID, run.LeaseEpoch).
 func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec) (harness.Launch, error) {
 	if err := a.Capabilities().CheckMode(run.Mode); err != nil {
 		return harness.Launch{}, fmt.Errorf("claude-code: %w", err)
@@ -60,6 +61,10 @@ func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec
 		Env:       []string{ConfigHomeEnv + "=" + run.ConfigDir},
 		SecretEnv: a.RequiredSecrets(),
 	}
+	session, err := sessionArgs(run)
+	if err != nil {
+		return harness.Launch{}, err
+	}
 	streamed := run.Mode == domain.ModeHeadless && run.StructuredInput
 	switch {
 	case run.Mode != domain.ModeHeadless:
@@ -80,6 +85,7 @@ func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec
 		}
 		launch.StructuredStdout = true
 	}
+	launch.Argv = append(launch.Argv, session...)
 	if run.Model != "" {
 		launch.Argv = append(launch.Argv, "--model", run.Model)
 	}
@@ -87,6 +93,21 @@ func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec
 		launch.Argv = append(launch.Argv, "--", run.Prompt)
 	}
 	return launch, nil
+}
+
+// sessionArgs names the session of the Run: --session-id the first time, and
+// --resume with the same id once Claude Code has written it, which keeps Start
+// idempotent (the CLI refuses a --session-id that is already in use).
+func sessionArgs(run harness.RunSpec) ([]string, error) {
+	id := SessionID(run.RunID, run.LeaseEpoch)
+	exists, err := sessionExists(run.ConfigDir, run.Worktree, id)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return []string{"--resume", id}, nil
+	}
+	return []string{"--session-id", id}, nil
 }
 
 // streamArgv is the command of a headless Run whose input is a stream.
