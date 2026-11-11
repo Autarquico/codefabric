@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Defer y resume"
+title: Defer y resume
 type: task
-status: draft
+status: active
 priority: P1
 size: M
 issue: null
 prs: []
-related_issues: []
+related_issues: [161]
 sub_issues: []
 depends_on: [checkpoint-capture]
 supersedes: []
 related_specs: [codefabric-spec, phase-5-handoff]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-11
 ---
 
 # Defer y resume
