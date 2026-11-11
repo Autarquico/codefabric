@@ -238,7 +238,11 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 			// code, the Run did not finish its work.
 			event, reason = domain.RunEventExitNonZero, domain.EndInputRequired
 		}
-		next, err := domain.NextRunState(domain.RunStatus{State: run.State}, event)
+		status, err := store.RunStatusOf(ctx, tx, run)
+		if err != nil {
+			return outcome(""), err
+		}
+		next, err := domain.NextRunState(status, event)
 		if err != nil {
 			return outcome(""), err
 		}
@@ -250,6 +254,10 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		ev.Data["exit_code"], ev.Data["signal"], ev.Data["cause"] = e.ExitCode, e.Signal, e.Cause
 		apply = func() error {
 			if err := tx.ExitRun(ctx, run, next.State, reason, e.ExitCode, e.At); err != nil {
+				return err
+			}
+			// An exit during a capture wins over it (§11.7): the capture is moot.
+			if err := tx.AbortCapture(ctx, run.ID, act.Now); err != nil {
 				return err
 			}
 			return tx.SetRunModel(ctx, run, e.Model)

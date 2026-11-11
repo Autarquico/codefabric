@@ -5,6 +5,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/checkpoints"
 	"github.com/Autarquico/codefabric/internal/app/environments"
 	"github.com/Autarquico/codefabric/internal/app/events"
 	"github.com/Autarquico/codefabric/internal/app/gc"
@@ -28,12 +29,14 @@ import (
 // Services are the use cases of the Controller, wired to one store. The clock
 // must be the one the store was opened with.
 type Services struct {
-	Projects  *projects.Service
-	Tasks     *tasks.Service
-	Runs      *runs.Service
-	Workers   *workers.Service
-	Leases    *leases.Service
-	Scheduler *scheduler.Service
+	Projects *projects.Service
+	Tasks    *tasks.Service
+	Runs     *runs.Service
+	// Checkpoints is the capture of a Run's checkpoints (§11.7, §23).
+	Checkpoints *checkpoints.Service
+	Workers     *workers.Service
+	Leases      *leases.Service
+	Scheduler   *scheduler.Service
 	// Workflows are the versioned configurations and the blobs they name (§8.9).
 	Workflows *workflows.Service
 	// Environments are the global, versioned definitions of how a worktree is
@@ -82,12 +85,13 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 	runService := runs.New(db, clk, ids, runs.Rederive(rederive), opts...)
 	leaseService := leases.New(db, clk, ids, leases.Rederive(rederive))
 	return &Services{
-		Projects:  projects.New(db, clk, ids),
-		Tasks:     tasks.New(db, clk, ids, runService),
-		Runs:      runService,
-		Workers:   workers.New(db, clk, workersCfg),
-		Leases:    leaseService,
-		Scheduler: scheduler.New(db, clk, leaseService, workersCfg.StartedAt),
+		Projects:    projects.New(db, clk, ids),
+		Tasks:       tasks.New(db, clk, ids, runService),
+		Runs:        runService,
+		Checkpoints: checkpoints.New(db, clk, ids, checkpoints.Rederive(rederive)),
+		Workers:     workers.New(db, clk, workersCfg),
+		Leases:      leaseService,
+		Scheduler:   scheduler.New(db, clk, leaseService, workersCfg.StartedAt),
 		Reconciliation: reconciliation.New(db, clk, reconciliation.Rederive(rederive), reconciliation.Config{
 			StartedAt: workersCfg.StartedAt, LostTimeout: cfg.RunLostTimeout, OfflineTTL: workersCfg.OfflineTTL,
 			Hooks: cfg.ReconciliationHooks,

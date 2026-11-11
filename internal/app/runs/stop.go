@@ -130,6 +130,10 @@ func EndByControllerIn(ctx context.Context, tx *store.Tx, act mutation.Act, run 
 	if err := MarkExecutedIn(ctx, tx, run); err != nil {
 		return err
 	}
+	// Whatever was being captured is aborted; what was published stays (§11.7).
+	if err := tx.AbortCapture(ctx, run.ID, act.Now); err != nil {
+		return err
+	}
 	_, err = OrderStopIn(ctx, tx, act, *run, task, l, reason)
 	return err
 }

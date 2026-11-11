@@ -97,7 +97,11 @@ func (s *Service) loseIfDue(ctx context.Context, candidate store.Run, identityGo
 		if !identityGone && !now.After(deadline) {
 			return nil
 		}
-		next, err := domain.NextRunState(domain.RunStatus{State: run.State}, domain.RunEventLostTimeout)
+		status, err := store.RunStatusOf(ctx, tx, run)
+		if err != nil {
+			return err
+		}
+		next, err := domain.NextRunState(status, domain.RunEventLostTimeout)
 		if err != nil {
 			return err
 		}
