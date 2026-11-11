@@ -40,9 +40,10 @@ func writeSession(t *testing.T, configDir, cwd string, epoch uint64) {
 
 // A Start repeated once the session exists resumes it with the same id: the CLI
 // refuses --session-id for a session in use.
-func TestStartResumesTheSessionThatAlreadyExists(t *testing.T) {
+func TestScenario_StartIdempotente(t *testing.T) {
 	for _, mode := range []domain.Mode{domain.ModeHeadless, domain.ModeInteractive} {
 		t.Run(string(mode), func(t *testing.T) {
+			id := claude.SessionID("r1", 1)
 			h := hostWithBinary(t, "#!/bin/sh\n")
 			run := spec(mode)
 			run.ConfigDir, run.Worktree = t.TempDir(), t.TempDir()
@@ -50,7 +51,7 @@ func TestStartResumesTheSessionThatAlreadyExists(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Contains(first.Argv, "--session-id") || slices.Contains(first.Argv, "--resume") {
+			if !slices.Contains(first.Argv, "--session-id="+id) || slices.Contains(first.Argv, "--resume="+id) {
 				t.Fatalf("first argv = %q", first.Argv)
 			}
 			writeSession(t, run.ConfigDir, run.Worktree, 1)
@@ -58,8 +59,7 @@ func TestStartResumesTheSessionThatAlreadyExists(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			i := slices.Index(again.Argv, "--resume")
-			if i < 0 || again.Argv[i+1] != claude.SessionID("r1", 1) || slices.Contains(again.Argv, "--session-id") {
+			if !slices.Contains(again.Argv, "--resume="+id) || slices.Contains(again.Argv, "--session-id="+id) {
 				t.Errorf("argv = %q", again.Argv)
 			}
 			run.LeaseEpoch = 2
@@ -67,7 +67,7 @@ func TestStartResumesTheSessionThatAlreadyExists(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Contains(next.Argv, "--session-id") || slices.Contains(next.Argv, "--resume") {
+			if !slices.Contains(next.Argv, "--session-id="+claude.SessionID("r1", 2)) || slices.Contains(next.Argv, "--resume="+claude.SessionID("r1", 2)) {
 				t.Errorf("another epoch has its own session: argv = %q", next.Argv)
 			}
 		})

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -34,13 +36,24 @@ func SessionID(runID domain.ID, epoch uint64) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
 }
 
+// sessionIDPattern is the only shape of a session id that reaches a path or an
+// argv: a canonical lowercase UUID, which cannot start with '-'.
+var sessionIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func validSessionID(id string) bool { return sessionIDPattern.MatchString(id) }
+
+// maxProjectDirName is the length from which Claude Code shortens the name of
+// a project directory and adds a hash (claude-code 2.1.311 and 2.1.319, spike
+// addendum case 7).
+const maxProjectDirName = 200
+
 // sessionExists tells whether Claude Code already wrote the session id for the
 // cwd, under configDir: Claude Code refuses --session-id for it.
 func sessionExists(configDir, cwd, id string) (bool, error) {
-	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
-		cwd = resolved
+	if !validSessionID(id) {
+		return false, fmt.Errorf("claude-code: %q is not a session id", id)
 	}
-	_, err := os.Stat(filepath.Join(configDir, "projects", encodeProjectDir(cwd), id+".jsonl"))
+	_, err := os.Stat(filepath.Join(sessionProjectDir(configDir, cwd, id), id+".jsonl"))
 	switch {
 	case err == nil:
 		return true, nil
@@ -50,9 +63,41 @@ func sessionExists(configDir, cwd, id string) (bool, error) {
 	return false, fmt.Errorf("claude-code: looking for the session %s: %w", id, err)
 }
 
+// projectDir is the directory of the sessions of a cwd. Like Claude Code, it
+// names the cwd with its symlinks resolved when it exists.
+func projectDir(configDir, cwd string) string {
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+	return filepath.Join(configDir, "projects", encodeProjectDir(cwd))
+}
+
+// sessionProjectDir is projectDir, except that for a long cwd, whose hash
+// suffix is the part of the rule that is easiest to get wrong, it looks for
+// the directory with the same first 200 characters that holds the session.
+func sessionProjectDir(configDir, cwd, id string) string {
+	dir := projectDir(configDir, cwd)
+	base := filepath.Base(dir)
+	if len(base) <= maxProjectDirName {
+		return dir
+	}
+	if _, err := os.Stat(filepath.Join(dir, id+".jsonl")); err == nil {
+		return dir
+	}
+	prefix := base[:maxProjectDirName] + "-"
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(dir), prefix+"*", id+".jsonl"))
+	if err != nil || len(matches) == 0 {
+		return dir
+	}
+	slices.Sort(matches)
+	return filepath.Dir(matches[0])
+}
+
 // encodeProjectDir is the name Claude Code gives the directory of a cwd under
-// projects/: every character that is not an ASCII letter or digit becomes '-'
-// (one per UTF-16 unit, as the harness counts them).
+// projects/ (claude-code 2.1.311): every character that is not an ASCII letter
+// or digit becomes '-', one per UTF-16 unit. Past 200 characters the name is
+// the first 200, '-', and base36(abs(h)) with h the Java-style int32 hash
+// (h = 31*h + unit) of the cwd as it is, not encoded.
 func encodeProjectDir(cwd string) string {
 	var b strings.Builder
 	for _, r := range cwd {
@@ -62,5 +107,17 @@ func encodeProjectDir(cwd string) string {
 		}
 		b.WriteString(strings.Repeat("-", utf16.RuneLen(r)))
 	}
-	return b.String()
+	name := b.String()
+	if len(name) <= maxProjectDirName {
+		return name
+	}
+	var h int32
+	for _, u := range utf16.Encode([]rune(cwd)) {
+		h = 31*h + int32(u)
+	}
+	abs := int64(h)
+	if abs < 0 {
+		abs = -abs
+	}
+	return name[:maxProjectDirName] + "-" + strconv.FormatInt(abs, 36)
 }

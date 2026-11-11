@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
@@ -50,6 +51,9 @@ func runSession(h harness.Handle) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	transcripts = slices.DeleteFunc(transcripts, func(p string) bool {
+		return !validSessionID(strings.TrimSuffix(filepath.Base(p), ".jsonl"))
+	})
 	switch len(transcripts) {
 	case 0:
 		return "", fmt.Errorf("%w: no session of the Run in %s", harness.ErrSessionNotFound, dir)
@@ -82,7 +86,7 @@ func (a Adapter) Resume(ctx context.Context, host harness.Host, run harness.RunS
 	var plan sessionPlan
 	switch {
 	case err == nil:
-		plan = sessionPlan{args: []string{"--resume", imported.SessionID}, prompt: run.Prompt}
+		plan = sessionPlan{args: []string{"--resume=" + imported.SessionID}, prompt: run.Prompt}
 	case errors.Is(err, harness.ErrSessionExists):
 		var arc archive
 		if arc, err = readArchive(ctx, bytes.NewReader(cp.Data), limitOf(0)); err == nil {
@@ -92,14 +96,14 @@ func (a Adapter) Resume(ctx context.Context, host harness.Host, run harness.RunS
 	if err != nil {
 		return harness.Launch{}, err
 	}
-	return launch(host, run, plan)
+	return a.launch(host, run, plan)
 }
 
-// sessionHolds tells whether the transcript of the session already has prompt
-// as the text of a message. A prompt that the CLI wrote with other escapes
+// sessionHolds tells whether the transcript of the session contains prompt,
+// JSON-escaped, anywhere (it does not tell where). A prompt that the CLI wrote with other escapes
 // than ours is not found: it is sent again, which is the safe side.
 func sessionHolds(configDir, cwd, id, prompt string) (bool, error) {
-	raw, err := os.ReadFile(filepath.Join(projectDir(configDir, cwd), id+".jsonl")) //nolint:gosec // a file of the Run
+	raw, err := os.ReadFile(filepath.Join(sessionProjectDir(configDir, cwd, id), id+".jsonl")) //nolint:gosec // a file of the Run
 	if err != nil {
 		return false, fmt.Errorf("claude-code: reading the session %s: %w", id, err)
 	}

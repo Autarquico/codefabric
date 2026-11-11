@@ -71,6 +71,20 @@ func TestRealCLI_TheDefaultPermissionModeIsAccepted(t *testing.T) {
 	}
 }
 
+// The session flags are passed glued to their value (--resume=<id>). The budget
+// is invalid on purpose, so no model is called; what the test refuses is the
+// parser rejecting the form.
+func TestRealCLI_TheGluedSessionFlagsAreParsed(t *testing.T) {
+	path := requireRealClaude(t)
+	for _, flag := range []string{"--session-id", "--resume"} {
+		out, _ := exec.CommandContext(t.Context(), path, "-p", flag+"="+claude.SessionID("realcli", 1), //nolint:gosec // the claude of the machine
+			"--max-budget-usd", "invalid", "hi").CombinedOutput()
+		if strings.Contains(string(out), "unknown option") || strings.Contains(string(out), "missing required argument") {
+			t.Errorf("%s=<id> was not parsed: %s", flag, out)
+		}
+	}
+}
+
 // The round trip against the real CLI: a headless Run learns a word, its session
 // is checkpointed, and a Run in another directory, resumed from the checkpoint,
 // still knows it. It calls a model, so it needs CLAUDE_CODE_OAUTH_TOKEN too.

@@ -39,7 +39,7 @@ func TestStartStreamedBypassesPermissions(t *testing.T) {
 	}
 	want := []string{
 		bin, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-		"--permission-mode", "bypassPermissions", "--session-id", claude.SessionID("r1", 1), "--model", "opus",
+		"--permission-mode", "bypassPermissions", "--session-id=" + claude.SessionID("r1", 1), "--model", "opus",
 	}
 	if !slices.Equal(l.Argv, want) {
 		t.Errorf("argv = %q", l.Argv)
@@ -69,7 +69,7 @@ func TestStartStreamedAsksPermissionsOfTheBridge(t *testing.T) {
 		bin, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", "default", "--setting-sources", "user",
 		"--mcp-config", l.Argv[i+1], "--permission-prompt-tool", claude.PermissionTool,
-		"--session-id", claude.SessionID("r1", 1),
+		"--session-id=" + claude.SessionID("r1", 1),
 	}
 	if !slices.Equal(l.Argv, want) {
 		t.Errorf("argv = %q", l.Argv)

@@ -100,7 +100,7 @@ func TestResumeHeadlessContinuesTheCheckpointedSession(t *testing.T) {
 	}
 	want := []string{
 		bin, "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions",
-		"--disallowedTools", "AskUserQuestion", "--resume", claude.SessionID("r1", 1), "--", "keep going",
+		"--disallowedTools", "AskUserQuestion", "--resume=" + claude.SessionID("r1", 1), "--", "keep going",
 	}
 	if !slices.Equal(l.Argv, want) || !l.StructuredStdout || !slices.Equal(l.Env, []string{"CLAUDE_CONFIG_DIR=" + run.ConfigDir}) {
 		t.Errorf("launch = %+v", l)
@@ -124,14 +124,14 @@ func TestResumeInteractiveNeedsNoPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{bin, "--permission-mode", "bypassPermissions", "--resume", id}; !slices.Equal(l.Argv, want) {
+	if want := []string{bin, "--permission-mode", "bypassPermissions", "--resume=" + id}; !slices.Equal(l.Argv, want) {
 		t.Errorf("argv = %q", l.Argv)
 	}
 	l, err = claude.Adapter{}.Resume(t.Context(), h, nextRun(t, domain.ModeInteractive, "hello"), cp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{bin, "--permission-mode", "bypassPermissions", "--resume", id, "--", "hello"}; !slices.Equal(l.Argv, want) {
+	if want := []string{bin, "--permission-mode", "bypassPermissions", "--resume=" + id, "--", "hello"}; !slices.Equal(l.Argv, want) {
 		t.Errorf("argv = %q", l.Argv)
 	}
 }
@@ -211,7 +211,7 @@ func TestStartDoesNotRepeatThePromptTheSessionHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(l.Argv, "fix it") || !slices.Contains(l.Argv, "Continue where you left off.") || !slices.Contains(l.Argv, "--resume") {
+	if slices.Contains(l.Argv, "fix it") || !slices.Contains(l.Argv, "Continue where you left off.") || !slices.Contains(l.Argv, "--resume="+claude.SessionID("r1", 1)) {
 		t.Errorf("argv = %q", l.Argv)
 	}
 	run.Mode = domain.ModeInteractive
@@ -242,7 +242,7 @@ func TestCheckpointOfAResumedRunKeepsTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if i := slices.Index(l.Argv, "--resume"); i < 0 || l.Argv[i+1] != claude.SessionID("r1", 1) {
+	if !slices.Contains(l.Argv, "--resume="+claude.SessionID("r1", 1)) {
 		t.Errorf("argv = %q", l.Argv)
 	}
 }

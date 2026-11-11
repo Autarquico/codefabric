@@ -25,7 +25,7 @@ func TestStartHeadless(t *testing.T) {
 	}
 	want := []string{
 		bin, "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions",
-		"--disallowedTools", "AskUserQuestion", "--session-id", claude.SessionID("r1", 1), "--model", "opus", "--", "fix it",
+		"--disallowedTools", "AskUserQuestion", "--session-id=" + claude.SessionID("r1", 1), "--model", "opus", "--", "fix it",
 	}
 	if !slices.Equal(l.Argv, want) {
 		t.Errorf("argv = %q", l.Argv)
@@ -43,7 +43,7 @@ func TestStartInteractive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{bin, "--permission-mode", "bypassPermissions", "--session-id", claude.SessionID("r1", 1), "--", "fix it"}; !slices.Equal(l.Argv, want) {
+	if want := []string{bin, "--permission-mode", "bypassPermissions", "--session-id=" + claude.SessionID("r1", 1), "--", "fix it"}; !slices.Equal(l.Argv, want) {
 		t.Errorf("argv = %q", l.Argv)
 	}
 	if l.StructuredStdout || filepath.Base(l.Argv[0]) != claude.Binary || len(l.SecretEnv) != 1 {

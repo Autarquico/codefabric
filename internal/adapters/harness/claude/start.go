@@ -48,7 +48,7 @@ func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec
 	if err != nil {
 		return harness.Launch{}, err
 	}
-	return launch(host, run, plan)
+	return a.launch(host, run, plan)
 }
 
 // validate is what Start and Resume refuse of a spec before building anything.
@@ -68,7 +68,8 @@ func (a Adapter) validate(run harness.RunSpec) error {
 // sessionPlan is how a process names its session and what it is asked: the
 // part of the Launch that Start and Resume decide differently.
 type sessionPlan struct {
-	// args are --session-id <id> or --resume <id>.
+	// args are --session-id=<id> or --resume=<id>: the id is glued to its flag
+	// so that it can never be read as an option.
 	args []string
 	// prompt is what the process is asked; empty only for an interactive
 	// process that has nothing to be told.
@@ -97,9 +98,9 @@ func planFor(run harness.RunSpec, id string) (sessionPlan, error) {
 		return sessionPlan{}, err
 	}
 	if !exists {
-		return sessionPlan{args: []string{"--session-id", id}, prompt: run.Prompt}, nil
+		return sessionPlan{args: []string{"--session-id=" + id}, prompt: run.Prompt}, nil
 	}
-	plan := sessionPlan{args: []string{"--resume", id}, prompt: run.Prompt}
+	plan := sessionPlan{args: []string{"--resume=" + id}, prompt: run.Prompt}
 	asked, err := sessionHolds(run.ConfigDir, run.Worktree, id, run.Prompt)
 	if err != nil || !asked {
 		return plan, err
@@ -112,17 +113,14 @@ func planFor(run harness.RunSpec, id string) (sessionPlan, error) {
 }
 
 // launch builds the process of run as plan says.
-func launch(host harness.Host, run harness.RunSpec, plan sessionPlan) (harness.Launch, error) {
-	if run.Mode == domain.ModeHeadless && plan.prompt == "" {
-		return harness.Launch{}, errors.New("claude-code: the prompt is empty: a headless process has nothing to ask")
-	}
+func (a Adapter) launch(host harness.Host, run harness.RunSpec, plan sessionPlan) (harness.Launch, error) {
 	binary, err := host.LookPath(Binary)
 	if err != nil {
 		return harness.Launch{}, fmt.Errorf("claude-code: finding %s in the PATH of the host: %w", Binary, err)
 	}
 	launch := harness.Launch{
 		Env:       []string{ConfigHomeEnv + "=" + run.ConfigDir},
-		SecretEnv: Adapter{}.RequiredSecrets(),
+		SecretEnv: a.RequiredSecrets(),
 	}
 	streamed := run.Mode == domain.ModeHeadless && run.StructuredInput
 	switch {

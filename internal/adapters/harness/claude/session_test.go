@@ -235,12 +235,3 @@ func TestSession_ImportRefusesALineThatIsNotJSON(t *testing.T) {
 		t.Fatalf("the destination was touched: %v", statErr)
 	}
 }
-
-func TestSession_ExportRefusesALineThatIsNotJSON(t *testing.T) {
-	if _, _, err := scanTranscript([]byte("{}\nnope\n"), false); err == nil {
-		t.Fatal("a line that is not JSON was exported")
-	}
-	if _, _, err := scanTranscript([]byte("{\"type\":\"user\"}\n"), true); err == nil {
-		t.Fatal("a cut with no tool_use succeeded")
-	}
-}

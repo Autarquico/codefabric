@@ -13,7 +13,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -28,7 +27,9 @@ const (
 	subagentsDir = "subagents"
 )
 
-var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+// maxArchiveEntries bounds the files of an archive: the byte limit does not
+// count the empty ones.
+const maxArchiveEntries = 10_000
 
 // Locate finds <configDir>/projects/<cwd>/<id>.jsonl and what is under
 // <id>/subagents. The tool results, file history and memory are not part of
@@ -37,14 +38,14 @@ func (Adapter) Locate(ctx context.Context, ref harness.SessionRef) (harness.Sess
 	if err := ctx.Err(); err != nil {
 		return harness.SessionFiles{}, err
 	}
-	if !sessionIDPattern.MatchString(ref.SessionID) {
+	if !validSessionID(ref.SessionID) {
 		return harness.SessionFiles{}, fmt.Errorf("claude-code: %q is not a session id", ref.SessionID)
 	}
 	configDir, err := sessionConfigDir(ref.ConfigDir)
 	if err != nil {
 		return harness.SessionFiles{}, err
 	}
-	dir := projectDir(configDir, ref.Cwd)
+	dir := sessionProjectDir(configDir, ref.Cwd, ref.SessionID)
 	files := harness.SessionFiles{Transcript: filepath.Join(dir, ref.SessionID+".jsonl")}
 	if info, err := os.Stat(files.Transcript); errors.Is(err, os.ErrNotExist) || (err == nil && !info.Mode().IsRegular()) {
 		return harness.SessionFiles{}, fmt.Errorf("%w: %s", harness.ErrSessionNotFound, files.Transcript)
@@ -144,7 +145,7 @@ func (a Adapter) Export(ctx context.Context, ref harness.SessionRef, opts harnes
 // to a directory of its own and renames, the transcript last, so a session
 // that is there is whole.
 func (Adapter) Import(ctx context.Context, in harness.SessionImport, r io.Reader) (harness.SessionImportResult, error) {
-	if in.NewSessionID != "" && !sessionIDPattern.MatchString(in.NewSessionID) {
+	if in.NewSessionID != "" && !validSessionID(in.NewSessionID) {
 		return harness.SessionImportResult{}, fmt.Errorf("claude-code: %q is not a session id", in.NewSessionID)
 	}
 	configDir, err := sessionConfigDir(in.ConfigDir)
@@ -205,11 +206,11 @@ func (Adapter) Import(ctx context.Context, in harness.SessionImport, r io.Reader
 	}
 
 	if len(arc.attachments) > 0 {
+		// With no transcript (or with Overwrite) what is in <id>/ is the
+		// leftover of an Import that died between its renames.
 		sessionDir := filepath.Join(dir, id)
-		if in.Overwrite {
-			if err := os.RemoveAll(sessionDir); err != nil {
-				return harness.SessionImportResult{}, err
-			}
+		if err := os.RemoveAll(sessionDir); err != nil {
+			return harness.SessionImportResult{}, err
 		}
 		if err := os.Rename(filepath.Join(stage, "attachments"), sessionDir); err != nil {
 			return harness.SessionImportResult{}, err
@@ -223,25 +224,20 @@ func (Adapter) Import(ctx context.Context, in harness.SessionImport, r io.Reader
 	return harness.SessionImportResult{SessionID: id, Transcript: transcript, Manifest: manifest}, nil
 }
 
-// sessionConfigDir is dir, or ~/.claude when it is empty.
+// sessionConfigDir is dir, or what Claude Code uses when it is empty:
+// CLAUDE_CONFIG_DIR, or ~/.claude.
 func sessionConfigDir(dir string) (string, error) {
 	if dir != "" {
 		return dir, nil
+	}
+	if env := os.Getenv(ConfigHomeEnv); env != "" {
+		return env, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("claude-code: no configuration directory: %w", err)
 	}
 	return filepath.Join(home, ".claude"), nil
-}
-
-// projectDir is the directory of the sessions of a cwd. Like Claude Code, it
-// names the cwd with its symlinks resolved when it exists.
-func projectDir(configDir, cwd string) string {
-	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
-		cwd = resolved
-	}
-	return filepath.Join(configDir, "projects", encodeProjectDir(cwd))
 }
 
 func limitOf(maxBytes int64) int64 {
@@ -346,7 +342,7 @@ func readArchive(ctx context.Context, r io.Reader, limit int64) (archive, error)
 	defer gz.Close() //nolint:errcheck // reading
 	tr := tar.NewReader(gz)
 	var haveManifest, haveTranscript bool
-	remaining := limit
+	remaining, entries := limit, 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return arc, err
@@ -357,6 +353,9 @@ func readArchive(ctx context.Context, r io.Reader, limit int64) (archive, error)
 		}
 		if err != nil {
 			return arc, fmt.Errorf("claude-code: the session archive: %w", err)
+		}
+		if entries++; entries > maxArchiveEntries {
+			return arc, fmt.Errorf("%w: more than %d entries", harness.ErrSessionTooLarge, maxArchiveEntries)
 		}
 		if hdr.Typeflag != tar.TypeReg {
 			return arc, fmt.Errorf("claude-code: the session archive has %q, which is not a file", hdr.Name)
@@ -373,7 +372,7 @@ func readArchive(ctx context.Context, r io.Reader, limit int64) (archive, error)
 			if err := json.Unmarshal(data, &arc.manifest); err != nil {
 				return arc, fmt.Errorf("claude-code: the manifest of the archive: %w", err)
 			}
-			if arc.manifest.Adapter != ID || !sessionIDPattern.MatchString(arc.manifest.SessionID) {
+			if arc.manifest.Adapter != ID || !validSessionID(arc.manifest.SessionID) {
 				return arc, fmt.Errorf("claude-code: the archive is not a %s session", ID)
 			}
 			haveManifest = true
