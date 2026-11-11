@@ -256,7 +256,7 @@ func (r *Relay) BranchTip(ctx context.Context, project domain.ID, branch string)
 
 // RefTip returns the commit a full ref points to in the repository of the
 // Project, and false if there is no such ref. Only the refs CodeFabric writes
-// are asked about: a branch cf/*, or the ref of an orphan.
+// are asked about: a branch cf/*, or the ref of an orphan or of a checkpoint.
 func (r *Relay) RefTip(ctx context.Context, project domain.ID, ref string) (oid string, found bool, err error) {
 	if kind, _, perr := domain.ParseID(string(project)); perr != nil || kind != domain.KindProject {
 		return "", false, fmt.Errorf("relay: %q is not a Project ID", project)
@@ -283,7 +283,7 @@ func ourRef(ref string) bool {
 	if branch, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
 		return domain.ValidBranch(branch)
 	}
-	return domain.ValidOrphanRef(ref)
+	return domain.ValidOrphanRef(ref) || domain.ValidCheckpointRef(ref)
 }
 
 // baseEnv is the environment of every git the relay runs or serves: nothing of

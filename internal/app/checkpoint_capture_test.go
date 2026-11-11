@@ -13,9 +13,23 @@ import (
 // startedRun is a Run of a Worker that started its harness.
 func (e *env) startedRun() *reporter {
 	e.t.Helper()
-	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	r := e.acceptedRun(e.joinWorker("alpha", withCapabilities(domain.CheckpointCapability)), "x")
 	r.mustSend(r.entry(v1.ReportStarted))
 	return r
+}
+
+const checkpointCommit = "0123456789abcdef0123456789abcdef01234567"
+
+// pushCheckpoint is the Worker pushing refs/cf/checkpoints/<id> to the relay at commit.
+func (r *reporter) pushCheckpoint(id, commit string) {
+	r.e.t.Helper()
+	run := r.e.storedRun(r.run.ID)
+	task, err := r.e.app.Tasks.Get(r.e.t.Context(), run.TaskID.String(), "")
+	must(r.e.t, err)
+	if r.e.relay.tips == nil {
+		r.e.relay.tips = map[string]string{}
+	}
+	r.e.relay.tips[task.ProjectID+"/"+domain.CheckpointRef(domain.ID(id))] = commit
 }
 
 func (r *reporter) requestCheckpoint(trigger domain.CheckpointTrigger, requestID string) (checkpoints.Requested, error) {
@@ -30,7 +44,8 @@ func (r *reporter) mustRequestCheckpoint(trigger domain.CheckpointTrigger, reque
 }
 
 func (r *reporter) completeCheckpoint(id string, mutate ...func(*checkpoints.Completion)) (checkpoints.Completed, error) {
-	c := checkpoints.Completion{Epoch: r.lease.Epoch, CheckpointID: domain.ID(id)}
+	c := checkpoints.Completion{Epoch: r.lease.Epoch, CheckpointID: domain.ID(id), Commit: checkpointCommit}
+	r.pushCheckpoint(id, checkpointCommit)
 	for _, m := range mutate {
 		m(&c)
 	}
@@ -48,11 +63,16 @@ func (r *reporter) checkpointRows() map[string]bool {
 	r.e.t.Helper()
 	out := map[string]bool{}
 	must(r.e.t, r.e.db.Read(r.e.t.Context(), func(q store.Querier) error {
-		rows, err := store.CheckpointsOfRun(r.e.t.Context(), q, domain.ID(r.run.ID))
-		for _, c := range rows {
-			at, perr := store.CheckpointPublishedAt(r.e.t.Context(), q, c.ID)
-			must(r.e.t, perr)
-			out[string(c.ID)] = at != nil
+		published, err := store.CheckpointsOfRun(r.e.t.Context(), q, domain.ID(r.run.ID))
+		if err != nil {
+			return err
+		}
+		for _, c := range published {
+			out[string(c.ID)] = true
+		}
+		reserved, err := store.CheckpointReservationsOfRun(r.e.t.Context(), q, domain.ID(r.run.ID))
+		for _, c := range reserved {
+			out[string(c.ID)] = false
 		}
 		return err
 	}))
@@ -126,11 +146,11 @@ func TestCheckpointRequest_RefusesWhatCannotBeCaptured(t *testing.T) {
 }
 
 func TestCheckpointComplete_DeferSuspendsAndAManualOneGoesOn(t *testing.T) {
-	e := newEnv(t)
+	e := newCheckpointEnv(t)
 	r := e.startedRun()
 
 	manual := r.mustRequestCheckpoint(domain.CheckpointManual, "m")
-	native := &domain.NativeState{Adapter: "claude", AdapterVersion: "1", Digest: "sha256:abc"}
+	native := &domain.NativeState{Adapter: "claude", AdapterVersion: "1", Digest: r.mustUploadNative(manual.CheckpointID, "session")}
 	done, err := r.completeCheckpoint(manual.CheckpointID, func(c *checkpoints.Completion) {
 		c.NativeState, c.Excluded = native, []string{".env"}
 	})

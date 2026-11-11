@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/app/runs"
+	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -21,30 +24,66 @@ type Rederive func(ctx context.Context, tx *store.Tx, act mutation.Act, task dom
 
 // Service runs the checkpoint capture use cases.
 type Service struct {
-	db       *store.DB
-	clock    clock.Clock
-	ids      *domain.IDGenerator
-	rederive Rederive
+	db        *store.DB
+	clock     clock.Clock
+	ids       *domain.IDGenerator
+	rederive  Rederive
+	relay     Relay
+	blobs     BlobStore
+	maxNative int64
+	exclude   []string
 }
 
+// Relay is what the capture asks of the git relay: where a ref points to.
+type Relay interface {
+	RefTip(ctx context.Context, project domain.ID, ref string) (oid string, found bool, err error)
+}
+
+// BlobStore is the content-addressed store the native state of a checkpoint
+// lives in. *blob.Store implements it.
+type BlobStore interface {
+	Open(d blob.Digest) (io.ReadCloser, error)
+	// Put installs the content of r only if it hashes to want, and nothing if r fails.
+	Put(ctx context.Context, r io.Reader, want blob.Digest) (blob.Digest, int64, error)
+}
+
+// DefaultMaxNativeStateBytes is the largest native state a Worker may upload
+// unless told otherwise: the transcript and session files of a harness.
+const DefaultMaxNativeStateBytes = 64 << 20
+
+// Option adjusts New.
+type Option func(*Service)
+
+// WithRelay gives the service the relay it verifies that a capture was pushed
+// against. Without one, Complete cannot verify and refuses.
+func WithRelay(r Relay) Option { return func(s *Service) { s.relay = r } }
+
+// WithBlobs gives the service the store of native state, and the largest blob
+// it accepts (0 takes DefaultMaxNativeStateBytes). Without one, the native
+// state cannot be uploaded nor read.
+func WithBlobs(b BlobStore, maxBytes int64) Option {
+	return func(s *Service) {
+		s.blobs = b
+		if maxBytes > 0 {
+			s.maxNative = maxBytes
+		}
+	}
+}
+
+// WithExclude sets the globs the order tells the Worker to leave out of a capture.
+func WithExclude(globs []string) Option { return func(s *Service) { s.exclude = slices.Clone(globs) } }
+
 // New builds the service; rederive is the one the Run use cases take.
-func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, rederive Rederive) *Service {
-	return &Service{db: db, clock: clk, ids: ids, rederive: rederive}
+func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, rederive Rederive, opts ...Option) *Service {
+	s := &Service{db: db, clock: clk, ids: ids, rederive: rederive, maxNative: DefaultMaxNativeStateBytes}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Order is the payload of the checkpoint order the Worker receives.
-type Order struct {
-	RunID        string                   `json:"run_id"`
-	LeaseID      string                   `json:"lease_id"`
-	Epoch        uint64                   `json:"epoch"`
-	CheckpointID string                   `json:"checkpoint_id"`
-	Trigger      domain.CheckpointTrigger `json:"trigger"`
-	// Ref is where the capture is pushed to: refs/cf/checkpoints/<id>.
-	Ref       string `json:"ref"`
-	RunShort  string `json:"run_short_id"`
-	TaskID    string `json:"task_id"`
-	ProjectID string `json:"project_id"`
-}
+type Order = v1.CheckpointCommand
 
 // Requested answers a request: the checkpoint reserved for the capture.
 type Requested struct {
@@ -65,7 +104,10 @@ func suspends(t domain.CheckpointTrigger) bool {
 }
 
 // Request puts a running or waiting Run in checkpointing, reserves the
-// checkpoint and orders the Worker of its accepted lease to capture it. State,
+// checkpoint and orders the Worker of its accepted lease to capture it. A Worker
+// that does not announce domain.CheckpointCapability gets no order, which it
+// would not know and would block its queue: the request fails with
+// CF_CHECKPOINT_UNSUPPORTED. State,
 // event, reservation and order are written in one transaction, and a repeated
 // requestID answers what the first one did.
 func (s *Service) Request(ctx context.Context, by pki.Session, runID domain.ID, trigger domain.CheckpointTrigger, requestID string) (Requested, error) {
@@ -96,6 +138,14 @@ func (s *Service) Request(ctx context.Context, by pki.Session, runID domain.ID, 
 			if err != nil {
 				return Requested{}, err
 			}
+			worker, err := store.WorkerByID(ctx, tx, l.WorkerID)
+			if err != nil {
+				return Requested{}, err
+			}
+			if !slices.Contains(worker.Report.Capabilities, domain.CheckpointCapability) {
+				return Requested{}, domain.NewError(domain.CodeCheckpointUnsupported,
+					"the Worker of this Run cannot capture checkpoints", map[string]any{"worker": string(worker.ID)})
+			}
 			task, err := store.TaskByID(ctx, tx, run.TaskID)
 			if err != nil {
 				return Requested{}, err
@@ -112,7 +162,7 @@ func (s *Service) Request(ctx context.Context, by pki.Session, runID domain.ID, 
 			}
 			payload, err := json.Marshal(Order{
 				RunID: string(run.ID), LeaseID: string(l.ID), Epoch: l.Epoch, CheckpointID: string(id), Trigger: trigger, Ref: ref,
-				RunShort: shortID(run), TaskID: string(task.ID), ProjectID: string(task.ProjectID),
+				RunShort: shortID(run), TaskID: string(task.ID), ProjectID: string(task.ProjectID), Exclude: s.exclude,
 			})
 			if err != nil {
 				return Requested{}, fmt.Errorf("checkpoints: encoding the order: %w", err)
@@ -135,27 +185,27 @@ func (s *Service) Request(ctx context.Context, by pki.Session, runID domain.ID, 
 }
 
 // Completion is what a Worker reports of a capture that went through: the ref
-// of the checkpoint is pushed, and the harness's own state, if it took it, is a
-// blob with this digest.
+// of the checkpoint is pushed at Commit, and the harness's own state, if it took
+// it, is a blob with this digest.
 type Completion struct {
 	Epoch        uint64
 	CheckpointID domain.ID
+	Commit       string
 	NativeState  *domain.NativeState
 	Excluded     []string
 }
 
 // Completed is what the Run is after a capture is reported.
-type Completed struct {
-	CheckpointID string `json:"checkpoint_id"`
-	Seq          int    `json:"seq"`
-	RunState     string `json:"run_state"`
-}
+type Completed = v1.CheckpointReported
 
 // Complete publishes the checkpoint the Worker captured. The Run is left
 // suspended if the trigger asks for it (defer, move, drain) and goes back to
 // where it was otherwise. A report that repeats is answered, not applied twice.
 // A capture the Controller has already aborted (a cancel, an exit won) finds
-// no reservation and is rejected: only what was published before stays.
+// no reservation and is rejected: only what was published before stays. The
+// ref must be in the relay at the commit reported, and the native state, if
+// any, must be an uploaded blob; otherwise the reservation stays for the Worker
+// to push again or to fail it.
 func (s *Service) Complete(ctx context.Context, by pki.Session, runID domain.ID, c Completion) (Completed, error) {
 	return mutation.Do(ctx, s.db, s.clock, by, "worker.checkpoint.complete", "", struct {
 		Run domain.ID `json:"run"`
@@ -172,6 +222,9 @@ func (s *Service) Complete(ctx context.Context, by pki.Session, runID domain.ID,
 			return Completed{}, err
 		} else if published != nil {
 			return done(), nil
+		}
+		if err := s.verifyCapture(ctx, tx, task, cp, c); err != nil {
+			return Completed{}, err
 		}
 		status, err := store.RunStatusOf(ctx, tx, run)
 		if err != nil {
@@ -284,34 +337,44 @@ func (s *Service) Fail(ctx context.Context, by pki.Session, runID domain.ID, f F
 	})
 }
 
-// capture resolves what a Worker's report on a capture is about: the Run under
-// the live lease of that Worker and epoch, and the checkpoint of that Run.
-func (s *Service) capture(ctx context.Context, tx *store.Tx, by pki.Session, runID domain.ID, epoch uint64, id domain.ID) (store.Run, store.Task, store.Checkpoint, error) {
-	w, err := store.WorkerByIdentity(ctx, tx, by.Principal.ID)
+// held resolves the Run a Worker reports on or reads for: the one under the
+// live accepted lease of that Worker and epoch.
+func (s *Service) held(ctx context.Context, q store.Querier, by pki.Session, runID domain.ID, epoch uint64) (store.Run, store.Task, error) {
+	w, err := store.WorkerByIdentity(ctx, q, by.Principal.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		return store.Run{}, store.Task{}, store.Checkpoint{}, domain.NewError(domain.CodeUnauthenticated, "this identity is not a Worker", nil)
+		return store.Run{}, store.Task{}, domain.NewError(domain.CodeUnauthenticated, "this identity is not a Worker", nil)
 	}
 	if err != nil {
-		return store.Run{}, store.Task{}, store.Checkpoint{}, err
+		return store.Run{}, store.Task{}, err
 	}
-	run, err := store.RunByID(ctx, tx, runID)
+	run, err := store.RunByID(ctx, q, runID)
 	if err != nil {
-		return store.Run{}, store.Task{}, store.Checkpoint{}, notFound(err, "run")
+		return store.Run{}, store.Task{}, notFound(err, "run")
 	}
-	l, err := store.LeaseByRunEpoch(ctx, tx, runID, epoch)
+	l, err := store.LeaseByRunEpoch(ctx, q, runID, epoch)
 	if err != nil || l.WorkerID != w.ID {
-		return store.Run{}, store.Task{}, store.Checkpoint{}, domain.NewError(domain.CodeNotFound, "lease not found", nil)
+		return store.Run{}, store.Task{}, domain.NewError(domain.CodeNotFound, "lease not found", nil)
 	}
 	if l.Epoch < run.LeaseEpoch || l.State != domain.LeaseAccepted {
-		return store.Run{}, store.Task{}, store.Checkpoint{}, domain.NewError(domain.CodeStaleLease, "this report is not under the live lease of the Run", nil)
+		return store.Run{}, store.Task{}, domain.NewError(domain.CodeStaleLease, "this report is not under the live lease of the Run", nil)
 	}
-	cp, err := store.CheckpointByID(ctx, tx, id)
-	if err != nil || cp.RunID != runID {
-		return store.Run{}, store.Task{}, store.Checkpoint{}, domain.NewError(domain.CodeNotFound, "checkpoint not found", nil)
+	task, err := store.TaskByID(ctx, q, run.TaskID)
+	if err != nil {
+		return store.Run{}, store.Task{}, err
 	}
-	task, err := store.TaskByID(ctx, tx, run.TaskID)
+	return run, task, nil
+}
+
+// capture resolves what a Worker's report on a capture is about: the Run under
+// the live lease of that Worker and epoch, and the checkpoint of that Run.
+func (s *Service) capture(ctx context.Context, q store.Querier, by pki.Session, runID domain.ID, epoch uint64, id domain.ID) (store.Run, store.Task, store.Checkpoint, error) {
+	run, task, err := s.held(ctx, q, by, runID, epoch)
 	if err != nil {
 		return store.Run{}, store.Task{}, store.Checkpoint{}, err
+	}
+	cp, err := store.CheckpointByID(ctx, q, id)
+	if err != nil || cp.RunID != runID {
+		return store.Run{}, store.Task{}, store.Checkpoint{}, domain.NewError(domain.CodeNotFound, "checkpoint not found", nil)
 	}
 	return run, task, cp, nil
 }

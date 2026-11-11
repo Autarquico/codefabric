@@ -74,6 +74,10 @@ type Config struct {
 	Blobs workflows.BlobStore
 	// MaxBlobBytes is the largest blob a client may upload; 0 takes the default.
 	MaxBlobBytes int64
+	// Relay is what a capture is verified against; nil makes Complete refuse.
+	Relay checkpoints.Relay
+	// CheckpointExclude are the globs a capture leaves out (checkpoint.exclude).
+	CheckpointExclude []string
 }
 
 // New wires the use cases. Runs re-derive their Task through tasks.NewRederive,
@@ -88,7 +92,7 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 		Projects:    projects.New(db, clk, ids),
 		Tasks:       tasks.New(db, clk, ids, runService),
 		Runs:        runService,
-		Checkpoints: checkpoints.New(db, clk, ids, checkpoints.Rederive(rederive)),
+		Checkpoints: checkpoints.New(db, clk, ids, checkpoints.Rederive(rederive), checkpointOptions(cfg)...),
 		Workers:     workers.New(db, clk, workersCfg),
 		Leases:      leaseService,
 		Scheduler:   scheduler.New(db, clk, leaseService, workersCfg.StartedAt),
@@ -110,6 +114,17 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 // narrows a Task name that more than one Project has.
 func (s *Services) Resolve(ctx context.Context, kind domain.Kind, ref, project string) (v1.Resolved, error) {
 	return refs.Resolve(ctx, s.db, kind, ref, project)
+}
+
+func checkpointOptions(cfg Config) []checkpoints.Option {
+	opts := []checkpoints.Option{checkpoints.WithExclude(cfg.CheckpointExclude)}
+	if cfg.Relay != nil {
+		opts = append(opts, checkpoints.WithRelay(cfg.Relay))
+	}
+	if cfg.Blobs != nil {
+		opts = append(opts, checkpoints.WithBlobs(cfg.Blobs, 0))
+	}
+	return opts
 }
 
 func blobLimit(n int64) []workflows.Option {

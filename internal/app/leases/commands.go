@@ -126,6 +126,9 @@ func commandView(c store.WorkerCommand) (v1.WorkerCommand, error) {
 	case domain.CommandInput:
 		out.Input = new(v1.InputCommand)
 		target = out.Input
+	case domain.CommandCheckpoint:
+		out.Checkpoint = new(v1.CheckpointCommand)
+		target = out.Checkpoint
 	default:
 		return out, nil
 	}

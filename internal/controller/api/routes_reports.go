@@ -12,6 +12,7 @@ import (
 func (s *Server) registerWorkerReportRoutes() {
 	s.handle("POST /v1/worker/runs/{run}/report", workersOnly, s.reportRun)
 	s.handle("POST /v1/worker/runs/{run}/secrets/grant", workersOnly, s.grantSecrets)
+	s.registerCheckpointRoutes()
 }
 
 func (s *Server) reportRun(w http.ResponseWriter, r *http.Request, c caller) error {

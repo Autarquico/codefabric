@@ -20,6 +20,12 @@ func (f *leaseFixture) insertCheckpoint(c Checkpoint) Checkpoint {
 	return stored
 }
 
+// publishCheckpoint is what Complete does to the reservation of a capture.
+func (f *leaseFixture) publishCheckpoint(c Checkpoint) {
+	f.t.Helper()
+	f.tx(func(tx *Tx) error { return tx.PublishCheckpoint(f.t.Context(), c.RunID, c.ID, nil, nil, epoch0) })
+}
+
 func (f *leaseFixture) checkpoint(id domain.ID) (Checkpoint, error) {
 	f.t.Helper()
 	var c Checkpoint
@@ -111,18 +117,22 @@ func TestCheckpoints_RefusesWhatTheTableDoesNotAllow(t *testing.T) {
 func TestCheckpoints_ListByRunAndByTask(t *testing.T) {
 	f := newLeaseFixture(t)
 	a, b := f.queuedRun(1).ID, f.queuedRun(2).ID
-	f.insertCheckpoint(checkpointOf("cp_1", a))
+	f.publishCheckpoint(f.insertCheckpoint(checkpointOf("cp_1", a)))
 	later := checkpointOf("cp_2", b)
 	later.CreatedAt = epoch0.Add(2 * time.Minute)
-	f.insertCheckpoint(later)
-	f.insertCheckpoint(checkpointOf("cp_3", a))
+	f.publishCheckpoint(f.insertCheckpoint(later))
+	f.publishCheckpoint(f.insertCheckpoint(checkpointOf("cp_3", a)))
+	f.insertCheckpoint(checkpointOf("cp_4", a)) // a reservation: no reader lists it
 
-	var byRun, byTask []Checkpoint
+	var byRun, byTask, reserved []Checkpoint
 	if err := f.db.Read(f.t.Context(), func(q Querier) (err error) {
 		if byRun, err = CheckpointsOfRun(f.t.Context(), q, a); err != nil {
 			return err
 		}
-		byTask, err = CheckpointsOfTask(f.t.Context(), q, "task_1")
+		if byTask, err = CheckpointsOfTask(f.t.Context(), q, "task_1"); err != nil {
+			return err
+		}
+		reserved, err = CheckpointReservationsOfRun(f.t.Context(), q, a)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -138,5 +148,8 @@ func TestCheckpoints_ListByRunAndByTask(t *testing.T) {
 	}
 	if got, want := ids(byTask), []domain.ID{"cp_1", "cp_3", "cp_2"}; !slices.Equal(got, want) {
 		t.Fatalf("by task = %v, want %v", got, want)
+	}
+	if got, want := ids(reserved), []domain.ID{"cp_4"}; !slices.Equal(got, want) {
+		t.Fatalf("reservations = %v, want %v", got, want)
 	}
 }

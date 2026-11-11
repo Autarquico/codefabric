@@ -87,15 +87,25 @@ func CheckpointByID(ctx context.Context, q Querier, id domain.ID) (Checkpoint, e
 	return scanCheckpoint(q.QueryRow(ctx, `SELECT `+checkpointColumns+` FROM checkpoints WHERE id = ?`, string(id)))
 }
 
-// CheckpointsOfRun lists the checkpoints of a Run by seq.
+// CheckpointsOfRun lists the published checkpoints of a Run by seq: the
+// reservation of a capture under way is not one yet.
 func CheckpointsOfRun(ctx context.Context, q Querier, run domain.ID) ([]Checkpoint, error) {
 	return collect(ctx, q, scanCheckpoint,
-		`SELECT `+checkpointColumns+` FROM checkpoints WHERE run_id = ? ORDER BY seq`, string(run))
+		`SELECT `+checkpointColumns+` FROM checkpoints WHERE run_id = ? AND published_at IS NOT NULL ORDER BY seq`, string(run))
 }
 
-// CheckpointsOfTask lists the checkpoints of every Run of a Task, oldest first.
+// CheckpointsOfTask lists the published checkpoints of every Run of a Task,
+// oldest first.
 func CheckpointsOfTask(ctx context.Context, q Querier, task domain.ID) ([]Checkpoint, error) {
 	return collect(ctx, q, scanCheckpoint,
-		`SELECT `+checkpointColumns+` FROM checkpoints WHERE run_id IN (SELECT id FROM runs WHERE task_id = ?) ORDER BY created_at, id`,
+		`SELECT `+checkpointColumns+` FROM checkpoints
+		 WHERE run_id IN (SELECT id FROM runs WHERE task_id = ?) AND published_at IS NOT NULL ORDER BY created_at, id`,
 		string(task))
+}
+
+// CheckpointReservationsOfRun lists the checkpoints of a Run whose capture has
+// not been reported done: the ones no reader of checkpoints sees.
+func CheckpointReservationsOfRun(ctx context.Context, q Querier, run domain.ID) ([]Checkpoint, error) {
+	return collect(ctx, q, scanCheckpoint,
+		`SELECT `+checkpointColumns+` FROM checkpoints WHERE run_id = ? AND published_at IS NULL ORDER BY seq`, string(run))
 }
