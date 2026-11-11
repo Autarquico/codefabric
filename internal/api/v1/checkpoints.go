@@ -1,6 +1,10 @@
 package v1
 
-import "github.com/Autarquico/codefabric/internal/domain"
+import (
+	"time"
+
+	"github.com/Autarquico/codefabric/internal/domain"
+)
 
 // CheckpointCommand orders the Worker of the live lease of a Run to capture a
 // checkpoint (§23): push the work to Ref and, if the harness has state of its
@@ -63,4 +67,32 @@ type CheckpointReported struct {
 type NativeStateUploaded struct {
 	Digest string `json:"digest"`
 	Size   int64  `json:"size"`
+}
+
+// CheckpointRequested answers POST /v1/runs/{ref}/checkpoints: the checkpoint
+// reserved for the capture, which the Worker takes and reports later.
+type CheckpointRequested struct {
+	CheckpointID string `json:"checkpoint_id"`
+	Ref          string `json:"ref"`
+	RunState     string `json:"run_state"`
+}
+
+// Checkpoint is a published checkpoint of a Run (§23.1). NativeState is nil
+// when the harness's own state was not captured: the checkpoint then has the
+// source and the summary only. Excluded are the paths the capture left out.
+type Checkpoint struct {
+	ID          string                   `json:"id"`
+	RunID       string                   `json:"run_id"`
+	Seq         int                      `json:"seq"`
+	Trigger     domain.CheckpointTrigger `json:"trigger"`
+	Ref         string                   `json:"ref"`
+	NativeState *NativeStateRef          `json:"native_state,omitempty"`
+	Excluded    []string                 `json:"excluded"`
+	CreatedAt   time.Time                `json:"created_at"`
+}
+
+// ListCheckpointsResponse is GET /v1/runs/{ref}/checkpoints and
+// GET /v1/tasks/{ref}/checkpoints, oldest first.
+type ListCheckpointsResponse struct {
+	Checkpoints []Checkpoint `json:"checkpoints"`
 }

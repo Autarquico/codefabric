@@ -86,11 +86,7 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, rederive Rederi
 type Order = v1.CheckpointCommand
 
 // Requested answers a request: the checkpoint reserved for the capture.
-type Requested struct {
-	CheckpointID string `json:"checkpoint_id"`
-	Ref          string `json:"ref"`
-	RunState     string `json:"run_state"`
-}
+type Requested = v1.CheckpointRequested
 
 var triggers = []domain.CheckpointTrigger{
 	domain.CheckpointManual, domain.CheckpointMove, domain.CheckpointDefer,

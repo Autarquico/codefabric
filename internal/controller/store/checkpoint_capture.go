@@ -100,3 +100,24 @@ func (t *Tx) AbortCapture(ctx context.Context, run domain.ID, at time.Time) erro
 	}
 	return nil
 }
+
+// RecordNativeUpload remembers that digest is the native state uploaded for a
+// checkpoint that is still a reservation of the Run, replacing an earlier one.
+func (t *Tx) RecordNativeUpload(ctx context.Context, run, id domain.ID, digest string) error {
+	res, err := t.Exec(ctx,
+		`UPDATE checkpoints SET uploaded_digest = ? WHERE id = ? AND run_id = ? AND published_at IS NULL`,
+		digest, string(id), string(run))
+	return changedOne(res, err, "recording a native state upload")
+}
+
+// NativeUpload is the digest uploaded for a checkpoint, "" if none was.
+func NativeUpload(ctx context.Context, q Querier, id domain.ID) (string, error) {
+	var digest *string
+	if err := q.QueryRow(ctx, `SELECT uploaded_digest FROM checkpoints WHERE id = ?`, string(id)).Scan(&digest); err != nil {
+		return "", scanErr(err, "checkpoint")
+	}
+	if digest == nil {
+		return "", nil
+	}
+	return *digest, nil
+}

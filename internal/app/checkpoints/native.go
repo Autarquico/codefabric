@@ -44,6 +44,13 @@ func (s *Service) verifyCapture(ctx context.Context, q store.Querier, task store
 	if _, err := blob.ParseDigest(n.Digest); err != nil {
 		return invalid("native state digest must be sha256:<64 lower-case hex characters>")
 	}
+	uploaded, err := store.NativeUpload(ctx, q, cp.ID)
+	if err != nil {
+		return err
+	}
+	if uploaded != n.Digest {
+		return invalid("native state %s was not uploaded for this checkpoint", n.Digest)
+	}
 	if _, err := store.BlobMeta(ctx, q, n.Digest); errors.Is(err, store.ErrNotFound) {
 		return invalid("native state %s was not uploaded", n.Digest)
 	} else if err != nil {
@@ -109,8 +116,10 @@ func (s *Service) PutNativeState(ctx context.Context, by pki.Session, runID doma
 		return v1.NativeStateUploaded{}, err
 	}
 	err = s.db.WithTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.PutBlobMeta(ctx, store.Blob{Digest: digest, Size: size, CreatedAt: s.clock.Now()})
-		return err
+		if _, err := tx.PutBlobMeta(ctx, store.Blob{Digest: digest, Size: size, CreatedAt: s.clock.Now()}); err != nil {
+			return err
+		}
+		return tx.RecordNativeUpload(ctx, runID, id, digest)
 	})
 	return v1.NativeStateUploaded{Digest: digest, Size: size}, err
 }

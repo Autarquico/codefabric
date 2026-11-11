@@ -183,3 +183,28 @@ func TestCheckpointRelayToken_OfAnotherRunIsRefused(t *testing.T) {
 		t.Fatal("a token for the checkpoint of another Run was minted")
 	}
 }
+
+func TestCheckpointComplete_ADigestAnotherRunUploadedIsRefused(t *testing.T) {
+	e := newCheckpointEnv(t)
+	mine := e.startedRun()
+	other := e.acceptedRun(e.joinWorker("beta", withCapabilities(domain.CheckpointCapability)), "y")
+	other.mustSend(other.entry(v1.ReportStarted))
+	mineCP := mine.mustRequestCheckpoint(domain.CheckpointManual, "a")
+	theirCP := other.mustRequestCheckpoint(domain.CheckpointManual, "b")
+
+	theirs := other.mustUploadNative(theirCP.CheckpointID, "their session")
+	_, err := mine.completeCheckpoint(mineCP.CheckpointID, func(c *checkpoints.Completion) {
+		c.NativeState = &domain.NativeState{Adapter: "claude", AdapterVersion: "1", Digest: theirs}
+	})
+	wantCode(t, err, domain.CodeInvalidRequest)
+	if rows := mine.checkpointRows(); rows[mineCP.CheckpointID] {
+		t.Fatalf("a capture naming another Run's native state was published: %v", rows)
+	}
+
+	// The digest of the upload that was this checkpoint's own goes through.
+	own := mine.mustUploadNative(mineCP.CheckpointID, "my session")
+	_, err = mine.completeCheckpoint(mineCP.CheckpointID, func(c *checkpoints.Completion) {
+		c.NativeState = &domain.NativeState{Adapter: "claude", AdapterVersion: "1", Digest: own}
+	})
+	must(t, err)
+}

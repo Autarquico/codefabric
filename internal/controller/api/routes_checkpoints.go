@@ -14,6 +14,7 @@ import (
 // the capture. The native state has routes of its own, authorized by the lease
 // of the Run: it never goes through /v1/blobs.
 func (s *Server) registerCheckpointRoutes() {
+	s.registerClientCheckpointRoutes()
 	s.handle("POST /v1/worker/runs/{run}/checkpoint-token", workersOnly, s.checkpointToken)
 	s.handle("PUT /v1/worker/runs/{run}/checkpoints/{checkpoint}/native-state/{digest}", workersOnly, s.putNativeState)
 	s.handle("GET /v1/worker/runs/{run}/checkpoints/{checkpoint}/native-state", workersOnly, s.getNativeState)
@@ -127,5 +128,49 @@ func (s *Server) failCheckpoint(w http.ResponseWriter, r *http.Request, c caller
 		return err
 	}
 	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+// registerClientCheckpointRoutes adds how a client asks for a capture and reads
+// the checkpoints that were published.
+func (s *Server) registerClientCheckpointRoutes() {
+	s.handle("POST /v1/runs/{ref}/checkpoints", clientsOnly, s.requestCheckpoint)
+	s.handle("GET /v1/runs/{ref}/checkpoints", clientsOnly, s.runCheckpoints)
+	s.handle("GET /v1/tasks/{ref}/checkpoints", clientsOnly, s.taskCheckpoints)
+}
+
+// requestCheckpoint asks for a manual checkpoint of a running Run.
+func (s *Server) requestCheckpoint(w http.ResponseWriter, r *http.Request, c caller) error {
+	var req v1.ActionRequest
+	if err := decodeOptionalBody(w, r, &req); err != nil {
+		return err
+	}
+	run, err := s.work.Resolve(r.Context(), domain.KindRun, r.PathValue("ref"), "")
+	if err != nil {
+		return err
+	}
+	out, err := s.work.Checkpoints.Request(r.Context(), c.Session, domain.ID(run.ID), domain.CheckpointManual, req.RequestID)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (s *Server) runCheckpoints(w http.ResponseWriter, r *http.Request, _ caller) error {
+	out, err := s.work.Checkpoints.OfRun(r.Context(), r.PathValue("ref"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, v1.ListCheckpointsResponse{Checkpoints: nonNil(out)})
+	return nil
+}
+
+func (s *Server) taskCheckpoints(w http.ResponseWriter, r *http.Request, _ caller) error {
+	out, err := s.work.Checkpoints.OfTask(r.Context(), r.PathValue("ref"), r.URL.Query().Get("project"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, v1.ListCheckpointsResponse{Checkpoints: nonNil(out)})
 	return nil
 }
