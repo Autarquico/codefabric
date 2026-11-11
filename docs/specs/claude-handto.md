@@ -1,13 +1,13 @@
 ---
 codename: codefabric
-title: "/handto desde Claude Code"
+title: /handto desde Claude Code
 type: task
-status: draft
+status: active
 priority: P1
 size: M
 issue: null
 prs: []
-related_issues: []
+related_issues: [164]
 sub_issues: []
 depends_on: [defer-resume, dirty-snapshots-auto-checkpoints]
 supersedes: []
