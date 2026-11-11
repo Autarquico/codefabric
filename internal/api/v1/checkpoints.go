@@ -88,7 +88,18 @@ type Checkpoint struct {
 	Ref         string                   `json:"ref"`
 	NativeState *NativeStateRef          `json:"native_state,omitempty"`
 	Excluded    []string                 `json:"excluded"`
+	Summary     CheckpointSummary        `json:"summary"`
 	CreatedAt   time.Time                `json:"created_at"`
+}
+
+// CheckpointSummary is the markdown summary the Controller composes when a
+// checkpoint is published, from what it knows of the Run and without a model
+// (§23.1): what is left of the work when there is no native state.
+type CheckpointSummary struct {
+	Progress  string `json:"progress"`
+	Next      string `json:"next"`
+	Decisions string `json:"decisions"`
+	Commands  string `json:"commands"`
 }
 
 // ListCheckpointsResponse is GET /v1/runs/{ref}/checkpoints and

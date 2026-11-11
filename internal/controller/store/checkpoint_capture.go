@@ -52,9 +52,10 @@ func (t *Tx) LeaveCheckpointing(ctx context.Context, run Run, to domain.RunState
 }
 
 // PublishCheckpoint completes the reservation of a checkpoint: the harness
-// state and the excluded paths the Worker reports, and the time. It is a
+// state and the excluded paths the Worker reports, the summary the Controller
+// composed of the capture, and the time. It is a
 // compare-and-set on the checkpoint still being a reservation of that Run.
-func (t *Tx) PublishCheckpoint(ctx context.Context, run, id domain.ID, native *domain.NativeState, excluded []string, at time.Time) error {
+func (t *Tx) PublishCheckpoint(ctx context.Context, run, id domain.ID, native *domain.NativeState, excluded []string, summary domain.CheckpointSummary, at time.Time) error {
 	raw, err := json.Marshal(nonNil(excluded))
 	if err != nil {
 		return fmt.Errorf("store: encoding excluded paths: %w", err)
@@ -64,9 +65,11 @@ func (t *Tx) PublishCheckpoint(ctx context.Context, run, id domain.ID, native *d
 		adapter, version, digest = native.Adapter, native.AdapterVersion, native.Digest
 	}
 	res, err := t.Exec(ctx,
-		`UPDATE checkpoints SET native_adapter = ?, native_adapter_version = ?, native_digest = ?, excluded = ?, published_at = ?
+		`UPDATE checkpoints SET native_adapter = ?, native_adapter_version = ?, native_digest = ?, excluded = ?,
+		     summary_progress = ?, summary_next = ?, summary_decisions = ?, summary_commands = ?, published_at = ?
 		 WHERE id = ? AND run_id = ? AND published_at IS NULL`,
-		adapter, version, digest, string(raw), at.UnixNano(), string(id), string(run))
+		adapter, version, digest, string(raw),
+		summary.Progress, summary.Next, summary.Decisions, summary.Commands, at.UnixNano(), string(id), string(run))
 	return changedOne(res, err, "publishing a checkpoint")
 }
 

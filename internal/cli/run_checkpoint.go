@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -13,7 +14,7 @@ import (
 
 func newRunCheckpointCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "checkpoint", Short: "Capture and list the checkpoints of a Run"}
-	cmd.AddCommand(newRunCheckpointCreateCmd(), newRunCheckpointListCmd())
+	cmd.AddCommand(newRunCheckpointCreateCmd(), newRunCheckpointListCmd(), newRunCheckpointShowCmd())
 	return cmd
 }
 
@@ -97,4 +98,44 @@ func printCheckpoints(out io.Writer, list []v1.Checkpoint) error {
 		}
 	}
 	return nil
+}
+
+func newRunCheckpointShowCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show <run> <checkpoint>",
+		Short: "Show the summary of a checkpoint of a Run, by its ID or its number",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := openClient(cmd)
+			if err != nil {
+				return err
+			}
+			list, err := c.RunCheckpoints(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			cp, err := pickCheckpoint(list, args[1])
+			if err != nil {
+				return err
+			}
+			return emit(cmd, cp, func(w io.Writer) error { return printCheckpointSummary(w, cp) })
+		},
+	}
+}
+
+// pickCheckpoint finds a checkpoint of a list by its ID or its seq.
+func pickCheckpoint(list []v1.Checkpoint, which string) (v1.Checkpoint, error) {
+	for _, c := range list {
+		if c.ID == which || strconv.Itoa(c.Seq) == which {
+			return c, nil
+		}
+	}
+	return v1.Checkpoint{}, domain.NewError(domain.CodeNotFound, fmt.Sprintf("the Run has no checkpoint %q", which), nil)
+}
+
+func printCheckpointSummary(out io.Writer, c v1.Checkpoint) error {
+	s := c.Summary
+	_, err := fmt.Fprintf(out, "# Checkpoint %d (%s) of %s\n\nRef: %s\n\n## Progress\n\n%s\n## Next\n\n%s\n## Decisions\n\n%s\n## Commands\n\n%s",
+		c.Seq, c.Trigger, c.RunID, c.Ref, s.Progress, s.Next, s.Decisions, s.Commands)
+	return err
 }

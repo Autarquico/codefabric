@@ -32,6 +32,7 @@ type Service struct {
 	blobs     BlobStore
 	maxNative int64
 	exclude   []string
+	history   History
 }
 
 // Relay is what the capture asks of the git relay: where a ref points to.
@@ -55,8 +56,16 @@ const DefaultMaxNativeStateBytes = 64 << 20
 type Option func(*Service)
 
 // WithRelay gives the service the relay it verifies that a capture was pushed
-// against. Without one, Complete cannot verify and refuses.
-func WithRelay(r Relay) Option { return func(s *Service) { s.relay = r } }
+// against. Without one, Complete cannot verify and refuses. A relay that is also
+// a History (*relay.Relay) is the one the summary reads commits from.
+func WithRelay(r Relay) Option {
+	return func(s *Service) {
+		s.relay = r
+		if h, ok := r.(History); ok {
+			s.history = h
+		}
+	}
+}
 
 // WithBlobs gives the service the store of native state, and the largest blob
 // it accepts (0 takes DefaultMaxNativeStateBytes). Without one, the native
@@ -234,7 +243,11 @@ func (s *Service) Complete(ctx context.Context, by pki.Session, runID domain.ID,
 		if err != nil {
 			return Completed{}, err
 		}
-		if err := tx.PublishCheckpoint(ctx, run.ID, cp.ID, c.NativeState, c.Excluded, act.Now); err != nil {
+		summary, err := s.summarize(ctx, tx, task, run, cp, status.CheckpointOrigin, c)
+		if err != nil {
+			return Completed{}, err
+		}
+		if err := tx.PublishCheckpoint(ctx, run.ID, cp.ID, c.NativeState, c.Excluded, summary, act.Now); err != nil {
 			return Completed{}, raced(err)
 		}
 		if err := tx.LeaveCheckpointing(ctx, run, next.State, "", act.Now); err != nil {

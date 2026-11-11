@@ -597,3 +597,27 @@ func TestRelay_AWorkerHasTwoRequestsInFlightWhateverTheyAre(t *testing.T) {
 	cancel()
 	assertGone(t, g.pgids)
 }
+
+func TestRelay_LogTellsTheCommitsOnTopOfABase(t *testing.T) {
+	g := newRig(t, nil)
+	work := gittest.InitRepo(t)
+	base := gittest.Run(t, work, "rev-parse", "HEAD")
+	gittest.Commit(t, work, "b.txt", "b\n", "add b")
+	tip := gittest.Commit(t, work, "c.txt", "c\n", "add c")
+	g.allow(branch1, tip)
+	gittest.Run(t, work, "push", g.url(), "HEAD:refs/heads/"+branch1)
+
+	commits, more, err := g.r.Log(t.Context(), g.project, base, tip, 5)
+	if err != nil || more || len(commits) != 2 {
+		t.Fatalf("Log = %+v, %v, %v", commits, more, err)
+	}
+	if c := commits[0]; c.ID != tip || c.Subject != "add c" || len(c.Files) != 1 || c.Files[0] != "c.txt" {
+		t.Errorf("newest = %+v", c)
+	}
+	if commits, more, err = g.r.Log(t.Context(), g.project, base, tip, 1); err != nil || !more || len(commits) != 1 {
+		t.Errorf("limited Log = %+v, %v, %v", commits, more, err)
+	}
+	if _, _, err := g.r.Log(t.Context(), g.project, "--all", tip, 1); err == nil {
+		t.Error("a base that is not a commit ID was passed to git")
+	}
+}

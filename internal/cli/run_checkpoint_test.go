@@ -43,3 +43,31 @@ func TestRunCheckpointList_NamesARunOrATaskNotBothNorNeither(t *testing.T) {
 		}
 	}
 }
+
+func TestPickCheckpoint_ByIDOrSeq(t *testing.T) {
+	list := []v1.Checkpoint{{ID: "cp_a", Seq: 1}, {ID: "cp_b", Seq: 2}}
+	for _, which := range []string{"cp_b", "2"} {
+		if c, err := pickCheckpoint(list, which); err != nil || c.ID != "cp_b" {
+			t.Errorf("%s: %+v, %v", which, c, err)
+		}
+	}
+	if _, err := pickCheckpoint(list, "3"); err == nil {
+		t.Error("an unknown checkpoint was found")
+	}
+}
+
+func TestPrintCheckpointSummary_RendersTheFourSections(t *testing.T) {
+	var out bytes.Buffer
+	c := v1.Checkpoint{
+		ID: "cp1", RunID: "run1", Seq: 2, Trigger: domain.CheckpointDefer, Ref: "refs/cf/checkpoints/cp1",
+		Summary: v1.CheckpointSummary{Progress: "p\n", Next: "n\n", Decisions: "d\n", Commands: "c\n"},
+	}
+	if err := printCheckpointSummary(&out, c); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# Checkpoint 2 (defer) of run1", "## Progress\n\np\n", "## Next\n\nn\n", "## Decisions\n\nd\n", "## Commands\n\nc\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}

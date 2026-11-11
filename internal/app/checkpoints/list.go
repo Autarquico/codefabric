@@ -51,6 +51,7 @@ func viewOf(c store.Checkpoint) v1.Checkpoint {
 	v := v1.Checkpoint{
 		ID: string(c.ID), RunID: string(c.RunID), Seq: c.Seq, Trigger: c.Trigger, Ref: c.SourceRef,
 		Excluded: c.Excluded, CreatedAt: c.CreatedAt,
+		Summary: v1.CheckpointSummary(c.Summary),
 	}
 	if v.Excluded == nil {
 		v.Excluded = []string{}

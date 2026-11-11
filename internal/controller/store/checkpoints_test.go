@@ -23,7 +23,9 @@ func (f *leaseFixture) insertCheckpoint(c Checkpoint) Checkpoint {
 // publishCheckpoint is what Complete does to the reservation of a capture.
 func (f *leaseFixture) publishCheckpoint(c Checkpoint) {
 	f.t.Helper()
-	f.tx(func(tx *Tx) error { return tx.PublishCheckpoint(f.t.Context(), c.RunID, c.ID, nil, nil, epoch0) })
+	f.tx(func(tx *Tx) error {
+		return tx.PublishCheckpoint(f.t.Context(), c.RunID, c.ID, nil, nil, c.Summary, epoch0)
+	})
 }
 
 func (f *leaseFixture) checkpoint(id domain.ID) (Checkpoint, error) {
