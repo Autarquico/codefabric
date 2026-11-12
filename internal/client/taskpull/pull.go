@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -179,6 +180,14 @@ func (p *puller) pull(ctx context.Context, task string) (Result, error) {
 		res.CheckedOut = p.repo.currentBranch(ctx) == pl.branch
 	default:
 		if p.repo.currentBranch(ctx) != pl.branch {
+			clash, err := p.repo.ignoredClash(ctx, commit)
+			if err != nil {
+				return res, err
+			}
+			if len(clash) > 0 {
+				p.warn("%s was not switched to: the checkpoint versions files that are ignored here and a switch would overwrite them (%s); pull again with --worktree", pl.branch, strings.Join(clash, ", "))
+				break
+			}
 			if _, err := p.repo.run(ctx, "switch", "--quiet", pl.branch); err != nil {
 				return res, err
 			}

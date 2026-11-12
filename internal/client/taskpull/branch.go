@@ -22,6 +22,9 @@ type placement struct {
 	// merge says the branch is the one checked out here, which moves with a
 	// fast-forward merge of the clean tree and not by writing the ref under it.
 	merge bool
+	// old is the commit the branch had when it was chosen: the move only goes through
+	// if the branch is still there.
+	old string
 }
 
 // place chooses the branch for commit, trying in order: the branch the Task started from
@@ -81,9 +84,9 @@ func (p *puller) place(ctx context.Context, commit string) (placement, error) {
 			if name != current || p.worktreeAsked || p.dirty {
 				continue
 			}
-			return placement{branch: name, outcome: Advanced, merge: true}, nil
+			return placement{branch: name, outcome: Advanced, merge: true, old: oid}, nil
 		}
-		return placement{branch: name, outcome: Advanced}, nil
+		return placement{branch: name, outcome: Advanced, old: oid}, nil
 	}
 	return placement{}, fmt.Errorf("no branch can take the work of the checkpoint")
 }
@@ -100,7 +103,6 @@ func (p *puller) move(ctx context.Context, pl placement, commit string) error {
 		_, err := p.repo.run(ctx, "update-ref", "-m", "cf task pull", "refs/heads/"+pl.branch, commit, "")
 		return err
 	}
-	old, _ := p.repo.branchOID(ctx, pl.branch)
-	_, err := p.repo.run(ctx, "update-ref", "-m", "cf task pull", "refs/heads/"+pl.branch, commit, old)
+	_, err := p.repo.run(ctx, "update-ref", "-m", "cf task pull", "refs/heads/"+pl.branch, commit, pl.old)
 	return err
 }

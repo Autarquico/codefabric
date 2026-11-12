@@ -113,3 +113,27 @@ func (r repo) subject(ctx context.Context, commit string) string {
 	out, _ := r.run(ctx, "log", "-1", "--format=%s", commit)
 	return out
 }
+
+// ignoredClash lists the ignored files of the working tree that commit also versions: a
+// switch to a branch at commit would overwrite them without a word.
+func (r repo) ignoredClash(ctx context.Context, commit string) ([]string, error) {
+	ignored, err := r.run(ctx, "ls-files", "-z", "--others", "--ignored", "--exclude-standard")
+	if err != nil || ignored == "" {
+		return nil, err
+	}
+	versioned, err := r.run(ctx, "ls-tree", "-r", "-z", "--name-only", commit)
+	if err != nil {
+		return nil, err
+	}
+	in := map[string]bool{}
+	for _, f := range strings.Split(versioned, "\x00") {
+		in[f] = true
+	}
+	var clash []string
+	for _, f := range strings.Split(ignored, "\x00") {
+		if f != "" && in[f] {
+			clash = append(clash, f)
+		}
+	}
+	return clash, nil
+}

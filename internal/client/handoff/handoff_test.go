@@ -81,6 +81,7 @@ type fakeController struct {
 	tasks   map[string]v1.Task
 
 	puts    map[string][]byte // by digest
+	takes   int               // snapshots taken
 	created []v1.CreateTaskRequest
 	// sent is every creation asked for, replays included.
 	sent []v1.CreateTaskRequest
@@ -167,6 +168,7 @@ func (f *fakeController) ResumeTaskWith(_ context.Context, ref, _ string, req v1
 }
 
 func (f *fakeController) TakeSnapshot(context.Context, string) (gitctx.Snapshot, error) {
+	f.takes++
 	return gitctx.Snapshot{Commit: strings.Repeat("c", 40), Tree: f.tree, Branch: "feature"}, nil
 }
 
@@ -209,7 +211,7 @@ func TestScenario_Handto(t *testing.T) {
 		t.Fatalf("created %d, resumed %d: a session without a Task starts one", len(c.created), len(c.resumed))
 	}
 	req := c.created[0]
-	if !req.Snapshot || req.Mode != domain.ModeInteractive || req.Requirements.Harness != "claude-code" ||
+	if c.takes != 1 || req.Snapshot || req.SourceSnapshot != strings.Repeat("c", 40) || req.SourceBranch != "feature" || len(c.pushed) != 1 || req.Mode != domain.ModeInteractive || req.Requirements.Harness != "claude-code" ||
 		len(req.Requirements.Workers.Require) != 1 || req.Requirements.Workers.Require[0] != "w" {
 		t.Errorf("the Task is not an interactive snapshot Run pinned to w: %+v", req)
 	}
@@ -338,7 +340,7 @@ func TestHandto_AResumeCarriesASnapshotOnlyIfTheTreeChanged(t *testing.T) {
 	if _, err := Do(t.Context(), c, local, again); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.resumed) != 1 || c.resumed[0].SourceSnapshot != "" || len(c.pushed) != 0 {
+	if len(c.resumed) != 1 || c.resumed[0].SourceSnapshot != "" || len(c.pushed) != 1 {
 		t.Fatalf("unchanged tree: resume %+v, pushed %v", c.resumed, c.pushed)
 	}
 
@@ -347,7 +349,7 @@ func TestHandto_AResumeCarriesASnapshotOnlyIfTheTreeChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := c.resumed[1]
-	if want := strings.Repeat("c", 40); got.SourceSnapshot != want || got.SourceBranch != "feature" || len(c.pushed) != 1 || c.pushed[0] != want {
+	if want := strings.Repeat("c", 40); got.SourceSnapshot != want || got.SourceBranch != "feature" || len(c.pushed) != 2 || c.pushed[1] != want {
 		t.Fatalf("changed tree: resume %+v, pushed %v", got, c.pushed)
 	}
 	if rec, _ := local.State.Get(sessionID); rec.Tree != "tree-2" {
@@ -435,7 +437,8 @@ func TestHandto_ARetryAfterALostResponseCreatesNoSecondTask(t *testing.T) {
 		t.Fatalf("created %d, %+v", len(c.created), res)
 	}
 	first, retry := c.sent[0], c.sent[len(c.sent)-1]
-	if retry.RequestID != first.RequestID || *retry.NativeSeed != *first.NativeSeed || retry.Name != first.Name || retry.Prompt != first.Prompt {
+	if retry.RequestID != first.RequestID || *retry.NativeSeed != *first.NativeSeed || retry.Name != first.Name || retry.Prompt != first.Prompt ||
+		retry.SourceSnapshot != first.SourceSnapshot || retry.SourceBranch != first.SourceBranch || c.takes != 1 {
 		t.Fatalf("the retry is not the same request:\n%+v\n%+v", first, retry)
 	}
 	if rec, _ := local.State.Get(sessionID); rec.Task != "tsk_1" || rec.HandedOff == nil ||

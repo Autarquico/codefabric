@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -38,9 +40,9 @@ func (o handoffOverrides) requireTerminal(stdin io.Reader, session, to string) e
 func (o handoffOverrides) command(session, to string) string {
 	cmd := "cf handoff"
 	if session != "" {
-		cmd += " --session " + session
+		cmd += " --session " + shellQuote(session)
 	}
-	cmd += " --to " + to
+	cmd += " --to " + shellQuote(to)
 	if o.force {
 		cmd += " --force"
 	}
@@ -48,6 +50,17 @@ func (o handoffOverrides) command(session, to string) string {
 		cmd += " --allow-sensitive-session"
 	}
 	return cmd
+}
+
+var plainShellWord = regexp.MustCompile(`^[A-Za-z0-9_./:=@%+,-]+$`)
+
+// shellQuote is s as one word of a POSIX shell: as it is when it needs no quoting,
+// else in single quotes, which take everything literally.
+func shellQuote(s string) string {
+	if plainShellWord.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func handoffFromClient(cmd *cobra.Command, opts Options, session, to string, o handoffOverrides) error {

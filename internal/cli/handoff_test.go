@@ -171,3 +171,13 @@ func TestHandoffError_NamesTheCommandThatLiftsTheGuard(t *testing.T) {
 		t.Errorf("%v\n%v", handed, secret)
 	}
 }
+
+func TestHandoffError_QuotesWhatTheUserWillPasteIntoAShell(t *testing.T) {
+	err := handoffError(&csession.HandedOffError{ID: "s", Task: "t"}, "s-1", "w; touch x #")
+	if want := "cf handoff --session s-1 --to 'w; touch x #' --force"; !strings.Contains(err.Error(), want) {
+		t.Errorf("%v does not contain %s", err, want)
+	}
+	if got := shellQuote("it's"); got != `'it'\''s'` {
+		t.Errorf("shellQuote = %s", got)
+	}
+}

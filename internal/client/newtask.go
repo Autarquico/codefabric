@@ -30,13 +30,22 @@ func (c *Client) NewTask(ctx context.Context, dir string, req v1.CreateTaskReque
 		return v1.CreateTaskResponse{}, err
 	}
 	req.Project = project.ID
-	req.ResolvedRef, req.SourceCommit, req.SourceSnapshot, req.SourceBranch = "", "", "", ""
+	// A caller that took and pushed the snapshot itself (a handoff, which must send the
+	// same commit again on a replay) names it; anything else here is made anew.
+	sent := !req.Snapshot && req.SourceSnapshot != ""
+	if sent {
+		req.SourceCommit, req.ResolvedRef = req.SourceSnapshot, first(req.SourceBranch, project.DefaultBranch)
+	} else {
+		req.ResolvedRef, req.SourceCommit, req.SourceSnapshot, req.SourceBranch = "", "", "", ""
+	}
 	var gitErr error
-	if req.Snapshot {
+	switch {
+	case sent:
+	case req.Snapshot:
 		if err := c.snapshotSource(ctx, dir, project, &req); err != nil {
 			return v1.CreateTaskResponse{}, err
 		}
-	} else if !req.NoStart {
+	case !req.NoStart:
 		ref := first(req.SourceRef, project.DefaultBranch)
 		commit, err := gitctx.ResolveRef(ctx, dir, remoteFor(ctx, dir, project), ref)
 		switch {

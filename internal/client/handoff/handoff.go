@@ -138,27 +138,30 @@ func create(ctx context.Context, c Controller, state session.State, ref session.
 		if err != nil {
 			return v1.Task{}, "", "", err
 		}
-		// The tree the Task is told about is that of this first snapshot: a replay
-		// reports it, whatever the files are by then.
+		// The snapshot is taken once, here: the Task starts from this very commit, and
+		// a replay sends it again whatever the files are by then.
 		snap, err := c.TakeSnapshot(ctx, req.Dir)
 		if err != nil {
+			return v1.Task{}, "", "", err
+		}
+		if err := c.PushSnapshot(ctx, req.Dir, project.ID, snap.Commit); err != nil {
 			return v1.Task{}, "", "", err
 		}
 		p = &session.Pending{
 			RequestID: newRequestID(), Worker: req.Worker, Tree: snap.Tree,
 			Name: TaskName(last, ref.ID), Prompt: Prompt(last),
 			SeedAdapter: seed.Adapter, SeedVersion: seed.AdapterVersion, SeedDigest: seed.Digest,
+			SnapshotCommit: snap.Commit, SnapshotBranch: snap.Branch,
 		}
 		if err := state.SetPending(ref.ID, *p); err != nil {
 			return v1.Task{}, "", "", err
 		}
 	}
 	sent := v1.NativeStateRef{Adapter: p.SeedAdapter, AdapterVersion: p.SeedVersion, Digest: p.SeedDigest}
-	var snapshot v1.SnapshotReport
 	out, err := c.NewTask(ctx, req.Dir, v1.CreateTaskRequest{
 		RequestID: p.RequestID,
 		Project:   project.ID, Name: p.Name, Prompt: p.Prompt,
-		Mode: domain.ModeInteractive, Snapshot: true, SnapshotReport: &snapshot, NativeSeed: &sent,
+		Mode: domain.ModeInteractive, SourceSnapshot: p.SnapshotCommit, SourceBranch: p.SnapshotBranch, NativeSeed: &sent,
 		Requirements: v1.Requirements{Harness: ref.Adapter, Workers: v1.WorkerPreferences{Require: []string{req.Worker}}},
 	})
 	if err != nil {
