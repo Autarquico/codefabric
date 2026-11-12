@@ -88,7 +88,7 @@ func TestSeed_ARunWithoutCheckpointResumesTheSessionOfItsClient(t *testing.T) {
 		t.Fatalf("starts = %d, resumes = %d", len(r.h.starts), len(r.h.resumes))
 	}
 	got := r.h.resumes[0]
-	if string(got.cp.Data) != seedArchive || got.run.Prompt != harness.ContinuePrompt {
+	if string(got.cp.Data) != seedArchive || got.run.Prompt != "fix the build" {
 		t.Errorf("resumed %q with %q", got.cp.Data, got.run.Prompt)
 	}
 	if len(sc.opens) != 1 || sc.opens[0] != k.RunID || len(r.ctrl.opens) != 0 {
@@ -96,6 +96,16 @@ func TestSeed_ARunWithoutCheckpointResumesTheSessionOfItsClient(t *testing.T) {
 	}
 	if got := r.run(k).SessionID; got != seedSession {
 		t.Errorf("session persisted = %q", got)
+	}
+}
+
+// A resume or a move has a parent, and what it ran already is not asked again.
+func TestSeed_AResumeOfATaskContinuesWithTheGenericPrompt(t *testing.T) {
+	r, sc := newSeedRig(t)
+	seededRun(r, v1.Continuation{ParentRunID: "run_parent", Seed: seedRef(sc.seed)})
+
+	if len(r.h.resumes) != 1 || r.h.resumes[0].run.Prompt != harness.ContinuePrompt {
+		t.Fatalf("resumes = %+v", r.h.resumes)
 	}
 }
 

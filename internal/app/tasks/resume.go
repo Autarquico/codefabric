@@ -65,15 +65,19 @@ func (s *Service) ResumeIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 		return v1.ResumeTaskResponse{}, domain.NewError(domain.CodeInvalidTransition,
 			fmt.Sprintf("task %s is %s: only a deferred Task can be resumed", task.Name, task.State), map[string]any{"state": string(task.State)})
 	}
+	snap, err := snapshotOf(req)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
 	cp, err := lastCheckpoint(ctx, tx, parent)
+	if snap != nil && errors.Is(err, errNoCheckpoint) {
+		// The Run starts from the tree and the session of the client: it needs no checkpoint.
+		cp, err = store.Checkpoint{}, nil
+	}
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
 	owner, err := store.ProjectByID(ctx, tx, task.ProjectID)
-	if err != nil {
-		return v1.ResumeTaskResponse{}, err
-	}
-	snap, err := snapshotOf(req)
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
@@ -232,6 +236,8 @@ func latestRun(ctx context.Context, q store.Querier, task store.Task) (store.Run
 	return all[len(all)-1], nil // ordered by short ID
 }
 
+var errNoCheckpoint = domain.NewError(domain.CodeInvalidTransition, "the suspended Run has no published checkpoint to continue from", nil)
+
 // lastCheckpoint is the last checkpoint published by the Run.
 func lastCheckpoint(ctx context.Context, q store.Querier, run store.Run) (store.Checkpoint, error) {
 	published, err := store.CheckpointsOfRun(ctx, q, run.ID)
@@ -239,7 +245,7 @@ func lastCheckpoint(ctx context.Context, q store.Querier, run store.Run) (store.
 		return store.Checkpoint{}, err
 	}
 	if len(published) == 0 {
-		return store.Checkpoint{}, domain.NewError(domain.CodeInvalidTransition, "the suspended Run has no published checkpoint to continue from", nil)
+		return store.Checkpoint{}, errNoCheckpoint
 	}
 	return published[len(published)-1], nil
 }

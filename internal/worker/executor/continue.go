@@ -116,7 +116,7 @@ func (e *Executor) launchOf(ctx context.Context, adapter harness.Adapter, r stat
 		}
 		if cp != nil {
 			native := run
-			native.Prompt = harness.ContinuePrompt
+			native.Prompt = seededPrompt(c, run.Prompt)
 			l, err := adapter.Resume(ctx, e.o.Host, native, *cp)
 			if err == nil {
 				e.log.InfoContext(ctx, "a Run continues the session its client seeded it with", "run", r.RunID)
@@ -162,6 +162,16 @@ func (e *Executor) launchOf(ctx context.Context, adapter harness.Adapter, r stat
 		run.Prompt = continuationPrompt(run.Prompt, c.Summary)
 	}
 	return adapter.Start(ctx, e.o.Host, run)
+}
+
+// seededPrompt is what a Run resumed on the session of a client is told: the prompt of
+// its Task when the Task began with that session (`cf do --session <id> "..."`), and
+// the generic one for a resume or a move, whose prompt is the one the parent already ran.
+func seededPrompt(c *v1.Continuation, prompt string) string {
+	if c.ParentRunID == "" && strings.TrimSpace(prompt) != "" {
+		return prompt
+	}
+	return harness.ContinuePrompt
 }
 
 // nativeCheckpoint downloads the native state of the checkpoint under the lease

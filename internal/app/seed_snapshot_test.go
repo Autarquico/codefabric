@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/controller/store"
 
@@ -54,6 +55,27 @@ func TestScenario_ResumeDesdeSnapshot(t *testing.T) {
 	must(t, err)
 	if parent.LineageNativeSeed != nil {
 		t.Errorf("the parent shows a seed: %+v", parent.LineageNativeSeed)
+	}
+}
+
+// A Run lost before it published any checkpoint can be continued from the snapshot and
+// the session of the client: they are the whole of what the new Run needs.
+func TestScenario_ResumeDesdeSnapshotDeUnRunPerdidoSinCheckpoint(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedClaudeRun(e.joinWorker("alpha", harnessWorkerCaps("2.1.0")))
+	e.clock.Advance(31 * time.Minute)
+	if n := e.sweepLost(); n != 1 {
+		t.Fatalf("lost = %d", n)
+	}
+	seed := e.seedUploaded(e.owner, "mine")
+
+	_, err := e.resumeWith(e.owner, r, v1.ResumeTaskRequest{})
+	wantCode(t, err, domain.CodeInvalidTransition) // without a snapshot, a checkpoint is needed
+	snapshot := strings.Repeat("a", 40)
+	out, err := e.resumeWith(e.owner, r, v1.ResumeTaskRequest{NativeSeed: seed, SourceSnapshot: snapshot})
+	must(t, err)
+	if run := e.storedRun(out.RunID); run.SourceCommit != snapshot || run.LineageCheckpoint != "" {
+		t.Fatalf("run = %+v", run)
 	}
 }
 
