@@ -304,14 +304,14 @@ func TestSession_ImportOverwriteRemovesSubagentsTheNewArchiveLacks(t *testing.T)
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	for name, data := range map[string]string{
-		"manifest.json":          `{"adapter":"claude-code","session_id":"` + testSessionID + `","cwd":"/a","lines":1}`,
-		testSessionID + ".jsonl": "{\"type\":\"user\",\"cwd\":\"/a\"}\n",
+	for _, f := range []struct{ name, data string }{ // the manifest goes first
+		{"manifest.json", `{"adapter":"claude-code","session_id":"` + testSessionID + `","cwd":"/a","lines":1}`},
+		{testSessionID + ".jsonl", "{\"type\":\"user\",\"cwd\":\"/a\"}\n"},
 	} {
-		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}); err != nil {
+		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: 0o644, Size: int64(len(f.data))}); err != nil {
 			t.Fatal(err)
 		}
-		_, _ = tw.Write([]byte(data))
+		_, _ = tw.Write([]byte(f.data))
 	}
 	_ = tw.Close()
 	_ = gz.Close()
