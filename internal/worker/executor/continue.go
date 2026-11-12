@@ -48,30 +48,35 @@ func validContinuation(c v1.Continuation) bool {
 // relaySource is how the source of a Run that continues a checkpoint is
 // fetched: from the relay, with the read token of the lease of the Run. Nothing
 // of it goes to the origin, and the credential of the origin is not asked for.
-func (e *Executor) relaySource(ctx context.Context, r state.Run, c *v1.Continuation) (*gitops.RelaySource, error) {
+func (e *Executor) relaySource(ctx context.Context, r state.Run, ref string) (*gitops.RelaySource, error) {
 	tok, err := e.o.Controller.RelayToken(ctx, r.RunID, r.LeaseEpoch)
 	if err != nil {
 		return nil, fmt.Errorf("%w: the token of the relay: %w", errPrepareLater, err)
 	}
-	return &gitops.RelaySource{Ref: c.Ref, Auth: gitops.PushAuth{
+	return &gitops.RelaySource{Ref: ref, Auth: gitops.PushAuth{
 		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
 		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
 	}}, nil
 }
 
 // sourceAccess is what the source of a Run is fetched with: the credential of
-// the origin, or for a Run that continues a checkpoint the token of the relay.
+// the origin, or for a Run that continues a checkpoint, or starts from the
+// snapshot of a client, the token of the relay.
 func (e *Executor) sourceAccess(ctx context.Context, r state.Run, og *originAccess) (*gitops.OriginAuth, *gitops.RelaySource, error) {
 	c, err := continuationOf(r)
 	if err != nil {
 		return nil, nil, err
 	}
-	if c == nil {
-		auth, err := og.credential(ctx)
-		return auth, nil, err
+	if c != nil {
+		relay, err := e.relaySource(ctx, r, c.Ref)
+		return nil, relay, err
 	}
-	relay, err := e.relaySource(ctx, r, c)
-	return nil, relay, err
+	if digest := snapshotOf(r); digest != "" {
+		relay, err := e.relaySource(ctx, r, domain.SnapshotRef(digest))
+		return nil, relay, err
+	}
+	auth, err := og.credential(ctx)
+	return auth, nil, err
 }
 
 // launchOf builds the Launch of a Run: Start for any Run, and for one that

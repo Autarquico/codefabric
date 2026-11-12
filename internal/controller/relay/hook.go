@@ -21,6 +21,9 @@ import (
 const (
 	envAllowedRef  = "CF_RELAY_ALLOWED_REF"
 	envExpectedOID = "CF_RELAY_EXPECTED_OID"
+	// envSnapshots is "1" for the push of a client: it may create any
+	// refs/cf/snapshots/<digest>, at the commit the digest names, and nothing else.
+	envSnapshots = "CF_RELAY_SNAPSHOTS"
 )
 
 var zeroOID = regexp.MustCompile(`^0{40}(?:0{24})?$`)
@@ -39,6 +42,9 @@ type Git interface {
 // Anything missing from the environment refuses: the hook fails closed.
 func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 	allowed, expected := getenv(envAllowedRef), getenv(envExpectedOID)
+	if getenv(envSnapshots) == "1" && allowed == "" && expected == "" {
+		return preReceiveSnapshot(stdin, git)
+	}
 	if allowed == "" || expected == "" {
 		return deny("this request is not authorised to push")
 	}
@@ -52,17 +58,9 @@ func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 		!isBranch && !domain.ValidOrphanRef(allowed) && !domain.ValidCheckpointRef(allowed):
 		return deny("this request is not authorised to push")
 	}
-	var updates [][3]string
-	sc := bufio.NewScanner(io.LimitReader(stdin, 1<<20))
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) != 3 {
-			return deny("malformed update")
-		}
-		updates = append(updates, [3]string{fields[0], fields[1], fields[2]})
-	}
-	if err := sc.Err(); err != nil {
-		return deny("malformed update")
+	updates, err := readUpdates(stdin)
+	if err != nil {
+		return err
 	}
 	if len(updates) != 1 {
 		return deny("a push updates exactly one ref: " + allowed)
@@ -92,6 +90,52 @@ func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 		if !ff {
 			return deny("updating " + allowed + " would not be a fast-forward")
 		}
+	}
+	return nil
+}
+
+// readUpdates reads the `<old> <new> <ref>` lines git hands to the hook.
+func readUpdates(stdin io.Reader) ([][3]string, error) {
+	var updates [][3]string
+	sc := bufio.NewScanner(io.LimitReader(stdin, 1<<20))
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) != 3 {
+			return nil, deny("malformed update")
+		}
+		updates = append(updates, [3]string{fields[0], fields[1], fields[2]})
+	}
+	if err := sc.Err(); err != nil {
+		return nil, deny("malformed update")
+	}
+	return updates, nil
+}
+
+// preReceiveSnapshot decides the push of a client: exactly one update, which
+// creates refs/cf/snapshots/<digest> at the commit whose ID is the digest.
+func preReceiveSnapshot(stdin io.Reader, git Git) error {
+	updates, err := readUpdates(stdin)
+	if err != nil {
+		return err
+	}
+	if len(updates) != 1 {
+		return deny("a push updates exactly one ref: a snapshot")
+	}
+	oldOID, newOID, ref := updates[0][0], updates[0][1], updates[0][2]
+	switch {
+	case !domain.ValidSnapshotRef(ref):
+		return deny("this push may only create refs/cf/snapshots/<digest>")
+	case !domain.ValidCommitID(oldOID) || !domain.ValidCommitID(newOID):
+		return deny("malformed update")
+	case !zeroOID.MatchString(oldOID):
+		return deny(ref + " exists: it is never moved")
+	case zeroOID.MatchString(newOID):
+		return deny("deleting " + ref + " is not allowed")
+	case ref != domain.SnapshotRef(newOID):
+		return deny("the digest of a snapshot is the ID of its commit")
+	}
+	if typ, err := git.ObjectType(newOID); err != nil || typ != "commit" {
+		return deny(ref + " must point to a commit")
 	}
 	return nil
 }

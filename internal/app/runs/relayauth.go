@@ -11,6 +11,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/refs"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -30,7 +31,9 @@ type relayClaims struct {
 	Expires int64     `json:"x"` // Unix nanoseconds
 	// Scope is "" for the token of a lease, scopeOrphan for that of an orphan
 	// and scopeCheckpoint for that of a checkpoint; the last two may only
-	// create their ref at Commit.
+	// create their ref at Commit. scopeClient is the token of a client: Worker
+	// then holds the ID of the client, and the token reads the Project and
+	// creates snapshots in it.
 	Scope  string `json:"s,omitempty"`
 	Commit string `json:"c,omitempty"`
 	// Checkpoint is the checkpoint a scopeCheckpoint token creates the ref of.
@@ -40,6 +43,7 @@ type relayClaims struct {
 const (
 	scopeOrphan     = "orphan"
 	scopeCheckpoint = "checkpoint"
+	scopeClient     = "client"
 )
 
 // RelayGrant is what AuthorizeRelay concedes to one request.
@@ -53,6 +57,10 @@ type RelayGrant struct {
 	Branch      string
 	Ref         string
 	ExpectedOID string
+	// Client is the grant of a client: it reads branches of Tasks and
+	// checkpoints, and with Write creates refs/cf/snapshots/<digest> (Snapshots).
+	Client    bool
+	Snapshots bool
 }
 
 func (s *Service) sign(c relayClaims) string {
@@ -209,7 +217,14 @@ func (s *Service) AuthorizeRelay(ctx context.Context, by pki.Session, project st
 	if kind, _, err := domain.ParseID(project); err != nil || kind != domain.KindProject {
 		return RelayGrant{}, errRelayDenied()
 	}
+	// A client uses the token of a client and a Worker the others: a token
+	// never crosses over.
+	if (by.Principal.Kind == domain.KindClient) != (claims.Scope == scopeClient) {
+		return RelayGrant{}, errRelayDenied()
+	}
 	switch claims.Scope {
+	case scopeClient:
+		return s.authorizeClient(ctx, by, claims, project, write, now)
 	case scopeOrphan:
 		return s.authorizeOrphan(ctx, by, claims, project, write, now)
 	case scopeCheckpoint:
@@ -448,4 +463,58 @@ func (s *Service) authorizeCheckpoint(ctx context.Context, by pki.Session, claim
 		return nil
 	})
 	return grant, err
+}
+
+// MintClientRelayToken gives a client a token for the git relay of a Project:
+// it reads the branches of Tasks and the checkpoints, and creates snapshots
+// (§22.2). Every authenticated client may, since the model has no scoping of
+// clients by Project (§16.8), but the Project must exist.
+func (s *Service) MintClientRelayToken(ctx context.Context, by pki.Session, req v1.ClientRelayTokenRequest) (v1.RelayTokenResponse, error) {
+	if s.relay == nil {
+		return v1.RelayTokenResponse{}, domain.NewError(domain.CodeInternal, "the Controller has no relay", nil)
+	}
+	var out v1.RelayTokenResponse
+	err := s.db.Read(ctx, func(q store.Querier) error {
+		now := s.clock.Now()
+		if _, err := pki.RequireCaller(ctx, q, by, now); err != nil {
+			return err
+		}
+		project, err := refs.Project(ctx, q, req.Project)
+		if err != nil {
+			return err
+		}
+		expires := now.Add(RelayTokenTTL)
+		out = v1.RelayTokenResponse{
+			Token: s.sign(relayClaims{
+				Worker: by.Principal.ID, Project: project, Expires: expires.UnixNano(), Scope: scopeClient,
+			}),
+			ExpiresAt: expires, Path: v1.RelayPathPrefix + string(project) + ".git", Write: true,
+		}
+		return nil
+	})
+	return out, err
+}
+
+// authorizeClient decides a request made with the token of a client: the
+// caller must be the client it was issued to, and the Project must still exist.
+// A read is conceded as such; a write only creates snapshots, which the hook
+// holds to refs/cf/snapshots/<digest>.
+func (s *Service) authorizeClient(ctx context.Context, by pki.Session, claims relayClaims, project string, write bool, now time.Time) (RelayGrant, error) {
+	if claims.Worker != by.Principal.ID {
+		return RelayGrant{}, errRelayDenied()
+	}
+	err := s.db.Read(ctx, func(q store.Querier) error {
+		if _, err := pki.RequireCaller(ctx, q, by, now); err != nil {
+			return err
+		}
+		_, err := store.ProjectByID(ctx, q, domain.ID(project))
+		if errors.Is(err, store.ErrNotFound) {
+			return errRelayDenied()
+		}
+		return err
+	})
+	if err != nil {
+		return RelayGrant{}, err
+	}
+	return RelayGrant{Project: domain.ID(project), Worker: by.Principal.ID, Client: true, Write: write, Snapshots: write}, nil
 }

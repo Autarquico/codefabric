@@ -47,6 +47,12 @@ type Grant struct {
 	Branch      string
 	Ref         string
 	ExpectedOID string
+	// Client marks the request of a client, which sees only the branches of
+	// Tasks and the checkpoints; with Snapshots it may also create
+	// refs/cf/snapshots/<digest>, which the hook checks (Ref and ExpectedOID
+	// are not set for it).
+	Client    bool
+	Snapshots bool
 }
 
 // allowedRef is the one ref a write may touch.
@@ -100,7 +106,7 @@ var (
 // The Authorization header of the request is never passed on: the environment
 // of the hooks is the environment of the child.
 func (r *Relay) Serve(w http.ResponseWriter, req *http.Request, ep Endpoint, g Grant) error {
-	if ep.writes() && (!g.Write || g.allowedRef() == "" || g.ExpectedOID == "") {
+	if ep.writes() && (!g.Write || (!g.Snapshots && (g.allowedRef() == "" || g.ExpectedOID == ""))) {
 		return errors.New("relay: a write was not granted")
 	}
 	// One deadline for the whole request, the upload included, on real time: it
@@ -262,6 +268,18 @@ func (r *Relay) spool(req *http.Request, rc *http.ResponseController, ep Endpoin
 	return f, n, nil
 }
 
+// clientConfig is what a client is shown and may touch in the relay: it reads
+// the branches of Tasks and the checkpoints, and only the refs of snapshots
+// are left for it to create (the pre-receive hook decides which).
+var clientConfig = [][2]string{
+	{"uploadpack.hideRefs", "refs"},
+	{"uploadpack.hideRefs", "!refs/heads/cf"},
+	{"uploadpack.hideRefs", "!refs/cf/checkpoints"},
+	{"receive.hideRefs", "refs/heads"},
+	{"receive.hideRefs", "refs/cf/checkpoints"},
+	{"receive.hideRefs", "refs/cf/orphans"},
+}
+
 // cgiEnv is the whole environment of http-backend and, through it, of
 // receive-pack and the hook. The Authorization header is not in it, and nothing
 // that comes from the peer is, apart from the validated few below.
@@ -273,10 +291,18 @@ func (r *Relay) cgiEnv(req *http.Request, ep Endpoint, g Grant, size int64) ([]s
 		"REMOTE_USER="+string(g.Worker), // what turns receive-pack on for the request
 		"REMOTE_ADDR=0.0.0.0",
 		"REQUEST_METHOD="+req.Method,
-		"GIT_CONFIG_COUNT=2",
-		"GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0="+r.hooksDir(),
-		"GIT_CONFIG_KEY_1=receive.maxInputSize", "GIT_CONFIG_VALUE_1="+strconv.FormatInt(r.cfg.MaxPushBytes, 10),
 	)
+	config := [][2]string{
+		{"core.hooksPath", r.hooksDir()},
+		{"receive.maxInputSize", strconv.FormatInt(r.cfg.MaxPushBytes, 10)},
+	}
+	if g.Client {
+		config = append(config, clientConfig...)
+	}
+	env = append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(len(config)))
+	for i, kv := range config {
+		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
+	}
 	switch ep {
 	case InfoRefsUpload, InfoRefsReceive:
 		service := "git-upload-pack"
@@ -302,11 +328,16 @@ func (r *Relay) cgiEnv(req *http.Request, ep Endpoint, g Grant, size int64) ([]s
 			return nil, fmt.Errorf("%w: content encoding %q", ErrBadBody, enc)
 		}
 	}
-	if p := req.Header.Get("Git-Protocol"); protocolHeader.MatchString(p) {
+	// Protocol v2 lets a client ask for any object it names; the earlier
+	// versions only for what the (filtered) advertisement showed.
+	if p := req.Header.Get("Git-Protocol"); protocolHeader.MatchString(p) && (!g.Client || p != "version=2") {
 		env = append(env, "HTTP_GIT_PROTOCOL="+p)
 	}
-	if ep.writes() {
-		env = append(env, "CF_RELAY_ALLOWED_REF="+g.allowedRef(), "CF_RELAY_EXPECTED_OID="+g.ExpectedOID)
+	switch {
+	case ep.writes() && g.Snapshots:
+		env = append(env, envSnapshots+"=1")
+	case ep.writes():
+		env = append(env, envAllowedRef+"="+g.allowedRef(), envExpectedOID+"="+g.ExpectedOID)
 	}
 	return env, nil
 }

@@ -10,20 +10,21 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-// RelaySource is where the source of a Run that continues a checkpoint comes
-// from: the ref of the checkpoint in the git relay of the Controller, which
-// holds commits that were never pushed to the origin. The token is the read
-// token of the Run's lease; it goes to git in the environment, as in a push.
+// RelaySource is where the source of a Run that continues a checkpoint, or
+// starts from the snapshot of a client, comes from: that ref in the relay of
+// the Controller, which holds commits that were never pushed to the origin. The
+// token is the read token of the Run's lease; it goes to the transport in the
+// environment, as in a push.
 type RelaySource struct {
-	// Ref is refs/cf/checkpoints/<checkpoint id>.
+	// Ref is refs/cf/checkpoints/<checkpoint id> or refs/cf/snapshots/<digest>.
 	Ref  string
 	Auth PushAuth
 }
 
 func (r *RelaySource) check() error {
 	switch {
-	case !domain.ValidCheckpointRef(r.Ref):
-		return errors.New("gitops: the source of this Run is not a checkpoint ref")
+	case !domain.ValidCheckpointRef(r.Ref) && !domain.ValidSnapshotRef(r.Ref):
+		return errors.New("gitops: the source of this Run is not a checkpoint or snapshot ref")
 	case r.Auth.URL == "" || r.Auth.Token == "" || r.Auth.Cert == "" || r.Auth.Key == "" || r.Auth.CA == "":
 		return errors.New("gitops: the credentials for the relay are incomplete")
 	}
@@ -77,7 +78,7 @@ func (g *Git) fetchRelay(ctx context.Context, bare string, s SourceSpec) error {
 			if g.hasCommit(ctx, bare, s.SourceCommit) {
 				return nil
 			}
-			return fmt.Errorf("gitops: the checkpoint %s of the relay does not hold the commit %s", s.Relay.Ref, s.SourceCommit[:12])
+			return fmt.Errorf("gitops: the ref %s of the relay does not hold the commit %s", s.Relay.Ref, s.SourceCommit[:12])
 		}
 		lastFailure = clean(err.Error(), []string{a.Token})
 		if ctx.Err() != nil {
@@ -89,5 +90,5 @@ func (g *Git) fetchRelay(ctx context.Context, bare string, s SourceSpec) error {
 			delay *= 2
 		}
 	}
-	return fmt.Errorf("gitops: the checkpoint %s is not available from the relay: %s", s.Relay.Ref, lastFailure)
+	return fmt.Errorf("gitops: the ref %s is not available from the relay: %s", s.Relay.Ref, lastFailure)
 }

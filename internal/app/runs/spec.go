@@ -163,6 +163,8 @@ type specSource struct {
 	Ref      string `json:"ref"`
 	Commit   string `json:"commit"`
 	Snapshot string `json:"snapshot"`
+	// Branch is the local branch a snapshot started from; absent for any other Run.
+	Branch string `json:"branch,omitempty"`
 }
 
 type specRequirements struct {
@@ -218,7 +220,7 @@ func newSpec(in Inherited, origins Origins, snapshot string, source Source, envi
 	spec := runSpec{
 		Schema:      domain.RunSpecSchemaWith(secrets != nil, repoConfig),
 		Prompt:      in.Prompt,
-		Source:      specSource{Ref: source.Ref, Commit: source.Commit, Snapshot: snapshot},
+		Source:      specSource{Ref: source.Ref, Commit: source.Commit, Snapshot: snapshot, Branch: source.Branch},
 		Mode:        in.Mode,
 		Workflow:    in.Workflow,
 		Environment: in.Environment,

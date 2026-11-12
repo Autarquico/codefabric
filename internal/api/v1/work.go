@@ -164,20 +164,30 @@ type Task struct {
 // ResolvedRef and SourceCommit are not inputs of the user, so they are outside
 // the idempotency payload: repeating a request_id needs neither.
 type CreateTaskRequest struct {
-	RequestID    string            `json:"request_id,omitempty"`
-	Project      string            `json:"project"`
-	Name         string            `json:"name,omitempty"`
-	Prompt       string            `json:"prompt"`
-	NoStart      bool              `json:"no_start,omitempty"`
-	SourceRef    string            `json:"source_ref,omitempty"`
-	ResolvedRef  string            `json:"resolved_ref,omitempty"`
-	SourceCommit string            `json:"source_commit,omitempty"`
-	Mode         domain.Mode       `json:"mode,omitempty"`
-	Workflow     string            `json:"workflow,omitempty"`
-	Environment  string            `json:"environment,omitempty"`
-	Requirements Requirements      `json:"requirements,omitempty"`
-	Completion   domain.Completion `json:"completion,omitempty"`
-	Retry        *Retry            `json:"retry,omitempty"`
+	RequestID    string `json:"request_id,omitempty"`
+	Project      string `json:"project"`
+	Name         string `json:"name,omitempty"`
+	Prompt       string `json:"prompt"`
+	NoStart      bool   `json:"no_start,omitempty"`
+	SourceRef    string `json:"source_ref,omitempty"`
+	ResolvedRef  string `json:"resolved_ref,omitempty"`
+	SourceCommit string `json:"source_commit,omitempty"`
+	// Snapshot asks the client to snapshot its working tree and start from
+	// that (cf do --snapshot). It never travels: the client turns it into
+	// SourceSnapshot, SourceBranch and the pair of the source.
+	Snapshot bool `json:"-"`
+	// SourceSnapshot is the digest of a snapshot the client sent to the relay
+	// (§22.2); SourceCommit is then that very commit. SourceBranch is the local
+	// branch the snapshot started from. Like the pair, they are no input of the
+	// user and are outside the idempotency payload.
+	SourceSnapshot string            `json:"source_snapshot,omitempty"`
+	SourceBranch   string            `json:"source_branch,omitempty"`
+	Mode           domain.Mode       `json:"mode,omitempty"`
+	Workflow       string            `json:"workflow,omitempty"`
+	Environment    string            `json:"environment,omitempty"`
+	Requirements   Requirements      `json:"requirements,omitempty"`
+	Completion     domain.Completion `json:"completion,omitempty"`
+	Retry          *Retry            `json:"retry,omitempty"`
 }
 
 // CreateTaskResponse carries the Run too when the Task started.
