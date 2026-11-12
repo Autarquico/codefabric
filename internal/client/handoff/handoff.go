@@ -8,7 +8,7 @@ package handoff
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -89,7 +89,7 @@ func Do(ctx context.Context, c Controller, sessions *session.Local, req Request)
 		task, tree, err = resume(ctx, c, rec, req, exp, seed)
 		res.Resumed = true
 	} else {
-		task, tree, err = create(ctx, c, ref, req, exp, seed)
+		task, tree, err = create(ctx, c, sessions.State, ref, rec, req, exp, seed)
 	}
 	if err != nil {
 		return Result{}, err
@@ -120,23 +120,38 @@ func requireOnline(ctx context.Context, c Controller, name string) error {
 	return domain.NewError(domain.CodeNotFound, fmt.Sprintf("no online Worker named %q; Workers: %s", name, list), nil)
 }
 
-func create(ctx context.Context, c Controller, ref session.Ref, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, string, error) {
+func create(ctx context.Context, c Controller, state session.State, ref session.Ref, rec session.Record, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, string, error) {
 	project, err := c.ProjectForDir(ctx, req.Dir)
 	if err != nil {
 		return v1.Task{}, "", err
 	}
-	if err := upload(ctx, c, project.ID, exp); err != nil {
-		return v1.Task{}, "", err
+	p := rec.Pending
+	if p == nil || p.Worker != req.Worker {
+		// A first try: the seed goes up and the request is remembered before it is
+		// sent, so that a retry after a lost answer is a replay, whatever the
+		// session holds by then.
+		if err := upload(ctx, c, project.ID, exp); err != nil {
+			return v1.Task{}, "", err
+		}
+		last, err := LastUserMessage(ref.Adapter, ref.Transcript)
+		if err != nil {
+			return v1.Task{}, "", err
+		}
+		p = &session.Pending{
+			RequestID: newRequestID(), Worker: req.Worker,
+			Name: TaskName(last, ref.ID), Prompt: Prompt(last),
+			SeedAdapter: seed.Adapter, SeedVersion: seed.AdapterVersion, SeedDigest: seed.Digest,
+		}
+		if err := state.SetPending(ref.ID, *p); err != nil {
+			return v1.Task{}, "", err
+		}
 	}
-	last, err := LastUserMessage(ref.Adapter, ref.Transcript)
-	if err != nil {
-		return v1.Task{}, "", err
-	}
+	sent := v1.NativeStateRef{Adapter: p.SeedAdapter, AdapterVersion: p.SeedVersion, Digest: p.SeedDigest}
 	var snapshot v1.SnapshotReport
 	out, err := c.NewTask(ctx, req.Dir, v1.CreateTaskRequest{
-		RequestID: handoffRequestID(ref.ID, exp.Digest, req.Worker),
-		Project:   project.ID, Name: TaskName(last, ref.ID), Prompt: Prompt(last),
-		Mode: domain.ModeInteractive, Snapshot: true, SnapshotReport: &snapshot, NativeSeed: &seed,
+		RequestID: p.RequestID,
+		Project:   project.ID, Name: p.Name, Prompt: p.Prompt,
+		Mode: domain.ModeInteractive, Snapshot: true, SnapshotReport: &snapshot, NativeSeed: &sent,
 		Requirements: v1.Requirements{Harness: ref.Adapter, Workers: v1.WorkerPreferences{Require: []string{req.Worker}}},
 	})
 	if err != nil {
@@ -175,11 +190,12 @@ func resume(ctx context.Context, c Controller, rec session.Record, req Request, 
 	return out.Task, snap.Tree, nil
 }
 
-// handoffRequestID is the same for the same session, seed and Worker, so that a retry
-// after a lost response is a replay of the first request and not a second Task.
-func handoffRequestID(sessionID, seedDigest, worker string) string {
-	sum := sha256.Sum256([]byte("handoff\x00" + sessionID + "\x00" + seedDigest + "\x00" + worker))
-	return "handoff-" + hex.EncodeToString(sum[:16])
+// newRequestID is the request id of a Task creation, kept in the local record so
+// that a retry sends it again.
+func newRequestID() string {
+	var b [12]byte
+	_, _ = rand.Read(b[:])
+	return "handoff-" + hex.EncodeToString(b[:])
 }
 
 func upload(ctx context.Context, c Controller, project string, exp session.Export) error {

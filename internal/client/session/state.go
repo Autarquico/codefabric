@@ -35,6 +35,21 @@ type Record struct {
 	// HandedOff is set while the work of the session continues somewhere else: writing
 	// in the local session now would make two writers.
 	HandedOff *HandedOff `json:"handed_off,omitempty"`
+	// Pending is the creation of a Task sent and not yet answered: a retry sends
+	// that very request, so the Controller replays it instead of making a second Task.
+	Pending *Pending `json:"pending,omitempty"`
+}
+
+// Pending is a Task creation as it was sent: its request id, where it goes, what
+// it is called and asked, and the seed it carries (already uploaded).
+type Pending struct {
+	RequestID   string `json:"request_id"`
+	Worker      string `json:"worker"`
+	Name        string `json:"name"`
+	Prompt      string `json:"prompt"`
+	SeedAdapter string `json:"seed_adapter"`
+	SeedVersion string `json:"seed_version"`
+	SeedDigest  string `json:"seed_digest"`
 }
 
 // HandedOff is the marker of a session that was handed over.
@@ -106,12 +121,17 @@ func (s State) Link(id, task string) error {
 	return s.update(id, func(r *Record) { r.Task = task })
 }
 
+// SetPending remembers a Task creation before it is sent (see Record.Pending).
+func (s State) SetPending(id string, p Pending) error {
+	return s.update(id, func(r *Record) { r.Pending = &p })
+}
+
 // MarkHandedOff leaves the marker: the session was seeded into task with the seed
 // whose digest is given, and binds it to the Task. tree is that of the snapshot that
 // went with it, "" if none did.
 func (s State) MarkHandedOff(id, task, digest, tree string, at time.Time) error {
 	return s.update(id, func(r *Record) {
-		r.Task, r.Tree, r.Seed = task, tree, digest
+		r.Task, r.Tree, r.Seed, r.Pending = task, tree, digest, nil
 		r.HandedOff = &HandedOff{Task: task, Digest: digest, At: at.UTC()}
 	})
 }

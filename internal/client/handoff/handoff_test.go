@@ -82,6 +82,8 @@ type fakeController struct {
 
 	puts    map[string][]byte // by digest
 	created []v1.CreateTaskRequest
+	// sent is every creation asked for, replays included.
+	sent []v1.CreateTaskRequest
 	// byRequest is what a replayed request_id answers; loseResponse makes the next
 	// NewTask commit the Task and then fail, as a lost response does.
 	byRequest    map[string]v1.Task
@@ -118,6 +120,7 @@ func (f *fakeController) PutNativeSeed(_ context.Context, _, digest string, r io
 }
 
 func (f *fakeController) NewTask(_ context.Context, _ string, req v1.CreateTaskRequest) (v1.CreateTaskResponse, error) {
+	f.sent = append(f.sent, req)
 	if t, ok := f.byRequest[req.RequestID]; ok && req.RequestID != "" {
 		return v1.CreateTaskResponse{Task: t}, nil
 	}
@@ -397,12 +400,21 @@ func TestHandto_ARetryAfterALostResponseCreatesNoSecondTask(t *testing.T) {
 	if _, err := Do(t.Context(), c, local, request("w")); err == nil {
 		t.Fatal("the lost response was not an error")
 	}
+	// By the retry the session has grown: one more turn and a new tool_use.
+	grown := transcript(`{"type":"user","sessionId":"` + sessionID + `","cwd":"` + cwd + `","message":{"role":"user","content":"try again"}}`)
+	if err := os.WriteFile(filepath.Join(local.ConfigDirs["claude-code"], "projects", "-work-repo", sessionID+".jsonl"), []byte(grown), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	res, err := Do(t.Context(), c, local, request("w"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(c.created) != 1 || res.Task == "" || res.Resumed {
 		t.Fatalf("created %d, %+v", len(c.created), res)
+	}
+	first, retry := c.sent[0], c.sent[len(c.sent)-1]
+	if retry.RequestID != first.RequestID || *retry.NativeSeed != *first.NativeSeed || retry.Name != first.Name || retry.Prompt != first.Prompt {
+		t.Fatalf("the retry is not the same request:\n%+v\n%+v", first, retry)
 	}
 	if rec, _ := local.State.Get(sessionID); rec.Task != "tsk_1" || rec.HandedOff == nil {
 		t.Fatalf("record %+v", rec)
