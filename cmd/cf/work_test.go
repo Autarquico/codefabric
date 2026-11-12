@@ -211,10 +211,18 @@ func TestScenario_ProjectsTasksRunsApi_OperacionesFuturas(t *testing.T) {
 	created := ok[v1.CreateTaskResponse](t, "do", "x", "--name", "auth-race")
 	run := created.Run.Short
 
+	// defer, resume and move exist now: on a queued Task none applies.
 	for _, args := range [][]string{
 		{"task", "defer", "auth-race"},
 		{"task", "resume", "auth-race"},
 		{"task", "move", "auth-race", "proxmox"},
+	} {
+		code, out, errOut := cf(t, "", args...)
+		if code == 0 || out != "" || strings.Contains(errOut, "CF_NOT_IMPLEMENTED") {
+			t.Errorf("cf %v: exit %d, stdout %q, stderr %q", args, code, out, errOut)
+		}
+	}
+	for _, args := range [][]string{
 		{"run", "fork", run},
 		{"run", "fork", run, "--workflow", "experimental@4", "--model", "m"},
 		{"run", "promote", run},
@@ -231,10 +239,6 @@ func TestScenario_ProjectsTasksRunsApi_OperacionesFuturas(t *testing.T) {
 	// They did nothing.
 	if task := ok[v1.Task](t, "task", "show", "auth-race"); task.State != domain.TaskQueued {
 		t.Errorf("state = %s", task.State)
-	}
-	// Missing arguments are still a usage error.
-	if code, _, _ := cf(t, "", "task", "move", "auth-race"); code != 2 {
-		t.Errorf("move without a worker: exit %d", code)
 	}
 }
 
