@@ -25,6 +25,11 @@ type Launch struct {
 	// InitialInput is what the wrapper writes to the FIFO as soon as the process
 	// starts: the first lines of its input (the prompt, as the harness reads it).
 	InitialInput string
+	// SessionID is the native session the process runs, when the harness has
+	// one and the adapter knows it. The Worker keeps it in Handle.SessionID.
+	// It is not always SessionID(run, epoch): Resume keeps the id of the
+	// session it resumes.
+	SessionID string
 }
 
 // StructuredInputChecker is implemented by an adapter whose structured input

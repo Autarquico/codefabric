@@ -35,23 +35,87 @@ const (
 // run.AskPermissions the Run is pinned to the default permission mode, reads
 // only the user settings (its own configuration directory), and every
 // permission it asks is the call of the MCP tool PermissionTool on
-// run.PermissionServer.
+// run.PermissionServer. Every Run, in both modes, names its session with
+// SessionID(run.RunID, run.LeaseEpoch).
 func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec) (harness.Launch, error) {
-	if err := a.Capabilities().CheckMode(run.Mode); err != nil {
-		return harness.Launch{}, fmt.Errorf("claude-code: %w", err)
+	if err := a.validate(run); err != nil {
+		return harness.Launch{}, err
 	}
 	if run.Prompt == "" {
 		return harness.Launch{}, errors.New("claude-code: the prompt is empty: there is nothing to ask")
 	}
-	if run.ConfigDir == "" {
-		return harness.Launch{}, errors.New("claude-code: the config directory is empty: Claude Code would read the global one")
-	}
-	if strings.HasPrefix(run.Model, "-") {
-		return harness.Launch{}, fmt.Errorf("claude-code: the model %q starts with '-': it would be read as an option", run.Model)
-	}
-	if err := checkInputSpec(run); err != nil {
+	plan, err := startPlan(run)
+	if err != nil {
 		return harness.Launch{}, err
 	}
+	return a.launch(host, run, plan)
+}
+
+// validate is what Start and Resume refuse of a spec before building anything.
+func (a Adapter) validate(run harness.RunSpec) error {
+	if err := a.Capabilities().CheckMode(run.Mode); err != nil {
+		return fmt.Errorf("claude-code: %w", err)
+	}
+	if run.ConfigDir == "" {
+		return errors.New("claude-code: the config directory is empty: Claude Code would read the global one")
+	}
+	if strings.HasPrefix(run.Model, "-") {
+		return fmt.Errorf("claude-code: the model %q starts with '-': it would be read as an option", run.Model)
+	}
+	return checkInputSpec(run)
+}
+
+// sessionPlan is how a process names its session and what it is asked: the
+// part of the Launch that Start and Resume decide differently.
+type sessionPlan struct {
+	// args are --session-id=<id> or --resume=<id>: the id is glued to its flag
+	// so that it can never be read as an option.
+	args []string
+	// prompt is what the process is asked; empty only for an interactive
+	// process that has nothing to be told.
+	prompt string
+	// sessionID is the session the process runs.
+	sessionID string
+}
+
+// continuePrompt is what a headless process that resumes a session already
+// holding its prompt is asked: the original prompt is not repeated, but the
+// CLI needs one to run.
+const continuePrompt = "Continue where you left off."
+
+// startPlan names the session of the Run: --session-id the first time, and
+// --resume with the same id once Claude Code has written it, which keeps Start
+// idempotent (the CLI refuses a --session-id that is already in use).
+func startPlan(run harness.RunSpec) (sessionPlan, error) {
+	return planFor(run, SessionID(run.RunID, run.LeaseEpoch))
+}
+
+// planFor is the plan of session id. A session that is already there is
+// resumed, and its prompt is not sent again when the session holds it: a
+// process restarted in the same epoch continues, it does not ask twice. Headless
+// it is asked continuePrompt instead; interactive, nothing.
+func planFor(run harness.RunSpec, id string) (sessionPlan, error) {
+	exists, err := sessionExists(run.ConfigDir, run.Worktree, id)
+	if err != nil {
+		return sessionPlan{}, err
+	}
+	if !exists {
+		return sessionPlan{args: []string{"--session-id=" + id}, prompt: run.Prompt, sessionID: id}, nil
+	}
+	plan := sessionPlan{args: []string{"--resume=" + id}, prompt: run.Prompt, sessionID: id}
+	asked, err := sessionHolds(run.ConfigDir, run.Worktree, id, run.Prompt)
+	if err != nil || !asked {
+		return plan, err
+	}
+	plan.prompt = ""
+	if run.Mode == domain.ModeHeadless {
+		plan.prompt = continuePrompt
+	}
+	return plan, nil
+}
+
+// launch builds the process of run as plan says.
+func (a Adapter) launch(host harness.Host, run harness.RunSpec, plan sessionPlan) (harness.Launch, error) {
 	binary, err := host.LookPath(Binary)
 	if err != nil {
 		return harness.Launch{}, fmt.Errorf("claude-code: finding %s in the PATH of the host: %w", Binary, err)
@@ -59,6 +123,7 @@ func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec
 	launch := harness.Launch{
 		Env:       []string{ConfigHomeEnv + "=" + run.ConfigDir},
 		SecretEnv: a.RequiredSecrets(),
+		SessionID: plan.sessionID,
 	}
 	streamed := run.Mode == domain.ModeHeadless && run.StructuredInput
 	switch {
@@ -70,7 +135,7 @@ func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec
 		}
 		launch.StructuredStdout = true
 		launch.InputPath = run.InputPath
-		if launch.InitialInput, err = userMessage(run.Prompt); err != nil {
+		if launch.InitialInput, err = userMessage(plan.prompt); err != nil {
 			return harness.Launch{}, err
 		}
 	default:
@@ -80,11 +145,12 @@ func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec
 		}
 		launch.StructuredStdout = true
 	}
+	launch.Argv = append(launch.Argv, plan.args...)
 	if run.Model != "" {
 		launch.Argv = append(launch.Argv, "--model", run.Model)
 	}
-	if !streamed {
-		launch.Argv = append(launch.Argv, "--", run.Prompt)
+	if !streamed && plan.prompt != "" {
+		launch.Argv = append(launch.Argv, "--", plan.prompt)
 	}
 	return launch, nil
 }
