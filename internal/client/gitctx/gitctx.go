@@ -123,7 +123,7 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 
 // gitEnv is git with more environment variables.
 func gitEnv(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // fixed git subcommands; user values follow "--"
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "-C", dir}, args...)...) //nolint:gosec // fixed git subcommands; user values follow "--"
 	cmd.Env = append(append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C"), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

@@ -16,8 +16,15 @@ import (
 // branch when the tree is clean.
 type repo struct{ dir string }
 
+// gitArgs turns off the hooks and the fsmonitor of the repository: what is checked out
+// comes from a Run, and a tracked core.hooksPath or core.fsmonitor must not run code
+// on this machine.
+func gitArgs(dir string, args []string) []string {
+	return append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "-C", dir}, args...)
+}
+
 func (r repo) run(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", r.dir}, args...)...) //nolint:gosec // fixed git subcommands; user values follow "--" or are validated refs
+	cmd := exec.CommandContext(ctx, "git", gitArgs(r.dir, args)...) //nolint:gosec // fixed git subcommands; user values follow "--" or are validated refs
 	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -35,7 +42,7 @@ func (r repo) run(ctx context.Context, args ...string) (string, error) {
 
 // ok runs git for its exit status alone: true for 0, false for 1, an error otherwise.
 func (r repo) ok(ctx context.Context, args ...string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", r.dir}, args...)...) //nolint:gosec // as run
+	cmd := exec.CommandContext(ctx, "git", gitArgs(r.dir, args)...) //nolint:gosec // as run
 	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
 	err := cmd.Run()
 	var exit *exec.ExitError

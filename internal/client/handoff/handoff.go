@@ -8,6 +8,8 @@ package handoff
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"strings"
@@ -132,7 +134,8 @@ func create(ctx context.Context, c Controller, ref session.Ref, req Request, exp
 	}
 	var snapshot v1.SnapshotReport
 	out, err := c.NewTask(ctx, req.Dir, v1.CreateTaskRequest{
-		Project: project.ID, Name: TaskName(last, ref.ID), Prompt: Prompt(last),
+		RequestID: handoffRequestID(ref.ID, exp.Digest, req.Worker),
+		Project:   project.ID, Name: TaskName(last, ref.ID), Prompt: Prompt(last),
 		Mode: domain.ModeInteractive, Snapshot: true, SnapshotReport: &snapshot, NativeSeed: &seed,
 		Requirements: v1.Requirements{Harness: ref.Adapter, Workers: v1.WorkerPreferences{Require: []string{req.Worker}}},
 	})
@@ -170,6 +173,13 @@ func resume(ctx context.Context, c Controller, rec session.Record, req Request, 
 		return v1.Task{}, "", err
 	}
 	return out.Task, snap.Tree, nil
+}
+
+// handoffRequestID is the same for the same session, seed and Worker, so that a retry
+// after a lost response is a replay of the first request and not a second Task.
+func handoffRequestID(sessionID, seedDigest, worker string) string {
+	sum := sha256.Sum256([]byte("handoff\x00" + sessionID + "\x00" + seedDigest + "\x00" + worker))
+	return "handoff-" + hex.EncodeToString(sum[:16])
 }
 
 func upload(ctx context.Context, c Controller, project string, exp session.Export) error {

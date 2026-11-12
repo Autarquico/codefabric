@@ -28,6 +28,10 @@ type Record struct {
 	// Tree is the tree of the snapshot that went with the last handoff ("" if none did):
 	// the last state of the files the Controller was told about.
 	Tree string `json:"tree,omitempty"`
+	// Seed is the digest of the last seed handed off from this session. Unlike the
+	// marker it outlives the pull: it is what tells a later pull of the same Task
+	// that the Task was seeded from here.
+	Seed string `json:"seed,omitempty"`
 	// HandedOff is set while the work of the session continues somewhere else: writing
 	// in the local session now would make two writers.
 	HandedOff *HandedOff `json:"handed_off,omitempty"`
@@ -107,7 +111,7 @@ func (s State) Link(id, task string) error {
 // went with it, "" if none did.
 func (s State) MarkHandedOff(id, task, digest, tree string, at time.Time) error {
 	return s.update(id, func(r *Record) {
-		r.Task, r.Tree = task, tree
+		r.Task, r.Tree, r.Seed = task, tree, digest
 		r.HandedOff = &HandedOff{Task: task, Digest: digest, At: at.UTC()}
 	})
 }

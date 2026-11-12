@@ -155,7 +155,9 @@ type fakeRemote struct {
 	afterDefer func(*v1.PullPlan)
 	deferred   int
 	pulled     int
-	polls      int
+	// pulledErr, when set, is what MarkTaskPulled answers once.
+	pulledErr error
+	polls     int
 }
 
 func (f *fakeRemote) PullPlan(context.Context, string, string) (v1.PullPlan, error) {
@@ -191,6 +193,10 @@ func (f *fakeRemote) MarkTaskPulled(context.Context, string, string, string) (v1
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pulled++
+	if err := f.pulledErr; err != nil {
+		f.pulledErr = nil
+		return v1.PulledTaskResponse{}, err
+	}
 	return v1.PulledTaskResponse{}, nil
 }
 
@@ -542,5 +548,110 @@ func TestPull_NotAGitRepository(t *testing.T) {
 	_, err := taskpull.Pull(context.Background(), w.remote, "fix-login", taskpull.Options{Dir: t.TempDir(), NoSession: true})
 	if err == nil || !strings.Contains(fmt.Sprint(err), "git repository") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// seededWorld is a world whose Task was seeded from the session of the user.
+func seededWorld(t *testing.T) *world {
+	t.Helper()
+	w := newWorld(t)
+	early := sessionArchive(t, w.mac, sessionID, []string{line(w.mac, "one")})
+	if _, err := (claude.Adapter{}).Import(t.Context(), harness.SessionImport{ConfigDir: w.home, Cwd: w.mac}, bytes.NewReader(early)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.local.State.MarkHandedOff(sessionID, "fix-login", "sha256:seed", "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, w.worker, "feature.go", "package x\n", "feature")
+	w.checkpoint(line("/home/worker/proj", "one"), line("/home/worker/proj", "two"))
+	w.remote.plan.SeedDigest = "sha256:seed"
+	return w
+}
+
+func sessionDirs(t *testing.T, w *world) int {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(w.home, "projects", "*", "*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(files)
+}
+
+func TestPull_ASecondPullOfTheSameTaskKeepsTheSessionId(t *testing.T) {
+	w := seededWorld(t)
+	if _, err := w.pull(taskpull.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := w.pull(taskpull.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Session == nil || res.Session.ID != sessionID || res.Session.NewID {
+		t.Fatalf("the second pull gave %+v", res.Session)
+	}
+	if n := sessionDirs(t, w); n != 1 {
+		t.Fatalf("%d transcripts after two pulls, want 1", n)
+	}
+}
+
+func TestPull_ARetryAfterTheControllerWasNotToldKeepsTheSessionId(t *testing.T) {
+	w := seededWorld(t)
+	w.remote.pulledErr = errors.New("connection reset")
+	if _, err := w.pull(taskpull.Options{}); err == nil {
+		t.Fatal("the failure of MarkTaskPulled was swallowed")
+	}
+	res, err := w.pull(taskpull.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Session == nil || res.Session.ID != sessionID || res.Session.NewID {
+		t.Fatalf("the retry gave %+v", res.Session)
+	}
+	if n := sessionDirs(t, w); n != 1 {
+		t.Fatalf("%d transcripts after the retry, want 1", n)
+	}
+}
+
+// What a Run commits cannot run code here: a tracked core.hooksPath is not honoured.
+func TestPull_AHookOfTheCheckedOutTreeDoesNotRun(t *testing.T) {
+	for name, opts := range map[string]taskpull.Options{"switch": {}, "worktree": {Worktree: "../hooked"}} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			marker := filepath.Join(t.TempDir(), "ran")
+			gitIn(t, w.mac, "config", "core.hooksPath", ".hooks")
+			hook := filepath.Join(w.worker, ".hooks", "post-checkout")
+			write(t, hook, "#!/bin/sh\ntouch '"+marker+"'\n")
+			if err := os.Chmod(hook, 0o700); err != nil { //nolint:gosec // a hook must be executable
+				t.Fatal(err)
+			}
+			gitIn(t, w.worker, "add", "-A")
+			gitIn(t, w.worker, "commit", "-q", "-m", "hook")
+			w.checkpoint()
+			if _, err := w.pull(opts); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Fatal("the post-checkout hook of the pulled tree ran")
+			}
+		})
+	}
+}
+
+// A branch that is at the commit but checked out in another worktree is not switched to:
+// the work goes to the next candidate.
+func TestPull_ABranchAtTheCommitThatAnotherWorktreeHasCheckedOutIsSkipped(t *testing.T) {
+	w := newWorld(t)
+	work := commitFile(t, w.worker, "feature.go", "package x\n", "feature")
+	w.checkpoint()
+	gitIn(t, w.mac, "fetch", "-q", w.worker, "HEAD")
+	gitIn(t, w.mac, "branch", "cf/fix-login", work)
+	gitIn(t, w.mac, "worktree", "add", "-q", filepath.Join(filepath.Dir(w.mac), "other"), "cf/fix-login")
+
+	res, err := w.pull(taskpull.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Branch != "cf/fix-login@r1" || w.head() != work {
+		t.Fatalf("branch %q, head %s", res.Branch, w.head())
 	}
 }

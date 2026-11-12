@@ -150,3 +150,23 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+// The config of a repository cannot make a snapshot run a program: not an fsmonitor.
+func TestTakeSnapshot_DoesNotRunTheFsmonitorOfTheRepository(t *testing.T) {
+	r := newRepo(t)
+	r.write("a.txt", "one\n")
+	r.git("add", "-A")
+	r.commit("first")
+	marker := filepath.Join(t.TempDir(), "ran")
+	script := filepath.Join(t.TempDir(), "monitor.sh")
+	must(t, os.WriteFile(script, []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o700)) //nolint:gosec // the program under test
+	r.git("config", "core.fsmonitor", script)
+	r.write("a.txt", "two\n")
+
+	if _, err := gitctx.TakeSnapshot(t.Context(), r.dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the fsmonitor of the repository ran")
+	}
+}

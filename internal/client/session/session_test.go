@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
 )
@@ -315,10 +317,14 @@ func TestStateRemembersTheTaskAndTheMarker(t *testing.T) {
 	if r, _ := s.Get(claudeID); r.Task != "task-2" || r.HandedOff != nil {
 		t.Fatalf("the binding stays and the marker goes: %+v", r)
 	}
-	if err := s.Link(claudeID, ""); err != nil {
+	other := "22222222-3333-4444-8555-666666666666"
+	if err := s.Link(other, "task-3"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(s.dir, claudeID+".json")); !os.IsNotExist(err) {
+	if err := s.Link(other, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, other+".json")); !os.IsNotExist(err) {
 		t.Fatalf("an empty record leaves a file: %v", err)
 	}
 	if err := s.Link("../x", "t"); err == nil {
@@ -491,5 +497,31 @@ func TestFindClaudeTakesTheTranscriptWrittenLast(t *testing.T) {
 	path, cwd, found, err := findClaude(dir, id)
 	if err != nil || !found || path != newer || cwd != "/repo-worktree" {
 		t.Fatalf("findClaude = %q, %q, %v, %v; want the worktree's transcript", path, cwd, found, err)
+	}
+}
+
+// The id in the manifest of a downloaded archive is not trusted to build a path.
+func TestCheckImportRefusesAManifestWhoseSessionIDIsAPath(t *testing.T) {
+	m := newMachine(t)
+	var buf bytes.Buffer
+	manifest := harness.SessionManifest{Adapter: claude.ID, SessionID: "../../../elsewhere/x", Cwd: workDir, Lines: 1}
+	if err := harness.WriteSessionArchive(&buf, manifest, []byte("{}\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CheckImport(t.Context(), ImportRequest{Archive: buf.Bytes(), Cwd: workDir, SameClient: true}); err == nil {
+		t.Fatal("a manifest with a path as its session id was accepted")
+	}
+}
+
+func TestSeededSessionOutlivesTheMarker(t *testing.T) {
+	s := NewState(filepath.Join(t.TempDir(), "state"))
+	if err := s.MarkHandedOff(claudeID, "task-1", "sha256:ab", "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearHandedOff(claudeID); err != nil {
+		t.Fatal(err)
+	}
+	if id, found, err := s.SeededSession("sha256:ab"); err != nil || !found || id != claudeID {
+		t.Fatalf("%q %v %v", id, found, err)
 	}
 }

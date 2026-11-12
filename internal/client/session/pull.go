@@ -14,7 +14,7 @@ import (
 )
 
 // SeededSession is the session of this machine that was handed off with the seed whose
-// digest is given: it is how a pull knows that the Task was seeded from here and under
+// digest is given, also after its pull cleared the marker: it is how a pull knows that the Task was seeded from here and under
 // which id its session comes back.
 func (s State) SeededSession(digest string) (id string, found bool, err error) {
 	entries, err := os.ReadDir(s.dir)
@@ -34,7 +34,7 @@ func (s State) SeededSession(digest string) (id string, found bool, err error) {
 			continue
 		}
 		var r Record
-		if json.Unmarshal(raw, &r) == nil && r.HandedOff != nil && r.HandedOff.Digest == digest {
+		if json.Unmarshal(raw, &r) == nil && r.Seed == digest {
 			return name, true, nil
 		}
 	}
@@ -59,10 +59,10 @@ func (l *Local) CheckImport(ctx context.Context, req ImportRequest) error {
 	if err != nil {
 		return err
 	}
-	live, err := a.live(l, dir, manifest.SessionID, path)
-	if err != nil && !found {
-		return nil
+	if !found {
+		return ctx.Err()
 	}
+	live, err := a.live(l, dir, manifest.SessionID, path)
 	if err != nil {
 		return err
 	}

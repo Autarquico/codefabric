@@ -82,7 +82,11 @@ type fakeController struct {
 
 	puts    map[string][]byte // by digest
 	created []v1.CreateTaskRequest
-	resumed []v1.ResumeTaskRequest
+	// byRequest is what a replayed request_id answers; loseResponse makes the next
+	// NewTask commit the Task and then fail, as a lost response does.
+	byRequest    map[string]v1.Task
+	loseResponse bool
+	resumed      []v1.ResumeTaskRequest
 
 	// tree is the tree of the working directory; pushed are the snapshot commits sent.
 	tree   string
@@ -114,12 +118,23 @@ func (f *fakeController) PutNativeSeed(_ context.Context, _, digest string, r io
 }
 
 func (f *fakeController) NewTask(_ context.Context, _ string, req v1.CreateTaskRequest) (v1.CreateTaskResponse, error) {
+	if t, ok := f.byRequest[req.RequestID]; ok && req.RequestID != "" {
+		return v1.CreateTaskResponse{Task: t}, nil
+	}
 	f.created = append(f.created, req)
 	if req.SnapshotReport != nil {
 		req.SnapshotReport.Tree = f.tree
 	}
 	t := v1.Task{ID: fmt.Sprintf("tsk_%d", len(f.created)), Name: req.Name, ProjectID: "prj_1"}
 	f.tasks[t.ID] = t
+	if f.byRequest == nil {
+		f.byRequest = map[string]v1.Task{}
+	}
+	f.byRequest[req.RequestID] = t
+	if f.loseResponse {
+		f.loseResponse = false
+		return v1.CreateTaskResponse{}, errors.New("connection reset")
+	}
 	return v1.CreateTaskResponse{Task: t}, nil
 }
 
@@ -372,5 +387,24 @@ func TestTaskNameAndPrompt_AreValidAndShort(t *testing.T) {
 		if n := len([]rune(strings.TrimPrefix(Prompt(msg), "Continue the work of this session where it was left."))); n > 300 {
 			t.Errorf("the prompt of %q is %d characters long", msg, n)
 		}
+	}
+}
+
+// A handoff whose response was lost and that is repeated is a replay, not a second Task.
+func TestHandto_ARetryAfterALostResponseCreatesNoSecondTask(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"))
+	c.loseResponse = true
+	if _, err := Do(t.Context(), c, local, request("w")); err == nil {
+		t.Fatal("the lost response was not an error")
+	}
+	res, err := Do(t.Context(), c, local, request("w"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.created) != 1 || res.Task == "" || res.Resumed {
+		t.Fatalf("created %d, %+v", len(c.created), res)
+	}
+	if rec, _ := local.State.Get(sessionID); rec.Task != "tsk_1" || rec.HandedOff == nil {
+		t.Fatalf("record %+v", rec)
 	}
 }

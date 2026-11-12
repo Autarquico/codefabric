@@ -58,7 +58,7 @@ func (p *puller) place(ctx context.Context, commit string) (placement, error) {
 		case !exists:
 			return placement{branch: name, outcome: Created}, nil
 		case oid == commit:
-			if p.worktreeAsked && checkedOut[name] {
+			if checkedOut[name] && (p.worktreeAsked || name != current) {
 				continue
 			}
 			return placement{branch: name, outcome: Unchanged}, nil

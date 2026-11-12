@@ -8,12 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 )
 
 // maxManifestBytes bounds the manifest an archive starts with.
 const maxManifestBytes = 1 << 20
+
+// canonicalID is the form of the id of a session of either harness: no id of an archive
+// reaches a path unless it has it.
+var canonicalID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // readManifest is the manifest an archive of a session starts with: which harness wrote
 // it and under which id.
@@ -33,7 +38,7 @@ func readManifest(archive []byte) (harness.SessionManifest, error) {
 	if err != nil {
 		return m, fmt.Errorf("session: the archive is not readable: %w", err)
 	}
-	if err := json.Unmarshal(raw, &m); err != nil || m.Adapter == "" || m.SessionID == "" {
+	if err := json.Unmarshal(raw, &m); err != nil || m.Adapter == "" || !canonicalID.MatchString(m.SessionID) {
 		return harness.SessionManifest{}, errors.New("session: the manifest of the archive is not valid")
 	}
 	return m, nil
