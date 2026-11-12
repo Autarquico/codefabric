@@ -3,6 +3,7 @@ package gitctx_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/Autarquico/codefabric/internal/client/gitctx"
@@ -103,6 +104,44 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestTakeSnapshot_LeavesOutWhatTheExclusionsNameAndSaysSo(t *testing.T) {
+	r := newRepo(t)
+	must(t, os.Mkdir(filepath.Join(r.dir, "cfg"), 0o700))
+	r.write("a.txt", "a\n")
+	r.write("tracked.key", "v1\n") // tracked: it keeps the version of HEAD
+	r.git("add", "-A")
+	r.commit("first")
+	r.write("tracked.key", "v2\n")
+	r.write("a.txt", "b\n")
+	r.write(".env", "TOKEN=x\n")
+	r.write(".env.local", "TOKEN=y\n")
+	r.write("cert.pem", "pem\n")
+	r.write(filepath.Join("cfg", "deep.pem"), "pem\n")
+	r.write("keep.txt", "keep\n")
+
+	snap, err := gitctx.TakeSnapshot(t.Context(), r.dir, "**/.env*", "**/*.pem", "**/*.key")
+	must(t, err)
+
+	want := []string{".env", ".env.local", "cert.pem", "cfg/deep.pem"}
+	if !slices.Equal(snap.Excluded, want) {
+		t.Fatalf("excluded = %v, want %v", snap.Excluded, want)
+	}
+	files := r.git("ls-tree", "-r", "--name-only", snap.Commit)
+	for _, absent := range append(want, "cfg") {
+		if contains(files, absent) {
+			t.Errorf("%s is in the snapshot:\n%s", absent, files)
+		}
+	}
+	for file, content := range map[string]string{"a.txt": "b", "keep.txt": "keep", "tracked.key": "v1"} {
+		if got := r.git("show", snap.Commit+":"+file); got != content {
+			t.Errorf("%s = %q, want %q", file, got, content)
+		}
+	}
+	if got := r.git("status", "--porcelain"); !contains(got, ".env") {
+		t.Errorf("the working tree changed:\n%s", got)
+	}
 }
 
 func must(t *testing.T, err error) {

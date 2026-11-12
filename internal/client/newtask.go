@@ -8,6 +8,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client/gitctx"
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -70,15 +71,20 @@ func (c *Client) snapshotSource(ctx context.Context, dir string, project v1.Proj
 		return err
 	}
 	req.SourceSnapshot, req.SourceCommit, req.SourceBranch = snap.Commit, snap.Commit, snap.Branch
+	if req.SnapshotReport != nil {
+		req.SnapshotReport.Excluded = snap.Excluded
+	}
 	req.ResolvedRef = first(snap.Branch, project.DefaultBranch)
 	return nil
 }
 
 // SnapshotDir commits the working tree of dir as it is (gitctx.TakeSnapshot)
 // and sends the commit to the relay of the Project, which is what `--snapshot`
-// of `cf do` and of `cf task resume` start from. The tree is left untouched.
+// of `cf do` and of `cf task resume` start from. The tree is left untouched, and
+// the files that checkpoint.exclude names (its default: the Controller does not tell
+// its configuration to clients) do not travel: Snapshot.Excluded lists them.
 func (c *Client) SnapshotDir(ctx context.Context, dir, project string) (gitctx.Snapshot, error) {
-	snap, err := gitctx.TakeSnapshot(ctx, dir)
+	snap, err := gitctx.TakeSnapshot(ctx, dir, config.DefaultCheckpointExclude()...)
 	if err != nil {
 		return gitctx.Snapshot{}, err
 	}
