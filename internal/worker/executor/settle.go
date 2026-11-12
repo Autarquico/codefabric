@@ -99,7 +99,7 @@ func (e *Executor) settleExit(ctx context.Context, r state.Run, m markers) (done
 	}
 	// The group is gone and the Run is not settled: a capture ordered of it is made
 	// first, since settling removes the ConfigDir that holds its session.
-	if r.Phase == state.PhaseCheckpointing && !e.capturedBeforeSettle(ctx, r) {
+	if !e.capturedBeforeSettle(ctx, r, m.exit) {
 		return false
 	}
 	e.endSession(ctx, r.Key)
@@ -158,7 +158,7 @@ func (e *Executor) settleLost(ctx context.Context, r state.Run, m markers, v pro
 		_ = syscall.Kill(-w.PGID, syscall.SIGKILL)
 		return false
 	}
-	if r.Phase == state.PhaseCheckpointing && !e.capturedBeforeSettle(ctx, r) {
+	if !e.capturedBeforeSettle(ctx, r, nil) {
 		return false // the group is gone, which is all a capture needs
 	}
 	e.endSession(ctx, r.Key)

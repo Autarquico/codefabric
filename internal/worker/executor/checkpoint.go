@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codefabric/internal/worker/execwrap"
 	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/procident"
 	"github.com/Autarquico/codefabric/internal/worker/state"
@@ -176,11 +178,21 @@ func (e *Executor) escalateCheckpoint(ctx context.Context, r state.Run, m marker
 	_ = e.o.Runtime.Stop(ctx, e.o.Runtime.HandleFor(e.sessionName(r.Key)))
 }
 
-// capturedBeforeSettle makes the capture of a Run in checkpointing, now that its
-// group is gone, and says whether the Run may be settled. Settling removes the
-// ConfigDir with the session of the harness, so it waits for the capture to be
-// reported (or abandoned): false means come back at the next tick.
-func (e *Executor) capturedBeforeSettle(ctx context.Context, r state.Run) (settle bool) {
+// captureRetryMax is the longest the Worker waits between two attempts of a
+// capture that the Controller or the relay did not take.
+const captureRetryMax = time.Minute
+
+// capturedBeforeSettle makes the capture a Run has open, now that its group is
+// gone, and says whether the Run may be settled. Settling removes the ConfigDir
+// with the session of the harness, so it waits for the capture to be reported
+// (or abandoned): false means come back later. Whatever phase the Run is in
+// (a checkpointing Run may have gone through stop_unverified), an open capture
+// ends here, reported or aborted, and never with the Run settled over it.
+//
+// exit is what the wrapper left, nil if it left none. A harness that ended by
+// itself (cause exit) while the capture was ordered wins over it, as it does at
+// the Controller: the capture is aborted and the exit is what is reported.
+func (e *Executor) capturedBeforeSettle(ctx context.Context, r state.Run, exit *execwrap.Exit) (settle bool) {
 	c, err := state.CaptureOf(ctx, e.o.DB.Reader(), r.Key)
 	if errors.Is(err, state.ErrNotFound) || err == nil && c.DoneAt != nil {
 		return true
@@ -188,6 +200,20 @@ func (e *Executor) capturedBeforeSettle(ctx context.Context, r state.Run) (settl
 	if err != nil {
 		e.log.ErrorContext(ctx, "reading the capture of a Run", "run", r.RunID, "err", err)
 		return false
+	}
+	if exit != nil && exit.Cause == execwrap.CauseExit {
+		e.log.InfoContext(ctx, "the harness ended by itself while a capture was ordered: the exit wins and the capture is abandoned", "run", r.RunID, "checkpoint", c.CheckpointID)
+		return e.closeCapture(ctx, r, state.CaptureAborted)
+	}
+	if !e.captureDue(r.Key) {
+		return false
+	}
+	// The events of the harness are read to the end first: the id of its session
+	// may be in the last of them, and the export needs it.
+	if err := e.drainEventsToEOF(ctx, r); err != nil {
+		e.log.WarnContext(ctx, "consuming the last events of a Run before its capture failed", "run", r.RunID, "err", err)
+	} else if fresh, err := state.RunBy(ctx, e.o.DB.Reader(), r.Key); err == nil {
+		r = fresh
 	}
 	cctx, cancel := context.WithCancel(ctx)
 	e.mu.Lock()
@@ -202,16 +228,38 @@ func (e *Executor) capturedBeforeSettle(ctx context.Context, r state.Run) (settl
 	outcome, retry := e.capture(cctx, r, c)
 	if retry {
 		if e.clock.Now().Before(c.CreatedAt.Add(e.checkpointGrace + captureWindow)) {
+			e.backOffCapture(r.Key)
 			return false
 		}
 		e.log.ErrorContext(ctx, "a capture could not be reported in time: the Run is settled without it", "run", r.RunID, "checkpoint", c.CheckpointID)
 		outcome = state.CaptureFailed
 	}
+	return e.closeCapture(ctx, r, outcome)
+}
+
+func (e *Executor) closeCapture(ctx context.Context, r state.Run, outcome string) bool {
 	if _, err := e.endCapture(ctx, r.Key, outcome); err != nil {
 		e.log.ErrorContext(ctx, "closing the capture of a Run", "run", r.RunID, "err", err)
 		return false
 	}
 	return true
+}
+
+// captureDue says whether the next attempt of a capture is due: one that was
+// not taken is tried again after a wait that grows to captureRetryMax, not at
+// every tick, since each attempt repeats the whole pipeline.
+func (e *Executor) captureDue(k state.Key) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return !e.clock.Now().Before(e.memo(k).captureAt)
+}
+
+func (e *Executor) backOffCapture(k state.Key) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	m := e.memo(k)
+	m.captureWait = min(max(m.captureWait*2, retryInitial), captureRetryMax)
+	m.captureAt = e.clock.Now().Add(m.captureWait)
 }
 
 func (e *Executor) endCapture(ctx context.Context, k state.Key, outcome string) (bool, error) {
@@ -351,8 +399,13 @@ func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r
 		return nil, nil, false
 	}
 	porter, ok := adapter.(harness.SessionPorter)
-	if !ok || r.SessionID == "" {
+	if !ok {
 		return nil, nil, false
+	}
+	if r.SessionID == "" {
+		why := "the session of the harness was never identified"
+		e.log.WarnContext(ctx, "the native state of a Run is left out of its checkpoint: "+why, "run", r.RunID, "checkpoint", c.CheckpointID, "adapter", adapter.ID())
+		return nil, []string{"The native state was left out of the checkpoint: " + why}, false
 	}
 	h, err := e.handleOf(adapter, r, spec)
 	if err != nil {
@@ -422,7 +475,7 @@ func (e *Executor) sessionHoldsSecrets(files harness.SessionFiles, forbidden git
 			return "it cannot be checked for secrets: " + forbidden.Redact(err.Error())
 		}
 		if len(lines) > 0 {
-			found = append(found, fmt.Sprintf("%s lines %s", baseName(path), joinInts(lines)))
+			found = append(found, fmt.Sprintf("%s lines %s", filepath.Base(path), joinInts(lines)))
 		}
 	}
 	if len(found) == 0 {
@@ -430,8 +483,6 @@ func (e *Executor) sessionHoldsSecrets(files harness.SessionFiles, forbidden git
 	}
 	return "it holds the value of a secret of the Run (" + strings.Join(found, "; ") + ")"
 }
-
-func baseName(path string) string { return path[strings.LastIndexByte(path, os.PathSeparator)+1:] }
 
 // joinInts lists the numbers, at most a few: a transcript that holds a secret
 // holds it where it was printed, and the count says how bad it is.

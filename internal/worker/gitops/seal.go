@@ -11,6 +11,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/redact"
 )
@@ -18,7 +19,7 @@ import (
 // Exclusions are the paths a sealing leaves out (§23.1, Appendix A): what is
 // captured of the worktree never includes them. A tracked file that matches
 // keeps its version in the parent commit.
-var exclusions = []string{"**/.env*", "**/*.pem", "**/*.key"}
+var exclusions = config.DefaultCheckpointExclude()
 
 // Intent is everything sealing depends on, stored before any git effect so that
 // sealing is one function of it: the same intent gives the same commit however
@@ -277,8 +278,8 @@ type SnapshotIntent struct {
 }
 
 // Snapshot captures the worktree of a Run that is still the Run's, for a
-// checkpoint: the commit Seal would make (the same guard, the same treatment of
-// ignored and excluded files, the same list of excluded paths), but it finalizes
+// checkpoint: the commit Seal would make (the same guard and the same list of excluded
+// paths, though what it leaves out is in.Exclude, not the fixed exclusions of Seal), but it finalizes
 // nothing. No ref points at it, neither the private ref of the Worker nor the
 // branch of the Run, so the sealing at the exit of the Run still makes its own
 // result; the caller pushes the commit to the ref of the checkpoint.

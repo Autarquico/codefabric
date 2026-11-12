@@ -278,6 +278,10 @@ type runMemo struct {
 	// cancelCapture ends the capture of a checkpoint in progress, which a stop
 	// of the Controller does.
 	cancelCapture context.CancelFunc
+	// captureAt is when a capture that was not taken is tried again, captureWait
+	// the backoff of that retry.
+	captureAt   time.Time
+	captureWait time.Duration
 }
 
 // runLock serialises the changes to a Run. It exists only while someone holds

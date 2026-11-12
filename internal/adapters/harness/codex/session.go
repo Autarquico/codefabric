@@ -41,8 +41,6 @@ func isToolCall(payloadType string) bool {
 	return payloadType == "custom_tool_call" || payloadType == "function_call"
 }
 
-var _ harness.SessionPorter = Adapter{}
-
 // sessionConfigDir is dir, or what Codex uses when it is empty: CODEX_HOME, or
 // ~/.codex.
 func sessionConfigDir(dir string) (string, error) {

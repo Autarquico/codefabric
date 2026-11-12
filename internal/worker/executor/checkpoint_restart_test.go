@@ -12,10 +12,10 @@ import (
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
-// A daemon that dies after taking the order and before capturing comes back
+// A daemon that dies after taking the order and before the capture starts comes back
 // to a Run in checkpointing with its capture row: it quiesces again, captures
 // and reports, and the ConfigDir with the session is still there to export.
-func TestScenario_CheckpointCapture_DaemonRestartsMidCapture_Worker(t *testing.T) {
+func TestScenario_CheckpointCapture_DaemonRestartsBeforeCapture_Worker(t *testing.T) {
 	r := newCpRig(t)
 	k, w := r.running(fakeSpec("do it", ""), "trap 'exit 0' TERM")
 	r.order(k)

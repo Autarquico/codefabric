@@ -40,12 +40,17 @@ type cpCtrl struct {
 	// onComplete and onPut run when the call arrives.
 	onComplete func()
 	onPut      func()
+	// tokenErr, if set, is what CheckpointToken answers.
+	tokenErr error
 }
 
 func (c *cpCtrl) CheckpointToken(_ context.Context, run string, req v1.CheckpointTokenRequest) (v1.RelayTokenResponse, error) {
 	c.cmu.Lock()
 	defer c.cmu.Unlock()
 	c.tokens = append(c.tokens, req)
+	if c.tokenErr != nil {
+		return v1.RelayTokenResponse{}, c.tokenErr
+	}
 	return v1.RelayTokenResponse{Token: "cp-token-" + run, Path: "/v1/relay/project_1.git", Write: true, Ref: domain.CheckpointRef(domain.ID(req.CheckpointID))}, nil
 }
 
@@ -199,7 +204,7 @@ func (r *cpRig) settled(k state.Key, w *helper) {
 	case <-time.After(10 * time.Second):
 		r.t.Fatal("the harness was not asked to end")
 	}
-	r.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: t0.Add(time.Second), Cause: execwrap.CauseExit})
+	r.writeExit(k, execwrap.Exit{ExitCode: intp(0), ExitedAt: t0.Add(time.Second), Cause: execwrap.CauseStop})
 	waitFor(r.t, "the Run to be settled", func() bool { return r.e.step(r.t.Context(), k) })
 }
 
