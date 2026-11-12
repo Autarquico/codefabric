@@ -136,7 +136,7 @@ func (s *Service) Cancel(ctx context.Context, by pki.Session, ref, project strin
 		if err := tx.UpdateTask(ctx, *t); err != nil {
 			return err
 		}
-		if err := dropFailedMove(ctx, tx, act, t.ID, "the Task was cancelled"); err != nil {
+		if err := endMoveIn(ctx, tx, act, t.ID, "the Task was cancelled", false); err != nil {
 			return err
 		}
 		if err := s.runs.CancelLiveIn(ctx, tx, act, t.ID); err != nil {
@@ -158,6 +158,9 @@ func (s *Service) Complete(ctx context.Context, by pki.Session, ref, project str
 		}
 		t.CompletedManuallyAt = &act.Now
 		if err := tx.UpdateTask(ctx, *t); err != nil {
+			return err
+		}
+		if err := endMoveIn(ctx, tx, act, t.ID, "the Task was completed", false); err != nil {
 			return err
 		}
 		if err := s.runs.CancelLiveIn(ctx, tx, act, t.ID); err != nil {
@@ -184,6 +187,9 @@ func (s *Service) Archive(ctx context.Context, by pki.Session, ref, project stri
 		}
 		t.ArchivedAt = &act.Now
 		if err := tx.UpdateTask(ctx, *t); err != nil {
+			return err
+		}
+		if err := endMoveIn(ctx, tx, act, t.ID, "the Task was archived", false); err != nil {
 			return err
 		}
 		return audit(ctx, tx, act, "task.archived", *t, nil, nil)

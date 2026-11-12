@@ -27,15 +27,15 @@ type Capturer interface {
 	RequestIn(ctx context.Context, tx *store.Tx, act mutation.Act, run domain.ID, trigger domain.CheckpointTrigger) (v1.CheckpointRequested, error)
 }
 
-// Resumer queues the Run that continues a Task from its last checkpoint (*tasks.Service),
-// in the transaction of the move.
+// Resumer queues the Run that continues a Task from the checkpoint a move chose
+// (*tasks.Service), in the transaction of the move.
 type Resumer interface {
-	ResumeIn(ctx context.Context, tx *store.Tx, act mutation.Act, ref, project string, req v1.ResumeTaskRequest) (v1.ResumeTaskResponse, error)
+	ContinueIn(ctx context.Context, tx *store.Tx, act mutation.Act, task, parent, checkpoint domain.ID, worker string) (v1.ResumeTaskResponse, error)
 }
 
-// Loser marks a live Run lost at once (*reconciliation.Service).
+// Loser marks a live Run lost at once, in the transaction of the move (*reconciliation.Service).
 type Loser interface {
-	ForceLose(ctx context.Context, run domain.ID, by string) (bool, error)
+	ForceLoseIn(ctx context.Context, tx *store.Tx, act mutation.Act, run domain.ID, by string) (bool, error)
 }
 
 // Service runs the move use cases.
@@ -65,17 +65,13 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, capture Capture
 // and goes on. A Task that has a move not over gets that move back; if the move
 // had failed it is retried from its stage, towards req.Worker if one is given.
 func (s *Service) Move(ctx context.Context, by pki.Session, ref, project string, req v1.MoveTaskRequest) (v1.MoveTaskResponse, error) {
-	forced, err := s.forceIfAsked(ctx, by, ref, project, req)
-	if err != nil {
-		return v1.MoveTaskResponse{}, err
-	}
 	out, err := mutation.Do(ctx, s.db, s.clock, by, "task.move", req.RequestID,
 		struct {
 			Ref, Project string
 			Request      v1.MoveTaskRequest
 		}{ref, project, req},
 		func(tx *store.Tx, act mutation.Act) (v1.MoveTaskResponse, error) {
-			id, err := s.open(ctx, tx, act, by, ref, project, req, forced)
+			id, err := s.open(ctx, tx, act, by, ref, project, req)
 			if err != nil {
 				return v1.MoveTaskResponse{}, err
 			}
@@ -220,21 +216,12 @@ func (s source) loss() *v1.MoveLoss {
 	return &v1.MoveLoss{CheckpointID: string(s.checkpoint.ID), CheckpointAt: s.checkpoint.CreatedAt}
 }
 
-// forceIfAsked marks lost the Run of an offline Worker when the user forces the
-// move, before the transaction that creates it: losing a Run is a transaction
-// of its own. It says whether it did. Without req.Force nothing changes and the
-// transaction refuses what needs it.
-func (s *Service) forceIfAsked(ctx context.Context, by pki.Session, ref, project string, req v1.MoveTaskRequest) (bool, error) {
+// forceIn marks lost the Run of an offline Worker when the user forces the move, in the
+// transaction of the move: if the move is refused the Run is as it was. It says whether
+// it did. Without req.Force nothing changes and canMove refuses what needs it.
+func (s *Service) forceIn(ctx context.Context, tx *store.Tx, act mutation.Act, by pki.Session, src source, req v1.MoveTaskRequest) (bool, error) {
 	if !req.Force {
 		return false, nil
-	}
-	var src source
-	err := s.db.Read(ctx, func(q store.Querier) (err error) {
-		src, err = sourceOf(ctx, q, ref, project)
-		return err
-	})
-	if err != nil {
-		return false, err
 	}
 	switch src.run.State {
 	case domain.RunRunning, domain.RunWaitingInput, domain.RunCheckpointing:
@@ -247,15 +234,24 @@ func (s *Service) forceIfAsked(ctx context.Context, by pki.Session, ref, project
 	if src.checkpoint == nil { // do not lose a Run that then cannot continue
 		return false, noCheckpoint(src)
 	}
-	return s.lose.ForceLose(ctx, src.run.ID, string(by.Principal.ID))
+	return s.lose.ForceLoseIn(ctx, tx, act, src.run.ID, string(by.Principal.ID))
 }
 
 // open creates the move of the Task or, if it has one not over, hands that one
 // back after retrying it when it had failed. It returns the ID of the move.
-func (s *Service) open(ctx context.Context, tx *store.Tx, act mutation.Act, by pki.Session, ref, project string, req v1.MoveTaskRequest, forced bool) (domain.ID, error) {
+func (s *Service) open(ctx context.Context, tx *store.Tx, act mutation.Act, by pki.Session, ref, project string, req v1.MoveTaskRequest) (domain.ID, error) {
 	src, err := sourceOf(ctx, tx, ref, project)
 	if err != nil {
 		return "", err
+	}
+	forced, err := s.forceIn(ctx, tx, act, by, src, req)
+	if err != nil {
+		return "", err
+	}
+	if forced {
+		if src, err = sourceOf(ctx, tx, ref, project); err != nil { // the Run is lost now
+			return "", err
+		}
 	}
 	target, err := workerName(ctx, tx, req.Worker)
 	if err != nil {
@@ -341,12 +337,27 @@ func noCheckpoint(src source) error {
 
 // retry gives an active move another go: a failure is cleared so the loop (or
 // Advance) tries the same stage again, and a Worker named now replaces the target
-// while the target Run does not exist yet.
+// while the target Run does not exist yet. A target Run that failed to start is
+// gone for good: the move goes back to checkpointed to queue another.
 func (s *Service) retry(ctx context.Context, tx *store.Tx, act mutation.Act, m store.Move, target string) error {
-	if target != "" && target != m.TargetWorker && (m.Stage == store.MoveRequested || m.Stage == store.MoveCheckpointing || m.Stage == store.MoveCheckpointed) {
+	rewound := m.Stage == store.MoveResuming && m.Failure != ""
+	if rewound {
+		if err := tx.RewindMove(ctx, m.ID, act.Now); err != nil {
+			return err
+		}
+		m.Stage = store.MoveCheckpointed
+	}
+	if target != "" && target != m.TargetWorker {
+		if m.Stage == store.MoveResuming {
+			return domain.NewError(domain.CodeInvalidTransition,
+				fmt.Sprintf("the target Run of the move already exists on %s", m.TargetWorker), map[string]any{"worker": m.TargetWorker})
+		}
 		if err := tx.RetargetMove(ctx, m.ID, target, act.Now); err != nil {
 			return err
 		}
+	}
+	if rewound {
+		return s.recordRetry(ctx, tx, act, m, "the target Run did not start")
 	}
 	if m.Failure == "" {
 		return nil
@@ -354,17 +365,24 @@ func (s *Service) retry(ctx context.Context, tx *store.Tx, act mutation.Act, m s
 	if err := tx.SetMoveFailure(ctx, m.ID, m.Stage, "", act.Now); err != nil {
 		return err
 	}
+	if err := s.recordRetry(ctx, tx, act, m, m.Failure); err != nil {
+		return err
+	}
+	return s.derive(ctx, tx, act, m.TaskID) // the decision is taken: the Runs say what the Task is
+}
+
+// recordRetry is the event of a retry. After a rewind the Task is not derived: the target
+// Run queued next does it, and the retry policy must not queue another on the dead one.
+func (s *Service) recordRetry(ctx context.Context, tx *store.Tx, act mutation.Act, m store.Move, was string) error {
 	task, err := store.TaskByID(ctx, tx, m.TaskID)
 	if err != nil {
 		return err
 	}
 	ev := act.Event(domain.EventMoveStageChanged, "move retried")
 	ev.ProjectID, ev.TaskID = task.ProjectID, task.ID
-	ev.Data = map[string]any{"move": string(m.ID), "stage": string(m.Stage), "retry": true, "was": m.Failure}
-	if _, _, err = tx.AppendEvent(ctx, ev); err != nil {
-		return err
-	}
-	return s.derive(ctx, tx, act, task.ID) // the decision is taken: the Runs say what the Task is
+	ev.Data = map[string]any{"move": string(m.ID), "stage": string(m.Stage), "retry": true, "was": was}
+	_, _, err = tx.AppendEvent(ctx, ev)
+	return err
 }
 
 // answer is the Task and the move, read through q.

@@ -176,6 +176,19 @@ func (t *Tx) SetMoveFailure(ctx context.Context, id domain.ID, stage MoveStage, 
 	return expectOne(res, ErrMoveStage)
 }
 
+// RewindMove takes a move whose target Run is dead back from the stage resuming to
+// checkpointed, so a new target Run is queued from the same checkpoint. The target Run
+// and the failure are cleared. Compare-and-set on the stage, like AdvanceMove.
+func (t *Tx) RewindMove(ctx context.Context, id domain.ID, now time.Time) error {
+	res, err := t.Exec(ctx,
+		`UPDATE moves SET stage = ?, target_run_id = NULL, failure = '', updated_at = ? WHERE id = ? AND stage = ?`,
+		string(MoveCheckpointed), now.UnixNano(), string(id), string(MoveResuming))
+	if err != nil {
+		return fmt.Errorf("store: rewinding move: %w", err)
+	}
+	return expectOne(res, ErrMoveStage)
+}
+
 // RetargetMove changes the Worker a move that is not over goes to.
 func (t *Tx) RetargetMove(ctx context.Context, id domain.ID, worker string, now time.Time) error {
 	res, err := t.Exec(ctx, `UPDATE moves SET target_worker = ?, updated_at = ? WHERE id = ? AND stage NOT IN ('done', 'failed')`,

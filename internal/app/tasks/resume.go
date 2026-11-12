@@ -62,11 +62,41 @@ func (s *Service) ResumeIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
+	return s.continueTask(ctx, tx, act, task, parent, cp, req.Worker)
+}
+
+// ContinueIn queues the Run of a move on its target: it continues the Task from the
+// checkpoint the move chose, with parent (the Run the move left) as its lineage, whatever
+// Runs the Task has had since (a target that failed to prepare is one). Like ResumeIn it
+// runs in the transaction of the caller.
+func (s *Service) ContinueIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID, parent, checkpoint domain.ID, worker string) (v1.ResumeTaskResponse, error) {
+	task, err := store.TaskByID(ctx, tx, taskID)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	run, err := store.RunByID(ctx, tx, parent)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	cp, err := store.CheckpointByID(ctx, tx, checkpoint)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	return s.continueTask(ctx, tx, act, task, run, cp, worker)
+}
+
+// continueTask queues the Run that continues parent from cp, pinned to the Worker named,
+// and ends the failed move of the Task. A Task that was cancelled, archived or completed
+// by hand has no Run to queue: its Runs stay as they are.
+func (s *Service) continueTask(ctx context.Context, tx *store.Tx, act mutation.Act, task store.Task, parent store.Run, cp store.Checkpoint, worker string) (v1.ResumeTaskResponse, error) {
+	if task.CancelledAt != nil || task.ArchivedAt != nil || task.CompletedManuallyAt != nil {
+		return v1.ResumeTaskResponse{}, notAllowed(task, "resumed")
+	}
 	commit, err := s.checkpointCommit(ctx, task, cp)
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
-	pin, err := workerName(ctx, tx, req.Worker)
+	pin, err := workerName(ctx, tx, worker)
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
@@ -74,7 +104,7 @@ func (s *Service) ResumeIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
-	if err := dropFailedMove(ctx, tx, act, task.ID, "the Task was resumed"); err != nil {
+	if err := endMoveIn(ctx, tx, act, task.ID, "the Task was resumed", true); err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
 	if err := s.rederive(ctx, tx, act, task.ID); err != nil {
@@ -87,18 +117,35 @@ func (s *Service) ResumeIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	return out, err
 }
 
-// dropFailedMove ends the move of the Task that failed and waits for a decision: the
-// decision (resume, cancel) is the end of it, and the move must not claim the Task again. A move that has not
-// failed is the caller's own (the Controller resuming it) and is left alone.
-func dropFailedMove(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID, decision string) error {
+// endMoveIn ends the move of the Task that is not over, with its event (§27.4): a decision
+// of the user (resume, cancel, complete, archive) is the end of it, and the move must not
+// claim the Task again. With onlyFailed, a move that has not failed is the caller's own
+// (the Controller resuming it) and is left alone.
+func endMoveIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID, decision string, onlyFailed bool) error {
 	m, err := store.ActiveMoveOfTask(ctx, tx, taskID)
-	if errors.Is(err, store.ErrNotFound) || (err == nil && m.Failure == "") {
+	if errors.Is(err, store.ErrNotFound) || (err == nil && onlyFailed && m.Failure == "") {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	return tx.AdvanceMove(ctx, m.ID, m.Stage, store.MoveFailed, store.MoveChange{Failure: m.Failure + " (" + decision + ")"}, act.Now)
+	failure := decision
+	if m.Failure != "" {
+		failure = m.Failure + " (" + decision + ")"
+	}
+	if err := tx.AdvanceMove(ctx, m.ID, m.Stage, store.MoveFailed, store.MoveChange{Failure: failure}, act.Now); err != nil {
+		return err
+	}
+	task, err := store.TaskByID(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	ev := act.Event(domain.EventMoveStageChanged, "move failed")
+	ev.Level = domain.LevelWarn
+	ev.ProjectID, ev.TaskID, ev.RunID = task.ProjectID, task.ID, m.SourceRunID
+	ev.Data = map[string]any{"move": string(m.ID), "from": string(m.Stage), "stage": string(store.MoveFailed), "failure": failure}
+	_, _, err = tx.AppendEvent(ctx, ev)
+	return err
 }
 
 // continueIn queues the Run that continues parent from checkpoint cp, with the
