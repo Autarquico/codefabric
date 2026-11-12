@@ -29,7 +29,7 @@ type fakeGit struct {
 	push       func(c pushCall) error
 	// remoteRef, if set, answers RemoteRef; by default no ref exists.
 	remoteRef func(ref, token string) (string, bool, error)
-	seals      []gitops.Intent
+	seals     []gitops.Intent
 	// snapshot, if set, answers Snapshot; snapshots are the intents it saw.
 	snapshot  func(in gitops.SnapshotIntent, f gitops.Forbidden) (gitops.Sealed, error)
 	snapshots []gitops.SnapshotIntent

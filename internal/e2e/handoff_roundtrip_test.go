@@ -314,12 +314,9 @@ func TestScenario_HandoffRoundtrip(t *testing.T) {
 	}
 
 	// 2. From inside the Run on A, as the agent: cf handoff --to B, through the socket.
+	// The move stops the agent that asked for it, so what its command prints may
+	// never be written: the move is seen where it lands, on B.
 	h.agentRuns(a, fmt.Sprintf("%q handoff --to %s --json\n", binary, b.Name))
-	out := h.agentOutput(a, "have said the Task is moving", func(o string) bool { return strings.Contains(o, `"stage"`) })
-	var moved v1.MoveTaskResponse
-	if err := decodeOne(out, &moved); err != nil {
-		t.Fatalf("cf handoff inside the Run: %v\n%s", err, out)
-	}
 	atB := h.report(b, 1)
 	if atB["kind"] != "resume" || atB["session"] != roundtripSession || atB.lines("found") != 6 || atB.lines("word") == 0 {
 		t.Errorf("B started %+v, want a resume of %s with the 4 lines of the client and the 2 of A, and the word", atB, roundtripSession)
