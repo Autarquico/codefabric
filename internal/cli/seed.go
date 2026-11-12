@@ -42,6 +42,15 @@ func (f *seedFlags) add(cmd *cobra.Command, forceUsage string) {
 	fl.BoolVar(&f.force, "force", false, forceUsage)
 }
 
+// check refuses a flag that has no session to apply to; nothing has been asked of the
+// Controller yet.
+func (f seedFlags) check() error {
+	if f.session == "" && f.allowSensitive {
+		return domain.NewError(domain.CodeInvalidRequest, "--allow-sensitive-session is for --session", nil)
+	}
+	return nil
+}
+
 // seed is a session of this machine uploaded for a Run that is about to be created.
 type seed struct {
 	id     string
@@ -54,9 +63,6 @@ type seed struct {
 // for the Project. Nothing is uploaded when there is no --session.
 func (f seedFlags) upload(ctx context.Context, sessions SessionsFactory, c *client.Client, project string) (*seed, error) {
 	if f.session == "" {
-		if f.allowSensitive {
-			return nil, domain.NewError(domain.CodeInvalidRequest, "--allow-sensitive-session is for --session", nil)
-		}
 		return nil, nil
 	}
 	if sessions == nil {

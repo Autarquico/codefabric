@@ -60,15 +60,18 @@ func newTaskResumeCmd(sessions SessionsFactory) *cobra.Command {
 			"`cf task pull` a resume is refused until a session of the same client seeds it, or with --force.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := seedFrom.check(); err != nil {
+				return err
+			}
+			if snapshot && seedFrom.session == "" {
+				return domain.NewError(domain.CodeInvalidRequest, "--snapshot continues the session of this working tree: give it with --session", nil)
+			}
 			c, err := openClient(cmd)
 			if err != nil {
 				return err
 			}
 			scope := refScope(cmd, c)
 			req := v1.ResumeTaskRequest{RequestID: requestID, Worker: worker, Force: seedFrom.force}
-			if snapshot && seedFrom.session == "" {
-				return domain.NewError(domain.CodeInvalidRequest, "--snapshot continues the session of this working tree: give it with --session", nil)
-			}
 			var (
 				seeded   *seed
 				excluded []string

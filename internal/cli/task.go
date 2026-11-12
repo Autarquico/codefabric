@@ -45,6 +45,9 @@ func newCreateTaskCmd(use, short string, sessions SessionsFactory) *cobra.Comman
 		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := seedFrom.check(); err != nil {
+				return err
+			}
 			req.Prompt = args[0]
 			req.Completion = domain.Completion(completion)
 			env, err := parseSecretEnv(secretEnv)
