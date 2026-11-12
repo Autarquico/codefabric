@@ -3,7 +3,9 @@
 package executor
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -102,6 +104,8 @@ type porterHarness struct {
 	transcript string
 	session    string
 	located    *[]harness.SessionRef
+	// beforeExport, if set, runs at the start of Export.
+	beforeExport *func()
 }
 
 func (p porterHarness) Start(ctx context.Context, host harness.Host, run harness.RunSpec) (harness.Launch, error) {
@@ -116,12 +120,15 @@ func (p porterHarness) Locate(_ context.Context, ref harness.SessionRef) (harnes
 }
 
 func (p porterHarness) Export(_ context.Context, ref harness.SessionRef, _ harness.ExportOptions, w io.Writer) (harness.SessionManifest, error) {
+	if p.beforeExport != nil && *p.beforeExport != nil {
+		(*p.beforeExport)() // the harness writes on, between the check of the files and the export
+	}
 	data, err := os.ReadFile(p.transcript)
 	if err != nil {
 		return harness.SessionManifest{}, err
 	}
-	_, err = w.Write(append([]byte("archive:"), data...))
-	return harness.SessionManifest{Adapter: p.ID(), Version: "9.9", SessionID: ref.SessionID}, err
+	manifest := harness.SessionManifest{Adapter: p.ID(), Version: "9.9", SessionID: ref.SessionID}
+	return manifest, harness.WriteSessionArchive(w, manifest, data, nil)
 }
 
 func (p porterHarness) Import(context.Context, harness.SessionImport, io.Reader) (harness.SessionImportResult, error) {
@@ -138,6 +145,8 @@ type cpRig struct {
 	transcript string
 	// withoutNativeState orders the capture of a Project that did not opt in.
 	withoutNativeState bool
+	// beforeExport runs when the adapter starts to export the session.
+	beforeExport func()
 }
 
 func newCpRig(t *testing.T, mutate ...func(*Options)) *cpRig {
@@ -148,7 +157,7 @@ func newCpRig(t *testing.T, mutate ...func(*Options)) *cpRig {
 	}
 	ph := porterHarness{
 		Adapter:    fakeharness.Adapter{Binary: "/fake/harness", Caps: harness.Capabilities{Modes: []domain.Mode{domain.ModeHeadless}, NativeCheckpoint: true}},
-		transcript: r.transcript, session: "sess-1", located: &r.located,
+		transcript: r.transcript, session: "sess-1", located: &r.located, beforeExport: &r.beforeExport,
 	}
 	r.fixture = newFixture(t, append([]func(*Options){func(o *Options) {
 		r.ctrl = &cpCtrl{fakeController: o.Controller.(*fakeController)}
@@ -298,8 +307,55 @@ func TestScenario_CheckpointCapture_SessionAfterSettle_Worker(t *testing.T) {
 		t.Fatalf("completes = %+v", r.ctrl.completes)
 	}
 	ns := r.ctrl.completes[0].NativeState
-	if ns.Adapter != fakeharness.DefaultID || ns.AdapterVersion != "9.9" || !bytes.HasPrefix(r.ctrl.blobs[ns.Digest], []byte("archive:{\"line\":1}")) {
+	if ns.Adapter != fakeharness.DefaultID || ns.AdapterVersion != "9.9" || !strings.Contains(unarchived(t, r.ctrl.blobs[ns.Digest]), "{\"line\":1}") {
 		t.Errorf("native state = %+v, blobs = %d", ns, len(r.ctrl.blobs))
+	}
+}
+
+// unarchived is the text of the files of a tar.gz.
+func unarchived(t *testing.T, archive []byte) string {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	tr := tar.NewReader(gz)
+	for {
+		if _, err := tr.Next(); err != nil {
+			return out.String()
+		}
+		if _, err := io.Copy(&out, tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// What is scanned is what is uploaded: a secret the harness writes to the session after
+// the files were looked at, before they are exported, does not travel.
+func TestScenario_CheckpointCapture_SecretWrittenDuringExport_Worker(t *testing.T) {
+	r := newCpRig(t)
+	spec := secretSpecFor(fakeharness.DefaultID, "do it", "headless", map[string]string{"GH": "github.personal"})
+	k, w := r.running(spec, "trap 'exit 0' TERM")
+	r.beforeExport = func() {
+		f, err := os.OpenFile(r.transcript, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer f.Close()
+		_, _ = f.WriteString("{\"tool\":\"" + ghValue + "\"}\n")
+	}
+	r.order(k)
+	r.settled(k, w)
+
+	for _, blob := range r.ctrl.blobs {
+		if strings.Contains(unarchived(t, blob), ghValue) {
+			t.Fatal("a secret written during the export was uploaded")
+		}
+	}
+	if len(r.ctrl.completes) != 1 || r.ctrl.completes[0].NativeState != nil {
+		t.Errorf("completes = %+v: the checkpoint is source and summary", r.ctrl.completes)
 	}
 }
 
@@ -320,12 +376,12 @@ func TestScenario_CheckpointCapture_SecretInSession_Worker(t *testing.T) {
 		t.Errorf("completes = %+v: the checkpoint is source and summary", r.ctrl.completes)
 	}
 	logs := r.logs.String()
-	if !strings.Contains(logs, "session.jsonl lines 2") || strings.Contains(logs, ghValue) {
+	if !strings.Contains(logs, "sess-1.jsonl lines 2") || strings.Contains(logs, ghValue) {
 		t.Errorf("the warning names the lines and never the value:\n%s", logs)
 	}
 	warnings := r.ctrl.completes[0].Warnings
 	if len(warnings) != 1 || !strings.HasPrefix(warnings[0], "Secret in the session") ||
-		!strings.Contains(warnings[0], "session.jsonl lines 2") || strings.Contains(warnings[0], ghValue) {
+		!strings.Contains(warnings[0], "sess-1.jsonl lines 2") || strings.Contains(warnings[0], ghValue) {
 		t.Errorf("the report warns of the lines, never of the value: %q", warnings)
 	}
 }

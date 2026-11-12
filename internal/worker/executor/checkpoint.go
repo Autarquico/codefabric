@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -463,13 +464,8 @@ func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r
 		e.log.WarnContext(ctx, "the native state of a Run is left out of its checkpoint: "+why, "run", r.RunID, "checkpoint", c.CheckpointID, "adapter", adapter.ID())
 		return nil, nil, false
 	}
-	files, err := porter.Locate(ctx, sref)
-	if err != nil {
+	if _, err := porter.Locate(ctx, sref); err != nil {
 		return leave("its session was not found: " + forbidden.Redact(err.Error()))
-	}
-	if why := e.sessionHoldsSecrets(files, forbidden); why != "" {
-		ref, _, retry := leave(why)
-		return ref, []string{"Secret in the session: " + why + "; the native state was left out of the checkpoint"}, retry
 	}
 	tmp, err := os.CreateTemp(e.o.Paths.WorkerDataDir(), "native-")
 	if err != nil {
@@ -491,6 +487,15 @@ func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 		return leave("it cannot be read back: " + brief(err))
 	}
+	// What is uploaded is what is scanned: the harness may still be writing to
+	// the session, so the live files say nothing of the bytes already exported.
+	if why := archiveHoldsSecrets(tmp, forbidden); why != "" {
+		ref, _, retry := leave(why)
+		return ref, []string{"Secret in the session: " + why + "; the native state was left out of the checkpoint"}, retry
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return leave("it cannot be read back: " + brief(err))
+	}
 	digest := "sha256:" + hex.EncodeToString(sum.Sum(nil))
 	if _, err := cc.PutNativeState(ctx, r.RunID, c.CheckpointID, r.LeaseEpoch, digest, tmp, size); err != nil {
 		var coded *domain.Error
@@ -503,25 +508,37 @@ func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r
 	return &v1.NativeStateRef{Adapter: adapter.ID(), AdapterVersion: manifest.Version, Digest: digest}, nil, false
 }
 
-// sessionHoldsSecrets reads every file of the session for the values of the
-// secrets of the Run, and says, with the names of the files and the numbers of
-// the lines, what it found; "" if nothing. The files cannot be redacted (a
-// signed block would break), so a finding leaves the session out whole. What
-// cannot be read to the end is a finding too: it could not be checked.
-func (e *Executor) sessionHoldsSecrets(files harness.SessionFiles, forbidden gitops.Forbidden) string {
+// archiveHoldsSecrets reads every file of the archive of a session (a tar.gz)
+// for the values of the secrets of the Run, and says, with the names of the
+// files and the numbers of the lines, what it found; "" if nothing. The files
+// cannot be redacted (a signed block would break), so a finding leaves the
+// session out whole. What cannot be read to the end is a finding too: it could
+// not be checked.
+func archiveHoldsSecrets(archive io.Reader, forbidden gitops.Forbidden) string {
+	unchecked := func(err error) string {
+		return "it cannot be checked for secrets: " + forbidden.Redact(err.Error())
+	}
+	gz, err := gzip.NewReader(archive)
+	if err != nil {
+		return unchecked(err)
+	}
+	defer gz.Close() //nolint:errcheck // reading
+	tr := tar.NewReader(gz)
 	var found []string
-	for _, path := range slices.Concat([]string{files.Transcript}, files.Attachments) {
-		f, err := os.Open(path) //nolint:gosec // a file of the session the adapter located
-		if err != nil {
-			return "it cannot be checked for secrets: " + brief(err)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
 		}
-		lines, err := gitops.LinesWithSecrets(f, forbidden)
-		_ = f.Close()
 		if err != nil {
-			return "it cannot be checked for secrets: " + forbidden.Redact(err.Error())
+			return unchecked(err)
+		}
+		lines, err := gitops.LinesWithSecrets(tr, forbidden)
+		if err != nil {
+			return unchecked(err)
 		}
 		if len(lines) > 0 {
-			found = append(found, fmt.Sprintf("%s lines %s", filepath.Base(path), joinInts(lines)))
+			found = append(found, fmt.Sprintf("%s lines %s", filepath.Base(hdr.Name), joinInts(lines)))
 		}
 	}
 	if len(found) == 0 {
