@@ -194,7 +194,7 @@ Run and administer Workers.
 - `run`: run the Worker daemon until interrupted.
 - `doctor`: check this machine as a Worker: tmux, git, disk, harnesses and their logins.
 - `list`, `show`: Workers with their resources and version.
-- `drain`, `undrain`: stop a Worker from taking new Runs, or let it take them again. `drain --move` also moves each Task that runs on the Worker (`cf task move`, the scheduler chooses where); Tasks that cannot be moved are listed with why. `drain --force` suspends the Runs it can checkpoint and cancels the rest, after asking each a checkpoint (see [Automatic checkpoints](#automatic-checkpoints)); it asks you to confirm, or takes `--yes`, and cannot be combined with `--move`.
+- `drain`, `undrain`: stop a Worker from taking new Runs, or let it take them again. `drain --move` also moves each Task that runs on the Worker (`cf task move`, the scheduler chooses where); Tasks that cannot be moved are listed with why; a Run still being prepared is one of them: run `drain --move` again once it has started. `drain --force` suspends the Runs it can checkpoint and cancels the rest, after asking each a checkpoint (see [Automatic checkpoints](#automatic-checkpoints)); it asks you to confirm, or takes `--yes`, and cannot be combined with `--move`.
 - `remove`: remove a Worker and revoke its credentials (only without active Runs).
 - `secrets`: manage the secrets this Worker holds for Runs.
 - `install-service`, `uninstall-service`: run the Worker as a service of this user (systemd or launchd).
