@@ -53,11 +53,15 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if origin.URL != "" {
 		repo = origin.URL
 	}
+	continues, err := continuationOf(ctx, tx, run, w)
+	if err != nil {
+		return store.Lease{}, err
+	}
 	payload, err := json.Marshal(v1.AssignCommand{
 		LeaseID: string(l.ID), RunID: string(run.ID), RunShort: domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(),
 		TaskID: string(run.TaskID), ProjectID: string(task.ProjectID), Epoch: l.Epoch, AcceptBy: l.AcceptBy,
 		SourceCommit: run.SourceCommit, Branch: branch, Repo: repo, Resources: reserve, Spec: json.RawMessage(run.Spec),
-		OriginSecret: origin.Secret, OriginURL: origin.URL,
+		OriginSecret: origin.Secret, OriginURL: origin.URL, Continues: continues,
 	})
 	if err != nil {
 		return store.Lease{}, fmt.Errorf("leases: encoding the assign order: %w", err)
@@ -72,6 +76,12 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	ev := act.Event(domain.EventRunAssigned, "run assigned")
 	ev.ProjectID, ev.TaskID, ev.RunID, ev.WorkerID = task.ProjectID, task.ID, run.ID, w.ID
 	ev.Data = map[string]any{"lease_id": string(l.ID), "epoch": l.Epoch, "worker": w.Name, "accept_by": l.AcceptBy}
+	if continues != nil {
+		ev.Data["checkpoint"], ev.Data["native_state"] = continues.CheckpointID, continues.NativeState != nil
+		if len(continues.Warnings) > 0 {
+			ev.Level, ev.Data["warnings"] = "warn", continues.Warnings
+		}
+	}
 	if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
 		return store.Lease{}, err
 	}

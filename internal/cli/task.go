@@ -24,8 +24,7 @@ func newTaskCmd() *cobra.Command {
 		}),
 		newTaskActionCmd("complete", "Mark a Task completed by hand", (*client.Client).CompleteTask),
 		newTaskActionCmd("archive", "Archive a Task, which frees its name", (*client.Client).ArchiveTask),
-		newFutureTaskCmd("defer", "Suspend a Task's Run with a checkpoint", 1, (*client.Client).DeferTask),
-		newFutureTaskCmd("resume", "Continue a deferred Task", 1, (*client.Client).ResumeTask),
+		newTaskDeferCmd(), newTaskResumeCmd(),
 		newFutureTaskCmd("move", "Continue a Task on another Worker", 2, (*client.Client).MoveTask),
 	)
 	return cmd
