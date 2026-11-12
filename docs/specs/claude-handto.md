@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: M
 issue: 164
-prs: []
+prs: [166]
 related_issues: [164]
 sub_issues: []
 depends_on: [defer-resume, dirty-snapshots-auto-checkpoints]
