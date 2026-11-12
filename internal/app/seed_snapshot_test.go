@@ -2,9 +2,10 @@ package app_test
 
 import (
 	"encoding/json"
-	"github.com/Autarquico/codefabric/internal/controller/store"
 	"strings"
 	"testing"
+
+	"github.com/Autarquico/codefabric/internal/controller/store"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"

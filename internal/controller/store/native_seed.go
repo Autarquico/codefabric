@@ -113,8 +113,10 @@ const liveSeedUse = `EXISTS (SELECT 1 FROM runs r JOIN tasks t ON t.id = r.task_
 	     AND (t.archived_at IS NULL OR r.state NOT IN (?, ?, ?, ?, ?)))`
 
 func terminalRunStateArgs() []any {
-	return []any{string(domain.RunSuspended), string(domain.RunCompleted), string(domain.RunFailed),
-		string(domain.RunCancelled), string(domain.RunLost)}
+	return []any{
+		string(domain.RunSuspended), string(domain.RunCompleted), string(domain.RunFailed),
+		string(domain.RunCancelled), string(domain.RunLost),
+	}
 }
 
 // UnusedNativeSeeds lists the seeds uploaded at or before cutoff that no Run keeps

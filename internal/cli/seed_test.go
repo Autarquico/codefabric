@@ -137,8 +137,10 @@ func (w *seedWorld) serve(rw http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/tasks/"):
 		reply(v1.Task{ID: "task_1", Short: "T-1", Name: "fix", ProjectID: "proj_1"})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/runs/"):
-		reply(v1.Run{ID: "run_1", Short: "R-1", TaskID: "task_1", Lineage: domain.LineageInitial,
-			LineageNativeSeed: &v1.NativeStateRef{Adapter: "claude-code", Digest: "sha256:abc"}})
+		reply(v1.Run{
+			ID: "run_1", Short: "R-1", TaskID: "task_1", Lineage: domain.LineageInitial,
+			LineageNativeSeed: &v1.NativeStateRef{Adapter: "claude-code", Digest: "sha256:abc"},
+		})
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/resume"):
 		reply(v1.ResumeTaskResponse{Task: v1.Task{ID: "task_1", Name: "fix"}, RunID: "run_2", RunShort: "R-2", CheckpointID: "cp_1"})
 	default:
