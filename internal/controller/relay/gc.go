@@ -16,13 +16,14 @@ const collectTimeout = 30 * time.Minute
 
 // deletable says whether the GC may delete ref: a branch cf/<task>/<run>, the
 // ref of an orphan, or the ref of a checkpoint (the GC of checkpoints names
-// those by the rows it deletes; Refs does not list them). Every other namespace
-// (refs/cf/snapshots/*, whatever a later phase adds) is not its to delete.
+// those by the rows it deletes; Refs does not list them) or the ref of a
+// snapshot of a client (the GC deletes only those of archived Tasks). Every other
+// namespace, whatever a later phase adds, is not its to delete.
 func deletable(ref string) bool {
 	if branch, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
 		return domain.ValidBranch(branch)
 	}
-	return domain.ValidOrphanRef(ref) || domain.ValidCheckpointRef(ref)
+	return domain.ValidOrphanRef(ref) || domain.ValidCheckpointRef(ref) || domain.ValidSnapshotRef(ref)
 }
 
 // Refs lists, by Project, the refs of its repository that the GC may delete.
@@ -39,7 +40,7 @@ func (r *Relay) Refs(ctx context.Context) (map[domain.ID][]string, error) {
 		}
 		project := domain.ID(id)
 		listed, err := r.run(ctx, verifyTimeout, r.RepoDir(project), "-C", r.RepoDir(project),
-			"for-each-ref", "--format=%(refname)", "refs/heads/cf/", "refs/cf/orphans/")
+			"for-each-ref", "--format=%(refname)", "refs/heads/cf/", "refs/cf/orphans/", "refs/cf/snapshots/")
 		if err != nil {
 			return nil, err
 		}

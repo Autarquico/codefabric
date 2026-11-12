@@ -14,6 +14,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/client/gitctx"
 	"github.com/Autarquico/codefabric/internal/client/session"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -26,6 +27,9 @@ type Controller interface {
 	PutNativeSeed(ctx context.Context, project, digest string, r io.Reader, size int64) (v1.NativeSeedUploaded, error)
 	NewTask(ctx context.Context, dir string, req v1.CreateTaskRequest) (v1.CreateTaskResponse, error)
 	ResumeTaskWith(ctx context.Context, ref, project string, req v1.ResumeTaskRequest) (v1.ResumeTaskResponse, error)
+	// TakeSnapshot commits the tree of dir locally, leaving out checkpoint.exclude; PushSnapshot sends it.
+	TakeSnapshot(ctx context.Context, dir string) (gitctx.Snapshot, error)
+	PushSnapshot(ctx context.Context, dir, project, commit string) error
 }
 
 // Request is one handoff.
@@ -76,18 +80,19 @@ func Do(ctx context.Context, c Controller, sessions *session.Local, req Request)
 
 	var (
 		task v1.Task
+		tree string
 		res  Result
 	)
 	if rec.Task != "" {
-		task, err = resume(ctx, c, rec.Task, req, exp, seed)
+		task, tree, err = resume(ctx, c, rec, req, exp, seed)
 		res.Resumed = true
 	} else {
-		task, err = create(ctx, c, ref, req, exp, seed)
+		task, tree, err = create(ctx, c, ref, req, exp, seed)
 	}
 	if err != nil {
 		return Result{}, err
 	}
-	if err := sessions.State.MarkHandedOff(ref.ID, task.ID, exp.Digest, time.Now()); err != nil {
+	if err := sessions.State.MarkHandedOff(ref.ID, task.ID, exp.Digest, tree, time.Now()); err != nil {
 		return Result{}, err
 	}
 	res.Task, res.Worker, res.Attach = task.Name, req.Worker, "cf attach "+task.Name
@@ -113,42 +118,58 @@ func requireOnline(ctx context.Context, c Controller, name string) error {
 	return domain.NewError(domain.CodeNotFound, fmt.Sprintf("no online Worker named %q; Workers: %s", name, list), nil)
 }
 
-func create(ctx context.Context, c Controller, ref session.Ref, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, error) {
+func create(ctx context.Context, c Controller, ref session.Ref, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, string, error) {
 	project, err := c.ProjectForDir(ctx, req.Dir)
 	if err != nil {
-		return v1.Task{}, err
+		return v1.Task{}, "", err
 	}
 	if err := upload(ctx, c, project.ID, exp); err != nil {
-		return v1.Task{}, err
+		return v1.Task{}, "", err
 	}
 	last, err := LastUserMessage(ref.Adapter, ref.Transcript)
 	if err != nil {
-		return v1.Task{}, err
+		return v1.Task{}, "", err
 	}
+	var snapshot v1.SnapshotReport
 	out, err := c.NewTask(ctx, req.Dir, v1.CreateTaskRequest{
 		Project: project.ID, Name: TaskName(last, ref.ID), Prompt: Prompt(last),
-		Mode: domain.ModeInteractive, Snapshot: true, NativeSeed: &seed,
+		Mode: domain.ModeInteractive, Snapshot: true, SnapshotReport: &snapshot, NativeSeed: &seed,
 		Requirements: v1.Requirements{Harness: ref.Adapter, Workers: v1.WorkerPreferences{Require: []string{req.Worker}}},
 	})
 	if err != nil {
-		return v1.Task{}, err
+		return v1.Task{}, "", err
 	}
-	return out.Task, nil
+	return out.Task, snapshot.Tree, nil
 }
 
-func resume(ctx context.Context, c Controller, task string, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, error) {
-	t, err := c.Task(ctx, task, "")
+// resume continues the Task the session already has. The tree travels only if it is not the
+// one the Controller was told about at the last handoff: then the Worker has the work of the
+// user. Unchanged, the Run continues from the last checkpoint of the Task, which holds what
+// the Worker did since, and a snapshot of the old tree would take it back.
+func resume(ctx context.Context, c Controller, rec session.Record, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, string, error) {
+	t, err := c.Task(ctx, rec.Task, "")
 	if err != nil {
-		return v1.Task{}, err
+		return v1.Task{}, "", err
+	}
+	snap, err := c.TakeSnapshot(ctx, req.Dir)
+	if err != nil {
+		return v1.Task{}, "", err
 	}
 	if err := upload(ctx, c, t.ProjectID, exp); err != nil {
-		return v1.Task{}, err
+		return v1.Task{}, "", err
 	}
-	out, err := c.ResumeTaskWith(ctx, task, "", v1.ResumeTaskRequest{Worker: req.Worker, NativeSeed: &seed, Force: req.Force})
+	resume := v1.ResumeTaskRequest{Worker: req.Worker, NativeSeed: &seed, Force: req.Force}
+	if snap.Tree != rec.Tree {
+		if err := c.PushSnapshot(ctx, req.Dir, t.ProjectID, snap.Commit); err != nil {
+			return v1.Task{}, "", err
+		}
+		resume.SourceSnapshot, resume.SourceBranch = snap.Commit, snap.Branch
+	}
+	out, err := c.ResumeTaskWith(ctx, rec.Task, "", resume)
 	if err != nil {
-		return v1.Task{}, err
+		return v1.Task{}, "", err
 	}
-	return out.Task, nil
+	return out.Task, snap.Tree, nil
 }
 
 func upload(ctx context.Context, c Controller, project string, exp session.Export) error {

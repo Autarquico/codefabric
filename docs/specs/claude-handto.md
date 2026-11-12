@@ -34,7 +34,16 @@ Owner previsto en el bucle Develop: backend-eng.
   El Run es interactivo (`--interactive`) y su prompt de continuación y el nombre de la Task salen de la sesión
   (último mensaje del usuario, truncado). Imprime la Task, el Worker y `cf attach <task>`.
 - Sesión viva propia: se permite cuando el id es el de la sesión que llama; el export corta el jsonl tras el
-  último `tool_use` (la propia llamada). Tras el éxito, marcador local `handed-off`.
+  último `tool_use` (la propia llamada). Tras el éxito, marcador local `handed-off`. (Enmienda) "la que llama" se
+  verifica: el proceso `claude` dueño de la sesión (`~/.claude/sessions/<pid>.json` con ese `sessionId`) debe ser
+  ancestro del proceso de `cf` (cadena de ppid, `/proc` o `ps`); si no, la sesión está abierta en otra ventana y se
+  rechaza pidiendo cerrarla. En Codex la sesión que llama es la que dice `CODEX_SESSION_ID`.
+- (Enmienda) Con Task ligada, el resume lleva snapshot solo si el árbol (por tree de git) cambió respecto al último
+  handoff; si no, continúa del último checkpoint de la Task.
+- (Enmienda) `--force` y `--allow-sensitive-session` exigen TTY: Claude Code ejecuta Bash sin terminal y la skill no
+  puede levantar esas guardas; el error imprime el comando exacto para el terminal del usuario.
+- (Enmienda) Codex entra: `cf codex install|uninstall|status` instala la skill `handto` en `~/.agents/skills`
+  (`$handto <worker>`), y `cf handoff` lee la sesión de `CODEX_SESSION_ID`.
 - `cf claude install [--scope user|project] [--force] [--dry-run]`, `cf claude uninstall`, `cf claude status`:
   escriben la skill embebida en el binario en `~/.claude/skills/handto/SKILL.md` (o `.claude/skills/` del repo con
   `--scope project`), marcada con la versión de `cf`; reutilizan el instalador de skills de `cf mcp install` y su
@@ -45,7 +54,6 @@ Owner previsto en el bucle Develop: backend-eng.
   `/exit` y seguir con `cf attach`; en error muestra el código `CF_*` y no reintenta.
 
 **No entra:**
-- Codex en v0.4.
 - `/handto` dentro de una sesión que ya corre en un Worker (Worker → Worker es `cf task move`).
 - Plugin o marketplace de Claude Code.
 

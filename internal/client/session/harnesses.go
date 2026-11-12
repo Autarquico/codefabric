@@ -32,6 +32,10 @@ type access struct {
 	find func(dir, id string) (path, cwd string, found bool, err error)
 	// live says whether a process has the session open.
 	live func(l *Local, dir, id, transcript string) (bool, error)
+	// owns says whether the process of the harness that has the session open is above
+	// this command in the process tree, which is what makes the session the one that
+	// calls. Nil if the harness tells it through the environment (caller) only.
+	owns func(l *Local, dir, id string) (bool, error)
 	// caller is the id of the session that runs this command, if the harness tells it
 	// through the environment.
 	caller func(getenv func(string) string) string
@@ -42,7 +46,7 @@ func accesses() []access {
 	return []access{
 		{
 			id: claude.ID, porter: claude.Adapter{}, home: homeOf(claude.ConfigHomeEnv, ".claude"),
-			find: findClaude, live: liveClaude, caller: func(func(string) string) string { return "" }, newID: uuid4,
+			find: findClaude, live: liveClaude, owns: ownsClaude, caller: func(func(string) string) string { return "" }, newID: uuid4,
 		},
 		{
 			id: codex.ID, porter: codex.Adapter{}, home: homeOf(codex.ConfigHomeEnv, ".codex"),
@@ -130,13 +134,32 @@ func firstString(path string, pick func(line []byte) string) (string, error) {
 // sessions: one that names the id and whose process is there is open. A file left by
 // a process that died does not count.
 func liveClaude(l *Local, dir, id, _ string) (bool, error) {
+	pids, err := claudePIDs(l, dir, id)
+	return len(pids) > 0, err
+}
+
+// ownsClaude says whether one of the processes that have the session open is an ancestor of
+// this command: the one that runs it is a tool of that Claude Code.
+func ownsClaude(l *Local, dir, id string) (bool, error) {
+	pids, err := claudePIDs(l, dir, id)
+	for _, pid := range pids {
+		if l.hasAncestor(pid) {
+			return true, nil
+		}
+	}
+	return false, err
+}
+
+// claudePIDs are the live processes whose sessions/<pid>.json names the session.
+func claudePIDs(l *Local, dir, id string) ([]int, error) {
 	entries, err := os.ReadDir(filepath.Join(dir, "sessions"))
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, err
 	}
+	var pids []int
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
@@ -150,10 +173,10 @@ func liveClaude(l *Local, dir, id, _ string) (bool, error) {
 			SessionID string `json:"sessionId"`
 		}
 		if json.Unmarshal(raw, &s) == nil && s.SessionID == id && s.PID > 0 && l.pidAlive(s.PID) {
-			return true, nil
+			pids = append(pids, s.PID)
 		}
 	}
-	return false, nil
+	return pids, nil
 }
 
 // codexQuietFor is how long a rollout must have been left alone for Codex to be taken

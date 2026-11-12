@@ -14,6 +14,9 @@ import (
 type Snapshot struct {
 	// Commit is the ID of the commit, which is the digest of the snapshot.
 	Commit string
+	// Tree is the ID of the tree of the commit: two snapshots of the same files have the
+	// same tree, whatever their commits.
+	Tree string
 	// Branch is the local branch the working tree was on; empty if HEAD was detached.
 	Branch string
 	// Excluded are the untracked files the snapshot left out because they match an
@@ -82,7 +85,7 @@ func TakeSnapshot(ctx context.Context, dir string, exclude ...string) (Snapshot,
 		return Snapshot{}, fmt.Errorf("gitctx: git commit-tree answered %q", commit)
 	}
 	branch, _ := git(ctx, dir, "symbolic-ref", "--short", "--quiet", "HEAD") // detached HEAD: no branch
-	return Snapshot{Commit: commit, Branch: strings.TrimSpace(branch), Excluded: excluded}, nil
+	return Snapshot{Commit: commit, Tree: tree, Branch: strings.TrimSpace(branch), Excluded: excluded}, nil
 }
 
 // untrackedMatching lists, sorted, the untracked files that are not ignored and that a

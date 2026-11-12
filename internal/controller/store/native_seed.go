@@ -100,3 +100,66 @@ func (t *Tx) ConsumeTaskPulls(ctx context.Context, task domain.ID, at time.Time)
 	}
 	return nil
 }
+
+// NativeSeed is a session seed a client uploaded for a Project.
+type NativeSeed struct {
+	Project domain.ID
+	Digest  string
+}
+
+// liveSeedUse says a Run keeps the seed alive: it still runs, or its Task is not archived.
+const liveSeedUse = `EXISTS (SELECT 1 FROM runs r JOIN tasks t ON t.id = r.task_id
+	   WHERE r.seed_digest = native_seeds.digest AND t.project_id = native_seeds.project_id
+	     AND (t.archived_at IS NULL OR r.state NOT IN (?, ?, ?, ?, ?)))`
+
+func terminalRunStateArgs() []any {
+	return []any{
+		string(domain.RunSuspended), string(domain.RunCompleted), string(domain.RunFailed),
+		string(domain.RunCancelled), string(domain.RunLost),
+	}
+}
+
+// UnusedNativeSeeds lists the seeds uploaded at or before cutoff that no Run keeps
+// alive: no Run that still runs and no Task that is not archived names them. A
+// seed nobody named yet is garbage once cutoff has passed it.
+func UnusedNativeSeeds(ctx context.Context, q Querier, cutoff time.Time) ([]NativeSeed, error) {
+	args := append([]any{cutoff.UnixNano()}, terminalRunStateArgs()...)
+	rows, err := q.Query(ctx,
+		`SELECT project_id, digest FROM native_seeds WHERE created_at <= ? AND NOT `+liveSeedUse+` ORDER BY project_id, digest`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the unused native seeds: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []NativeSeed
+	for rows.Next() {
+		var project string
+		var s NativeSeed
+		if err := rows.Scan(&project, &s.Digest); err != nil {
+			return nil, fmt.Errorf("store: scanning a native seed: %w", err)
+		}
+		s.Project = domain.ID(project)
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// DeleteNativeSeeds deletes the seeds, unless a Run started to keep one alive since
+// it was listed, and returns how many went. The blob is freed by the blob sweep
+// once no seed or checkpoint names it.
+func (db *DB) DeleteNativeSeeds(ctx context.Context, seeds []NativeSeed) (int64, error) {
+	var n int64
+	err := db.WithTx(ctx, func(tx *Tx) error {
+		n = 0
+		for _, s := range seeds {
+			args := append([]any{string(s.Project), s.Digest}, terminalRunStateArgs()...)
+			c, err := deleted(tx.Exec(ctx,
+				`DELETE FROM native_seeds WHERE project_id = ? AND digest = ? AND NOT `+liveSeedUse, args...))
+			if err != nil {
+				return err
+			}
+			n += c
+		}
+		return nil
+	})
+	return n, err
+}

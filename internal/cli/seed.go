@@ -94,7 +94,7 @@ func (s *seed) handedOff(task string) error {
 	if s == nil {
 		return nil
 	}
-	return s.local.State.MarkHandedOff(s.id, task, s.digest, time.Now())
+	return s.local.State.MarkHandedOff(s.id, task, s.digest, "", time.Now())
 }
 
 // asUserError gives the refusals of the sessions a code the CLI can show and a script

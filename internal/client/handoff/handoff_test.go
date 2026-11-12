@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/client/gitctx"
 	"github.com/Autarquico/codefabric/internal/client/session"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -53,8 +54,27 @@ func machine(t *testing.T, content string) *session.Local {
 	}
 	local := session.New(filepath.Join(t.TempDir(), "sessions"))
 	local.ConfigDirs = map[string]string{"claude-code": home}
+	local.UseProcesses(100, func(pid int) (int, bool) { return map[int]int{100: 50, 50: 1}[pid], pid == 100 || pid == 50 }, func(int) bool { return false })
 	return local
 }
+
+// openedBy marks the session as open in the Claude Code process pid, with the command
+// running two processes below the one that is in parents.
+func openedBy(t *testing.T, local *session.Local, pid int, parents map[int]int) {
+	t.Helper()
+	live := filepath.Join(local.ConfigDirs["claude-code"], "sessions")
+	if err := os.MkdirAll(live, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	open := fmt.Sprintf(`{"pid":%d,"sessionId":"%s"}`, pid, sessionID)
+	if err := os.WriteFile(filepath.Join(live, fmt.Sprint(pid)+".json"), []byte(open), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	local.UseProcesses(100, func(p int) (int, bool) { parent, ok := parents[p]; return parent, ok }, func(p int) bool { return p == pid })
+}
+
+// the Claude Code that runs the command: cf (100) under a shell (50) under claude (4242).
+var ownTree = map[int]int{100: 50, 50: 4242, 4242: 1}
 
 type fakeController struct {
 	workers []v1.Worker
@@ -63,6 +83,10 @@ type fakeController struct {
 	puts    map[string][]byte // by digest
 	created []v1.CreateTaskRequest
 	resumed []v1.ResumeTaskRequest
+
+	// tree is the tree of the working directory; pushed are the snapshot commits sent.
+	tree   string
+	pushed []string
 }
 
 func newController(workers ...v1.Worker) *fakeController {
@@ -91,6 +115,9 @@ func (f *fakeController) PutNativeSeed(_ context.Context, _, digest string, r io
 
 func (f *fakeController) NewTask(_ context.Context, _ string, req v1.CreateTaskRequest) (v1.CreateTaskResponse, error) {
 	f.created = append(f.created, req)
+	if req.SnapshotReport != nil {
+		req.SnapshotReport.Tree = f.tree
+	}
 	t := v1.Task{ID: fmt.Sprintf("tsk_%d", len(f.created)), Name: req.Name, ProjectID: "prj_1"}
 	f.tasks[t.ID] = t
 	return v1.CreateTaskResponse{Task: t}, nil
@@ -99,6 +126,15 @@ func (f *fakeController) NewTask(_ context.Context, _ string, req v1.CreateTaskR
 func (f *fakeController) ResumeTaskWith(_ context.Context, ref, _ string, req v1.ResumeTaskRequest) (v1.ResumeTaskResponse, error) {
 	f.resumed = append(f.resumed, req)
 	return v1.ResumeTaskResponse{Task: f.tasks[ref]}, nil
+}
+
+func (f *fakeController) TakeSnapshot(context.Context, string) (gitctx.Snapshot, error) {
+	return gitctx.Snapshot{Commit: strings.Repeat("c", 40), Tree: f.tree, Branch: "feature"}, nil
+}
+
+func (f *fakeController) PushSnapshot(_ context.Context, _, _, commit string) error {
+	f.pushed = append(f.pushed, commit)
+	return nil
 }
 
 func archiveText(t *testing.T, archive []byte) string {
@@ -124,6 +160,7 @@ func request(worker string) Request {
 
 func TestScenario_Handto(t *testing.T) {
 	local, c := machine(t, transcript()), newController(online("w"))
+	openedBy(t, local, 4242, ownTree)
 
 	res, err := Do(t.Context(), c, local, request("w"))
 	if err != nil {
@@ -163,17 +200,25 @@ func TestScenario_Handto(t *testing.T) {
 
 func TestScenario_TurnoEnCurso_TheCallingSessionMayBeOpen(t *testing.T) {
 	local := machine(t, transcript())
-	live := filepath.Join(local.ConfigDirs["claude-code"], "sessions")
-	if err := os.MkdirAll(live, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	// The session that calls is open by definition: its own process is alive.
-	open := fmt.Sprintf(`{"pid":%d,"sessionId":"%s"}`, os.Getpid(), sessionID)
-	if err := os.WriteFile(filepath.Join(live, "1.json"), []byte(open), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	openedBy(t, local, 4242, ownTree)
 	if _, err := Do(t.Context(), newController(online("w")), local, request("w")); err != nil {
 		t.Fatalf("an open session that calls is refused: %v", err)
+	}
+}
+
+// --session of a session open in another window is not the session that calls: its Claude
+// Code is not above the command, so it is refused until it is closed.
+func TestScenario_SesionVivaDeOtraVentana(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"))
+	openedBy(t, local, 4242, map[int]int{100: 50, 50: 777, 777: 1, 4242: 1})
+
+	_, err := Do(t.Context(), c, local, request("w"))
+	var live *session.LiveError
+	if !errors.As(err, &live) {
+		t.Fatalf("a session open elsewhere: %v", err)
+	}
+	if len(c.created)+len(c.puts) != 0 {
+		t.Fatal("something was created or uploaded")
 	}
 }
 
@@ -234,6 +279,41 @@ func TestHandto_ASessionWithATaskIsResumedNotRecreated(t *testing.T) {
 	res, err := Do(t.Context(), c, local, request("w"))
 	if err != nil || !res.Resumed || res.Task != "old" || len(c.created) != 0 || len(c.resumed) != 1 {
 		t.Fatalf("%+v, %v, created %d, resumed %d", res, err, len(c.created), len(c.resumed))
+	}
+}
+
+// A resume carries the tree only if it changed since the last handoff: unchanged, the Run
+// continues from the last checkpoint of the Task, with what the Worker did.
+func TestHandto_AResumeCarriesASnapshotOnlyIfTheTreeChanged(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"))
+	c.tree = "tree-1"
+	first, err := Do(t.Context(), c, local, request("w"))
+	if err != nil || first.Resumed {
+		t.Fatalf("%+v, %v", first, err)
+	}
+	if rec, _ := local.State.Get(sessionID); rec.Tree != "tree-1" {
+		t.Fatalf("the registry keeps tree %q", rec.Tree)
+	}
+
+	again := request("w")
+	again.Force = true
+	if _, err := Do(t.Context(), c, local, again); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.resumed) != 1 || c.resumed[0].SourceSnapshot != "" || len(c.pushed) != 0 {
+		t.Fatalf("unchanged tree: resume %+v, pushed %v", c.resumed, c.pushed)
+	}
+
+	c.tree = "tree-2"
+	if _, err := Do(t.Context(), c, local, again); err != nil {
+		t.Fatal(err)
+	}
+	got := c.resumed[1]
+	if want := strings.Repeat("c", 40); got.SourceSnapshot != want || got.SourceBranch != "feature" || len(c.pushed) != 1 || c.pushed[0] != want {
+		t.Fatalf("changed tree: resume %+v, pushed %v", got, c.pushed)
+	}
+	if rec, _ := local.State.Get(sessionID); rec.Tree != "tree-2" {
+		t.Errorf("the registry keeps tree %q, want tree-2", rec.Tree)
 	}
 }
 

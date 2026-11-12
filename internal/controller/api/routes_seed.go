@@ -14,9 +14,17 @@ import (
 // checkpoint it never goes through /v1/blobs. TaskPulled is the marker that `cf task
 // pull` leaves, which a resume checks.
 func (s *Server) registerSeedRoutes() {
+	s.handle("GET /v1/checkpoint/exclude", clientsOnly, s.checkpointExclude)
 	s.handle("PUT /v1/projects/{ref}/native-seed/{digest}", clientsOnly, s.putNativeSeed)
 	s.handle("POST /v1/tasks/{ref}/pulled", clientsOnly, s.pulledTask)
 	s.handle("GET /v1/worker/runs/{run}/native-seed", workersOnly, s.getNativeSeed)
+}
+
+// checkpointExclude tells a client what checkpoint.exclude is, so that the
+// snapshot it takes leaves out what a capture of the Controller would.
+func (s *Server) checkpointExclude(w http.ResponseWriter, _ *http.Request, _ caller) error {
+	writeJSON(w, http.StatusOK, v1.CheckpointExclude{Exclude: s.work.Checkpoints.Exclude()})
+	return nil
 }
 
 func (s *Server) putNativeSeed(w http.ResponseWriter, r *http.Request, c caller) error {

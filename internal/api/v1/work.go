@@ -217,10 +217,18 @@ type ActionRequest struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
+// CheckpointExclude is GET /v1/checkpoint/exclude: checkpoint.exclude, the globs
+// that a capture and a snapshot of a client leave out.
+type CheckpointExclude struct {
+	Exclude []string `json:"exclude"`
+}
+
 // SnapshotReport is what the client says of a snapshot it took: the untracked files that
 // match checkpoint.exclude and so were left out of it.
 type SnapshotReport struct {
 	Excluded []string
+	// Tree is the tree of the snapshot: what tells whether the files changed since another.
+	Tree string
 }
 
 // ResumeTaskRequest is the body of POST /v1/tasks/{ref}/resume. Worker, a name

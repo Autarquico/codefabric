@@ -30,7 +30,7 @@ func WithCheckpointRoots(roots ...CheckpointRoot) Option {
 
 // checkpointGarbage is what a pass would delete: the published checkpoints no
 // root keeps, and the reservations that never completed. Snapshots live under
-// refs/cf/snapshots/ and are not looked at: nothing here can name them.
+// refs/cf/snapshots/ and go with the relay refs of archived Tasks.
 type checkpointGarbage struct {
 	published, reservations []store.CheckpointGarbage
 }
@@ -130,6 +130,48 @@ func (s *Service) deleteCheckpoints(ctx context.Context, list []store.Checkpoint
 		done.Count += n
 		if s.hooks.AfterBatch != nil {
 			s.hooks.AfterBatch(done.Kind, n)
+		}
+		if err := yield(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedsKind is the item of the report for the session seeds of clients.
+const seedsKind = "native_seeds"
+
+func (s *Service) unusedSeeds(ctx context.Context, now time.Time) (seeds []store.NativeSeed, err error) {
+	err = s.db.Read(ctx, func(q store.Querier) (err error) {
+		seeds, err = store.UnusedNativeSeeds(ctx, q, now.Add(-s.policy.CheckpointReservation))
+		return err
+	})
+	return seeds, err
+}
+
+func (s *Service) planSeeds(ctx context.Context, now time.Time) (v1.GCCount, error) {
+	seeds, err := s.unusedSeeds(ctx, now)
+	return v1.GCCount{Kind: seedsKind, Count: int64(len(seeds))}, err
+}
+
+// sweepSeeds deletes the seeds no live Run or Task keeps, which frees their blobs
+// for the sweep that follows. A seed nobody named is left for the same time a
+// reservation of a checkpoint is, so an upload has time to be named by its Task.
+func (s *Service) sweepSeeds(ctx context.Context, rep *v1.GCReport) error {
+	seeds, err := s.unusedSeeds(ctx, s.clock.Now())
+	if err != nil {
+		return err
+	}
+	done := v1.GCCount{Kind: seedsKind}
+	defer func() { rep.Items = append(rep.Items, done) }()
+	for batch := range chunks(seeds, s.policy.BatchSize) {
+		n, err := s.db.DeleteNativeSeeds(ctx, batch)
+		if err != nil {
+			return err
+		}
+		done.Count += n
+		if s.hooks.AfterBatch != nil {
+			s.hooks.AfterBatch(seedsKind, n)
 		}
 		if err := yield(ctx); err != nil {
 			return err

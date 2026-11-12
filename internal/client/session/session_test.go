@@ -142,18 +142,29 @@ func TestExportCutsAtTheLastToolUseOnlyForTheCaller(t *testing.T) {
 	m.writeClaude(t, claudeID, claudeBody(claudeID))
 	m.writeCodex(t, codexID, codexBody(codexID))
 
-	for id, cutLines := range map[string]int{claudeID: 2, codexID: 3} {
-		whole := export(t, m, ExportRequest{SessionID: id})
-		if whole.Manifest.Cut {
-			t.Errorf("%s: cut without being the caller", id)
+	// Claude Code is the grandparent of this command; Codex tells its session through the environment.
+	m.openClaude(t, claudeID, 4242)
+	m.pidAlive = func(pid int) bool { return pid == 4242 }
+	m.processes(map[int]int{100: 50, 50: 4242, 4242: 1}, 100)
+	m.getenv = func(k string) string {
+		if k == "CODEX_SESSION_ID" {
+			return codexID
 		}
+		return ""
+	}
+	for id, cutLines := range map[string]int{claudeID: 2, codexID: 3} {
 		cut := export(t, m, ExportRequest{SessionID: id, Caller: true})
 		if !cut.Manifest.Cut || cut.Manifest.Lines != cutLines {
 			t.Errorf("%s: the cut should end at the tool call, line %d: %+v", id, cutLines, cut.Manifest)
 		}
-		if cut.Digest == whole.Digest || !strings.HasPrefix(cut.Digest, "sha256:") {
-			t.Errorf("%s: digests %s %s", id, cut.Digest, whole.Digest)
+		if !strings.HasPrefix(cut.Digest, "sha256:") {
+			t.Errorf("%s: digest %s", id, cut.Digest)
 		}
+	}
+	m.pidAlive = func(int) bool { return false }
+	m.getenv = func(string) string { return "" }
+	if whole := export(t, m, ExportRequest{SessionID: claudeID}); whole.Manifest.Cut {
+		t.Error("cut without being the caller")
 	}
 }
 
@@ -211,11 +222,43 @@ func TestExportRefusesAnOpenSessionExceptTheCallers(t *testing.T) {
 	if live, err := m.Live(Ref{Adapter: claude.ID, ID: claudeID}); err != nil || !live {
 		t.Fatalf("Live: %v %v", live, err)
 	}
+	m.processes(map[int]int{100: 4242, 4242: 1}, 100)
 	if e := export(t, m, ExportRequest{SessionID: claudeID, Caller: true}); !e.Manifest.Cut {
 		t.Fatal("the caller's open session was not exported cut")
 	}
 	m.pidAlive = func(int) bool { return false } // the file is left by a process that died
 	export(t, m, ExportRequest{SessionID: claudeID})
+}
+
+// processes is a synthetic process table, parent by pid, and self the process that runs the command.
+func (m machine) processes(parents map[int]int, self int) {
+	m.self = func() int { return self }
+	m.parent = func(pid int) (int, bool) { p, ok := parents[pid]; return p, ok }
+}
+
+// A session open in another window is not the one that calls, whatever --session says:
+// only the Claude Code above this command in the process tree is.
+func TestExportClaimsOfTheCallerHoldOnlyForAnAncestorProcess(t *testing.T) {
+	m := newMachine(t)
+	m.writeClaude(t, claudeID, claudeBody(claudeID))
+	m.openClaude(t, claudeID, 4242)
+	m.pidAlive = func(pid int) bool { return pid == 4242 }
+
+	// cf (100) runs under a shell (50) of another Claude Code (777); 4242 is a sibling tree.
+	m.processes(map[int]int{100: 50, 50: 777, 777: 1, 4242: 1}, 100)
+	if _, err := m.Export(t.Context(), ExportRequest{SessionID: claudeID, Caller: true}); !errors.As(err, new(*LiveError)) {
+		t.Fatalf("a session open in another window was exported as the caller: %v", err)
+	}
+
+	m.processes(map[int]int{100: 50, 50: 4242, 4242: 1}, 100)
+	if e := export(t, m, ExportRequest{SessionID: claudeID, Caller: true}); !e.Manifest.Cut {
+		t.Fatal("the session of the Claude Code above the command was not the caller's")
+	}
+
+	m.processes(map[int]int{100: 50, 50: 100}, 100) // a loop in the table ends
+	if _, err := m.Export(t.Context(), ExportRequest{SessionID: claudeID, Caller: true}); !errors.As(err, new(*LiveError)) {
+		t.Fatalf("a loop: %v", err)
+	}
 }
 
 func TestCodexIsOpenWhileItsRolloutIsBeingWritten(t *testing.T) {
@@ -234,7 +277,7 @@ func TestCodexIsOpenWhileItsRolloutIsBeingWritten(t *testing.T) {
 func TestExportOfASessionHandedOffNeedsForce(t *testing.T) {
 	m := newMachine(t)
 	m.writeClaude(t, claudeID, claudeBody(claudeID))
-	if err := m.State.MarkHandedOff(claudeID, "task-1", "sha256:ab", time.Now()); err != nil {
+	if err := m.State.MarkHandedOff(claudeID, "task-1", "sha256:ab", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	_, err := m.Export(t.Context(), ExportRequest{SessionID: claudeID})
@@ -259,7 +302,7 @@ func TestStateRemembersTheTaskAndTheMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
-	if err := s.MarkHandedOff(claudeID, "task-2", "sha256:cd", at); err != nil {
+	if err := s.MarkHandedOff(claudeID, "task-2", "sha256:cd", "", at); err != nil {
 		t.Fatal(err)
 	}
 	r, _ := s.Get(claudeID)

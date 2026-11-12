@@ -53,11 +53,14 @@ type Local struct {
 	clock    func() time.Time
 	// pidAlive says whether a process exists.
 	pidAlive func(int) bool
+	// self is the process that runs this command, and parent the process table: who is above a pid.
+	self   func() int
+	parent func(pid int) (ppid int, ok bool)
 }
 
 // New is the sessions of this machine, with the state of the handoffs under stateDir.
 func New(stateDir string) *Local {
-	return &Local{State: NewState(stateDir), adapters: accesses(), getenv: os.Getenv, clock: time.Now, pidAlive: pidAlive}
+	return &Local{State: NewState(stateDir), adapters: accesses(), getenv: os.Getenv, clock: time.Now, pidAlive: pidAlive, self: os.Getpid, parent: parentOf}
 }
 
 func (l *Local) now() time.Time { return l.clock() }
@@ -139,9 +142,11 @@ type ExportRequest struct {
 	SessionID string
 	// Adapter narrows the search to one harness; empty looks in all.
 	Adapter string
-	// Caller says the session is the one that runs this command (the session of
+	// Caller claims the session is the one that runs this command (the session of
 	// /handto): it is open by definition, which is allowed, and the export ends at the
-	// last tool call, which is that very command.
+	// last tool call, which is that very command. The claim holds only if the process
+	// of the harness that owns the session is above this one: otherwise the session is
+	// open in another window and is refused as any open session is.
 	Caller bool
 	// AllowSensitive exports a session that holds what looks like a secret.
 	AllowSensitive bool
@@ -182,7 +187,12 @@ func (l *Local) Export(ctx context.Context, req ExportRequest) (Export, error) {
 	if rec.HandedOff != nil && !req.Force {
 		return Export{}, &HandedOffError{ID: ref.ID, Task: rec.HandedOff.Task}
 	}
-	caller := req.Caller || a.caller(l.getenv) == ref.ID
+	caller := a.caller(l.getenv) == ref.ID
+	if !caller && req.Caller && a.owns != nil {
+		if caller, err = a.owns(l, dir, ref.ID); err != nil {
+			return Export{}, err
+		}
+	}
 	if !caller {
 		live, err := a.live(l, dir, ref.ID, ref.Transcript)
 		if err != nil {
