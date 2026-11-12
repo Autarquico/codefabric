@@ -45,8 +45,14 @@ func continuationOf(ctx context.Context, q store.Querier, run store.Run, w store
 		ParentRunID: string(run.LineageParent), CheckpointID: string(cp.ID), Ref: cp.SourceRef,
 		Summary: v1.CheckpointSummary(cp.Summary),
 	}
+	keeps, err := projectKeepsNativeState(ctx, q, run.TaskID)
+	if err != nil {
+		return nil, err
+	}
 	native := cp.NativeState
 	switch {
+	case native != nil && !keeps:
+		out.Warnings = append(out.Warnings, "the Project does not keep native state: the Run continues from the source and the summary")
 	case native == nil:
 		out.Warnings = append(out.Warnings, "the checkpoint holds no native state: the Run continues from the source and the summary")
 	case native.Adapter != spec.Requirements.Harness:
@@ -59,6 +65,20 @@ func continuationOf(ctx context.Context, q store.Querier, run store.Run, w store
 		out.NativeState = &v1.NativeStateRef{Adapter: native.Adapter, AdapterVersion: native.AdapterVersion, Digest: native.Digest}
 	}
 	return out, nil
+}
+
+// projectKeepsNativeState is the native_state switch of the Project of task
+// (migration 0504): off, the Controller does not serve it, so it is not offered.
+func projectKeepsNativeState(ctx context.Context, q store.Querier, task domain.ID) (bool, error) {
+	t, err := store.TaskByID(ctx, q, task)
+	if err != nil {
+		return false, fmt.Errorf("leases: the task of a continuation: %w", err)
+	}
+	p, err := store.ProjectByID(ctx, q, t.ProjectID)
+	if err != nil {
+		return false, fmt.Errorf("leases: the project of a continuation: %w", err)
+	}
+	return p.NativeState, nil
 }
 
 // sameMajor says whether the harness the Worker announces is of the major of

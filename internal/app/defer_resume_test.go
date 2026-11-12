@@ -236,6 +236,22 @@ func TestScenario_MajorDistinto(t *testing.T) {
 	}
 }
 
+// A Project switched off after the capture is not offered the native state it
+// would refuse to serve: the Run continues from the source and the summary.
+func TestResume_AProjectThatOptedOutGetsOnlySourceAndSummary(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedClaudeRun(e.joinWorker("alpha", harnessWorkerCaps("2.1.0")))
+	e.deferredWithNative(r)
+	e.setNativeState(false)
+	out, err := e.resumeTask(r, "")
+	must(t, err)
+	target := e.joinWorker("target", harnessWorkerCaps("2.1.0"))
+	e.offer(out.RunID, target)
+	if cont := e.assignOf(target, out.RunID).Continues; cont == nil || cont.NativeState != nil || len(cont.Warnings) == 0 {
+		t.Fatalf("continues = %+v, want source and summary with a warning", cont)
+	}
+}
+
 func TestScenario_AnotherAdapterKeepsOnlySourceAndSummary(t *testing.T) {
 	e := newCheckpointEnv(t)
 	r := e.startedClaudeRun(e.joinWorker("alpha", harnessWorkerCaps("")))
