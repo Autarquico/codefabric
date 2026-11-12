@@ -131,6 +131,9 @@ func (w *seedWorld) serve(rw http.ResponseWriter, r *http.Request) {
 		reply(v1.CreateTaskResponse{Task: v1.Task{ID: "task_1", Short: "T-1", Name: "fix", ProjectID: "proj_1"}})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/tasks/"):
 		reply(v1.Task{ID: "task_1", Short: "T-1", Name: "fix", ProjectID: "proj_1"})
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/runs/"):
+		reply(v1.Run{ID: "run_1", Short: "R-1", TaskID: "task_1", Lineage: domain.LineageInitial,
+			LineageNativeSeed: &v1.NativeStateRef{Adapter: "claude-code", Digest: "sha256:abc"}})
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/resume"):
 		reply(v1.ResumeTaskResponse{Task: v1.Task{ID: "task_1", Name: "fix"}, RunID: "run_2", RunShort: "R-2", CheckpointID: "cp_1"})
 	default:
@@ -355,5 +358,20 @@ func TestScenario_SessionSeed_ASnapshotNamesWhatItLeftOut(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Left out of the snapshot") || !strings.Contains(out.String(), ".env") {
 		t.Errorf("the output does not say what stayed home:\n%s", out.String())
+	}
+}
+
+func TestScenario_SessionSeed_RunShowSaysWhichSessionSeededTheRun(t *testing.T) {
+	newSeedWorld(t)
+	var out, errOut bytes.Buffer
+	if code := RunContext(t.Context(), []string{"run", "show", "run_1"}, strings.NewReader(""), &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s %s", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "native seed: claude-code session sha256:abc") {
+		t.Errorf("%s", out.String())
+	}
+	out.Reset()
+	if code := RunContext(t.Context(), []string{"run", "show", "run_1", "--json"}, strings.NewReader(""), &out, &errOut); code != 0 || !strings.Contains(out.String(), `"lineage_native_seed":{"adapter":"claude-code"`) {
+		t.Errorf("exit %d: %s", code, out.String())
 	}
 }

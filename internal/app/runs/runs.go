@@ -343,6 +343,13 @@ func (s *Service) viewWith(ctx context.Context, q store.Querier, r store.Run, wi
 		r.Branch = branchOf(task, r)
 	}
 	out := view(r, withSpec)
+	seed, err := store.RunSeed(ctx, q, r.ID)
+	if err != nil {
+		return v1.Run{}, err
+	}
+	if seed != nil {
+		out.LineageNativeSeed = &v1.NativeStateRef{Adapter: seed.Adapter, AdapterVersion: seed.AdapterVersion, Digest: seed.Digest}
+	}
 	if r.WorkerID != "" {
 		reachable, err := reach.of(ctx, q, r.WorkerID)
 		if err != nil {

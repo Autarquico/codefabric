@@ -365,9 +365,11 @@ type Run struct {
 	Lineage      domain.LineageKind `json:"lineage"`
 	// LineageParent is the Run this one repeats, for a retry.
 	LineageParent string `json:"lineage_parent_id,omitempty"`
-	SpecDigest    string `json:"spec_digest"`
-	SourceCommit  string `json:"source_commit"`
-	Branch        string `json:"branch,omitempty"`
+	// LineageNativeSeed is the session of a client the Run was seeded with (`--session`).
+	LineageNativeSeed *NativeStateRef `json:"lineage_native_seed,omitempty"`
+	SpecDigest        string          `json:"spec_digest"`
+	SourceCommit      string          `json:"source_commit"`
+	Branch            string          `json:"branch,omitempty"`
 	// Model is the model the harness said it ran with, known once it ended.
 	Model        string `json:"model,omitempty"`
 	ResultCommit string `json:"result_commit,omitempty"`

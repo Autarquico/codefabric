@@ -40,4 +40,15 @@ func TestScenario_ResumeDesdeSnapshot(t *testing.T) {
 	if got := e.storedSeed(out.RunID); got == nil || got.Digest != seed.Digest {
 		t.Errorf("seed = %+v", got)
 	}
+	// The view of the Run says which session seeded it, and a Run without one says nothing.
+	view, err := e.app.Runs.Get(t.Context(), out.RunID)
+	must(t, err)
+	if view.LineageNativeSeed == nil || *view.LineageNativeSeed != *seed {
+		t.Errorf("lineage_native_seed = %+v, want %+v", view.LineageNativeSeed, seed)
+	}
+	parent, err := e.app.Runs.Get(t.Context(), string(run.LineageParent))
+	must(t, err)
+	if parent.LineageNativeSeed != nil {
+		t.Errorf("the parent shows a seed: %+v", parent.LineageNativeSeed)
+	}
 }
