@@ -3,39 +3,43 @@ package checkpoints
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/mutation"
+	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-// pollEvery is how often CaptureBeforeDestroy looks whether the captures it asked are done.
+// pollEvery is how often AwaitCaptures looks whether the captures it asked are done.
 const pollEvery = 250 * time.Millisecond
 
-// CaptureBeforeDestroy asks each Run a checkpoint of trigger pre-destructive and
-// waits for the captures, for at most wait, so that what is about to be thrown
-// away is kept if it can be. It never fails the destructive action: a Run whose
-// checkpoint could not be asked, failed, or was not published in time is
-// reported with why, and the caller goes on. The answers are in the order of runs.
-func (s *Service) CaptureBeforeDestroy(ctx context.Context, runs []domain.ID, wait time.Duration) []v1.ForcedRun {
-	out := make([]v1.ForcedRun, len(runs))
+// RequestBeforeDestroy asks the Run a checkpoint of trigger pre-destructive as
+// by, the user who wants the destructive action: the event carries their actor
+// and a repeated requestID answers what the first one did. It never fails: a
+// checkpoint that cannot be asked is reported with why.
+func (s *Service) RequestBeforeDestroy(ctx context.Context, by pki.Session, run domain.ID, requestID string) v1.ForcedRun {
+	got, err := s.Request(ctx, by, run, domain.CheckpointPreDestructive, requestID)
+	if err != nil {
+		return v1.ForcedRun{RunID: string(run), Reason: reasonOf(err)}
+	}
+	return v1.ForcedRun{RunID: string(run), CheckpointID: got.CheckpointID}
+}
+
+// AwaitCaptures waits, for at most wait, for the pre-destructive checkpoints
+// that forced names, asked beforehand with Request in the mutation of the user
+// who wants the destructive action, so that what is about to be thrown away is
+// kept if it can be. It never fails that action: a Run whose checkpoint could
+// not be asked, failed, or was not published in time is reported with why, and
+// the caller goes on. The answers are in the order of forced.
+func (s *Service) AwaitCaptures(ctx context.Context, forced []v1.ForcedRun, wait time.Duration) []v1.ForcedRun {
+	out := slices.Clone(forced)
 	pending := map[int]domain.ID{}
-	for i, run := range runs {
-		out[i].RunID = string(run)
-		var got Requested
-		err := s.db.WithTx(ctx, func(tx *store.Tx) error {
-			var err error
-			got, err = s.RequestIn(ctx, tx, mutation.Act{Actor: systemActor, Now: s.clock.Now()}, run, domain.CheckpointPreDestructive)
-			return err
-		})
-		if err != nil {
-			out[i].Reason = reasonOf(err)
-			continue
+	for i, f := range out {
+		if f.CheckpointID != "" && !f.Captured {
+			pending[i] = domain.ID(f.CheckpointID)
 		}
-		out[i].CheckpointID = got.CheckpointID
-		pending[i] = domain.ID(got.CheckpointID)
 	}
 	if len(pending) == 0 {
 		return out

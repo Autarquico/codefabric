@@ -63,10 +63,10 @@ func (s *Service) planCheckpoints(ctx context.Context, now time.Time) ([]v1.GCCo
 	}, err
 }
 
-// sweepCheckpoints deletes, a batch at a time, the ref of each checkpoint in the
-// relay and then its row. The ref goes first: a failure between the two leaves
-// the row, and the next pass finds it again, where a ref with no row would be
-// found by nobody. The native state goes with the blob sweep that follows, once
+// sweepCheckpoints deletes, a batch at a time, the rows of the checkpoints and,
+// in the same transaction, their refs in the relay: a row that cannot go keeps
+// its ref, and a ref that cannot go brings its row back, so the next pass finds
+// both again. The native state goes with the blob sweep that follows, once
 // no row names it. With no relay nothing is deleted: the rows would orphan the refs.
 func (s *Service) sweepCheckpoints(ctx context.Context, rep *v1.GCReport) error {
 	if s.relay == nil {
@@ -104,23 +104,30 @@ func (s *Service) sweepCheckpoints(ctx context.Context, rep *v1.GCReport) error 
 
 func (s *Service) deleteCheckpoints(ctx context.Context, list []store.CheckpointGarbage, reservations bool, done *v1.GCCount, touched map[domain.ID]bool) error {
 	for batch := range chunks(list, s.policy.BatchSize) {
-		refs := map[domain.ID][]string{}
+		byID := make(map[domain.ID]store.CheckpointGarbage, len(batch))
 		ids := make([]domain.ID, 0, len(batch))
 		for _, c := range batch {
-			refs[c.Project] = append(refs[c.Project], c.Ref)
+			byID[c.ID] = c
 			ids = append(ids, c.ID)
 		}
-		for project, names := range refs {
-			if err := s.deleteRefs(ctx, project, names); err != nil {
-				return err
+		gone, err := s.db.DeleteCheckpoints(ctx, ids, reservations, func(gone []domain.ID) error {
+			refs := map[domain.ID][]string{}
+			for _, id := range gone {
+				refs[byID[id].Project] = append(refs[byID[id].Project], byID[id].Ref)
 			}
-			touched[project] = true
-		}
-		n, err := s.db.DeleteCheckpoints(ctx, ids, reservations)
-		done.Count += n
+			for project, names := range refs {
+				touched[project] = true
+				if err := s.deleteRefs(ctx, project, names); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 		if err != nil {
 			return err
 		}
+		n := int64(len(gone))
+		done.Count += n
 		if s.hooks.AfterBatch != nil {
 			s.hooks.AfterBatch(done.Kind, n)
 		}

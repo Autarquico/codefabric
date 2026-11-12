@@ -35,6 +35,9 @@ func (s *Service) verifyCapture(ctx context.Context, q store.Querier, task store
 	if n == nil {
 		return nil
 	}
+	if err := requireNativeState(ctx, q, task.ID); err != nil {
+		return err
+	}
 	if n.Adapter == "" {
 		return input.Invalid("native state needs the adapter that took it")
 	}
@@ -52,6 +55,24 @@ func (s *Service) verifyCapture(ctx context.Context, q store.Querier, task store
 		return input.Invalid("native state %s was not uploaded", n.Digest)
 	} else if err != nil {
 		return err
+	}
+	return nil
+}
+
+// requireNativeState denies native state to a Project whose owner switched it
+// off (native_state, migration 0504): the Controller neither stores nor serves
+// it, whatever the Worker does.
+func requireNativeState(ctx context.Context, q store.Querier, task domain.ID) error {
+	t, err := store.TaskByID(ctx, q, task)
+	if err != nil {
+		return err
+	}
+	project, err := store.ProjectByID(ctx, q, t.ProjectID)
+	if err != nil {
+		return err
+	}
+	if !project.NativeState {
+		return domain.NewError(domain.CodePolicyDenied, "the Project does not keep native state", nil)
 	}
 	return nil
 }
@@ -87,8 +108,11 @@ func (s *Service) PutNativeState(ctx context.Context, by pki.Session, runID doma
 		return v1.NativeStateUploaded{}, input.Invalid("digest must be sha256:<64 lower-case hex characters>")
 	}
 	err = s.db.Read(ctx, func(q store.Querier) error {
-		_, cp, err := s.ownCheckpoint(ctx, q, by, runID, epoch, id)
+		run, cp, err := s.ownCheckpoint(ctx, q, by, runID, epoch, id)
 		if err != nil {
+			return err
+		}
+		if err := requireNativeState(ctx, q, run.TaskID); err != nil {
 			return err
 		}
 		published, err := store.CheckpointPublishedAt(ctx, q, cp.ID)
@@ -145,6 +169,9 @@ func (s *Service) OpenNativeState(ctx context.Context, by pki.Session, runID dom
 		}
 		if owner.TaskID != run.TaskID {
 			return domain.NewError(domain.CodePolicyDenied, "this checkpoint is not of the Task the Worker holds", nil)
+		}
+		if err := requireNativeState(ctx, q, run.TaskID); err != nil {
+			return err
 		}
 		published, err := store.CheckpointPublishedAt(ctx, q, cp.ID)
 		if err != nil {

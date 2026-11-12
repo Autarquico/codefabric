@@ -98,18 +98,20 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 	runService := runs.New(db, clk, ids, runs.Rederive(rederive), opts...)
 	leaseService := leases.New(db, clk, ids, leases.Rederive(rederive))
 	checkpointService := checkpoints.New(db, clk, ids, checkpoints.Rederive(rederive), checkpointOptions(cfg)...)
-	workersCfg.Force = workers.Force{
-		Capture: checkpointService.CaptureBeforeDestroy, Wait: cfg.PreDestructiveWait, CancelLiveIn: runService.CancelLiveIn,
-	}
 	taskService := tasks.New(db, clk, ids, runService, taskOptions(cfg, checkpointService)...)
 	reconciliationService := reconciliation.New(db, clk, reconciliation.Rederive(rederive), reconciliation.Config{
 		StartedAt: workersCfg.StartedAt, LostTimeout: cfg.RunLostTimeout, OfflineTTL: workersCfg.OfflineTTL,
 		Hooks: cfg.ReconciliationHooks,
 	})
+	moveService := moves.New(db, clk, ids, checkpointService, taskService, reconciliationService)
+	workersCfg.Force = workers.Force{
+		RequestCapture: checkpointService.RequestBeforeDestroy, AwaitCaptures: checkpointService.AwaitCaptures,
+		Wait: cfg.PreDestructiveWait, CancelLiveIn: runService.CancelLiveIn, MoveTasks: moveService.DrainMove,
+	}
 	return &Services{
 		Projects:       projects.New(db, clk, ids),
 		Tasks:          taskService,
-		Moves:          moves.New(db, clk, ids, checkpointService, taskService, reconciliationService),
+		Moves:          moveService,
 		Runs:           runService,
 		Checkpoints:    checkpointService,
 		Workers:        workers.New(db, clk, workersCfg),

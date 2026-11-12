@@ -399,7 +399,9 @@ type CheckpointGarbage struct {
 // UnprotectedCheckpoints lists the published checkpoints that no root keeps.
 // What keeps one: being the latest of a Task that is not archived; being one of
 // the last keepInterval of the `interval` trigger of its Run; a Task archived
-// after archivedCutoff, whose history stays as long as its branches. Roots that
+// after archivedCutoff, whose history stays as long as its branches; the one a
+// Run continues from (runs.lineage_checkpoint_id) or a move names
+// (moves.checkpoint_id), which foreign keys keep alive. Roots that
 // need more than the tables of the store (a move that is not over) are the
 // caller's: it filters the result.
 func UnprotectedCheckpoints(ctx context.Context, q Querier, keepInterval int, archivedCutoff time.Time) ([]CheckpointGarbage, error) {
@@ -409,7 +411,9 @@ func UnprotectedCheckpoints(ctx context.Context, q Querier, keepInterval int, ar
 		     ROW_NUMBER() OVER (PARTITION BY r.task_id ORDER BY c.created_at DESC, c.id DESC) AS task_rank,
 		     ROW_NUMBER() OVER (PARTITION BY c.run_id, c.trigger ORDER BY c.seq DESC) AS trigger_rank
 		   FROM checkpoints c JOIN runs r ON r.id = c.run_id JOIN tasks t ON t.id = r.task_id
-		   WHERE c.published_at IS NOT NULL)
+		   WHERE c.published_at IS NOT NULL
+		     AND NOT EXISTS (SELECT 1 FROM runs lr WHERE lr.lineage_checkpoint_id = c.id)
+		     AND NOT EXISTS (SELECT 1 FROM moves m WHERE m.checkpoint_id = c.id))
 		 SELECT id, project_id FROM ranked
 		 WHERE CASE WHEN archived_at IS NOT NULL THEN archived_at <= ?
 		            ELSE task_rank > 1 AND NOT (trigger = ? AND trigger_rank <= ?) END
@@ -449,23 +453,40 @@ func scanCheckpointGarbage(rows *sql.Rows) ([]CheckpointGarbage, error) {
 	return out, rows.Err()
 }
 
-// DeleteCheckpoints deletes the rows of the checkpoints and returns how many
+// DeleteCheckpoints deletes the rows of the checkpoints and returns the IDs that
 // went. reservations says which kind they are: a row of the other kind, such as
-// a reservation published since it was listed, stays. Their native state is not touched: the blob sweep frees it once no
-// checkpoint names it.
-func (db *DB) DeleteCheckpoints(ctx context.Context, ids []domain.ID, reservations bool) (int64, error) {
-	var n int64
+// a reservation published since it was listed, stays, and so does one a Run or
+// a move started to name since: only the rows that really went are returned.
+// dropRefs runs inside the transaction, after the rows are gone and with the IDs
+// that went, so a ref is never removed for a row that could not be: if it fails,
+// the rows come back. Their native state is not touched: the blob sweep frees it
+// once no checkpoint names it.
+func (db *DB) DeleteCheckpoints(ctx context.Context, ids []domain.ID, reservations bool, dropRefs func(gone []domain.ID) error) ([]domain.ID, error) {
+	var gone []domain.ID
 	err := db.WithTx(ctx, func(tx *Tx) error {
+		gone = gone[:0]
 		for _, id := range ids {
-			c, err := deleted(tx.Exec(ctx, `DELETE FROM checkpoints WHERE id = ? AND (published_at IS NULL) = ?`, string(id), reservations))
+			c, err := deleted(tx.Exec(ctx,
+				`DELETE FROM checkpoints WHERE id = ? AND (published_at IS NULL) = ?
+				   AND NOT EXISTS (SELECT 1 FROM runs WHERE lineage_checkpoint_id = checkpoints.id)
+				   AND NOT EXISTS (SELECT 1 FROM moves WHERE checkpoint_id = checkpoints.id)`,
+				string(id), reservations))
 			if err != nil {
 				return err
 			}
-			n += c
+			if c > 0 {
+				gone = append(gone, id)
+			}
 		}
-		return nil
+		if dropRefs == nil || len(gone) == 0 {
+			return nil
+		}
+		return dropRefs(gone)
 	})
-	return n, err
+	if err != nil {
+		return nil, err
+	}
+	return gone, nil
 }
 
 // CheckpointDigests visits the native state, uploaded or published, that any
