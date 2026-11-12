@@ -22,9 +22,31 @@ const pollEvery = 250 * time.Millisecond
 func (s *Service) RequestBeforeDestroy(ctx context.Context, by pki.Session, run domain.ID, requestID string) v1.ForcedRun {
 	got, err := s.Request(ctx, by, run, domain.CheckpointPreDestructive, requestID)
 	if err != nil {
+		if id := s.captureUnderWay(ctx, run); id != "" {
+			return v1.ForcedRun{RunID: string(run), CheckpointID: string(id)}
+		}
 		return v1.ForcedRun{RunID: string(run), Reason: reasonOf(err)}
 	}
 	return v1.ForcedRun{RunID: string(run), CheckpointID: got.CheckpointID}
+}
+
+// captureUnderWay is the checkpoint a Run is being captured for already (an
+// interval capture, a manual one), which a forced drain waits for instead of
+// cancelling the Run under it; "" if there is none.
+func (s *Service) captureUnderWay(ctx context.Context, run domain.ID) domain.ID {
+	var id domain.ID
+	_ = s.db.Read(ctx, func(q store.Querier) error {
+		r, err := store.RunByID(ctx, q, run)
+		if err != nil || r.State != domain.RunCheckpointing {
+			return err
+		}
+		held, err := store.CheckpointReservationsOfRun(ctx, q, run)
+		if len(held) > 0 {
+			id = held[len(held)-1].ID
+		}
+		return err
+	})
+	return id
 }
 
 // AwaitCaptures waits, for at most wait, for the pre-destructive checkpoints

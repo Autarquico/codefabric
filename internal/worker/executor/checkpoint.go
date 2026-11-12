@@ -85,15 +85,29 @@ func (e *Executor) persistCheckpoint(ctx context.Context, tx *state.Tx, c v1.Wor
 		return nil, &refusal{cmd: *o, why: why}, nil
 	}
 	now := e.clock.Now()
+	live := o.Trigger.Live()
+	if live {
+		// A capture still open is the one the Controller gave up on (it asked for
+		// this one): it ends here, and what is in flight of it is cut short.
+		if open, err := state.CaptureOf(ctx, tx, k); err == nil && open.DoneAt == nil && open.CheckpointID != o.CheckpointID {
+			if _, err := state.EndCapture(ctx, tx, k, state.CaptureAborted, now); err != nil {
+				return nil, nil, err
+			}
+			e.cancelCapture(k)
+		}
+	}
 	exclude := o.Exclude
 	if len(exclude) == 0 {
 		exclude = config.DefaultCheckpointExclude()
 	}
 	created, err := state.BeginCapture(ctx, tx, state.Capture{
-		Key: k, CheckpointID: o.CheckpointID, Trigger: string(o.Trigger), Ref: o.Ref, Exclude: exclude, NativeState: o.NativeState, CreatedAt: now,
+		Key: k, CheckpointID: o.CheckpointID, Trigger: string(o.Trigger), Ref: o.Ref, Exclude: exclude, NativeState: o.NativeState, Live: live, CreatedAt: now,
 	}, r.Phase)
 	if err != nil || !created {
 		return nil, nil, err
+	}
+	if live {
+		return nil, nil, nil // the harness goes on: the supervisor makes the capture on its next look
 	}
 	order := e.stopOrder(k, ReasonCheckpoint, SourceWorker, now)
 	order.WasRunning = true
@@ -201,6 +215,12 @@ func (e *Executor) capturedBeforeSettle(ctx context.Context, r state.Run, exit *
 		e.log.ErrorContext(ctx, "reading the capture of a Run", "run", r.RunID, "err", err)
 		return false
 	}
+	if domain.CheckpointTrigger(c.Trigger).Live() {
+		// A live capture is made while the harness runs, never after the fact: the
+		// Run is over, and what the Controller reserved it aborts.
+		e.log.InfoContext(ctx, "the Run ended while a live capture was open: the capture is abandoned", "run", r.RunID, "checkpoint", c.CheckpointID)
+		return e.closeCapture(ctx, r, state.CaptureAborted)
+	}
 	if exit != nil && exit.Cause == execwrap.CauseExit {
 		e.log.InfoContext(ctx, "the harness ended by itself while a capture was ordered: the exit wins and the capture is abandoned", "run", r.RunID, "checkpoint", c.CheckpointID)
 		return e.closeCapture(ctx, r, state.CaptureAborted)
@@ -215,6 +235,24 @@ func (e *Executor) capturedBeforeSettle(ctx context.Context, r state.Run, exit *
 	} else if fresh, err := state.RunBy(ctx, e.o.DB.Reader(), r.Key); err == nil {
 		r = fresh
 	}
+	return e.attemptCapture(ctx, r, c)
+}
+
+// captureLive makes the live capture a running Run has open, if one is due:
+// the harness is not stopped and the Run stays running, whatever the outcome.
+func (e *Executor) captureLive(ctx context.Context, r state.Run) {
+	c, err := state.CaptureOf(ctx, e.o.DB.Reader(), r.Key)
+	if err != nil || c.DoneAt != nil || !domain.CheckpointTrigger(c.Trigger).Live() || !e.captureDue(r.Key) {
+		return
+	}
+	e.attemptCapture(ctx, r, c)
+}
+
+// attemptCapture is one attempt at the open capture c of a Run, and says
+// whether the capture is closed: reported, abandoned, or out of time. An attempt
+// that the Controller or the relay did not take leaves it open, to be tried
+// again after a wait.
+func (e *Executor) attemptCapture(ctx context.Context, r state.Run, c state.Capture) (closed bool) {
 	cctx, cancel := context.WithCancel(ctx)
 	e.mu.Lock()
 	e.memo(r.Key).cancelCapture = cancel
@@ -231,10 +269,17 @@ func (e *Executor) capturedBeforeSettle(ctx context.Context, r state.Run, exit *
 			e.backOffCapture(r.Key)
 			return false
 		}
-		e.log.ErrorContext(ctx, "a capture could not be reported in time: the Run is settled without it", "run", r.RunID, "checkpoint", c.CheckpointID)
+		e.log.ErrorContext(ctx, "a capture could not be reported in time: it is given up", "run", r.RunID, "checkpoint", c.CheckpointID)
 		outcome = state.CaptureFailed
 	}
-	return e.closeCapture(ctx, r, outcome)
+	if !e.closeCapture(ctx, r, outcome) {
+		return false
+	}
+	e.mu.Lock()
+	m := e.memo(r.Key)
+	m.captureAt, m.captureWait = time.Time{}, 0 // the next capture of this Run starts afresh
+	e.mu.Unlock()
+	return true
 }
 
 func (e *Executor) closeCapture(ctx context.Context, r state.Run, outcome string) bool {
@@ -364,11 +409,12 @@ func (e *Executor) afterControllerError(ctx context.Context, r state.Run, err er
 	return "", true
 }
 
-// failCapture tells the Controller that the capture failed with the harness
-// gone: the Run ends failed there, and keeps its worktree for another try.
+// failCapture tells the Controller that the capture failed. With the harness
+// gone the Run ends failed there, and keeps its worktree for another try; a live
+// capture leaves the harness running, and the Run goes on.
 func (e *Executor) failCapture(ctx context.Context, cc CheckpointClient, r state.Run, c state.Capture, why string) (string, bool) {
 	e.log.WarnContext(ctx, "a capture failed", "run", r.RunID, "checkpoint", c.CheckpointID, "why", why)
-	_, err := cc.FailCheckpoint(ctx, r.RunID, c.CheckpointID, v1.CheckpointFailRequest{LeaseEpoch: r.LeaseEpoch, Reason: reportable(why), HarnessAlive: false})
+	_, err := cc.FailCheckpoint(ctx, r.RunID, c.CheckpointID, v1.CheckpointFailRequest{LeaseEpoch: r.LeaseEpoch, Reason: reportable(why), HarnessAlive: domain.CheckpointTrigger(c.Trigger).Live()})
 	if err == nil {
 		return state.CaptureFailed, false
 	}

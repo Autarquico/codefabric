@@ -52,17 +52,20 @@ type Checkpoint struct {
 	// going. Unset or 0, there are none.
 	Interval Duration `json:"interval,omitempty"`
 	// PreDestructiveTimeout is how long `cf worker drain --force` waits for the
-	// checkpoints it asks before it cancels the Runs. Unset, it is
-	// DefaultPreDestructiveTimeout; it never exceeds MaxPreDestructiveTimeout.
+	// checkpoints it asks before it cancels the Runs: the time a Worker may take
+	// to quiesce a harness (checkpoint.grace) and to publish what it captured.
+	// Unset, it is DefaultPreDestructiveTimeout; it never exceeds
+	// MaxPreDestructiveTimeout.
 	PreDestructiveTimeout Duration `json:"pre_destructive_timeout,omitempty"`
 }
 
 const (
-	// DefaultPreDestructiveTimeout is the default of checkpoint.pre_destructive_timeout.
-	DefaultPreDestructiveTimeout = 20 * time.Second
-	// MaxPreDestructiveTimeout is what a client waits for at most: its requests
-	// time out at 30s.
-	MaxPreDestructiveTimeout = 25 * time.Second
+	// DefaultPreDestructiveTimeout is the default of checkpoint.pre_destructive_timeout:
+	// the default checkpoint.grace (30s, Appendix A) and a margin for the snapshot,
+	// the push and the upload of the native state.
+	DefaultPreDestructiveTimeout = 30*time.Second + 15*time.Second
+	// MaxPreDestructiveTimeout is the longest wait a forced drain accepts.
+	MaxPreDestructiveTimeout = 10 * time.Minute
 )
 
 // PreDestructiveWait is checkpoint.pre_destructive_timeout, with its default

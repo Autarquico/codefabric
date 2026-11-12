@@ -146,7 +146,7 @@ func (s *Service) collect(ctx context.Context, m store.Move) (bool, error) {
 	case domain.RunCheckpointing:
 		return false, nil
 	case domain.RunRunning, domain.RunWaitingInput:
-		return true, s.end(ctx, m, "the capture failed and the Run is still running")
+		return true, s.fail(ctx, m, "the capture was refused and the Run is still running: move it again to ask another")
 	}
 	return true, s.end(ctx, m, fmt.Sprintf("the Run ended (%s) before it could be moved", run.State))
 }

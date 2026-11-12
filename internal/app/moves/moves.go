@@ -132,19 +132,17 @@ func (s *Service) Of(ctx context.Context, ref, project string) (v1.Move, error) 
 // scheduler puts it (the Worker is draining, so not back here). A Task that
 // cannot be moved does not stop the others: it is listed as skipped, with why.
 func (s *Service) DrainMove(ctx context.Context, by pki.Session, worker domain.ID, requestID string) (moved []v1.Move, skipped []v1.MoveSkipped, err error) {
-	var tasks []domain.ID
-	err = s.db.Read(ctx, func(q store.Querier) error {
-		live, err := store.LiveRunsOfWorker(ctx, q, worker)
-		for _, r := range live {
-			tasks = append(tasks, r.TaskID)
-		}
+	var live []store.Run
+	err = s.db.Read(ctx, func(q store.Querier) (err error) {
+		live, err = store.LiveRunsOfWorker(ctx, q, worker)
 		return err
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	moved, skipped = []v1.Move{}, []v1.MoveSkipped{}
-	for _, task := range tasks {
+	for _, run := range live {
+		task := run.TaskID
 		rid := ""
 		if requestID != "" {
 			rid = fmt.Sprintf("%.24s-%s", requestID, task)
@@ -156,6 +154,10 @@ func (s *Service) DrainMove(ctx context.Context, by pki.Session, worker domain.I
 			skipped = append(skipped, v1.MoveSkipped{TaskID: string(task), Reason: de.Message})
 		case err != nil:
 			return moved, skipped, err
+		case resp.Move.SourceRunID != string(run.ID):
+			// Move answers the move the Task already had: the one that brought this
+			// Run here and is not over. It is not a move of this Run.
+			skipped = append(skipped, v1.MoveSkipped{TaskID: string(task), Reason: "the move that brought it here is not over: move it when it ends"})
 		default:
 			moved = append(moved, resp.Move)
 		}
@@ -320,10 +322,6 @@ func (s *Service) canMove(src source, target string) error {
 		if src.unreachable() {
 			return offlineError(src)
 		}
-		if run.State == domain.RunCheckpointing {
-			return domain.NewError(domain.CodeInvalidTransition,
-				fmt.Sprintf("task %s is capturing a checkpoint: move it when that ends", src.task.Name), map[string]any{"state": string(run.State)})
-		}
 		if src.worker != nil && target != "" && src.worker.Name == target {
 			return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("task %s already runs on %s", src.task.Name, target), nil)
 		}
@@ -361,6 +359,13 @@ func noCheckpoint(src source) error {
 // while the target Run does not exist yet. A target Run that failed to start is
 // gone for good: the move goes back to checkpointed to queue another.
 func (s *Service) retry(ctx context.Context, tx *store.Tx, act mutation.Act, m store.Move, target string) error {
+	if m.Stage == store.MoveCheckpointing && m.Failure != "" {
+		// The capture was refused and the Run goes on: the move asks another.
+		if err := tx.RewindCapture(ctx, m.ID, act.Now); err != nil {
+			return err
+		}
+		m.Stage = store.MoveRequested
+	}
 	rewound := m.Stage == store.MoveResuming && m.Failure != ""
 	if rewound {
 		if err := tx.RewindMove(ctx, m.ID, act.Now); err != nil {

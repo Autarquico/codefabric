@@ -54,7 +54,8 @@ func (c *Client) DrainMoveWorker(ctx context.Context, ref, requestID string) (v1
 // the Controller asks and waits for a while.
 func (c *Client) DrainForceWorker(ctx context.Context, ref, requestID string) (v1.DrainForceResponse, error) {
 	var out v1.DrainForceResponse
-	err := c.do(ctx, http.MethodPost, refPath("workers", ref, "drain-force"), v1.ActionRequest{RequestID: requestID}, &out)
+	// It waits for captures, longer than the request timeout: the stream client has none.
+	err := c.doOver(ctx, c.stream.Load(), maxResponse, http.MethodPost, refPath("workers", ref, "drain-force"), v1.ActionRequest{RequestID: requestID}, &out)
 	return out, err
 }
 
