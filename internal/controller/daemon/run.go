@@ -16,6 +16,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/app/checkpoints"
 	"github.com/Autarquico/codefabric/internal/app/gc"
+	"github.com/Autarquico/codefabric/internal/app/moves"
 	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/app/workers"
 	"github.com/Autarquico/codefabric/internal/app/workflows"
@@ -152,7 +153,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		Relay: checkpointRelay(gitRelay), History: checkpointHistory(gitRelay), CheckpointExclude: cfg.Checkpoint.Excluded(),
 	}, runOpts...)
 	services.GC = gc.New(db, o.Clock, blobs, gcPolicy(cfg),
-		gcOptions(p, gitRelay)...)
+		gcOptions(p, gitRelay, services.Moves)...)
 	stopLogs := runLogs(ctx, tee, services, fallback)
 	// §27.1: the stops that are owed are resumed before anything is served.
 	if err := services.Reconciliation.Startup(ctx, o.Logger); err != nil {
@@ -187,6 +188,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		background.Go(func() { services.GC.RunLoop(runCtx, o.Logger) })
 		background.Go(func() { services.Reconciliation.RunGate(runCtx, o.Logger) })
 		background.Go(func() { services.Reconciliation.RunLostSweeper(runCtx, o.Logger) })
+		background.Go(func() { services.Moves.Run(runCtx, services.Reconciliation.Ready(), o.Logger) })
 		background.Go(func() {
 			services.Scheduler.RunAfter(runCtx, services.Reconciliation.Ready(), o.SchedulerTick, o.Logger)
 		})
@@ -213,8 +215,11 @@ func gcPolicy(cfg config.Controller) gc.Policy {
 
 // gcOptions wires the GC to the disk and, when there is one, to the relay: with
 // no relay (no usable git) the pass leaves refs alone.
-func gcOptions(p config.Paths, gitRelay *relay.Relay) []gc.Option {
-	opts := []gc.Option{gc.WithLockFile(p.GCLockFile()), gc.WithDisk(p.DatabaseFile(), p.RelayDir())}
+func gcOptions(p config.Paths, gitRelay *relay.Relay, moves *moves.Service) []gc.Option {
+	// A move that is not over keeps the checkpoint it continues from.
+	opts := []gc.Option{
+		gc.WithLockFile(p.GCLockFile()), gc.WithDisk(p.DatabaseFile(), p.RelayDir()), gc.WithCheckpointRoots(moves.Root),
+	}
 	if gitRelay != nil {
 		opts = append(opts, gc.WithRelay(gitRelay))
 	}

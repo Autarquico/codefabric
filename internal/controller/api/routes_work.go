@@ -40,7 +40,9 @@ func (s *Server) registerWorkRoutes() {
 	s.handle("GET /v1/inbox", clientsOnly, s.inbox)
 	s.handle("POST /v1/tasks/{ref}/defer", clientsOnly, taskAction(s.work.Tasks.Defer))
 	s.handle("POST /v1/tasks/{ref}/resume", clientsOnly, s.resumeTask)
-	s.handle("POST /v1/tasks/{ref}/move", clientsOnly, notImplemented("move"))
+	s.handle("POST /v1/tasks/{ref}/move", clientsOnly, s.moveTask)
+	s.handle("GET /v1/tasks/{ref}/move", clientsOnly, s.getMove)
+	s.handle("POST /v1/workers/{ref}/drain-move", clientsOnly, s.drainMove)
 
 	s.handle("GET /v1/runs", clientsOnly, s.listRuns)
 	s.handle("GET /v1/runs/{ref}", clientsOnly, s.getRun)
@@ -225,6 +227,47 @@ func (s *Server) resumeTask(w http.ResponseWriter, r *http.Request, c caller) er
 		return err
 	}
 	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (s *Server) moveTask(w http.ResponseWriter, r *http.Request, c caller) error {
+	var req v1.MoveTaskRequest
+	if err := decodeOptionalBody(w, r, &req); err != nil {
+		return err
+	}
+	out, err := s.work.Moves.Move(r.Context(), c.Session, r.PathValue("ref"), r.URL.Query().Get("project"), req)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+// getMove is the last move of the Task: CF_NOT_FOUND if it never had one.
+func (s *Server) getMove(w http.ResponseWriter, r *http.Request, _ caller) error {
+	out, err := s.work.Moves.Of(r.Context(), r.PathValue("ref"), r.URL.Query().Get("project"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+// drainMove drains the Worker and moves the Tasks that run on it.
+func (s *Server) drainMove(w http.ResponseWriter, r *http.Request, c caller) error {
+	var req v1.ActionRequest
+	if err := decodeOptionalBody(w, r, &req); err != nil {
+		return err
+	}
+	worker, err := s.work.Workers.Drain(r.Context(), c.Session, r.PathValue("ref"), req)
+	if err != nil {
+		return err
+	}
+	moved, skipped, err := s.work.Moves.DrainMove(r.Context(), c.Session, domain.ID(worker.ID), req.RequestID)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, v1.DrainMoveResponse{Worker: worker, Moves: moved, Skipped: skipped})
 	return nil
 }
 

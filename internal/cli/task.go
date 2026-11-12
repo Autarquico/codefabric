@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,7 +26,7 @@ func newTaskCmd() *cobra.Command {
 		newTaskActionCmd("complete", "Mark a Task completed by hand", (*client.Client).CompleteTask),
 		newTaskActionCmd("archive", "Archive a Task, which frees its name", (*client.Client).ArchiveTask),
 		newTaskDeferCmd(), newTaskResumeCmd(),
-		newFutureTaskCmd("move", "Continue a Task on another Worker", 2, (*client.Client).MoveTask),
+		newTaskMoveCmd(),
 	)
 	return cmd
 }
@@ -189,13 +190,23 @@ func newTaskShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			move, err := lastMove(cmd, c, t.ID)
+			if err != nil {
+				return err
+			}
 			detail := struct {
 				v1.Task
+				Move *v1.Move `json:"move,omitempty"`
 				Runs []v1.Run `json:"runs"`
-			}{t, append([]v1.Run{}, runs...)}
+			}{t, move, append([]v1.Run{}, runs...)}
 			return emit(cmd, detail, func(w io.Writer) error {
 				if err := printTask(w, t); err != nil {
 					return err
+				}
+				if move != nil {
+					if _, err := fmt.Fprintf(w, "Move        %s\n", moveLine(*move)); err != nil {
+						return err
+					}
 				}
 				if len(runs) == 0 {
 					return nil
@@ -207,6 +218,19 @@ func newTaskShowCmd() *cobra.Command {
 	}
 	addProjectFlag(cmd, "Project that narrows a name more than one Project has (default: the one of this directory)")
 	return cmd
+}
+
+// lastMove is the last move of the Task, nil if it never had one.
+func lastMove(cmd *cobra.Command, c *client.Client, task string) (*v1.Move, error) {
+	m, err := c.TaskMove(cmd.Context(), task, "")
+	var coded *domain.Error
+	if errors.As(err, &coded) && coded.Code == domain.CodeNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
 }
 
 func printTask(w io.Writer, t v1.Task) error {
@@ -293,30 +317,5 @@ func newTaskActionCmd(verb, short string, act func(*client.Client, context.Conte
 		},
 	}
 	addProjectFlag(cmd, "Project that narrows a name more than one Project has (default: the one of this directory)")
-	return cmd
-}
-
-// newFutureTaskCmd is a command of §18.2 whose milestone has not arrived: it
-// exists, takes the arguments it will take, and the Controller answers
-// CF_NOT_IMPLEMENTED (exit 8). Flags it will gain are accepted and ignored.
-func newFutureTaskCmd(verb, short string, args int, call func(*client.Client, context.Context, string, string) error) *cobra.Command {
-	use := verb + " <task>"
-	if args == 2 {
-		use += " <worker>"
-	}
-	cmd := &cobra.Command{
-		Use:   use,
-		Short: short + " (not implemented yet)",
-		Args:  cobra.MinimumNArgs(args),
-		RunE: func(cmd *cobra.Command, a []string) error {
-			c, err := openClient(cmd)
-			if err != nil {
-				return err
-			}
-			return call(c, cmd.Context(), a[0], refScope(cmd, c))
-		},
-	}
-	cmd.FParseErrWhitelist.UnknownFlags = true
-	addProjectFlag(cmd, "Project that narrows a name more than one Project has")
 	return cmd
 }

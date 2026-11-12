@@ -56,8 +56,10 @@ func Do[T any](ctx context.Context, db *store.DB, clk clock.Clock, by pki.Sessio
 	var out T
 	err = db.WithTx(ctx, func(tx *store.Tx) error {
 		now := clk.Now()
-		if _, err := pki.RequireCaller(ctx, tx, by, now); err != nil {
-			return err
+		if !by.IsSystem() {
+			if _, err := pki.RequireCaller(ctx, tx, by, now); err != nil {
+				return err
+			}
 		}
 		saved, found, err := tx.SavedResponse(ctx, key, payload)
 		if err != nil {
@@ -90,6 +92,9 @@ func Do[T any](ctx context.Context, db *store.DB, clk clock.Clock, by pki.Sessio
 // certificate, as mcp when the client declared an MCP session. The ID is always
 // the certificate's.
 func actorOf(by pki.Session) domain.ActorRef {
+	if by.IsSystem() {
+		return domain.ActorRef{Kind: domain.ActorSystem, ID: string(by.Principal.ID)}
+	}
 	actor := domain.ActorRef{Kind: by.Principal.ActorKind(), ID: string(by.Principal.ID)}
 	if by.MCPSession != "" && by.Principal.Kind == domain.KindClient {
 		actor.Kind, actor.Session = domain.ActorMCP, by.MCPSession

@@ -42,7 +42,10 @@ func (s *Service) Resume(ctx context.Context, by pki.Session, ref, project strin
 			if err != nil {
 				return v1.ResumeTaskResponse{}, err
 			}
-			if parent.State != domain.RunSuspended {
+			// A lost Run is terminal too, and the Controller no longer has authority over it
+			// (§10.4): it can be continued from its last checkpoint, as a move from an
+			// offline Worker does (§11.5).
+			if parent.State != domain.RunSuspended && parent.State != domain.RunLost {
 				return v1.ResumeTaskResponse{}, domain.NewError(domain.CodeInvalidTransition,
 					fmt.Sprintf("task %s is %s: only a deferred Task can be resumed", task.Name, task.State), map[string]any{"state": string(task.State)})
 			}

@@ -63,7 +63,7 @@ func (s *Service) SweepLost(ctx context.Context) (int, error) {
 		failed []error
 	)
 	for _, run := range due {
-		done, err := s.loseIfDue(ctx, run, false)
+		done, err := s.loseIfDue(ctx, run, "")
 		switch {
 		case err != nil:
 			failed = append(failed, fmt.Errorf("reconciliation: losing %s: %w", run.ID, err))
@@ -74,7 +74,33 @@ func (s *Service) SweepLost(ctx context.Context) (int, error) {
 	return lost, errors.Join(failed...)
 }
 
-func (s *Service) loseIfDue(ctx context.Context, candidate store.Run, identityGone bool) (bool, error) {
+// causeIdentityGone is why a Run is lost with no deadline after a restore.
+const causeIdentityGone = "worker identity gone"
+
+// ForceLose loses a live Run now, without waiting for run_lost_timeout, because
+// a person asked to move it (§11.5): its Worker is offline and they accept to
+// lose what the Run did after its last checkpoint. It says whether the Run was
+// lost by this call; a Run that has ended or is queued is left alone. The event
+// of the loss carries who forced it.
+func (s *Service) ForceLose(ctx context.Context, run domain.ID, by string) (bool, error) {
+	candidate, err := s.runOf(ctx, run)
+	if err != nil {
+		return false, err
+	}
+	return s.loseIfDue(ctx, candidate, "forced by "+by)
+}
+
+func (s *Service) runOf(ctx context.Context, id domain.ID) (run store.Run, err error) {
+	err = s.db.Read(ctx, func(q store.Querier) (err error) {
+		run, err = store.RunByID(ctx, q, id)
+		return err
+	})
+	return run, err
+}
+
+// loseIfDue loses the Run when its deadline has passed or, if cause is not
+// empty, whatever the deadline.
+func (s *Service) loseIfDue(ctx context.Context, candidate store.Run, cause string) (bool, error) {
 	if h := s.cfg.Hooks.BeforeLose; h != nil {
 		h(candidate.ID)
 	}
@@ -94,7 +120,7 @@ func (s *Service) loseIfDue(ctx context.Context, candidate store.Run, identityGo
 			return err
 		}
 		lastSeen, deadline := s.lostDeadline(w)
-		if !identityGone && !now.After(deadline) {
+		if cause == "" && !now.After(deadline) {
 			return nil
 		}
 		status, err := store.RunStatusOf(ctx, tx, run)
@@ -126,8 +152,8 @@ func (s *Service) loseIfDue(ctx context.Context, candidate store.Run, identityGo
 			"last_seen": lastSeen, "controller_started_at": s.cfg.StartedAt, "deadline": deadline,
 			"timeout": s.cfg.LostTimeout.String(), "publication": string(run.Publication),
 		}
-		if identityGone {
-			ev.Data["cause"] = "worker identity gone"
+		if cause != "" {
+			ev.Data["cause"] = cause
 		}
 		if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
 			return err
@@ -177,7 +203,7 @@ func (s *Service) ReleaseReservationsOfGoneWorkers(ctx context.Context, reason s
 	}
 	lost := 0
 	for _, run := range live {
-		done, err := s.loseIfDue(ctx, run, true)
+		done, err := s.loseIfDue(ctx, run, causeIdentityGone)
 		if err != nil {
 			return lost, fmt.Errorf("reconciliation: losing %s: %w", run.ID, err)
 		}

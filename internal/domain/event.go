@@ -51,6 +51,8 @@ const (
 	EventRunExited               EventType = "RunExited"          // the harness of a Run the Controller had ended exited after it
 	EventRunForked               EventType = "RunForked"
 	EventRunContinued            EventType = "RunContinued"
+	EventMoveRequested           EventType = "MoveRequested"    // a Task is to continue on another Worker (§11.5)
+	EventMoveStageChanged        EventType = "MoveStageChanged" // a move reached its next stage, or failed
 	EventRunPromoted             EventType = "RunPromoted"
 	EventRunSealed               EventType = "RunSealed" // the Worker sealed the result into a commit (§22.6)
 	EventRunPublished            EventType = "RunPublished"

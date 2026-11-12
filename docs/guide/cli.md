@@ -180,7 +180,7 @@ Create and manage Tasks.
 - `cancel`, `complete` (mark it completed by hand), `archive` (frees its name).
 - `defer <task>`: suspend the Task's running Run with a checkpoint (the work goes to the Controller's relay, never to `origin`, and the harness's session with it if the Project keeps native state). The Task waits (deferred) once the Worker has published the capture. Deferring a deferred Task changes nothing; a Task with no running Run, or busy with a capture for another reason, is refused (exit 4). `--request-id` makes repeating the call safe.
 - `resume <task> [--worker <name>]`: queue a new Run that continues the deferred Task from the last checkpoint of the deferred Run, which is never started again. `--worker` offers the Run to that Worker only, which prepares its source from the relay. If the harness's session cannot be restored there (another adapter, or another major version than the Worker announces) the Run continues from the source and the summary alone, and the `RunAssigned` event carries the warning. A Task that is not deferred is refused (exit 4).
-- `move` exists but is not implemented yet.
+- `move <task> [<worker>] [--worker <name>] [--force]`: continue the Task on another Worker. It checkpoints the Run (trigger `move`), waits for it to end and then queues a new Run on the target, pinned to `--worker` (or wherever the scheduler puts it). The new Run is only created once the old one is terminal, so the old one cannot report anything afterwards. The move is durable, in stages (`requested`, `checkpointing`, `checkpointed`, `resuming`, `done`) that never go back; the Controller resumes it after a restart, and `cf task show` says where it is. A move that is not over keeps its checkpoint from the GC. If the Run's Worker is offline the Run must be `lost` first: the command refuses (exit 8) and says which checkpoint it would continue from and that what the Run did since is lost; `--force` marks it lost (audited) and goes on. If the target cannot be prepared the stage stays, the Task waits (decision) and repeating `cf task move` retries from that stage without capturing again.
 
 ## `cf version`
 
@@ -194,7 +194,7 @@ Run and administer Workers.
 - `run`: run the Worker daemon until interrupted.
 - `doctor`: check this machine as a Worker: tmux, git, disk, harnesses and their logins.
 - `list`, `show`: Workers with their resources and version.
-- `drain`, `undrain`: stop a Worker from taking new Runs, or let it take them again.
+- `drain`, `undrain`: stop a Worker from taking new Runs, or let it take them again. `drain --move` also moves each Task that runs on the Worker (`cf task move`, the scheduler chooses where); Tasks that cannot be moved are listed with why.
 - `remove`: remove a Worker and revoke its credentials (only without active Runs).
 - `secrets`: manage the secrets this Worker holds for Runs.
 - `install-service`, `uninstall-service`: run the Worker as a service of this user (systemd or launchd).
