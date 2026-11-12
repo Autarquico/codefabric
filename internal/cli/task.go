@@ -45,6 +45,9 @@ func newCreateTaskCmd(use, short string, sessions SessionsFactory) *cobra.Comman
 		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := seedFrom.check(); err != nil {
+				return err
+			}
 			req.Prompt = args[0]
 			req.Completion = domain.Completion(completion)
 			env, err := parseSecretEnv(secretEnv)
@@ -76,6 +79,8 @@ func newCreateTaskCmd(use, short string, sessions SessionsFactory) *cobra.Comman
 			if seeded != nil {
 				req.Project, req.NativeSeed = project, &seeded.ref
 			}
+			var snapshot v1.SnapshotReport
+			req.SnapshotReport = &snapshot
 			out, err := c.NewTask(cmd.Context(), dir, req)
 			if err != nil {
 				return err
@@ -83,7 +88,12 @@ func newCreateTaskCmd(use, short string, sessions SessionsFactory) *cobra.Comman
 			if err := seeded.handedOff(out.Task.ID); err != nil {
 				return err
 			}
-			return emit(cmd, out, func(w io.Writer) error { return printCreated(w, out) })
+			return emit(cmd, out, func(w io.Writer) error {
+				if err := printCreated(w, out); err != nil {
+					return err
+				}
+				return printSnapshotExcluded(w, snapshot.Excluded)
+			})
 		},
 	}
 	f := cmd.Flags()
@@ -115,6 +125,15 @@ func parseSecretEnv(flags []string) ([]v1.SecretEnv, error) {
 		env = append(env, v1.SecretEnv{Name: name, Ref: ref})
 	}
 	return env, nil
+}
+
+// printSnapshotExcluded says which files of the working tree did not travel in a snapshot.
+func printSnapshotExcluded(w io.Writer, excluded []string) error {
+	if len(excluded) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "Left out of the snapshot (checkpoint.exclude): %s.\n", strings.Join(excluded, ", "))
+	return err
 }
 
 func printCreated(w io.Writer, out v1.CreateTaskResponse) error {

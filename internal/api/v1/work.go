@@ -176,6 +176,8 @@ type CreateTaskRequest struct {
 	// that (cf do --snapshot). It never travels: the client turns it into
 	// SourceSnapshot, SourceBranch and the pair of the source.
 	Snapshot bool `json:"-"`
+	// SnapshotReport, if set, is filled with what the snapshot left out; client side only.
+	SnapshotReport *SnapshotReport `json:"-"`
 	// SourceSnapshot is the digest of a snapshot the client sent to the relay
 	// (§22.2); SourceCommit is then that very commit. SourceBranch is the local
 	// branch the snapshot started from. Like the pair, they are no input of the
@@ -215,6 +217,12 @@ type ActionRequest struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
+// SnapshotReport is what the client says of a snapshot it took: the untracked files that
+// match checkpoint.exclude and so were left out of it.
+type SnapshotReport struct {
+	Excluded []string
+}
+
 // ResumeTaskRequest is the body of POST /v1/tasks/{ref}/resume. Worker, a name
 // or ID, makes the Run go to that Worker only.
 //
@@ -227,6 +235,12 @@ type ResumeTaskRequest struct {
 	Worker     string          `json:"worker,omitempty"`
 	NativeSeed *NativeStateRef `json:"native_seed,omitempty"`
 	Force      bool            `json:"force,omitempty"`
+	// SourceSnapshot is the digest of a snapshot the client sent to the relay (`cf task
+	// resume --snapshot`): the Run starts from that tree and not from the checkpoint,
+	// and it needs NativeSeed, the session that carries the conversation. SourceBranch is
+	// the local branch the snapshot started from.
+	SourceSnapshot string `json:"source_snapshot,omitempty"`
+	SourceBranch   string `json:"source_branch,omitempty"`
 }
 
 // PulledTaskRequest is POST /v1/tasks/{ref}/pulled: the client says it brought the
@@ -351,9 +365,11 @@ type Run struct {
 	Lineage      domain.LineageKind `json:"lineage"`
 	// LineageParent is the Run this one repeats, for a retry.
 	LineageParent string `json:"lineage_parent_id,omitempty"`
-	SpecDigest    string `json:"spec_digest"`
-	SourceCommit  string `json:"source_commit"`
-	Branch        string `json:"branch,omitempty"`
+	// LineageNativeSeed is the session of a client the Run was seeded with (`--session`).
+	LineageNativeSeed *NativeStateRef `json:"lineage_native_seed,omitempty"`
+	SpecDigest        string          `json:"spec_digest"`
+	SourceCommit      string          `json:"source_commit"`
+	Branch            string          `json:"branch,omitempty"`
 	// Model is the model the harness said it ran with, known once it ended.
 	Model        string `json:"model,omitempty"`
 	ResultCommit string `json:"result_commit,omitempty"`

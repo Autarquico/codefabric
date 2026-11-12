@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -9,7 +10,6 @@ import (
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
-	"io"
 )
 
 // seedUploaded uploads a session as client for the Project backend and names it as a seed.

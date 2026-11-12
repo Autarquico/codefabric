@@ -6,7 +6,9 @@ import (
 	"fmt"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/input"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
+	"github.com/Autarquico/codefabric/internal/app/runs"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -66,6 +68,10 @@ func (s *Service) ResumeIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
+	snap, err := snapshotOf(req)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
 	seed, err := seedOf(ctx, tx, owner, req.NativeSeed)
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
@@ -73,7 +79,7 @@ func (s *Service) ResumeIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if err := guardPull(ctx, tx, act, task, seed, req.Force); err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
-	out, err := s.continueTask(ctx, tx, act, task, parent, cp, req.Worker)
+	out, err := s.continueTask(ctx, tx, act, task, parent, cp, req.Worker, snap)
 	if err != nil || seed == nil {
 		return out, err
 	}
@@ -97,25 +103,31 @@ func (s *Service) ContinueIn(ctx context.Context, tx *store.Tx, act mutation.Act
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
-	return s.continueTask(ctx, tx, act, task, run, cp, worker)
+	return s.continueTask(ctx, tx, act, task, run, cp, worker, nil)
 }
 
 // continueTask queues the Run that continues parent from cp, pinned to the Worker named,
 // and ends the failed move of the Task. A Task that was cancelled, archived or completed
 // by hand has no Run to queue: its Runs stay as they are.
-func (s *Service) continueTask(ctx context.Context, tx *store.Tx, act mutation.Act, task store.Task, parent store.Run, cp store.Checkpoint, worker string) (v1.ResumeTaskResponse, error) {
+func (s *Service) continueTask(ctx context.Context, tx *store.Tx, act mutation.Act, task store.Task, parent store.Run, cp store.Checkpoint, worker string, snap *snapshotSource) (v1.ResumeTaskResponse, error) {
 	if task.CancelledAt != nil || task.ArchivedAt != nil || task.CompletedManuallyAt != nil {
 		return v1.ResumeTaskResponse{}, notAllowed(task, "resumed")
 	}
-	commit, err := s.checkpointCommit(ctx, task, cp)
-	if err != nil {
+	var (
+		commit string
+		err    error
+	)
+	if snap != nil {
+		// The Run starts from the tree of the client: no checkpoint, and the session seeds it.
+		cp, commit = store.Checkpoint{}, snap.commit
+	} else if commit, err = s.checkpointCommit(ctx, task, cp); err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
 	pin, err := workerName(ctx, tx, worker)
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
-	run, err := s.continueIn(ctx, tx, act, task, parent, cp, commit, pin)
+	run, err := s.continueIn(ctx, tx, act, task, parent, cp, commit, pin, snap)
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
@@ -165,7 +177,7 @@ func endMoveIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domai
 
 // continueIn queues the Run that continues parent from checkpoint cp, with the
 // spec and the Workflow and Environment parent froze (retryIn is its template).
-func (s *Service) continueIn(ctx context.Context, tx *store.Tx, act mutation.Act, task store.Task, parent store.Run, cp store.Checkpoint, commit, pin string) (store.Run, error) {
+func (s *Service) continueIn(ctx context.Context, tx *store.Tx, act mutation.Act, task store.Task, parent store.Run, cp store.Checkpoint, commit, pin string, snap *snapshotSource) (store.Run, error) {
 	all, err := store.Runs(ctx, tx, store.RunFilter{TaskID: task.ID})
 	if err != nil {
 		return store.Run{}, err
@@ -174,10 +186,16 @@ func (s *Service) continueIn(ctx context.Context, tx *store.Tx, act mutation.Act
 	if err != nil {
 		return store.Run{}, err
 	}
+	spec, digest := parent.Spec, parent.SpecDigest
+	if snap != nil {
+		if spec, digest, err = runs.WithSnapshot(spec, snap.commit, snap.branch); err != nil {
+			return store.Run{}, err
+		}
+	}
 	run := store.Run{
 		ID: s.ids.New(domain.KindRun), Short: short, TaskID: task.ID, Attempt: len(all) + 1,
 		Lineage: domain.LineageContinues, LineageParent: parent.ID, LineageCheckpoint: cp.ID, PinnedWorker: pin,
-		Spec: parent.Spec, SpecDigest: parent.SpecDigest, Workflow: parent.Workflow, Environment: parent.Environment,
+		Spec: spec, SpecDigest: digest, Workflow: parent.Workflow, Environment: parent.Environment,
 		SourceCommit: commit,
 		Branch:       domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: short}),
 		State:        domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,
@@ -252,4 +270,28 @@ func workerName(ctx context.Context, q store.Querier, ref string) (string, error
 		}
 	}
 	return "", domain.NewError(domain.CodeNotFound, fmt.Sprintf("no Worker %q", ref), map[string]any{"worker": ref})
+}
+
+// snapshotSource is the tree of a client that a resumed Run starts from.
+type snapshotSource struct{ commit, branch string }
+
+// snapshotOf is the snapshot of a resume, nil if it has none. It is the session of the
+// client that carries the conversation, so a snapshot needs the seed.
+func snapshotOf(req v1.ResumeTaskRequest) (*snapshotSource, error) {
+	if req.SourceSnapshot == "" {
+		if req.SourceBranch != "" {
+			return nil, input.Invalid("source_branch goes with source_snapshot")
+		}
+		return nil, nil
+	}
+	if !domain.ValidSnapshotRef(domain.SnapshotRef(req.SourceSnapshot)) {
+		return nil, input.Invalid("source_snapshot must be the full commit ID of the snapshot")
+	}
+	if req.SourceBranch != "" && !domain.ValidSourceRef(req.SourceBranch) {
+		return nil, input.Invalid("source_branch must be a plain branch name")
+	}
+	if req.NativeSeed == nil {
+		return nil, input.Invalid("a resume from a snapshot continues the session of the client: send it with native_seed (--session)")
+	}
+	return &snapshotSource{commit: req.SourceSnapshot, branch: req.SourceBranch}, nil
 }

@@ -425,3 +425,14 @@ func requireOriginSeparate(ctx context.Context, q store.Querier, in Inherited, p
 	return domain.NewError(domain.CodePolicyDenied,
 		fmt.Sprintf("origin_secret %s cannot also be a harness secret", ref), map[string]any{"ref": ref})
 }
+
+// WithSnapshot is the spec of a Run that starts from a snapshot of a client instead of
+// the source of spec, and its digest: only the source changes.
+func WithSnapshot(spec []byte, commit, branch string) (raw []byte, digest string, err error) {
+	var s runSpec
+	if err := json.Unmarshal(spec, &s); err != nil {
+		return nil, "", fmt.Errorf("runs: reading a spec: %w", err)
+	}
+	s.Source.Commit, s.Source.Snapshot, s.Source.Branch = commit, commit, branch
+	return s.encode()
+}

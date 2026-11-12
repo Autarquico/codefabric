@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -15,6 +16,9 @@ type Snapshot struct {
 	Commit string
 	// Branch is the local branch the working tree was on; empty if HEAD was detached.
 	Branch string
+	// Excluded are the untracked files the snapshot left out because they match an
+	// exclusion, sorted.
+	Excluded []string
 }
 
 // snapshotIdentity authors the commit of a snapshot: it is a temporary commit
@@ -29,7 +33,12 @@ var snapshotIdentity = []string{
 // commit is made on a temporary index, so neither the index, nor the working
 // tree, nor any ref of the user changes (`git status` is the same before and
 // after); the only trace is the new objects. Its parent is HEAD, if there is one.
-func TakeSnapshot(ctx context.Context, dir string) (Snapshot, error) {
+//
+// exclude are globs (checkpoint.exclude, matched at any depth as git's glob
+// pathspec does) that are left out: an untracked file that matches does not enter
+// the commit and is listed in Snapshot.Excluded; a tracked one keeps its version
+// in HEAD.
+func TakeSnapshot(ctx context.Context, dir string, exclude ...string) (Snapshot, error) {
 	tmp, err := os.MkdirTemp("", "cf-snapshot-")
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("gitctx: making a temporary index: %w", err)
@@ -37,8 +46,24 @@ func TakeSnapshot(ctx context.Context, dir string) (Snapshot, error) {
 	defer func() { _ = os.RemoveAll(tmp) }()
 	env := []string{"GIT_INDEX_FILE=" + filepath.Join(tmp, "index")}
 
-	// An empty index and everything added to it is the tree: what was deleted is simply not there.
-	if _, err := gitEnv(ctx, dir, env, "add", "--all", "--", ":/"); err != nil {
+	// The tree is HEAD with the working tree added to it: what was deleted is not
+	// there, and a tracked file that an exclusion matches stays as HEAD has it.
+	head, headErr := git(ctx, dir, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+	hasHead := headErr == nil && fullSHA.MatchString(head)
+	if hasHead {
+		if _, err := gitEnv(ctx, dir, env, "read-tree", "HEAD"); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	excluded, err := untrackedMatching(ctx, dir, exclude)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	add := []string{"add", "--all", "--", ":/"}
+	for _, pattern := range exclude {
+		add = append(add, ":(top,exclude,glob)"+pattern)
+	}
+	if _, err := gitEnv(ctx, dir, env, add...); err != nil {
 		return Snapshot{}, err
 	}
 	tree, err := gitEnv(ctx, dir, env, "write-tree")
@@ -46,7 +71,7 @@ func TakeSnapshot(ctx context.Context, dir string) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	args := []string{"commit-tree", tree, "-m", "cf snapshot"}
-	if head, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err == nil && fullSHA.MatchString(head) {
+	if hasHead {
 		args = append(args, "-p", head)
 	}
 	commit, err := gitEnv(ctx, dir, snapshotIdentity, args...)
@@ -57,5 +82,29 @@ func TakeSnapshot(ctx context.Context, dir string) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("gitctx: git commit-tree answered %q", commit)
 	}
 	branch, _ := git(ctx, dir, "symbolic-ref", "--short", "--quiet", "HEAD") // detached HEAD: no branch
-	return Snapshot{Commit: commit, Branch: strings.TrimSpace(branch)}, nil
+	return Snapshot{Commit: commit, Branch: strings.TrimSpace(branch), Excluded: excluded}, nil
+}
+
+// untrackedMatching lists, sorted, the untracked files that are not ignored and that a
+// glob of patterns matches: what the snapshot is about to leave out.
+func untrackedMatching(ctx context.Context, dir string, patterns []string) ([]string, error) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	args := []string{"ls-files", "--others", "--exclude-standard", "-z", "--full-name", "--"}
+	for _, pattern := range patterns {
+		args = append(args, ":(top,glob)"+pattern)
+	}
+	out, err := git(ctx, dir, args...)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	slices.Sort(paths)
+	return paths, nil
 }

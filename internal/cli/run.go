@@ -73,6 +73,9 @@ func newRunShowCmd() *cobra.Command {
 				if r.LineageParent != "" {
 					lineage += " of " + r.LineageParent
 				}
+				if seed := r.LineageNativeSeed; seed != nil {
+					lineage += fmt.Sprintf(" (native seed: %s session %s)", seed.Adapter, seed.Digest)
+				}
 				environment := "-"
 				if r.Environment != nil {
 					environment = fmt.Sprintf("%s v%d (%s)", r.Environment.Name, r.Environment.Version, r.Environment.Digest)
