@@ -36,26 +36,35 @@ func pinOfRetry(ctx context.Context, tx *store.Tx, parent store.Run) (pin, unpin
 	return "", fmt.Sprintf("worker %s is gone", parent.PinnedWorker), nil
 }
 
-// checkpointOfRetry is the checkpoint a retry continues from: the last the
-// parent published, which is newer than the one the parent itself continued
-// from (so the work of the interval checkpoints is not lost); without one, the
-// one the parent inherited, if any.
-func checkpointOfRetry(ctx context.Context, tx *store.Tx, parent store.Run) (domain.ID, error) {
+// sourceOfRetry is the checkpoint a retry continues from and the commit it starts at:
+// the last checkpoint the parent published, which is newer than the one the parent itself
+// continued from (so the work of the interval checkpoints is not lost), with the tip of
+// its ref in the relay as the commit, so that the tree and the session agree. If the relay
+// cannot say, the pair the parent itself continued from; without one, the commit the
+// parent started at and no checkpoint.
+func sourceOfRetry(ctx context.Context, tx *store.Tx, relay Relay, task store.Task, parent store.Run) (checkpoint domain.ID, commit string, err error) {
 	published, err := store.CheckpointsOfRun(ctx, tx, parent.ID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if n := len(published); n > 0 {
-		return published[n-1].ID, nil
+	if n := len(published); n > 0 && relay != nil {
+		newest := published[n-1]
+		oid, found, err := relay.RefTip(ctx, task.ProjectID, newest.SourceRef)
+		if err != nil {
+			return "", "", err
+		}
+		if found {
+			return newest.ID, oid, nil
+		}
 	}
-	return parent.LineageCheckpoint, nil
+	return parent.LineageCheckpoint, parent.SourceCommit, nil
 }
 
 // retryIn queues the Run that retries the last Run of the Task (§11.7 retry,
 // `reschedule`): the same frozen spec and source (and the checkpoint and the pinned Worker, if the Run continues),
 // as the next attempt, on a branch of its own and with the Run it
 // repeats as its parent. The caller has checked that the policy asks for it.
-func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.IDGenerator, task store.Task) error {
+func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.IDGenerator, relay Relay, task store.Task) error {
 	all, err := store.Runs(ctx, tx, store.RunFilter{TaskID: task.ID})
 	if err != nil {
 		return err
@@ -73,7 +82,7 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 	if err != nil {
 		return err
 	}
-	checkpoint, err := checkpointOfRetry(ctx, tx, parent)
+	checkpoint, commit, err := sourceOfRetry(ctx, tx, relay, task, parent)
 	if err != nil {
 		return err
 	}
@@ -84,7 +93,7 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 	run := store.Run{
 		ID: ids.New(domain.KindRun), Short: short, TaskID: task.ID, Attempt: len(all) + 1,
 		Lineage: domain.LineageRetries, LineageParent: parent.ID, Spec: parent.Spec, SpecDigest: parent.SpecDigest, Workflow: parent.Workflow, Environment: parent.Environment,
-		SourceCommit: parent.SourceCommit, LineageCheckpoint: checkpoint, PinnedWorker: pin,
+		SourceCommit: commit, LineageCheckpoint: checkpoint, PinnedWorker: pin,
 		Branch: domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: short}),
 		State:  domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,
 		Runtime: domain.RuntimeNone, CreatedAt: act.Now,
@@ -97,7 +106,7 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 	ev.Data = map[string]any{
 		"short_id": domain.ShortID{Kind: domain.KindRun, N: short}.String(), "attempt": run.Attempt, "spec_digest": run.SpecDigest,
 		"source_commit": run.SourceCommit, "lineage": string(domain.LineageRetries), "parent": string(parent.ID),
-		"parent_state": string(parent.State),
+		"parent_state": string(parent.State), "checkpoint": string(checkpoint),
 	}
 	if unpinned != "" {
 		ev.Data["unpinned"] = unpinned

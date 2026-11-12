@@ -75,6 +75,7 @@ func (s *Server) drainForce(w http.ResponseWriter, r *http.Request, c caller) er
 	if err := decodeOptionalBody(w, r, &req); err != nil {
 		return err
 	}
+	lift(w) // the wait for the checkpoints can exceed the write timeout
 	out, err := s.work.Workers.DrainForce(r.Context(), c.Session, r.PathValue("ref"), req)
 	if err != nil {
 		return err

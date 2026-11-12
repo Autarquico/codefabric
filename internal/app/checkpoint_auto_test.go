@@ -171,8 +171,8 @@ func TestScenario_PreDestructivo(t *testing.T) {
 	if len(out.Runs) != 1 || !out.Runs[0].Captured || out.Runs[0].CheckpointID != order.CheckpointID {
 		t.Fatalf("runs = %+v, want the checkpoint captured", out.Runs)
 	}
-	if got := e.storedRun(r.run.ID).State; got != domain.RunCancelled {
-		t.Fatalf("Run = %s, want cancelled", got)
+	if got := e.storedRun(r.run.ID); got.State != domain.RunSuspended || got.EndReason != domain.EndDrained {
+		t.Fatalf("Run = %s/%s, want suspended/drained: the captured work is kept", got.State, got.EndReason)
 	}
 	if !r.checkpointRows()[order.CheckpointID] {
 		t.Fatal("the pre-destructive checkpoint is not published")

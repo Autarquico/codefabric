@@ -94,13 +94,41 @@ func TestScenario_ResumeElReintentoContinuaDelCheckpointMasNuevoDelPadre(t *test
 	newer := resumed.mustRequestCheckpoint(domain.CheckpointInterval, "").CheckpointID
 	_, err := resumed.completeCheckpoint(newer)
 	must(t, err)
+	const newerCommit = "fedcba9876543210fedcba9876543210fedcba98"
+	resumed.pushCheckpoint(newer, newerCommit)
 	resumed.mustSend(resumed.entry(v1.ReportExited, exitCode(1)))
 
 	retry, _ := e.retryOf(resumed)
+	if retry.SourceCommit != newerCommit {
+		t.Errorf("source commit = %q, want the commit of the checkpoint %s: tree and session must agree", retry.SourceCommit, newerCommit)
+	}
 	if retry.ID == "" || retry.LineageCheckpoint != domain.ID(newer) || retry.LineageCheckpoint == domain.ID(first) {
 		t.Fatalf("retry = %+v, want the checkpoint %s of the parent, not %s", retry, newer, first)
 	}
 	if retry.PinnedWorker != "beta" {
 		t.Errorf("pin = %q, want beta: it is online", retry.PinnedWorker)
+	}
+}
+
+// A first Run (no lineage) that fails after publishing an interval checkpoint is retried
+// from that checkpoint, at its commit and not at the one the Run started at.
+func TestScenario_ResumeElReintentoDelPrimerRunContinuaDelCheckpointDeIntervalo(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	e.rescheduleOnFailure(r)
+	started := e.storedRun(r.run.ID).SourceCommit
+	cp := r.mustRequestCheckpoint(domain.CheckpointInterval, "").CheckpointID
+	_, err := r.completeCheckpoint(cp)
+	must(t, err)
+	const cpCommit = "fedcba9876543210fedcba9876543210fedcba98"
+	r.pushCheckpoint(cp, cpCommit)
+	r.mustSend(r.entry(v1.ReportExited, exitCode(1)))
+
+	retry, _ := e.retryOf(r)
+	if retry.ID == "" || retry.LineageCheckpoint != domain.ID(cp) {
+		t.Fatalf("retry = %+v, want checkpoint %s", retry, cp)
+	}
+	if retry.SourceCommit != cpCommit || retry.SourceCommit == started {
+		t.Errorf("source commit = %q, want %q (not the %q the first Run started at)", retry.SourceCommit, cpCommit, started)
 	}
 }

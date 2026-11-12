@@ -52,6 +52,9 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, runs *runs.Serv
 	for _, o := range opts {
 		o(s)
 	}
+	if s.relay != nil {
+		s.rederive = NewRederive(ids, s.relay)
+	}
 	return s
 }
 
