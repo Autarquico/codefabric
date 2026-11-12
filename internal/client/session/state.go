@@ -25,6 +25,9 @@ func NewState(dir string) State { return State{dir: dir} }
 type Record struct {
 	// Task is the Task the session was seeded into ("" if it never was).
 	Task string `json:"task,omitempty"`
+	// Tree is the tree of the snapshot that went with the last handoff ("" if none did):
+	// the last state of the files the Controller was told about.
+	Tree string `json:"tree,omitempty"`
 	// HandedOff is set while the work of the session continues somewhere else: writing
 	// in the local session now would make two writers.
 	HandedOff *HandedOff `json:"handed_off,omitempty"`
@@ -100,10 +103,11 @@ func (s State) Link(id, task string) error {
 }
 
 // MarkHandedOff leaves the marker: the session was seeded into task with the seed
-// whose digest is given, and binds it to the Task.
-func (s State) MarkHandedOff(id, task, digest string, at time.Time) error {
+// whose digest is given, and binds it to the Task. tree is that of the snapshot that
+// went with it, "" if none did.
+func (s State) MarkHandedOff(id, task, digest, tree string, at time.Time) error {
 	return s.update(id, func(r *Record) {
-		r.Task = task
+		r.Task, r.Tree = task, tree
 		r.HandedOff = &HandedOff{Task: task, Digest: digest, At: at.UTC()}
 	})
 }

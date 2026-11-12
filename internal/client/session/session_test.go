@@ -234,7 +234,7 @@ func TestCodexIsOpenWhileItsRolloutIsBeingWritten(t *testing.T) {
 func TestExportOfASessionHandedOffNeedsForce(t *testing.T) {
 	m := newMachine(t)
 	m.writeClaude(t, claudeID, claudeBody(claudeID))
-	if err := m.State.MarkHandedOff(claudeID, "task-1", "sha256:ab", time.Now()); err != nil {
+	if err := m.State.MarkHandedOff(claudeID, "task-1", "sha256:ab", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	_, err := m.Export(t.Context(), ExportRequest{SessionID: claudeID})
@@ -259,7 +259,7 @@ func TestStateRemembersTheTaskAndTheMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
-	if err := s.MarkHandedOff(claudeID, "task-2", "sha256:cd", at); err != nil {
+	if err := s.MarkHandedOff(claudeID, "task-2", "sha256:cd", "", at); err != nil {
 		t.Fatal(err)
 	}
 	r, _ := s.Get(claudeID)

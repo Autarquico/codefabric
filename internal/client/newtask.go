@@ -71,7 +71,7 @@ func (c *Client) snapshotSource(ctx context.Context, dir string, project v1.Proj
 	}
 	req.SourceSnapshot, req.SourceCommit, req.SourceBranch = snap.Commit, snap.Commit, snap.Branch
 	if req.SnapshotReport != nil {
-		req.SnapshotReport.Excluded = snap.Excluded
+		req.SnapshotReport.Excluded, req.SnapshotReport.Tree = snap.Excluded, snap.Tree
 	}
 	req.ResolvedRef = first(snap.Branch, project.DefaultBranch)
 	return nil
@@ -83,15 +83,21 @@ func (c *Client) snapshotSource(ctx context.Context, dir string, project v1.Proj
 // the files that checkpoint.exclude names (its default: the Controller does not tell
 // its configuration to clients) do not travel: Snapshot.Excluded lists them.
 func (c *Client) SnapshotDir(ctx context.Context, dir, project string) (gitctx.Snapshot, error) {
-	exclude, err := c.CheckpointExclude(ctx)
-	if err != nil {
-		return gitctx.Snapshot{}, err
-	}
-	snap, err := gitctx.TakeSnapshot(ctx, dir, exclude...)
+	snap, err := c.TakeSnapshot(ctx, dir)
 	if err != nil {
 		return gitctx.Snapshot{}, err
 	}
 	return snap, c.PushSnapshot(ctx, dir, project, snap.Commit)
+}
+
+// TakeSnapshot is SnapshotDir without sending: the commit stays in the repository of dir,
+// so a caller can tell from its tree whether anything changed before deciding to push.
+func (c *Client) TakeSnapshot(ctx context.Context, dir string) (gitctx.Snapshot, error) {
+	exclude, err := c.CheckpointExclude(ctx)
+	if err != nil {
+		return gitctx.Snapshot{}, err
+	}
+	return gitctx.TakeSnapshot(ctx, dir, exclude...)
 }
 
 func first(a, b string) string {

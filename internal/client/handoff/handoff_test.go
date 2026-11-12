@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/client/gitctx"
 	"github.com/Autarquico/codefabric/internal/client/session"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -63,6 +64,10 @@ type fakeController struct {
 	puts    map[string][]byte // by digest
 	created []v1.CreateTaskRequest
 	resumed []v1.ResumeTaskRequest
+
+	// tree is the tree of the working directory; pushed are the snapshot commits sent.
+	tree   string
+	pushed []string
 }
 
 func newController(workers ...v1.Worker) *fakeController {
@@ -91,6 +96,9 @@ func (f *fakeController) PutNativeSeed(_ context.Context, _, digest string, r io
 
 func (f *fakeController) NewTask(_ context.Context, _ string, req v1.CreateTaskRequest) (v1.CreateTaskResponse, error) {
 	f.created = append(f.created, req)
+	if req.SnapshotReport != nil {
+		req.SnapshotReport.Tree = f.tree
+	}
 	t := v1.Task{ID: fmt.Sprintf("tsk_%d", len(f.created)), Name: req.Name, ProjectID: "prj_1"}
 	f.tasks[t.ID] = t
 	return v1.CreateTaskResponse{Task: t}, nil
@@ -99,6 +107,15 @@ func (f *fakeController) NewTask(_ context.Context, _ string, req v1.CreateTaskR
 func (f *fakeController) ResumeTaskWith(_ context.Context, ref, _ string, req v1.ResumeTaskRequest) (v1.ResumeTaskResponse, error) {
 	f.resumed = append(f.resumed, req)
 	return v1.ResumeTaskResponse{Task: f.tasks[ref]}, nil
+}
+
+func (f *fakeController) TakeSnapshot(context.Context, string) (gitctx.Snapshot, error) {
+	return gitctx.Snapshot{Commit: strings.Repeat("c", 40), Tree: f.tree, Branch: "feature"}, nil
+}
+
+func (f *fakeController) PushSnapshot(_ context.Context, _, _, commit string) error {
+	f.pushed = append(f.pushed, commit)
+	return nil
 }
 
 func archiveText(t *testing.T, archive []byte) string {
@@ -234,6 +251,41 @@ func TestHandto_ASessionWithATaskIsResumedNotRecreated(t *testing.T) {
 	res, err := Do(t.Context(), c, local, request("w"))
 	if err != nil || !res.Resumed || res.Task != "old" || len(c.created) != 0 || len(c.resumed) != 1 {
 		t.Fatalf("%+v, %v, created %d, resumed %d", res, err, len(c.created), len(c.resumed))
+	}
+}
+
+// A resume carries the tree only if it changed since the last handoff: unchanged, the Run
+// continues from the last checkpoint of the Task, with what the Worker did.
+func TestHandto_AResumeCarriesASnapshotOnlyIfTheTreeChanged(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"))
+	c.tree = "tree-1"
+	first, err := Do(t.Context(), c, local, request("w"))
+	if err != nil || first.Resumed {
+		t.Fatalf("%+v, %v", first, err)
+	}
+	if rec, _ := local.State.Get(sessionID); rec.Tree != "tree-1" {
+		t.Fatalf("the registry keeps tree %q", rec.Tree)
+	}
+
+	again := request("w")
+	again.Force = true
+	if _, err := Do(t.Context(), c, local, again); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.resumed) != 1 || c.resumed[0].SourceSnapshot != "" || len(c.pushed) != 0 {
+		t.Fatalf("unchanged tree: resume %+v, pushed %v", c.resumed, c.pushed)
+	}
+
+	c.tree = "tree-2"
+	if _, err := Do(t.Context(), c, local, again); err != nil {
+		t.Fatal(err)
+	}
+	got := c.resumed[1]
+	if want := strings.Repeat("c", 40); got.SourceSnapshot != want || got.SourceBranch != "feature" || len(c.pushed) != 1 || c.pushed[0] != want {
+		t.Fatalf("changed tree: resume %+v, pushed %v", got, c.pushed)
+	}
+	if rec, _ := local.State.Get(sessionID); rec.Tree != "tree-2" {
+		t.Errorf("the registry keeps tree %q, want tree-2", rec.Tree)
 	}
 }
 

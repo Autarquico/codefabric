@@ -227,6 +227,8 @@ type CheckpointExclude struct {
 // match checkpoint.exclude and so were left out of it.
 type SnapshotReport struct {
 	Excluded []string
+	// Tree is the tree of the snapshot: what tells whether the files changed since another.
+	Tree string
 }
 
 // ResumeTaskRequest is the body of POST /v1/tasks/{ref}/resume. Worker, a name
