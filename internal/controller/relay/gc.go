@@ -14,14 +14,15 @@ import (
 // child process, so it runs on real time.
 const collectTimeout = 30 * time.Minute
 
-// deletable says whether the GC may delete ref: a branch cf/<task>/<run>, or
-// the ref of an orphan. Every other namespace (refs/cf/checkpoints/*,
-// refs/cf/snapshots/*, whatever a later phase adds) is not its to delete.
+// deletable says whether the GC may delete ref: a branch cf/<task>/<run>, the
+// ref of an orphan, or the ref of a checkpoint (the GC of checkpoints names
+// those by the rows it deletes; Refs does not list them). Every other namespace
+// (refs/cf/snapshots/*, whatever a later phase adds) is not its to delete.
 func deletable(ref string) bool {
 	if branch, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
 		return domain.ValidBranch(branch)
 	}
-	return domain.ValidOrphanRef(ref)
+	return domain.ValidOrphanRef(ref) || domain.ValidCheckpointRef(ref)
 }
 
 // Refs lists, by Project, the refs of its repository that the GC may delete.

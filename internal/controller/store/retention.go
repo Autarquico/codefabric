@@ -387,3 +387,91 @@ func ArchivedRuns(ctx context.Context, q Querier, cutoff time.Time) ([]ArchivedR
 	}
 	return out, rows.Err()
 }
+
+// CheckpointGarbage is a checkpoint the retention may delete: its row, the ref
+// that holds its source in the relay of Project, and the native state it names.
+type CheckpointGarbage struct {
+	ID      domain.ID
+	Project domain.ID
+	Ref     string
+}
+
+// UnprotectedCheckpoints lists the published checkpoints that no root keeps.
+// What keeps one: being the latest of a Task that is not archived; being one of
+// the last keepInterval of the `interval` trigger of its Run; a Task archived
+// after archivedCutoff, whose history stays as long as its branches. Roots that
+// need more than the tables of the store (a move that is not over) are the
+// caller's: it filters the result.
+func UnprotectedCheckpoints(ctx context.Context, q Querier, keepInterval int, archivedCutoff time.Time) ([]CheckpointGarbage, error) {
+	rows, err := q.Query(ctx,
+		`WITH ranked AS (
+		   SELECT c.id, t.project_id, t.archived_at, c.trigger,
+		     ROW_NUMBER() OVER (PARTITION BY r.task_id ORDER BY c.created_at DESC, c.id DESC) AS task_rank,
+		     ROW_NUMBER() OVER (PARTITION BY c.run_id, c.trigger ORDER BY c.seq DESC) AS trigger_rank
+		   FROM checkpoints c JOIN runs r ON r.id = c.run_id JOIN tasks t ON t.id = r.task_id
+		   WHERE c.published_at IS NOT NULL)
+		 SELECT id, project_id FROM ranked
+		 WHERE CASE WHEN archived_at IS NOT NULL THEN archived_at <= ?
+		            ELSE task_rank > 1 AND NOT (trigger = ? AND trigger_rank <= ?) END
+		 ORDER BY id`,
+		archivedCutoff.UnixNano(), string(domain.CheckpointInterval), keepInterval)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the checkpoints to collect: %w", err)
+	}
+	return scanCheckpointGarbage(rows)
+}
+
+// StaleCheckpointReservations lists the reservations, made at or before cutoff,
+// whose capture was never reported done. A Run still checkpointing keeps its own.
+func StaleCheckpointReservations(ctx context.Context, q Querier, cutoff time.Time) ([]CheckpointGarbage, error) {
+	rows, err := q.Query(ctx,
+		`SELECT c.id, t.project_id
+		 FROM checkpoints c JOIN runs r ON r.id = c.run_id JOIN tasks t ON t.id = r.task_id
+		 WHERE c.published_at IS NULL AND c.created_at <= ? AND r.state <> ?
+		 ORDER BY c.id`,
+		cutoff.UnixNano(), string(domain.RunCheckpointing))
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the stale checkpoint reservations: %w", err)
+	}
+	return scanCheckpointGarbage(rows)
+}
+
+func scanCheckpointGarbage(rows *sql.Rows) ([]CheckpointGarbage, error) {
+	defer func() { _ = rows.Close() }()
+	var out []CheckpointGarbage
+	for rows.Next() {
+		var id, project string
+		if err := rows.Scan(&id, &project); err != nil {
+			return nil, fmt.Errorf("store: scanning a checkpoint to collect: %w", err)
+		}
+		out = append(out, CheckpointGarbage{ID: domain.ID(id), Project: domain.ID(project), Ref: domain.CheckpointRef(domain.ID(id))})
+	}
+	return out, rows.Err()
+}
+
+// DeleteCheckpoints deletes the rows of the checkpoints and returns how many
+// went. reservations says which kind they are: a row of the other kind, such as
+// a reservation published since it was listed, stays. Their native state is not touched: the blob sweep frees it once no
+// checkpoint names it.
+func (db *DB) DeleteCheckpoints(ctx context.Context, ids []domain.ID, reservations bool) (int64, error) {
+	var n int64
+	err := db.WithTx(ctx, func(tx *Tx) error {
+		for _, id := range ids {
+			c, err := deleted(tx.Exec(ctx, `DELETE FROM checkpoints WHERE id = ? AND (published_at IS NULL) = ?`, string(id), reservations))
+			if err != nil {
+				return err
+			}
+			n += c
+		}
+		return nil
+	})
+	return n, err
+}
+
+// CheckpointDigests visits the native state, uploaded or published, that any
+// checkpoint names: the blobs the retention of checkpoints keeps alive.
+func CheckpointDigests(ctx context.Context, q Querier, visit func(string)) error {
+	return visitStrings(ctx, q, visit,
+		`SELECT native_digest FROM checkpoints WHERE native_digest IS NOT NULL
+		 UNION SELECT uploaded_digest FROM checkpoints WHERE uploaded_digest IS NOT NULL`)
+}

@@ -34,6 +34,12 @@ type Policy struct {
 	// RelayBranches is retention.relay_branches: how long after its Task is
 	// archived the relay keeps the branches and orphans of its Runs.
 	RelayBranches time.Duration
+	// AutoCheckpoints is the most automatic checkpoints (trigger interval) kept
+	// per Run, besides the roots every checkpoint may have.
+	AutoCheckpoints int
+	// CheckpointReservation is how long the reservation of a checkpoint whose
+	// capture never completed is kept.
+	CheckpointReservation time.Duration
 	// BlobGrace is how long a blob nothing refers to is left alone.
 	BlobGrace time.Duration
 	// BatchSize is gc.batch_size: the most rows a transaction of the GC touches.
@@ -57,6 +63,10 @@ func (p Policy) withDefaults() Policy {
 	def(&p.IdempotencyTTL, domain.Defaults().IdempotencyTTL)
 	def(&p.RelayBranches, 30*day)
 	def(&p.BlobGrace, day)
+	def(&p.CheckpointReservation, 7*day)
+	if p.AutoCheckpoints <= 0 {
+		p.AutoCheckpoints = 5
+	}
 	def(&p.Interval, time.Hour)
 	if p.BatchSize <= 0 {
 		p.BatchSize = 500
@@ -100,6 +110,7 @@ type Service struct {
 	clock  clock.Clock
 	blobs  Blobs
 	relay  Relay // nil: the relay is not collected
+	roots  []CheckpointRoot
 	policy Policy
 	hooks  Hooks
 
@@ -149,6 +160,9 @@ func (s *Service) RunAs(ctx context.Context, by domain.ActorRef, dryRun bool) (v
 func (s *Service) passOnce(ctx context.Context) (v1.GCReport, error) {
 	rep := v1.GCReport{}
 	if err := s.purgeHistory(ctx, &rep); err != nil {
+		return rep, err
+	}
+	if err := s.sweepCheckpoints(ctx, &rep); err != nil {
 		return rep, err
 	}
 	if err := s.sweepBlobs(ctx, &rep); err != nil {
