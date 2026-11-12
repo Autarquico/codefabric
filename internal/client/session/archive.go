@@ -24,11 +24,12 @@ func readManifest(archive []byte) (harness.SessionManifest, error) {
 		return m, fmt.Errorf("session: the archive is not readable: %w", err)
 	}
 	defer func() { _ = gz.Close() }()
-	h, err := tar.NewReader(gz).Next()
+	tr := tar.NewReader(gz)
+	h, err := tr.Next()
 	if err != nil || h.Name != manifestName {
 		return m, errors.New("session: the archive does not start with its manifest")
 	}
-	raw, err := io.ReadAll(io.LimitReader(gz, maxManifestBytes))
+	raw, err := io.ReadAll(io.LimitReader(tr, maxManifestBytes))
 	if err != nil {
 		return m, fmt.Errorf("session: the archive is not readable: %w", err)
 	}

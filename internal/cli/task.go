@@ -26,7 +26,7 @@ func newTaskCmd(sessions SessionsFactory) *cobra.Command {
 		newTaskActionCmd("complete", "Mark a Task completed by hand", (*client.Client).CompleteTask),
 		newTaskActionCmd("archive", "Archive a Task, which frees its name", (*client.Client).ArchiveTask),
 		newTaskDeferCmd(), newTaskResumeCmd(sessions),
-		newTaskMoveCmd(),
+		newTaskMoveCmd(), newTaskPullCmd(sessions),
 	)
 	return cmd
 }
