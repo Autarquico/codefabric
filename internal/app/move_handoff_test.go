@@ -251,6 +251,9 @@ func TestScenario_MoveFallidoSeCierraAlReanudar(t *testing.T) {
 	if m := e.moveOf(r); m.Stage != "failed" {
 		t.Fatalf("move = %s: the resume is the decision and ends it", m.Stage)
 	}
+	if !e.moveEnded("checkpointed") {
+		t.Error("ending the move left no MoveStageChanged")
+	}
 	e.sweepMoves()
 	if n := len(e.taskRuns(r)); n != 2 {
 		t.Fatalf("%d Runs, want 2: the move must not queue another", n)
@@ -266,6 +269,9 @@ func TestScenario_MoveFallidoSeCierraAlCancelar(t *testing.T) {
 	e.wantTask(r, domain.TaskCancelled, domain.WaitingNone)
 	if m := e.moveOf(r); m.Stage != "failed" {
 		t.Fatalf("move = %s", m.Stage)
+	}
+	if !e.moveEnded("checkpointed") {
+		t.Error("ending the move left no MoveStageChanged")
 	}
 }
 
@@ -432,5 +438,169 @@ func TestScenario_MoveRaizDeGC(t *testing.T) {
 	}))
 	if !kept[domain.ID(cp)] || len(kept) != 1 {
 		t.Fatalf("roots = %v", kept)
+	}
+}
+
+// moveEnded says whether the stream has a MoveStageChanged that ends a move from stage.
+func (e *env) moveEnded(from string) bool {
+	e.t.Helper()
+	for _, ev := range e.events(domain.EventMoveStageChanged) {
+		if ev.Data["stage"] == "failed" && ev.Data["from"] == from {
+			return true
+		}
+	}
+	return false
+}
+
+func TestScenario_ReanudarUnaTareaCanceladaNoEncolaRun(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	_, err := e.deferTask(r, "")
+	must(t, err)
+	_, err = r.completeCheckpoint(e.checkpointOrders(r)[0].CheckpointID)
+	must(t, err)
+	e.cancelTask(e.taskOf(r))
+
+	_, err = e.resumeTask(r, "")
+	wantCode(t, err, domain.CodeInvalidTransition)
+	if n := len(e.taskRuns(r)); n != 1 {
+		t.Fatalf("%d Runs: a cancelled Task got a Run", n)
+	}
+	e.wantTask(r, domain.TaskCancelled, domain.WaitingNone)
+}
+
+func TestScenario_CancelarTerminaElMoveEnCurso(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	e.joinWorker("beta", harnessWorkerCaps(""))
+	_, err := e.moveTask(r, v1.MoveTaskRequest{Worker: "beta"})
+	must(t, err)
+	e.cancelTask(e.taskOf(r))
+
+	if m := e.moveOf(r); m.Stage != "failed" || !e.moveEnded("checkpointing") {
+		t.Fatalf("move = %+v: cancelling must end it, with its event", m)
+	}
+	e.sweepMoves()
+	if n := len(e.taskRuns(r)); n != 1 {
+		t.Fatalf("%d Runs: the move brought a cancelled Task back", n)
+	}
+	e.wantTask(r, domain.TaskCancelled, domain.WaitingNone)
+}
+
+func TestScenario_MoveEsperaUnaCapturaEnCurso(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	e.joinWorker("beta", harnessWorkerCaps(""))
+	// An interval capture is under way when the move is looked at.
+	id := r.mustRequestCheckpoint(domain.CheckpointInterval, "").CheckpointID
+	if e.storedRun(r.run.ID).State != domain.RunCheckpointing {
+		t.Fatalf("Run = %s", e.storedRun(r.run.ID).State)
+	}
+	now := e.clock.Now()
+	must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		return tx.InsertMove(t.Context(), store.Move{
+			ID: domain.ID("op_waits"), TaskID: e.storedRun(r.run.ID).TaskID, SourceRunID: domain.ID(r.run.ID), TargetWorker: "beta",
+			Stage: store.MoveRequested, CreatedAt: now, UpdatedAt: now,
+		})
+	}))
+
+	e.sweepMoves()
+	if m := e.moveOf(r); m.Stage != "requested" || m.Failure != "" {
+		t.Fatalf("move = %s (%s): it must wait for the capture", m.Stage, m.Failure)
+	}
+
+	_, err := r.completeCheckpoint(id)
+	must(t, err)
+	e.sweepMoves()
+	wantStage(t, e.moveOf(r), "checkpointing")
+}
+
+// The target that cannot be prepared ends its Run without starting it: the move waits
+// for a decision at the stage resuming and is retried with another target Run.
+func TestScenario_MoveDestinoFallaDeVerdad(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	beta := e.joinWorker("beta", harnessWorkerCaps(""))
+	_, err := e.moveTask(r, v1.MoveTaskRequest{Worker: "beta"})
+	must(t, err)
+	cp := e.checkpointOrders(r)[0].CheckpointID
+	_, err = r.completeCheckpoint(cp)
+	must(t, err)
+	e.sweepMoves()
+	target := e.taskRuns(r)[1]
+	if res := e.pass(); res.Assigned != 1 {
+		t.Fatalf("pass = %+v", res)
+	}
+	var l store.Lease
+	must(t, e.db.Read(t.Context(), func(q store.Querier) (err error) {
+		l, err = store.LeaseByID(t.Context(), q, e.storedRun(target.ID.String()).LeaseID)
+		return err
+	}))
+	_, err = e.accept(beta, l)
+	must(t, err)
+	failed := &reporter{e: e, w: beta, run: v1.Run{ID: target.ID.String()}, lease: l, epoch: reportEpoch}
+	failed.mustSend(failed.entry(v1.ReportPrepareFailed), failed.entry(v1.ReportStopped, neverStarted))
+
+	e.sweepMoves()
+	m := e.moveOf(r)
+	if m.Stage != "resuming" || m.Failure == "" {
+		t.Fatalf("move = %s (%q): a target that failed must leave the move retryable", m.Stage, m.Failure)
+	}
+	e.wantTask(r, domain.TaskWaiting, domain.WaitingDecision)
+	e.sweepMoves()
+	if n := len(e.taskRuns(r)); n != 2 {
+		t.Fatalf("%d Runs: the sweep retried a failed move", n)
+	}
+
+	out, err := e.moveTask(r, v1.MoveTaskRequest{})
+	must(t, err)
+	wantStage(t, out.Move, "resuming")
+	all := e.taskRuns(r)
+	if len(all) != 3 || out.Move.TargetRunID != all[2].ID.String() || all[2].LineageCheckpoint.String() != cp || all[2].State != domain.RunQueued {
+		t.Fatalf("Runs = %+v, move = %+v", all, out.Move)
+	}
+	e.wantTask(r, domain.TaskQueued, domain.WaitingNone)
+	if n := len(e.checkpointOrders(r)); n != 1 {
+		t.Fatalf("%d capture orders: the retry captured again", n)
+	}
+}
+
+func TestScenario_MoveForzadoSeRechazaSinPerderElRun(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	e.joinWorker("beta", harnessWorkerCaps(""))
+	e.publishedCheckpoint(r)
+	e.clock.Advance(2 * time.Minute)
+	must(t, e.app.Workers.Sweep(t.Context()))
+
+	_, err := e.moveTask(r, v1.MoveTaskRequest{Worker: "beta", Force: true, RequestID: "not/valid"})
+	wantCode(t, err, domain.CodeInvalidRequest)
+	if run := e.storedRun(r.run.ID); run.State != domain.RunRunning {
+		t.Fatalf("a refused move left the Run %s", run.State)
+	}
+	if n := len(e.events(domain.EventRunLost)); n != 0 {
+		t.Fatalf("%d run.lost events from a refused move", n)
+	}
+}
+
+func TestScenario_MoveForzadoSeAudita(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	e.joinWorker("beta", harnessWorkerCaps(""))
+	e.publishedCheckpoint(r)
+	e.clock.Advance(2 * time.Minute)
+	must(t, e.app.Workers.Sweep(t.Context()))
+
+	_, err := e.moveTask(r, v1.MoveTaskRequest{Worker: "beta", Force: true})
+	must(t, err)
+	lost := e.events(domain.EventRunLost)
+	if len(lost) != 1 || lost[0].Actor.ID != string(e.owner.Principal.ID) {
+		t.Fatalf("run.lost = %+v: the loss is the user's", lost)
+	}
+	var n int
+	must(t, e.db.Reader().QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM audit_entries WHERE action = 'task.move' AND actor_id = ?`, string(e.owner.Principal.ID)).Scan(&n))
+	if n != 1 {
+		t.Fatalf("%d audit entries of the move by the user", n)
 	}
 }

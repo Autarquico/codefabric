@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -118,7 +117,9 @@ func (s *Service) stop(ctx context.Context, m store.Move) (bool, error) {
 	switch run.State {
 	case domain.RunSuspended, domain.RunLost:
 		return s.checkpointed(ctx, m, run)
-	case domain.RunRunning, domain.RunWaitingInput, domain.RunCheckpointing:
+	case domain.RunCheckpointing:
+		return false, nil // another capture (interval, defer) is under way: look again when it ends
+	case domain.RunRunning, domain.RunWaitingInput:
 		err := s.db.WithTx(ctx, func(tx *store.Tx) error {
 			act := s.act()
 			if _, err := s.capture.RequestIn(ctx, tx, act, run.ID, domain.CheckpointMove); err != nil {
@@ -173,7 +174,7 @@ func (s *Service) checkpointed(ctx context.Context, m store.Move, run store.Run)
 func (s *Service) create(ctx context.Context, m store.Move) (bool, error) {
 	err := s.db.WithTx(ctx, func(tx *store.Tx) error {
 		act := s.act()
-		resp, err := s.resume.ResumeIn(ctx, tx, act, string(m.TaskID), "", v1.ResumeTaskRequest{Worker: m.TargetWorker})
+		resp, err := s.resume.ContinueIn(ctx, tx, act, m.TaskID, m.SourceRunID, m.CheckpointID, m.TargetWorker)
 		if err != nil {
 			return err
 		}
@@ -183,7 +184,8 @@ func (s *Service) create(ctx context.Context, m store.Move) (bool, error) {
 }
 
 // start waits for the Run on the target to leave queued and preparing. A Run
-// that ended without ever running means the target could not be prepared.
+// that ended without ever running means the target could not be prepared: the Task
+// waits for a decision and the move is retried with another target Run.
 func (s *Service) start(ctx context.Context, m store.Move) (bool, error) {
 	run, err := s.runOf(ctx, m.TargetRunID)
 	if err != nil {
@@ -193,7 +195,7 @@ func (s *Service) start(ctx context.Context, m store.Move) (bool, error) {
 	case run.State == domain.RunQueued || run.State == domain.RunPreparing:
 		return false, nil
 	case run.StartedAt == nil && run.State.IsTerminal():
-		return true, s.end(ctx, m, fmt.Sprintf("the Run on the target ended (%s) before it started", run.State))
+		return false, s.fail(ctx, m, fmt.Sprintf("the Run on the target ended (%s) before it started", run.State))
 	}
 	return true, s.advance(ctx, m, store.MoveDone, store.MoveChange{}, "the target Run started")
 }
@@ -242,15 +244,20 @@ func (s *Service) stageError(ctx context.Context, m store.Move, err error) error
 	if !errors.As(err, &de) {
 		return err
 	}
+	return s.fail(ctx, m, de.Message)
+}
+
+// fail records why the stage cannot be done and has the Task wait for a decision.
+func (s *Service) fail(ctx context.Context, m store.Move, why string) error {
 	return s.db.WithTx(ctx, func(tx *store.Tx) error {
 		act := s.act()
-		if err := tx.SetMoveFailure(ctx, m.ID, m.Stage, de.Message, act.Now); err != nil {
+		if err := tx.SetMoveFailure(ctx, m.ID, m.Stage, why, act.Now); err != nil {
 			return err
 		}
 		if err := s.derive(ctx, tx, act, m.TaskID); err != nil {
 			return err
 		}
-		return s.record(ctx, tx, act, m, m.Stage, "move stage failed", de.Message)
+		return s.record(ctx, tx, act, m, m.Stage, "move stage failed", why)
 	})
 }
 
