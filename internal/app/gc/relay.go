@@ -17,12 +17,13 @@ const relayRefsKind = "relay_refs"
 
 // Relay is the git relay as the GC uses it (§29). *relay.Relay implements it.
 //
-// It lists only the refs the GC may ever delete (branches cf/*/*, orphans and
-// snapshots); DeleteRefs refuses any other, so a namespace the GC does not know
-// is out of reach by construction; the refs of checkpoints are deleted by name.
+// It lists only the refs the GC may ever delete (branches cf/*/*, orphans,
+// snapshots and checkpoints); DeleteRefs refuses any other, so a namespace the GC
+// does not know is out of reach by construction.
 type Relay interface {
 	// Refs lists by Project the full names of those refs: refs/heads/cf/<task>/<run>
-	// refs/cf/orphans/<run>-e<epoch> and refs/cf/snapshots/<commit>.
+	// refs/cf/orphans/<run>-e<epoch>, refs/cf/snapshots/<commit> and
+	// refs/cf/checkpoints/<id>.
 	Refs(ctx context.Context) (map[domain.ID][]string, error)
 	DeleteRefs(ctx context.Context, project domain.ID, refs []string) error
 	// Collect runs git gc on the repository of the Project, with git's own
@@ -80,6 +81,36 @@ func (a archivedRefs) owns(project domain.ID, name string) bool {
 	return ok && a.runs[run]
 }
 
+// garbageRefs are the names the GC deletes: those archived Tasks own and the
+// refs of checkpoints that have no row (a deletion that failed after its commit).
+func garbageRefs(ctx context.Context, q store.Querier, archived archivedRefs, project domain.ID, names []string) ([]string, error) {
+	var checkpoints []domain.ID
+	for _, name := range names {
+		if domain.ValidCheckpointRef(name) {
+			checkpoints = append(checkpoints, checkpointOf(name))
+		}
+	}
+	present, err := store.CheckpointsPresent(ctx, q, checkpoints)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, name := range names {
+		if domain.ValidCheckpointRef(name) {
+			if !present[checkpointOf(name)] {
+				out = append(out, name)
+			}
+		} else if archived.owns(project, name) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+func checkpointOf(ref string) domain.ID {
+	return domain.ID(strings.TrimPrefix(ref, "refs/cf/checkpoints/"))
+}
+
 // relayGarbage is the refs to delete, by Project and in a stable order.
 func (s *Service) relayGarbage(ctx context.Context, now time.Time) (map[domain.ID][]string, error) {
 	var archived archivedRefs
@@ -94,12 +125,20 @@ func (s *Service) relayGarbage(ctx context.Context, now time.Time) (map[domain.I
 		return nil, err
 	}
 	out := map[domain.ID][]string{}
-	for project, names := range refs {
-		for _, name := range names {
-			if archived.owns(project, name) {
-				out[project] = append(out[project], name)
+	err = s.db.Read(ctx, func(q store.Querier) error {
+		for project, names := range refs {
+			garbage, err := garbageRefs(ctx, q, archived, project, names)
+			if err != nil {
+				return err
+			}
+			if len(garbage) > 0 {
+				out[project] = garbage
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	for _, names := range out {
 		slices.Sort(names)
@@ -177,7 +216,10 @@ func (s *Service) deleteArchivedRefs(ctx context.Context, project domain.ID, ref
 		if err != nil {
 			return err
 		}
-		still := slices.DeleteFunc(slices.Clone(refs), func(name string) bool { return !archived.owns(project, name) })
+		still, err := garbageRefs(ctx, tx, archived, project, refs)
+		if err != nil {
+			return err
+		}
 		if len(still) == 0 {
 			return nil
 		}

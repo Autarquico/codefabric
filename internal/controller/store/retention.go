@@ -494,10 +494,12 @@ func scanCheckpointGarbage(rows *sql.Rows) ([]CheckpointGarbage, error) {
 // went. reservations says which kind they are: a row of the other kind, such as
 // a reservation published since it was listed, stays, and so does one a Run or
 // a move started to name since: only the rows that really went are returned.
-// dropRefs runs inside the transaction, after the rows are gone and with the IDs
-// that went, so a ref is never removed for a row that could not be: if it fails,
-// the rows come back. Their native state is not touched: the blob sweep frees it
-// once no checkpoint names it.
+// dropRefs runs after the transaction committed, with the IDs that went, so a ref
+// is never removed for a row that could not be, and a rollback never leaves a row
+// pointing at a deleted ref. If it fails the rows stay gone, with their ids
+// returned next to the error, and the refs are orphans the relay sweep collects
+// (CheckpointsPresent). Their native state is not touched: the blob sweep frees
+// it once no checkpoint names it.
 func (db *DB) DeleteCheckpoints(ctx context.Context, ids []domain.ID, reservations bool, dropRefs func(gone []domain.ID) error) ([]domain.ID, error) {
 	var gone []domain.ID
 	err := db.WithTx(ctx, func(tx *Tx) error {
@@ -515,15 +517,28 @@ func (db *DB) DeleteCheckpoints(ctx context.Context, ids []domain.ID, reservatio
 				gone = append(gone, id)
 			}
 		}
-		if dropRefs == nil || len(gone) == 0 {
-			return nil
-		}
-		return dropRefs(gone)
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return gone, nil
+	if dropRefs == nil || len(gone) == 0 {
+		return gone, nil
+	}
+	return gone, dropRefs(gone)
+}
+
+// CheckpointsPresent says which of ids still have a row.
+func CheckpointsPresent(ctx context.Context, q Querier, ids []domain.ID) (map[domain.ID]bool, error) {
+	out := make(map[domain.ID]bool, len(ids))
+	for _, id := range ids {
+		var n int
+		if err := q.QueryRow(ctx, `SELECT COUNT(*) FROM checkpoints WHERE id = ?`, string(id)).Scan(&n); err != nil {
+			return nil, fmt.Errorf("store: looking for checkpoint %s: %w", id, err)
+		}
+		out[id] = n > 0
+	}
+	return out, nil
 }
 
 // CheckpointDigests visits the native state, uploaded or published, that any

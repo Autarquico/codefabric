@@ -3,6 +3,7 @@ package taskpull
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // Outcome is what became of the branch the work was put on.
@@ -82,6 +83,14 @@ func (p *puller) place(ctx context.Context, commit string) (placement, error) {
 		}
 		if checkedOut[name] {
 			if name != current || p.worktreeAsked || p.dirty {
+				continue
+			}
+			clash, err := p.repo.ignoredClash(ctx, commit)
+			if err != nil {
+				return placement{}, err
+			}
+			if len(clash) > 0 {
+				p.warn("%s was not advanced: the checkpoint versions files that are ignored here and the merge would overwrite them (%s); pull again with --worktree", name, strings.Join(clash, ", "))
 				continue
 			}
 			return placement{branch: name, outcome: Advanced, merge: true, old: oid}, nil

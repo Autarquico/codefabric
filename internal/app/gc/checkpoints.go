@@ -64,9 +64,9 @@ func (s *Service) planCheckpoints(ctx context.Context, now time.Time) ([]v1.GCCo
 }
 
 // sweepCheckpoints deletes, a batch at a time, the rows of the checkpoints and,
-// in the same transaction, their refs in the relay: a row that cannot go keeps
-// its ref, and a ref that cannot go brings its row back, so the next pass finds
-// both again. The native state goes with the blob sweep that follows, once
+// once that transaction committed, their refs in the relay: a row that cannot go
+// keeps its ref, and a ref that cannot go stays as an orphan the relay sweep of
+// the next pass deletes (it lists the checkpoint refs without a row). The native state goes with the blob sweep that follows, once
 // no row names it. With no relay nothing is deleted: the rows would orphan the refs.
 func (s *Service) sweepCheckpoints(ctx context.Context, rep *v1.GCReport) error {
 	if s.relay == nil {
@@ -123,11 +123,11 @@ func (s *Service) deleteCheckpoints(ctx context.Context, list []store.Checkpoint
 			}
 			return nil
 		})
+		n := int64(len(gone))
+		done.Count += n
 		if err != nil {
 			return err
 		}
-		n := int64(len(gone))
-		done.Count += n
 		if s.hooks.AfterBatch != nil {
 			s.hooks.AfterBatch(done.Kind, n)
 		}
