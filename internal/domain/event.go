@@ -26,6 +26,11 @@ const (
 	EventTaskCreated      EventType = "TaskCreated"
 	EventTaskStateChanged EventType = "TaskStateChanged"
 	EventTaskNeedsInput   EventType = "TaskNeedsInput"
+	// EventTaskPulled records that a client brought the Task to its own checkout
+	// (`cf task pull`): from then on the work is there, and a resume needs a seed of that
+	// client or --force. EventTaskResumeForced audits the --force that overrode it.
+	EventTaskPulled       EventType = "TaskPulled"
+	EventTaskResumeForced EventType = "TaskResumeForced"
 	EventInputProvided    EventType = "InputProvided"
 
 	EventRunQueued               EventType = "RunQueued"

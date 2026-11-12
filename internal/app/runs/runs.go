@@ -59,7 +59,11 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, rederive Rederi
 
 // Source is what a Run starts from: the commit the client resolved and the ref
 // it resolved it from, which travel together (ADR 0002 D1).
-type Source struct{ Ref, Commit string }
+type Source struct {
+	Ref, Commit string
+	// Branch is the local branch of the client a snapshot started from, if any.
+	Branch string
+}
 
 // CreateIn queues a Run of the Task in tx, freezing what the Run will execute:
 // the Task's configuration resolved against its Project and the defaults, and
@@ -209,52 +213,67 @@ func ended(t store.Task) bool {
 // pending, since its worktree is to be sealed. The reservation is released by
 // RunStopped and the sealing (§10.5).
 func (s *Service) CancelLiveIn(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID) error {
-	task, err := store.TaskByID(ctx, tx, taskID)
-	if err != nil {
-		return err
-	}
 	all, err := store.Runs(ctx, tx, store.RunFilter{TaskID: taskID})
 	if err != nil {
 		return err
 	}
 	for _, run := range all {
-		if run.State.IsTerminal() {
-			continue
-		}
-		status, err := store.RunStatusOf(ctx, tx, run)
-		if err != nil {
-			return err
-		}
-		next, err := domain.NextRunState(status, domain.RunEventCancel)
-		if err != nil {
-			return err
-		}
-		if err := leases.InvalidateIn(ctx, tx, act, &run); err != nil {
-			return err
-		}
-		if err := tx.FinishRun(ctx, run, next.State, "", act.Now); errors.Is(err, store.ErrNoRowChanged) {
-			return domain.NewError(domain.CodeInvalidTransition, "the Run changed state meanwhile", map[string]any{"run": string(run.ID)})
-		} else if err != nil {
-			return err
-		}
-		from := run.State
-		run.State = next.State
-		if run.LeaseState == domain.LeaseAccepted {
-			if err := EndByControllerIn(ctx, tx, act, &run, task, domain.StopCancel); err != nil {
-				return err
-			}
-		}
-		ev := act.Event(domain.EventRunCancelled, "run cancelled")
-		ev.ProjectID, ev.TaskID, ev.RunID = task.ProjectID, taskID, run.ID
-		ev.Data = map[string]any{"short_id": shortID(run.Short), "from": string(from), "publication": string(run.Publication)}
-		if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
-			return err
-		}
-		if err := s.rederive(ctx, tx, act, taskID); err != nil {
+		if err := s.cancelIn(ctx, tx, act, run); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// CancelRunIn cancels that one Run, as CancelLiveIn does each of a Task's, and
+// leaves it alone if it has ended: the other Runs of its Task are not touched.
+func (s *Service) CancelRunIn(ctx context.Context, tx *store.Tx, act mutation.Act, runID domain.ID) error {
+	run, err := store.RunByID(ctx, tx, runID)
+	if err != nil {
+		return err
+	}
+	return s.cancelIn(ctx, tx, act, run)
+}
+
+func (s *Service) cancelIn(ctx context.Context, tx *store.Tx, act mutation.Act, run store.Run) error {
+	if run.State.IsTerminal() {
+		return nil
+	}
+	taskID := run.TaskID
+	task, err := store.TaskByID(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	status, err := store.RunStatusOf(ctx, tx, run)
+	if err != nil {
+		return err
+	}
+	next, err := domain.NextRunState(status, domain.RunEventCancel)
+	if err != nil {
+		return err
+	}
+	if err := leases.InvalidateIn(ctx, tx, act, &run); err != nil {
+		return err
+	}
+	if err := tx.FinishRun(ctx, run, next.State, "", act.Now); errors.Is(err, store.ErrNoRowChanged) {
+		return domain.NewError(domain.CodeInvalidTransition, "the Run changed state meanwhile", map[string]any{"run": string(run.ID)})
+	} else if err != nil {
+		return err
+	}
+	from := run.State
+	run.State = next.State
+	if run.LeaseState == domain.LeaseAccepted {
+		if err := EndByControllerIn(ctx, tx, act, &run, task, domain.StopCancel); err != nil {
+			return err
+		}
+	}
+	ev := act.Event(domain.EventRunCancelled, "run cancelled")
+	ev.ProjectID, ev.TaskID, ev.RunID = task.ProjectID, taskID, run.ID
+	ev.Data = map[string]any{"short_id": shortID(run.Short), "from": string(from), "publication": string(run.Publication)}
+	if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
+		return err
+	}
+	return s.rederive(ctx, tx, act, taskID)
 }
 
 // ListFilter selects Runs by the references of their Task and Project.
@@ -339,6 +358,13 @@ func (s *Service) viewWith(ctx context.Context, q store.Querier, r store.Run, wi
 		r.Branch = branchOf(task, r)
 	}
 	out := view(r, withSpec)
+	seed, err := store.RunSeed(ctx, q, r.ID)
+	if err != nil {
+		return v1.Run{}, err
+	}
+	if seed != nil {
+		out.LineageNativeSeed = &v1.NativeStateRef{Adapter: seed.Adapter, AdapterVersion: seed.AdapterVersion, Digest: seed.Digest}
+	}
 	if r.WorkerID != "" {
 		reachable, err := reach.of(ctx, q, r.WorkerID)
 		if err != nil {

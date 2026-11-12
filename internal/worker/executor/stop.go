@@ -112,7 +112,7 @@ func (e *Executor) stopLocked(ctx context.Context, k state.Key, reason, source s
 		}
 		// The stop wins over the capture, quiescing or live: what it published stays
 		// published, and nothing more is reported of it.
-		if _, err := state.EndCapture(ctx, tx, k, state.CaptureAborted, now); err != nil {
+		if err := state.EndCaptures(ctx, tx, k, state.CaptureAborted, now); err != nil {
 			return err
 		}
 		if r.Phase == state.PhaseStarting || r.Phase == state.PhaseRunning || r.Phase == state.PhaseCheckpointing || hasEnv {

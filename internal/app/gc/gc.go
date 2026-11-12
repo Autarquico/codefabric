@@ -85,6 +85,9 @@ type Hooks struct {
 	// AfterBatch runs after every batch of a purge, with the transaction over: a
 	// write made here does not wait for the GC. rows is what the batch deleted.
 	AfterBatch func(kind string, rows int64)
+	// BeforeDeleteRefs runs after the refs of a batch were chosen and before they are
+	// checked again and deleted: what it writes is seen by the check.
+	BeforeDeleteRefs func(project domain.ID, refs []string)
 	// BeforeUnlink runs between the decision to delete a blob and the unlink.
 	BeforeUnlink func(blob.Digest)
 }
@@ -163,6 +166,9 @@ func (s *Service) passOnce(ctx context.Context) (v1.GCReport, error) {
 		return rep, err
 	}
 	if err := s.sweepCheckpoints(ctx, &rep); err != nil {
+		return rep, err
+	}
+	if err := s.sweepSeeds(ctx, &rep); err != nil {
 		return rep, err
 	}
 	if err := s.sweepBlobs(ctx, &rep); err != nil {

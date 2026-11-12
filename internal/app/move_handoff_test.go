@@ -260,6 +260,26 @@ func TestScenario_MoveFallidoSeCierraAlReanudar(t *testing.T) {
 	}
 }
 
+// A resume by hand of a Task whose move is under way and has not failed is refused: the
+// move queues the continuation, and a second one from the same checkpoint would run twice.
+func TestScenario_ReanudarManualConMoveActivoSeRechaza(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	e.joinWorker("beta", harnessWorkerCaps(""))
+	_, err := e.moveTask(r, v1.MoveTaskRequest{Worker: "beta"})
+	must(t, err)
+	_, err = r.completeCheckpoint(e.checkpointOrders(r)[0].CheckpointID)
+	must(t, err)
+
+	if _, err := e.resumeTask(r, "beta"); err == nil {
+		t.Fatal("the resume of a Task being moved was accepted")
+	}
+	e.sweepMoves()
+	if n := len(e.taskRuns(r)); n != 2 {
+		t.Fatalf("%d Runs, want 2: the move's, and no other", n)
+	}
+}
+
 func TestScenario_MoveFallidoSeCierraAlCancelar(t *testing.T) {
 	e := newCheckpointEnv(t)
 	r := e.startedRun()

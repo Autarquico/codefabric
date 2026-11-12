@@ -87,6 +87,25 @@ func TestRelayGC_DeletesTheRefsOfArchivedTasksAndNothingElse(t *testing.T) {
 	}
 }
 
+// The plan is some time old when it is carried out: a Task unarchived in between keeps
+// its refs.
+func TestRelayGC_ATaskUnarchivedAfterThePlanKeepsItsRefs(t *testing.T) {
+	f := newFixture(t)
+	branch, orphan := f.taskRuns(10, "old", 31)
+	rel := &fakeRelay{refs: map[domain.ID][]string{relayProject: {branch, orphan}}}
+	hooks := gc.Hooks{BeforeDeleteRefs: func(domain.ID, []string) {
+		f.exec(`UPDATE tasks SET archived_at = NULL WHERE name = 'old'`)
+	}}
+
+	rep, err := f.service(gc.Policy{}, gc.WithRelay(rel), gc.WithHooks(hooks)).Run(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rel.deleted) != 0 || items(rep)["relay_refs"] != 0 {
+		t.Errorf("deleted %v, relay_refs = %d", rel.deleted, items(rep)["relay_refs"])
+	}
+}
+
 func TestRelayGC_KeepsTheRefsOfARunWhosePublicationIsPending(t *testing.T) {
 	f := newFixture(t)
 	branch, _ := f.taskRuns(10, "old", 31)

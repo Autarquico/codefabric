@@ -21,7 +21,7 @@ func runClaude(t *testing.T, args ...string) (code int, stdout, stderr string) {
 }
 
 func TestHandtoSkill_FrontmatterIsExact(t *testing.T) {
-	out, err := renderHandto("v1.2.3")
+	out, err := renderHandto(claudeHandto, "v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,31 +46,31 @@ func TestHandtoSkill_FrontmatterIsExact(t *testing.T) {
 
 func TestHandtoSkill_RejectsAVersionThatBreaksTheMarker(t *testing.T) {
 	for _, v := range []string{"", "a b", "x-->", "v1\n2"} {
-		if _, err := renderHandto(v); err == nil {
-			t.Errorf("renderHandto(%q) accepted it", v)
+		if _, err := renderHandto(claudeHandto, v); err == nil {
+			t.Errorf("renderHandto(claudeHandto, %q) accepted it", v)
 		}
 	}
 }
 
 func TestScenario_InstallIdempotente(t *testing.T) {
 	home := t.TempDir()
-	if s, err := installHandto("user", home, "v1", false, false); err != nil || s.Action != "created" {
+	if s, err := installHandto(claudeHandto, "user", home, "v1", false, false); err != nil || s.Action != "created" {
 		t.Fatalf("first install: %+v, %v", s, err)
 	}
-	before, _ := os.Stat(handtoPath(home))
-	if s, err := installHandto("user", home, "v1", false, false); err != nil || s.Action != "unchanged" {
+	before, _ := os.Stat(handtoPath(claudeHandto, home))
+	if s, err := installHandto(claudeHandto, "user", home, "v1", false, false); err != nil || s.Action != "unchanged" {
 		t.Fatalf("same version: %+v, %v", s, err)
 	}
-	if after, _ := os.Stat(handtoPath(home)); !after.ModTime().Equal(before.ModTime()) {
+	if after, _ := os.Stat(handtoPath(claudeHandto, home)); !after.ModTime().Equal(before.ModTime()) {
 		t.Error("the same version rewrote the file")
 	}
-	if s, _ := handtoStatus("user", home, "v2"); s.State != skillOutdated || s.Version != "v1" {
+	if s, _ := handtoStatus(claudeHandto, "user", home, "v2"); s.State != skillOutdated || s.Version != "v1" {
 		t.Errorf("status under v2 = %+v", s)
 	}
-	if s, err := installHandto("user", home, "v2", false, false); err != nil || s.Action != "updated" {
+	if s, err := installHandto(claudeHandto, "user", home, "v2", false, false); err != nil || s.Action != "updated" {
 		t.Fatalf("other version: %+v, %v", s, err)
 	}
-	if s, _ := handtoStatus("user", home, "v2"); s.State != skillCurrent {
+	if s, _ := handtoStatus(claudeHandto, "user", home, "v2"); s.State != skillCurrent {
 		t.Errorf("status = %+v", s)
 	}
 }
@@ -78,49 +78,49 @@ func TestScenario_InstallIdempotente(t *testing.T) {
 func TestScenario_InstallIdempotente_Foreign(t *testing.T) {
 	home := t.TempDir()
 	mine := "---\nname: handto\n---\nmy own skill\n"
-	if err := os.MkdirAll(filepath.Dir(handtoPath(home)), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(handtoPath(claudeHandto, home)), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(handtoPath(home), []byte(mine), 0o600); err != nil {
+	if err := os.WriteFile(handtoPath(claudeHandto, home), []byte(mine), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := installHandto("user", home, "v1", false, false)
+	_, err := installHandto(claudeHandto, "user", home, "v1", false, false)
 	var de *domain.Error
 	if !errors.As(err, &de) || de.Code != domain.CodeConfirmationRequired {
 		t.Fatalf("a foreign skill without --force: %v", err)
 	}
-	if b, _ := os.ReadFile(handtoPath(home)); string(b) != mine {
+	if b, _ := os.ReadFile(handtoPath(claudeHandto, home)); string(b) != mine {
 		t.Error("a foreign skill was overwritten without force")
 	}
-	if s, err := installHandto("user", home, "v1", true, false); err != nil || s.Action != "replaced" {
+	if s, err := installHandto(claudeHandto, "user", home, "v1", true, false); err != nil || s.Action != "replaced" {
 		t.Fatalf("force: %+v, %v", s, err)
 	}
 }
 
 func TestHandtoStatus_EditedIsNotAnotherVersion(t *testing.T) {
 	home := t.TempDir()
-	if _, err := installHandto("user", home, "v1", false, false); err != nil {
+	if _, err := installHandto(claudeHandto, "user", home, "v1", false, false); err != nil {
 		t.Fatal(err)
 	}
-	f, err := os.OpenFile(handtoPath(home), os.O_APPEND|os.O_WRONLY, 0)
+	f, err := os.OpenFile(handtoPath(claudeHandto, home), os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _ = f.WriteString("an edit\n")
 	_ = f.Close()
-	s, _ := handtoStatus("user", home, "v1")
+	s, _ := handtoStatus(claudeHandto, "user", home, "v1")
 	if s.State != skillModified {
 		t.Fatalf("status = %+v", s)
 	}
 	var out bytes.Buffer
-	_ = printClaudeSkill(&out, s)
+	_ = printHandtoSkill(&out, claudeHandto, s)
 	if strings.Contains(out.String(), "another version") || !strings.Contains(out.String(), "edited") {
 		t.Errorf("message: %s", out.String())
 	}
-	if d := doctorSkill(&s); d.Warning == "" || strings.Contains(d.Warning, "otra versión") || d.Action != "cf claude install" {
+	if d := doctorSkill(claudeHandto, &s); d.Warning == "" || strings.Contains(d.Warning, "otra versión") || d.Action != "cf claude install" {
 		t.Errorf("doctor: %+v", d)
 	}
-	if s, err := installHandto("user", home, "v1", false, false); err != nil || s.Action != "restored" {
+	if s, err := installHandto(claudeHandto, "user", home, "v1", false, false); err != nil || s.Action != "restored" {
 		t.Fatalf("install: %+v, %v", s, err)
 	}
 }
@@ -128,18 +128,18 @@ func TestHandtoStatus_EditedIsNotAnotherVersion(t *testing.T) {
 func TestHandtoStatus_MarkerOnlyCountsRightAfterTheFrontmatter(t *testing.T) {
 	home := t.TempDir()
 	body := "---\nname: handto\n---\nquoting:\n<!-- cf-version: v1 -->\n"
-	_ = os.MkdirAll(filepath.Dir(handtoPath(home)), 0o700)
-	_ = os.WriteFile(handtoPath(home), []byte(body), 0o600)
-	if s, _ := handtoStatus("user", home, "v1"); s.State != skillForeign {
+	_ = os.MkdirAll(filepath.Dir(handtoPath(claudeHandto, home)), 0o700)
+	_ = os.WriteFile(handtoPath(claudeHandto, home), []byte(body), 0o600)
+	if s, _ := handtoStatus(claudeHandto, "user", home, "v1"); s.State != skillForeign {
 		t.Errorf("status = %+v", s)
 	}
-	if s, err := uninstallHandto("user", home); err != nil || s.Action != "kept" {
+	if s, err := uninstallHandto(claudeHandto, "user", home); err != nil || s.Action != "kept" {
 		t.Errorf("uninstall: %+v, %v", s, err)
 	}
 }
 
 func TestHandtoSkill_NeverLetsTheModelOverrideAGuard(t *testing.T) {
-	out, _ := renderHandto("v1")
+	out, _ := renderHandto(claudeHandto, "v1")
 	for _, want := range []string{
 		"Never add flags to `cf handoff`",
 		"run it themselves in their own terminal",
@@ -183,12 +183,12 @@ func TestClaudeProjectScope_RefusesSymlinkedClaudeDirs(t *testing.T) {
 
 func TestInstall_DryRunWritesNothing(t *testing.T) {
 	home := t.TempDir()
-	if s, err := installHandto("user", home, "v1", false, true); err != nil || s.Action != "created" || !s.DryRun {
+	if s, err := installHandto(claudeHandto, "user", home, "v1", false, true); err != nil || s.Action != "created" || !s.DryRun {
 		t.Fatalf("%+v, %v", s, err)
 	}
 	var out bytes.Buffer
-	_ = printClaudeSkill(&out, ClaudeSkill{Action: "created", DryRun: true, Path: "p"})
-	_ = printClaudeSkill(&out, ClaudeSkill{Action: "unchanged", DryRun: true, Path: "p"})
+	_ = printHandtoSkill(&out, claudeHandto, HandtoSkill{Action: "created", DryRun: true, Path: "p"})
+	_ = printHandtoSkill(&out, claudeHandto, HandtoSkill{Action: "unchanged", DryRun: true, Path: "p"})
 	if !strings.Contains(out.String(), "would be created") || strings.Contains(out.String(), "would be unchanged") {
 		t.Errorf("dry-run copy: %s", out.String())
 	}
@@ -199,25 +199,25 @@ func TestInstall_DryRunWritesNothing(t *testing.T) {
 
 func TestUninstall_OnlyRemovesWhatIsOurs(t *testing.T) {
 	home := t.TempDir()
-	if s, err := uninstallHandto("user", home); err != nil || s.Action != "absent" {
+	if s, err := uninstallHandto(claudeHandto, "user", home); err != nil || s.Action != "absent" {
 		t.Fatalf("absent: %+v, %v", s, err)
 	}
-	if _, err := installHandto("user", home, "v1", false, false); err != nil {
+	if _, err := installHandto(claudeHandto, "user", home, "v1", false, false); err != nil {
 		t.Fatal(err)
 	}
-	if s, err := uninstallHandto("user", home); err != nil || s.Action != "removed" {
+	if s, err := uninstallHandto(claudeHandto, "user", home); err != nil || s.Action != "removed" {
 		t.Fatalf("removed: %+v, %v", s, err)
 	}
-	if _, err := os.Stat(filepath.Dir(handtoPath(home))); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Dir(handtoPath(claudeHandto, home))); !os.IsNotExist(err) {
 		t.Error("the empty directory of the skill stayed")
 	}
 	foreign := "someone else's\n"
-	_ = os.MkdirAll(filepath.Dir(handtoPath(home)), 0o700)
-	_ = os.WriteFile(handtoPath(home), []byte(foreign), 0o600)
-	if s, err := uninstallHandto("user", home); err != nil || s.Action != "kept" {
+	_ = os.MkdirAll(filepath.Dir(handtoPath(claudeHandto, home)), 0o700)
+	_ = os.WriteFile(handtoPath(claudeHandto, home), []byte(foreign), 0o600)
+	if s, err := uninstallHandto(claudeHandto, "user", home); err != nil || s.Action != "kept" {
 		t.Fatalf("foreign: %+v, %v", s, err)
 	}
-	if b, _ := os.ReadFile(handtoPath(home)); string(b) != foreign {
+	if b, _ := os.ReadFile(handtoPath(claudeHandto, home)); string(b) != foreign {
 		t.Error("a foreign skill was removed")
 	}
 }
@@ -228,7 +228,7 @@ func TestClaudeCmd_InstallStatusUninstallOverHome(t *testing.T) {
 		t.Fatalf("install: %d %s %s", code, out, errOut)
 	}
 	code, out, _ := runClaude(t, "status", "--json")
-	var s ClaudeSkill
+	var s HandtoSkill
 	if err := json.Unmarshal([]byte(out), &s); err != nil || code != 0 || s.State != skillCurrent || s.Scope != "user" {
 		t.Fatalf("status: %d %s %v", code, out, err)
 	}
@@ -245,19 +245,19 @@ func TestClaudeCmd_InstallStatusUninstallOverHome(t *testing.T) {
 
 func TestDoctorSkill_WarnsWhenMissingOrStaleWithTheAction(t *testing.T) {
 	for _, tc := range []struct {
-		skill ClaudeSkill
+		skill HandtoSkill
 		warns bool
 	}{
-		{ClaudeSkill{State: skillMissing}, true},
-		{ClaudeSkill{State: skillOutdated, Version: "v0"}, true},
-		{ClaudeSkill{State: skillCurrent}, false},
+		{HandtoSkill{State: skillMissing}, true},
+		{HandtoSkill{State: skillOutdated, Version: "v0"}, true},
+		{HandtoSkill{State: skillCurrent}, false},
 	} {
-		d := doctorSkill(&tc.skill)
+		d := doctorSkill(claudeHandto, &tc.skill)
 		if (d.Warning != "") != tc.warns || (tc.warns && d.Action != "cf claude install") {
 			t.Errorf("%s: %+v", tc.skill.State, d)
 		}
 	}
-	if doctorSkill(nil) != nil {
+	if doctorSkill(claudeHandto, nil) != nil {
 		t.Error("an unknown state must not be reported")
 	}
 }

@@ -32,6 +32,7 @@ type Service struct {
 	rederive Rederive
 	capture  Capturer
 	relay    Relay
+	blobs    BlobOpener
 }
 
 // Option adjusts New.
@@ -68,7 +69,7 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateTaskR
 	// Only what the user asked for identifies the call: the pair the client
 	// resolved from the remote is no input, so a replay does not depend on it.
 	explicit := req
-	explicit.ResolvedRef, explicit.SourceCommit = "", ""
+	explicit.ResolvedRef, explicit.SourceCommit, explicit.SourceSnapshot, explicit.SourceBranch = "", "", "", ""
 	return mutation.Do(ctx, s.db, s.clock, by, "task.create", req.RequestID, explicit,
 		func(tx *store.Tx, act mutation.Act) (v1.CreateTaskResponse, error) {
 			if err := requireSource(req); err != nil {
@@ -82,6 +83,10 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateTaskR
 			if err != nil {
 				return v1.CreateTaskResponse{}, err
 			}
+			seed, err := seedOf(ctx, tx, project, req.NativeSeed)
+			if err != nil {
+				return v1.CreateTaskResponse{}, err
+			}
 			name, err := freeName(ctx, tx, projectID, req)
 			if err != nil {
 				return v1.CreateTaskResponse{}, err
@@ -92,7 +97,7 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateTaskR
 			}
 			task := store.Task{
 				ID: s.ids.New(domain.KindTask), Short: short, ProjectID: projectID, Name: name, Prompt: req.Prompt,
-				Autostart: !req.NoStart, SourceRef: req.SourceRef, Mode: req.Mode, Workflow: req.Workflow,
+				Autostart: !req.NoStart, SourceRef: req.SourceRef, SourceSnapshot: req.SourceSnapshot, Mode: req.Mode, Workflow: req.Workflow,
 				Environment: req.Environment, Requirements: req.Requirements, CompletionOverride: req.Completion,
 				RetryOverride: req.Retry, CreatedBy: creator(by), CreatedAt: act.Now,
 			}
@@ -114,9 +119,14 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateTaskR
 
 			var out v1.CreateTaskResponse
 			if task.Autostart {
-				run, err := s.runs.CreateIn(ctx, tx, act, task.ID, runs.Source{Ref: req.ResolvedRef, Commit: req.SourceCommit})
+				run, err := s.runs.CreateIn(ctx, tx, act, task.ID, runs.Source{Ref: req.ResolvedRef, Commit: req.SourceCommit, Branch: req.SourceBranch})
 				if err != nil {
 					return out, err
+				}
+				if seed != nil {
+					if err := s.seedRun(ctx, tx, act, task, domain.ID(run.ID), *seed); err != nil {
+						return out, err
+					}
 				}
 				out.Run = &run
 			}
@@ -481,8 +491,17 @@ func validatePrompt(prompt string) error {
 // the pair of the client is a mistake. That a Task that starts has one is
 // checked later (requireSource), inside the transaction.
 func validateStart(req v1.CreateTaskRequest) error {
-	if req.NoStart && (req.SourceCommit != "" || req.ResolvedRef != "") {
-		return input.Invalid("source_commit and resolved_ref are for Tasks that start: the Run freezes them")
+	if req.NoStart && (req.SourceCommit != "" || req.ResolvedRef != "" || req.SourceSnapshot != "" || req.SourceBranch != "") {
+		return input.Invalid("source_commit, resolved_ref, source_snapshot and source_branch are for Tasks that start: the Run freezes them")
+	}
+	if req.SourceSnapshot != "" && req.SourceSnapshot != req.SourceCommit {
+		return input.Invalid("source_snapshot is the digest of a snapshot, which is the commit the Run starts from: source_commit must be the same")
+	}
+	if req.SourceBranch != "" && !domain.ValidSourceRef(req.SourceBranch) {
+		return input.Invalid("source_branch must be a plain branch name")
+	}
+	if req.NoStart && req.NativeSeed != nil {
+		return input.Invalid("a session seed is for the Run that starts: it cannot go with no_start")
 	}
 	return nil
 }

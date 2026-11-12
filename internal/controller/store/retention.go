@@ -388,6 +388,43 @@ func ArchivedRuns(ctx context.Context, q Querier, cutoff time.Time) ([]ArchivedR
 	return out, rows.Err()
 }
 
+// ArchivedSnapshots lists, by Project, the commits of the snapshots of clients
+// whose every user is gone: Runs started from that commit (runs.source_commit)
+// and Tasks that name it (tasks.source_snapshot) all belong to Tasks archived at
+// or before cutoff, with no publication pending. A commit some other Run or Task
+// uses is not listed. The caller matches them against the refs the relay holds.
+func ArchivedSnapshots(ctx context.Context, q Querier, cutoff time.Time) (map[domain.ID]map[string]bool, error) {
+	const archived = `t.archived_at IS NOT NULL AND t.archived_at <= ?`
+	pending := string(domain.PublicationPending)
+	c := cutoff.UnixNano()
+	rows, err := q.Query(ctx,
+		`WITH used AS (
+		   SELECT t.project_id AS project, r.source_commit AS sha,
+		          (`+archived+` AND r.publication <> ?) AS gone
+		   FROM runs r JOIN tasks t ON t.id = r.task_id
+		   UNION ALL
+		   SELECT t.project_id, t.source_snapshot, (`+archived+`)
+		   FROM tasks t WHERE t.source_snapshot IS NOT NULL AND t.source_snapshot <> '')
+		 SELECT project, sha FROM used GROUP BY project, sha HAVING MIN(gone) = 1 ORDER BY project, sha`,
+		c, pending, c)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the archived snapshots: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[domain.ID]map[string]bool{}
+	for rows.Next() {
+		var project, commit string
+		if err := rows.Scan(&project, &commit); err != nil {
+			return nil, fmt.Errorf("store: scanning an archived snapshot: %w", err)
+		}
+		if out[domain.ID(project)] == nil {
+			out[domain.ID(project)] = map[string]bool{}
+		}
+		out[domain.ID(project)][commit] = true
+	}
+	return out, rows.Err()
+}
+
 // CheckpointGarbage is a checkpoint the retention may delete: its row, the ref
 // that holds its source in the relay of Project, and the native state it names.
 type CheckpointGarbage struct {
@@ -457,10 +494,12 @@ func scanCheckpointGarbage(rows *sql.Rows) ([]CheckpointGarbage, error) {
 // went. reservations says which kind they are: a row of the other kind, such as
 // a reservation published since it was listed, stays, and so does one a Run or
 // a move started to name since: only the rows that really went are returned.
-// dropRefs runs inside the transaction, after the rows are gone and with the IDs
-// that went, so a ref is never removed for a row that could not be: if it fails,
-// the rows come back. Their native state is not touched: the blob sweep frees it
-// once no checkpoint names it.
+// dropRefs runs after the transaction committed, with the IDs that went, so a ref
+// is never removed for a row that could not be, and a rollback never leaves a row
+// pointing at a deleted ref. If it fails the rows stay gone, with their ids
+// returned next to the error, and the refs are orphans the relay sweep collects
+// (CheckpointsPresent). Their native state is not touched: the blob sweep frees
+// it once no checkpoint names it.
 func (db *DB) DeleteCheckpoints(ctx context.Context, ids []domain.ID, reservations bool, dropRefs func(gone []domain.ID) error) ([]domain.ID, error) {
 	var gone []domain.ID
 	err := db.WithTx(ctx, func(tx *Tx) error {
@@ -478,21 +517,35 @@ func (db *DB) DeleteCheckpoints(ctx context.Context, ids []domain.ID, reservatio
 				gone = append(gone, id)
 			}
 		}
-		if dropRefs == nil || len(gone) == 0 {
-			return nil
-		}
-		return dropRefs(gone)
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return gone, nil
+	if dropRefs == nil || len(gone) == 0 {
+		return gone, nil
+	}
+	return gone, dropRefs(gone)
+}
+
+// CheckpointsPresent says which of ids still have a row.
+func CheckpointsPresent(ctx context.Context, q Querier, ids []domain.ID) (map[domain.ID]bool, error) {
+	out := make(map[domain.ID]bool, len(ids))
+	for _, id := range ids {
+		var n int
+		if err := q.QueryRow(ctx, `SELECT COUNT(*) FROM checkpoints WHERE id = ?`, string(id)).Scan(&n); err != nil {
+			return nil, fmt.Errorf("store: looking for checkpoint %s: %w", id, err)
+		}
+		out[id] = n > 0
+	}
+	return out, nil
 }
 
 // CheckpointDigests visits the native state, uploaded or published, that any
-// checkpoint names: the blobs the retention of checkpoints keeps alive.
+// checkpoint names, and the session seeds clients uploaded: the blobs the retention of checkpoints keeps alive.
 func CheckpointDigests(ctx context.Context, q Querier, visit func(string)) error {
 	return visitStrings(ctx, q, visit,
 		`SELECT native_digest FROM checkpoints WHERE native_digest IS NOT NULL
-		 UNION SELECT uploaded_digest FROM checkpoints WHERE uploaded_digest IS NOT NULL`)
+		 UNION SELECT uploaded_digest FROM checkpoints WHERE uploaded_digest IS NOT NULL
+		 UNION SELECT digest FROM native_seeds`)
 }

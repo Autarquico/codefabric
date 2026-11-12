@@ -26,8 +26,19 @@ func HarnessVersionPrefix(harness string) string {
 // which version it has, at the same major: otherwise the Run continues from the
 // source and the summary alone, and the warnings say why (§23.1).
 func continuationOf(ctx context.Context, q store.Querier, run store.Run, w store.Worker) (*v1.Continuation, error) {
+	seed, seedWarning, err := seedOf(ctx, q, run, w)
+	if err != nil {
+		return nil, err
+	}
 	if run.LineageCheckpoint == "" {
-		return nil, nil
+		if seed == nil && seedWarning == "" {
+			return nil, nil
+		}
+		out := &v1.Continuation{ParentRunID: string(run.LineageParent), Seed: seed}
+		if seedWarning != "" {
+			out.Warnings = []string{seedWarning}
+		}
+		return out, nil
 	}
 	cp, err := store.CheckpointByID(ctx, q, run.LineageCheckpoint)
 	if err != nil {
@@ -50,7 +61,13 @@ func continuationOf(ctx context.Context, q store.Querier, run store.Run, w store
 		return nil, err
 	}
 	native := cp.NativeState
+	out.Seed = seed
+	if seedWarning != "" {
+		out.Warnings = append(out.Warnings, seedWarning)
+	}
 	switch {
+	case seed != nil:
+		// The session of the client replaces the one of the checkpoint.
 	case native != nil && !keeps:
 		out.Warnings = append(out.Warnings, "the Project does not keep native state: the Run continues from the source and the summary")
 	case native == nil:
@@ -65,6 +82,39 @@ func continuationOf(ctx context.Context, q store.Querier, run store.Run, w store
 		out.NativeState = &v1.NativeStateRef{Adapter: native.Adapter, AdapterVersion: native.AdapterVersion, Digest: native.Digest}
 	}
 	return out, nil
+}
+
+// seedOf is the session of a client that the assignment of a Run carries (lineage.native_seed),
+// or nil. It travels under the rules of the native state of a checkpoint (§23.1): the
+// Project keeps native state, the harness of the Run is the adapter that wrote it and
+// the Worker has the same major. If any fails the Run goes on without it, and the
+// warning says why.
+func seedOf(ctx context.Context, q store.Querier, run store.Run, w store.Worker) (*v1.NativeStateRef, string, error) {
+	seed, err := store.RunSeed(ctx, q, run.ID)
+	if err != nil || seed == nil {
+		return nil, "", err
+	}
+	var spec struct {
+		Requirements struct {
+			Harness string `json:"harness"`
+		} `json:"requirements"`
+	}
+	if err := json.Unmarshal(run.Spec, &spec); err != nil {
+		return nil, "", fmt.Errorf("leases: reading the harness of a spec: %w", err)
+	}
+	keeps, err := projectKeepsNativeState(ctx, q, run.TaskID)
+	if err != nil {
+		return nil, "", err
+	}
+	switch {
+	case !keeps:
+		return nil, "the Project does not keep native state: the Run starts without the session it was seeded with", nil
+	case seed.Adapter != spec.Requirements.Harness:
+		return nil, fmt.Sprintf("the session is of the %s adapter and the Run uses %q: the Run starts without it", seed.Adapter, spec.Requirements.Harness), nil
+	case !sameMajor(seed.AdapterVersion, w.Report.Capabilities, spec.Requirements.Harness):
+		return nil, fmt.Sprintf("the session was written by %s %s, another major version than the Worker's: the Run starts without it", seed.Adapter, seed.AdapterVersion), nil
+	}
+	return &v1.NativeStateRef{Adapter: seed.Adapter, AdapterVersion: seed.AdapterVersion, Digest: seed.Digest}, "", nil
 }
 
 // projectKeepsNativeState is the native_state switch of the Project of task

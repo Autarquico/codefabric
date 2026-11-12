@@ -16,6 +16,13 @@ type OrphanTokenRequest struct {
 	ResultCommit string `json:"result_commit"`
 }
 
+// ClientRelayTokenRequest is POST /v1/relay-token: the token of a client for
+// the relay of a Project (a reference), to read what a Task published and to
+// create snapshots.
+type ClientRelayTokenRequest struct {
+	Project string `json:"project"`
+}
+
 // RelayTokenResponse carries a token for the git relay (§16.8). The token goes
 // to git in an HTTP header and nowhere else: not in argv, not in a repository's
 // configuration, not in a file. Path is where the relay serves the Project

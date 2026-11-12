@@ -30,7 +30,7 @@ func WithCheckpointRoots(roots ...CheckpointRoot) Option {
 
 // checkpointGarbage is what a pass would delete: the published checkpoints no
 // root keeps, and the reservations that never completed. Snapshots live under
-// refs/cf/snapshots/ and are not looked at: nothing here can name them.
+// refs/cf/snapshots/ and go with the relay refs of archived Tasks.
 type checkpointGarbage struct {
 	published, reservations []store.CheckpointGarbage
 }
@@ -64,9 +64,9 @@ func (s *Service) planCheckpoints(ctx context.Context, now time.Time) ([]v1.GCCo
 }
 
 // sweepCheckpoints deletes, a batch at a time, the rows of the checkpoints and,
-// in the same transaction, their refs in the relay: a row that cannot go keeps
-// its ref, and a ref that cannot go brings its row back, so the next pass finds
-// both again. The native state goes with the blob sweep that follows, once
+// once that transaction committed, their refs in the relay: a row that cannot go
+// keeps its ref, and a ref that cannot go stays as an orphan the relay sweep of
+// the next pass deletes (it lists the checkpoint refs without a row). The native state goes with the blob sweep that follows, once
 // no row names it. With no relay nothing is deleted: the rows would orphan the refs.
 func (s *Service) sweepCheckpoints(ctx context.Context, rep *v1.GCReport) error {
 	if s.relay == nil {
@@ -123,13 +123,55 @@ func (s *Service) deleteCheckpoints(ctx context.Context, list []store.Checkpoint
 			}
 			return nil
 		})
+		n := int64(len(gone))
+		done.Count += n
 		if err != nil {
 			return err
 		}
-		n := int64(len(gone))
-		done.Count += n
 		if s.hooks.AfterBatch != nil {
 			s.hooks.AfterBatch(done.Kind, n)
+		}
+		if err := yield(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedsKind is the item of the report for the session seeds of clients.
+const seedsKind = "native_seeds"
+
+func (s *Service) unusedSeeds(ctx context.Context, now time.Time) (seeds []store.NativeSeed, err error) {
+	err = s.db.Read(ctx, func(q store.Querier) (err error) {
+		seeds, err = store.UnusedNativeSeeds(ctx, q, now.Add(-s.policy.CheckpointReservation))
+		return err
+	})
+	return seeds, err
+}
+
+func (s *Service) planSeeds(ctx context.Context, now time.Time) (v1.GCCount, error) {
+	seeds, err := s.unusedSeeds(ctx, now)
+	return v1.GCCount{Kind: seedsKind, Count: int64(len(seeds))}, err
+}
+
+// sweepSeeds deletes the seeds no live Run or Task keeps, which frees their blobs
+// for the sweep that follows. A seed nobody named is left for the same time a
+// reservation of a checkpoint is, so an upload has time to be named by its Task.
+func (s *Service) sweepSeeds(ctx context.Context, rep *v1.GCReport) error {
+	seeds, err := s.unusedSeeds(ctx, s.clock.Now())
+	if err != nil {
+		return err
+	}
+	done := v1.GCCount{Kind: seedsKind}
+	defer func() { rep.Items = append(rep.Items, done) }()
+	for batch := range chunks(seeds, s.policy.BatchSize) {
+		n, err := s.db.DeleteNativeSeeds(ctx, batch)
+		if err != nil {
+			return err
+		}
+		done.Count += n
+		if s.hooks.AfterBatch != nil {
+			s.hooks.AfterBatch(seedsKind, n)
 		}
 		if err := yield(ctx); err != nil {
 			return err

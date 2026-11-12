@@ -163,6 +163,8 @@ type specSource struct {
 	Ref      string `json:"ref"`
 	Commit   string `json:"commit"`
 	Snapshot string `json:"snapshot"`
+	// Branch is the local branch a snapshot started from; absent for any other Run.
+	Branch string `json:"branch,omitempty"`
 }
 
 type specRequirements struct {
@@ -218,7 +220,7 @@ func newSpec(in Inherited, origins Origins, snapshot string, source Source, envi
 	spec := runSpec{
 		Schema:      domain.RunSpecSchemaWith(secrets != nil, repoConfig),
 		Prompt:      in.Prompt,
-		Source:      specSource{Ref: source.Ref, Commit: source.Commit, Snapshot: snapshot},
+		Source:      specSource{Ref: source.Ref, Commit: source.Commit, Snapshot: snapshot, Branch: source.Branch},
 		Mode:        in.Mode,
 		Workflow:    in.Workflow,
 		Environment: in.Environment,
@@ -422,4 +424,15 @@ func requireOriginSeparate(ctx context.Context, q store.Querier, in Inherited, p
 	}
 	return domain.NewError(domain.CodePolicyDenied,
 		fmt.Sprintf("origin_secret %s cannot also be a harness secret", ref), map[string]any{"ref": ref})
+}
+
+// WithSnapshot is the spec of a Run that starts from a snapshot of a client instead of
+// the source of spec, and its digest: only the source changes.
+func WithSnapshot(spec []byte, commit, branch string) (raw []byte, digest string, err error) {
+	var s runSpec
+	if err := json.Unmarshal(spec, &s); err != nil {
+		return nil, "", fmt.Errorf("runs: reading a spec: %w", err)
+	}
+	s.Source.Commit, s.Source.Snapshot, s.Source.Branch = commit, commit, branch
+	return s.encode()
 }

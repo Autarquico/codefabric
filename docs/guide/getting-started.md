@@ -136,8 +136,71 @@ cf
 
 It opens the TUI: home with live counts and activity, then views for Tasks, Workers, Runs, logs and the inbox. See [The TUI](../tui/) for the keys.
 
+## Hand a session to a Worker and bring it back
+
+This is the whole journey of a Claude Code session: from your Mac to a Worker, between Workers, and back to your Mac. Each step names the command and what it prints.
+
+**1. Once per Project: keep the session in checkpoints.**
+
+```sh
+cf project set <project> --native-state on
+```
+
+It prints the Project; `Native state` reads `on`. Without it the Project does not accept sessions as seeds.
+
+**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on, then on each such Worker:
+
+```sh
+cf worker secrets set claude/oauth-token
+```
+
+It reads the token from stdin, or asks for it twice without echo on a terminal, and prints `Stored secret claude/oauth-token (...) ...`. A Worker without the secret is not offered the Run (`CF_SECRET_UNAVAILABLE` in `cf run explain`).
+
+**3. Once on your Mac: install the skill.**
+
+```sh
+cf claude install
+```
+
+It prints `handto skill: created  ~/.claude/skills/handto/SKILL.md` (`unchanged` if it was already there, `updated` if it was of another version of `cf`). For Codex, `cf codex install` does the same and you ask for it by name (`$handto <worker>`).
+
+**4. Hand the session over.** In Claude Code, in a clone of the Project:
+
+```text
+/handto <worker>
+```
+
+Claude runs `cf handoff` and the answer is three lines: `Task: <task> (started)`, `Worker: <worker>` and `Continue with: cf attach <task>`. Uncommitted and untracked files travel with it, and your working tree is not touched. The session on your Mac is now marked as handed off: do not keep writing in it. Then close it with `/exit` and follow the work:
+
+```sh
+cf attach <task>
+```
+
+**5. Move it to another Worker.** From inside the Run, in its session:
+
+```text
+/handto <other-worker>
+```
+
+It prints `Task <task> is moving to <other-worker> (...)` and the Run of this session ends when the checkpoint is taken; reconnect with `cf attach <task>`. From your Mac, without being in the session, `cf task move <task> <other-worker>` does the same and prints `<task>: move <id> done: the Run on <other-worker> started.` (or the stage it is at).
+
+**6. Bring it back to your Mac.** Suspend the Run and wait for its checkpoint, then pull it, in a clone of the Project:
+
+```sh
+cf task defer <task>
+cf task pull <task> --open
+```
+
+`cf task defer` prints `<task>: capturing a checkpoint; it waits (deferred) once the Worker has published it.` `cf task pull` prints `<task>: branch <branch> (...) is checked out in <dir>.` and `Session <id> installed.` (or `updated`), followed by `Resume it: claude --resume=<id>`; `--open` runs that command for you. `cf task pull <task> --defer` does the defer and the pull in one go.
+
+The branch is the one the Task started from if the checkpoint contains it, and `cf/<task>` otherwise. If your tree has uncommitted changes nothing is touched: the branch is made but not checked out, and the output says `NOT checked out` and offers `cf task pull <task> --worktree <path>`, which makes a worktree for it and installs the session there. The session returns under its own id and the handed-off mark is cleared, so you can hand it over again.
+
+If the Worker of the Run is down, `cf task pull --defer` cannot get a checkpoint: it says so, and that the Run becomes lost when its lease expires, after which `cf task pull <task>` brings the last checkpoint it published.
+
+[The CLI reference](../cli/) has every flag of these commands.
+
 ## What is tested, and what is not
 
 The core flow above is covered by automated tests. The default tests use the `command` harness, a scripted fake harness and recorded Claude Code and Codex output. No automated test runs a session with the real Claude Code or Codex CLI; an opt-in check (`CF_REQUIRE_CLAUDE=1`) only confirms the flags the Claude Code adapter relies on. Expect rough edges there, and run `cf worker doctor` first when something does not start.
 
-Several commands are present but say so in their help: `cf task defer`, `move` and `resume`, and `cf run fork` and `promote` are not implemented yet.
+Of the commands that are present but say so in their help, only `cf run fork` and `promote` are not implemented yet. `cf task defer`, `move` and `resume` work; see below.

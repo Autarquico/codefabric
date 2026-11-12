@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -184,6 +185,24 @@ func (c *Client) TaskMove(ctx context.Context, ref, project string) (v1.Move, er
 	var out v1.Move
 	err := c.do(ctx, http.MethodGet, withQuery(refPath("tasks", ref, "move"), scope(project)), nil, &out)
 	return out, err
+}
+
+// PullPlan is what `cf task pull` would bring for the Task: its last checkpoint and the
+// commit of it in the relay, or that its Run is live.
+func (c *Client) PullPlan(ctx context.Context, ref, project string) (v1.PullPlan, error) {
+	var out v1.PullPlan
+	err := c.do(ctx, http.MethodGet, withQuery(refPath("tasks", ref, "pull"), scope(project)), nil, &out)
+	return out, err
+}
+
+// OpenPullNativeState streams the session of the checkpoint PullPlan names and its
+// size. The caller closes the reader and checks the content against the digest.
+func (c *Client) OpenPullNativeState(ctx context.Context, ref, project string) (io.ReadCloser, int64, error) {
+	resp, err := c.sendOK(ctx, c.stream.Load(), http.MethodGet, withQuery(refPath("tasks", ref, "pull", "native-state"), scope(project)), nil, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	return resp.Body, resp.ContentLength, nil
 }
 
 // ForkRun asks to start a new Run from an existing one.

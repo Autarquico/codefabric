@@ -164,20 +164,36 @@ type Task struct {
 // ResolvedRef and SourceCommit are not inputs of the user, so they are outside
 // the idempotency payload: repeating a request_id needs neither.
 type CreateTaskRequest struct {
-	RequestID    string            `json:"request_id,omitempty"`
-	Project      string            `json:"project"`
-	Name         string            `json:"name,omitempty"`
-	Prompt       string            `json:"prompt"`
-	NoStart      bool              `json:"no_start,omitempty"`
-	SourceRef    string            `json:"source_ref,omitempty"`
-	ResolvedRef  string            `json:"resolved_ref,omitempty"`
-	SourceCommit string            `json:"source_commit,omitempty"`
-	Mode         domain.Mode       `json:"mode,omitempty"`
-	Workflow     string            `json:"workflow,omitempty"`
-	Environment  string            `json:"environment,omitempty"`
-	Requirements Requirements      `json:"requirements,omitempty"`
-	Completion   domain.Completion `json:"completion,omitempty"`
-	Retry        *Retry            `json:"retry,omitempty"`
+	RequestID    string `json:"request_id,omitempty"`
+	Project      string `json:"project"`
+	Name         string `json:"name,omitempty"`
+	Prompt       string `json:"prompt"`
+	NoStart      bool   `json:"no_start,omitempty"`
+	SourceRef    string `json:"source_ref,omitempty"`
+	ResolvedRef  string `json:"resolved_ref,omitempty"`
+	SourceCommit string `json:"source_commit,omitempty"`
+	// Snapshot asks the client to snapshot its working tree and start from
+	// that (cf do --snapshot). It never travels: the client turns it into
+	// SourceSnapshot, SourceBranch and the pair of the source.
+	Snapshot bool `json:"-"`
+	// SnapshotReport, if set, is filled with what the snapshot left out; client side only.
+	SnapshotReport *SnapshotReport `json:"-"`
+	// SourceSnapshot is the digest of a snapshot the client sent to the relay
+	// (§22.2); SourceCommit is then that very commit. SourceBranch is the local
+	// branch the snapshot started from. Like the pair, they are no input of the
+	// user and are outside the idempotency payload.
+	SourceSnapshot string            `json:"source_snapshot,omitempty"`
+	SourceBranch   string            `json:"source_branch,omitempty"`
+	Mode           domain.Mode       `json:"mode,omitempty"`
+	Workflow       string            `json:"workflow,omitempty"`
+	Environment    string            `json:"environment,omitempty"`
+	Requirements   Requirements      `json:"requirements,omitempty"`
+	Completion     domain.Completion `json:"completion,omitempty"`
+	Retry          *Retry            `json:"retry,omitempty"`
+	// NativeSeed is the session of a client the first Run starts from
+	// (lineage.native_seed): a blob uploaded with PUT /v1/projects/{ref}/native-seed/{digest}.
+	// Without NoStart.
+	NativeSeed *NativeStateRef `json:"native_seed,omitempty"`
 }
 
 // CreateTaskResponse carries the Run too when the Task started.
@@ -201,11 +217,56 @@ type ActionRequest struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
+// CheckpointExclude is GET /v1/checkpoint/exclude: checkpoint.exclude, the globs
+// that a capture and a snapshot of a client leave out.
+type CheckpointExclude struct {
+	Exclude []string `json:"exclude"`
+}
+
+// SnapshotReport is what the client says of a snapshot it took: the untracked files that
+// match checkpoint.exclude and so were left out of it.
+type SnapshotReport struct {
+	Excluded []string
+	// Tree is the tree of the snapshot: what tells whether the files changed since another.
+	Tree string
+}
+
 // ResumeTaskRequest is the body of POST /v1/tasks/{ref}/resume. Worker, a name
 // or ID, makes the Run go to that Worker only.
+//
+// NativeSeed is the session of a client the Run starts from, as in
+// CreateTaskRequest. After a TaskPulled that no checkpoint followed, the resume is
+// refused unless the seed is of the client that pulled or Force is set; Force is
+// audited and consumes the marker.
 type ResumeTaskRequest struct {
+	RequestID  string          `json:"request_id,omitempty"`
+	Worker     string          `json:"worker,omitempty"`
+	NativeSeed *NativeStateRef `json:"native_seed,omitempty"`
+	Force      bool            `json:"force,omitempty"`
+	// SourceSnapshot is the digest of a snapshot the client sent to the relay (`cf task
+	// resume --snapshot`): the Run starts from that tree and not from the checkpoint,
+	// and it needs NativeSeed, the session that carries the conversation. SourceBranch is
+	// the local branch the snapshot started from.
+	SourceSnapshot string `json:"source_snapshot,omitempty"`
+	SourceBranch   string `json:"source_branch,omitempty"`
+}
+
+// PulledTaskRequest is POST /v1/tasks/{ref}/pulled: the client says it brought the
+// Task to its checkout. It leaves the marker that makes a resume ask for --force
+// or a seed of the same client, and the audited event TaskPulled.
+type PulledTaskRequest struct {
 	RequestID string `json:"request_id,omitempty"`
-	Worker    string `json:"worker,omitempty"`
+}
+
+// PulledTaskResponse is the Task after it was marked as pulled.
+type PulledTaskResponse struct {
+	Task Task `json:"task"`
+}
+
+// NativeSeedUploaded answers the upload of a session seed.
+type NativeSeedUploaded struct {
+	Digest string `json:"digest"`
+	Size   int64  `json:"size"`
 }
 
 // ResumeTaskResponse is the Task after a resume and the Run that continues it.
@@ -312,9 +373,11 @@ type Run struct {
 	Lineage      domain.LineageKind `json:"lineage"`
 	// LineageParent is the Run this one repeats, for a retry.
 	LineageParent string `json:"lineage_parent_id,omitempty"`
-	SpecDigest    string `json:"spec_digest"`
-	SourceCommit  string `json:"source_commit"`
-	Branch        string `json:"branch,omitempty"`
+	// LineageNativeSeed is the session of a client the Run was seeded with (`--session`).
+	LineageNativeSeed *NativeStateRef `json:"lineage_native_seed,omitempty"`
+	SpecDigest        string          `json:"spec_digest"`
+	SourceCommit      string          `json:"source_commit"`
+	Branch            string          `json:"branch,omitempty"`
 	// Model is the model the harness said it ran with, known once it ended.
 	Model        string `json:"model,omitempty"`
 	ResultCommit string `json:"result_commit,omitempty"`

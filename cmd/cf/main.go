@@ -19,6 +19,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/cli/actions"
 	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/client/notify"
+	"github.com/Autarquico/codefabric/internal/client/session"
 	"github.com/Autarquico/codefabric/internal/client/workflowadopt"
 	"github.com/Autarquico/codefabric/internal/controller/daemon"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
@@ -35,7 +36,7 @@ func run() int { return cli.ExecuteWith(options(), commands()...) }
 // options are what the CLI cannot reach itself (ADR 0001).
 func options() cli.Options {
 	native := notify.DetectNative(runtime.GOOS, exec.LookPath, notify.OSExec)
-	opts := cli.Options{Terminal: sshTerminal{}, Workflows: workflowAdopter, Native: native}
+	opts := cli.Options{Terminal: sshTerminal{}, Workflows: workflowAdopter, Sessions: session.New, Native: native}
 	// The actions of the TUI run the same commands, with this same composition.
 	opts.TUI = tuiWithNotifications(native, func(ctx context.Context, c *client.Client) error {
 		return tui.Run(ctx, c, actions.Runner{Options: opts})

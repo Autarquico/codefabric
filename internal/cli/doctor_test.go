@@ -190,6 +190,7 @@ func TestDeadlineContext_ExpiresWhenTheFakeClockPassesIt(t *testing.T) {
 
 func TestDoctor_WarnsWhenTheHandtoSkillIsMissingAndNotOnceInstalled(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir()) // no codex: only the skill of Claude Code is asked for
 	f := &fakeDoctor{status: healthyController()}
 	probe := func(context.Context, domain.SSHTarget) error { return nil }
 	code, out, errOut := runDoctorHere(t, f, probe)

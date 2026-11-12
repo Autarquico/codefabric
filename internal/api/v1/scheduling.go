@@ -75,7 +75,7 @@ type AssignCommand struct {
 	Continues *Continuation `json:"continues,omitempty"`
 }
 
-// Continuation is what a Worker needs to continue a checkpoint instead of
+// Continuation is what a Worker needs to continue a checkpoint or a seed instead of
 // starting from the Project's source (§11.7 resume).
 //
 // The source is the commit at Ref in the Controller's relay (SourceCommit of
@@ -93,6 +93,14 @@ type Continuation struct {
 	NativeState *NativeStateRef   `json:"native_state,omitempty"`
 	Summary     CheckpointSummary `json:"summary"`
 	Warnings    []string          `json:"warnings,omitempty"`
+	// Seed is the session of a client the Run starts from (lineage.native_seed). It needs
+	// no checkpoint: for a Run that has none, CheckpointID and Ref are empty and the
+	// source is the Project's. The Worker downloads it from GET
+	// /v1/worker/runs/{run}/native-seed under the lease and resumes it with the adapter,
+	// as it would the NativeState of a checkpoint, which then is nil. Seed is only set
+	// if the harness of the Run is the adapter of the session and the major version
+	// matches; otherwise it is nil and Warnings say why.
+	Seed *NativeStateRef `json:"seed,omitempty"`
 }
 
 // PublishCommand asks the Worker to push the sealed result of a Run again, under

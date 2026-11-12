@@ -270,6 +270,15 @@ func (t *Tx) PutBlobMeta(ctx context.Context, b Blob) (bool, error) {
 	return rowsChanged(res)
 }
 
+// RenewBlobMeta dates the upload of a blob again, for one that is uploaded once more: the
+// grace the GC gives to what was just uploaded starts anew.
+func (t *Tx) RenewBlobMeta(ctx context.Context, digest string, at time.Time) error {
+	if _, err := t.Exec(ctx, `UPDATE blobs_meta SET created_at = ? WHERE digest = ?`, at.UnixNano(), digest); err != nil {
+		return fmt.Errorf("store: renewing a blob: %w", err)
+	}
+	return nil
+}
+
 // BlobMeta returns ErrNotFound for a digest nobody uploaded.
 func BlobMeta(ctx context.Context, q Querier, digest string) (Blob, error) {
 	var (

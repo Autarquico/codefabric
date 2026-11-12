@@ -24,8 +24,9 @@ type Force struct {
 	AwaitCaptures func(ctx context.Context, forced []v1.ForcedRun, wait time.Duration) []v1.ForcedRun
 	// Wait is how long the checkpoints are waited for.
 	Wait time.Duration
-	// CancelLiveIn cancels the live Runs of a Task (runs.Service.CancelLiveIn).
-	CancelLiveIn func(ctx context.Context, tx *store.Tx, act mutation.Act, task domain.ID) error
+	// CancelRunIn cancels one Run, and no other of its Task
+	// (runs.Service.CancelRunIn).
+	CancelRunIn func(ctx context.Context, tx *store.Tx, act mutation.Act, run domain.ID) error
 	// MoveTasks moves every Task that has a live Run on a Worker
 	// (moves.Service.DrainMove).
 	MoveTasks func(ctx context.Context, by pki.Session, worker domain.ID, requestID string) ([]v1.Move, []v1.MoveSkipped, error)
@@ -57,7 +58,7 @@ func (s *Service) DrainMove(ctx context.Context, by pki.Session, ref string, req
 // is late does not stop the cancel, and is said in the event of the Worker. A
 // repeated request ID answers what the first one did, even if the Runs are gone.
 func (s *Service) DrainForce(ctx context.Context, by pki.Session, ref string, req v1.ActionRequest) (v1.DrainForceResponse, error) {
-	if s.force.RequestCapture == nil || s.force.AwaitCaptures == nil || s.force.CancelLiveIn == nil {
+	if s.force.RequestCapture == nil || s.force.AwaitCaptures == nil || s.force.CancelRunIn == nil {
 		return v1.DrainForceResponse{}, domain.NewError(domain.CodeNotImplemented, "this Controller cannot force a drain", nil)
 	}
 	if saved, err := s.drainedForce(ctx, by, ref, req); !errors.Is(err, errNotDone) {
@@ -89,7 +90,7 @@ func (s *Service) DrainForce(ctx context.Context, by pki.Session, ref string, re
 			return v1.DrainForceResponse{}, err
 		}
 		for _, r := range forced {
-			if err := s.force.CancelLiveIn(ctx, tx, act, domain.ID(r.TaskID)); err != nil {
+			if err := s.force.CancelRunIn(ctx, tx, act, domain.ID(r.RunID)); err != nil {
 				return v1.DrainForceResponse{}, err
 			}
 		}

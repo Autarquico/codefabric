@@ -130,3 +130,19 @@ func ValidCheckpointRef(ref string) bool {
 	kind, _, err := ParseID(rest)
 	return err == nil && kind == KindCheckpoint
 }
+
+// snapshotRefPrefix is where the relay keeps the dirty snapshots of clients.
+const snapshotRefPrefix = "refs/cf/snapshots/"
+
+// SnapshotRef is the ref of the relay that keeps a dirty snapshot (§22.2,
+// §22.4): refs/cf/snapshots/<digest>, where the digest is the full ID of the
+// commit of the snapshot, so that the name vouches for the content. It is only
+// ever created.
+func SnapshotRef(digest string) string { return snapshotRefPrefix + digest }
+
+// ValidSnapshotRef reports whether ref is the ref of a snapshot: a full commit
+// ID in the one form SnapshotRef writes, and nothing after it.
+func ValidSnapshotRef(ref string) bool {
+	digest, ok := strings.CutPrefix(ref, snapshotRefPrefix)
+	return ok && ValidCommitID(digest)
+}

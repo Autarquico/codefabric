@@ -78,6 +78,9 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	ev.Data = map[string]any{"lease_id": string(l.ID), "epoch": l.Epoch, "worker": w.Name, "accept_by": l.AcceptBy}
 	if continues != nil {
 		ev.Data["checkpoint"], ev.Data["native_state"] = continues.CheckpointID, continues.NativeState != nil
+		if continues.Seed != nil {
+			ev.Data["native_seed"] = continues.Seed.Digest
+		}
 		if len(continues.Warnings) > 0 {
 			ev.Level, ev.Data["warnings"] = "warn", continues.Warnings
 		}

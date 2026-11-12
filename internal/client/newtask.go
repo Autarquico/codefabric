@@ -30,9 +30,22 @@ func (c *Client) NewTask(ctx context.Context, dir string, req v1.CreateTaskReque
 		return v1.CreateTaskResponse{}, err
 	}
 	req.Project = project.ID
-	req.ResolvedRef, req.SourceCommit = "", ""
+	// A caller that took and pushed the snapshot itself (a handoff, which must send the
+	// same commit again on a replay) names it; anything else here is made anew.
+	sent := !req.Snapshot && req.SourceSnapshot != ""
+	if sent {
+		req.SourceCommit, req.ResolvedRef = req.SourceSnapshot, first(req.SourceBranch, project.DefaultBranch)
+	} else {
+		req.ResolvedRef, req.SourceCommit, req.SourceSnapshot, req.SourceBranch = "", "", "", ""
+	}
 	var gitErr error
-	if !req.NoStart {
+	switch {
+	case sent:
+	case req.Snapshot:
+		if err := c.snapshotSource(ctx, dir, project, &req); err != nil {
+			return v1.CreateTaskResponse{}, err
+		}
+	case !req.NoStart:
 		ref := first(req.SourceRef, project.DefaultBranch)
 		commit, err := gitctx.ResolveRef(ctx, dir, remoteFor(ctx, dir, project), ref)
 		switch {
@@ -51,6 +64,49 @@ func (c *Client) NewTask(ctx context.Context, dir string, req v1.CreateTaskReque
 		return res, domain.NewError(domain.CodeInvalidRequest, gitErr.Error(), nil)
 	}
 	return res, err
+}
+
+// snapshotSource makes the Task start from the working tree of dir as it is
+// (§22.2): the tree is committed on a temporary index, so that it stays as it
+// was, and the commit goes to the relay. The Run freezes that commit, the
+// digest, and the branch the tree was on.
+func (c *Client) snapshotSource(ctx context.Context, dir string, project v1.Project, req *v1.CreateTaskRequest) error {
+	if req.NoStart || req.SourceRef != "" {
+		return domain.NewError(domain.CodeInvalidRequest, "a snapshot is what a Run starts from: it cannot go with --no-start or --ref", nil)
+	}
+	snap, err := c.SnapshotDir(ctx, dir, project.ID)
+	if err != nil {
+		return err
+	}
+	req.SourceSnapshot, req.SourceCommit, req.SourceBranch = snap.Commit, snap.Commit, snap.Branch
+	if req.SnapshotReport != nil {
+		req.SnapshotReport.Excluded, req.SnapshotReport.Tree = snap.Excluded, snap.Tree
+	}
+	req.ResolvedRef = first(snap.Branch, project.DefaultBranch)
+	return nil
+}
+
+// SnapshotDir commits the working tree of dir as it is (gitctx.TakeSnapshot)
+// and sends the commit to the relay of the Project, which is what `--snapshot`
+// of `cf do` and of `cf task resume` start from. The tree is left untouched, and
+// the files that checkpoint.exclude names (its default: the Controller does not tell
+// its configuration to clients) do not travel: Snapshot.Excluded lists them.
+func (c *Client) SnapshotDir(ctx context.Context, dir, project string) (gitctx.Snapshot, error) {
+	snap, err := c.TakeSnapshot(ctx, dir)
+	if err != nil {
+		return gitctx.Snapshot{}, err
+	}
+	return snap, c.PushSnapshot(ctx, dir, project, snap.Commit)
+}
+
+// TakeSnapshot is SnapshotDir without sending: the commit stays in the repository of dir,
+// so a caller can tell from its tree whether anything changed before deciding to push.
+func (c *Client) TakeSnapshot(ctx context.Context, dir string) (gitctx.Snapshot, error) {
+	exclude, err := c.CheckpointExclude(ctx)
+	if err != nil {
+		return gitctx.Snapshot{}, err
+	}
+	return gitctx.TakeSnapshot(ctx, dir, exclude...)
 }
 
 func first(a, b string) string {

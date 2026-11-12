@@ -26,6 +26,7 @@ func relayServing(t *testing.T) (url, commit string, stub *relayStub) {
 	root := t.TempDir()
 	gittest.Run(t, root, "clone", "--bare", "--quiet", work, filepath.Join(root, "p.git"))
 	gittest.Run(t, filepath.Join(root, "p.git"), "update-ref", domain.CheckpointRef(resumedCheckpoint), commit)
+	gittest.Run(t, filepath.Join(root, "p.git"), "update-ref", domain.SnapshotRef(commit), commit)
 	execPath := gittest.Run(t, root, "--exec-path")
 	backend := &cgi.Handler{
 		Path: filepath.Join(execPath, "git-http-backend"),
@@ -46,6 +47,26 @@ func relayServing(t *testing.T) (url, commit string, stub *relayStub) {
 }
 
 const relayToken = "tok-relay-0123456789"
+
+func TestRemoteRef_TellsAnExistingCheckpointRefFromAMissingOne(t *testing.T) {
+	r := newRig(t)
+	r.prepare()
+	url, commit, stub := relayServing(t)
+	auth := relaySource(url, stub).Auth
+
+	got, ok, err := r.g.RemoteRef(t.Context(), project, domain.CheckpointRef(resumedCheckpoint), auth)
+	if err != nil || !ok || got != commit {
+		t.Fatalf("existing ref: %q, %v, %v; want %s", got, ok, err, commit)
+	}
+	got, ok, err = r.g.RemoteRef(t.Context(), project, domain.CheckpointRef("cp_01J0000000000000000000CP02"), auth)
+	if err != nil || ok || got != "" {
+		t.Fatalf("missing ref: %q, %v, %v", got, ok, err)
+	}
+	auth.Token = "wrong"
+	if _, _, err := r.g.RemoteRef(t.Context(), project, domain.CheckpointRef(resumedCheckpoint), auth); err == nil {
+		t.Fatal("a relay that refuses the token must be an error, not a missing ref")
+	}
+}
 
 func relaySource(url string, stub *relayStub) *gitops.RelaySource {
 	return &gitops.RelaySource{
@@ -113,5 +134,25 @@ func TestPrepare_RelayThatLacksTheCommitFails(t *testing.T) {
 	err := r.g.Prepare(t.Context(), spec, r.worktree)
 	if err == nil || !strings.Contains(err.Error(), "does not hold") {
 		t.Errorf("Prepare = %v", err)
+	}
+}
+
+func TestScenario_DirtySnapshots_PrepareFetchesTheSnapshotFromTheRelayAndNotFromOrigin(t *testing.T) {
+	r := newRig(t)
+	url, commit, stub := relayServing(t)
+
+	spec := r.spec()
+	spec.SourceCommit, spec.SourceRef = commit, "main"
+	spec.Repo = filepath.Join(t.TempDir(), "gone")
+	spec.Relay = relaySource(url, stub)
+	spec.Relay.Ref = domain.SnapshotRef(commit)
+	if err := r.g.Prepare(t.Context(), spec, r.worktree); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if got := gittest.Run(t, r.worktree, "rev-parse", "HEAD"); got != commit {
+		t.Errorf("HEAD = %s, want the snapshot commit %s", got, commit)
+	}
+	if _, err := gittest.Try(t, r.origin, "cat-file", "-e", commit+"^{commit}"); err == nil {
+		t.Error("the snapshot commit is in the origin")
 	}
 }

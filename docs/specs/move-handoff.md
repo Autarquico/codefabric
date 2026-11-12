@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: L
 issue: 169
-prs: []
+prs: [170]
 related_issues: [169]
 sub_issues: []
 depends_on: [defer-resume]

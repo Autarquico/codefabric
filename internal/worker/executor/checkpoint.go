@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -90,7 +91,7 @@ func (e *Executor) persistCheckpoint(ctx context.Context, tx *state.Tx, c v1.Wor
 		// A capture still open is the one the Controller gave up on (it asked for
 		// this one): it ends here, and what is in flight of it is cut short.
 		if open, err := state.CaptureOf(ctx, tx, k); err == nil && open.DoneAt == nil && open.CheckpointID != o.CheckpointID {
-			if _, err := state.EndCapture(ctx, tx, k, state.CaptureAborted, now); err != nil {
+			if _, err := state.EndCapture(ctx, tx, k, open.CheckpointID, state.CaptureAborted, now); err != nil {
 				return nil, nil, err
 			}
 			e.cancelCapture(k)
@@ -219,11 +220,11 @@ func (e *Executor) capturedBeforeSettle(ctx context.Context, r state.Run, exit *
 		// A live capture is made while the harness runs, never after the fact: the
 		// Run is over, and what the Controller reserved it aborts.
 		e.log.InfoContext(ctx, "the Run ended while a live capture was open: the capture is abandoned", "run", r.RunID, "checkpoint", c.CheckpointID)
-		return e.closeCapture(ctx, r, state.CaptureAborted)
+		return e.closeCapture(ctx, r, c, state.CaptureAborted)
 	}
 	if exit != nil && exit.Cause == execwrap.CauseExit {
 		e.log.InfoContext(ctx, "the harness ended by itself while a capture was ordered: the exit wins and the capture is abandoned", "run", r.RunID, "checkpoint", c.CheckpointID)
-		return e.closeCapture(ctx, r, state.CaptureAborted)
+		return e.closeCapture(ctx, r, c, state.CaptureAborted)
 	}
 	if !e.captureDue(r.Key) {
 		return false
@@ -272,7 +273,7 @@ func (e *Executor) attemptCapture(ctx context.Context, r state.Run, c state.Capt
 		e.log.ErrorContext(ctx, "a capture could not be reported in time: it is given up", "run", r.RunID, "checkpoint", c.CheckpointID)
 		outcome = state.CaptureFailed
 	}
-	if !e.closeCapture(ctx, r, outcome) {
+	if !e.closeCapture(ctx, r, c, outcome) {
 		return false
 	}
 	e.mu.Lock()
@@ -282,8 +283,8 @@ func (e *Executor) attemptCapture(ctx context.Context, r state.Run, c state.Capt
 	return true
 }
 
-func (e *Executor) closeCapture(ctx context.Context, r state.Run, outcome string) bool {
-	if _, err := e.endCapture(ctx, r.Key, outcome); err != nil {
+func (e *Executor) closeCapture(ctx context.Context, r state.Run, c state.Capture, outcome string) bool {
+	if _, err := e.endCapture(ctx, r.Key, c.CheckpointID, outcome); err != nil {
 		e.log.ErrorContext(ctx, "closing the capture of a Run", "run", r.RunID, "err", err)
 		return false
 	}
@@ -307,10 +308,10 @@ func (e *Executor) backOffCapture(k state.Key) {
 	m.captureAt = e.clock.Now().Add(m.captureWait)
 }
 
-func (e *Executor) endCapture(ctx context.Context, k state.Key, outcome string) (bool, error) {
+func (e *Executor) endCapture(ctx context.Context, k state.Key, checkpointID, outcome string) (bool, error) {
 	var ended bool
 	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) (err error) {
-		ended, err = state.EndCapture(ctx, tx, k, outcome, e.clock.Now())
+		ended, err = state.EndCapture(ctx, tx, k, checkpointID, outcome, e.clock.Now())
 		return err
 	})
 	return ended, err
@@ -337,40 +338,12 @@ func (e *Executor) capture(ctx context.Context, r state.Run, c state.Capture) (o
 	if err != nil {
 		return fail("the capture cannot be checked for secrets: " + forbidden.Redact(err.Error()))
 	}
-	head, err := e.o.Git.Head(ctx, e.worktree(r.Key))
-	if err != nil {
-		return fail("HEAD of the worktree cannot be read: " + forbidden.Redact(err.Error()))
-	}
-	sealed, err := e.o.Git.Snapshot(ctx, e.worktree(r.Key), gitops.SnapshotIntent{
-		Project: r.ProjectID, ParentOID: head, At: c.CreatedAt, Exclude: c.Exclude,
-	}, forbidden)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", true
+	sealed := gitops.Sealed{Commit: c.PushedCommit, Excluded: c.PushedExcluded}
+	if c.PushedCommit == "" {
+		var done bool
+		if sealed, outcome, retry, done = e.sealAndPush(ctx, cc, r, c, forbidden, fail); !done {
+			return outcome, retry
 		}
-		return fail("capturing the worktree failed: " + forbidden.Redact(err.Error()))
-	}
-	tok, err := cc.CheckpointToken(ctx, r.RunID, v1.CheckpointTokenRequest{LeaseEpoch: r.LeaseEpoch, CheckpointID: c.CheckpointID, Commit: sealed.Commit})
-	if err != nil {
-		return e.afterControllerError(ctx, r, err, fail)
-	}
-	if tok.Ref != c.Ref {
-		return fail("the token is for another ref than the checkpoint's")
-	}
-	pushErr := e.o.Git.PushRef(ctx, r.ProjectID, sealed.Commit, c.Ref, gitops.PushAuth{
-		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
-		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
-	}, forbidden)
-	if ctx.Err() != nil {
-		return "", true
-	}
-	if pushErr != nil {
-		var pe *gitops.PushError
-		if errors.As(pushErr, &pe) && pe.Class == gitops.PushUnreachable {
-			e.log.WarnContext(ctx, "pushing a checkpoint failed; it will be tried again", "run", r.RunID, "err", pe.Message)
-			return "", true
-		}
-		return fail("pushing the capture failed: " + forbidden.Redact(briefErr(pushErr)))
 	}
 	native, warnings, retry := e.exportNativeState(ctx, cc, r, c, forbidden)
 	if retry {
@@ -384,6 +357,100 @@ func (e *Executor) capture(ctx context.Context, r state.Run, c state.Capture) (o
 	}
 	e.log.InfoContext(ctx, "checkpoint captured", "run", r.RunID, "checkpoint", c.CheckpointID, "commit", sealed.Commit, "excluded", len(sealed.Excluded), "native_state", native != nil)
 	return state.CaptureCompleted, false
+}
+
+// sealAndPush seals the worktree of the Run, asks the Controller for the right to push
+// the commit and pushes it to the ref of the checkpoint. ok says the commit is
+// pushed; otherwise outcome and retry say what became of the capture, as for capture.
+func (e *Executor) sealAndPush(ctx context.Context, cc CheckpointClient, r state.Run, c state.Capture, forbidden gitops.Forbidden, fail func(string) (string, bool)) (sealed gitops.Sealed, outcome string, retry, ok bool) {
+	stop := func(outcome string, retry bool) (gitops.Sealed, string, bool, bool) {
+		return gitops.Sealed{}, outcome, retry, false
+	}
+	head, err := e.o.Git.Head(ctx, e.worktree(r.Key))
+	if err != nil {
+		return stop(fail("HEAD of the worktree cannot be read: " + forbidden.Redact(err.Error())))
+	}
+	sealed, err = e.o.Git.Snapshot(ctx, e.worktree(r.Key), gitops.SnapshotIntent{
+		Project: r.ProjectID, ParentOID: head, At: c.CreatedAt, Exclude: c.Exclude,
+	}, forbidden)
+	if err != nil {
+		if ctx.Err() != nil {
+			return stop("", true)
+		}
+		return stop(fail("capturing the worktree failed: " + forbidden.Redact(err.Error())))
+	}
+	tok, err := cc.CheckpointToken(ctx, r.RunID, v1.CheckpointTokenRequest{LeaseEpoch: r.LeaseEpoch, CheckpointID: c.CheckpointID, Commit: sealed.Commit})
+	if err != nil {
+		return stop(e.afterControllerError(ctx, r, err, fail))
+	}
+	if tok.Ref != c.Ref {
+		return stop(fail("the token is for another ref than the checkpoint's"))
+	}
+	auth := gitops.PushAuth{
+		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
+		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
+	}
+	pushErr := e.pushCheckpoint(ctx, r, c, &sealed, auth, forbidden)
+	if ctx.Err() != nil {
+		return stop("", true)
+	}
+	if pushErr != nil {
+		var pe *gitops.PushError
+		if errors.As(pushErr, &pe) && pe.Class == gitops.PushUnreachable {
+			e.log.WarnContext(ctx, "pushing a checkpoint failed; it will be tried again", "run", r.RunID, "err", pe.Message)
+			return stop("", true)
+		}
+		return stop(fail("pushing the capture failed: " + forbidden.Redact(briefErr(pushErr))))
+	}
+	// The ref is immutable: from here on a retry reuses this commit, since sealing
+	// the worktree again (the harness goes on writing) would give another one.
+	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		return state.MarkCapturePushed(ctx, tx, r.Key, c.CheckpointID, sealed.Commit, sealed.Excluded)
+	})
+	if err != nil {
+		e.log.WarnContext(ctx, "recording the push of a capture failed; a retry would seal the worktree again", "run", r.RunID, "err", err)
+	}
+	return sealed, "", false, true
+}
+
+// checkpointPushAttempts bounds the pushes of one commit that fail for the network
+// within one try of a capture.
+const checkpointPushAttempts = 3
+
+// pushCheckpoint pushes the sealed commit to the ref of the checkpoint. The ref is
+// immutable and a push can fail after the relay took it (the connection drops before the
+// answer), so after every failure the ref is asked for: one that exists is the commit
+// this capture pushed, and is adopted in place of the sealed one (its excluded paths are
+// those of the sealing at hand); one that does not is pushed again with the same commit,
+// never a new sealing, which the ref would refuse.
+// checkpointRefOnRelay asks the relay for the ref of a checkpoint with the read
+// token of the lease: the token of the checkpoint only writes.
+func (e *Executor) checkpointRefOnRelay(ctx context.Context, r state.Run, ref string) (string, bool, error) {
+	src, err := e.relaySource(ctx, r, ref)
+	if err != nil {
+		return "", false, err
+	}
+	return e.o.Git.RemoteRef(ctx, r.ProjectID, ref, src.Auth)
+}
+
+func (e *Executor) pushCheckpoint(ctx context.Context, r state.Run, c state.Capture, sealed *gitops.Sealed, auth gitops.PushAuth, forbidden gitops.Forbidden) error {
+	var pushErr error
+	for range checkpointPushAttempts {
+		pushErr = e.o.Git.PushRef(ctx, r.ProjectID, sealed.Commit, c.Ref, auth, forbidden)
+		if pushErr == nil || ctx.Err() != nil {
+			return pushErr
+		}
+		if commit, found, err := e.checkpointRefOnRelay(ctx, r, c.Ref); err == nil && found {
+			e.log.InfoContext(ctx, "a checkpoint push failed after the relay took it; its commit is adopted", "run", r.RunID, "checkpoint", c.CheckpointID, "commit", commit)
+			sealed.Commit = commit
+			return nil
+		}
+		var pe *gitops.PushError
+		if !errors.As(pushErr, &pe) || pe.Class != gitops.PushUnreachable {
+			return pushErr
+		}
+	}
+	return pushErr
 }
 
 // afterControllerError is what an error of the Controller means for a capture: a
@@ -463,13 +530,8 @@ func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r
 		e.log.WarnContext(ctx, "the native state of a Run is left out of its checkpoint: "+why, "run", r.RunID, "checkpoint", c.CheckpointID, "adapter", adapter.ID())
 		return nil, nil, false
 	}
-	files, err := porter.Locate(ctx, sref)
-	if err != nil {
+	if _, err := porter.Locate(ctx, sref); err != nil {
 		return leave("its session was not found: " + forbidden.Redact(err.Error()))
-	}
-	if why := e.sessionHoldsSecrets(files, forbidden); why != "" {
-		ref, _, retry := leave(why)
-		return ref, []string{"Secret in the session: " + why + "; the native state was left out of the checkpoint"}, retry
 	}
 	tmp, err := os.CreateTemp(e.o.Paths.WorkerDataDir(), "native-")
 	if err != nil {
@@ -491,6 +553,15 @@ func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 		return leave("it cannot be read back: " + brief(err))
 	}
+	// What is uploaded is what is scanned: the harness may still be writing to
+	// the session, so the live files say nothing of the bytes already exported.
+	if why := archiveHoldsSecrets(tmp, forbidden); why != "" {
+		ref, _, retry := leave(why)
+		return ref, []string{"Secret in the session: " + why + "; the native state was left out of the checkpoint"}, retry
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return leave("it cannot be read back: " + brief(err))
+	}
 	digest := "sha256:" + hex.EncodeToString(sum.Sum(nil))
 	if _, err := cc.PutNativeState(ctx, r.RunID, c.CheckpointID, r.LeaseEpoch, digest, tmp, size); err != nil {
 		var coded *domain.Error
@@ -503,25 +574,37 @@ func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r
 	return &v1.NativeStateRef{Adapter: adapter.ID(), AdapterVersion: manifest.Version, Digest: digest}, nil, false
 }
 
-// sessionHoldsSecrets reads every file of the session for the values of the
-// secrets of the Run, and says, with the names of the files and the numbers of
-// the lines, what it found; "" if nothing. The files cannot be redacted (a
-// signed block would break), so a finding leaves the session out whole. What
-// cannot be read to the end is a finding too: it could not be checked.
-func (e *Executor) sessionHoldsSecrets(files harness.SessionFiles, forbidden gitops.Forbidden) string {
+// archiveHoldsSecrets reads every file of the archive of a session (a tar.gz)
+// for the values of the secrets of the Run, and says, with the names of the
+// files and the numbers of the lines, what it found; "" if nothing. The files
+// cannot be redacted (a signed block would break), so a finding leaves the
+// session out whole. What cannot be read to the end is a finding too: it could
+// not be checked.
+func archiveHoldsSecrets(archive io.Reader, forbidden gitops.Forbidden) string {
+	unchecked := func(err error) string {
+		return "it cannot be checked for secrets: " + forbidden.Redact(err.Error())
+	}
+	gz, err := gzip.NewReader(archive)
+	if err != nil {
+		return unchecked(err)
+	}
+	defer gz.Close() //nolint:errcheck // reading
+	tr := tar.NewReader(gz)
 	var found []string
-	for _, path := range slices.Concat([]string{files.Transcript}, files.Attachments) {
-		f, err := os.Open(path) //nolint:gosec // a file of the session the adapter located
-		if err != nil {
-			return "it cannot be checked for secrets: " + brief(err)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
 		}
-		lines, err := gitops.LinesWithSecrets(f, forbidden)
-		_ = f.Close()
 		if err != nil {
-			return "it cannot be checked for secrets: " + forbidden.Redact(err.Error())
+			return unchecked(err)
+		}
+		lines, err := gitops.LinesWithSecrets(tr, forbidden)
+		if err != nil {
+			return unchecked(err)
 		}
 		if len(lines) > 0 {
-			found = append(found, fmt.Sprintf("%s lines %s", filepath.Base(path), joinInts(lines)))
+			found = append(found, fmt.Sprintf("%s lines %s", filepath.Base(hdr.Name), joinInts(lines)))
 		}
 	}
 	if len(found) == 0 {

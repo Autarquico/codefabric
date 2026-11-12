@@ -101,6 +101,16 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 	if err := tx.InsertRun(ctx, run); err != nil {
 		return err
 	}
+	// The session that seeded the Run seeds its retry: the spec and the source it repeats name that tree.
+	seed, err := store.RunSeed(ctx, tx, parent.ID)
+	if err != nil {
+		return err
+	}
+	if seed != nil {
+		if err := tx.SetRunSeed(ctx, run.ID, *seed); err != nil {
+			return err
+		}
+	}
 	ev := act.Event(domain.EventRunQueued, "run queued: retry")
 	ev.ProjectID, ev.TaskID, ev.RunID = task.ProjectID, task.ID, run.ID
 	ev.Data = map[string]any{

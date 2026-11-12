@@ -40,6 +40,9 @@ func (s *Server) registerWorkRoutes() {
 	s.handle("GET /v1/inbox", clientsOnly, s.inbox)
 	s.handle("POST /v1/tasks/{ref}/defer", clientsOnly, taskAction(s.work.Tasks.Defer))
 	s.handle("POST /v1/tasks/{ref}/resume", clientsOnly, s.resumeTask)
+	s.handle("GET /v1/tasks/{ref}/pull", clientsOnly, s.pullPlan)
+	s.handle("GET /v1/tasks/{ref}/pull/native-state", clientsOnly, s.pullNativeState)
+	s.registerSeedRoutes()
 	s.handle("POST /v1/tasks/{ref}/move", clientsOnly, s.moveTask)
 	s.handle("GET /v1/tasks/{ref}/move", clientsOnly, s.getMove)
 	s.handle("POST /v1/workers/{ref}/drain-move", clientsOnly, s.drainMove)
@@ -227,6 +230,29 @@ func (s *Server) resumeTask(w http.ResponseWriter, r *http.Request, c caller) er
 		return err
 	}
 	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+// pullPlan is what `cf task pull` would bring; it changes nothing.
+func (s *Server) pullPlan(w http.ResponseWriter, r *http.Request, _ caller) error {
+	out, err := s.work.Tasks.PullPlan(r.Context(), r.PathValue("ref"), r.URL.Query().Get("project"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+// pullNativeState streams the harness's session of the checkpoint to pull.
+func (s *Server) pullNativeState(w http.ResponseWriter, r *http.Request, _ caller) error {
+	body, size, err := s.work.Tasks.OpenPullNativeState(r.Context(), r.PathValue("ref"), r.URL.Query().Get("project"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = body.Close() }()
+	setBlobHeaders(w, size)
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
 	return nil
 }
 

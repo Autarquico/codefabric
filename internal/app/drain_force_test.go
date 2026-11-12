@@ -6,8 +6,34 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
+
+// Only the Run the drained Worker has is cancelled: a Run another Worker has
+// got of the same Task meanwhile (a resume, a move) lives on.
+func TestDrainForce_OnlyTheRunOfTheWorkerIsCancelled(t *testing.T) {
+	e := newForceEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha", withCapabilities(domain.CheckpointCapability)), "x")
+	r.mustSend(r.entry(v1.ReportStarted))
+
+	done := e.drainForce("alpha")
+	e.untilWaiting()
+	order := e.preDestructiveOrder(r)
+	replacement := e.storedRun(r.run.ID)
+	replacement.ID, replacement.Short, replacement.Attempt = "run_replacement", replacement.Short+1000, replacement.Attempt+1
+	replacement.State, replacement.LeaseID, replacement.WorkerID = domain.RunQueued, "", ""
+	must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error { return tx.InsertRun(t.Context(), replacement) }))
+	if _, err := r.completeCheckpoint(order.CheckpointID); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.Advance(500 * time.Millisecond)
+	<-done
+
+	if got := e.storedRun("run_replacement").State; got != domain.RunQueued {
+		t.Fatalf("replacement Run = %s, want it left alone", got)
+	}
+}
 
 // A repeated drain --force answers what the first one did, with the same Runs,
 // though they are cancelled by now; and the checkpoint it asked is the user's.

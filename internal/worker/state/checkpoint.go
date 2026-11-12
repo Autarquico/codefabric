@@ -32,6 +32,10 @@ type Capture struct {
 	CreatedAt time.Time
 	DoneAt    *time.Time
 	Outcome   string
+	// PushedCommit is the commit the capture pushed to its ref, "" until it did,
+	// and PushedExcluded the paths its sealing left out: a retry reuses them.
+	PushedCommit   string
+	PushedExcluded []string
 }
 
 // BeginCapture stores the capture of an order and takes the Run, which is in
@@ -68,14 +72,15 @@ func CaptureOf(ctx context.Context, q Querier, k Key) (Capture, error) {
 	var (
 		c       Capture
 		exclude string
+		pushed  string
 		created int64
 		done    sql.NullInt64
 		outcome sql.NullString
 	)
 	err := q.QueryRowContext(ctx,
-		`SELECT checkpoint_id, trigger, ref, exclude, native_state, created_at, done_at, outcome FROM checkpoint_captures WHERE run_id = ? AND lease_epoch = ?
+		`SELECT checkpoint_id, trigger, ref, exclude, native_state, created_at, done_at, outcome, pushed_commit, pushed_excluded FROM checkpoint_captures WHERE run_id = ? AND lease_epoch = ?
 		 ORDER BY done_at IS NULL DESC, created_at DESC LIMIT 1`,
-		k.RunID, k.LeaseEpoch).Scan(&c.CheckpointID, &c.Trigger, &c.Ref, &exclude, &c.NativeState, &created, &done, &outcome)
+		k.RunID, k.LeaseEpoch).Scan(&c.CheckpointID, &c.Trigger, &c.Ref, &exclude, &c.NativeState, &created, &done, &outcome, &c.PushedCommit, &pushed)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Capture{}, ErrNotFound
@@ -86,6 +91,9 @@ func CaptureOf(ctx context.Context, q Querier, k Key) (Capture, error) {
 	if err := json.Unmarshal([]byte(exclude), &c.Exclude); err != nil {
 		return Capture{}, fmt.Errorf("state: decoding the exclusions of a capture: %w", err)
 	}
+	if err := json.Unmarshal([]byte(pushed), &c.PushedExcluded); err != nil {
+		return Capture{}, fmt.Errorf("state: decoding the paths a capture left out: %w", err)
+	}
 	if done.Valid {
 		at := time.Unix(0, done.Int64).UTC()
 		c.DoneAt = &at
@@ -93,15 +101,42 @@ func CaptureOf(ctx context.Context, q Querier, k Key) (Capture, error) {
 	return c, nil
 }
 
-// EndCapture closes the capture of an assignment with its outcome. One that is
-// closed already keeps its outcome: ended says whether this call closed it.
-func EndCapture(ctx context.Context, tx *Tx, k Key, outcome string, at time.Time) (ended bool, err error) {
+// MarkCapturePushed records that the capture of the checkpoint pushed commit to its ref,
+// with the paths its sealing left out, so that a retry does not seal the worktree again.
+func MarkCapturePushed(ctx context.Context, tx *Tx, k Key, checkpointID, commit string, excluded []string) error {
+	paths, err := json.Marshal(excluded)
+	if err != nil {
+		return fmt.Errorf("state: encoding the paths a capture left out: %w", err)
+	}
+	if _, err := tx.exec(ctx,
+		`UPDATE checkpoint_captures SET pushed_commit = ?, pushed_excluded = ? WHERE run_id = ? AND lease_epoch = ? AND checkpoint_id = ?`,
+		commit, string(paths), k.RunID, k.LeaseEpoch, checkpointID); err != nil {
+		return fmt.Errorf("state: recording the push of a capture: %w", err)
+	}
+	return nil
+}
+
+// EndCapture closes the capture of the checkpoint, with its outcome: another capture of
+// the same assignment, open at the same time, is not touched. One that is closed already
+// keeps its outcome: ended says whether this call closed it.
+func EndCapture(ctx context.Context, tx *Tx, k Key, checkpointID, outcome string, at time.Time) (ended bool, err error) {
 	res, err := tx.exec(ctx,
-		`UPDATE checkpoint_captures SET done_at = ?, outcome = ? WHERE run_id = ? AND lease_epoch = ? AND done_at IS NULL`,
-		at.UnixNano(), outcome, k.RunID, k.LeaseEpoch)
+		`UPDATE checkpoint_captures SET done_at = ?, outcome = ? WHERE run_id = ? AND lease_epoch = ? AND checkpoint_id = ? AND done_at IS NULL`,
+		at.UnixNano(), outcome, k.RunID, k.LeaseEpoch, checkpointID)
 	if err != nil {
 		return false, fmt.Errorf("state: closing a capture: %w", err)
 	}
 	n, err := res.RowsAffected()
 	return n == 1, err
+}
+
+// EndCaptures closes every capture the assignment has open, with the outcome: a stop of
+// the Run ends them all.
+func EndCaptures(ctx context.Context, tx *Tx, k Key, outcome string, at time.Time) error {
+	if _, err := tx.exec(ctx,
+		`UPDATE checkpoint_captures SET done_at = ?, outcome = ? WHERE run_id = ? AND lease_epoch = ? AND done_at IS NULL`,
+		at.UnixNano(), outcome, k.RunID, k.LeaseEpoch); err != nil {
+		return fmt.Errorf("state: closing the captures: %w", err)
+	}
+	return nil
 }

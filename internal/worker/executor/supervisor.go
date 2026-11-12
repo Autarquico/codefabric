@@ -250,6 +250,9 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if run.StructuredInput {
 		l.InputPath, l.InitialInput = launch.InputPath, launch.InitialInput
 	}
+	if sock := e.runSocketEnv(ctx, r, spec); sock != "" {
+		l.Env = append(slices.Clone(l.Env), sock)
+	}
 	env, extra, err := launchSecretEnv(spec, launch.SecretEnv)
 	if err != nil {
 		return err
@@ -409,6 +412,9 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 	}
 	if m.started != nil {
 		e.serveInput(ctx, r, m.exit == nil)
+		if m.exit == nil {
+			e.runSocketEnv(ctx, r, parseSpec(r.Spec)) // a restarted daemon serves again the socket its Run knows
+		}
 	}
 	if m.exit == nil && r.Phase.Live() {
 		e.releaseStartIfDue(ctx, r)

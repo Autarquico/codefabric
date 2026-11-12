@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +33,8 @@ type Git interface {
 	Push(ctx context.Context, project, commit, branch string, a gitops.PushAuth, forbidden gitops.Forbidden) error
 	// PushRef pushes to a full ref; the ref of an orphan is only ever created.
 	PushRef(ctx context.Context, project, commit, ref string, a gitops.PushAuth, forbidden gitops.Forbidden) error
+	// RemoteRef is the commit a checkpoint ref points to in the relay, if it exists.
+	RemoteRef(ctx context.Context, project, ref string, a gitops.PushAuth) (commit string, ok bool, err error)
 	// Snapshot captures the worktree for a checkpoint as Seal does, but it
 	// records no ref and finalizes nothing: the commit is pushed to the ref of the
 	// checkpoint, and the Run is sealed at its exit as ever.
@@ -41,6 +44,21 @@ type Git interface {
 // RelayTLS are the PEM files git presents and trusts when it pushes: the
 // certificate and key of this Worker and the CA pinned at join time.
 type RelayTLS struct{ Cert, Key, CA string }
+
+// snapshotOf is the digest of the snapshot the Run starts from, which the
+// client sent to the relay, or "" for a Run that starts from the origin. A
+// spec this Worker cannot read says none: it fails elsewhere.
+func snapshotOf(r state.Run) string {
+	var spec struct {
+		Source struct {
+			Snapshot string `json:"snapshot"`
+		} `json:"source"`
+	}
+	if json.Unmarshal(r.Spec, &spec) != nil || !domain.ValidCommitID(spec.Source.Snapshot) {
+		return ""
+	}
+	return spec.Source.Snapshot
+}
 
 // makeWorktree prepares the directory a Run executes in.
 func (e *Executor) makeWorktree(ctx context.Context, r state.Run, spec specView, worktree string, og *originAccess) error {
