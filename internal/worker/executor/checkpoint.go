@@ -423,6 +423,16 @@ const checkpointPushAttempts = 3
 // this capture pushed, and is adopted in place of the sealed one (its excluded paths are
 // those of the sealing at hand); one that does not is pushed again with the same commit,
 // never a new sealing, which the ref would refuse.
+// checkpointRefOnRelay asks the relay for the ref of a checkpoint with the read
+// token of the lease: the token of the checkpoint only writes.
+func (e *Executor) checkpointRefOnRelay(ctx context.Context, r state.Run, ref string) (string, bool, error) {
+	src, err := e.relaySource(ctx, r, ref)
+	if err != nil {
+		return "", false, err
+	}
+	return e.o.Git.RemoteRef(ctx, r.ProjectID, ref, src.Auth)
+}
+
 func (e *Executor) pushCheckpoint(ctx context.Context, r state.Run, c state.Capture, sealed *gitops.Sealed, auth gitops.PushAuth, forbidden gitops.Forbidden) error {
 	var pushErr error
 	for range checkpointPushAttempts {
@@ -430,7 +440,7 @@ func (e *Executor) pushCheckpoint(ctx context.Context, r state.Run, c state.Capt
 		if pushErr == nil || ctx.Err() != nil {
 			return pushErr
 		}
-		if commit, found, err := e.o.Git.RemoteRef(ctx, r.ProjectID, c.Ref, auth); err == nil && found {
+		if commit, found, err := e.checkpointRefOnRelay(ctx, r, c.Ref); err == nil && found {
 			e.log.InfoContext(ctx, "a checkpoint push failed after the relay took it; its commit is adopted", "run", r.RunID, "checkpoint", c.CheckpointID, "commit", commit)
 			sealed.Commit = commit
 			return nil

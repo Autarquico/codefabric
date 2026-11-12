@@ -111,7 +111,9 @@ func TestCheckpointCapture_APushTheRelayTookButDidNotAnswerIsAdopted(t *testing.
 		remote[c.Branch] = c.Commit
 		return &gitops.PushError{Class: gitops.PushUnreachable, Message: "connection reset"}
 	}
-	r.git.remoteRef = func(ref string) (string, bool, error) {
+	var probedWith []string
+	r.git.remoteRef = func(ref, token string) (string, bool, error) {
+		probedWith = append(probedWith, token)
 		commit, ok := remote[ref]
 		return commit, ok, nil
 	}
@@ -124,6 +126,10 @@ func TestCheckpointCapture_APushTheRelayTookButDidNotAnswerIsAdopted(t *testing.
 	}
 	if len(r.ctrl.completes) != 1 || r.ctrl.completes[0].Commit != strings.Repeat("1", 40) || len(r.ctrl.fails) != 0 {
 		t.Errorf("completes = %+v, fails = %+v", r.ctrl.completes, r.ctrl.fails)
+	}
+	// The token of the checkpoint only writes: the ref is asked for with that of the lease.
+	if len(probedWith) == 0 || !strings.HasPrefix(probedWith[0], "token-") {
+		t.Errorf("the ref was asked for with %q, want the read token of the lease", probedWith)
 	}
 }
 
