@@ -77,6 +77,9 @@ func scanCheckpoint(row rowScanner) (Checkpoint, error) {
 	if err := json.Unmarshal([]byte(excluded), &c.Excluded); err != nil {
 		return Checkpoint{}, fmt.Errorf("store: decoding excluded paths of %s: %w", id, err)
 	}
+	if warnings == "[]" {
+		warnings = "null"
+	}
 	if err := json.Unmarshal([]byte(warnings), &c.Warnings); err != nil {
 		return Checkpoint{}, fmt.Errorf("store: decoding warnings of %s: %w", id, err)
 	}
