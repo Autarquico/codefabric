@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -11,8 +12,8 @@ import (
 )
 
 // retryIn queues the Run that retries the last Run of the Task (§11.7 retry,
-// `reschedule`): the same frozen spec and source, since checkpoints arrive in
-// Phase 5, as the next attempt, on a branch of its own and with the Run it
+// `reschedule`): the same frozen spec and source (and the checkpoint and the pinned Worker, if the Run continues),
+// as the next attempt, on a branch of its own and with the Run it
 // repeats as its parent. The caller has checked that the policy asks for it.
 func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.IDGenerator, task store.Task) error {
 	all, err := store.Runs(ctx, tx, store.RunFilter{TaskID: task.ID})
@@ -23,6 +24,11 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 		return fmt.Errorf("tasks: task %s has no Run to retry", task.ID)
 	}
 	parent := slices.MaxFunc(all, func(a, b store.Run) int { return int(a.Short) - int(b.Short) }) //nolint:gosec // short IDs are small
+	if movedBy, err := store.ActiveMoveOfTask(ctx, tx, task.ID); err == nil && movedBy.TargetRunID == parent.ID {
+		return nil // the move owns the decision about its target Run: it records the failure
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
 	short, err := tx.NextShortID(ctx, domain.KindRun)
 	if err != nil {
 		return err
@@ -30,9 +36,9 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 	run := store.Run{
 		ID: ids.New(domain.KindRun), Short: short, TaskID: task.ID, Attempt: len(all) + 1,
 		Lineage: domain.LineageRetries, LineageParent: parent.ID, Spec: parent.Spec, SpecDigest: parent.SpecDigest, Workflow: parent.Workflow, Environment: parent.Environment,
-		SourceCommit: parent.SourceCommit,
-		Branch:       domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: short}),
-		State:        domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,
+		SourceCommit: parent.SourceCommit, LineageCheckpoint: parent.LineageCheckpoint, PinnedWorker: parent.PinnedWorker,
+		Branch: domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: short}),
+		State:  domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,
 		Runtime: domain.RuntimeNone, CreatedAt: act.Now,
 	}
 	if err := tx.InsertRun(ctx, run); err != nil {
