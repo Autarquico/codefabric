@@ -141,7 +141,9 @@ func contractFixture(t *testing.T) harnesstest.Fixture {
 			if err := os.WriteFile(h.OutputPath, []byte("note on stderr\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			writeSessionFile(t, h.ConfigDir, h.Worktree, claude.SessionID(h.RunID, h.LeaseEpoch), "the first prompt")
 		},
+		ResumeFrom: []harness.Checkpoint{checkpointOfAnotherSession(t)},
 		ExpectEvents: []harness.Event{
 			{Kind: harness.EventSessionStarted, SessionID: "5b0e1c1e-2f64-4d0e-9a33-6f1a7d0c9a11", Model: "claude-opus-5-5"},
 			{Kind: harness.EventUsage, Usage: &harness.UsageEvent{Model: "claude-haiku-5", InputTokens: i64(0), OutputTokens: i64(2), CacheReadTokens: i64(300)}},

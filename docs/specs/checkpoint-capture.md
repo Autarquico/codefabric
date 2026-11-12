@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: L
 issue: 160
-prs: []
+prs: [167, 168]
 related_issues: [160]
 sub_issues: []
 depends_on: [claude-code-adapter, codex-adapter, logs-output-storage]
