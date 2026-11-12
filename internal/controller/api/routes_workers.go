@@ -17,6 +17,7 @@ func (s *Server) registerWorkerRoutes() {
 	s.handle("GET /v1/workers", clientsOnly, s.listWorkers)
 	s.handle("GET /v1/workers/{ref}", clientsOnly, s.getWorker)
 	s.handle("POST /v1/workers/{ref}/drain", clientsOnly, workerAction(s.work.Workers.Drain))
+	s.handle("POST /v1/workers/{ref}/drain-force", clientsOnly, s.drainForce)
 	s.handle("POST /v1/workers/{ref}/undrain", clientsOnly, workerAction(s.work.Workers.Undrain))
 	s.handle("DELETE /v1/workers/{ref}", clientsOnly, workerAction(s.work.Workers.Remove))
 }
@@ -66,6 +67,20 @@ func workerAction(act workerActionFunc) handlerFunc {
 		writeJSON(w, http.StatusOK, worker)
 		return nil
 	}
+}
+
+// drainForce drains the Worker and cancels its Runs, after asking each a checkpoint.
+func (s *Server) drainForce(w http.ResponseWriter, r *http.Request, c caller) error {
+	var req v1.ActionRequest
+	if err := decodeOptionalBody(w, r, &req); err != nil {
+		return err
+	}
+	out, err := s.work.Workers.DrainForce(r.Context(), c.Session, r.PathValue("ref"), req)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
 }
 
 type workerActionFunc = func(ctx context.Context, by pki.Session, ref string, req v1.ActionRequest) (v1.Worker, error)

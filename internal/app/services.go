@@ -84,6 +84,9 @@ type Config struct {
 	History checkpoints.History
 	// CheckpointExclude are the globs a capture leaves out (checkpoint.exclude).
 	CheckpointExclude []string
+	// PreDestructiveWait is how long a forced drain waits for the checkpoints it
+	// asks before it cancels the Runs (checkpoint.pre_destructive_timeout).
+	PreDestructiveWait time.Duration
 }
 
 // New wires the use cases. Runs re-derive their Task through tasks.NewRederive,
@@ -95,6 +98,9 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 	runService := runs.New(db, clk, ids, runs.Rederive(rederive), opts...)
 	leaseService := leases.New(db, clk, ids, leases.Rederive(rederive))
 	checkpointService := checkpoints.New(db, clk, ids, checkpoints.Rederive(rederive), checkpointOptions(cfg)...)
+	workersCfg.Force = workers.Force{
+		Capture: checkpointService.CaptureBeforeDestroy, Wait: cfg.PreDestructiveWait, CancelLiveIn: runService.CancelLiveIn,
+	}
 	taskService := tasks.New(db, clk, ids, runService, taskOptions(cfg, checkpointService)...)
 	reconciliationService := reconciliation.New(db, clk, reconciliation.Rederive(rederive), reconciliation.Config{
 		StartedAt: workersCfg.StartedAt, LostTimeout: cfg.RunLostTimeout, OfflineTTL: workersCfg.OfflineTTL,

@@ -269,6 +269,24 @@ type DrainMoveResponse struct {
 	Skipped []MoveSkipped `json:"skipped"`
 }
 
+// DrainForceResponse is POST /v1/workers/{ref}/drain-force: the Worker, draining,
+// and what became of each Run it had: the checkpoint asked before it was cancelled.
+type DrainForceResponse struct {
+	Worker Worker      `json:"worker"`
+	Runs   []ForcedRun `json:"runs"`
+}
+
+// ForcedRun is a Run that a forced drain cancelled. Captured says whether the
+// pre-destructive checkpoint was published before the Run was cancelled;
+// otherwise Reason says why not (the Worker cannot capture, it failed, it was too slow).
+type ForcedRun struct {
+	RunID        string `json:"run_id"`
+	TaskID       string `json:"task_id"`
+	CheckpointID string `json:"checkpoint_id,omitempty"`
+	Captured     bool   `json:"captured"`
+	Reason       string `json:"reason,omitempty"`
+}
+
 // MoveSkipped is a Task a drain could not move.
 type MoveSkipped struct {
 	TaskID string `json:"task_id"`

@@ -194,7 +194,7 @@ Run and administer Workers.
 - `run`: run the Worker daemon until interrupted.
 - `doctor`: check this machine as a Worker: tmux, git, disk, harnesses and their logins.
 - `list`, `show`: Workers with their resources and version.
-- `drain`, `undrain`: stop a Worker from taking new Runs, or let it take them again. `drain --move` also moves each Task that runs on the Worker (`cf task move`, the scheduler chooses where); Tasks that cannot be moved are listed with why.
+- `drain`, `undrain`: stop a Worker from taking new Runs, or let it take them again. `drain --move` also moves each Task that runs on the Worker (`cf task move`, the scheduler chooses where); Tasks that cannot be moved are listed with why. `drain --force` cancels the Runs the Worker has, after asking each a checkpoint (see [Automatic checkpoints](#automatic-checkpoints)); it asks you to confirm, or takes `--yes`, and cannot be combined with `--move`.
 - `remove`: remove a Worker and revoke its credentials (only without active Runs).
 - `secrets`: manage the secrets this Worker holds for Runs.
 - `install-service`, `uninstall-service`: run the Worker as a service of this user (systemd or launchd).
@@ -206,3 +206,10 @@ Adopt, version and inspect Workflows. Subcommands: `adopt` (create one from this
 ### Native state of checkpoints
 
 A checkpoint carries the harness's own state (its session) only in a Project that opted in: `cf project set <project> --native-state on|off` (off by default; `cf project show` prints it). With it off, checkpoints are source and summary. With it on, a session that holds the value of a secret of the Run is left out and the checkpoint says so with a warning. The Worker's grace for quiescing a harness is `checkpoint.grace` in its `config.json`; the Controller keeps the last `gc.checkpoint_interval_keep` (5) automatic checkpoints of a Run and drops reservations never published after `gc.checkpoint_reservation_ttl` (7d).
+
+### Automatic checkpoints
+
+Two things take a checkpoint without you asking. Both go to a Run only if its Worker can capture checkpoints (`CF_CHECKPOINT_UNSUPPORTED` otherwise: the Run is just skipped).
+
+- **By interval.** `checkpoint.interval` in the Controller's `controller.json`, as text such as `"10m"`, takes a checkpoint (trigger `interval`) of each Run that is going once that long has passed since its last checkpoint, or since it started. It is off when unset or `0`. The Run goes on after the capture; a Run already capturing is not asked again, and one whose capture failed is asked again only after another interval. The Controller keeps the last `gc.checkpoint_interval_keep` of them per Run. There is one interval for the whole Controller, not one per Project.
+- **Before a destructive action.** `cf worker drain <worker> --force` drains the Worker and cancels its Runs. First it asks each Run a checkpoint (trigger `pre-destructive`) and waits for them up to `checkpoint.pre_destructive_timeout` (default `20s`, at most `25s`, since a request to the Controller times out at 30s). A Run whose checkpoint cannot be asked, fails or is not published in time is cancelled all the same; the command prints which Runs were checkpointed first and why the others were not, and the `WorkerDraining` event carries the same list under `forced`.

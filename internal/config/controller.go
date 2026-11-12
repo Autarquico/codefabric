@@ -48,6 +48,31 @@ type Checkpoint struct {
 	// Exclude are the globs of the untracked paths a checkpoint leaves out of
 	// the capture. Unset, they are DefaultCheckpointExclude.
 	Exclude []string `json:"exclude,omitempty"`
+	// Interval is the time between the automatic checkpoints of a Run that is
+	// going. Unset or 0, there are none.
+	Interval Duration `json:"interval,omitempty"`
+	// PreDestructiveTimeout is how long `cf worker drain --force` waits for the
+	// checkpoints it asks before it cancels the Runs. Unset, it is
+	// DefaultPreDestructiveTimeout; it never exceeds MaxPreDestructiveTimeout.
+	PreDestructiveTimeout Duration `json:"pre_destructive_timeout,omitempty"`
+}
+
+const (
+	// DefaultPreDestructiveTimeout is the default of checkpoint.pre_destructive_timeout.
+	DefaultPreDestructiveTimeout = 20 * time.Second
+	// MaxPreDestructiveTimeout is what a client waits for at most: its requests
+	// time out at 30s.
+	MaxPreDestructiveTimeout = 25 * time.Second
+)
+
+// PreDestructiveWait is checkpoint.pre_destructive_timeout, with its default
+// when unset and its ceiling.
+func (c Checkpoint) PreDestructiveWait() time.Duration {
+	d := time.Duration(c.PreDestructiveTimeout)
+	if d <= 0 {
+		return DefaultPreDestructiveTimeout
+	}
+	return min(d, MaxPreDestructiveTimeout)
 }
 
 // DefaultCheckpointExclude is the default of checkpoint.exclude (Appendix A).
