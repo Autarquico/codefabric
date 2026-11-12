@@ -386,10 +386,11 @@ func (e *Executor) sealAndPush(ctx context.Context, cc CheckpointClient, r state
 	if tok.Ref != c.Ref {
 		return stop(fail("the token is for another ref than the checkpoint's"))
 	}
-	pushErr := e.o.Git.PushRef(ctx, r.ProjectID, sealed.Commit, c.Ref, gitops.PushAuth{
+	auth := gitops.PushAuth{
 		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
 		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
-	}, forbidden)
+	}
+	pushErr := e.pushCheckpoint(ctx, r, c, &sealed, auth, forbidden)
 	if ctx.Err() != nil {
 		return stop("", true)
 	}
@@ -410,6 +411,36 @@ func (e *Executor) sealAndPush(ctx context.Context, cc CheckpointClient, r state
 		e.log.WarnContext(ctx, "recording the push of a capture failed; a retry would seal the worktree again", "run", r.RunID, "err", err)
 	}
 	return sealed, "", false, true
+}
+
+// checkpointPushAttempts bounds the pushes of one commit that fail for the network
+// within one try of a capture.
+const checkpointPushAttempts = 3
+
+// pushCheckpoint pushes the sealed commit to the ref of the checkpoint. The ref is
+// immutable and a push can fail after the relay took it (the connection drops before the
+// answer), so after every failure the ref is asked for: one that exists is the commit
+// this capture pushed, and is adopted in place of the sealed one (its excluded paths are
+// those of the sealing at hand); one that does not is pushed again with the same commit,
+// never a new sealing, which the ref would refuse.
+func (e *Executor) pushCheckpoint(ctx context.Context, r state.Run, c state.Capture, sealed *gitops.Sealed, auth gitops.PushAuth, forbidden gitops.Forbidden) error {
+	var pushErr error
+	for range checkpointPushAttempts {
+		pushErr = e.o.Git.PushRef(ctx, r.ProjectID, sealed.Commit, c.Ref, auth, forbidden)
+		if pushErr == nil || ctx.Err() != nil {
+			return pushErr
+		}
+		if commit, found, err := e.o.Git.RemoteRef(ctx, r.ProjectID, c.Ref, auth); err == nil && found {
+			e.log.InfoContext(ctx, "a checkpoint push failed after the relay took it; its commit is adopted", "run", r.RunID, "checkpoint", c.CheckpointID, "commit", commit)
+			sealed.Commit = commit
+			return nil
+		}
+		var pe *gitops.PushError
+		if !errors.As(pushErr, &pe) || pe.Class != gitops.PushUnreachable {
+			return pushErr
+		}
+	}
+	return pushErr
 }
 
 // afterControllerError is what an error of the Controller means for a capture: a

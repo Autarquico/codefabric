@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path"
 	"strings"
 
 	"github.com/Autarquico/codefabric/internal/support/redact"
@@ -114,8 +115,9 @@ func (r repo) subject(ctx context.Context, commit string) string {
 	return out
 }
 
-// ignoredClash lists the ignored files of the working tree that commit also versions: a
-// switch to a branch at commit would overwrite them without a word.
+// ignoredClash lists the ignored files of the working tree that a switch to a branch at
+// commit would overwrite without a word: those commit versions as a file, those under a
+// path commit versions as a file, and those that are a directory path of commit.
 func (r repo) ignoredClash(ctx context.Context, commit string) ([]string, error) {
 	ignored, err := r.run(ctx, "ls-files", "-z", "--others", "--ignored", "--exclude-standard")
 	if err != nil || ignored == "" {
@@ -125,15 +127,28 @@ func (r repo) ignoredClash(ctx context.Context, commit string) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	in := map[string]bool{}
+	files, dirs := map[string]bool{}, map[string]bool{}
 	for _, f := range strings.Split(versioned, "\x00") {
-		in[f] = true
+		files[f] = true
+		for d := path.Dir(f); d != "."; d = path.Dir(d) {
+			dirs[d] = true
+		}
 	}
 	var clash []string
 	for _, f := range strings.Split(ignored, "\x00") {
-		if f != "" && in[f] {
+		if f != "" && (files[f] || dirs[f] || underFile(f, files)) {
 			clash = append(clash, f)
 		}
 	}
 	return clash, nil
+}
+
+// underFile says whether an ancestor directory of f is a file in files.
+func underFile(f string, files map[string]bool) bool {
+	for d := path.Dir(f); d != "."; d = path.Dir(d) {
+		if files[d] {
+			return true
+		}
+	}
+	return false
 }

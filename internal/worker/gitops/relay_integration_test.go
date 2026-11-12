@@ -48,6 +48,26 @@ func relayServing(t *testing.T) (url, commit string, stub *relayStub) {
 
 const relayToken = "tok-relay-0123456789"
 
+func TestRemoteRef_TellsAnExistingCheckpointRefFromAMissingOne(t *testing.T) {
+	r := newRig(t)
+	r.prepare()
+	url, commit, stub := relayServing(t)
+	auth := relaySource(url, stub).Auth
+
+	got, ok, err := r.g.RemoteRef(t.Context(), project, domain.CheckpointRef(resumedCheckpoint), auth)
+	if err != nil || !ok || got != commit {
+		t.Fatalf("existing ref: %q, %v, %v; want %s", got, ok, err, commit)
+	}
+	got, ok, err = r.g.RemoteRef(t.Context(), project, domain.CheckpointRef("cp_01J0000000000000000000CP02"), auth)
+	if err != nil || ok || got != "" {
+		t.Fatalf("missing ref: %q, %v, %v", got, ok, err)
+	}
+	auth.Token = "wrong"
+	if _, _, err := r.g.RemoteRef(t.Context(), project, domain.CheckpointRef(resumedCheckpoint), auth); err == nil {
+		t.Fatal("a relay that refuses the token must be an error, not a missing ref")
+	}
+}
+
 func relaySource(url string, stub *relayStub) *gitops.RelaySource {
 	return &gitops.RelaySource{
 		Ref:  domain.CheckpointRef(resumedCheckpoint),

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -59,6 +60,32 @@ func relayEnv(bare string, a PushAuth) []string {
 		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
 	}
 	return env
+}
+
+// RemoteRef asks the relay which commit ref points to, with the token of a push: ok is
+// false when the ref does not exist there. It is how a push that failed ambiguously (the
+// relay may have taken it) is told from one that did not happen.
+func (g *Git) RemoteRef(ctx context.Context, project, ref string, a PushAuth) (commit string, ok bool, err error) {
+	switch {
+	case !isProject(project) || !domain.ValidCheckpointRef(ref):
+		return "", false, errors.New("gitops: the project or ref is not valid")
+	case a.URL == "" || a.Token == "" || a.Cert == "" || a.Key == "" || a.CA == "":
+		return "", false, errors.New("gitops: the credentials for the relay are incomplete")
+	}
+	bare := g.o.Paths.WorkerRepoDir(project)
+	out, err := g.ok(ctx, cmd{
+		dir: bare, env: relayEnv(bare, a), timeout: g.pushTimeout(), secrets: []string{a.Token},
+		args: []string{"ls-remote", "--end-of-options", a.URL, ref},
+	})
+	if err != nil {
+		return "", false, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if oid, name, found := strings.Cut(line, "\t"); found && name == ref && domain.ValidCommitID(oid) {
+			return oid, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // fetchRelay brings the commit of a checkpoint from its ref in the relay into
