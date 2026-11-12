@@ -28,7 +28,9 @@ Owner previsto en el bucle Develop: backend-eng.
 
 **Entra:**
 - `internal/app/checkpoints` con resumen mecánico
-- Quiesce = checkpoint nativo confirmado o stop del grupo completo de procesos (cubre hijos)
+- Dos modos de captura según el trigger:
+  - **Suspensiva** (`defer`, `move`, `drain`, `pre-destructive`): quiesce = checkpoint nativo confirmado o stop del grupo completo de procesos (cubre hijos); el harness no sigue y el Controller suspende el Run (o lo cancela, en `pre-destructive`). Checkpoint `consistency: quiesced`.
+  - **En vivo** (`interval`, `manual`): el harness no se para y el Run sigue `running`; se captura sobre el árbol vivo (índice temporal, export de la sesión sin corte). Checkpoint `consistency: live`, reanudable pero sin garantía de corte coherente. Un exit del harness o un stop durante la captura la aborta.
 - `native_state`: jsonl de sesión (Claude), rollout (Codex)
 - Refs `refs/cf/checkpoints/*`; migración `0501_checkpoints.sql`; `cf run checkpoint create|list`
 - Identidad de sesión determinista: `--session-id <uuid5(run:epoch)>` en el primer `Start`; si la sesión ya existe, `--resume <id>` (spike: repetir `--session-id` falla con `already in use`)
@@ -50,9 +52,19 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **Then** no entran y se listan como excluidos
 
 ### Scenario: Captura coherente
-- **Given** fakeharness escribiendo sin parar
+- **Given** fakeharness escribiendo sin parar y un trigger suspensivo (`defer`, `move`, `drain`, `pre-destructive`)
 - **When** se captura
-- **Then** solo tras parar
+- **Then** solo tras parar, y el checkpoint es `quiesced`
+
+### Scenario: Captura en vivo
+- **Given** un Run con `checkpoint.interval` (o `cf run checkpoint create`)
+- **When** se captura
+- **Then** el harness sigue vivo y el Run `running` sin parada ni `Exited`, el checkpoint es `live` y se puede reanudar desde él; el Run puede capturarse de nuevo
+
+### Scenario: Captura en vivo cortada
+- **Given** una captura en vivo abierta
+- **When** el harness sale por su cuenta (o el Worker se reinicia)
+- **Then** si sale, la captura se aborta y gana el exit; si el Worker se reinicia, la captura abierta se retoma en el poll
 
 ### Scenario: Fallo con harness vivo
 - **Given** la captura falla con el harness vivo

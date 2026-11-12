@@ -36,6 +36,21 @@ func pinOfRetry(ctx context.Context, tx *store.Tx, parent store.Run) (pin, unpin
 	return "", fmt.Sprintf("worker %s is gone", parent.PinnedWorker), nil
 }
 
+// checkpointOfRetry is the checkpoint a retry continues from: the last the
+// parent published, which is newer than the one the parent itself continued
+// from (so the work of the interval checkpoints is not lost); without one, the
+// one the parent inherited, if any.
+func checkpointOfRetry(ctx context.Context, tx *store.Tx, parent store.Run) (domain.ID, error) {
+	published, err := store.CheckpointsOfRun(ctx, tx, parent.ID)
+	if err != nil {
+		return "", err
+	}
+	if n := len(published); n > 0 {
+		return published[n-1].ID, nil
+	}
+	return parent.LineageCheckpoint, nil
+}
+
 // retryIn queues the Run that retries the last Run of the Task (§11.7 retry,
 // `reschedule`): the same frozen spec and source (and the checkpoint and the pinned Worker, if the Run continues),
 // as the next attempt, on a branch of its own and with the Run it
@@ -58,6 +73,10 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 	if err != nil {
 		return err
 	}
+	checkpoint, err := checkpointOfRetry(ctx, tx, parent)
+	if err != nil {
+		return err
+	}
 	short, err := tx.NextShortID(ctx, domain.KindRun)
 	if err != nil {
 		return err
@@ -65,7 +84,7 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 	run := store.Run{
 		ID: ids.New(domain.KindRun), Short: short, TaskID: task.ID, Attempt: len(all) + 1,
 		Lineage: domain.LineageRetries, LineageParent: parent.ID, Spec: parent.Spec, SpecDigest: parent.SpecDigest, Workflow: parent.Workflow, Environment: parent.Environment,
-		SourceCommit: parent.SourceCommit, LineageCheckpoint: parent.LineageCheckpoint, PinnedWorker: pin,
+		SourceCommit: parent.SourceCommit, LineageCheckpoint: checkpoint, PinnedWorker: pin,
 		Branch: domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: short}),
 		State:  domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,
 		Runtime: domain.RuntimeNone, CreatedAt: act.Now,

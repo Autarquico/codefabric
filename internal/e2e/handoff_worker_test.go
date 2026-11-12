@@ -346,6 +346,7 @@ func TestScenario_HandoffWorker_MoveAndDrain(t *testing.T) {
 		t.Errorf("after the move back A started %+v, want a resume of %s with the 4 lines A and B wrote", backOnA, first.Session)
 	}
 	requireAncestor(t, h.RelayRepo(), onB.Head, backOnA.Head, "B's work travels back to A")
+	h.waitMove(created.Task.ID, "done") // drain --move does not move a Run whose own move is open
 
 	// Drain A: the Task goes where the scheduler can put it, which is B.
 	drained := JSON[v1.DrainMoveResponse](h.Cluster, h.Ctl, "worker", "drain", a.Name, "--move")

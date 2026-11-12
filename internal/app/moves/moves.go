@@ -125,19 +125,17 @@ func (s *Service) Of(ctx context.Context, ref, project string) (v1.Move, error) 
 // scheduler puts it (the Worker is draining, so not back here). A Task that
 // cannot be moved does not stop the others: it is listed as skipped, with why.
 func (s *Service) DrainMove(ctx context.Context, by pki.Session, worker domain.ID, requestID string) (moved []v1.Move, skipped []v1.MoveSkipped, err error) {
-	var tasks []domain.ID
-	err = s.db.Read(ctx, func(q store.Querier) error {
-		live, err := store.LiveRunsOfWorker(ctx, q, worker)
-		for _, r := range live {
-			tasks = append(tasks, r.TaskID)
-		}
+	var live []store.Run
+	err = s.db.Read(ctx, func(q store.Querier) (err error) {
+		live, err = store.LiveRunsOfWorker(ctx, q, worker)
 		return err
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	moved, skipped = []v1.Move{}, []v1.MoveSkipped{}
-	for _, task := range tasks {
+	for _, run := range live {
+		task := run.TaskID
 		rid := ""
 		if requestID != "" {
 			rid = fmt.Sprintf("%.24s-%s", requestID, task)
@@ -149,6 +147,10 @@ func (s *Service) DrainMove(ctx context.Context, by pki.Session, worker domain.I
 			skipped = append(skipped, v1.MoveSkipped{TaskID: string(task), Reason: de.Message})
 		case err != nil:
 			return moved, skipped, err
+		case resp.Move.SourceRunID != string(run.ID):
+			// Move answers the move the Task already had: the one that brought this
+			// Run here and is not over. It is not a move of this Run.
+			skipped = append(skipped, v1.MoveSkipped{TaskID: string(task), Reason: "the move that brought it here is not over: move it when it ends"})
 		default:
 			moved = append(moved, resp.Move)
 		}
