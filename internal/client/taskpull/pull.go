@@ -189,6 +189,12 @@ func (p *puller) pull(ctx context.Context, task string) (Result, error) {
 	res.Sealed = p.repo.subject(ctx, commit) == sealSubject
 	res.Excluded = cp.Excluded
 
+	if archive != nil && !res.CheckedOut {
+		// The session would point at a tree that is not the branch: bring it
+		// with the branch, through --worktree or once the tree is clean.
+		p.warnings = append(p.warnings, fmt.Sprintf("the session was not brought: %s is not checked out; pull again with --worktree, or once the tree is clean", pl.branch))
+		archive = nil
+	}
 	if archive != nil {
 		imported, err := p.opts.Sessions.Import(ctx, importReq)
 		if err != nil {

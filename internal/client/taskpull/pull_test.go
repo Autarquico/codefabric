@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -365,7 +366,7 @@ func TestScenario_SessionPull_Dirty(t *testing.T) {
 	write(t, filepath.Join(w.mac, "scratch.txt"), "untracked\n")
 	statusBefore := gitIn(t, w.mac, "status", "--porcelain")
 	work := commitFile(t, w.worker, "feature.go", "package x\n", "feature")
-	w.checkpoint()
+	w.checkpoint(`{"type":"user","cwd":"/home/worker/proj"}`)
 
 	res, err := w.pull(taskpull.Options{})
 	if err != nil {
@@ -382,6 +383,9 @@ func TestScenario_SessionPull_Dirty(t *testing.T) {
 	}
 	if gitIn(t, w.mac, "stash", "list") != "" {
 		t.Fatal("something was stashed")
+	}
+	if res.Session != nil || !slices.ContainsFunc(res.Warnings, func(s string) bool { return strings.Contains(s, "--worktree") }) {
+		t.Fatalf("session = %+v, warnings = %q: without the branch checked out the session stays behind", res.Session, res.Warnings)
 	}
 }
 
