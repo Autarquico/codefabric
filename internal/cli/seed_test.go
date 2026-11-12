@@ -36,6 +36,9 @@ type seedWorld struct {
 	claudeHome string
 	stateDir   string
 
+	// exclude is checkpoint.exclude of the fake Controller.
+	exclude []string
+
 	mu       sync.Mutex
 	requests []seenRequest
 }
@@ -59,7 +62,7 @@ func gitIn(t *testing.T, dir string, args ...string) string {
 func newSeedWorld(t *testing.T) *seedWorld {
 	t.Helper()
 	isolatedMachine(t)
-	w := &seedWorld{t: t, work: t.TempDir(), bare: filepath.Join(t.TempDir(), "proj_1"), claudeHome: t.TempDir()}
+	w := &seedWorld{t: t, work: t.TempDir(), bare: filepath.Join(t.TempDir(), "proj_1"), claudeHome: t.TempDir(), exclude: config.DefaultCheckpointExclude()}
 	gitIn(t, filepath.Dir(w.bare), "init", "--quiet", "--bare", "--initial-branch=main", w.bare)
 	gitIn(t, w.bare, "config", "http.receivepack", "true")
 	gitIn(t, w.work, "init", "--quiet", "--initial-branch=main")
@@ -121,6 +124,8 @@ func (w *seedWorld) serve(rw http.ResponseWriter, r *http.Request) {
 	w.mu.Unlock()
 	reply := func(v any) { _ = json.NewEncoder(rw).Encode(v) }
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/checkpoint/exclude":
+		reply(v1.CheckpointExclude{Exclude: w.exclude})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/projects/"):
 		reply(v1.Project{ID: "proj_1", Name: "p", Repo: w.bare, DefaultBranch: "main", NativeState: true})
 	case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/native-seed/"):
@@ -373,5 +378,27 @@ func TestScenario_SessionSeed_RunShowSaysWhichSessionSeededTheRun(t *testing.T) 
 	out.Reset()
 	if code := RunContext(t.Context(), []string{"run", "show", "run_1", "--json"}, strings.NewReader(""), &out, &errOut); code != 0 || !strings.Contains(out.String(), `"lineage_native_seed":{"adapter":"claude-code"`) {
 		t.Errorf("exit %d: %s", code, out.String())
+	}
+}
+
+func TestScenario_SessionSeed_ASnapshotLeavesOutWhatTheControllerExcludes(t *testing.T) {
+	w := newSeedWorld(t)
+	w.exclude = []string{"secrets/**", "**/*.pem"}
+	write(t, filepath.Join(w.work, "secrets", "a.txt"), "a\n")
+	write(t, filepath.Join(w.work, ".env"), "TOKEN=x\n")
+	write(t, filepath.Join(w.work, "wip.txt"), "wip\n")
+
+	code, out, errOut := w.cf("do", "--project", "p", "--snapshot", "fix it")
+	if code != 0 {
+		t.Fatalf("exit %d: %s %s", code, out, errOut)
+	}
+	var req v1.CreateTaskRequest
+	posts := w.seen(http.MethodPost, "/v1/tasks")
+	if len(posts) != 1 || json.Unmarshal(posts[0].Body, &req) != nil {
+		t.Fatalf("task requests: %+v", posts)
+	}
+	files := gitIn(t, w.bare, "ls-tree", "-r", "--name-only", domain.SnapshotRef(req.SourceSnapshot))
+	if strings.Contains(files, "secrets/") || !strings.Contains(files, ".env") || !strings.Contains(files, "wip.txt") {
+		t.Errorf("the snapshot follows the exclusions of the Controller, not the defaults:\n%s", files)
 	}
 }

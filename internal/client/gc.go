@@ -23,3 +23,11 @@ func (c *Client) StorageStats(ctx context.Context) (v1.StorageStats, error) {
 	err := c.doOver(ctx, c.stream.Load(), maxResponse, http.MethodGet, "/v1/storage/stats", nil, &out)
 	return out, err
 }
+
+// CheckpointExclude is checkpoint.exclude of the Controller (GET /v1/checkpoint/exclude):
+// the globs a snapshot of the client must leave out, as a capture of a Worker does.
+func (c *Client) CheckpointExclude(ctx context.Context) ([]string, error) {
+	var out v1.CheckpointExclude
+	err := c.do(ctx, http.MethodGet, "/v1/checkpoint/exclude", nil, &out)
+	return out.Exclude, err
+}

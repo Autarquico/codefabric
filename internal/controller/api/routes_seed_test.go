@@ -172,3 +172,15 @@ func TestSeedRoutes_TheUploadIsCheckedAgainstItsDigestAndTheProject(t *testing.T
 	_, err = f.owner.PutNativeSeed(ctx, seedProject, sha("x"), strings.NewReader("x"), 1)
 	wantCode(t, err, domain.CodePolicyDenied)
 }
+
+func TestCheckpointExclude_ClientsReadWhatACaptureLeavesOut(t *testing.T) {
+	f := newSeedFixture(t)
+	got, err := f.owner.CheckpointExclude(t.Context())
+	must(t, err)
+	if len(got) == 0 {
+		t.Fatal("no exclusions: a client would snapshot .env files")
+	}
+	if _, err := f.alpha.CheckpointExclude(t.Context()); err == nil {
+		t.Error("a Worker read a route that is for clients")
+	}
+}

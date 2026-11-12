@@ -8,7 +8,6 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client/gitctx"
-	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -84,7 +83,11 @@ func (c *Client) snapshotSource(ctx context.Context, dir string, project v1.Proj
 // the files that checkpoint.exclude names (its default: the Controller does not tell
 // its configuration to clients) do not travel: Snapshot.Excluded lists them.
 func (c *Client) SnapshotDir(ctx context.Context, dir, project string) (gitctx.Snapshot, error) {
-	snap, err := gitctx.TakeSnapshot(ctx, dir, config.DefaultCheckpointExclude()...)
+	exclude, err := c.CheckpointExclude(ctx)
+	if err != nil {
+		return gitctx.Snapshot{}, err
+	}
+	snap, err := gitctx.TakeSnapshot(ctx, dir, exclude...)
 	if err != nil {
 		return gitctx.Snapshot{}, err
 	}

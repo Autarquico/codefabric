@@ -13,6 +13,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
 	"github.com/Autarquico/codefabric/internal/app/runs"
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
@@ -75,6 +76,15 @@ func WithBlobs(b BlobStore, maxBytes int64) Option {
 
 // WithExclude sets the globs the order tells the Worker to leave out of a capture.
 func WithExclude(globs []string) Option { return func(s *Service) { s.exclude = slices.Clone(globs) } }
+
+// Exclude is checkpoint.exclude as the Controller applies it: what a capture and a
+// snapshot of a client leave out. Unset, it is config.DefaultCheckpointExclude.
+func (s *Service) Exclude() []string {
+	if len(s.exclude) == 0 {
+		return config.DefaultCheckpointExclude()
+	}
+	return slices.Clone(s.exclude)
+}
 
 // New builds the service; rederive is the one the Run use cases take.
 func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, rederive Rederive, opts ...Option) *Service {
