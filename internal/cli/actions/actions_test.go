@@ -39,6 +39,7 @@ var notActions = map[string]string{
 	"cf claude install": "writes the /handto skill into this machine's Claude Code", "cf claude uninstall": "removes the /handto skill from this machine's Claude Code", "cf claude status": "read",
 	"cf codex install": "writes the handto skill into this machine's Codex", "cf codex uninstall": "removes the handto skill from this machine's Codex", "cf codex status": "read",
 	"cf handoff": "run by the /handto skill inside a Claude Code session, not from the TUI",
+	"cf task pull": "writes a branch and a session into the checkout of a shell, which the TUI does not have",
 	// Maintenance of the Controller's storage, run by whoever operates it.
 	"cf gc": "maintenance of the Controller, not something the TUI does to the cluster",
 	// Same command as an action that exists.

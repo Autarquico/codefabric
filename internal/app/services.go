@@ -139,6 +139,9 @@ func taskOptions(cfg Config, capture tasks.Capturer) []tasks.Option {
 	if cfg.Relay != nil {
 		opts = append(opts, tasks.WithRelay(cfg.Relay))
 	}
+	if cfg.Blobs != nil {
+		opts = append(opts, tasks.WithBlobs(cfg.Blobs))
+	}
 	return opts
 }
 

@@ -32,6 +32,7 @@ type Service struct {
 	rederive Rederive
 	capture  Capturer
 	relay    Relay
+	blobs    BlobOpener
 }
 
 // Option adjusts New.
