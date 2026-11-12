@@ -165,6 +165,9 @@ func (s *Service) passOnce(ctx context.Context) (v1.GCReport, error) {
 	if err := s.sweepCheckpoints(ctx, &rep); err != nil {
 		return rep, err
 	}
+	if err := s.sweepSeeds(ctx, &rep); err != nil {
+		return rep, err
+	}
 	if err := s.sweepBlobs(ctx, &rep); err != nil {
 		return rep, err
 	}

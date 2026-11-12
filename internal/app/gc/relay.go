@@ -17,12 +17,12 @@ const relayRefsKind = "relay_refs"
 
 // Relay is the git relay as the GC uses it (§29). *relay.Relay implements it.
 //
-// It lists only the refs the GC may ever delete (branches cf/*/* and orphans);
-// DeleteRefs refuses any other, so a namespace the GC does not know, such as
-// refs/cf/snapshots/*, is out of reach by construction; the refs of checkpoints are deleted by name.
+// It lists only the refs the GC may ever delete (branches cf/*/*, orphans and
+// snapshots); DeleteRefs refuses any other, so a namespace the GC does not know
+// is out of reach by construction; the refs of checkpoints are deleted by name.
 type Relay interface {
 	// Refs lists by Project the full names of those refs: refs/heads/cf/<task>/<run>
-	// and refs/cf/orphans/<run>-e<epoch>.
+	// refs/cf/orphans/<run>-e<epoch> and refs/cf/snapshots/<commit>.
 	Refs(ctx context.Context) (map[domain.ID][]string, error)
 	DeleteRefs(ctx context.Context, project domain.ID, refs []string) error
 	// Collect runs git gc on the repository of the Project, with git's own
@@ -38,6 +38,8 @@ func WithRelay(r Relay) Option { return func(s *Service) { s.relay = r } }
 type archivedRefs struct {
 	branches map[domain.ID]map[string]bool // project -> "refs/heads/cf/<task>/<run>"
 	runs     map[string]bool               // run ID -> orphan refs
+	// snapshots are the commits of the snapshots only archived Tasks use, by Project.
+	snapshots map[domain.ID]map[string]bool
 }
 
 // archivedRuns reads the Runs of Tasks archived at or before cutoff. A Run
@@ -46,6 +48,9 @@ func archivedRuns(ctx context.Context, q store.Querier, cutoff time.Time) (archi
 	out := archivedRefs{branches: map[domain.ID]map[string]bool{}, runs: map[string]bool{}}
 	rows, err := store.ArchivedRuns(ctx, q, cutoff)
 	if err != nil {
+		return out, err
+	}
+	if out.snapshots, err = store.ArchivedSnapshots(ctx, q, cutoff); err != nil {
 		return out, err
 	}
 	for _, r := range rows {
@@ -63,6 +68,9 @@ func archivedRuns(ctx context.Context, q store.Querier, cutoff time.Time) (archi
 func (a archivedRefs) owns(project domain.ID, name string) bool {
 	if a.branches[project][name] {
 		return true
+	}
+	if commit, ok := strings.CutPrefix(name, "refs/cf/snapshots/"); ok {
+		return a.snapshots[project][commit]
 	}
 	rest, ok := strings.CutPrefix(name, "refs/cf/orphans/")
 	if !ok {

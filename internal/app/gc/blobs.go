@@ -154,6 +154,11 @@ func (s *Service) plan(ctx context.Context) (v1.GCReport, blobScan, error) {
 		}
 		rep.Items = append(rep.Items, cp...)
 	}
+	seeds, err := s.planSeeds(ctx, now)
+	if err != nil {
+		return rep, blobScan{}, err
+	}
+	rep.Items = append(rep.Items, seeds)
 	scan, err := s.scan(ctx, now, true)
 	if err != nil {
 		return rep, blobScan{}, err
