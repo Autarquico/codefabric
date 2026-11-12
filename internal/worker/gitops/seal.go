@@ -109,15 +109,8 @@ func (g *Git) Seal(ctx context.Context, worktree string, in Intent, forbidden Fo
 		return Sealed{}, blocked("the result cannot be checked for secrets: %v", err)
 	}
 	env := isolatedEnv(worktree)
-	git := func(c cmd) (string, error) {
-		c.dir, c.timeout, c.values = worktree, sealTimeout, values
-		if c.env == nil {
-			c.env = env
-		}
-		return g.ok(ctx, c)
-	}
 
-	excluded, truncated, err := g.excludedPaths(ctx, worktree, values)
+	excluded, truncated, err := g.excludedPaths(ctx, worktree, exclusions, values)
 	if err != nil {
 		return Sealed{}, err
 	}
@@ -140,46 +133,63 @@ func (g *Git) Seal(ctx context.Context, worktree string, in Intent, forbidden Fo
 		}
 	}
 
-	scratch, err := os.MkdirTemp(g.o.Paths.WorkerDataDir(), "seal-")
-	if err != nil {
-		return Sealed{}, fmt.Errorf("gitops: making the scratch space of a sealing: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(scratch) }()
-	sealEnv := append(slices.Clone(env), "GIT_INDEX_FILE="+filepath.Join(scratch, "seal.index"))
-
-	if _, err := git(cmd{env: sealEnv, args: g.hardened("read-tree", in.ParentOID)}); err != nil {
+	if out.Commit, err = g.commitWorktree(ctx, worktree, in.ParentOID, in.At, "cf: uncommitted changes at exit", exclusions, values); err != nil {
 		return Sealed{}, err
-	}
-	add := g.hardened("add", "-A", "--", ".")
-	for _, pattern := range exclusions {
-		add = append(add, ":(exclude,glob)"+pattern)
-	}
-	if _, err := git(cmd{env: sealEnv, args: add}); err != nil {
-		return Sealed{}, err
-	}
-	tree, err := git(cmd{env: sealEnv, args: g.hardened("write-tree")})
-	if err != nil {
-		return Sealed{}, err
-	}
-	parentTree, err := git(cmd{args: g.hardened("rev-parse", "--verify", in.ParentOID+"^{tree}")})
-	if err != nil {
-		return Sealed{}, err
-	}
-	if tree == parentTree {
-		out.Commit = in.ParentOID
-	} else {
-		date := fmt.Sprintf("@%d +0000", in.At.Unix())
-		commitEnv := append(slices.Clone(env),
-			"GIT_AUTHOR_NAME=CodeFabric", "GIT_AUTHOR_EMAIL=codefabric@localhost", "GIT_AUTHOR_DATE="+date,
-			"GIT_COMMITTER_NAME=CodeFabric", "GIT_COMMITTER_EMAIL=codefabric@localhost", "GIT_COMMITTER_DATE="+date)
-		if out.Commit, err = git(cmd{env: commitEnv, args: g.hardened("commit-tree", tree, "-p", in.ParentOID, "-m", "cf: uncommitted changes at exit")}); err != nil {
-			return Sealed{}, err
-		}
 	}
 	if err := g.guard(ctx, in.Project, out.Commit, forbidden); err != nil {
 		return Sealed{}, err
 	}
 	return out, g.record(ctx, worktree, in, ref, out.Commit)
+}
+
+// commitWorktree makes the commit of the worktree on top of parent, in an index
+// of its own: the files tracked at parent, plus the untracked ones that are not
+// ignored and match none of patterns. If that tree is the parent's, the result
+// is the parent itself. Otherwise the commit has a fixed author and the date at,
+// so it is the same commit every time. No ref is touched and neither are the
+// files or the index of the worktree.
+func (g *Git) commitWorktree(ctx context.Context, worktree, parent string, at time.Time, message string, patterns []string, values *redact.Set) (string, error) {
+	env := isolatedEnv(worktree)
+	run := func(c cmd) (string, error) {
+		c.dir, c.timeout, c.values = worktree, sealTimeout, values
+		if c.env == nil {
+			c.env = env
+		}
+		return g.ok(ctx, c)
+	}
+	scratch, err := os.MkdirTemp(g.o.Paths.WorkerDataDir(), "seal-")
+	if err != nil {
+		return "", fmt.Errorf("gitops: making the scratch space of a sealing: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	sealEnv := append(slices.Clone(env), "GIT_INDEX_FILE="+filepath.Join(scratch, "seal.index"))
+
+	if _, err := run(cmd{env: sealEnv, args: g.hardened("read-tree", parent)}); err != nil {
+		return "", err
+	}
+	add := g.hardened("add", "-A", "--", ".")
+	for _, pattern := range patterns {
+		add = append(add, ":(exclude,glob)"+pattern)
+	}
+	if _, err := run(cmd{env: sealEnv, args: add}); err != nil {
+		return "", err
+	}
+	tree, err := run(cmd{env: sealEnv, args: g.hardened("write-tree")})
+	if err != nil {
+		return "", err
+	}
+	parentTree, err := run(cmd{args: g.hardened("rev-parse", "--verify", parent+"^{tree}")})
+	if err != nil {
+		return "", err
+	}
+	if tree == parentTree {
+		return parent, nil
+	}
+	date := fmt.Sprintf("@%d +0000", at.Unix())
+	commitEnv := append(slices.Clone(env),
+		"GIT_AUTHOR_NAME=CodeFabric", "GIT_AUTHOR_EMAIL=codefabric@localhost", "GIT_AUTHOR_DATE="+date,
+		"GIT_COMMITTER_NAME=CodeFabric", "GIT_COMMITTER_EMAIL=codefabric@localhost", "GIT_COMMITTER_DATE="+date)
+	return run(cmd{env: commitEnv, args: g.hardened("commit-tree", tree, "-p", parent, "-m", message)})
 }
 
 // firstParent is the first parent of a commit, or "" if it has none or git fails.
@@ -215,9 +225,9 @@ func (g *Git) record(ctx context.Context, worktree string, in Intent, privateRef
 // ignored: what a sealing would have captured and did not. Each path is
 // redacted of values before the list is sorted and bounded, which is what the
 // Controller checks of it.
-func (g *Git) excludedPaths(ctx context.Context, worktree string, values *redact.Set) (paths []string, truncated bool, err error) {
+func (g *Git) excludedPaths(ctx context.Context, worktree string, patterns []string, values *redact.Set) (paths []string, truncated bool, err error) {
 	args := g.hardened("ls-files", "--others", "--exclude-standard", "-z", "--")
-	for _, pattern := range exclusions {
+	for _, pattern := range patterns {
 		args = append(args, ":(glob)"+pattern)
 	}
 	res, err := g.run(ctx, cmd{dir: worktree, env: isolatedEnv(worktree), timeout: sealTimeout, args: args, values: values})
@@ -255,4 +265,43 @@ func bound(paths []string) ([]string, bool) {
 		size += len(p)
 	}
 	return out, truncated
+}
+
+// SnapshotIntent is what a checkpoint capture depends on.
+type SnapshotIntent struct {
+	Project   string
+	ParentOID string    // HEAD of the worktree
+	At        time.Time // the date of the commit
+	// Exclude are the globs the capture leaves out (checkpoint.exclude).
+	Exclude []string
+}
+
+// Snapshot captures the worktree of a Run that is still the Run's, for a
+// checkpoint: the commit Seal would make (the same guard, the same treatment of
+// ignored and excluded files, the same list of excluded paths), but it finalizes
+// nothing. No ref points at it, neither the private ref of the Worker nor the
+// branch of the Run, so the sealing at the exit of the Run still makes its own
+// result; the caller pushes the commit to the ref of the checkpoint.
+func (g *Git) Snapshot(ctx context.Context, worktree string, in SnapshotIntent, forbidden Forbidden) (Sealed, error) {
+	if !domain.ValidCommitID(in.ParentOID) {
+		return Sealed{}, errors.New("gitops: there is no repository to capture: the worktree has no commit")
+	}
+	ctx, cancel := context.WithTimeout(ctx, sealTimeout)
+	defer cancel()
+	values, err := forbidden.redaction()
+	if err != nil {
+		return Sealed{}, blocked("the capture cannot be checked for secrets: %v", err)
+	}
+	excluded, truncated, err := g.excludedPaths(ctx, worktree, in.Exclude, values)
+	if err != nil {
+		return Sealed{}, err
+	}
+	out := Sealed{Excluded: excluded, Truncated: truncated}
+	if out.Commit, err = g.commitWorktree(ctx, worktree, in.ParentOID, in.At, "cf: checkpoint", in.Exclude, values); err != nil {
+		return Sealed{}, err
+	}
+	if err := g.guard(ctx, in.Project, out.Commit, forbidden); err != nil {
+		return Sealed{}, err
+	}
+	return out, nil
 }

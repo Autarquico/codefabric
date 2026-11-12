@@ -66,6 +66,9 @@ type Announcement struct {
 // those modes and harness:<id>:config-isolation if it has ConfigIsolation, and
 // harness:<id>:structured-input:v1 if it has StructuredInput and what it needs
 // of the host (harness.StructuredInputChecker) is there.
+// It announces domain.CheckpointCapability when some harness it offers has
+// Capabilities.NativeCheckpoint: it then captures the checkpoints the Controller
+// orders (the Controller sends the order only to a Worker that announces it).
 // It always announces domain.RepoConfigCapability (it reads the repo
 // configuration of a Run), domain.WorkflowConfigCapability (it fetches and
 // materialises the Workflow a Run froze), domain.EnvironmentHostCapability (it runs the prepare
@@ -76,6 +79,7 @@ type Announcement struct {
 // next start. It waits for each Detect at most DetectTimeout, whether or not
 // the adapter honours its ctx.
 func Announce(ctx context.Context, host harness.Host, reg *harness.Registry, runtimeModes []domain.Mode) Announcement {
+	checkpoint := false
 	out := Announcement{Capabilities: []string{domain.HarnessModesMarker, domain.RepoConfigCapability, domain.WorkflowConfigCapability, domain.EnvironmentHostCapability}}
 	for _, id := range reg.IDs() {
 		a, _ := reg.Get(id)
@@ -91,6 +95,9 @@ func Announce(ctx context.Context, host harness.Host, reg *harness.Registry, run
 		if a.Capabilities().ConfigIsolation {
 			out.Capabilities = append(out.Capabilities, domain.HarnessConfigIsolationCapability(id))
 		}
+		if a.Capabilities().NativeCheckpoint {
+			checkpoint = true
+		}
 		if a.Capabilities().StructuredInput {
 			if h.InputErr = structuredInputReady(ctx, host, a); h.InputErr == nil {
 				h.StructuredInput = true
@@ -98,6 +105,9 @@ func Announce(ctx context.Context, host harness.Host, reg *harness.Registry, run
 			}
 			out.Harnesses[len(out.Harnesses)-1] = h
 		}
+	}
+	if checkpoint {
+		out.Capabilities = append(out.Capabilities, domain.CheckpointCapability)
 	}
 	slices.Sort(out.Capabilities)
 	out.Capabilities = slices.Compact(out.Capabilities)

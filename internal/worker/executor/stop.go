@@ -34,6 +34,8 @@ const (
 // It takes the lock of the Run, so a start in progress finishes first.
 func (e *Executor) Stop(ctx context.Context, runID string, leaseEpoch uint64, reason, source string) error {
 	k := state.Key{RunID: runID, LeaseEpoch: leaseEpoch}
+	// A capture in progress holds the lock of the Run until it ends: it is cut short first.
+	e.cancelCapture(k)
 	unlock := e.lock(k)
 	defer unlock()
 	return e.stopLocked(ctx, k, reason, source)
@@ -108,7 +110,14 @@ func (e *Executor) stopLocked(ctx context.Context, k state.Key, reason, source s
 				return err
 			}
 		}
-		if r.Phase == state.PhaseStarting || r.Phase == state.PhaseRunning || hasEnv {
+		if r.Phase == state.PhaseCheckpointing {
+			// The stop wins over the capture: what it published stays published, and
+			// nothing more is reported of it.
+			if _, err := state.EndCapture(ctx, tx, k, state.CaptureAborted, now); err != nil {
+				return err
+			}
+		}
+		if r.Phase == state.PhaseStarting || r.Phase == state.PhaseRunning || r.Phase == state.PhaseCheckpointing || hasEnv {
 			return state.Advance(ctx, tx, k, r.Phase, state.PhaseStopping, now)
 		}
 		return nil
