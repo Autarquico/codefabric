@@ -69,7 +69,8 @@ func homeOf(env, dir string) func(func(string) string) (string, error) {
 }
 
 // findClaude looks for projects/*/<id>.jsonl, since the directory is named after a cwd
-// that only the transcript tells.
+// that only the transcript tells. A session pulled into a second checkout (a
+// worktree) has a copy under each: the one written last is the session.
 func findClaude(dir, id string) (path, cwd string, found bool, err error) {
 	entries, err := os.ReadDir(filepath.Join(dir, "projects"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -78,21 +79,17 @@ func findClaude(dir, id string) (path, cwd string, found bool, err error) {
 	if err != nil {
 		return "", "", false, err
 	}
-	var matches []string
+	var latest time.Time
 	for _, e := range entries {
 		p := filepath.Join(dir, "projects", e.Name(), id+".jsonl")
-		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() {
-			matches = append(matches, p)
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() && (path == "" || info.ModTime().After(latest)) {
+			path, latest = p, info.ModTime()
 		}
 	}
-	switch len(matches) {
-	case 0:
+	if path == "" {
 		return "", "", false, nil
-	case 1:
-	default:
-		return "", "", false, fmt.Errorf("session %s is in %d project directories of %s", id, len(matches), dir)
 	}
-	cwd, err = firstString(matches[0], func(line []byte) string {
+	cwd, err = firstString(path, func(line []byte) string {
 		var l struct {
 			Cwd string `json:"cwd"`
 		}
@@ -105,7 +102,7 @@ func findClaude(dir, id string) (path, cwd string, found bool, err error) {
 	if cwd == "" {
 		return "", "", false, fmt.Errorf("session %s does not say the directory it ran in", id)
 	}
-	return matches[0], cwd, true, nil
+	return path, cwd, true, nil
 }
 
 // firstString is the first non-empty value pick finds in the lines of a file.

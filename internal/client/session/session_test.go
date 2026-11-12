@@ -468,3 +468,28 @@ func TestImportRefusesWhatIsNotAnArchive(t *testing.T) {
 		t.Fatal("garbage was imported")
 	}
 }
+
+// A session pulled into a worktree has a transcript under each checkout: the
+// one written last is the session, not an ambiguity.
+func TestFindClaudeTakesTheTranscriptWrittenLast(t *testing.T) {
+	dir := t.TempDir()
+	const id = "11111111-2222-4333-8444-555555555555"
+	older := filepath.Join(dir, "projects", "-repo", id+".jsonl")
+	newer := filepath.Join(dir, "projects", "-repo-worktree", id+".jsonl")
+	for path, cwd := range map[string]string{older: "/repo", newer: "/repo-worktree"} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{"type":"user","cwd":"`+cwd+`"}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(older, past, past); err != nil {
+		t.Fatal(err)
+	}
+	path, cwd, found, err := findClaude(dir, id)
+	if err != nil || !found || path != newer || cwd != "/repo-worktree" {
+		t.Fatalf("findClaude = %q, %q, %v, %v; want the worktree's transcript", path, cwd, found, err)
+	}
+}
