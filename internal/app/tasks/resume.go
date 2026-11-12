@@ -38,8 +38,32 @@ func (s *Service) Resume(ctx context.Context, by pki.Session, ref, project strin
 			Request      v1.ResumeTaskRequest
 		}{ref, project, explicit},
 		func(tx *store.Tx, act mutation.Act) (v1.ResumeTaskResponse, error) {
+			if err := refuseWhileMoving(ctx, tx, ref, project); err != nil {
+				return v1.ResumeTaskResponse{}, err
+			}
 			return s.ResumeIn(ctx, tx, act, ref, project, req)
 		})
+}
+
+// refuseWhileMoving stops a user's resume of a Task whose move is under way and has not
+// failed: the move is going to queue the Run that continues the Task, and a second one
+// from the same checkpoint would run it twice. A failed move does not stop it (resume
+// ends it, as the way out of a move that cannot go on).
+func refuseWhileMoving(ctx context.Context, tx *store.Tx, ref, project string) error {
+	id, err := resolveIn(ctx, tx, ref, project)
+	if err != nil {
+		return err
+	}
+	m, err := store.ActiveMoveOfTask(ctx, tx, id)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && m.Failure != "") {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return domain.NewError(domain.CodeInvalidTransition,
+		"the Task is being moved: wait for the move to end (cf task move shows it), then resume it if it failed",
+		map[string]any{"move": string(m.ID), "stage": string(m.Stage)})
 }
 
 // ResumeIn is Resume inside the transaction of the caller, for the Controller acting on
