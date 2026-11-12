@@ -288,7 +288,7 @@ func scanTranscript(raw []byte, cut bool) ([]byte, harness.SessionManifest, erro
 			} `json:"message"`
 		}
 		if err := json.Unmarshal(line, &head); err != nil {
-			if len(raw) > 0 || !(cut || !hasNewline) {
+			if len(raw) > 0 || (!cut && hasNewline) {
 				return nil, manifest, fmt.Errorf("claude-code: line %d of the transcript is not a JSON object: %w", n, err)
 			}
 			// The last line: whether it survives is decided below.
