@@ -122,6 +122,11 @@ type Handle struct {
 	// InputPath is the FIFO of the stdin of a Run that was started with
 	// RunSpec.StructuredInput; empty for one that was not.
 	InputPath string
+	// SessionID is the native session of the Run, as Launch.SessionID said it
+	// when the Run started. The Worker persists it and gives it back, so that
+	// Checkpoint captures that session and does not have to guess it. Empty for
+	// a Run that predates it, or for a harness that has no sessions.
+	SessionID string
 }
 
 // Detection is what Detect found.

@@ -235,3 +235,103 @@ func TestSession_ImportRefusesALineThatIsNotJSON(t *testing.T) {
 		t.Fatalf("the destination was touched: %v", statErr)
 	}
 }
+
+func sessionTranscript(t *testing.T) []byte {
+	t.Helper()
+	return []byte(readData(t, "config", "projects", "-Users-x-repo", testSessionID+".jsonl"))
+}
+
+// CODE-14: the tail of a live or killed session.
+func TestSession_ScanToleratesATailAfterTheCut(t *testing.T) {
+	whole := sessionTranscript(t)
+	wantCut, _, err := scanTranscript(whole, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tail := range map[string]string{"incomplete": `{"type":"user","cwd":"/Users/x/re`, "not JSON": "garbage\n"} {
+		got, m, err := scanTranscript(append(bytes.Clone(whole), tail...), true)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !bytes.Equal(got, wantCut) || !m.Cut || len(m.Warnings) != 0 {
+			t.Errorf("%s: the cut changed: %s %+v", name, got, m)
+		}
+	}
+}
+
+func TestSession_ScanWithNoCutLeavesOutAnIncompleteLastLine(t *testing.T) {
+	whole := sessionTranscript(t)
+	want, wantManifest, err := scanTranscript(whole, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, m, err := scanTranscript(append(bytes.Clone(whole), `{"type":"user","cwd":"/Users/x/re`...), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) || m.Lines != wantManifest.Lines || len(m.Warnings) != 1 {
+		t.Errorf("got %d lines, warnings %q", m.Lines, m.Warnings)
+	}
+}
+
+func TestSession_ScanWithNoCutRefusesAnyOtherLineThatIsNotJSON(t *testing.T) {
+	whole := sessionTranscript(t)
+	for name, raw := range map[string][]byte{
+		"complete last line": append(bytes.Clone(whole), "garbage\n"...),
+		"middle line":        append(append(bytes.Clone(whole), "garbage\n"...), whole...),
+	} {
+		if _, _, err := scanTranscript(raw, false); err == nil {
+			t.Errorf("%s: it was accepted", name)
+		}
+	}
+	if _, _, err := scanTranscript(append([]byte("garbage\n"), whole...), true); err == nil {
+		t.Error("a line that is not JSON before the cut was accepted")
+	}
+}
+
+// CODE-17: the subagents of the session replaced are not the new one's.
+func TestSession_ImportOverwriteRemovesSubagentsTheNewArchiveLacks(t *testing.T) {
+	withSubagents, _ := exportSession(t, harness.ExportOptions{})
+	cfg := t.TempDir()
+	in := harness.SessionImport{ConfigDir: cfg, Cwd: "/home/x/repo", Overwrite: true}
+	if _, err := (Adapter{}).Import(context.Background(), in, bytes.NewReader(withSubagents)); err != nil {
+		t.Fatal(err)
+	}
+	subagents := filepath.Join(cfg, "projects", "-home-x-repo", testSessionID)
+	if _, err := os.Stat(subagents); err != nil {
+		t.Fatalf("the fixture has no subagents: %v", err)
+	}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, data := range map[string]string{
+		"manifest.json":          `{"adapter":"claude-code","session_id":"` + testSessionID + `","cwd":"/a","lines":1}`,
+		testSessionID + ".jsonl": "{\"type\":\"user\",\"cwd\":\"/a\"}\n",
+	} {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write([]byte(data))
+	}
+	_ = tw.Close()
+	_ = gz.Close()
+	if _, err := (Adapter{}).Import(context.Background(), in, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(subagents); !os.IsNotExist(err) {
+		t.Fatalf("the old subagents are still there: %v", err)
+	}
+}
+
+// CODE-16: ErrSessionExists says which session it is.
+func TestSession_ImportTellsTheIDOfTheSessionThatExists(t *testing.T) {
+	archive, _ := exportSession(t, harness.ExportOptions{})
+	in := harness.SessionImport{ConfigDir: t.TempDir(), Cwd: "/home/x/repo"}
+	if _, err := (Adapter{}).Import(context.Background(), in, bytes.NewReader(archive)); err != nil {
+		t.Fatal(err)
+	}
+	res, err := (Adapter{}).Import(context.Background(), in, bytes.NewReader(archive))
+	if !errors.Is(err, harness.ErrSessionExists) || res.SessionID != testSessionID {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+}

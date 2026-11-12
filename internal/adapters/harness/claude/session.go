@@ -164,7 +164,7 @@ func (Adapter) Import(ctx context.Context, in harness.SessionImport, r io.Reader
 	transcript := filepath.Join(dir, id+".jsonl")
 	if !in.Overwrite {
 		if _, err := os.Lstat(transcript); err == nil {
-			return harness.SessionImportResult{}, fmt.Errorf("%w: %s", harness.ErrSessionExists, transcript)
+			return harness.SessionImportResult{SessionID: id}, fmt.Errorf("%w: %s", harness.ErrSessionExists, transcript)
 		}
 	}
 
@@ -205,13 +205,13 @@ func (Adapter) Import(ctx context.Context, in harness.SessionImport, r io.Reader
 		return harness.SessionImportResult{}, err
 	}
 
+	// With no transcript (or with Overwrite) what is in <id>/ is the leftover
+	// of an Import that died between its renames, or of the session replaced.
+	sessionDir := filepath.Join(dir, id)
+	if err := os.RemoveAll(sessionDir); err != nil {
+		return harness.SessionImportResult{}, err
+	}
 	if len(arc.attachments) > 0 {
-		// With no transcript (or with Overwrite) what is in <id>/ is the
-		// leftover of an Import that died between its renames.
-		sessionDir := filepath.Join(dir, id)
-		if err := os.RemoveAll(sessionDir); err != nil {
-			return harness.SessionImportResult{}, err
-		}
 		if err := os.Rename(filepath.Join(stage, "attachments"), sessionDir); err != nil {
 			return harness.SessionImportResult{}, err
 		}
@@ -265,7 +265,11 @@ func checkSize(files harness.SessionFiles, maxBytes int64) error {
 
 // scanTranscript checks that every line is JSON, counts them and, when cut,
 // drops what follows the last assistant line that has a tool_use. The result
-// ends every line with a newline.
+// ends every line with a newline. The last line of a session that is still
+// being written, or whose process was killed mid-write, may not be JSON: with
+// a cut it is tolerated when it falls after the cut; with no cut it is left
+// out if it is incomplete (no newline), with a warning in the manifest. Any
+// other line that is not JSON is an error.
 func scanTranscript(raw []byte, cut bool) ([]byte, harness.SessionManifest, error) {
 	var (
 		manifest harness.SessionManifest
@@ -274,7 +278,8 @@ func scanTranscript(raw []byte, cut bool) ([]byte, harness.SessionManifest, erro
 	)
 	for n := 1; len(raw) > 0; n++ {
 		var line []byte
-		line, raw, _ = bytes.Cut(raw, []byte("\n"))
+		var hasNewline bool
+		line, raw, hasNewline = bytes.Cut(raw, []byte("\n"))
 		var head struct {
 			Type    string `json:"type"`
 			Version string `json:"version"`
@@ -283,7 +288,16 @@ func scanTranscript(raw []byte, cut bool) ([]byte, harness.SessionManifest, erro
 			} `json:"message"`
 		}
 		if err := json.Unmarshal(line, &head); err != nil {
-			return nil, manifest, fmt.Errorf("claude-code: line %d of the transcript is not a JSON object: %w", n, err)
+			if len(raw) > 0 || !(cut || !hasNewline) {
+				return nil, manifest, fmt.Errorf("claude-code: line %d of the transcript is not a JSON object: %w", n, err)
+			}
+			// The last line: whether it survives is decided below.
+			if !cut {
+				manifest.Warnings = append(manifest.Warnings, fmt.Sprintf("line %d of the transcript is incomplete and was left out", n))
+				break
+			}
+			lines = append(lines, line)
+			continue
 		}
 		if head.Version != "" {
 			manifest.Version = head.Version

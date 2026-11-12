@@ -20,8 +20,9 @@ import (
 const CheckpointFormat = "claude-session-tar-gz/v1"
 
 // Checkpoint exports the session of the Run, which is no longer running: the
-// Worker stopped the process before asking. It is the session Start named for
-// the Run, or, for a Run that Resume started, the only one in its directory.
+// Worker stopped the process before asking. It is h.SessionID, the one Start
+// or Resume said in their Launch; only a Handle without it falls back to the
+// only transcript in the directory of the Run.
 func (a Adapter) Checkpoint(ctx context.Context, _ harness.Host, h harness.Handle) (harness.Checkpoint, error) {
 	id, err := runSession(h)
 	if err != nil {
@@ -35,16 +36,14 @@ func (a Adapter) Checkpoint(ctx context.Context, _ harness.Host, h harness.Handl
 	return harness.Checkpoint{Harness: ID, Format: CheckpointFormat, Data: buf.Bytes()}, nil
 }
 
-// runSession is the id of the session of a Run: SessionID(run, epoch), or
-// the one transcript in the directory of the Run when Resume started it, which
-// keeps the id of the session it resumed.
+// runSession is the session of a Run: the one its Handle carries or, for a
+// Run that predates that, the only transcript in its directory.
 func runSession(h harness.Handle) (string, error) {
 	if h.ConfigDir == "" {
 		return "", errors.New("claude-code: the Run has no config directory to find its session in")
 	}
-	id := SessionID(h.RunID, h.LeaseEpoch)
-	if exists, err := sessionExists(h.ConfigDir, h.Worktree, id); err != nil || exists {
-		return id, err
+	if h.SessionID != "" {
+		return h.SessionID, nil
 	}
 	dir := projectDir(h.ConfigDir, h.Worktree)
 	transcripts, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
@@ -60,7 +59,7 @@ func runSession(h harness.Handle) (string, error) {
 	case 1:
 		return strings.TrimSuffix(filepath.Base(transcripts[0]), ".jsonl"), nil
 	}
-	return "", fmt.Errorf("claude-code: %d sessions in %s and none is %s: which one is the Run's?", len(transcripts), dir, id)
+	return "", fmt.Errorf("claude-code: %d sessions in %s and the Handle does not say which is the Run's", len(transcripts), dir)
 }
 
 // Resume installs the session of the checkpoint under the cwd of the Run, in
@@ -86,12 +85,9 @@ func (a Adapter) Resume(ctx context.Context, host harness.Host, run harness.RunS
 	var plan sessionPlan
 	switch {
 	case err == nil:
-		plan = sessionPlan{args: []string{"--resume=" + imported.SessionID}, prompt: run.Prompt}
+		plan = sessionPlan{args: []string{"--resume=" + imported.SessionID}, prompt: run.Prompt, sessionID: imported.SessionID}
 	case errors.Is(err, harness.ErrSessionExists):
-		var arc archive
-		if arc, err = readArchive(ctx, bytes.NewReader(cp.Data), limitOf(0)); err == nil {
-			plan, err = planFor(run, arc.manifest.SessionID)
-		}
+		plan, err = planFor(run, imported.SessionID)
 	}
 	if err != nil {
 		return harness.Launch{}, err

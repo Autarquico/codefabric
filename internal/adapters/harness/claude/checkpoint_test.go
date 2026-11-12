@@ -265,3 +265,43 @@ func TestCheckpointNeedsOneSessionOfTheRun(t *testing.T) {
 		t.Error("two sessions and none the Run's: it must not guess")
 	}
 }
+
+// CODE-15: the Launch of Start and Resume say the session, and Checkpoint uses
+// the one its Handle carries even when the directory has others.
+func TestCheckpointUsesTheSessionOfTheHandle(t *testing.T) {
+	h := hostWithBinary(t, "#!/bin/sh\n")
+	adapter := claude.Adapter{}
+	started := nextRun(t, domain.ModeHeadless, "go")
+	l, err := adapter.Start(t.Context(), h, started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := claude.SessionID(started.RunID, started.LeaseEpoch); l.SessionID != want {
+		t.Errorf("Start says session %q, want %q", l.SessionID, want)
+	}
+
+	_, cp := checkpointedRun(t, domain.ModeHeadless)
+	run := nextRun(t, domain.ModeHeadless, "keep going")
+	l, err = adapter.Resume(t.Context(), h, run, cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := claude.SessionID("r1", 1)
+	if l.SessionID != resumed {
+		t.Fatalf("Resume says session %q, want %q", l.SessionID, resumed)
+	}
+	writeSessionFile(t, run.ConfigDir, run.Worktree, claude.SessionID(run.RunID, run.LeaseEpoch), "a session of the same directory")
+	handle := harness.Handle{RunID: run.RunID, LeaseEpoch: run.LeaseEpoch, ConfigDir: run.ConfigDir, Worktree: run.Worktree}
+	if _, err := adapter.Checkpoint(t.Context(), h, handle); err == nil {
+		t.Fatal("without the session in the Handle, two sessions must not be guessed between")
+	}
+	handle.SessionID = l.SessionID
+	again, err := adapter.Checkpoint(t.Context(), h, handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := adapter.Resume(t.Context(), h, nextRun(t, domain.ModeHeadless, "and on"), again)
+	if err != nil || next.SessionID != resumed {
+		t.Fatalf("session %q, err %v: the checkpoint is not of the resumed session", next.SessionID, err)
+	}
+}

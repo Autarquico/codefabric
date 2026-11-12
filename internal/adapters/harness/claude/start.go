@@ -74,6 +74,8 @@ type sessionPlan struct {
 	// prompt is what the process is asked; empty only for an interactive
 	// process that has nothing to be told.
 	prompt string
+	// sessionID is the session the process runs.
+	sessionID string
 }
 
 // continuePrompt is what a headless process that resumes a session already
@@ -98,9 +100,9 @@ func planFor(run harness.RunSpec, id string) (sessionPlan, error) {
 		return sessionPlan{}, err
 	}
 	if !exists {
-		return sessionPlan{args: []string{"--session-id=" + id}, prompt: run.Prompt}, nil
+		return sessionPlan{args: []string{"--session-id=" + id}, prompt: run.Prompt, sessionID: id}, nil
 	}
-	plan := sessionPlan{args: []string{"--resume=" + id}, prompt: run.Prompt}
+	plan := sessionPlan{args: []string{"--resume=" + id}, prompt: run.Prompt, sessionID: id}
 	asked, err := sessionHolds(run.ConfigDir, run.Worktree, id, run.Prompt)
 	if err != nil || !asked {
 		return plan, err
@@ -121,6 +123,7 @@ func (a Adapter) launch(host harness.Host, run harness.RunSpec, plan sessionPlan
 	launch := harness.Launch{
 		Env:       []string{ConfigHomeEnv + "=" + run.ConfigDir},
 		SecretEnv: a.RequiredSecrets(),
+		SessionID: plan.sessionID,
 	}
 	streamed := run.Mode == domain.ModeHeadless && run.StructuredInput
 	switch {

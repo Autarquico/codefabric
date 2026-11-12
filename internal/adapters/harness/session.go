@@ -79,6 +79,9 @@ type SessionManifest struct {
 	// Lines are the lines of the transcript in the archive.
 	Lines int  `json:"lines"`
 	Cut   bool `json:"cut,omitempty"`
+	// Warnings are what Export left out or tolerated, e.g. an incomplete last
+	// line.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // SessionImport is what Import is given besides the archive.
