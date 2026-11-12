@@ -54,8 +54,27 @@ func machine(t *testing.T, content string) *session.Local {
 	}
 	local := session.New(filepath.Join(t.TempDir(), "sessions"))
 	local.ConfigDirs = map[string]string{"claude-code": home}
+	local.UseProcesses(100, func(pid int) (int, bool) { return map[int]int{100: 50, 50: 1}[pid], pid == 100 || pid == 50 }, func(int) bool { return false })
 	return local
 }
+
+// openedBy marks the session as open in the Claude Code process pid, with the command
+// running two processes below the one that is in parents.
+func openedBy(t *testing.T, local *session.Local, pid int, parents map[int]int) {
+	t.Helper()
+	live := filepath.Join(local.ConfigDirs["claude-code"], "sessions")
+	if err := os.MkdirAll(live, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	open := fmt.Sprintf(`{"pid":%d,"sessionId":"%s"}`, pid, sessionID)
+	if err := os.WriteFile(filepath.Join(live, fmt.Sprint(pid)+".json"), []byte(open), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	local.UseProcesses(100, func(p int) (int, bool) { parent, ok := parents[p]; return parent, ok }, func(p int) bool { return p == pid })
+}
+
+// the Claude Code that runs the command: cf (100) under a shell (50) under claude (4242).
+var ownTree = map[int]int{100: 50, 50: 4242, 4242: 1}
 
 type fakeController struct {
 	workers []v1.Worker
@@ -141,6 +160,7 @@ func request(worker string) Request {
 
 func TestScenario_Handto(t *testing.T) {
 	local, c := machine(t, transcript()), newController(online("w"))
+	openedBy(t, local, 4242, ownTree)
 
 	res, err := Do(t.Context(), c, local, request("w"))
 	if err != nil {
@@ -180,17 +200,25 @@ func TestScenario_Handto(t *testing.T) {
 
 func TestScenario_TurnoEnCurso_TheCallingSessionMayBeOpen(t *testing.T) {
 	local := machine(t, transcript())
-	live := filepath.Join(local.ConfigDirs["claude-code"], "sessions")
-	if err := os.MkdirAll(live, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	// The session that calls is open by definition: its own process is alive.
-	open := fmt.Sprintf(`{"pid":%d,"sessionId":"%s"}`, os.Getpid(), sessionID)
-	if err := os.WriteFile(filepath.Join(live, "1.json"), []byte(open), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	openedBy(t, local, 4242, ownTree)
 	if _, err := Do(t.Context(), newController(online("w")), local, request("w")); err != nil {
 		t.Fatalf("an open session that calls is refused: %v", err)
+	}
+}
+
+// --session of a session open in another window is not the session that calls: its Claude
+// Code is not above the command, so it is refused until it is closed.
+func TestScenario_SesionVivaDeOtraVentana(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"))
+	openedBy(t, local, 4242, map[int]int{100: 50, 50: 777, 777: 1, 4242: 1})
+
+	_, err := Do(t.Context(), c, local, request("w"))
+	var live *session.LiveError
+	if !errors.As(err, &live) {
+		t.Fatalf("a session open elsewhere: %v", err)
+	}
+	if len(c.created)+len(c.puts) != 0 {
+		t.Fatal("something was created or uploaded")
 	}
 }
 
