@@ -150,19 +150,22 @@ func (c *Client) ArchiveTask(ctx context.Context, ref, project string) (v1.Task,
 	return c.taskAction(ctx, "archive", ref, project, "")
 }
 
-// DeferTask, ResumeTask, MoveTask, ForkRun and PromoteRun are in the API
-// surface before their milestones are: the Controller answers CF_NOT_IMPLEMENTED.
+// MoveTask, ForkRun and PromoteRun are in the API surface before their
+// milestones are: the Controller answers CF_NOT_IMPLEMENTED.
 
-// DeferTask asks to suspend a Task's Run with a checkpoint (§11.4).
-func (c *Client) DeferTask(ctx context.Context, ref, project string) error {
-	_, err := c.taskAction(ctx, "defer", ref, project, "")
-	return err
+// DeferTask suspends a Task's Run with a checkpoint (§11.4). The Task is
+// waiting(deferred) once the Worker has published the capture.
+func (c *Client) DeferTask(ctx context.Context, ref, project, requestID string) (v1.Task, error) {
+	return c.taskAction(ctx, "defer", ref, project, requestID)
 }
 
-// ResumeTask asks to continue a deferred Task.
-func (c *Client) ResumeTask(ctx context.Context, ref, project string) error {
-	_, err := c.taskAction(ctx, "resume", ref, project, "")
-	return err
+// ResumeTask continues a deferred Task with a new Run from its last
+// checkpoint; worker, if not empty, is the only Worker that may take it.
+func (c *Client) ResumeTask(ctx context.Context, ref, project, worker, requestID string) (v1.ResumeTaskResponse, error) {
+	var out v1.ResumeTaskResponse
+	err := c.do(ctx, http.MethodPost, withQuery(refPath("tasks", ref, "resume"), scope(project)),
+		v1.ResumeTaskRequest{RequestID: requestID, Worker: worker}, &out)
+	return out, err
 }
 
 // MoveTask asks to continue a Task on another Worker.

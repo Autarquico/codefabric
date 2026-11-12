@@ -63,6 +63,11 @@ func placementOf(run store.Run) (domain.Placement, error) {
 	if err != nil {
 		return p, fmt.Errorf("scheduler: run %s has an unreadable spec: %w", run.ID, err)
 	}
+	if run.PinnedWorker != "" {
+		// The Worker a resume chose replaces what the spec requires: it is the
+		// user's explicit word, given later, and the require filter enforces it.
+		p.Require = []string{run.PinnedWorker}
+	}
 	return p, nil
 }
 

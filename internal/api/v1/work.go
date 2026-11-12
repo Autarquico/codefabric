@@ -197,6 +197,21 @@ type ActionRequest struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
+// ResumeTaskRequest is the body of POST /v1/tasks/{ref}/resume. Worker, a name
+// or ID, makes the Run go to that Worker only.
+type ResumeTaskRequest struct {
+	RequestID string `json:"request_id,omitempty"`
+	Worker    string `json:"worker,omitempty"`
+}
+
+// ResumeTaskResponse is the Task after a resume and the Run that continues it.
+type ResumeTaskResponse struct {
+	Task         Task   `json:"task"`
+	RunID        string `json:"run_id"`
+	RunShort     string `json:"run_short_id"`
+	CheckpointID string `json:"checkpoint_id"`
+}
+
 // ListTasksResponse is GET /v1/tasks.
 type ListTasksResponse struct {
 	Tasks []Task `json:"tasks"`

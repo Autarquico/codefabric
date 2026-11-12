@@ -70,6 +70,29 @@ type AssignCommand struct {
 	// equals OriginURL otherwise.
 	OriginSecret string `json:"origin_secret,omitempty"`
 	OriginURL    string `json:"origin_url,omitempty"`
+	// Continues is set for a Run that continues a checkpoint (resume): the
+	// Worker prepares its source from the relay and not from the origin.
+	Continues *Continuation `json:"continues,omitempty"`
+}
+
+// Continuation is what a Worker needs to continue a checkpoint instead of
+// starting from the Project's source (§11.7 resume).
+//
+// The source is the commit at Ref in the Controller's relay (SourceCommit of
+// the assignment is that commit): the Worker fetches the ref from the relay,
+// which holds commits that were never pushed to the origin. If NativeState is
+// set, the Worker downloads it from GET /v1/worker/runs/{run}/checkpoints/{checkpoint_id}/native-state
+// under the lease of this Run and imports it with the harness's adapter. If it
+// is nil, the Run continues from the source and Summary alone, and Warnings say
+// why (another adapter, another major version).
+type Continuation struct {
+	ParentRunID  string `json:"parent_run_id"`
+	CheckpointID string `json:"checkpoint_id"`
+	// Ref is refs/cf/checkpoints/<checkpoint_id> in the relay.
+	Ref         string            `json:"ref"`
+	NativeState *NativeStateRef   `json:"native_state,omitempty"`
+	Summary     CheckpointSummary `json:"summary"`
+	Warnings    []string          `json:"warnings,omitempty"`
 }
 
 // PublishCommand asks the Worker to push the sealed result of a Run again, under

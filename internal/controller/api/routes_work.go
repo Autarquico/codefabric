@@ -38,8 +38,8 @@ func (s *Server) registerWorkRoutes() {
 	s.handle("POST /v1/tasks/{ref}/archive", clientsOnly, taskAction(s.work.Tasks.Archive))
 	s.handle("POST /v1/tasks/{ref}/respond", clientsOnly, s.respondTask)
 	s.handle("GET /v1/inbox", clientsOnly, s.inbox)
-	s.handle("POST /v1/tasks/{ref}/defer", clientsOnly, notImplemented("defer"))
-	s.handle("POST /v1/tasks/{ref}/resume", clientsOnly, notImplemented("resume"))
+	s.handle("POST /v1/tasks/{ref}/defer", clientsOnly, taskAction(s.work.Tasks.Defer))
+	s.handle("POST /v1/tasks/{ref}/resume", clientsOnly, s.resumeTask)
 	s.handle("POST /v1/tasks/{ref}/move", clientsOnly, notImplemented("move"))
 
 	s.handle("GET /v1/runs", clientsOnly, s.listRuns)
@@ -213,6 +213,19 @@ func taskAction(act taskActionFunc) handlerFunc {
 		writeJSON(w, http.StatusOK, t)
 		return nil
 	}
+}
+
+func (s *Server) resumeTask(w http.ResponseWriter, r *http.Request, c caller) error {
+	var req v1.ResumeTaskRequest
+	if err := decodeOptionalBody(w, r, &req); err != nil {
+		return err
+	}
+	out, err := s.work.Tasks.Resume(r.Context(), c.Session, r.PathValue("ref"), r.URL.Query().Get("project"), req)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
 }
 
 func (s *Server) respondTask(w http.ResponseWriter, r *http.Request, c caller) error {

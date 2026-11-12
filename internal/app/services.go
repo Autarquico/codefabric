@@ -91,11 +91,12 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 	rederive := tasks.NewRederive(ids)
 	runService := runs.New(db, clk, ids, runs.Rederive(rederive), opts...)
 	leaseService := leases.New(db, clk, ids, leases.Rederive(rederive))
+	checkpointService := checkpoints.New(db, clk, ids, checkpoints.Rederive(rederive), checkpointOptions(cfg)...)
 	return &Services{
 		Projects:    projects.New(db, clk, ids),
-		Tasks:       tasks.New(db, clk, ids, runService),
+		Tasks:       tasks.New(db, clk, ids, runService, taskOptions(cfg, checkpointService)...),
 		Runs:        runService,
-		Checkpoints: checkpoints.New(db, clk, ids, checkpoints.Rederive(rederive), checkpointOptions(cfg)...),
+		Checkpoints: checkpointService,
 		Workers:     workers.New(db, clk, workersCfg),
 		Leases:      leaseService,
 		Scheduler:   scheduler.New(db, clk, leaseService, workersCfg.StartedAt),
@@ -117,6 +118,14 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 // narrows a Task name that more than one Project has.
 func (s *Services) Resolve(ctx context.Context, kind domain.Kind, ref, project string) (v1.Resolved, error) {
 	return refs.Resolve(ctx, s.db, kind, ref, project)
+}
+
+func taskOptions(cfg Config, capture tasks.Capturer) []tasks.Option {
+	opts := []tasks.Option{tasks.WithCapturer(capture)}
+	if cfg.Relay != nil {
+		opts = append(opts, tasks.WithRelay(cfg.Relay))
+	}
+	return opts
 }
 
 func checkpointOptions(cfg Config) []checkpoints.Option {
