@@ -1,0 +1,157 @@
+// Package handoff is what `cf handoff` does from the machine of the user: it takes
+// the session that calls it, with the working tree of its repository, and makes a
+// Worker continue it, as a new interactive Task or, if the session already has a Task,
+// as a resume of that one. What reaches the Controller is the seed of the session (cut
+// at the call that handed it off) and a snapshot of the tree.
+package handoff
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/client/session"
+	"github.com/Autarquico/codefabric/internal/domain"
+)
+
+// Controller is what a handoff asks of the Controller: the narrow face of *client.Client.
+type Controller interface {
+	Workers(ctx context.Context, includeRemoved bool) ([]v1.Worker, error)
+	Task(ctx context.Context, ref, project string) (v1.Task, error)
+	ProjectForDir(ctx context.Context, dir string) (v1.Project, error)
+	PutNativeSeed(ctx context.Context, project, digest string, r io.Reader, size int64) (v1.NativeSeedUploaded, error)
+	NewTask(ctx context.Context, dir string, req v1.CreateTaskRequest) (v1.CreateTaskResponse, error)
+	ResumeTaskWith(ctx context.Context, ref, project string, req v1.ResumeTaskRequest) (v1.ResumeTaskResponse, error)
+}
+
+// Request is one handoff.
+type Request struct {
+	// SessionID is the session to hand over; Worker the name of the Worker that continues it.
+	SessionID, Worker string
+	// Dir is the working directory of the session: the repository that is snapshotted.
+	Dir string
+	// AllowSensitive and Force override the guards of the secret and of the double writer.
+	AllowSensitive, Force bool
+}
+
+// Result says where the session went.
+type Result struct {
+	Task   string `json:"task"`
+	Worker string `json:"worker"`
+	// Resumed is true when the session already had a Task and it was resumed.
+	Resumed bool   `json:"resumed"`
+	Attach  string `json:"attach"`
+}
+
+// Do hands the session over. It refuses, before anything is created, a Worker that
+// is not online, a session that is open elsewhere, one that holds a secret and one that
+// was handed off already, unless the request overrides the last two.
+func Do(ctx context.Context, c Controller, sessions *session.Local, req Request) (Result, error) {
+	if req.Worker == "" {
+		return Result{}, domain.NewError(domain.CodeInvalidRequest, "name the Worker with --to", nil)
+	}
+	if err := requireOnline(ctx, c, req.Worker); err != nil {
+		return Result{}, err
+	}
+	ref, err := sessions.Find(ctx, req.SessionID, "")
+	if err != nil {
+		return Result{}, err
+	}
+	rec, err := sessions.State.Get(ref.ID)
+	if err != nil {
+		return Result{}, err
+	}
+	exp, err := sessions.Export(ctx, session.ExportRequest{
+		SessionID: ref.ID, Adapter: ref.Adapter, Caller: true,
+		AllowSensitive: req.AllowSensitive, Force: req.Force,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	seed := v1.NativeStateRef{Adapter: ref.Adapter, AdapterVersion: exp.Version, Digest: exp.Digest}
+
+	var (
+		task v1.Task
+		res  Result
+	)
+	if rec.Task != "" {
+		task, err = resume(ctx, c, rec.Task, req, exp, seed)
+		res.Resumed = true
+	} else {
+		task, err = create(ctx, c, ref, req, exp, seed)
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	if err := sessions.State.MarkHandedOff(ref.ID, task.ID, exp.Digest, time.Now()); err != nil {
+		return Result{}, err
+	}
+	res.Task, res.Worker, res.Attach = task.Name, req.Worker, "cf attach "+task.Name
+	return res, nil
+}
+
+func requireOnline(ctx context.Context, c Controller, name string) error {
+	workers, err := c.Workers(ctx, false)
+	if err != nil {
+		return err
+	}
+	var known []string
+	for _, w := range workers {
+		if w.Name == name && w.State == domain.WorkerOnline {
+			return nil
+		}
+		known = append(known, fmt.Sprintf("%s (%s)", w.Name, w.State))
+	}
+	list := "none"
+	if len(known) > 0 {
+		list = strings.Join(known, ", ")
+	}
+	return domain.NewError(domain.CodeNotFound, fmt.Sprintf("no online Worker named %q; Workers: %s", name, list), nil)
+}
+
+func create(ctx context.Context, c Controller, ref session.Ref, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, error) {
+	project, err := c.ProjectForDir(ctx, req.Dir)
+	if err != nil {
+		return v1.Task{}, err
+	}
+	if err := upload(ctx, c, project.ID, exp); err != nil {
+		return v1.Task{}, err
+	}
+	last, err := LastUserMessage(ref.Adapter, ref.Transcript)
+	if err != nil {
+		return v1.Task{}, err
+	}
+	out, err := c.NewTask(ctx, req.Dir, v1.CreateTaskRequest{
+		Project: project.ID, Name: TaskName(last, ref.ID), Prompt: Prompt(last),
+		Mode: domain.ModeInteractive, Snapshot: true, NativeSeed: &seed,
+		Requirements: v1.Requirements{Harness: ref.Adapter, Workers: v1.WorkerPreferences{Require: []string{req.Worker}}},
+	})
+	if err != nil {
+		return v1.Task{}, err
+	}
+	return out.Task, nil
+}
+
+func resume(ctx context.Context, c Controller, task string, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, error) {
+	t, err := c.Task(ctx, task, "")
+	if err != nil {
+		return v1.Task{}, err
+	}
+	if err := upload(ctx, c, t.ProjectID, exp); err != nil {
+		return v1.Task{}, err
+	}
+	out, err := c.ResumeTaskWith(ctx, task, "", v1.ResumeTaskRequest{Worker: req.Worker, NativeSeed: &seed, Force: req.Force})
+	if err != nil {
+		return v1.Task{}, err
+	}
+	return out.Task, nil
+}
+
+func upload(ctx context.Context, c Controller, project string, exp session.Export) error {
+	_, err := c.PutNativeSeed(ctx, project, exp.Digest, bytes.NewReader(exp.Archive), int64(len(exp.Archive)))
+	return err
+}

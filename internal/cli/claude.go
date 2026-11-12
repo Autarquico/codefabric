@@ -19,6 +19,27 @@ import (
 //go:embed skills/handto/SKILL.md
 var handtoSkillTemplate []byte
 
+//go:embed skills/handto-codex/SKILL.md
+var handtoCodexTemplate []byte
+
+// handtoKind is the handto skill of one harness: what is written, where that harness
+// reads it, and the command that manages it.
+type handtoKind struct {
+	// command is the `cf` command that installs it (claude, codex); label how a person
+	// calls the harness.
+	command, label string
+	template       []byte
+	// skillsDir is where the harness reads skills, under the base of a scope.
+	skillsDir string
+}
+
+var (
+	claudeHandto = handtoKind{command: "claude", label: "Claude Code", template: handtoSkillTemplate, skillsDir: filepath.Join(".claude", "skills")}
+	codexHandto  = handtoKind{command: "codex", label: "Codex", template: handtoCodexTemplate, skillsDir: filepath.Join(".agents", "skills")}
+)
+
+func (k handtoKind) installCommand() string { return "cf " + k.command + " install" }
+
 const handtoVersionVar = "{{cf-version}}"
 
 var (
@@ -35,8 +56,8 @@ const (
 	skillForeign  = "foreign"  // a handto skill that cf did not write
 )
 
-// ClaudeSkill is the handto skill under a scope, as `cf claude` reports it.
-type ClaudeSkill struct {
+// HandtoSkill is the handto skill under a scope, as `cf claude` reports it.
+type HandtoSkill struct {
 	Scope   string `json:"scope"`
 	Path    string `json:"path"`
 	State   string `json:"state"`
@@ -63,34 +84,34 @@ func handtoMarkerVersion(file []byte) string {
 }
 
 // renderHandto is the SKILL.md that the cf of this version writes.
-func renderHandto(version string) ([]byte, error) {
+func renderHandto(k handtoKind, version string) ([]byte, error) {
 	if !handtoVersionRE.MatchString(version) {
 		return nil, fmt.Errorf("version %q cannot be written into the skill", version)
 	}
-	return bytes.ReplaceAll(handtoSkillTemplate, []byte(handtoVersionVar), []byte(version)), nil
+	return bytes.ReplaceAll(k.template, []byte(handtoVersionVar), []byte(version)), nil
 }
 
-func handtoPath(base string) string {
-	return filepath.Join(base, ".claude", "skills", "handto", "SKILL.md")
+func handtoPath(k handtoKind, base string) string {
+	return filepath.Join(base, k.skillsDir, "handto", "SKILL.md")
 }
 
 // handtoStatus says how the skill stands under base for the cf of this version.
-func handtoStatus(scope, base, version string) (ClaudeSkill, error) {
-	want, err := renderHandto(version)
+func handtoStatus(k handtoKind, scope, base, version string) (HandtoSkill, error) {
+	want, err := renderHandto(k, version)
 	if err != nil {
-		return ClaudeSkill{}, err
+		return HandtoSkill{}, err
 	}
-	return classifyHandto(scope, base, version, want)
+	return classifyHandto(k, scope, base, version, want)
 }
 
-func classifyHandto(scope, base, version string, want []byte) (ClaudeSkill, error) {
-	s := ClaudeSkill{Scope: scope, Path: handtoPath(base)}
+func classifyHandto(k handtoKind, scope, base, version string, want []byte) (HandtoSkill, error) {
+	s := HandtoSkill{Scope: scope, Path: handtoPath(k, base)}
 	have, err := readRegular(s.Path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		s.State = skillMissing
 	case err != nil:
-		return ClaudeSkill{}, err
+		return HandtoSkill{}, err
 	case bytes.Equal(have, want):
 		s.State, s.Version = skillCurrent, version
 	default:
@@ -109,14 +130,14 @@ func classifyHandto(scope, base, version string, want []byte) (ClaudeSkill, erro
 
 // installHandto writes the skill. It does nothing when it is current, updates
 // one written by another cf and refuses one that cf did not write unless force.
-func installHandto(scope, base, version string, force, dryRun bool) (ClaudeSkill, error) {
-	want, err := renderHandto(version)
+func installHandto(k handtoKind, scope, base, version string, force, dryRun bool) (HandtoSkill, error) {
+	want, err := renderHandto(k, version)
 	if err != nil {
-		return ClaudeSkill{}, err
+		return HandtoSkill{}, err
 	}
-	s, err := classifyHandto(scope, base, version, want)
+	s, err := classifyHandto(k, scope, base, version, want)
 	if err != nil {
-		return ClaudeSkill{}, err
+		return HandtoSkill{}, err
 	}
 	s.DryRun = dryRun
 	switch s.State {
@@ -125,7 +146,7 @@ func installHandto(scope, base, version string, force, dryRun bool) (ClaudeSkill
 		return s, nil
 	case skillForeign:
 		if !force {
-			return ClaudeSkill{}, domain.NewError(domain.CodeConfirmationRequired,
+			return HandtoSkill{}, domain.NewError(domain.CodeConfirmationRequired,
 				fmt.Sprintf("%s is a skill named handto that cf did not write; use --force to replace it", s.Path), nil)
 		}
 		s.Action = "replaced"
@@ -140,26 +161,26 @@ func installHandto(scope, base, version string, force, dryRun bool) (ClaudeSkill
 		return s, nil
 	}
 	if _, err := writeSkill(s.Path, want); err != nil {
-		return ClaudeSkill{}, err
+		return HandtoSkill{}, err
 	}
 	s.State, s.Version = skillCurrent, version
 	return s, nil
 }
 
 // uninstallHandto removes the skill that cf wrote. One that cf did not write stays.
-func uninstallHandto(scope, base string) (ClaudeSkill, error) {
-	s := ClaudeSkill{Scope: scope, Path: handtoPath(base)}
+func uninstallHandto(k handtoKind, scope, base string) (HandtoSkill, error) {
+	s := HandtoSkill{Scope: scope, Path: handtoPath(k, base)}
 	have, err := readRegular(s.Path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		s.State, s.Action = skillMissing, "absent"
 	case err != nil:
-		return ClaudeSkill{}, err
+		return HandtoSkill{}, err
 	case handtoMarkerVersion(have) == "":
 		s.State, s.Action = skillForeign, "kept"
 	default:
 		if _, err := removeSkill(s.Path); err != nil {
-			return ClaudeSkill{}, err
+			return HandtoSkill{}, err
 		}
 		s.State, s.Action = skillMissing, "removed"
 	}
@@ -173,27 +194,31 @@ func InstallUserHandtoSkill() (path string, err error) {
 	if err != nil {
 		return "", err
 	}
-	s, err := installHandto("user", base, buildinfo.Get().Version, false, false)
+	s, err := installHandto(claudeHandto, "user", base, buildinfo.Get().Version, false, false)
 	return s.Path, err
 }
 
 // userHandtoSkill is the state of the skill under the home, or nil when it
 // cannot be told (no home directory, an unreadable file).
-func userHandtoSkill() *ClaudeSkill {
+func userHandtoSkill(k handtoKind) *HandtoSkill {
 	base, err := scopeBase("user")
 	if err != nil {
 		return nil
 	}
-	s, err := handtoStatus("user", base, buildinfo.Get().Version)
+	s, err := handtoStatus(k, "user", base, buildinfo.Get().Version)
 	if err != nil {
 		return nil
 	}
 	return &s
 }
 
-func newClaudeCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "claude", Short: "Install into Claude Code what cf needs there: the /handto skill"}
-	cmd.AddCommand(newClaudeInstallCmd(), newClaudeUninstallCmd(), newClaudeStatusCmd())
+func newClaudeCmd() *cobra.Command { return newHandtoCmd(claudeHandto) }
+
+// newHandtoCmd is `cf claude` or `cf codex`: install, uninstall and status of the
+// handto skill of that harness.
+func newHandtoCmd(k handtoKind) *cobra.Command {
+	cmd := &cobra.Command{Use: k.command, Short: "Install into " + k.label + " what cf needs there: the handto skill"}
+	cmd.AddCommand(newHandtoInstallCmd(k), newHandtoUninstallCmd(k), newHandtoStatusCmd(k))
 	return cmd
 }
 
@@ -201,33 +226,40 @@ func bindScope(cmd *cobra.Command, scope *string) {
 	cmd.Flags().StringVar(scope, "scope", "user", "user (this machine) or project (this repository)")
 }
 
-func claudeBase(scope string) (string, error) {
+func (k handtoKind) base(scope string) (string, error) {
 	if err := validScope(scope); err != nil {
 		return "", err
 	}
-	return skillsBase(scope, filepath.Join(".claude", "skills"))
+	return skillsBase(scope, k.skillsDir)
 }
 
-func newClaudeInstallCmd() *cobra.Command {
+func (k handtoKind) invocation() string {
+	if k.command == codexHandto.command {
+		return "asking for it by name"
+	}
+	return "`/handto <worker>`"
+}
+
+func newHandtoInstallCmd(k handtoKind) *cobra.Command {
 	var scope string
 	var force, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "install [--scope user|project] [--force] [--dry-run]",
-		Short: "Write the /handto skill into ~/.claude/skills (or .claude/skills of the repository)",
-		Long: "Write the handto skill, which hands a Claude Code session over to a Worker with `/handto <worker>`.\n" +
+		Short: "Write the handto skill into " + filepath.ToSlash(filepath.Join("~", k.skillsDir)) + " (or the same directory of the repository)",
+		Long: "Write the handto skill, which hands a " + k.label + " session over to a Worker by " + k.invocation() + ".\n" +
 			"It carries the version of this cf: the same version changes nothing and another one updates it.\n" +
 			"A handto skill that cf did not write is not overwritten without --force.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			base, err := claudeBase(scope)
+			base, err := k.base(scope)
 			if err != nil {
 				return err
 			}
-			s, err := installHandto(scope, base, buildinfo.Get().Version, force, dryRun)
+			s, err := installHandto(k, scope, base, buildinfo.Get().Version, force, dryRun)
 			if err != nil {
 				return err
 			}
-			return emit(cmd, s, func(out io.Writer) error { return printClaudeSkill(out, s) })
+			return emit(cmd, s, func(out io.Writer) error { return printHandtoSkill(out, k, s) })
 		},
 	}
 	bindScope(cmd, &scope)
@@ -236,52 +268,52 @@ func newClaudeInstallCmd() *cobra.Command {
 	return cmd
 }
 
-func newClaudeUninstallCmd() *cobra.Command {
+func newHandtoUninstallCmd(k handtoKind) *cobra.Command {
 	var scope string
 	cmd := &cobra.Command{
 		Use:   "uninstall [--scope user|project]",
-		Short: "Remove the /handto skill that cf wrote",
+		Short: "Remove the handto skill that cf wrote",
 		Long:  "Remove the handto skill. One that cf did not write stays where it is.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			base, err := claudeBase(scope)
+			base, err := k.base(scope)
 			if err != nil {
 				return err
 			}
-			s, err := uninstallHandto(scope, base)
+			s, err := uninstallHandto(k, scope, base)
 			if err != nil {
 				return err
 			}
-			return emit(cmd, s, func(out io.Writer) error { return printClaudeSkill(out, s) })
+			return emit(cmd, s, func(out io.Writer) error { return printHandtoSkill(out, k, s) })
 		},
 	}
 	bindScope(cmd, &scope)
 	return cmd
 }
 
-func newClaudeStatusCmd() *cobra.Command {
+func newHandtoStatusCmd(k handtoKind) *cobra.Command {
 	var scope string
 	cmd := &cobra.Command{
 		Use:   "status [--scope user|project]",
-		Short: "Say whether the /handto skill is installed and of which version",
+		Short: "Say whether the handto skill is installed and of which version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			base, err := claudeBase(scope)
+			base, err := k.base(scope)
 			if err != nil {
 				return err
 			}
-			s, err := handtoStatus(scope, base, buildinfo.Get().Version)
+			s, err := handtoStatus(k, scope, base, buildinfo.Get().Version)
 			if err != nil {
 				return err
 			}
-			return emit(cmd, s, func(out io.Writer) error { return printClaudeSkill(out, s) })
+			return emit(cmd, s, func(out io.Writer) error { return printHandtoSkill(out, k, s) })
 		},
 	}
 	bindScope(cmd, &scope)
 	return cmd
 }
 
-func printClaudeSkill(out io.Writer, s ClaudeSkill) error {
+func printHandtoSkill(out io.Writer, k handtoKind, s HandtoSkill) error {
 	verb := s.Action
 	switch {
 	case verb == "":
@@ -298,9 +330,9 @@ func printClaudeSkill(out io.Writer, s ClaudeSkill) error {
 	}
 	switch s.State {
 	case skillOutdated:
-		_, err = fmt.Fprintln(out, "It is of another version: run `cf claude install` to update it.")
+		_, err = fmt.Fprintf(out, "It is of another version: run `%s` to update it.\n", k.installCommand())
 	case skillModified:
-		_, err = fmt.Fprintln(out, "It was edited since cf wrote it: run `cf claude install` to restore it.")
+		_, err = fmt.Fprintf(out, "It was edited since cf wrote it: run `%s` to restore it.\n", k.installCommand())
 	}
 	return err
 }

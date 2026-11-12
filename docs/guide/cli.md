@@ -31,7 +31,11 @@ Install into Claude Code what cf needs there: the `/handto` skill, which hands t
 - `cf claude uninstall [--scope user|project]`: remove the skill that cf wrote. One it did not write stays.
 - `cf claude status [--scope user|project]`: `missing`, `current`, `outdated` (another version of cf), `modified` (cf wrote it, then it was edited; `install` restores it) or `foreign`. With `--json`, the same as an object.
 
-`cf doctor` warns when the user skill is missing, of another version or edited since cf wrote it, and `cf setup` offers to install it to a client on a terminal. The skill needs `cf handoff`, which this page lists once it exists.
+`cf doctor` warns when the user skill is missing, of another version or edited since cf wrote it, and `cf setup` offers to install it to a client on a terminal. The skill runs `cf handoff` (see below).
+
+## `cf codex`
+
+The same for Codex: `cf codex install|uninstall|status [--scope user|project]` manages the `handto` skill in `~/.agents/skills/handto/SKILL.md` (`--scope project`: `.agents/skills/` of the repository), with the same rules as `cf claude` (versioned, idempotent, a foreign `handto` is not overwritten without `--force`). Codex has no slash commands with arguments: you ask for it by name (`$handto omarch02`) and the skill runs `cf handoff --to <worker>`, which reads the session from `CODEX_SESSION_ID`. `cf doctor` warns when the skill is missing and `codex` is on the `PATH`.
 
 ## `cf client`
 
@@ -113,6 +117,12 @@ A Worker keeps the worktree of a published Run for `retention.worktrees` in its 
 ## `cf handoff`
 
 What `/handto` runs: `cf handoff --to <worker>` hands the session that calls it over to a Worker. Inside a Run on a Worker (`CF_RUN_SOCKET` is set, for interactive Runs) it asks the Worker, over a local socket, to move the Task of the Run to that Worker: no client credentials are involved, the Controller grants it only while the Run is live under its lease, and it is audited as asked from the Run. `--list` prints the Workers by name and state. `--session <id>` is for the client side, outside a Run.
+
+From the machine of the user (no `CF_RUN_SOCKET`): `cf handoff --session <id> --to <worker>` (Codex: no `--session`, it reads `CODEX_SESSION_ID`) exports the session of Claude Code or Codex, cut after its last tool call (the call to `cf handoff` itself; a session open elsewhere is refused), snapshots the repository (uncommitted and untracked files travel, the working tree is untouched, commits not pushed travel too) and creates an interactive Task on that Worker with the session as its seed. If the session already has a Task (the local registry `session -> task`), it resumes that Task on the Worker instead. It prints the Task, the Worker and `cf attach <task>`, and leaves the local `handed-off` marker. The Worker must be online (otherwise `CF_NOT_FOUND` lists the Workers) and the Project must keep native state.
+
+- A second handoff of a session with the marker is refused (two writers on the same work): `--force` resumes the Task on the other Worker.
+- A session that holds what looks like a secret is blocked, with the lines: `--allow-sensitive-session` sends it anyway.
+- `--force` and `--allow-sensitive-session` are accepted only when stdin is a terminal. Claude Code runs Bash without one, so the skill cannot lift these guards: the error prints the exact command to run in your own terminal.
 
 ## `cf inbox`
 

@@ -18,11 +18,13 @@ import (
 //   - inside a Run of a Worker (CF_RUN_SOCKET is set): it asks the Worker, over the
 //     socket of the Run, to move the Task of the Run. No credentials of a client
 //     are involved or needed, and it is the only thing it can do from there.
-//   - on the machine of the user: handoffFromClient, the extension point of the
-//     client side (snapshot of the session and tree, `cf do`/`cf task resume`).
-func newHandoffCmd() *cobra.Command {
+//   - on the machine of the user: it exports the session (Claude Code by --session,
+//     Codex by CODEX_SESSION_ID), snapshots the tree and creates the Task, or
+//     resumes the one the session already has (client/handoff).
+func newHandoffCmd(opts Options) *cobra.Command {
 	var to, session string
 	var list bool
+	var overrides handoffOverrides
 	cmd := &cobra.Command{
 		Use:   "handoff --to <worker>",
 		Short: "Hand this session over to a Worker (what /handto runs)",
@@ -32,6 +34,9 @@ func newHandoffCmd() *cobra.Command {
 			"continue it with `cf attach <task>`. --list prints the Workers a Run may move to.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := overrides.requireTerminal(cmd.InOrStdin(), session, to); err != nil {
+				return err
+			}
 			if socket := os.Getenv(client.RunSocketEnv); socket != "" {
 				if list {
 					return listPeersFromRun(cmd, socket)
@@ -42,20 +47,15 @@ func newHandoffCmd() *cobra.Command {
 			if list {
 				return domain.NewError(domain.CodeInvalidRequest, "--list is for inside a Run; use `cf worker list`", nil)
 			}
-			return handoffFromClient(cmd, session, to)
+			return handoffFromClient(cmd, opts, session, to, overrides)
 		},
 	}
 	cmd.Flags().StringVar(&to, "to", "", "Worker that continues the session")
-	cmd.Flags().StringVar(&session, "session", "", "id of the session to hand over (from outside a Run)")
+	cmd.Flags().StringVar(&session, "session", "", "id of the session to hand over (from outside a Run; Codex gives it in CODEX_SESSION_ID)")
+	cmd.Flags().BoolVar(&overrides.force, "force", false, "hand the session over although it was handed off already (a second writer on the same work); needs a terminal")
+	cmd.Flags().BoolVar(&overrides.allowSensitive, "allow-sensitive-session", false, "send the session although it holds what looks like a secret; needs a terminal")
 	cmd.Flags().BoolVar(&list, "list", false, "list the Workers a Run may move to (inside a Run)")
 	return cmd
-}
-
-// handoffFromClient is the client side of `cf handoff`: the one that holds the
-// credentials of a client, outside any Run. The task that writes it replaces this
-// variable; until then it says so.
-var handoffFromClient = func(*cobra.Command, string, string) error {
-	return domain.NewError(domain.CodeInvalidRequest, "cf handoff needs to run inside a Run of a Worker in this build", nil)
 }
 
 func handoffFromRun(cmd *cobra.Command, socket, to string) error {

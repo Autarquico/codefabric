@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"slices"
@@ -10,8 +12,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/client/handoff"
+	csession "github.com/Autarquico/codefabric/internal/client/session"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -98,9 +104,70 @@ func TestScenario_HandoffInsideARunUsesTheSocketOfTheRun(t *testing.T) {
 	}
 }
 
-func TestScenario_HandoffOutsideARunNeedsItsClientSide(t *testing.T) {
+func TestScenario_HandoffOutsideARunNeedsASession(t *testing.T) {
 	t.Setenv(client.RunSocketEnv, "")
+	t.Setenv("CODEX_SESSION_ID", "")
 	if code, _, errOut := runHandoff(t, "--to", "omarch02"); code == 0 || !strings.Contains(errOut, "CF_INVALID_REQUEST") {
 		t.Errorf("exit %d, err %q", code, errOut)
+	}
+}
+
+// terminal is a stdin that says it is a terminal, as isTerminal asks.
+type terminal struct{ io.Reader }
+
+func (terminal) IsTerminal() bool { return true }
+
+// errNoController stops a handoff that got past the guards before it reaches a Controller.
+var errNoController = errors.New("no controller in this test")
+
+func runHandoffWith(t *testing.T, stdin io.Reader, args ...string) (int, string, string) {
+	t.Helper()
+	opts := Options{
+		Sessions:     func(string) *csession.Local { return nil },
+		handoffStore: func(*cobra.Command) (handoff.Controller, error) { return nil, errNoController },
+	}
+	var out, errOut bytes.Buffer
+	code := RunContextWith(t.Context(), opts, append([]string{"handoff"}, args...), stdin, &out, &errOut)
+	return code, out.String(), errOut.String()
+}
+
+func TestScenario_HandoffOverridesNeedATerminal(t *testing.T) {
+	t.Setenv(client.RunSocketEnv, "")
+	t.Setenv("HOME", t.TempDir())
+	const id = "11111111-2222-4333-8444-555555555555"
+	for flag, want := range map[string]string{
+		"--force":                   "cf handoff --session " + id + " --to w --force",
+		"--allow-sensitive-session": "cf handoff --session " + id + " --to w --allow-sensitive-session",
+	} {
+		code, _, errOut := runHandoffWith(t, strings.NewReader(""), "--session", id, "--to", "w", flag)
+		if code == 0 || !strings.Contains(errOut, "CF_CONFIRMATION_REQUIRED") || !strings.Contains(errOut, want) {
+			t.Errorf("%s without a terminal: exit %d, err %q; want the command %q", flag, code, errOut, want)
+		}
+		// With a terminal it gets past the guard and reaches the Controller.
+		code, _, errOut = runHandoffWith(t, terminal{strings.NewReader("")}, "--session", id, "--to", "w", flag)
+		if code == 0 || !strings.Contains(errOut, errNoController.Error()) {
+			t.Errorf("%s with a terminal: exit %d, err %q; want it to get as far as the Controller", flag, code, errOut)
+		}
+	}
+	// Without the flags there is no terminal to ask for.
+	if _, _, errOut := runHandoffWith(t, strings.NewReader(""), "--session", id, "--to", "w"); !strings.Contains(errOut, errNoController.Error()) {
+		t.Errorf("no flags: %q", errOut)
+	}
+}
+
+func TestScenario_HandoffOverridesAreRefusedInsideARunToo(t *testing.T) {
+	path, requests := fakeRunSocket(t)
+	t.Setenv(client.RunSocketEnv, path)
+	if code, _, errOut := runHandoff(t, "--to", "w", "--force"); code == 0 || !strings.Contains(errOut, "CF_CONFIRMATION_REQUIRED") || len(requests()) != 0 {
+		t.Errorf("exit %d, err %q, requests %v", code, errOut, requests())
+	}
+}
+
+func TestHandoffError_NamesTheCommandThatLiftsTheGuard(t *testing.T) {
+	handed := handoffError(&csession.HandedOffError{ID: "s", Task: "t"}, "s-1", "w")
+	secret := handoffError(&csession.SensitiveError{Findings: []csession.Finding{{File: "f", Line: 1, Kind: "API key"}}}, "s-1", "w")
+	if !strings.Contains(handed.Error(), "cf handoff --session s-1 --to w --force") ||
+		!strings.Contains(secret.Error(), "cf handoff --session s-1 --to w --allow-sensitive-session") {
+		t.Errorf("%v\n%v", handed, secret)
 	}
 }

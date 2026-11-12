@@ -19,6 +19,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/client/handoff"
 	"github.com/Autarquico/codefabric/internal/client/notify"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -53,6 +54,8 @@ type Options struct {
 
 	// openTUIClient replaces the Controller client that the TUI gets in tests.
 	openTUIClient func(*cobra.Command) (*client.Client, error)
+	// handoffStore replaces the Controller client of `cf handoff` in tests.
+	handoffStore func(*cobra.Command) (handoff.Controller, error)
 	// workflowStore replaces the Controller client of the workflow commands in tests.
 	workflowStore func(*cobra.Command) (workflowStore, error)
 	// workflowApplyStore does the same for status, diff, apply, rollback, explain and sync.
@@ -214,7 +217,7 @@ func newRootCmd(opts Options) *cobra.Command {
 		newProjectCmd(openProjectUpdater(opts)), newTaskCmd(opts.Sessions), newDoCmd(opts.Sessions), newRunCmd(), newWorkerCmd(),
 		newAttachCmd(opts.Terminal), newPsCmd(), newInboxCmd(), newEventsCmd(), newLogsCmd(), newSearchCmd(),
 		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)),
-		newDoctorCmd(openDoctorStore(opts), probeOf(opts)), newNotifyCmd(opts.Native), newMCPCmd(), newClaudeCmd(), newHandoffCmd(), newGCCmd(), newStorageCmd())
+		newDoctorCmd(openDoctorStore(opts), probeOf(opts)), newNotifyCmd(opts.Native), newMCPCmd(), newClaudeCmd(), newHandtoCmd(codexHandto), newHandoffCmd(opts), newGCCmd(), newStorageCmd())
 	return root
 }
 
