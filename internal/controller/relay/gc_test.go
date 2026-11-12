@@ -87,6 +87,17 @@ func TestDeleteRefsRefusesTheNamespacesItDoesNotOwnBeforeDeletingAny(t *testing.
 	}
 }
 
+func TestDeleteRefsRemovesTheRefOfACheckpointByName(t *testing.T) {
+	cp := domain.CheckpointRef(ids.New(domain.KindCheckpoint))
+	r, dir := gcRelay(t, cp, snapshotRef)
+	if err := r.DeleteRefs(t.Context(), gcProject, []string{cp}); err != nil {
+		t.Fatal(err)
+	}
+	if got := refsOf(t, dir); !slices.Equal(got, []string{snapshotRef}) {
+		t.Errorf("refs left = %v, want only the snapshot", got)
+	}
+}
+
 func TestCollectWaitsWhileAPushIsInFlight(t *testing.T) {
 	r, _ := gcRelay(t, branchRef)
 	r.pushing["worker_1"] = struct{}{}
