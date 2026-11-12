@@ -31,16 +31,21 @@ type Adapter struct {
 	GOOS string
 }
 
-var _ harness.Adapter = Adapter{}
+var (
+	_ harness.Adapter       = Adapter{}
+	_ harness.SessionPorter = Adapter{}
+)
 
 // ID is "codex".
 func (Adapter) ID() string { return ID }
 
-// Capabilities are both modes, usage, model selection and a configuration
-// directory per Run, and Install.
+// Capabilities are both modes, Checkpoint and Resume of the native session,
+// usage, model selection, a configuration directory per Run, and Install.
 func (Adapter) Capabilities() harness.Capabilities {
 	return harness.Capabilities{
 		Modes:                  []domain.Mode{domain.ModeHeadless, domain.ModeInteractive},
+		Resume:                 true,
+		NativeCheckpoint:       true,
 		UsageEvents:            true,
 		ModelSelection:         true,
 		ConfigIsolation:        true,
@@ -85,37 +90,68 @@ func (Adapter) Version(ctx context.Context, host harness.Host) (string, error) {
 // gives the same Launch. Argv[0] is the path of the binary in the host, so that
 // whoever execs it does not look it up in a PATH of its own. Codex reads its
 // configuration from ConfigDir and runs in the sandbox of the worktree
-// without asking for approvals, since nobody answers them.
+// without asking for approvals, since nobody answers them. Codex has no flag to
+// name the session it creates, so Launch.SessionID is empty: the id is the
+// thread of the first event, and Checkpoint finds the session by itself.
 func (a Adapter) Start(_ context.Context, host harness.Host, run harness.RunSpec) (harness.Launch, error) {
-	if err := a.Capabilities().CheckMode(run.Mode); err != nil {
-		return harness.Launch{}, fmt.Errorf("codex: %w", err)
+	if err := a.validate(run); err != nil {
+		return harness.Launch{}, err
 	}
 	if run.Prompt == "" {
 		return harness.Launch{}, errors.New("codex: the prompt is empty: there is nothing to ask")
 	}
+	return launch(host, run, "", run.Prompt)
+}
+
+// validate is what Start and Resume refuse of a spec before building anything.
+func (a Adapter) validate(run harness.RunSpec) error {
+	if err := a.Capabilities().CheckMode(run.Mode); err != nil {
+		return fmt.Errorf("codex: %w", err)
+	}
 	if run.ConfigDir == "" {
-		return harness.Launch{}, errors.New("codex: the config directory is empty: Codex would read the global one")
+		return errors.New("codex: the config directory is empty: Codex would read the global one")
 	}
 	if strings.HasPrefix(run.Model, "-") {
-		return harness.Launch{}, fmt.Errorf("codex: the model %q starts with '-': it would be read as an option", run.Model)
+		return fmt.Errorf("codex: the model %q starts with '-': it would be read as an option", run.Model)
 	}
+	return nil
+}
+
+// launch builds the process of run: a new session, or the resume of sessionID
+// (already validated: it cannot be read as an option). An empty prompt is only
+// for an interactive resume. Resume options are repeated after `resume` where
+// that subcommand accepts them; --sandbox and -C only exist before it.
+func launch(host harness.Host, run harness.RunSpec, sessionID, prompt string) (harness.Launch, error) {
 	binary, err := host.LookPath(Binary)
 	if err != nil {
 		return harness.Launch{}, fmt.Errorf("codex: finding %s in the PATH of the host: %w", Binary, err)
 	}
-	launch := harness.Launch{Env: []string{ConfigHomeEnv + "=" + run.ConfigDir}}
+	l := harness.Launch{Env: []string{ConfigHomeEnv + "=" + run.ConfigDir}, SessionID: sessionID}
+	resuming := sessionID != ""
 	if run.Mode == domain.ModeHeadless {
-		launch.Argv = []string{
+		l.Argv = []string{
 			binary, "exec", "--json", "--sandbox", "workspace-write",
 			"-c", `approval_policy="never"`, "--skip-git-repo-check", "-C", run.Worktree,
 		}
-		launch.StructuredStdout = true
+		if resuming {
+			l.Argv = append(l.Argv, "resume", "--json", "-c", `approval_policy="never"`, "--skip-git-repo-check")
+		}
+		l.StructuredStdout = true
 	} else {
-		launch.Argv = []string{binary, "--sandbox", "workspace-write", "-a", "never", "-C", run.Worktree}
+		l.Argv = []string{binary}
+		if resuming {
+			l.Argv = append(l.Argv, "resume")
+		}
+		l.Argv = append(l.Argv, "--sandbox", "workspace-write", "-a", "never", "-C", run.Worktree)
 	}
 	if run.Model != "" {
-		launch.Argv = append(launch.Argv, "-m", run.Model)
+		l.Argv = append(l.Argv, "-m", run.Model)
 	}
-	launch.Argv = append(launch.Argv, "--", run.Prompt)
-	return launch, nil
+	if resuming {
+		l.Argv = append(l.Argv, sessionID)
+	}
+	if prompt != "" {
+		l.Argv = append(l.Argv, "--", prompt)
+	}
+	return l, nil
 }

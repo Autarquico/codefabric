@@ -123,7 +123,7 @@ func TestCapabilitiesAndUnsupported(t *testing.T) {
 	a := codex.Adapter{}
 	c := a.Capabilities()
 	if a.ID() != "codex" || !c.Supports(domain.ModeHeadless) || !c.Supports(domain.ModeInteractive) ||
-		!c.UsageEvents || !c.ModelSelection || !c.ConfigIsolation || !c.Install || c.Resume {
+		!c.UsageEvents || !c.ModelSelection || !c.ConfigIsolation || !c.Install || !c.Resume || !c.NativeCheckpoint || c.StructuredInput {
 		t.Errorf("%s %+v", a.ID(), c)
 	}
 }

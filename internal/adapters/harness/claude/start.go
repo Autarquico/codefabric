@@ -78,11 +78,6 @@ type sessionPlan struct {
 	sessionID string
 }
 
-// continuePrompt is what a headless process that resumes a session already
-// holding its prompt is asked: the original prompt is not repeated, but the
-// CLI needs one to run.
-const continuePrompt = "Continue where you left off."
-
 // startPlan names the session of the Run: --session-id the first time, and
 // --resume with the same id once Claude Code has written it, which keeps Start
 // idempotent (the CLI refuses a --session-id that is already in use).
@@ -93,7 +88,7 @@ func startPlan(run harness.RunSpec) (sessionPlan, error) {
 // planFor is the plan of session id. A session that is already there is
 // resumed, and its prompt is not sent again when the session holds it: a
 // process restarted in the same epoch continues, it does not ask twice. Headless
-// it is asked continuePrompt instead; interactive, nothing.
+// it is asked harness.ContinuePrompt instead; interactive, nothing.
 func planFor(run harness.RunSpec, id string) (sessionPlan, error) {
 	exists, err := sessionExists(run.ConfigDir, run.Worktree, id)
 	if err != nil {
@@ -109,7 +104,7 @@ func planFor(run harness.RunSpec, id string) (sessionPlan, error) {
 	}
 	plan.prompt = ""
 	if run.Mode == domain.ModeHeadless {
-		plan.prompt = continuePrompt
+		plan.prompt = harness.ContinuePrompt
 	}
 	return plan, nil
 }
