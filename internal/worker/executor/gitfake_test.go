@@ -28,7 +28,10 @@ type fakeGit struct {
 	seal       func(in gitops.Intent) (gitops.Sealed, error)
 	push       func(c pushCall) error
 	seals      []gitops.Intent
-	pushes     []pushCall
+	// snapshot, if set, answers Snapshot; snapshots are the intents it saw.
+	snapshot  func(in gitops.SnapshotIntent, f gitops.Forbidden) (gitops.Sealed, error)
+	snapshots []gitops.SnapshotIntent
+	pushes    []pushCall
 	// guard stands for the guard of gitops: it sees what each sealing and
 	// push is checked against, and an error it returns is theirs.
 	guard     func(f gitops.Forbidden) error
@@ -128,6 +131,21 @@ func (g *fakeGit) Seal(_ context.Context, _ string, in gitops.Intent, f gitops.F
 		return fn(in)
 	}
 	return gitops.Sealed{Commit: "2222222222222222222222222222222222222222"}, nil
+}
+
+func (g *fakeGit) Snapshot(_ context.Context, _ string, in gitops.SnapshotIntent, f gitops.Forbidden) (gitops.Sealed, error) {
+	g.called("snapshot")
+	if err := g.check(f); err != nil {
+		return gitops.Sealed{}, err
+	}
+	g.mu.Lock()
+	g.snapshots = append(g.snapshots, in)
+	fn := g.snapshot
+	g.mu.Unlock()
+	if fn != nil {
+		return fn(in, f)
+	}
+	return gitops.Sealed{Commit: "3333333333333333333333333333333333333333"}, nil
 }
 
 func (g *fakeGit) Push(_ context.Context, project, commit, branch string, a gitops.PushAuth, f gitops.Forbidden) error {

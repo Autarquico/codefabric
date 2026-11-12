@@ -32,6 +32,10 @@ type Git interface {
 	Push(ctx context.Context, project, commit, branch string, a gitops.PushAuth, forbidden gitops.Forbidden) error
 	// PushRef pushes to a full ref; the ref of an orphan is only ever created.
 	PushRef(ctx context.Context, project, commit, ref string, a gitops.PushAuth, forbidden gitops.Forbidden) error
+	// Snapshot captures the worktree for a checkpoint as Seal does, but it
+	// records no ref and finalizes nothing: the commit is pushed to the ref of the
+	// checkpoint, and the Run is sealed at its exit as ever.
+	Snapshot(ctx context.Context, worktree string, in gitops.SnapshotIntent, forbidden gitops.Forbidden) (gitops.Sealed, error)
 }
 
 // RelayTLS are the PEM files git presents and trusts when it pushes: the

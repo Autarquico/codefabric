@@ -76,11 +76,12 @@ func (g *Git) Push(ctx context.Context, project, commit, branch string, a PushAu
 	return g.PushRef(ctx, project, commit, "refs/heads/"+branch, a, forbidden)
 }
 
-// PushRef is Push to a full ref: a branch of CodeFabric, or the ref of an orphan.
+// PushRef is Push to a full ref: a branch of CodeFabric, the ref of an orphan or
+// the ref of a checkpoint.
 func (g *Git) PushRef(ctx context.Context, project, commit, ref string, a PushAuth, forbidden Forbidden) error {
 	branch, isBranch := strings.CutPrefix(ref, "refs/heads/")
 	switch {
-	case !isProject(project) || !domain.ValidCommitID(commit) || (isBranch && !domain.ValidBranch(branch)) || (!isBranch && !domain.ValidOrphanRef(ref)):
+	case !isProject(project) || !domain.ValidCommitID(commit) || (isBranch && !domain.ValidBranch(branch)) || (!isBranch && !domain.ValidOrphanRef(ref) && !domain.ValidCheckpointRef(ref)):
 		return &PushError{Class: PushLocal, Message: "the project, commit or branch is not valid"}
 	case a.URL == "" || a.Token == "" || a.Cert == "" || a.Key == "" || a.CA == "":
 		return &PushError{Class: PushLocal, Message: "the credentials for the relay are incomplete"}
