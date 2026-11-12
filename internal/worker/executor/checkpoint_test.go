@@ -329,7 +329,7 @@ func unarchived(t *testing.T, archive []byte) string {
 		if _, err := tr.Next(); err != nil {
 			return out.String()
 		}
-		if _, err := io.Copy(&out, tr); err != nil {
+		if _, err := io.Copy(&out, tr); err != nil { //nolint:gosec // an archive the test itself wrote
 			t.Fatal(err)
 		}
 	}

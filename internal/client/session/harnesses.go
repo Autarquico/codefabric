@@ -161,7 +161,7 @@ func claudePIDs(l *Local, dir, id string) ([]int, error) {
 		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(dir, "sessions", e.Name()))
+		raw, err := os.ReadFile(filepath.Join(dir, "sessions", e.Name())) //nolint:gosec // a session file listed under the home of the harness
 		if err != nil {
 			continue
 		}
@@ -239,7 +239,7 @@ func uuid7() string {
 	u := randomUUID()
 	ms := uint64(time.Now().UnixMilli())
 	for i := range 6 {
-		u[i] = byte(ms >> (8 * (5 - i)))
+		u[i] = byte(ms >> (8 * (5 - i))) //nolint:gosec // one byte of the 48-bit timestamp, truncation is the point
 	}
 	u[6], u[8] = u[6]&0x0f|0x70, u[8]&0x3f|0x80
 	return formatUUID(u)

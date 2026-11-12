@@ -331,7 +331,7 @@ func (l *Local) isPrefix(ctx context.Context, a access, path string, req ImportR
 	if err != nil {
 		return false, err
 	}
-	local, err := os.ReadFile(path)
+	local, err := os.ReadFile(path) //nolint:gosec // a transcript found under the home of the harness
 	if err != nil {
 		return false, err
 	}

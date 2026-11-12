@@ -38,7 +38,7 @@ func TranscriptHolds(transcript []byte, text string) (bool, error) {
 		if entry.Payload.Type == "user_message" {
 			_ = json.Unmarshal(entry.Payload.Text, &event)
 		}
-		if entry.Message.sent(want) || entry.Payload.userMessage.sent(want) || event != "" && strings.TrimSpace(event) == want {
+		if entry.Message.sent(want) || entry.Payload.sent(want) || event != "" && strings.TrimSpace(event) == want {
 			return true, nil
 		}
 	}

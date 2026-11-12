@@ -178,7 +178,7 @@ func seededPrompt(c *v1.Continuation, prompt string) string {
 // of the Run and makes the Checkpoint the adapter resumes from. A state that
 // cannot be used here is nil with the reason (the Run goes on without it); an
 // error is a download to try again, with the prepare.
-func (e *Executor) nativeCheckpoint(ctx context.Context, adapter harness.Adapter, native *v1.NativeStateRef, open func() (io.ReadCloser, int64, error)) (*harness.Checkpoint, string, error) {
+func (e *Executor) nativeCheckpoint(_ context.Context, adapter harness.Adapter, native *v1.NativeStateRef, open func() (io.ReadCloser, int64, error)) (*harness.Checkpoint, string, error) {
 	f, ok := adapter.(harness.CheckpointFormatter)
 	switch {
 	case native.Adapter != adapter.ID():

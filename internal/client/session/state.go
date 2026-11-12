@@ -82,7 +82,7 @@ func (s State) Get(id string) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
-	raw, err := os.ReadFile(p)
+	raw, err := os.ReadFile(p) //nolint:gosec // p is built by path() from a checked session id
 	if errors.Is(err, os.ErrNotExist) {
 		return Record{}, nil
 	}

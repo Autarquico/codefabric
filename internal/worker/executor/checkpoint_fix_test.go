@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -69,7 +70,7 @@ func TestCheckpointCapture_ARetryAfterThePushReusesTheCommit(t *testing.T) {
 	seals := 0
 	r.git.snapshot = func(gitops.SnapshotIntent, gitops.Forbidden) (gitops.Sealed, error) {
 		seals++
-		return gitops.Sealed{Commit: strings.Repeat(string(rune('0'+seals)), 40), Excluded: []string{".env"}}, nil
+		return gitops.Sealed{Commit: strings.Repeat(strconv.Itoa(seals%10), 40), Excluded: []string{".env"}}, nil
 	}
 	r.ctrl.putErr = errors.New("connection refused")
 	r.order(k)

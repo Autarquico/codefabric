@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/cgi"
+	"net/http/cgi" //nolint:gosec // a test server of git over HTTP; the advisory is about Go before 1.6.3
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -105,11 +105,11 @@ func (w *seedWorld) session(secret bool) {
 	if secret {
 		lines = append(lines, `{"type":"user","sessionId":"`+seedSessionID+`","cwd":"`+w.work+`","message":{"role":"user","content":"AKIAABCDEFGHIJKLMNOP"}}`)
 	}
-	real, err := filepath.EvalSymlinks(w.work)
+	resolved, err := filepath.EvalSymlinks(w.work)
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	dir := regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(real, "-")
+	dir := regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(resolved, "-")
 	write(w.t, filepath.Join(w.claudeHome, "projects", dir, seedSessionID+".jsonl"), strings.Join(lines, "\n")+"\n")
 }
 
