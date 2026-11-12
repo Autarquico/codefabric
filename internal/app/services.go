@@ -109,7 +109,7 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 	moveService := moves.New(db, clk, ids, checkpointService, taskService, reconciliationService)
 	workersCfg.Force = workers.Force{
 		RequestCapture: checkpointService.RequestBeforeDestroy, AwaitCaptures: checkpointService.AwaitCaptures,
-		Wait: cfg.PreDestructiveWait, CancelLiveIn: runService.CancelLiveIn, MoveTasks: moveService.DrainMove,
+		Wait: cfg.PreDestructiveWait, CancelRunIn: runService.CancelRunIn, MoveTasks: moveService.DrainMove,
 	}
 	return &Services{
 		Projects:       projects.New(db, clk, ids),
