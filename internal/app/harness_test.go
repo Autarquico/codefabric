@@ -78,6 +78,9 @@ func newEnvStore(t *testing.T, configure func(*app.Config, *clock.Fake), opts st
 	if configure != nil {
 		configure(&cfg, clk)
 	}
+	if cfg.Relay == nil {
+		cfg.Relay = e.relay
+	}
 	e.app = app.New(db, clk, ids, cfg, runs.WithRelay(e.relay))
 	e.owner = e.newClient("owner")
 	return e

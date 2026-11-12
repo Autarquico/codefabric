@@ -10,7 +10,7 @@ var (
 	terminalRunStates = []RunState{RunSuspended, RunCompleted, RunFailed, RunCancelled, RunLost}
 	allRunEvents      = []RunEvent{
 		RunEventLeaseAccepted, RunEventHarnessStarted, RunEventInputRequested, RunEventInputProvided,
-		RunEventCheckpointRequested, RunEventCheckpointCaptured, RunEventCheckpointFailedHarnessAlive,
+		RunEventCheckpointRequested, RunEventCheckpointCaptured, RunEventCheckpointKept, RunEventCheckpointFailedHarnessAlive,
 		RunEventCheckpointFailedHarnessStopped, RunEventExitZero, RunEventExitNonZero,
 		RunEventPrepareFailed, RunEventCancel, RunEventLostTimeout,
 	}
@@ -92,6 +92,7 @@ func TestRunTransitions_EveryArrowOfTheDiagram(t *testing.T) {
 func TestRunTransitions_NothingOutsideTheDiagramIsValid(t *testing.T) {
 	allowed := map[[2]string]bool{
 		{string(RunCheckpointing), string(RunEventCheckpointFailedHarnessAlive)}: true,
+		{string(RunCheckpointing), string(RunEventCheckpointKept)}:               true,
 	}
 	for _, a := range runArrows() {
 		allowed[[2]string{string(a.from), string(a.event)}] = true
@@ -105,6 +106,19 @@ func TestRunTransitions_NothingOutsideTheDiagramIsValid(t *testing.T) {
 				_, err := NextRunState(statusIn(state), ev)
 				requireCode(t, err, CodeInvalidTransition)
 			})
+		}
+	}
+}
+
+func TestRunTransitions_AKeptCheckpointReturnsToOrigin(t *testing.T) {
+	for _, origin := range []RunState{RunRunning, RunWaitingInput} {
+		entered, err := NextRunState(RunStatus{State: origin}, RunEventCheckpointRequested)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := NextRunState(entered, RunEventCheckpointKept)
+		if err != nil || back != (RunStatus{State: origin}) {
+			t.Fatalf("%s: NextRunState = %+v, %v", origin, back, err)
 		}
 	}
 }

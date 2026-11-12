@@ -18,7 +18,7 @@ func newDoCmd() *cobra.Command {
 
 func newRunCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "run", Short: "Inspect and explain Runs"}
-	cmd.AddCommand(newRunListCmd(), newRunShowCmd(), newRunExplainCmd(), newRunPublishCmd(),
+	cmd.AddCommand(newRunListCmd(), newRunShowCmd(), newRunExplainCmd(), newRunPublishCmd(), newRunCheckpointCmd(),
 		newFutureRunCmd("fork", "Start a new Run from an existing one", (*client.Client).ForkRun),
 		newFutureRunCmd("promote", "Promote the result of a Run", (*client.Client).PromoteRun))
 	return cmd

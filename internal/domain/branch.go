@@ -112,3 +112,21 @@ func ValidOrphanRef(ref string) bool {
 	kind, _, err := ParseID(run)
 	return err == nil && kind == KindRun
 }
+
+// checkpointRefPrefix is where the relay keeps the source of each checkpoint.
+const checkpointRefPrefix = "refs/cf/checkpoints/"
+
+// CheckpointRef is the ref of the relay that keeps the source of a checkpoint
+// (§22.4): refs/cf/checkpoints/<checkpoint-id>. It is only ever created.
+func CheckpointRef(id ID) string { return checkpointRefPrefix + string(id) }
+
+// ValidCheckpointRef reports whether ref is the ref of a checkpoint: a
+// checkpoint ID, in the one form CheckpointRef writes, and nothing after it.
+func ValidCheckpointRef(ref string) bool {
+	rest, ok := strings.CutPrefix(ref, checkpointRefPrefix)
+	if !ok {
+		return false
+	}
+	kind, _, err := ParseID(rest)
+	return err == nil && kind == KindCheckpoint
+}

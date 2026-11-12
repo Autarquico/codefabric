@@ -73,6 +73,13 @@ func ControllerEnded(run store.Run) bool {
 	return false
 }
 
+// CaptureEnded says whether a checkpoint capture ended the Run: it was
+// suspended, or failed with the harness stopped. The capture stops the harness,
+// so its exit comes after the end and is noted as a late one, never a transition.
+func CaptureEnded(run store.Run) bool {
+	return run.State == domain.RunSuspended || (run.State == domain.RunFailed && run.EndReason == domain.EndCheckpoint)
+}
+
 // StopReasonOf is why a Run the Controller ended is stopped; it is only for a
 // Run of which ControllerEnded is true.
 func StopReasonOf(run store.Run) domain.StopReason {
@@ -128,6 +135,10 @@ func EndByControllerIn(ctx context.Context, tx *store.Tx, act mutation.Act, run 
 		return fmt.Errorf("runs: the lease %s of run %s is %s, not accepted", l.ID, run.ID, l.State)
 	}
 	if err := MarkExecutedIn(ctx, tx, run); err != nil {
+		return err
+	}
+	// Whatever was being captured is aborted; what was published stays (§11.7).
+	if err := tx.AbortCapture(ctx, run.ID, act.Now); err != nil {
 		return err
 	}
 	_, err = OrderStopIn(ctx, tx, act, *run, task, l, reason)

@@ -36,6 +36,7 @@ const (
 	EventLeaseRejected           EventType = "LeaseRejected"
 	EventRunConfigResolved       EventType = "RunConfigResolved"
 	EventRunStarted              EventType = "RunStarted"
+	EventRunCheckpointRequested  EventType = "RunCheckpointRequested"
 	EventRunCheckpointed         EventType = "RunCheckpointed"
 	EventRunCheckpointFailed     EventType = "RunCheckpointFailed"
 	EventRunWaitingInput         EventType = "RunWaitingInput"

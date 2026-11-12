@@ -32,6 +32,11 @@ const EnvironmentHostCapability = "environment-host:v1"
 // announces it: one that does not would fetch with whatever credentials it has.
 const OriginAskpassCapability = "origin-askpass:v1"
 
+// CheckpointCapability is that of a Worker that captures a checkpoint when the
+// Controller orders it (§23). The order is only sent to a Worker that
+// announces it: one that does not know it would block its queue.
+const CheckpointCapability = "checkpoint:v1"
+
 // StructuredInputCapability is that of a Worker whose harness can be answered
 // while it runs: it reports input_requested and input_delivered and executes
 // the `input` order. The Worker announces it per harness

@@ -11,6 +11,7 @@ const (
 	RunEventInputProvided                  RunEvent = "input_provided"
 	RunEventCheckpointRequested            RunEvent = "checkpoint_requested"
 	RunEventCheckpointCaptured             RunEvent = "checkpoint_captured"
+	RunEventCheckpointKept                 RunEvent = "checkpoint_kept"
 	RunEventCheckpointFailedHarnessAlive   RunEvent = "checkpoint_failed_harness_alive"
 	RunEventCheckpointFailedHarnessStopped RunEvent = "checkpoint_failed_harness_stopped"
 	RunEventExitZero                       RunEvent = "exit_zero"
@@ -30,7 +31,7 @@ type RunStatus struct {
 
 // runTransitions is §11.7 for the non-terminal states, whose keys are exactly
 // those states. Cancel and LostTimeout (open to all of them) and
-// CheckpointFailedHarnessAlive (its target is the status's own
+// CheckpointKept and CheckpointFailedHarnessAlive (their target is the status's own
 // CheckpointOrigin) are absent: runTargetState handles them.
 var runTransitions = map[RunState]map[RunEvent]RunState{
 	RunQueued: {
@@ -77,7 +78,7 @@ func NextRunState(cur RunStatus, ev RunEvent) (RunStatus, error) {
 }
 
 func runTargetState(cur RunStatus, ev RunEvent) (RunState, bool) {
-	if cur.State == RunCheckpointing && ev == RunEventCheckpointFailedHarnessAlive {
+	if cur.State == RunCheckpointing && (ev == RunEventCheckpointFailedHarnessAlive || ev == RunEventCheckpointKept) {
 		return cur.CheckpointOrigin, true
 	}
 	if _, nonTerminal := runTransitions[cur.State]; nonTerminal {
