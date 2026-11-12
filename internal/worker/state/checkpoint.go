@@ -24,9 +24,11 @@ type Capture struct {
 	Trigger      string
 	Ref          string
 	Exclude      []string
-	CreatedAt    time.Time
-	DoneAt       *time.Time
-	Outcome      string
+	// NativeState says the Project opted in to capturing the harness's own state.
+	NativeState bool
+	CreatedAt   time.Time
+	DoneAt      *time.Time
+	Outcome     string
 }
 
 // BeginCapture stores the capture of an order and takes the Run, which is in
@@ -40,9 +42,9 @@ func BeginCapture(ctx context.Context, tx *Tx, c Capture, from Phase) (created b
 		return false, fmt.Errorf("state: encoding the exclusions of a capture: %w", err)
 	}
 	res, err := tx.exec(ctx,
-		`INSERT INTO checkpoint_captures (run_id, lease_epoch, checkpoint_id, trigger, ref, exclude, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-		c.RunID, c.LeaseEpoch, c.CheckpointID, c.Trigger, c.Ref, string(exclude), c.CreatedAt.UnixNano())
+		`INSERT INTO checkpoint_captures (run_id, lease_epoch, checkpoint_id, trigger, ref, exclude, native_state, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+		c.RunID, c.LeaseEpoch, c.CheckpointID, c.Trigger, c.Ref, string(exclude), c.NativeState, c.CreatedAt.UnixNano())
 	if err != nil {
 		return false, fmt.Errorf("state: storing a capture: %w", err)
 	}
@@ -63,8 +65,8 @@ func CaptureOf(ctx context.Context, q Querier, k Key) (Capture, error) {
 		outcome sql.NullString
 	)
 	err := q.QueryRowContext(ctx,
-		`SELECT checkpoint_id, trigger, ref, exclude, created_at, done_at, outcome FROM checkpoint_captures WHERE run_id = ? AND lease_epoch = ?`,
-		k.RunID, k.LeaseEpoch).Scan(&c.CheckpointID, &c.Trigger, &c.Ref, &exclude, &created, &done, &outcome)
+		`SELECT checkpoint_id, trigger, ref, exclude, native_state, created_at, done_at, outcome FROM checkpoint_captures WHERE run_id = ? AND lease_epoch = ?`,
+		k.RunID, k.LeaseEpoch).Scan(&c.CheckpointID, &c.Trigger, &c.Ref, &exclude, &c.NativeState, &created, &done, &outcome)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Capture{}, ErrNotFound

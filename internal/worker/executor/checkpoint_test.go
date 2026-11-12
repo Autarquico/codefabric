@@ -127,6 +127,8 @@ type cpRig struct {
 	located []harness.SessionRef
 	// transcript is the file of the native session of the Runs.
 	transcript string
+	// withoutNativeState orders the capture of a Project that did not opt in.
+	withoutNativeState bool
 }
 
 func newCpRig(t *testing.T, mutate ...func(*Options)) *cpRig {
@@ -177,6 +179,7 @@ func (r *cpRig) order(k state.Key, exclude ...string) {
 	cmd := v1.WorkerCommand{Seq: r.nextID, Type: domain.CommandCheckpoint, Checkpoint: &v1.CheckpointCommand{
 		RunID: k.RunID, LeaseID: r.run(k).LeaseID, Epoch: k.LeaseEpoch, CheckpointID: testCheckpoint, Trigger: domain.CheckpointDefer,
 		Ref: domain.CheckpointRef(testCheckpoint), RunShort: "run-1", TaskID: "task_1", ProjectID: "project_1", Exclude: exclude,
+		NativeState: !r.withoutNativeState,
 	}}
 	if blocked, err := r.e.persist(r.t.Context(), []v1.WorkerCommand{cmd}); err != nil || blocked {
 		r.t.Fatalf("persist: blocked=%v err=%v", blocked, err)
@@ -304,6 +307,26 @@ func TestScenario_CheckpointCapture_SecretInSession_Worker(t *testing.T) {
 	logs := r.logs.String()
 	if !strings.Contains(logs, "session.jsonl lines 2") || strings.Contains(logs, ghValue) {
 		t.Errorf("the warning names the lines and never the value:\n%s", logs)
+	}
+	warnings := r.ctrl.completes[0].Warnings
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0], "Secret in the session") ||
+		!strings.Contains(warnings[0], "session.jsonl lines 2") || strings.Contains(warnings[0], ghValue) {
+		t.Errorf("the report warns of the lines, never of the value: %q", warnings)
+	}
+}
+
+func TestScenario_CheckpointCapture_NativeStateOff_Worker(t *testing.T) {
+	r := newCpRig(t)
+	r.withoutNativeState = true
+	k, w := r.running(fakeSpec("do it", ""), "trap 'exit 0' TERM")
+	r.order(k)
+	r.settled(k, w)
+
+	if len(r.located) != 0 || len(r.ctrl.blobs) != 0 {
+		t.Errorf("a Project without native_state had its session read (%d) or uploaded (%d)", len(r.located), len(r.ctrl.blobs))
+	}
+	if len(r.ctrl.completes) != 1 || r.ctrl.completes[0].NativeState != nil || len(r.ctrl.completes[0].Warnings) != 0 {
+		t.Errorf("completes = %+v: the checkpoint is source and summary, with nothing to warn of", r.ctrl.completes)
 	}
 }
 

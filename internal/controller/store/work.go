@@ -26,6 +26,7 @@ type Project struct {
 	Defaults           v1.ProjectDefaults
 	RepoConfig         domain.RepoConfig
 	OriginSecret       string // ref of the secret that authenticates the origin fetch; "" for none
+	NativeState        bool   // whether checkpoints capture the harness's own state
 	CreatedAt          time.Time
 }
 
@@ -163,7 +164,7 @@ func jsonOrNil[T any](v *T) (any, error) {
 // --- Projects ---
 
 const projectColumns = `id, short_n, name, repo, default_branch,
-    COALESCE(default_workflow, ''), COALESCE(default_environment, ''), defaults, repo_config, COALESCE(origin_secret, ''), created_at`
+    COALESCE(default_workflow, ''), COALESCE(default_environment, ''), defaults, repo_config, COALESCE(origin_secret, ''), native_state, created_at`
 
 func scanProject(row rowScanner) (Project, error) {
 	var (
@@ -173,7 +174,7 @@ func scanProject(row rowScanner) (Project, error) {
 		created  int64
 	)
 	if err := row.Scan(&id, &p.Short, &p.Name, &p.Repo, &p.DefaultBranch,
-		&p.DefaultWorkflow, &p.DefaultEnvironment, &defaults, &p.RepoConfig, &p.OriginSecret, &created); err != nil {
+		&p.DefaultWorkflow, &p.DefaultEnvironment, &defaults, &p.RepoConfig, &p.OriginSecret, &p.NativeState, &created); err != nil {
 		return Project{}, scanErr(err, "project")
 	}
 	if err := json.Unmarshal([]byte(defaults), &p.Defaults); err != nil {
@@ -190,10 +191,10 @@ func (t *Tx) InsertProject(ctx context.Context, p Project) error {
 		return err
 	}
 	_, err = t.Exec(ctx,
-		`INSERT INTO projects (id, short_n, name, repo, default_branch, default_workflow, default_environment, defaults, repo_config, origin_secret, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO projects (id, short_n, name, repo, default_branch, default_workflow, default_environment, defaults, repo_config, origin_secret, native_state, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(p.ID), p.Short, p.Name, p.Repo, p.DefaultBranch,
-		nullable(p.DefaultWorkflow), nullable(p.DefaultEnvironment), string(defaults), repoConfigOf(p), nullable(p.OriginSecret), p.CreatedAt.UnixNano())
+		nullable(p.DefaultWorkflow), nullable(p.DefaultEnvironment), string(defaults), repoConfigOf(p), nullable(p.OriginSecret), p.NativeState, p.CreatedAt.UnixNano())
 	if err != nil {
 		return fmt.Errorf("store: inserting project: %w", err)
 	}
@@ -210,15 +211,15 @@ func repoConfigOf(p Project) string {
 }
 
 // UpdateProject replaces what a Project lets change: branch, workflow,
-// environment, defaults, repo config, origin secret and the repo aliases.
+// environment, defaults, repo config, origin secret, native state and the repo aliases.
 func (t *Tx) UpdateProject(ctx context.Context, p Project) error {
 	defaults, err := json.Marshal(p.Defaults)
 	if err != nil {
 		return err
 	}
 	_, err = t.Exec(ctx,
-		`UPDATE projects SET default_branch = ?, default_workflow = ?, default_environment = ?, defaults = ?, repo_config = ?, origin_secret = ? WHERE id = ?`,
-		p.DefaultBranch, nullable(p.DefaultWorkflow), nullable(p.DefaultEnvironment), string(defaults), repoConfigOf(p), nullable(p.OriginSecret), string(p.ID))
+		`UPDATE projects SET default_branch = ?, default_workflow = ?, default_environment = ?, defaults = ?, repo_config = ?, origin_secret = ?, native_state = ? WHERE id = ?`,
+		p.DefaultBranch, nullable(p.DefaultWorkflow), nullable(p.DefaultEnvironment), string(defaults), repoConfigOf(p), nullable(p.OriginSecret), p.NativeState, string(p.ID))
 	if err != nil {
 		return fmt.Errorf("store: updating project: %w", err)
 	}

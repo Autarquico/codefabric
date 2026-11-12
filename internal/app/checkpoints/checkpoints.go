@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
+	"unicode"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
@@ -156,6 +158,10 @@ func (s *Service) Request(ctx context.Context, by pki.Session, runID domain.ID, 
 			if err != nil {
 				return Requested{}, err
 			}
+			project, err := store.ProjectByID(ctx, tx, task.ProjectID)
+			if err != nil {
+				return Requested{}, err
+			}
 			if err := tx.BeginCheckpointing(ctx, run); err != nil {
 				return Requested{}, raced(err)
 			}
@@ -169,6 +175,7 @@ func (s *Service) Request(ctx context.Context, by pki.Session, runID domain.ID, 
 			payload, err := json.Marshal(Order{
 				RunID: string(run.ID), LeaseID: string(l.ID), Epoch: l.Epoch, CheckpointID: string(id), Trigger: trigger, Ref: ref,
 				RunShort: shortID(run), TaskID: string(task.ID), ProjectID: string(task.ProjectID), Exclude: s.exclude,
+				NativeState: project.NativeState,
 			})
 			if err != nil {
 				return Requested{}, fmt.Errorf("checkpoints: encoding the order: %w", err)
@@ -199,6 +206,9 @@ type Completion struct {
 	Commit       string
 	NativeState  *domain.NativeState
 	Excluded     []string
+	// Warnings are what the Worker tells the user of the capture; the service
+	// bounds and cleans them before they are stored.
+	Warnings []string
 }
 
 // Completed is what the Run is after a capture is reported.
@@ -250,6 +260,9 @@ func (s *Service) Complete(ctx context.Context, by pki.Session, runID domain.ID,
 		}
 		if err := tx.PublishCheckpoint(ctx, run.ID, cp.ID, c.NativeState, c.Excluded, summary, act.Now); err != nil {
 			return Completed{}, raced(err)
+		}
+		if err := tx.SetCheckpointWarnings(ctx, cp.ID, cleanWarnings(c.Warnings)); err != nil {
+			return Completed{}, err
 		}
 		if err := tx.LeaveCheckpointing(ctx, run, next.State, suspendReason[cp.Trigger], act.Now); err != nil {
 			return Completed{}, raced(err)
@@ -390,6 +403,36 @@ func (s *Service) capture(ctx context.Context, q store.Querier, by pki.Session, 
 		return store.Run{}, store.Task{}, store.Checkpoint{}, domain.NewError(domain.CodeNotFound, "checkpoint not found", nil)
 	}
 	return run, task, cp, nil
+}
+
+const (
+	maxWarnings      = 16
+	maxWarningLength = 512
+)
+
+// cleanWarnings keeps what a Worker says of a capture within what a person
+// reads: a few lines of printable text, without control characters.
+func cleanWarnings(in []string) []string {
+	var out []string
+	for _, w := range in {
+		w = strings.TrimSpace(strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, w))
+		if w == "" {
+			continue
+		}
+		if r := []rune(w); len(r) > maxWarningLength {
+			w = string(r[:maxWarningLength])
+		}
+		out = append(out, w)
+		if len(out) == maxWarnings {
+			break
+		}
+	}
+	return out
 }
 
 func runEvent(act mutation.Act, t domain.EventType, message string, run store.Run, task store.Task) domain.Event {

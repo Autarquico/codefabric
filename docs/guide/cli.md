@@ -149,8 +149,8 @@ Inspect and explain Runs. Subcommands: `list`, `show` (a Run and the configurati
 `cf run checkpoint` captures and lists checkpoints (the Run's source pushed to a ref of the relay, plus the harness's own state when the harness supports it):
 
 - `create <run>`: ask the Worker of a live Run for a manual checkpoint. The Run is `checkpointing` while it captures. `--request-id` makes repeating the command ask once. It fails with `CF_CHECKPOINT_UNSUPPORTED` if the Worker cannot capture.
-- `list <run>` or `list --task <task> [--project <p>]`: the published checkpoints, oldest first, with their trigger, whether they carry native state, and the paths the capture left out (listed under the table). `--json` prints the same, with the `summary` of each checkpoint.
-- `show <run> <checkpoint>`: the summary of one checkpoint, by ID or number. The Controller composes it when the checkpoint is published, without a model: commits since the Run's base with their files, the Task prompt, what the capture left out and whether there is native state, and the latest events. Each part is bounded and says what it cut. It is what a Run that resumes without native state starts from.
+- `list <run>` or `list --task <task> [--project <p>]`: the published checkpoints, oldest first, with their trigger, whether they carry native state, the paths the capture left out and the warnings of the capture, such as a secret found in the session (both listed under the table). `--json` prints the same, with the `summary` of each checkpoint.
+- `show <run> <checkpoint>`: the summary of one checkpoint, by ID or number. The Controller composes it when the checkpoint is published, without a model: commits since the Run's base with their files, the Task prompt, what the capture left out and whether there is native state, and the latest events. Warnings of the capture are printed after the summary. Each part is bounded and says what it cut. It is what a Run that resumes without native state starts from.
 
 ## `cf search`
 
@@ -202,3 +202,7 @@ Run and administer Workers.
 ## `cf workflow`
 
 Adopt, version and inspect Workflows. Subcommands: `adopt` (create one from this machine's native configuration), `commit` (a new version), `list`, `show`, `history`, `diff` and `explain` (dry runs), `apply` (to a Worker), `sync` (to every online Worker), `status` (what each Worker holds, and drift) and `rollback`.
+
+### Native state of checkpoints
+
+A checkpoint carries the harness's own state (its session) only in a Project that opted in: `cf project set <project> --native-state on|off` (off by default; `cf project show` prints it). With it off, checkpoints are source and summary. With it on, a session that holds the value of a secret of the Run is left out and the checkpoint says so with a warning. The Worker's grace for quiescing a harness is `checkpoint.grace` in its `config.json`; the Controller keeps the last `gc.checkpoint_interval_keep` (5) automatic checkpoints of a Run and drops reservations never published after `gc.checkpoint_reservation_ttl` (7d).

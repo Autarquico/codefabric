@@ -73,6 +73,17 @@ func (t *Tx) PublishCheckpoint(ctx context.Context, run, id domain.ID, native *d
 	return changedOne(res, err, "publishing a checkpoint")
 }
 
+// SetCheckpointWarnings stores what the Worker said of a capture, on the
+// checkpoint just published.
+func (t *Tx) SetCheckpointWarnings(ctx context.Context, id domain.ID, warnings []string) error {
+	raw, err := json.Marshal(nonNil(warnings))
+	if err != nil {
+		return fmt.Errorf("store: encoding warnings: %w", err)
+	}
+	res, err := t.Exec(ctx, `UPDATE checkpoints SET warnings = ? WHERE id = ?`, string(raw), string(id))
+	return changedOne(res, err, "recording checkpoint warnings")
+}
+
 // CheckpointPublishedAt is when the checkpoint was published, nil while it is a
 // reservation. ErrNotFound if there is no such checkpoint.
 func CheckpointPublishedAt(ctx context.Context, q Querier, id domain.ID) (*time.Time, error) {

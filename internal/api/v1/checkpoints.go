@@ -21,6 +21,9 @@ type CheckpointCommand struct {
 	TaskID    string   `json:"task_id"`
 	ProjectID string   `json:"project_id"`
 	Exclude   []string `json:"exclude,omitempty"`
+	// NativeState says whether the Project opted in to capturing the harness's
+	// own state; off, the Worker leaves it out and the capture is source only.
+	NativeState bool `json:"native_state,omitempty"`
 }
 
 // CheckpointTokenRequest is POST /v1/worker/runs/{run}/checkpoint-token: a token
@@ -46,6 +49,9 @@ type CheckpointCompleteRequest struct {
 	Commit      string          `json:"commit"`
 	NativeState *NativeStateRef `json:"native_state,omitempty"`
 	Excluded    []string        `json:"excluded,omitempty"`
+	// Warnings are what the Worker tells the user of the capture, such as a
+	// secret found in the session, which left the native state out.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // CheckpointFailRequest is POST /v1/worker/runs/{run}/checkpoints/{id}/fail.
@@ -79,7 +85,8 @@ type CheckpointRequested struct {
 
 // Checkpoint is a published checkpoint of a Run (§23.1). NativeState is nil
 // when the harness's own state was not captured: the checkpoint then has the
-// source and the summary only. Excluded are the paths the capture left out.
+// source and the summary only. Excluded are the paths the capture left out and
+// Warnings what the Worker said of the capture.
 type Checkpoint struct {
 	ID          string                   `json:"id"`
 	RunID       string                   `json:"run_id"`
@@ -88,6 +95,7 @@ type Checkpoint struct {
 	Ref         string                   `json:"ref"`
 	NativeState *NativeStateRef          `json:"native_state,omitempty"`
 	Excluded    []string                 `json:"excluded"`
+	Warnings    []string                 `json:"warnings"`
 	Summary     CheckpointSummary        `json:"summary"`
 	CreatedAt   time.Time                `json:"created_at"`
 }
