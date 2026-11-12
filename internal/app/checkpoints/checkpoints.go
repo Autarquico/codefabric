@@ -97,7 +97,16 @@ var triggers = []domain.CheckpointTrigger{
 // suspends says whether a capture for the trigger leaves the Run suspended, to
 // continue elsewhere (§11.7: defer, move, drain), or lets it go on.
 func suspends(t domain.CheckpointTrigger) bool {
-	return t == domain.CheckpointDefer || t == domain.CheckpointMove || t == domain.CheckpointDrain
+	_, ok := suspendReason[t]
+	return ok
+}
+
+// suspendReason is the end_reason of the Run a capture suspends (§11.4); a
+// trigger that keeps the Run going has none.
+var suspendReason = map[domain.CheckpointTrigger]domain.EndReason{
+	domain.CheckpointDefer: domain.EndDeferred,
+	domain.CheckpointMove:  domain.EndMoved,
+	domain.CheckpointDrain: domain.EndDrained,
 }
 
 // Request puts a running or waiting Run in checkpointing, reserves the
@@ -242,7 +251,7 @@ func (s *Service) Complete(ctx context.Context, by pki.Session, runID domain.ID,
 		if err := tx.PublishCheckpoint(ctx, run.ID, cp.ID, c.NativeState, c.Excluded, summary, act.Now); err != nil {
 			return Completed{}, raced(err)
 		}
-		if err := tx.LeaveCheckpointing(ctx, run, next.State, "", act.Now); err != nil {
+		if err := tx.LeaveCheckpointing(ctx, run, next.State, suspendReason[cp.Trigger], act.Now); err != nil {
 			return Completed{}, raced(err)
 		}
 		from := run.State

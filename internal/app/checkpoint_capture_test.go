@@ -250,6 +250,26 @@ func TestCheckpointFailure_WithTheHarnessStoppedFailsTheRun(t *testing.T) {
 	}
 }
 
+func TestCheckpointCapture_ASuspendingCaptureSaysWhy(t *testing.T) {
+	for trigger, reason := range map[domain.CheckpointTrigger]domain.EndReason{
+		domain.CheckpointDefer: domain.EndDeferred,
+		domain.CheckpointMove:  domain.EndMoved,
+		domain.CheckpointDrain: domain.EndDrained,
+	} {
+		t.Run(string(trigger), func(t *testing.T) {
+			e := newCheckpointEnv(t)
+			r := e.startedRun()
+			got := r.mustRequestCheckpoint(trigger, string(trigger))
+			if _, err := r.completeCheckpoint(got.CheckpointID); err != nil {
+				t.Fatal(err)
+			}
+			if run := e.storedRun(r.run.ID); run.State != domain.RunSuspended || run.EndReason != reason {
+				t.Fatalf("run = %s/%q, want suspended/%q", run.State, run.EndReason, reason)
+			}
+		})
+	}
+}
+
 // The capture stops the harness: its exit, reported after the capture ended the
 // Run, is noted and the batch goes on to the entries that release the lease.
 func TestCheckpointCapture_TheExitItCausedIsReportedAfterTheEnd(t *testing.T) {
