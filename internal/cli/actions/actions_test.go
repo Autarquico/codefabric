@@ -29,6 +29,9 @@ var notActions = map[string]string{
 	"cf task list": "read", "cf task show": "read", "cf version": "read", "cf worker list": "read", "cf worker show": "read",
 	"cf workflow diff": "read", "cf workflow explain": "read", "cf workflow history": "read", "cf workflow list": "read",
 	"cf workflow show": "read", "cf workflow status": "read",
+	"cf run checkpoint list":   "read",
+	"cf run checkpoint show":   "read",
+	"cf run checkpoint create": "manual capture; the TUI offers no checkpoint action until defer and move exist",
 	// This machine's identity and setup, not something the TUI does to the cluster.
 	"cf connect": "enrols this machine", "cf client remove": "revokes a client identity", "cf client renew": "renews this machine's credentials",
 	"cf worker set-controller": "changes the address in this machine's Worker credentials",

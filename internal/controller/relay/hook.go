@@ -43,13 +43,13 @@ func PreReceive(stdin io.Reader, getenv func(string) string, git Git) error {
 		return deny("this request is not authorised to push")
 	}
 	// A branch of a Run moves by fast-forwards; any other ref it may write (the
-	// ref of an orphan) is only ever created.
+	// ref of an orphan, of a checkpoint) is only ever created.
 	branch, isBranch := strings.CutPrefix(allowed, "refs/heads/")
 	createOnly := !isBranch
 	switch {
 	case !domain.ValidCommitID(expected),
 		isBranch && !domain.ValidBranch(branch),
-		!isBranch && !domain.ValidOrphanRef(allowed):
+		!isBranch && !domain.ValidOrphanRef(allowed) && !domain.ValidCheckpointRef(allowed):
 		return deny("this request is not authorised to push")
 	}
 	var updates [][3]string

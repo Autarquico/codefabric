@@ -4,7 +4,7 @@ import "slices"
 
 // WorkerCommandType is a kind of order in the Controller→Worker queue. Only
 // the types that something already produces and consumes exist; the rest of
-// §6 (apply, diff, input, checkpoint, promote, doctor) join with it.
+// §6 (apply, diff, promote, doctor) join with it.
 type WorkerCommandType string
 
 // Worker command types.
@@ -22,6 +22,11 @@ const (
 	// StructuredInputCapability for the harness of the Run: an order a Worker
 	// does not know blocks its queue.
 	CommandInput WorkerCommandType = "input"
+	// CommandCheckpoint orders the Worker to capture a checkpoint of a Run under
+	// one lease epoch (§23.2): it quiesces the harness, pushes the worktree to the
+	// reserved ref and reports. It is durable until acknowledged, and withdrawn if
+	// the capture is aborted (a cancel, an exit).
+	CommandCheckpoint WorkerCommandType = "checkpoint"
 )
 
 // StopReason says why the Controller ordered a stop. There is one stop per

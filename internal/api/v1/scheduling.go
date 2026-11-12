@@ -108,6 +108,8 @@ type WorkerCommand struct {
 	Publish   *PublishCommand          `json:"publish,omitempty"`
 	Stop      *StopCommand             `json:"stop,omitempty"`
 	Input     *InputCommand            `json:"input,omitempty"`
+	// Checkpoint is only sent to a Worker that announces domain.CheckpointCapability.
+	Checkpoint *CheckpointCommand `json:"checkpoint,omitempty"`
 }
 
 // AssignmentsResponse is GET /v1/worker/assignments: the orders the Worker has

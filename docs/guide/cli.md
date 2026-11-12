@@ -146,6 +146,12 @@ List the Runs that are live, with their Workers and whether they can be attached
 
 Inspect and explain Runs. Subcommands: `list`, `show` (a Run and the configuration it froze), `explain` (why a Run waits, Worker by Worker) and `publish` (try again to publish the result of a Run whose publication failed). `fork` and `promote` exist but are not implemented yet.
 
+`cf run checkpoint` captures and lists checkpoints (the Run's source pushed to a ref of the relay, plus the harness's own state when the harness supports it):
+
+- `create <run>`: ask the Worker of a live Run for a manual checkpoint. The Run is `checkpointing` while it captures. `--request-id` makes repeating the command ask once. It fails with `CF_CHECKPOINT_UNSUPPORTED` if the Worker cannot capture.
+- `list <run>` or `list --task <task> [--project <p>]`: the published checkpoints, oldest first, with their trigger, whether they carry native state, and the paths the capture left out (listed under the table). `--json` prints the same, with the `summary` of each checkpoint.
+- `show <run> <checkpoint>`: the summary of one checkpoint, by ID or number. The Controller composes it when the checkpoint is published, without a model: commits since the Run's base with their files, the Task prompt, what the capture left out and whether there is native state, and the latest events. Each part is bounded and says what it cut. It is what a Run that resumes without native state starts from.
+
 ## `cf search`
 
 `cf search <query>` resolves the query as a reference first (short ID, ULID prefix, name), listing every candidate when it is ambiguous, then lists the entities whose text matches. `--kind` restricts it to `project`, `task`, `run`, `worker` or `workflow`; `--project` and `--limit` narrow it.

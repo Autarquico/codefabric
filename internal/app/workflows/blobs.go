@@ -74,7 +74,14 @@ func (s *Service) OpenBlob(ctx context.Context, by pki.Session, digest string) (
 	}
 	var meta store.Blob
 	err = s.db.Read(ctx, func(q store.Querier) (err error) {
-		meta, err = store.BlobMeta(ctx, q, digest)
+		if meta, err = store.BlobMeta(ctx, q, digest); err != nil {
+			return err
+		}
+		// A transcript is read only by the checkpoint routes that authorize it.
+		native, err := store.IsNativeStateDigest(ctx, q, digest)
+		if native {
+			return store.ErrNotFound
+		}
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {

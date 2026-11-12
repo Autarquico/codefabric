@@ -116,3 +116,44 @@ func TestPreReceiveOnlyCreatesTheRefOfAnOrphan(t *testing.T) {
 		})
 	}
 }
+
+func TestPreReceiveOnlyCreatesTheRefOfACheckpoint(t *testing.T) {
+	cp := domain.CheckpointRef("cp_01J00000000000000000000000")
+	other := domain.CheckpointRef("cp_01J00000000000000000000001")
+	granted := map[string]string{envAllowedRef: cp, envExpectedOID: oidB}
+	git := fakeGit{types: map[string]string{oidB: "commit", oidA: "commit"}, ff: true}
+	bad := func(ref string) map[string]string { return map[string]string{envAllowedRef: ref, envExpectedOID: oidB} }
+	for name, tc := range map[string]struct {
+		env   map[string]string
+		input string
+		deny  string
+	}{
+		"creating it":                {granted, zero + " " + oidB + " " + cp + "\n", ""},
+		"moving it":                  {granted, oidA + " " + oidB + " " + cp + "\n", "never moved"},
+		"deleting it":                {granted, oidB + " " + zero + " " + cp + "\n", "deleting"},
+		"another checkpoint":         {granted, zero + " " + oidB + " " + other + "\n", "may only update"},
+		"another commit":             {granted, zero + " " + oidA + " " + cp + "\n", "only the commit"},
+		"two refs at once":           {granted, zero + " " + oidB + " " + cp + "\n" + zero + " " + oidB + " " + other + "\n", "exactly one ref"},
+		"a branch with it granted":   {granted, zero + " " + oidB + " refs/heads/cf/t/r\n", "may only update"},
+		"no grant":                   {map[string]string{}, zero + " " + oidB + " " + cp + "\n", "not authorised"},
+		"a path out of the prefix":   {bad("refs/cf/checkpoints/../x"), zero + " " + oidB + " refs/cf/checkpoints/../x\n", "not authorised"},
+		"an empty id":                {bad("refs/cf/checkpoints/"), zero + " " + oidB + " refs/cf/checkpoints/\n", "not authorised"},
+		"a malformed id":             {bad("refs/cf/checkpoints/cp_x"), zero + " " + oidB + " refs/cf/checkpoints/cp_x\n", "not authorised"},
+		"an id of another kind":      {bad("refs/cf/checkpoints/run_01J00000000000000000000000"), zero + " " + oidB + " refs/cf/checkpoints/run_01J00000000000000000000000\n", "not authorised"},
+		"a ref of the prefix itself": {bad("refs/cf/checkpoints"), zero + " " + oidB + " refs/cf/checkpoints\n", "not authorised"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := PreReceive(strings.NewReader(tc.input), envOf(tc.env), git)
+			if tc.deny == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			var coded *domain.Error
+			if !errors.As(err, &coded) || !strings.Contains(coded.Message, tc.deny) {
+				t.Fatalf("got %v, want a denial mentioning %q", err, tc.deny)
+			}
+		})
+	}
+}

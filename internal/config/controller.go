@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -35,9 +36,31 @@ type Controller struct {
 	Retention Retention `json:"retention,omitzero"`
 	// GC tunes the garbage collector of the Controller.
 	GC GC `json:"gc,omitzero"`
+	// Checkpoint tunes what a checkpoint captures.
+	Checkpoint Checkpoint `json:"checkpoint,omitzero"`
 	// MaxStorage is max_storage of §20.5 in bytes. It only measures: the GC
 	// warns when the Controller's storage passes it and deletes nothing for it.
 	MaxStorage int64 `json:"max_storage,omitempty"`
+}
+
+// Checkpoint tunes what a checkpoint captures (§23.1).
+type Checkpoint struct {
+	// Exclude are the globs of the untracked paths a checkpoint leaves out of
+	// the capture. Unset, they are DefaultCheckpointExclude.
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// DefaultCheckpointExclude is the default of checkpoint.exclude (Appendix A).
+func DefaultCheckpointExclude() []string {
+	return []string{"**/.env*", "**/*.pem", "**/*.key"}
+}
+
+// Excluded is checkpoint.exclude, with its default when unset.
+func (c Checkpoint) Excluded() []string {
+	if len(c.Exclude) == 0 {
+		return DefaultCheckpointExclude()
+	}
+	return slices.Clone(c.Exclude)
 }
 
 // Retention is logs.retention of §20.5, as JSON (this file is not YAML), e.g. "30d".

@@ -221,7 +221,11 @@ func (s *Service) CancelLiveIn(ctx context.Context, tx *store.Tx, act mutation.A
 		if run.State.IsTerminal() {
 			continue
 		}
-		next, err := domain.NextRunState(domain.RunStatus{State: run.State}, domain.RunEventCancel)
+		status, err := store.RunStatusOf(ctx, tx, run)
+		if err != nil {
+			return err
+		}
+		next, err := domain.NextRunState(status, domain.RunEventCancel)
 		if err != nil {
 			return err
 		}
