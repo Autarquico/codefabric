@@ -334,7 +334,7 @@ func TestScenario_SessionPull_VueltaDeUnaSemillaPropia(t *testing.T) {
 	if _, err := (claude.Adapter{}).Import(t.Context(), harness.SessionImport{ConfigDir: w.home, Cwd: w.mac}, bytes.NewReader(early)); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.local.State.MarkHandedOff(sessionID, "fix-login", "sha256:seed", time.Now()); err != nil {
+	if err := w.local.State.MarkHandedOff(sessionID, "fix-login", "sha256:seed", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	commitFile(t, w.worker, "feature.go", "package x\n", "feature")
@@ -437,7 +437,7 @@ func TestScenario_SessionPull_SesionLocalPrefijo(t *testing.T) {
 	if _, err := (claude.Adapter{}).Import(t.Context(), harness.SessionImport{ConfigDir: w.home, Cwd: w.mac}, bytes.NewReader(early)); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.local.State.MarkHandedOff(sessionID, "fix-login", "sha256:seed", time.Now()); err != nil {
+	if err := w.local.State.MarkHandedOff(sessionID, "fix-login", "sha256:seed", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	commitFile(t, w.worker, "feature.go", "package x\n", "feature")
@@ -462,7 +462,7 @@ func TestScenario_SessionPull_SesionDivergente(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := w.located(w.mac, sessionID)
-	if err := w.local.State.MarkHandedOff(sessionID, "fix-login", "sha256:seed", time.Now()); err != nil {
+	if err := w.local.State.MarkHandedOff(sessionID, "fix-login", "sha256:seed", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	commitFile(t, w.worker, "feature.go", "package x\n", "feature")
@@ -490,7 +490,7 @@ func TestScenario_SessionPull_SesionAbierta(t *testing.T) {
 	if _, err := (claude.Adapter{}).Import(t.Context(), harness.SessionImport{ConfigDir: w.home, Cwd: w.mac}, bytes.NewReader(early)); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.local.State.MarkHandedOff(sessionID, "fix-login", "sha256:seed", time.Now()); err != nil {
+	if err := w.local.State.MarkHandedOff(sessionID, "fix-login", "sha256:seed", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	live, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "sessionId": sessionID})
