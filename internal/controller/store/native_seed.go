@@ -11,11 +11,11 @@ import (
 )
 
 // RecordNativeSeed remembers that a client uploaded the blob digest as a seed for
-// a Project. Uploading it again changes nothing.
+// a Project. Uploading it again renews the grace that is given to a seed nobody has named yet.
 func (t *Tx) RecordNativeSeed(ctx context.Context, project domain.ID, digest, by string, at time.Time) error {
 	_, err := t.Exec(ctx,
 		`INSERT INTO native_seeds (digest, project_id, uploaded_by, created_at) VALUES (?, ?, ?, ?)
-		 ON CONFLICT (digest, project_id) DO NOTHING`, digest, string(project), by, at.UnixNano())
+		 ON CONFLICT (digest, project_id) DO UPDATE SET created_at = excluded.created_at`, digest, string(project), by, at.UnixNano())
 	if err != nil {
 		return fmt.Errorf("store: recording a native seed: %w", err)
 	}

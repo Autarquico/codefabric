@@ -238,8 +238,15 @@ func (s *Service) PutNativeSeed(ctx context.Context, by pki.Session, project, di
 		return v1.NativeSeedUploaded{}, err
 	}
 	err = s.db.WithTx(ctx, func(tx *store.Tx) error {
-		if _, err := tx.PutBlobMeta(ctx, store.Blob{Digest: digest, Size: size, CreatedAt: s.clock.Now()}); err != nil {
+		fresh, err := tx.PutBlobMeta(ctx, store.Blob{Digest: digest, Size: size, CreatedAt: s.clock.Now()})
+		if err != nil {
 			return err
+		}
+		if !fresh {
+			// A seed uploaded again is wanted again: its grace starts anew.
+			if err := tx.RenewBlobMeta(ctx, digest, s.clock.Now()); err != nil {
+				return err
+			}
 		}
 		return tx.RecordNativeSeed(ctx, projectID, digest, string(by.Principal.ID), s.clock.Now())
 	})

@@ -138,12 +138,13 @@ func (s *Service) sweepRelay(ctx context.Context, rep *v1.GCReport) error {
 	slices.Sort(projects)
 	for _, project := range projects {
 		for batch := range chunks(garbage[project], s.policy.BatchSize) {
-			if err := s.deleteRefs(ctx, project, batch); err != nil {
+			n, err := s.deleteArchivedRefs(ctx, project, batch)
+			if err != nil {
 				return err
 			}
-			done.Count += int64(len(batch))
+			done.Count += n
 			if s.hooks.AfterBatch != nil {
-				s.hooks.AfterBatch(relayRefsKind, int64(len(batch)))
+				s.hooks.AfterBatch(relayRefsKind, n)
 			}
 			if err := yield(ctx); err != nil {
 				return err
@@ -154,6 +155,36 @@ func (s *Service) sweepRelay(ctx context.Context, rep *v1.GCReport) error {
 		}
 	}
 	return nil
+}
+
+// deleteArchivedRefs deletes the refs of the batch that archived Tasks still own. The plan was
+// made some time ago: a Task unarchived or a Run queued since (a snapshot a retry sends
+// again) keeps its refs. The check and the delete are in one write transaction, so nothing
+// is registered between them. It returns how many went.
+func (s *Service) deleteArchivedRefs(ctx context.Context, project domain.ID, refs []string) (int64, error) {
+	if s.hooks.BeforeDeleteRefs != nil {
+		s.hooks.BeforeDeleteRefs(project, refs)
+	}
+	release, err := s.lock()
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	var n int64
+	err = s.db.WithTx(ctx, func(tx *store.Tx) error {
+		n = 0
+		archived, err := archivedRuns(ctx, tx, s.clock.Now().Add(-s.policy.RelayBranches))
+		if err != nil {
+			return err
+		}
+		still := slices.DeleteFunc(slices.Clone(refs), func(name string) bool { return !archived.owns(project, name) })
+		if len(still) == 0 {
+			return nil
+		}
+		n = int64(len(still))
+		return s.relay.DeleteRefs(ctx, project, still)
+	})
+	return n, err
 }
 
 func (s *Service) deleteRefs(ctx context.Context, project domain.ID, refs []string) error {

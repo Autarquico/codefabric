@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -199,4 +200,27 @@ func (e *env) storedRunsOf(task string) int {
 		return err
 	}))
 	return n
+}
+
+// Uploading a seed again renews its grace period, the seed row and its blob alike: a client
+// that retries a handoff must not find it collected by the pass that was about to.
+func TestScenario_SeedSubidaDeNuevoRenuevaSuPlazoDeGracia(t *testing.T) {
+	e := newCheckpointEnv(t)
+	seed := e.seedUploaded(e.owner, "mine")
+	first := e.clock.Now()
+	e.clock.Advance(time.Hour)
+	e.seedUploaded(e.owner, "mine")
+	again := e.clock.Now()
+
+	var seeds []store.NativeSeed
+	var recent []string
+	must(t, e.db.Read(t.Context(), func(q store.Querier) (err error) {
+		if seeds, err = store.UnusedNativeSeeds(t.Context(), q, first.Add(time.Minute)); err != nil {
+			return err
+		}
+		return store.UploadedSince(t.Context(), q, again, func(d string) { recent = append(recent, d) })
+	}))
+	if len(seeds) != 0 || !slices.Contains(recent, seed.Digest) {
+		t.Errorf("seeds past the first grace = %v, blobs uploaded since the second upload = %v", seeds, recent)
+	}
 }
