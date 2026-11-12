@@ -157,3 +157,36 @@ func TestPreReceiveOnlyCreatesTheRefOfACheckpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestPreReceiveSnapshotsOnlyCreatesTheRefOfItsDigest(t *testing.T) {
+	snapshots := map[string]string{envSnapshots: "1"}
+	repo := fakeGit{types: map[string]string{oidA: "commit", oidB: "tree"}}
+	ref := domain.SnapshotRef(oidA)
+
+	for name, tc := range map[string]struct {
+		env   map[string]string
+		input string
+		deny  string
+	}{
+		"the snapshot":              {snapshots, zero + " " + oidA + " " + ref + "\n", ""},
+		"another digest":            {snapshots, zero + " " + oidA + " " + domain.SnapshotRef(oidB) + "\n", "ID of its commit"},
+		"main":                      {snapshots, zero + " " + oidA + " refs/heads/main\n", "may only create"},
+		"a checkpoint":              {snapshots, zero + " " + oidA + " refs/cf/checkpoints/x\n", "may only create"},
+		"a branch of a Task":        {snapshots, zero + " " + oidA + " refs/heads/cf/a/b\n", "may only create"},
+		"moving a snapshot":         {snapshots, oidB + " " + oidA + " " + ref + "\n", "never moved"},
+		"deleting a snapshot":       {snapshots, oidA + " " + zero + " " + ref + "\n", "never moved"},
+		"not a commit":              {snapshots, zero + " " + oidB + " " + domain.SnapshotRef(oidB) + "\n", "must point to a commit"},
+		"several refs":              {snapshots, zero + " " + oidA + " " + ref + "\n" + zero + " " + oidA + " refs/heads/main\n", "exactly one"},
+		"not asked for (fail shut)": {nil, zero + " " + oidA + " " + ref + "\n", "not authorised"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := PreReceive(strings.NewReader(tc.input), envOf(tc.env), repo)
+			switch {
+			case tc.deny == "" && err != nil:
+				t.Fatalf("refused: %v", err)
+			case tc.deny != "" && (err == nil || !strings.Contains(err.Error(), tc.deny)):
+				t.Fatalf("err = %v, want it to contain %q", err, tc.deny)
+			}
+		})
+	}
+}

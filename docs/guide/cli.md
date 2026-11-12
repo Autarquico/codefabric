@@ -74,6 +74,7 @@ Run and administer the Controller.
 - `--permissions ask`: have the harness ask what it is not allowed to do, answered with `cf task respond`.
 - `--completion`: `first_success`, `promote` or `manual`.
 - `--no-start`: create the Task without a Run.
+- `--snapshot`: start from this working tree as it is, uncommitted changes and untracked (not ignored) files included. The tree is committed on a temporary index and sent to the Controller as a snapshot, so `git status` is the same before and after; the Run starts from that commit and records the branch you were on. It cannot go with `--ref` or `--no-start`.
 - `--secret-env NAME=ref`: give the harness a secret held by the Worker, in variable NAME. Repeatable.
 - `--request-id`: idempotency key; repeating the command with it creates nothing twice.
 

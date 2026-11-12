@@ -59,7 +59,11 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, rederive Rederi
 
 // Source is what a Run starts from: the commit the client resolved and the ref
 // it resolved it from, which travel together (ADR 0002 D1).
-type Source struct{ Ref, Commit string }
+type Source struct {
+	Ref, Commit string
+	// Branch is the local branch of the client a snapshot started from, if any.
+	Branch string
+}
 
 // CreateIn queues a Run of the Task in tx, freezing what the Run will execute:
 // the Task's configuration resolved against its Project and the defaults, and
