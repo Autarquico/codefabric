@@ -64,13 +64,12 @@ func TestScenario_SemillaDeSesion(t *testing.T) {
 		t.Fatalf("stored seed = %+v", got)
 	}
 	l := e.offer(out.Run.ID, w)
-	_, err := e.accept(w, l)
-	must(t, err)
-
 	c := e.assignOf(w, out.Run.ID).Continues
 	if c == nil || c.CheckpointID != "" || c.Ref != "" || c.Seed == nil || c.Seed.Digest != seed.Digest || c.NativeState != nil {
 		t.Fatalf("continues = %+v: a seed needs no checkpoint", c)
 	}
+	_, err := e.accept(w, l)
+	must(t, err)
 	body, size, err := e.app.Checkpoints.OpenNativeSeed(t.Context(), w, domain.ID(out.Run.ID), l.Epoch)
 	must(t, err)
 	got, _ := io.ReadAll(body)
