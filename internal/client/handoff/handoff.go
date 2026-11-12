@@ -84,17 +84,18 @@ func Do(ctx context.Context, c Controller, sessions *session.Local, req Request)
 		task v1.Task
 		tree string
 		res  Result
+		sent = exp.Digest // the seed that went, which a replay keeps from its first try
 	)
 	if rec.Task != "" {
 		task, tree, err = resume(ctx, c, rec, req, exp, seed)
 		res.Resumed = true
 	} else {
-		task, tree, err = create(ctx, c, sessions.State, ref, rec, req, exp, seed)
+		task, tree, sent, err = create(ctx, c, sessions.State, ref, rec, req, exp, seed)
 	}
 	if err != nil {
 		return Result{}, err
 	}
-	if err := sessions.State.MarkHandedOff(ref.ID, task.ID, exp.Digest, tree, time.Now()); err != nil {
+	if err := sessions.State.MarkHandedOff(ref.ID, task.ID, sent, tree, time.Now()); err != nil {
 		return Result{}, err
 	}
 	res.Task, res.Worker, res.Attach = task.Name, req.Worker, "cf attach "+task.Name
@@ -120,10 +121,10 @@ func requireOnline(ctx context.Context, c Controller, name string) error {
 	return domain.NewError(domain.CodeNotFound, fmt.Sprintf("no online Worker named %q; Workers: %s", name, list), nil)
 }
 
-func create(ctx context.Context, c Controller, state session.State, ref session.Ref, rec session.Record, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, string, error) {
+func create(ctx context.Context, c Controller, state session.State, ref session.Ref, rec session.Record, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, string, string, error) {
 	project, err := c.ProjectForDir(ctx, req.Dir)
 	if err != nil {
-		return v1.Task{}, "", err
+		return v1.Task{}, "", "", err
 	}
 	p := rec.Pending
 	if p == nil || p.Worker != req.Worker {
@@ -131,11 +132,11 @@ func create(ctx context.Context, c Controller, state session.State, ref session.
 		// sent, so that a retry after a lost answer is a replay, whatever the
 		// session holds by then.
 		if err := upload(ctx, c, project.ID, exp); err != nil {
-			return v1.Task{}, "", err
+			return v1.Task{}, "", "", err
 		}
 		last, err := LastUserMessage(ref.Adapter, ref.Transcript)
 		if err != nil {
-			return v1.Task{}, "", err
+			return v1.Task{}, "", "", err
 		}
 		p = &session.Pending{
 			RequestID: newRequestID(), Worker: req.Worker,
@@ -143,7 +144,7 @@ func create(ctx context.Context, c Controller, state session.State, ref session.
 			SeedAdapter: seed.Adapter, SeedVersion: seed.AdapterVersion, SeedDigest: seed.Digest,
 		}
 		if err := state.SetPending(ref.ID, *p); err != nil {
-			return v1.Task{}, "", err
+			return v1.Task{}, "", "", err
 		}
 	}
 	sent := v1.NativeStateRef{Adapter: p.SeedAdapter, AdapterVersion: p.SeedVersion, Digest: p.SeedDigest}
@@ -155,9 +156,9 @@ func create(ctx context.Context, c Controller, state session.State, ref session.
 		Requirements: v1.Requirements{Harness: ref.Adapter, Workers: v1.WorkerPreferences{Require: []string{req.Worker}}},
 	})
 	if err != nil {
-		return v1.Task{}, "", err
+		return v1.Task{}, "", "", err
 	}
-	return out.Task, snapshot.Tree, nil
+	return out.Task, snapshot.Tree, p.SeedDigest, nil
 }
 
 // resume continues the Task the session already has. The tree travels only if it is not the

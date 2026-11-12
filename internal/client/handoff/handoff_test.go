@@ -416,7 +416,8 @@ func TestHandto_ARetryAfterALostResponseCreatesNoSecondTask(t *testing.T) {
 	if retry.RequestID != first.RequestID || *retry.NativeSeed != *first.NativeSeed || retry.Name != first.Name || retry.Prompt != first.Prompt {
 		t.Fatalf("the retry is not the same request:\n%+v\n%+v", first, retry)
 	}
-	if rec, _ := local.State.Get(sessionID); rec.Task != "tsk_1" || rec.HandedOff == nil {
-		t.Fatalf("record %+v", rec)
+	if rec, _ := local.State.Get(sessionID); rec.Task != "tsk_1" || rec.HandedOff == nil ||
+		rec.Seed != first.NativeSeed.Digest || rec.HandedOff.Digest != first.NativeSeed.Digest || rec.Pending != nil {
+		t.Fatalf("record %+v: it must name the seed that went, not the session as it is now", rec)
 	}
 }
