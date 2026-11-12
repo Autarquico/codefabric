@@ -27,11 +27,16 @@ type Relay interface {
 // as only then is its adapter version known (leases.CreateIn). req.Worker, if
 // not empty, is the only Worker the scheduler offers the Run to.
 func (s *Service) Resume(ctx context.Context, by pki.Session, ref, project string, req v1.ResumeTaskRequest) (v1.ResumeTaskResponse, error) {
+	// Only what the user asked for identifies the call: the commit of a snapshot
+	// is made anew by every attempt of the client, so a replay with the same
+	// request_id answers with the Run the first one made, from the first snapshot.
+	explicit := req
+	explicit.SourceSnapshot, explicit.SourceBranch = "", ""
 	return mutation.Do(ctx, s.db, s.clock, by, "task.resume", req.RequestID,
 		struct {
 			Ref, Project string
 			Request      v1.ResumeTaskRequest
-		}{ref, project, req},
+		}{ref, project, explicit},
 		func(tx *store.Tx, act mutation.Act) (v1.ResumeTaskResponse, error) {
 			return s.ResumeIn(ctx, tx, act, ref, project, req)
 		})
