@@ -196,6 +196,9 @@ func Run(ctx context.Context, o Options) error {
 		CheckpointGrace:      time.Duration(d.settings.Checkpoint.Grace),
 	}
 	eo.AskpassScript = d.writeAskpassScript(ctx, o)
+	runSockets := newRunSockets(o.Paths.WorkerDataDir(), c, d.log)
+	defer runSockets.CloseAll()
+	eo.RunSockets = runSockets
 	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})
 	eo.AuthSync = broker
 	// Publishing the result of a Run needs git: without it this Worker offers no harness.

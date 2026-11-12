@@ -109,6 +109,10 @@ Retention is set in `controller.json`, as text such as `"30d"` or `"45s"` (at le
 
 A Worker keeps the worktree of a published Run for `retention.worktrees` in its own `worker/config.json` (default `7d`).
 
+## `cf handoff`
+
+What `/handto` runs: `cf handoff --to <worker>` hands the session that calls it over to a Worker. Inside a Run on a Worker (`CF_RUN_SOCKET` is set, for interactive Runs) it asks the Worker, over a local socket, to move the Task of the Run to that Worker: no client credentials are involved, the Controller grants it only while the Run is live under its lease, and it is audited as asked from the Run. `--list` prints the Workers by name and state. `--session <id>` is for the client side, outside a Run.
+
 ## `cf inbox`
 
 List what needs you: Tasks waiting for input and failures to decide on. Answer with `cf task respond`.

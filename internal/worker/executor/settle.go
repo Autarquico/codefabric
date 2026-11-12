@@ -422,6 +422,9 @@ func fillExit(en *v1.RunReportEntry, f facts) {
 func (e *Executor) forget(k state.Key) {
 	_ = e.dropMaterialization(k, e.runDir(k)) // logged; the janitor retries
 	e.dropInput(context.Background(), k)
+	if e.o.RunSockets != nil {
+		e.o.RunSockets.Stop(k.RunID, k.LeaseEpoch)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.memos, k)
