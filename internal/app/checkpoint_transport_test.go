@@ -168,6 +168,9 @@ func TestCheckpointNativeState_HasNoRouteThroughTheGenericBlobStore(t *testing.T
 	// A Worker cannot read it with the generic blob routes: they are the clients'.
 	_, _, err := e.app.Workflows.OpenBlob(t.Context(), r.w, digest)
 	wantCode(t, err, domain.CodePolicyDenied)
+	// Nor a client: the digest is public in the checkpoint list, the content is not.
+	_, _, err = e.app.Workflows.OpenBlob(t.Context(), e.owner, digest)
+	wantCode(t, err, domain.CodeNotFound)
 }
 
 func TestCheckpointRelayToken_OfAnotherRunIsRefused(t *testing.T) {

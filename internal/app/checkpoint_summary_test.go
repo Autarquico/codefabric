@@ -7,25 +7,20 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/app/checkpoints"
-	"github.com/Autarquico/codefabric/internal/controller/relay"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
-// historyRelay is a relay that also tells the commits of a Run.
-type historyRelay struct {
-	*fakeRelay
-	commits []relay.Commit
-}
+// fakeHistory tells the commits of a Run.
+type fakeHistory struct{ commits []checkpoints.Commit }
 
-func (h *historyRelay) Log(context.Context, domain.ID, string, string, int) ([]relay.Commit, bool, error) {
+func (h *fakeHistory) Log(context.Context, domain.ID, string, string, int) ([]checkpoints.Commit, bool, error) {
 	return h.commits, false, nil
 }
 
 func TestCheckpointComplete_PublishesTheMechanicalSummary(t *testing.T) {
-	h := &historyRelay{fakeRelay: &fakeRelay{}, commits: []relay.Commit{{ID: checkpointCommit, Subject: "add the thing", Files: []string{"a.go"}}}}
-	e := newEnvWith(t, func(cfg *app.Config, _ *clock.Fake) { cfg.Relay = h })
-	e.relay = h.fakeRelay
+	h := &fakeHistory{commits: []checkpoints.Commit{{ID: checkpointCommit, Subject: "add the thing", Files: []string{"a.go"}}}}
+	e := newEnvWith(t, func(cfg *app.Config, _ *clock.Fake) { cfg.History = h })
 	r := e.startedRun()
 	e.clock.Advance(1)
 

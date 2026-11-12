@@ -7,7 +7,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Autarquico/codefabric/internal/controller/relay"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -25,14 +24,21 @@ const (
 	eventScan         = 200 // newest events of the Run looked at to pick the relevant ones
 )
 
+// Commit is one commit of a Run: its ID, subject line and the paths it touched.
+type Commit struct {
+	ID      string
+	Subject string
+	Files   []string
+}
+
 // History is what the summary asks of the git relay: the commits a Run made on
-// top of the one it started from. *relay.Relay implements it.
+// top of the one it started from. The composition root adapts the relay to it.
 type History interface {
-	Log(ctx context.Context, project domain.ID, base, tip string, limit int) ([]relay.Commit, bool, error)
+	Log(ctx context.Context, project domain.ID, base, tip string, limit int) ([]Commit, bool, error)
 }
 
 // WithHistory gives the service the history it summarizes the commits of a
-// Run from, when it is not the relay given to WithRelay. Without one, the summary says the commits are unavailable.
+// Run from. Without one, the summary says the commits are unavailable.
 func WithHistory(h History) Option { return func(s *Service) { s.history = h } }
 
 // captured is what a checkpoint's summary is made of: everything the Controller
@@ -43,7 +49,7 @@ type captured struct {
 	Checkpoint  store.Checkpoint
 	Origin      domain.RunState
 	Commit      string
-	Commits     []relay.Commit
+	Commits     []Commit
 	MoreCommits bool
 	NoHistory   bool
 	Events      []domain.Event

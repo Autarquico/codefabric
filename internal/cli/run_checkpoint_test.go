@@ -71,3 +71,32 @@ func TestPrintCheckpointSummary_RendersTheFourSections(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintCheckpoints_NothingTheWorkerControlsReachesTheTerminalWithControlCharacters(t *testing.T) {
+	const evil = "\x1b]52;c;ZXZpbA==\x07x\rspoof"
+	c := v1.Checkpoint{
+		ID: "cp" + evil, RunID: "run" + evil, Seq: 1, Trigger: domain.CheckpointManual, Ref: "ref" + evil,
+		Excluded:    []string{evil},
+		NativeState: &v1.NativeStateRef{Adapter: evil, AdapterVersion: evil, Digest: "sha256:x"},
+		CreatedAt:   time.Unix(0, 0),
+		Summary:     v1.CheckpointSummary{Progress: "a\n\t" + evil + "\n", Next: evil, Decisions: evil, Commands: evil},
+	}
+	var list, show bytes.Buffer
+	if err := printCheckpoints(&list, []v1.Checkpoint{c}); err != nil {
+		t.Fatal(err)
+	}
+	if err := printCheckpointSummary(&show, c); err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]string{"list": list.String(), "show": show.String()} {
+		for _, r := range got {
+			if r < 0x20 && r != '\n' && r != '\t' || r == 0x7f {
+				t.Errorf("%s has the control character %q:\n%q", name, r, got)
+				break
+			}
+		}
+	}
+	if !strings.Contains(show.String(), "a\n\t") {
+		t.Errorf("the newlines and tabs of the summary are lost:\n%q", show.String())
+	}
+}

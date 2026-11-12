@@ -250,6 +250,34 @@ func TestCheckpointFailure_WithTheHarnessStoppedFailsTheRun(t *testing.T) {
 	}
 }
 
+// The capture stops the harness: its exit, reported after the capture ended the
+// Run, is noted and the batch goes on to the entries that release the lease.
+func TestCheckpointCapture_TheExitItCausedIsReportedAfterTheEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		end   func(r *reporter, id string)
+		state domain.RunState
+	}{
+		{"suspended", func(r *reporter, id string) { _, err := r.completeCheckpoint(id); must(t, err) }, domain.RunSuspended},
+		{"failed", func(r *reporter, id string) { _, err := r.failCheckpoint(id, false); must(t, err) }, domain.RunFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newCheckpointEnv(t)
+			r := e.startedRun()
+			got := r.mustRequestCheckpoint(domain.CheckpointDefer, "d")
+			tc.end(r, got.CheckpointID)
+
+			res := results(r.mustSend(r.entry(v1.ReportExited, exitCode(0), cause(v1.ExitCauseStop)), r.entry(v1.ReportStopped)))
+			if res != "applied,applied" {
+				t.Fatalf("results = %s, want the exit and the stop applied", res)
+			}
+			if run := e.storedRun(r.run.ID); run.State != tc.state {
+				t.Fatalf("run = %s, want %s", run.State, tc.state)
+			}
+		})
+	}
+}
+
 func TestScenario_AnExitDuringCheckpointingWins(t *testing.T) {
 	e := newEnv(t)
 	r := e.startedRun()

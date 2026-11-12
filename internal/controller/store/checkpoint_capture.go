@@ -124,3 +124,16 @@ func NativeUpload(ctx context.Context, q Querier, id domain.ID) (string, error) 
 	}
 	return *digest, nil
 }
+
+// IsNativeStateDigest says whether a checkpoint holds the digest as native
+// state, uploaded or published: content that is never served as a plain blob.
+func IsNativeStateDigest(ctx context.Context, q Querier, digest string) (bool, error) {
+	var found int
+	err := q.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM checkpoints WHERE native_digest = ? OR uploaded_digest = ?)`,
+		digest, digest).Scan(&found)
+	if err != nil {
+		return false, scanErr(err, "checkpoint")
+	}
+	return found == 1, nil
+}

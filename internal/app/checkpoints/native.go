@@ -7,22 +7,19 @@ import (
 	"io"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/app/input"
 	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-func invalid(format string, args ...any) error {
-	return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf(format, args...), nil)
-}
-
 // verifyCapture checks what a Worker claims of a capture before it is
 // published: the ref is in the relay at the reported commit, and the native
 // state is a blob the Controller holds.
 func (s *Service) verifyCapture(ctx context.Context, q store.Querier, task store.Task, cp store.Checkpoint, c Completion) error {
 	if !domain.ValidCommitID(c.Commit) {
-		return invalid("a completed capture names the commit its ref points to")
+		return input.Invalid("a completed capture names the commit its ref points to")
 	}
 	if s.relay == nil {
 		return domain.NewError(domain.CodeInternal, "the Controller has no relay to verify the capture against", nil)
@@ -32,27 +29,27 @@ func (s *Service) verifyCapture(ctx context.Context, q store.Querier, task store
 		return fmt.Errorf("checkpoints: asking the relay for %s: %w", cp.SourceRef, err)
 	}
 	if !found || tip != c.Commit {
-		return invalid("%s is not at %s in the relay: push it before reporting the capture", cp.SourceRef, c.Commit)
+		return input.Invalid("%s is not at %s in the relay: push it before reporting the capture", cp.SourceRef, c.Commit)
 	}
 	n := c.NativeState
 	if n == nil {
 		return nil
 	}
 	if n.Adapter == "" {
-		return invalid("native state needs the adapter that took it")
+		return input.Invalid("native state needs the adapter that took it")
 	}
 	if _, err := blob.ParseDigest(n.Digest); err != nil {
-		return invalid("native state digest must be sha256:<64 lower-case hex characters>")
+		return input.Invalid("native state digest must be sha256:<64 lower-case hex characters>")
 	}
 	uploaded, err := store.NativeUpload(ctx, q, cp.ID)
 	if err != nil {
 		return err
 	}
 	if uploaded != n.Digest {
-		return invalid("native state %s was not uploaded for this checkpoint", n.Digest)
+		return input.Invalid("native state %s was not uploaded for this checkpoint", n.Digest)
 	}
 	if _, err := store.BlobMeta(ctx, q, n.Digest); errors.Is(err, store.ErrNotFound) {
-		return invalid("native state %s was not uploaded", n.Digest)
+		return input.Invalid("native state %s was not uploaded", n.Digest)
 	} else if err != nil {
 		return err
 	}
@@ -79,15 +76,15 @@ func (s *Service) ownCheckpoint(ctx context.Context, q store.Querier, by pki.Ses
 // PutNativeState stores the native state of a capture under the digest the
 // Worker declares, for a checkpoint of its Run that is still a reservation. It
 // installs nothing if the content is larger than the limit or does not hash to
-// the digest. The blob is only reachable through OpenNativeState, never by
-// the generic blob routes.
+// the digest. The blob is only reachable through OpenNativeState: the generic
+// blob routes refuse a digest that a checkpoint holds.
 func (s *Service) PutNativeState(ctx context.Context, by pki.Session, runID domain.ID, epoch uint64, id domain.ID, digest string, r io.Reader) (v1.NativeStateUploaded, error) {
 	if s.blobs == nil {
 		return v1.NativeStateUploaded{}, domain.NewError(domain.CodeInternal, "the Controller has no blob store", nil)
 	}
 	d, err := blob.ParseDigest(digest)
 	if err != nil {
-		return v1.NativeStateUploaded{}, invalid("digest must be sha256:<64 lower-case hex characters>")
+		return v1.NativeStateUploaded{}, input.Invalid("digest must be sha256:<64 lower-case hex characters>")
 	}
 	err = s.db.Read(ctx, func(q store.Querier) error {
 		_, cp, err := s.ownCheckpoint(ctx, q, by, runID, epoch, id)
@@ -109,9 +106,9 @@ func (s *Service) PutNativeState(ctx context.Context, by pki.Session, runID doma
 	_, size, err := s.blobs.Put(ctx, &limitReader{r: r, left: s.maxNative}, d)
 	switch {
 	case errors.Is(err, errTooLarge):
-		return v1.NativeStateUploaded{}, invalid("native state is at most %d bytes", s.maxNative)
+		return v1.NativeStateUploaded{}, input.Invalid("native state is at most %d bytes", s.maxNative)
 	case errors.Is(err, blob.ErrDigestMismatch):
-		return v1.NativeStateUploaded{}, invalid("the content does not hash to %s", digest)
+		return v1.NativeStateUploaded{}, input.Invalid("the content does not hash to %s", digest)
 	case err != nil:
 		return v1.NativeStateUploaded{}, err
 	}
@@ -119,7 +116,7 @@ func (s *Service) PutNativeState(ctx context.Context, by pki.Session, runID doma
 		if _, err := tx.PutBlobMeta(ctx, store.Blob{Digest: digest, Size: size, CreatedAt: s.clock.Now()}); err != nil {
 			return err
 		}
-		return tx.RecordNativeUpload(ctx, runID, id, digest)
+		return raced(tx.RecordNativeUpload(ctx, runID, id, digest))
 	})
 	return v1.NativeStateUploaded{Digest: digest, Size: size}, err
 }

@@ -76,6 +76,9 @@ type Config struct {
 	MaxBlobBytes int64
 	// Relay is what a capture is verified against; nil makes Complete refuse.
 	Relay checkpoints.Relay
+	// History is where the summary of a checkpoint reads the commits of a Run; nil
+	// makes the summary say they are unavailable.
+	History checkpoints.History
 	// CheckpointExclude are the globs a capture leaves out (checkpoint.exclude).
 	CheckpointExclude []string
 }
@@ -120,6 +123,9 @@ func checkpointOptions(cfg Config) []checkpoints.Option {
 	opts := []checkpoints.Option{checkpoints.WithExclude(cfg.CheckpointExclude)}
 	if cfg.Relay != nil {
 		opts = append(opts, checkpoints.WithRelay(cfg.Relay))
+	}
+	if cfg.History != nil {
+		opts = append(opts, checkpoints.WithHistory(cfg.History))
 	}
 	if cfg.Blobs != nil {
 		opts = append(opts, checkpoints.WithBlobs(cfg.Blobs, 0))

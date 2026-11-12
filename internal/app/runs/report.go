@@ -199,7 +199,8 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 		// The same end, told again under another seq (a daemon that lost its state
 		// and adopted the Run from its markers): the Controller has it.
 		noEvent, apply = true, func() error { return nil }
-	case ControllerEnded(run) && (e.Kind == v1.ReportStarted || e.Kind == v1.ReportExited || e.Kind == v1.ReportPrepareFailed):
+	case ControllerEnded(run) && (e.Kind == v1.ReportStarted || e.Kind == v1.ReportExited || e.Kind == v1.ReportPrepareFailed),
+		CaptureEnded(run) && e.Kind == v1.ReportExited:
 		if apply, err = s.lateEntry(ctx, tx, act, &ev, run, task, l, e); err != nil {
 			return outcome(""), err
 		}

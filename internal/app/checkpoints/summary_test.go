@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/controller/relay"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -24,7 +23,7 @@ func sample() captured {
 		Checkpoint: store.Checkpoint{Checkpoint: domain.Checkpoint{Seq: 2, Trigger: domain.CheckpointDefer}},
 		Origin:     domain.RunRunning,
 		Commit:     tip,
-		Commits: []relay.Commit{
+		Commits: []Commit{
 			{ID: strings.Repeat("c", 40), Subject: "redirect after login", Files: []string{"auth.go", "auth_test.go"}},
 		},
 		Events: []domain.Event{
@@ -89,7 +88,7 @@ func TestCompose_TruncatesAndSaysSo(t *testing.T) {
 		for j := range files {
 			files[j] = fmt.Sprintf("dir/%d/%d.go", i, j)
 		}
-		in.Commits = append(in.Commits, relay.Commit{ID: strings.Repeat("d", 40), Subject: "s", Files: files})
+		in.Commits = append(in.Commits, Commit{ID: strings.Repeat("d", 40), Subject: "s", Files: files})
 	}
 	in.MoreCommits = true
 	in.Excluded = nil

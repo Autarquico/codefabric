@@ -1,7 +1,7 @@
 -- +goose Up
 
 -- Checkpoints of a Run (§23.1): a recoverable point, made with the agent
--- stopped. seq numbers them within the Run from 1 and is never reused.
+-- stopped. seq numbers them within the Run from 1 and two published checkpoints of a Run never share one (an aborted reservation's number is taken by the next).
 -- source_ref is the ref in the relay that holds the captured worktree;
 -- native_digest is the digest of the blob of the harness's own state, and is
 -- NULL, with the other native_* columns, when the checkpoint has none.

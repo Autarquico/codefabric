@@ -149,7 +149,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		Workers:        workers.Config{ControllerVersion: build.Version, OfflineTTL: offlineTTL, StartedAt: startedAt},
 		RunLostTimeout: cmp.Or(o.RunLostTimeout, time.Duration(cfg.RunLostTimeout)),
 		Blobs:          blobs, MaxBlobBytes: workflows.DefaultMaxBlobBytes,
-		Relay: checkpointRelay(gitRelay), CheckpointExclude: cfg.Checkpoint.Excluded(),
+		Relay: checkpointRelay(gitRelay), History: checkpointHistory(gitRelay), CheckpointExclude: cfg.Checkpoint.Excluded(),
 	}, runOpts...)
 	services.GC = gc.New(db, o.Clock, blobs, gcPolicy(cfg),
 		gcOptions(p, gitRelay)...)
@@ -254,6 +254,26 @@ func renewServerCert(ctx context.Context, clk clock.Clock, every time.Duration, 
 			publish(cert)
 		}
 	}
+}
+
+// checkpointHistory is the relay as the summary of a checkpoint reads commits
+// from it: nil, not a typed nil, when the daemon has none.
+func checkpointHistory(r *relay.Relay) checkpoints.History {
+	if r == nil {
+		return nil
+	}
+	return relayHistory{r}
+}
+
+type relayHistory struct{ r *relay.Relay }
+
+func (h relayHistory) Log(ctx context.Context, project domain.ID, base, tip string, limit int) ([]checkpoints.Commit, bool, error) {
+	commits, more, err := h.r.Log(ctx, project, base, tip, limit)
+	out := make([]checkpoints.Commit, len(commits))
+	for i, c := range commits {
+		out[i] = checkpoints.Commit(c)
+	}
+	return out, more, err
 }
 
 // checkpointRelay is the relay as the capture sees it: nil, not a typed nil,

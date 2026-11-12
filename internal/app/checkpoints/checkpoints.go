@@ -56,16 +56,8 @@ const DefaultMaxNativeStateBytes = 64 << 20
 type Option func(*Service)
 
 // WithRelay gives the service the relay it verifies that a capture was pushed
-// against. Without one, Complete cannot verify and refuses. A relay that is also
-// a History (*relay.Relay) is the one the summary reads commits from.
-func WithRelay(r Relay) Option {
-	return func(s *Service) {
-		s.relay = r
-		if h, ok := r.(History); ok {
-			s.history = h
-		}
-	}
-}
+// against. Without one, Complete cannot verify and refuses.
+func WithRelay(r Relay) Option { return func(s *Service) { s.relay = r } }
 
 // WithBlobs gives the service the store of native state, and the largest blob
 // it accepts (0 takes DefaultMaxNativeStateBytes). Without one, the native
@@ -349,6 +341,9 @@ func (s *Service) Fail(ctx context.Context, by pki.Session, runID domain.ID, f F
 // held resolves the Run a Worker reports on or reads for: the one under the
 // live accepted lease of that Worker and epoch.
 func (s *Service) held(ctx context.Context, q store.Querier, by pki.Session, runID domain.ID, epoch uint64) (store.Run, store.Task, error) {
+	if _, err := pki.RequireCaller(ctx, q, by, s.clock.Now()); err != nil {
+		return store.Run{}, store.Task{}, err
+	}
 	w, err := store.WorkerByIdentity(ctx, q, by.Principal.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.Run{}, store.Task{}, domain.NewError(domain.CodeUnauthenticated, "this identity is not a Worker", nil)

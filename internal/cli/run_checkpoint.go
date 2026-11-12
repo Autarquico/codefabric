@@ -5,6 +5,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -83,16 +84,16 @@ func printCheckpoints(out io.Writer, list []v1.Checkpoint) error {
 	for _, c := range list {
 		native := "no"
 		if n := c.NativeState; n != nil {
-			native = n.Adapter + " " + n.AdapterVersion
+			native = printable(n.Adapter + " " + n.AdapterVersion)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%d\t%s\n", c.ID, c.RunID, c.Seq, c.Trigger, native, len(c.Excluded), local(c.CreatedAt))
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%d\t%s\n", printable(c.ID), printable(c.RunID), c.Seq, printable(string(c.Trigger)), native, len(c.Excluded), local(c.CreatedAt))
 	}
 	if err := w.Flush(); err != nil {
 		return err
 	}
 	for _, c := range list {
 		if len(c.Excluded) > 0 {
-			if _, err := fmt.Fprintf(out, "Left out of %s: %s\n", c.ID, strings.Join(c.Excluded, ", ")); err != nil {
+			if _, err := fmt.Fprintf(out, "Left out of %s: %s\n", printable(c.ID), printable(strings.Join(c.Excluded, ", "))); err != nil {
 				return err
 			}
 		}
@@ -136,6 +137,17 @@ func pickCheckpoint(list []v1.Checkpoint, which string) (v1.Checkpoint, error) {
 func printCheckpointSummary(out io.Writer, c v1.Checkpoint) error {
 	s := c.Summary
 	_, err := fmt.Fprintf(out, "# Checkpoint %d (%s) of %s\n\nRef: %s\n\n## Progress\n\n%s\n## Next\n\n%s\n## Decisions\n\n%s\n## Commands\n\n%s",
-		c.Seq, c.Trigger, c.RunID, c.Ref, s.Progress, s.Next, s.Decisions, s.Commands)
+		c.Seq, printable(string(c.Trigger)), printable(c.RunID), printable(c.Ref),
+		printableText(s.Progress), printableText(s.Next), printableText(s.Decisions), printableText(s.Commands))
 	return err
+}
+
+// printableText is printable for text of several lines: it keeps newlines and tabs.
+func printableText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return -1
+		}
+		return r
+	}, s)
 }
