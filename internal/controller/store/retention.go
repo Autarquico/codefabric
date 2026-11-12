@@ -490,9 +490,10 @@ func (db *DB) DeleteCheckpoints(ctx context.Context, ids []domain.ID, reservatio
 }
 
 // CheckpointDigests visits the native state, uploaded or published, that any
-// checkpoint names: the blobs the retention of checkpoints keeps alive.
+// checkpoint names, and the session seeds clients uploaded: the blobs the retention of checkpoints keeps alive.
 func CheckpointDigests(ctx context.Context, q Querier, visit func(string)) error {
 	return visitStrings(ctx, q, visit,
 		`SELECT native_digest FROM checkpoints WHERE native_digest IS NOT NULL
-		 UNION SELECT uploaded_digest FROM checkpoints WHERE uploaded_digest IS NOT NULL`)
+		 UNION SELECT uploaded_digest FROM checkpoints WHERE uploaded_digest IS NOT NULL
+		 UNION SELECT digest FROM native_seeds`)
 }

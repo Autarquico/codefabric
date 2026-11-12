@@ -79,6 +79,10 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateTaskR
 			if err != nil {
 				return v1.CreateTaskResponse{}, err
 			}
+			seed, err := seedOf(ctx, tx, project, req.NativeSeed)
+			if err != nil {
+				return v1.CreateTaskResponse{}, err
+			}
 			name, err := freeName(ctx, tx, projectID, req)
 			if err != nil {
 				return v1.CreateTaskResponse{}, err
@@ -114,6 +118,11 @@ func (s *Service) Create(ctx context.Context, by pki.Session, req v1.CreateTaskR
 				run, err := s.runs.CreateIn(ctx, tx, act, task.ID, runs.Source{Ref: req.ResolvedRef, Commit: req.SourceCommit})
 				if err != nil {
 					return out, err
+				}
+				if seed != nil {
+					if err := s.seedRun(ctx, tx, act, task, domain.ID(run.ID), *seed); err != nil {
+						return out, err
+					}
 				}
 				out.Run = &run
 			}
@@ -480,6 +489,9 @@ func validatePrompt(prompt string) error {
 func validateStart(req v1.CreateTaskRequest) error {
 	if req.NoStart && (req.SourceCommit != "" || req.ResolvedRef != "") {
 		return input.Invalid("source_commit and resolved_ref are for Tasks that start: the Run freezes them")
+	}
+	if req.NoStart && req.NativeSeed != nil {
+		return input.Invalid("a session seed is for the Run that starts: it cannot go with no_start")
 	}
 	return nil
 }

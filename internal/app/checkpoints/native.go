@@ -8,6 +8,7 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/input"
+	"github.com/Autarquico/codefabric/internal/app/refs"
 	"github.com/Autarquico/codefabric/internal/controller/blob"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
@@ -182,6 +183,93 @@ func (s *Service) OpenNativeState(ctx context.Context, by pki.Session, runID dom
 		}
 		meta, err = store.BlobMeta(ctx, q, cp.NativeState.Digest)
 		return notFound(err, "native state")
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	d, err := blob.ParseDigest(meta.Digest)
+	if err != nil {
+		return nil, 0, err
+	}
+	rc, err := s.blobs.Open(d)
+	return rc, meta.Size, err
+}
+
+// PutNativeSeed stores the session a client uploads to seed a Run of the Project
+// (lineage.native_seed) under the digest it declares. Like the native state of a
+// checkpoint it needs the Project to have opted in, installs nothing if the content
+// is larger than the limit or does not hash to the digest, and is only reachable
+// through OpenNativeSeed, never through /v1/blobs.
+func (s *Service) PutNativeSeed(ctx context.Context, by pki.Session, project, digest string, r io.Reader) (v1.NativeSeedUploaded, error) {
+	if s.blobs == nil {
+		return v1.NativeSeedUploaded{}, domain.NewError(domain.CodeInternal, "the Controller has no blob store", nil)
+	}
+	d, err := blob.ParseDigest(digest)
+	if err != nil {
+		return v1.NativeSeedUploaded{}, input.Invalid("digest must be sha256:<64 lower-case hex characters>")
+	}
+	var projectID domain.ID
+	err = s.db.Read(ctx, func(q store.Querier) error {
+		if _, err := pki.RequireCaller(ctx, q, by, s.clock.Now()); err != nil {
+			return err
+		}
+		if projectID, err = refs.Project(ctx, q, project); err != nil {
+			return err
+		}
+		p, err := store.ProjectByID(ctx, q, projectID)
+		if err != nil {
+			return err
+		}
+		if !p.NativeState {
+			return domain.NewError(domain.CodePolicyDenied, "the Project does not keep native state", nil)
+		}
+		return nil
+	})
+	if err != nil {
+		return v1.NativeSeedUploaded{}, err
+	}
+	_, size, err := s.blobs.Put(ctx, &limitReader{r: r, left: s.maxNative}, d)
+	switch {
+	case errors.Is(err, errTooLarge):
+		return v1.NativeSeedUploaded{}, input.Invalid("a session seed is at most %d bytes", s.maxNative)
+	case errors.Is(err, blob.ErrDigestMismatch):
+		return v1.NativeSeedUploaded{}, input.Invalid("the content does not hash to %s", digest)
+	case err != nil:
+		return v1.NativeSeedUploaded{}, err
+	}
+	err = s.db.WithTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.PutBlobMeta(ctx, store.Blob{Digest: digest, Size: size, CreatedAt: s.clock.Now()}); err != nil {
+			return err
+		}
+		return tx.RecordNativeSeed(ctx, projectID, digest, string(by.Principal.ID), s.clock.Now())
+	})
+	return v1.NativeSeedUploaded{Digest: digest, Size: size}, err
+}
+
+// OpenNativeSeed is the session a Run was seeded with, and its size, for the Worker
+// that holds the Run under its live lease.
+func (s *Service) OpenNativeSeed(ctx context.Context, by pki.Session, runID domain.ID, epoch uint64) (io.ReadCloser, int64, error) {
+	if s.blobs == nil {
+		return nil, 0, domain.NewError(domain.CodeInternal, "the Controller has no blob store", nil)
+	}
+	var meta store.Blob
+	err := s.db.Read(ctx, func(q store.Querier) error {
+		run, _, err := s.held(ctx, q, by, runID, epoch)
+		if err != nil {
+			return err
+		}
+		if err := requireNativeState(ctx, q, run.TaskID); err != nil {
+			return err
+		}
+		seed, err := store.RunSeed(ctx, q, run.ID)
+		if err != nil {
+			return err
+		}
+		if seed == nil {
+			return domain.NewError(domain.CodeNotFound, "this Run was not seeded with a session", nil)
+		}
+		meta, err = store.BlobMeta(ctx, q, seed.Digest)
+		return notFound(err, "session seed")
 	})
 	if err != nil {
 		return nil, 0, err

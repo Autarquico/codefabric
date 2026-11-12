@@ -40,6 +40,9 @@ type Options struct {
 	// Workflows builds the adopter of the harness configuration of this machine
 	// (`cf workflow adopt|commit`). Without one they answer CF_NOT_IMPLEMENTED.
 	Workflows WorkflowAdopterFactory
+	// Sessions builds the sessions of this machine's harnesses (`--session` of `cf do`
+	// and `cf task resume`). Without it they answer CF_NOT_IMPLEMENTED.
+	Sessions SessionsFactory
 	// TUI opens the terminal UI over the Controller (`cf` with no arguments on a
 	// terminal). internal/tui is composed in by cmd/cf: the CLI may not import
 	// it. Without one, `cf` prints its help.
@@ -208,7 +211,7 @@ func newRootCmd(opts Options) *cobra.Command {
 	flags.String(flagController, "", "host:port of the Controller for this run, instead of the one stored at connect time")
 	flags.Bool(flagDebug, false, "show the details of an error")
 	root.AddCommand(newVersionCmd(), newStatusCmd(), newConnectCmd(), newClientCmd(), newConfigCmd(),
-		newProjectCmd(openProjectUpdater(opts)), newTaskCmd(), newDoCmd(), newRunCmd(), newWorkerCmd(),
+		newProjectCmd(openProjectUpdater(opts)), newTaskCmd(opts.Sessions), newDoCmd(opts.Sessions), newRunCmd(), newWorkerCmd(),
 		newAttachCmd(opts.Terminal), newPsCmd(), newInboxCmd(), newEventsCmd(), newLogsCmd(), newSearchCmd(),
 		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)),
 		newDoctorCmd(openDoctorStore(opts), probeOf(opts)), newNotifyCmd(opts.Native), newMCPCmd(), newClaudeCmd(), newGCCmd(), newStorageCmd())

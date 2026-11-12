@@ -178,6 +178,10 @@ type CreateTaskRequest struct {
 	Requirements Requirements      `json:"requirements,omitempty"`
 	Completion   domain.Completion `json:"completion,omitempty"`
 	Retry        *Retry            `json:"retry,omitempty"`
+	// NativeSeed is the session of a client the first Run starts from
+	// (lineage.native_seed): a blob uploaded with PUT /v1/projects/{ref}/native-seed/{digest}.
+	// Without NoStart.
+	NativeSeed *NativeStateRef `json:"native_seed,omitempty"`
 }
 
 // CreateTaskResponse carries the Run too when the Task started.
@@ -203,9 +207,34 @@ type ActionRequest struct {
 
 // ResumeTaskRequest is the body of POST /v1/tasks/{ref}/resume. Worker, a name
 // or ID, makes the Run go to that Worker only.
+//
+// NativeSeed is the session of a client the Run starts from, as in
+// CreateTaskRequest. After a TaskPulled that no checkpoint followed, the resume is
+// refused unless the seed is of the client that pulled or Force is set; Force is
+// audited and consumes the marker.
 type ResumeTaskRequest struct {
+	RequestID  string          `json:"request_id,omitempty"`
+	Worker     string          `json:"worker,omitempty"`
+	NativeSeed *NativeStateRef `json:"native_seed,omitempty"`
+	Force      bool            `json:"force,omitempty"`
+}
+
+// PulledTaskRequest is POST /v1/tasks/{ref}/pulled: the client says it brought the
+// Task to its checkout. It leaves the marker that makes a resume ask for --force
+// or a seed of the same client, and the audited event TaskPulled.
+type PulledTaskRequest struct {
 	RequestID string `json:"request_id,omitempty"`
-	Worker    string `json:"worker,omitempty"`
+}
+
+// PulledTaskResponse is the Task after it was marked as pulled.
+type PulledTaskResponse struct {
+	Task Task `json:"task"`
+}
+
+// NativeSeedUploaded answers the upload of a session seed.
+type NativeSeedUploaded struct {
+	Digest string `json:"digest"`
+	Size   int64  `json:"size"`
 }
 
 // ResumeTaskResponse is the Task after a resume and the Run that continues it.

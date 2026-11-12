@@ -15,29 +15,30 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-func newTaskCmd() *cobra.Command {
+func newTaskCmd(sessions SessionsFactory) *cobra.Command {
 	cmd := &cobra.Command{Use: "task", Short: "Create and manage Tasks"}
 	cmd.AddCommand(
-		newCreateTaskCmd("new", "Create a Task and, unless --no-start, its first Run"),
+		newCreateTaskCmd("new", "Create a Task and, unless --no-start, its first Run", sessions),
 		newTaskListCmd(), newTaskShowCmd(), newTaskTimelineCmd(), newTaskSetCmd(), newTaskRespondCmd(),
 		newTaskActionCmd("cancel", "Cancel a Task and its live Runs", func(c *client.Client, ctx context.Context, ref, project string) (v1.Task, error) {
 			return c.CancelTask(ctx, ref, project, "")
 		}),
 		newTaskActionCmd("complete", "Mark a Task completed by hand", (*client.Client).CompleteTask),
 		newTaskActionCmd("archive", "Archive a Task, which frees its name", (*client.Client).ArchiveTask),
-		newTaskDeferCmd(), newTaskResumeCmd(),
+		newTaskDeferCmd(), newTaskResumeCmd(sessions),
 		newTaskMoveCmd(),
 	)
 	return cmd
 }
 
 // newCreateTaskCmd is `cf task new` and, under another name, `cf do` (§11.1).
-func newCreateTaskCmd(use, short string) *cobra.Command {
+func newCreateTaskCmd(use, short string, sessions SessionsFactory) *cobra.Command {
 	var (
 		req         v1.CreateTaskRequest
 		interactive bool
 		completion  string
 		secretEnv   []string
+		seedFrom    seedFlags
 	)
 	cmd := &cobra.Command{
 		Use:   use + ` "<prompt>"`,
@@ -62,8 +63,24 @@ func newCreateTaskCmd(use, short string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var project string
+			if seedFrom.session != "" {
+				if project, err = projectOfDir(cmd.Context(), c, dir, req.Project); err != nil {
+					return err
+				}
+			}
+			seeded, err := seedFrom.upload(cmd.Context(), sessions, c, project)
+			if err != nil {
+				return err
+			}
+			if seeded != nil {
+				req.Project, req.NativeSeed = project, &seeded.ref
+			}
 			out, err := c.NewTask(cmd.Context(), dir, req)
 			if err != nil {
+				return err
+			}
+			if err := seeded.handedOff(out.Task.ID); err != nil {
 				return err
 			}
 			return emit(cmd, out, func(w io.Writer) error { return printCreated(w, out) })
@@ -81,6 +98,7 @@ func newCreateTaskCmd(use, short string) *cobra.Command {
 	f.StringVar(&req.Requirements.Permissions, "permissions", "", "`ask` to have the harness ask what it is not allowed to do, answered with cf task respond (default: it skips its permission prompts)")
 	f.StringArrayVar(&secretEnv, "secret-env", nil, "NAME=ref: the harness gets the secret ref, held by the Worker, in variable NAME; repeatable (see cf project secrets)")
 	f.StringVar(&req.RequestID, flagRequestID, "", "idempotency key: repeating the command with it creates nothing twice")
+	seedFrom.add(cmd, "send a session that was handed off already (a second writer on the same work)")
 	return cmd
 }
 

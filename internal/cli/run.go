@@ -12,8 +12,8 @@ import (
 	"github.com/Autarquico/codefabric/internal/client"
 )
 
-func newDoCmd() *cobra.Command {
-	return newCreateTaskCmd("do", "Create a Task from this directory's repository and start it (shortcut of task new)")
+func newDoCmd(sessions SessionsFactory) *cobra.Command {
+	return newCreateTaskCmd("do", "Create a Task from this directory's repository and start it (shortcut of task new)", sessions)
 }
 
 func newRunCmd() *cobra.Command {

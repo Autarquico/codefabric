@@ -40,6 +40,7 @@ func (s *Server) registerWorkRoutes() {
 	s.handle("GET /v1/inbox", clientsOnly, s.inbox)
 	s.handle("POST /v1/tasks/{ref}/defer", clientsOnly, taskAction(s.work.Tasks.Defer))
 	s.handle("POST /v1/tasks/{ref}/resume", clientsOnly, s.resumeTask)
+	s.registerSeedRoutes()
 	s.handle("POST /v1/tasks/{ref}/move", clientsOnly, s.moveTask)
 	s.handle("GET /v1/tasks/{ref}/move", clientsOnly, s.getMove)
 	s.handle("POST /v1/workers/{ref}/drain-move", clientsOnly, s.drainMove)

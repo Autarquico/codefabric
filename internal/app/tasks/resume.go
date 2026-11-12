@@ -62,7 +62,22 @@ func (s *Service) ResumeIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	if err != nil {
 		return v1.ResumeTaskResponse{}, err
 	}
-	return s.continueTask(ctx, tx, act, task, parent, cp, req.Worker)
+	owner, err := store.ProjectByID(ctx, tx, task.ProjectID)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	seed, err := seedOf(ctx, tx, owner, req.NativeSeed)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	if err := guardPull(ctx, tx, act, task, seed, req.Force); err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	out, err := s.continueTask(ctx, tx, act, task, parent, cp, req.Worker)
+	if err != nil || seed == nil {
+		return out, err
+	}
+	return out, s.seedRun(ctx, tx, act, task, domain.ID(out.RunID), *seed)
 }
 
 // ContinueIn queues the Run of a move on its target: it continues the Task from the
