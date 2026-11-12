@@ -6,14 +6,14 @@ status: active
 priority: P1
 size: L
 issue: 160
-prs: []
+prs: [167, 168]
 related_issues: [160]
 sub_issues: []
 depends_on: [claude-code-adapter, codex-adapter, logs-output-storage]
 supersedes: []
 related_specs: [codefabric-spec, phase-5-handoff]
 created: 2026-10-10
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # Captura de checkpoints
