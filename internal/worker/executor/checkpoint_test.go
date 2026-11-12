@@ -87,6 +87,10 @@ func (c *cpCtrl) PutNativeState(_ context.Context, _, _ string, _ uint64, digest
 	return v1.NativeStateUploaded{Digest: digest, Size: size}, nil
 }
 
+func (c *cpCtrl) OpenNativeState(context.Context, string, string, uint64) (io.ReadCloser, int64, error) {
+	return nil, 0, domain.NewError(domain.CodeNotFound, "this checkpoint has no native state", nil)
+}
+
 // porterHarness is the fakeharness with a native session in a directory of the test.
 type porterHarness struct {
 	fakeharness.Adapter

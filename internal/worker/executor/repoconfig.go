@@ -165,12 +165,12 @@ func (e *Executor) ensureSource(ctx context.Context, r state.Run, spec specView,
 	if r.Repo == "" {
 		return fmt.Errorf("this assignment was made before the Controller sent the repository of the Run: it cannot be prepared")
 	}
-	auth, err := og.credential(ctx)
+	auth, relay, err := e.sourceAccess(ctx, r, og)
 	if err != nil {
 		return err
 	}
 	return e.o.Git.EnsureSource(ctx, gitops.SourceSpec{
-		Project: r.ProjectID, Run: r.RunID, Repo: r.Repo, SourceRef: spec.Source.Ref, SourceCommit: r.SourceCommit, Auth: auth,
+		Project: r.ProjectID, Run: r.RunID, Repo: r.Repo, SourceRef: spec.Source.Ref, SourceCommit: r.SourceCommit, Auth: auth, Relay: relay,
 	})
 }
 

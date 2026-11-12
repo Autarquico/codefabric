@@ -413,7 +413,7 @@ type relayStub struct {
 func newStub(t *testing.T, status int) *relayStub {
 	t.Helper()
 	s := &relayStub{status: status}
-	s.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	return s.serve(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		s.mu.Lock()
 		s.headers = append(s.headers, req.Header.Clone())
 		code := s.status
@@ -426,6 +426,13 @@ func newStub(t *testing.T, status int) *relayStub {
 		}
 		http.Error(w, "x", code)
 	}))
+}
+
+// serve starts the TLS server of the stub with h, and makes the CA and the
+// client certificate its Workers use.
+func (s *relayStub) serve(t *testing.T, h http.Handler) *relayStub {
+	t.Helper()
+	s.srv = httptest.NewTLSServer(h)
 	t.Cleanup(s.srv.Close)
 	dir := t.TempDir()
 	s.ca = writePEM(t, filepath.Join(dir, "ca.pem"), "CERTIFICATE", s.srv.Certificate().Raw)

@@ -18,6 +18,10 @@ import (
 // Export (manifest, transcript and subagents of one session).
 const CheckpointFormat = "claude-session-tar-gz/v1"
 
+// CheckpointFormat is the Format of the Checkpoints this adapter resumes
+// (harness.CheckpointFormatter).
+func (Adapter) CheckpointFormat() string { return CheckpointFormat }
+
 // Checkpoint exports the session of the Run, which is no longer running: the
 // Worker stopped the process before asking. It is h.SessionID, the one Start
 // or Resume said in their Launch; only a Handle without it falls back to the

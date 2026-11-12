@@ -40,6 +40,9 @@ type CheckpointClient interface {
 	CompleteCheckpoint(ctx context.Context, run, checkpoint string, req v1.CheckpointCompleteRequest) (v1.CheckpointReported, error)
 	FailCheckpoint(ctx context.Context, run, checkpoint string, req v1.CheckpointFailRequest) (v1.CheckpointReported, error)
 	PutNativeState(ctx context.Context, run, checkpoint string, leaseEpoch uint64, digest string, r io.Reader, size int64) (v1.NativeStateUploaded, error)
+	// OpenNativeState streams the native state of a published checkpoint of the
+	// Task, under the lease of the Run that continues it.
+	OpenNativeState(ctx context.Context, run, checkpoint string, leaseEpoch uint64) (io.ReadCloser, int64, error)
 }
 
 // refusal is a checkpoint order this Worker cannot carry out, which it tells
