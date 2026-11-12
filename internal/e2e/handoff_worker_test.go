@@ -78,10 +78,16 @@ type handoff struct {
 // the Project allowing it. nativeState is the setting of the Project.
 func newHandoff(t *testing.T, nativeState bool) *handoff {
 	t.Helper()
+	return newHandoffWith(t, nativeState, handoffClaude)
+}
+
+// newHandoffWith is newHandoff with the claude of the Workers made by claude(name, dir).
+func newHandoffWith(t *testing.T, nativeState bool, claude func(name, dir string) string) *handoff {
+	t.Helper()
 	dir := t.TempDir()
 	c := NewCluster(t, Opts{Workers: 2, Prepare: func(name string, b *Box) {
 		b.InstallHarnesses()
-		b.Install("claude", handoffClaude(name, dir))
+		b.Install("claude", claude(name, dir))
 	}})
 	for _, w := range c.Workers {
 		if res := c.CFInput(w.Box, claudeTokenValue, "worker", "secrets", "set", claudeTokenRef); res.Code != 0 {
@@ -347,6 +353,9 @@ func TestScenario_HandoffWorker_MoveAndDrain(t *testing.T) {
 	}
 	requireAncestor(t, h.RelayRepo(), onB.Head, backOnA.Head, "B's work travels back to A")
 
+	// Drain A once its Run is running (the harness logging its start is not that yet):
+	// a drain while the Run of the move back is still starting moves nothing.
+	h.WaitRun(h.runsOf(created.Task.ID)[2].ID, "running on A", func(r v1.Run) bool { return r.State == domain.RunRunning })
 	// Drain A: the Task goes where the scheduler can put it, which is B.
 	drained := JSON[v1.DrainMoveResponse](h.Cluster, h.Ctl, "worker", "drain", a.Name, "--move")
 	if len(drained.Moves) != 1 || drained.Moves[0].TaskID != created.Task.ID || len(drained.Skipped) != 0 {
