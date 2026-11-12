@@ -88,16 +88,19 @@ type CheckpointRequested struct {
 // source and the summary only. Excluded are the paths the capture left out and
 // Warnings what the Worker said of the capture.
 type Checkpoint struct {
-	ID          string                   `json:"id"`
-	RunID       string                   `json:"run_id"`
-	Seq         int                      `json:"seq"`
-	Trigger     domain.CheckpointTrigger `json:"trigger"`
-	Ref         string                   `json:"ref"`
-	NativeState *NativeStateRef          `json:"native_state,omitempty"`
-	Excluded    []string                 `json:"excluded"`
-	Warnings    []string                 `json:"warnings"`
-	Summary     CheckpointSummary        `json:"summary"`
-	CreatedAt   time.Time                `json:"created_at"`
+	ID      string                   `json:"id"`
+	RunID   string                   `json:"run_id"`
+	Seq     int                      `json:"seq"`
+	Trigger domain.CheckpointTrigger `json:"trigger"`
+	// Consistency is "quiesced" (harness stopped for the capture) or "live"
+	// (taken while it ran: the session is cut at its last complete line).
+	Consistency domain.Consistency `json:"consistency"`
+	Ref         string             `json:"ref"`
+	NativeState *NativeStateRef    `json:"native_state,omitempty"`
+	Excluded    []string           `json:"excluded"`
+	Warnings    []string           `json:"warnings"`
+	Summary     CheckpointSummary  `json:"summary"`
+	CreatedAt   time.Time          `json:"created_at"`
 }
 
 // CheckpointSummary is the markdown summary the Controller composes when a

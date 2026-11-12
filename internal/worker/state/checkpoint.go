@@ -26,13 +26,17 @@ type Capture struct {
 	Exclude      []string
 	// NativeState says the Project opted in to capturing the harness's own state.
 	NativeState bool
-	CreatedAt   time.Time
-	DoneAt      *time.Time
-	Outcome     string
+	// Live is a capture made while the harness runs: the Run stays in the phase
+	// it was in. Not stored: the trigger says it.
+	Live      bool
+	CreatedAt time.Time
+	DoneAt    *time.Time
+	Outcome   string
 }
 
 // BeginCapture stores the capture of an order and takes the Run, which is in
-// phase from, to checkpointing, in the transaction of the caller. created is
+// phase from, to checkpointing (unless the capture is live, which leaves it
+// where it is), in the transaction of the caller. created is
 // false for an order that is stored already (the Controller delivers one again
 // until it is acknowledged): nothing changes then. ErrChanged if the Run is not
 // in from.
@@ -52,10 +56,14 @@ func BeginCapture(ctx context.Context, tx *Tx, c Capture, from Phase) (created b
 	if err != nil || n == 0 {
 		return false, err
 	}
+	if c.Live {
+		return true, nil
+	}
 	return true, Advance(ctx, tx, c.Key, from, PhaseCheckpointing, c.CreatedAt)
 }
 
-// CaptureOf returns ErrNotFound if the assignment has none.
+// CaptureOf returns the capture the assignment has open, or else the last one;
+// ErrNotFound if it has none.
 func CaptureOf(ctx context.Context, q Querier, k Key) (Capture, error) {
 	var (
 		c       Capture
@@ -65,7 +73,8 @@ func CaptureOf(ctx context.Context, q Querier, k Key) (Capture, error) {
 		outcome sql.NullString
 	)
 	err := q.QueryRowContext(ctx,
-		`SELECT checkpoint_id, trigger, ref, exclude, native_state, created_at, done_at, outcome FROM checkpoint_captures WHERE run_id = ? AND lease_epoch = ?`,
+		`SELECT checkpoint_id, trigger, ref, exclude, native_state, created_at, done_at, outcome FROM checkpoint_captures WHERE run_id = ? AND lease_epoch = ?
+		 ORDER BY done_at IS NULL DESC, created_at DESC LIMIT 1`,
 		k.RunID, k.LeaseEpoch).Scan(&c.CheckpointID, &c.Trigger, &c.Ref, &exclude, &c.NativeState, &created, &done, &outcome)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

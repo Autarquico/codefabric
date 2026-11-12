@@ -416,3 +416,37 @@ func TestScenario_HandoffWorker_NativeStateOff(t *testing.T) {
 		t.Errorf("the resumed Run ended as %s", RunStage(done))
 	}
 }
+
+// Given a Run on Worker A that is going,
+// When a checkpoint is asked of it with `cf run checkpoint create` (a live capture),
+// Then the harness is not stopped or restarted, the checkpoint is published as
+// live with its session, the Run is running again, and it goes on to complete.
+func TestScenario_HandoffWorker_LiveCapture(t *testing.T) {
+	h := newHandoff(t, true)
+	created, a, first := h.create()
+
+	h.mustCF(h.Ctl, "run", "checkpoint", "create", created.Run.ID)
+	cp := h.checkpointOf(created.Run.ID)
+
+	if cp.Trigger != domain.CheckpointManual || cp.Consistency != domain.ConsistencyLive {
+		t.Errorf("checkpoint = trigger %s consistency %s, want manual and live", cp.Trigger, cp.Consistency)
+	}
+	if cp.NativeState == nil || cp.NativeState.Adapter != "claude-code" {
+		t.Errorf("checkpoint native_state = %+v, want the claude-code session", cp.NativeState)
+	}
+	commit := gittest.Run(t, h.RelayRepo(), "rev-parse", cp.Ref)
+	requireAncestor(t, h.RelayRepo(), first.Head, commit, "the commit of the harness is in the checkpoint")
+	run := h.WaitRun(created.Run.ID, "running again", func(r v1.Run) bool { return r.State == domain.RunRunning })
+	if run.WorkerID != a.ID {
+		t.Errorf("the Run is on %s, want %s", run.WorkerID, a.ID)
+	}
+	if got := h.starts(a); len(got) != 1 {
+		t.Errorf("the harness started %d times: a live capture must not restart it", len(got))
+	}
+
+	h.release(a)
+	done := waitPublished(h.Cluster, created.Run.ID)
+	if done.State != domain.RunCompleted {
+		t.Fatalf("the Run ended as %s, want it to complete after the capture", RunStage(done))
+	}
+}

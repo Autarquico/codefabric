@@ -189,6 +189,19 @@ func (t *Tx) RewindMove(ctx context.Context, id domain.ID, now time.Time) error 
 	return expectOne(res, ErrMoveStage)
 }
 
+// RewindCapture takes a move whose capture was refused, with the Run still
+// running, back from the stage checkpointing to requested, so a new capture is
+// ordered. The failure is cleared. Compare-and-set on the stage.
+func (t *Tx) RewindCapture(ctx context.Context, id domain.ID, now time.Time) error {
+	res, err := t.Exec(ctx,
+		`UPDATE moves SET stage = ?, failure = '', updated_at = ? WHERE id = ? AND stage = ?`,
+		string(MoveRequested), now.UnixNano(), string(id), string(MoveCheckpointing))
+	if err != nil {
+		return fmt.Errorf("store: rewinding the capture of a move: %w", err)
+	}
+	return expectOne(res, ErrMoveStage)
+}
+
 // RetargetMove changes the Worker a move that is not over goes to.
 func (t *Tx) RetargetMove(ctx context.Context, id domain.ID, worker string, now time.Time) error {
 	res, err := t.Exec(ctx, `UPDATE moves SET target_worker = ?, updated_at = ? WHERE id = ? AND stage NOT IN ('done', 'failed')`,

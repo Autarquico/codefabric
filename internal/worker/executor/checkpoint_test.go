@@ -184,10 +184,16 @@ func (r *cpRig) running(spec []byte, trap string) (state.Key, *helper) {
 
 func (r *cpRig) order(k state.Key, exclude ...string) {
 	r.t.Helper()
+	r.orderOf(k, domain.CheckpointDefer, testCheckpoint, exclude...)
+}
+
+// orderOf is the order of the checkpoint id, for the trigger.
+func (r *cpRig) orderOf(k state.Key, trigger domain.CheckpointTrigger, id string, exclude ...string) {
+	r.t.Helper()
 	r.nextID++
 	cmd := v1.WorkerCommand{Seq: r.nextID, Type: domain.CommandCheckpoint, Checkpoint: &v1.CheckpointCommand{
-		RunID: k.RunID, LeaseID: r.run(k).LeaseID, Epoch: k.LeaseEpoch, CheckpointID: testCheckpoint, Trigger: domain.CheckpointDefer,
-		Ref: domain.CheckpointRef(testCheckpoint), RunShort: "run-1", TaskID: "task_1", ProjectID: "project_1", Exclude: exclude,
+		RunID: k.RunID, LeaseID: r.run(k).LeaseID, Epoch: k.LeaseEpoch, CheckpointID: id, Trigger: trigger,
+		Ref: domain.CheckpointRef(domain.ID(id)), RunShort: "run-1", TaskID: "task_1", ProjectID: "project_1", Exclude: exclude,
 		NativeState: !r.withoutNativeState,
 	}}
 	if blocked, err := r.e.persist(r.t.Context(), []v1.WorkerCommand{cmd}); err != nil || blocked {

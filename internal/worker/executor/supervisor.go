@@ -413,6 +413,9 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 	if m.exit == nil && r.Phase.Live() {
 		e.releaseStartIfDue(ctx, r)
 	}
+	if m.exit == nil && m.started != nil && r.Phase == state.PhaseRunning {
+		e.captureLive(ctx, r)
+	}
 	if (r.Phase == state.PhaseStopping || r.Phase == state.PhaseCheckpointing) && m.exit == nil && e.firstLook(r.Key) {
 		// A stop, or a quiesce, the previous daemon began: the signal may not have been sent.
 		e.signalStop(ctx, r, m)

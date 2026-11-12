@@ -11,6 +11,31 @@ import (
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
+// pinOfRetry is the Worker a retry stays pinned to: the one its parent was,
+// if that Worker can take Runs. One that is offline, draining, drained or gone
+// would leave the retry queued until it returns, so the retry has no pin and the
+// scheduler places it by the spec; unpinned says why, for the event.
+func pinOfRetry(ctx context.Context, tx *store.Tx, parent store.Run) (pin, unpinned string, err error) {
+	if parent.PinnedWorker == "" {
+		return "", "", nil
+	}
+	all, err := store.Workers(ctx, tx, false)
+	if err != nil {
+		return "", "", err
+	}
+	for _, w := range all {
+		if w.Name != parent.PinnedWorker {
+			continue
+		}
+		switch w.State {
+		case domain.WorkerOffline, domain.WorkerDraining, domain.WorkerDrained, domain.WorkerRemoved:
+			return "", fmt.Sprintf("worker %s is %s", w.Name, w.State), nil
+		}
+		return parent.PinnedWorker, "", nil
+	}
+	return "", fmt.Sprintf("worker %s is gone", parent.PinnedWorker), nil
+}
+
 // retryIn queues the Run that retries the last Run of the Task (§11.7 retry,
 // `reschedule`): the same frozen spec and source (and the checkpoint and the pinned Worker, if the Run continues),
 // as the next attempt, on a branch of its own and with the Run it
@@ -29,6 +54,10 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return err
 	}
+	pin, unpinned, err := pinOfRetry(ctx, tx, parent)
+	if err != nil {
+		return err
+	}
 	short, err := tx.NextShortID(ctx, domain.KindRun)
 	if err != nil {
 		return err
@@ -36,7 +65,7 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 	run := store.Run{
 		ID: ids.New(domain.KindRun), Short: short, TaskID: task.ID, Attempt: len(all) + 1,
 		Lineage: domain.LineageRetries, LineageParent: parent.ID, Spec: parent.Spec, SpecDigest: parent.SpecDigest, Workflow: parent.Workflow, Environment: parent.Environment,
-		SourceCommit: parent.SourceCommit, LineageCheckpoint: parent.LineageCheckpoint, PinnedWorker: parent.PinnedWorker,
+		SourceCommit: parent.SourceCommit, LineageCheckpoint: parent.LineageCheckpoint, PinnedWorker: pin,
 		Branch: domain.BranchOf(task.Name, domain.ShortID{Kind: domain.KindTask, N: task.Short}, domain.ShortID{Kind: domain.KindRun, N: short}),
 		State:  domain.RunQueued, Publication: domain.PublicationNone, Evaluation: domain.EvaluationNone,
 		Runtime: domain.RuntimeNone, CreatedAt: act.Now,
@@ -50,6 +79,9 @@ func retryIn(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.ID
 		"short_id": domain.ShortID{Kind: domain.KindRun, N: short}.String(), "attempt": run.Attempt, "spec_digest": run.SpecDigest,
 		"source_commit": run.SourceCommit, "lineage": string(domain.LineageRetries), "parent": string(parent.ID),
 		"parent_state": string(parent.State),
+	}
+	if unpinned != "" {
+		ev.Data["unpinned"] = unpinned
 	}
 	_, _, err = tx.AppendEvent(ctx, ev)
 	return err

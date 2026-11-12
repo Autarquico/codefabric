@@ -179,7 +179,7 @@ func (s *Service) RequestIn(ctx context.Context, tx *store.Tx, act mutation.Act,
 	id := s.ids.New(domain.KindCheckpoint)
 	ref := domain.CheckpointRef(id)
 	if _, err := tx.InsertCheckpoint(ctx, store.Checkpoint{Checkpoint: domain.Checkpoint{
-		ID: id, RunID: run.ID, Trigger: trigger, SourceRef: ref, CreatedAt: act.Now,
+		ID: id, RunID: run.ID, Trigger: trigger, Consistency: domain.ConsistencyOf(trigger), SourceRef: ref, CreatedAt: act.Now,
 	}}); err != nil {
 		return Requested{}, err
 	}

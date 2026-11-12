@@ -80,13 +80,13 @@ func newRunCheckpointListCmd() *cobra.Command {
 }
 
 func printCheckpoints(out io.Writer, list []v1.Checkpoint) error {
-	w := newTable(out, "ID\tRUN\tSEQ\tTRIGGER\tNATIVE STATE\tEXCLUDED\tCREATED")
+	w := newTable(out, "ID\tRUN\tSEQ\tTRIGGER\tCONSISTENCY\tNATIVE STATE\tEXCLUDED\tCREATED")
 	for _, c := range list {
 		native := "no"
 		if n := c.NativeState; n != nil {
 			native = printable(n.Adapter + " " + n.AdapterVersion)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%d\t%s\n", printable(c.ID), printable(c.RunID), c.Seq, printable(string(c.Trigger)), native, len(c.Excluded), local(c.CreatedAt))
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%d\t%s\n", printable(c.ID), printable(c.RunID), c.Seq, printable(string(c.Trigger)), printable(string(c.Consistency)), native, len(c.Excluded), local(c.CreatedAt))
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -143,8 +143,8 @@ func pickCheckpoint(list []v1.Checkpoint, which string) (v1.Checkpoint, error) {
 
 func printCheckpointSummary(out io.Writer, c v1.Checkpoint) error {
 	s := c.Summary
-	_, err := fmt.Fprintf(out, "# Checkpoint %d (%s) of %s\n\nRef: %s\n\n## Progress\n\n%s\n## Next\n\n%s\n## Decisions\n\n%s\n## Commands\n\n%s",
-		c.Seq, printable(string(c.Trigger)), printable(c.RunID), printable(c.Ref),
+	_, err := fmt.Fprintf(out, "# Checkpoint %d (%s) of %s\n\nRef: %s\nConsistency: %s\n\n## Progress\n\n%s\n## Next\n\n%s\n## Decisions\n\n%s\n## Commands\n\n%s",
+		c.Seq, printable(string(c.Trigger)), printable(c.RunID), printable(c.Ref), printable(string(c.Consistency)),
 		printableText(s.Progress), printableText(s.Next), printableText(s.Decisions), printableText(s.Commands))
 	if err != nil {
 		return err

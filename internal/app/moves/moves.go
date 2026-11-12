@@ -299,10 +299,6 @@ func (s *Service) canMove(src source, target string) error {
 		if src.unreachable() {
 			return offlineError(src)
 		}
-		if run.State == domain.RunCheckpointing {
-			return domain.NewError(domain.CodeInvalidTransition,
-				fmt.Sprintf("task %s is capturing a checkpoint: move it when that ends", src.task.Name), map[string]any{"state": string(run.State)})
-		}
 		if src.worker != nil && target != "" && src.worker.Name == target {
 			return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("task %s already runs on %s", src.task.Name, target), nil)
 		}
@@ -340,6 +336,13 @@ func noCheckpoint(src source) error {
 // while the target Run does not exist yet. A target Run that failed to start is
 // gone for good: the move goes back to checkpointed to queue another.
 func (s *Service) retry(ctx context.Context, tx *store.Tx, act mutation.Act, m store.Move, target string) error {
+	if m.Stage == store.MoveCheckpointing && m.Failure != "" {
+		// The capture was refused and the Run goes on: the move asks another.
+		if err := tx.RewindCapture(ctx, m.ID, act.Now); err != nil {
+			return err
+		}
+		m.Stage = store.MoveRequested
+	}
 	rewound := m.Stage == store.MoveResuming && m.Failure != ""
 	if rewound {
 		if err := tx.RewindMove(ctx, m.ID, act.Now); err != nil {
