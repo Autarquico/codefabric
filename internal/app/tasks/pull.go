@@ -56,6 +56,13 @@ func (s *Service) PullPlan(ctx context.Context, ref, project string) (v1.PullPla
 			RunID: string(run.ID), RunShort: domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(),
 			RunState: run.State, Live: !run.State.IsTerminal(),
 		}
+		if run.WorkerID != "" {
+			w, err := store.WorkerByID(ctx, q, run.WorkerID)
+			if err != nil {
+				return err
+			}
+			out.Worker, out.WorkerState = w.Name, w.State
+		}
 		if out.SourceBranch, out.SeedDigest, err = originOf(ctx, q, all); err != nil {
 			return err
 		}

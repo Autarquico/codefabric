@@ -244,8 +244,7 @@ func (p *puller) deferred(ctx context.Context, task string) (v1.PullPlan, error)
 		case <-ctx.Done():
 			return v1.PullPlan{}, ctx.Err()
 		case <-deadline.C:
-			return v1.PullPlan{}, domain.NewError(domain.CodeInProgress, fmt.Sprintf(
-				"the Run of %s was asked for a checkpoint and has not published it in %s: run `cf task pull %s` again when it has", plan.Task, wait, task), nil)
+			return v1.PullPlan{}, domain.NewError(domain.CodeInProgress, timedOut(plan, task, wait), nil)
 		case <-tick.C:
 		}
 	}
@@ -319,4 +318,14 @@ func requestID() string {
 	var b [12]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// timedOut says why a deferred Run has not published its checkpoint: with its Worker not
+// online it cannot, until the lease expires and the Run is lost.
+func timedOut(plan v1.PullPlan, task string, wait time.Duration) string {
+	if plan.Worker != "" && plan.WorkerState != domain.WorkerOnline {
+		return fmt.Sprintf("the Worker %s of %s is %s, so its Run cannot publish a checkpoint in %s: when its lease expires the Run becomes lost, and then `cf task pull %s` brings its last checkpoint",
+			plan.Worker, plan.Task, plan.WorkerState, wait, task)
+	}
+	return fmt.Sprintf("the Run of %s was asked for a checkpoint and has not published it in %s: run `cf task pull %s` again when it has", plan.Task, wait, task)
 }

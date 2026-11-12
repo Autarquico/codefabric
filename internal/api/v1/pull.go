@@ -17,6 +17,10 @@ type PullPlan struct {
 	RunShort string          `json:"run_short_id"`
 	RunState domain.RunState `json:"run_state"`
 	Live     bool            `json:"live"`
+	// Worker and WorkerState are the Worker of the last Run and its state ("" if the
+	// Run never had one): what tells why a live Run does not publish its checkpoint.
+	Worker      string             `json:"worker,omitempty"`
+	WorkerState domain.WorkerState `json:"worker_state,omitempty"`
 
 	Checkpoint *Checkpoint `json:"checkpoint,omitempty"`
 	Commit     string      `json:"commit,omitempty"`

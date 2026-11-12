@@ -655,3 +655,20 @@ func TestPull_ABranchAtTheCommitThatAnotherWorktreeHasCheckedOutIsSkipped(t *tes
 		t.Fatalf("branch %q, head %s", res.Branch, w.head())
 	}
 }
+
+// A Run whose Worker is down cannot publish: the message says so and what happens next.
+func TestPull_DeferWithTheWorkerDownSaysWhyAndWhatComesNext(t *testing.T) {
+	w := newWorld(t)
+	w.remote.plan.RunState, w.remote.plan.Live = domain.RunRunning, true
+	w.remote.plan.Worker, w.remote.plan.WorkerState = "ci-1", domain.WorkerOffline
+	_, err := w.pull(taskpull.Options{Defer: true, Poll: time.Millisecond, Wait: 20 * time.Millisecond})
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.CodeInProgress {
+		t.Fatalf("got %v", err)
+	}
+	for _, want := range []string{"ci-1", string(domain.WorkerOffline), "lost", "last checkpoint"} {
+		if !strings.Contains(de.Message, want) {
+			t.Errorf("the message %q lacks %q", de.Message, want)
+		}
+	}
+}

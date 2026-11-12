@@ -439,12 +439,6 @@ printf '{"type":"assistant","version":"2.1.314","sessionId":"%s","cwd":"%s","mes
 	}
 	t.Run("seeded by the session of the client", func(t *testing.T) {
 		res := c.CF(c.Ctl, "task", "resume", task.Name, "--worker", a.Name, "--session", roundtripSession, "--snapshot", "--json")
-		if res.Code != 0 && strings.Contains(res.Stdout, "project directories") {
-			// Known product bug: the session came back under its own id into the
-			// worktree, so the id is in two directories of ~/.claude/projects and
-			// Local.Find refuses it. See C7-r1.md, "Bug 1".
-			t.Skipf("--session after a pull into a worktree: %s", strings.TrimSpace(res.Stdout))
-		}
 		if res.Code != 0 {
 			t.Fatalf("e2e: %s", res)
 		}

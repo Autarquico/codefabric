@@ -84,10 +84,10 @@ func Do(ctx context.Context, c Controller, sessions *session.Local, req Request)
 		task v1.Task
 		tree string
 		res  Result
-		sent = exp.Digest // the seed that went, which a replay keeps from its first try
+		sent string // the digest of the seed that went, which a replay keeps from its first try
 	)
 	if rec.Task != "" {
-		task, tree, err = resume(ctx, c, rec, req, exp, seed)
+		task, tree, sent, err = resume(ctx, c, sessions.State, ref, rec, req, exp, seed)
 		res.Resumed = true
 	} else {
 		task, tree, sent, err = create(ctx, c, sessions.State, ref, rec, req, exp, seed)
@@ -138,8 +138,14 @@ func create(ctx context.Context, c Controller, state session.State, ref session.
 		if err != nil {
 			return v1.Task{}, "", "", err
 		}
+		// The tree the Task is told about is that of this first snapshot: a replay
+		// reports it, whatever the files are by then.
+		snap, err := c.TakeSnapshot(ctx, req.Dir)
+		if err != nil {
+			return v1.Task{}, "", "", err
+		}
 		p = &session.Pending{
-			RequestID: newRequestID(), Worker: req.Worker,
+			RequestID: newRequestID(), Worker: req.Worker, Tree: snap.Tree,
 			Name: TaskName(last, ref.ID), Prompt: Prompt(last),
 			SeedAdapter: seed.Adapter, SeedVersion: seed.AdapterVersion, SeedDigest: seed.Digest,
 		}
@@ -158,40 +164,73 @@ func create(ctx context.Context, c Controller, state session.State, ref session.
 	if err != nil {
 		return v1.Task{}, "", "", err
 	}
-	return out.Task, snapshot.Tree, p.SeedDigest, nil
+	return out.Task, p.Tree, p.SeedDigest, nil
 }
 
-// resume continues the Task the session already has. The tree travels only if it is not the
-// one the Controller was told about at the last handoff: then the Worker has the work of the
-// user. Unchanged, the Run continues from the last checkpoint of the Task, which holds what
-// the Worker did since, and a snapshot of the old tree would take it back.
-func resume(ctx context.Context, c Controller, rec session.Record, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, string, error) {
-	t, err := c.Task(ctx, rec.Task, "")
-	if err != nil {
-		return v1.Task{}, "", err
-	}
-	snap, err := c.TakeSnapshot(ctx, req.Dir)
-	if err != nil {
-		return v1.Task{}, "", err
-	}
-	if err := upload(ctx, c, t.ProjectID, exp); err != nil {
-		return v1.Task{}, "", err
-	}
-	resume := v1.ResumeTaskRequest{Worker: req.Worker, NativeSeed: &seed, Force: req.Force}
-	if snap.Tree != rec.Tree {
-		if err := c.PushSnapshot(ctx, req.Dir, t.ProjectID, snap.Commit); err != nil {
-			return v1.Task{}, "", err
+// resume continues the Task the session already has, and is retried like a creation: what
+// is sent is remembered before it is sent, so that a retry after a lost answer replays it
+// with the same request id, seed and snapshot, without uploading again.
+//
+// The tree travels only if it is not the one the Controller was told about at the last
+// handoff: then the Worker has the work of the user. Unchanged, the Run continues from the
+// last checkpoint of the Task, which holds what the Worker did since, and a snapshot of the
+// old tree would take it back.
+func resume(ctx context.Context, c Controller, state session.State, ref session.Ref, rec session.Record, req Request, exp session.Export, seed v1.NativeStateRef) (v1.Task, string, string, error) {
+	p := rec.Pending
+	if p == nil || p.Worker != req.Worker {
+		t, err := c.Task(ctx, rec.Task, "")
+		if err != nil {
+			return v1.Task{}, "", "", err
 		}
-		resume.SourceSnapshot, resume.SourceBranch = snap.Commit, snap.Branch
+		if err := requireResumable(t); err != nil {
+			return v1.Task{}, "", "", err
+		}
+		snap, err := c.TakeSnapshot(ctx, req.Dir)
+		if err != nil {
+			return v1.Task{}, "", "", err
+		}
+		if err := upload(ctx, c, t.ProjectID, exp); err != nil {
+			return v1.Task{}, "", "", err
+		}
+		p = &session.Pending{
+			RequestID: newRequestID(), Worker: req.Worker, Tree: snap.Tree,
+			SeedAdapter: seed.Adapter, SeedVersion: seed.AdapterVersion, SeedDigest: seed.Digest,
+		}
+		if snap.Tree != rec.Tree {
+			if err := c.PushSnapshot(ctx, req.Dir, t.ProjectID, snap.Commit); err != nil {
+				return v1.Task{}, "", "", err
+			}
+			p.SnapshotCommit, p.SnapshotBranch = snap.Commit, snap.Branch
+		}
+		if err := state.SetPending(ref.ID, *p); err != nil {
+			return v1.Task{}, "", "", err
+		}
 	}
-	out, err := c.ResumeTaskWith(ctx, rec.Task, "", resume)
+	sent := v1.NativeStateRef{Adapter: p.SeedAdapter, AdapterVersion: p.SeedVersion, Digest: p.SeedDigest}
+	out, err := c.ResumeTaskWith(ctx, rec.Task, "", v1.ResumeTaskRequest{
+		RequestID: p.RequestID, Worker: req.Worker, NativeSeed: &sent, Force: req.Force,
+		SourceSnapshot: p.SnapshotCommit, SourceBranch: p.SnapshotBranch,
+	})
 	if err != nil {
-		return v1.Task{}, "", err
+		return v1.Task{}, "", "", err
 	}
-	return out.Task, snap.Tree, nil
+	return out.Task, p.Tree, p.SeedDigest, nil
 }
 
-// newRequestID is the request id of a Task creation, kept in the local record so
+// requireResumable refuses, before anything is uploaded, a Task whose Run is still live:
+// only a deferred Task, or one whose Run was lost or failed, can be resumed.
+func requireResumable(t v1.Task) error {
+	switch {
+	case t.State == domain.TaskFailed,
+		t.State == domain.TaskWaiting && (t.WaitingReason == domain.WaitingDeferred || t.WaitingReason == domain.WaitingDecision):
+		return nil
+	}
+	return domain.NewError(domain.CodeInvalidTransition,
+		fmt.Sprintf("task %s is %s: only a deferred Task can be resumed; to move it to another Worker while it runs use `cf task move %s <worker>`", t.Name, t.State, t.Name),
+		map[string]any{"state": string(t.State)})
+}
+
+// newRequestID is the request id of a creation or resume, kept in the local record so
 // that a retry sends it again.
 func newRequestID() string {
 	var b [12]byte

@@ -89,6 +89,13 @@ type fakeController struct {
 	byRequest    map[string]v1.Task
 	loseResponse bool
 	resumed      []v1.ResumeTaskRequest
+	// resumes counts the resumes the Controller committed (a replayed request_id is not one);
+	// loseResume makes the next one commit and then fail.
+	resumes    int
+	resumeSeen map[string]bool
+	loseResume bool
+	// uploads counts PutNativeSeed calls.
+	uploads int
 
 	// tree is the tree of the working directory; pushed are the snapshot commits sent.
 	tree   string
@@ -116,6 +123,7 @@ func (f *fakeController) ProjectForDir(context.Context, string) (v1.Project, err
 func (f *fakeController) PutNativeSeed(_ context.Context, _, digest string, r io.Reader, _ int64) (v1.NativeSeedUploaded, error) {
 	b, err := io.ReadAll(r)
 	f.puts[digest] = b
+	f.uploads++
 	return v1.NativeSeedUploaded{}, err
 }
 
@@ -128,7 +136,8 @@ func (f *fakeController) NewTask(_ context.Context, _ string, req v1.CreateTaskR
 	if req.SnapshotReport != nil {
 		req.SnapshotReport.Tree = f.tree
 	}
-	t := v1.Task{ID: fmt.Sprintf("tsk_%d", len(f.created)), Name: req.Name, ProjectID: "prj_1"}
+	// A Task of the tests is one whose Run was deferred, the one a handoff may resume.
+	t := v1.Task{ID: fmt.Sprintf("tsk_%d", len(f.created)), Name: req.Name, ProjectID: "prj_1", State: domain.TaskWaiting, WaitingReason: domain.WaitingDeferred}
 	f.tasks[t.ID] = t
 	if f.byRequest == nil {
 		f.byRequest = map[string]v1.Task{}
@@ -143,6 +152,17 @@ func (f *fakeController) NewTask(_ context.Context, _ string, req v1.CreateTaskR
 
 func (f *fakeController) ResumeTaskWith(_ context.Context, ref, _ string, req v1.ResumeTaskRequest) (v1.ResumeTaskResponse, error) {
 	f.resumed = append(f.resumed, req)
+	if f.resumeSeen == nil {
+		f.resumeSeen = map[string]bool{}
+	}
+	if !f.resumeSeen[req.RequestID] || req.RequestID == "" {
+		f.resumes++
+		f.resumeSeen[req.RequestID] = true
+		if f.loseResume {
+			f.loseResume = false
+			return v1.ResumeTaskResponse{}, errors.New("connection reset")
+		}
+	}
 	return v1.ResumeTaskResponse{Task: f.tasks[ref]}, nil
 }
 
@@ -290,7 +310,7 @@ func TestScenario_SegundoHandto(t *testing.T) {
 
 func TestHandto_ASessionWithATaskIsResumedNotRecreated(t *testing.T) {
 	local, c := machine(t, transcript()), newController(online("w"))
-	c.tasks["tsk_9"] = v1.Task{ID: "tsk_9", Name: "old", ProjectID: "prj_1"}
+	c.tasks["tsk_9"] = v1.Task{ID: "tsk_9", Name: "old", ProjectID: "prj_1", State: domain.TaskWaiting, WaitingReason: domain.WaitingDeferred}
 	if err := local.State.Link(sessionID, "tsk_9"); err != nil {
 		t.Fatal(err)
 	}
@@ -397,9 +417,11 @@ func TestTaskNameAndPrompt_AreValidAndShort(t *testing.T) {
 func TestHandto_ARetryAfterALostResponseCreatesNoSecondTask(t *testing.T) {
 	local, c := machine(t, transcript()), newController(online("w"))
 	c.loseResponse = true
+	c.tree = "tree-1"
 	if _, err := Do(t.Context(), c, local, request("w")); err == nil {
 		t.Fatal("the lost response was not an error")
 	}
+	c.tree = "tree-2" // a file was edited between the attempts
 	// By the retry the session has grown: one more turn and a new tool_use.
 	grown := transcript(`{"type":"user","sessionId":"` + sessionID + `","cwd":"` + cwd + `","message":{"role":"user","content":"try again"}}`)
 	if err := os.WriteFile(filepath.Join(local.ConfigDirs["claude-code"], "projects", "-work-repo", sessionID+".jsonl"), []byte(grown), 0o600); err != nil {
@@ -417,7 +439,70 @@ func TestHandto_ARetryAfterALostResponseCreatesNoSecondTask(t *testing.T) {
 		t.Fatalf("the retry is not the same request:\n%+v\n%+v", first, retry)
 	}
 	if rec, _ := local.State.Get(sessionID); rec.Task != "tsk_1" || rec.HandedOff == nil ||
-		rec.Seed != first.NativeSeed.Digest || rec.HandedOff.Digest != first.NativeSeed.Digest || rec.Pending != nil {
+		rec.Tree != "tree-1" || rec.Seed != first.NativeSeed.Digest || rec.HandedOff.Digest != first.NativeSeed.Digest || rec.Pending != nil {
 		t.Fatalf("record %+v: it must name the seed that went, not the session as it is now", rec)
+	}
+}
+
+// A handoff that resumes a Task is retried like a creation: the same request, seed and
+// snapshot, nothing uploaded again, and the session ends marked.
+func TestHandto_AResumeRetryAfterALostResponseIsAReplay(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"), online("other"))
+	c.tree = "tree-1"
+	if _, err := Do(t.Context(), c, local, request("w")); err != nil {
+		t.Fatal(err)
+	}
+	c.tree = "tree-2"
+	forced := request("other")
+	forced.Force = true
+	c.loseResume = true
+	if _, err := Do(t.Context(), c, local, forced); err == nil {
+		t.Fatal("the lost response was not an error")
+	}
+	if rec, _ := local.State.Get(sessionID); rec.Pending == nil || rec.Pending.Tree != "tree-2" {
+		t.Fatalf("the resume was not remembered before it was sent: %+v", rec.Pending)
+	}
+	uploads, pushed := c.uploads, len(c.pushed)
+	c.tree = "tree-3" // edited between the attempts
+	res, err := Do(t.Context(), c, local, forced)
+	if err != nil || !res.Resumed {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	first, retry := c.resumed[0], c.resumed[len(c.resumed)-1]
+	if first.RequestID == "" || retry.RequestID != first.RequestID || *retry.NativeSeed != *first.NativeSeed ||
+		retry.SourceSnapshot != first.SourceSnapshot || retry.SourceBranch != first.SourceBranch {
+		t.Fatalf("the retry is not the same request:\n%+v\n%+v", first, retry)
+	}
+	if c.uploads != uploads || len(c.pushed) != pushed || c.resumes != 1 {
+		t.Errorf("a replay uploaded again: uploads %d->%d, pushed %d->%d, resumes %d", uploads, c.uploads, pushed, len(c.pushed), c.resumes)
+	}
+	if rec, _ := local.State.Get(sessionID); rec.HandedOff == nil || rec.Tree != "tree-2" || rec.Seed != first.NativeSeed.Digest || rec.Pending != nil {
+		t.Fatalf("record %+v", rec)
+	}
+}
+
+// A Task that still runs cannot be resumed: nothing goes up, and the user is pointed at move.
+func TestHandto_ARunningTaskIsRefusedBeforeAnythingGoesUp(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"), online("other"))
+	if _, err := Do(t.Context(), c, local, request("w")); err != nil {
+		t.Fatal(err)
+	}
+	running := c.tasks["tsk_1"]
+	running.State, running.WaitingReason = domain.TaskRunning, ""
+	c.tasks["tsk_1"] = running
+	uploads, pushed := c.uploads, len(c.pushed)
+
+	forced := request("other")
+	forced.Force = true
+	_, err := Do(t.Context(), c, local, forced)
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.CodeInvalidTransition || !strings.Contains(de.Message, "cf task move") {
+		t.Fatalf("got %v", err)
+	}
+	if c.uploads != uploads || len(c.pushed) != pushed || len(c.resumed) != 0 {
+		t.Error("something went up before the refusal")
+	}
+	if rec, _ := local.State.Get(sessionID); rec.Pending != nil {
+		t.Errorf("a refusal left %+v pending", rec.Pending)
 	}
 }

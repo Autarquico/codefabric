@@ -35,13 +35,15 @@ type Record struct {
 	// HandedOff is set while the work of the session continues somewhere else: writing
 	// in the local session now would make two writers.
 	HandedOff *HandedOff `json:"handed_off,omitempty"`
-	// Pending is the creation of a Task sent and not yet answered: a retry sends
+	// Pending is the creation or resume of a Task sent and not yet answered: a retry sends
 	// that very request, so the Controller replays it instead of making a second Task.
 	Pending *Pending `json:"pending,omitempty"`
 }
 
-// Pending is a Task creation as it was sent: its request id, where it goes, what
-// it is called and asked, and the seed it carries (already uploaded).
+// Pending is a Task creation or resume as it was sent: its request id, where it goes,
+// what it is called and asked, the seed it carries (already uploaded) and the tree of
+// the snapshot it was told about. A resume leaves Name and Prompt empty, and has a
+// SnapshotCommit only if the tree changed.
 type Pending struct {
 	RequestID   string `json:"request_id"`
 	Worker      string `json:"worker"`
@@ -50,6 +52,10 @@ type Pending struct {
 	SeedAdapter string `json:"seed_adapter"`
 	SeedVersion string `json:"seed_version"`
 	SeedDigest  string `json:"seed_digest"`
+	Tree        string `json:"tree,omitempty"`
+	// SnapshotCommit and SnapshotBranch are the snapshot already pushed that a resume carries.
+	SnapshotCommit string `json:"snapshot_commit,omitempty"`
+	SnapshotBranch string `json:"snapshot_branch,omitempty"`
 }
 
 // HandedOff is the marker of a session that was handed over.
