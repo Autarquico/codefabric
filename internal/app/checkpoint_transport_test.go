@@ -12,15 +12,48 @@ import (
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
-// newCheckpointEnv is an env with a real blob store for native state.
+// newCheckpointEnv is an env with a real blob store for native state, and a
+// Project that keeps it.
 func newCheckpointEnv(t *testing.T) *env {
 	t.Helper()
-	return newEnvWith(t, func(c *app.Config, clk *clock.Fake) {
+	e := newEnvWith(t, func(c *app.Config, clk *clock.Fake) {
 		store, err := blob.New(t.TempDir(), clk)
 		must(t, err)
 		c.Blobs = store
 		c.CheckpointExclude = []string{"*.pem"}
 	})
+	e.project("backend")
+	e.setNativeState(true)
+	return e
+}
+
+func (e *env) setNativeState(on bool) {
+	e.t.Helper()
+	_, err := e.app.Projects.Set(e.t.Context(), e.owner, "backend", v1.UpdateProjectRequest{NativeState: &on})
+	must(e.t, err)
+}
+
+func TestCheckpointNativeState_AProjectThatOptedOutNeitherStoresNorServesIt(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	kept := r.mustRequestCheckpoint(domain.CheckpointManual, "a")
+	digest := r.mustUploadNative(kept.CheckpointID, "session")
+	_, err := r.completeCheckpoint(kept.CheckpointID, func(c *checkpoints.Completion) {
+		c.NativeState = &domain.NativeState{Adapter: "claude", AdapterVersion: "1", Digest: digest}
+	})
+	must(t, err)
+
+	e.setNativeState(false)
+	_, _, err = e.app.Checkpoints.OpenNativeState(t.Context(), r.w, domain.ID(r.run.ID), r.lease.Epoch, domain.ID(kept.CheckpointID))
+	wantCode(t, err, domain.CodePolicyDenied)
+
+	next := r.mustRequestCheckpoint(domain.CheckpointManual, "b")
+	_, err = r.uploadNative(next.CheckpointID, sha("more"), "more")
+	wantCode(t, err, domain.CodePolicyDenied)
+	_, err = r.completeCheckpoint(next.CheckpointID, func(c *checkpoints.Completion) {
+		c.NativeState = &domain.NativeState{Adapter: "claude", AdapterVersion: "1", Digest: digest}
+	})
+	wantCode(t, err, domain.CodePolicyDenied)
 }
 
 func (r *reporter) uploadNative(id, digest, content string) (domain.ID, error) {

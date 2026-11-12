@@ -79,6 +79,9 @@ func newCheckpointFixture(t *testing.T) *checkpointFixture {
 	}
 	_, err := f.owner.CreateProject(ctx, v1.CreateProjectRequest{Name: f.project, Repo: "/srv/r"})
 	must(t, err)
+	keep := true
+	_, err = f.owner.UpdateProject(ctx, f.project, v1.UpdateProjectRequest{NativeState: &keep})
+	must(t, err)
 	for _, name := range []string{"one", "two"} {
 		created, err := f.owner.CreateTask(ctx, v1.CreateTaskRequest{Project: f.project, Name: name, Prompt: "x", ResolvedRef: "main", SourceCommit: commitA})
 		must(t, err)

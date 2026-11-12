@@ -259,15 +259,11 @@ func (s *Server) drainMove(w http.ResponseWriter, r *http.Request, c caller) err
 	if err := decodeOptionalBody(w, r, &req); err != nil {
 		return err
 	}
-	worker, err := s.work.Workers.Drain(r.Context(), c.Session, r.PathValue("ref"), req)
+	out, err := s.work.Workers.DrainMove(r.Context(), c.Session, r.PathValue("ref"), req)
 	if err != nil {
 		return err
 	}
-	moved, skipped, err := s.work.Moves.DrainMove(r.Context(), c.Session, domain.ID(worker.ID), req.RequestID)
-	if err != nil {
-		return err
-	}
-	writeJSON(w, http.StatusOK, v1.DrainMoveResponse{Worker: worker, Moves: moved, Skipped: skipped})
+	writeJSON(w, http.StatusOK, out)
 	return nil
 }
 
