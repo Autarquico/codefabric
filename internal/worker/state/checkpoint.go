@@ -93,15 +93,27 @@ func CaptureOf(ctx context.Context, q Querier, k Key) (Capture, error) {
 	return c, nil
 }
 
-// EndCapture closes the capture of an assignment with its outcome. One that is
-// closed already keeps its outcome: ended says whether this call closed it.
-func EndCapture(ctx context.Context, tx *Tx, k Key, outcome string, at time.Time) (ended bool, err error) {
+// EndCapture closes the capture of the checkpoint, with its outcome: another capture of
+// the same assignment, open at the same time, is not touched. One that is closed already
+// keeps its outcome: ended says whether this call closed it.
+func EndCapture(ctx context.Context, tx *Tx, k Key, checkpointID, outcome string, at time.Time) (ended bool, err error) {
 	res, err := tx.exec(ctx,
-		`UPDATE checkpoint_captures SET done_at = ?, outcome = ? WHERE run_id = ? AND lease_epoch = ? AND done_at IS NULL`,
-		at.UnixNano(), outcome, k.RunID, k.LeaseEpoch)
+		`UPDATE checkpoint_captures SET done_at = ?, outcome = ? WHERE run_id = ? AND lease_epoch = ? AND checkpoint_id = ? AND done_at IS NULL`,
+		at.UnixNano(), outcome, k.RunID, k.LeaseEpoch, checkpointID)
 	if err != nil {
 		return false, fmt.Errorf("state: closing a capture: %w", err)
 	}
 	n, err := res.RowsAffected()
 	return n == 1, err
+}
+
+// EndCaptures closes every capture the assignment has open, with the outcome: a stop of
+// the Run ends them all.
+func EndCaptures(ctx context.Context, tx *Tx, k Key, outcome string, at time.Time) error {
+	if _, err := tx.exec(ctx,
+		`UPDATE checkpoint_captures SET done_at = ?, outcome = ? WHERE run_id = ? AND lease_epoch = ? AND done_at IS NULL`,
+		at.UnixNano(), outcome, k.RunID, k.LeaseEpoch); err != nil {
+		return fmt.Errorf("state: closing the captures: %w", err)
+	}
+	return nil
 }

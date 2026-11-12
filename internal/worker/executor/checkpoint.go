@@ -91,7 +91,7 @@ func (e *Executor) persistCheckpoint(ctx context.Context, tx *state.Tx, c v1.Wor
 		// A capture still open is the one the Controller gave up on (it asked for
 		// this one): it ends here, and what is in flight of it is cut short.
 		if open, err := state.CaptureOf(ctx, tx, k); err == nil && open.DoneAt == nil && open.CheckpointID != o.CheckpointID {
-			if _, err := state.EndCapture(ctx, tx, k, state.CaptureAborted, now); err != nil {
+			if _, err := state.EndCapture(ctx, tx, k, open.CheckpointID, state.CaptureAborted, now); err != nil {
 				return nil, nil, err
 			}
 			e.cancelCapture(k)
@@ -220,11 +220,11 @@ func (e *Executor) capturedBeforeSettle(ctx context.Context, r state.Run, exit *
 		// A live capture is made while the harness runs, never after the fact: the
 		// Run is over, and what the Controller reserved it aborts.
 		e.log.InfoContext(ctx, "the Run ended while a live capture was open: the capture is abandoned", "run", r.RunID, "checkpoint", c.CheckpointID)
-		return e.closeCapture(ctx, r, state.CaptureAborted)
+		return e.closeCapture(ctx, r, c, state.CaptureAborted)
 	}
 	if exit != nil && exit.Cause == execwrap.CauseExit {
 		e.log.InfoContext(ctx, "the harness ended by itself while a capture was ordered: the exit wins and the capture is abandoned", "run", r.RunID, "checkpoint", c.CheckpointID)
-		return e.closeCapture(ctx, r, state.CaptureAborted)
+		return e.closeCapture(ctx, r, c, state.CaptureAborted)
 	}
 	if !e.captureDue(r.Key) {
 		return false
@@ -273,7 +273,7 @@ func (e *Executor) attemptCapture(ctx context.Context, r state.Run, c state.Capt
 		e.log.ErrorContext(ctx, "a capture could not be reported in time: it is given up", "run", r.RunID, "checkpoint", c.CheckpointID)
 		outcome = state.CaptureFailed
 	}
-	if !e.closeCapture(ctx, r, outcome) {
+	if !e.closeCapture(ctx, r, c, outcome) {
 		return false
 	}
 	e.mu.Lock()
@@ -283,8 +283,8 @@ func (e *Executor) attemptCapture(ctx context.Context, r state.Run, c state.Capt
 	return true
 }
 
-func (e *Executor) closeCapture(ctx context.Context, r state.Run, outcome string) bool {
-	if _, err := e.endCapture(ctx, r.Key, outcome); err != nil {
+func (e *Executor) closeCapture(ctx context.Context, r state.Run, c state.Capture, outcome string) bool {
+	if _, err := e.endCapture(ctx, r.Key, c.CheckpointID, outcome); err != nil {
 		e.log.ErrorContext(ctx, "closing the capture of a Run", "run", r.RunID, "err", err)
 		return false
 	}
@@ -308,10 +308,10 @@ func (e *Executor) backOffCapture(k state.Key) {
 	m.captureAt = e.clock.Now().Add(m.captureWait)
 }
 
-func (e *Executor) endCapture(ctx context.Context, k state.Key, outcome string) (bool, error) {
+func (e *Executor) endCapture(ctx context.Context, k state.Key, checkpointID, outcome string) (bool, error) {
 	var ended bool
 	err := e.o.DB.WithTx(ctx, func(tx *state.Tx) (err error) {
-		ended, err = state.EndCapture(ctx, tx, k, outcome, e.clock.Now())
+		ended, err = state.EndCapture(ctx, tx, k, checkpointID, outcome, e.clock.Now())
 		return err
 	})
 	return ended, err
