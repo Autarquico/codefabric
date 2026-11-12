@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -166,6 +168,25 @@ type ComponentDigest struct {
 type Materializer struct {
 	host harness.Host
 	fs   fsOps
+	// files are what cf adds to the configuration of a harness's Runs, by harness ID and
+	// path in the configuration directory (see WithFiles).
+	files map[string]map[string][]byte
+}
+
+// MaterializerOption tunes NewMaterializer.
+type MaterializerOption func(*Materializer)
+
+// WithFiles adds files (path in the configuration directory, slash-separated, to
+// content) to the configuration of every Run of the harness. They are part of what
+// the configuration digests to. A path the configuration already has is left as
+// it is: what the user configured wins over what cf adds.
+func WithFiles(harnessID string, files map[string][]byte) MaterializerOption {
+	return func(m *Materializer) {
+		if m.files == nil {
+			m.files = map[string]map[string][]byte{}
+		}
+		m.files[harnessID] = files
+	}
 }
 
 // fsOps are the steps of a materialisation that touch the disk at a
@@ -181,14 +202,18 @@ type fsOps struct {
 }
 
 // NewMaterializer is a Materializer that applies configurations through host.
-func NewMaterializer(host harness.Host) *Materializer {
-	return &Materializer{host: host, fs: fsOps{
+func NewMaterializer(host harness.Host, opts ...MaterializerOption) *Materializer {
+	m := &Materializer{host: host, fs: fsOps{
 		sync:        syncPath,
 		rename:      os.Rename,
 		syncIn:      syncIn,
 		renameIn:    func(root *os.Root, from, to string) error { return root.Rename(from, to) },
 		writeRecord: func(path string, data []byte) error { return atomicfile.Write(path, data, 0o600) },
 	}}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
 }
 
 // Materialize gives the Run whose directory is runDir the configuration snap
@@ -325,6 +350,9 @@ func (m *Materializer) build(ctx context.Context, a harness.Adapter, runDir stri
 	applied, err := a.ApplyConfig(ctx, m.host, snap, harness.ApplyOptions{Target: harness.TargetRun{Dir: staging}, LinkAuth: true})
 	if err != nil {
 		return Materialization{}, fmt.Errorf("applying the configuration: %w", err)
+	}
+	if err := addFiles(staging, m.files[a.ID()]); err != nil {
+		return Materialization{}, fmt.Errorf("adding files to the configuration: %w", err)
 	}
 	links := slices.Sorted(slices.Values(applied.AuthLinks))
 	copies := slices.Sorted(slices.Values(applied.AuthCopies))
@@ -467,4 +495,34 @@ func componentDigest(c harness.Component) (string, error) {
 		return "", fmt.Errorf("component %q carries digest %s, but its files are %s", c.Name, c.Digest, digest)
 	}
 	return digest, nil
+}
+
+// addFiles writes files into dir, never outside it and never over a path that
+// is already there.
+func addFiles(dir string, files map[string][]byte) error {
+	if len(files) == 0 {
+		return nil
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	for _, name := range slices.Sorted(maps.Keys(files)) {
+		if !fs.ValidPath(name) || name == "." {
+			return fmt.Errorf("%q is not a path in the configuration", name)
+		}
+		if _, err := root.Lstat(name); err == nil {
+			continue
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if err := root.MkdirAll(path.Dir(name), 0o700); err != nil {
+			return err
+		}
+		if err := root.WriteFile(name, files[name], 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }

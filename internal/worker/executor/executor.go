@@ -157,6 +157,18 @@ type Options struct {
 	// defaults to inputsock.Dir of the data directory of the Worker; a path
 	// over the limit of a unix socket (macOS: 104 bytes) is refused.
 	SocketDir string
+	// RunSockets makes the socket through which an interactive Run asks its
+	// Worker to move its Task (`/handto` inside a Run); nil gives the Runs none.
+	RunSockets RunSockets
+}
+
+// RunSockets serves, per Run, the socket the Run learns from CF_RUN_SOCKET (see
+// package runsocket). Serve is idempotent: it makes the socket of the Run under
+// the lease epoch if there is none and says where it is; a daemon that restarts
+// serves again the one its Runs already know. Stop takes it down.
+type RunSockets interface {
+	Serve(run string, leaseEpoch uint64) (path string, err error)
+	Stop(run string, leaseEpoch uint64)
 }
 
 // AuthSync is told which auth copies a live Run has, and when it is over.
@@ -357,7 +369,7 @@ func New(o Options) (*Executor, error) {
 		e.o.ConfigSource = e.config
 	}
 	if e.o.Host != nil {
-		e.materializer = host.NewMaterializer(e.o.Host)
+		e.materializer = host.NewMaterializer(e.o.Host, runSkills()...)
 	}
 	return e, nil
 }

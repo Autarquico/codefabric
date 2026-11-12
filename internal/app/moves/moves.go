@@ -65,13 +65,20 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, capture Capture
 // and goes on. A Task that has a move not over gets that move back; if the move
 // had failed it is retried from its stage, towards req.Worker if one is given.
 func (s *Service) Move(ctx context.Context, by pki.Session, ref, project string, req v1.MoveTaskRequest) (v1.MoveTaskResponse, error) {
-	out, err := mutation.Do(ctx, s.db, s.clock, by, "task.move", req.RequestID,
+	return s.move(ctx, by, "task.move", ref, project, req, nil)
+}
+
+// move is Move for a request that comes from a client (from nil) or from a Run
+// through its Worker (MoveFromRun).
+func (s *Service) move(ctx context.Context, by pki.Session, operation, ref, project string, req v1.MoveTaskRequest, from *runLease) (v1.MoveTaskResponse, error) {
+	out, err := mutation.Do(ctx, s.db, s.clock, by, operation, req.RequestID,
 		struct {
 			Ref, Project string
 			Request      v1.MoveTaskRequest
-		}{ref, project, req},
+			From         *runLease
+		}{ref, project, req, from},
 		func(tx *store.Tx, act mutation.Act) (v1.MoveTaskResponse, error) {
-			id, err := s.open(ctx, tx, act, by, ref, project, req)
+			id, err := s.open(ctx, tx, act, by, ref, project, req, from)
 			if err != nil {
 				return v1.MoveTaskResponse{}, err
 			}
@@ -239,10 +246,15 @@ func (s *Service) forceIn(ctx context.Context, tx *store.Tx, act mutation.Act, b
 
 // open creates the move of the Task or, if it has one not over, hands that one
 // back after retrying it when it had failed. It returns the ID of the move.
-func (s *Service) open(ctx context.Context, tx *store.Tx, act mutation.Act, by pki.Session, ref, project string, req v1.MoveTaskRequest) (domain.ID, error) {
+func (s *Service) open(ctx context.Context, tx *store.Tx, act mutation.Act, by pki.Session, ref, project string, req v1.MoveTaskRequest, from *runLease) (domain.ID, error) {
 	src, err := sourceOf(ctx, tx, ref, project)
 	if err != nil {
 		return "", err
+	}
+	if from != nil {
+		if err := from.authorize(ctx, tx, by, act.Now, src); err != nil {
+			return "", err
+		}
 	}
 	forced, err := s.forceIn(ctx, tx, act, by, src, req)
 	if err != nil {
@@ -259,6 +271,8 @@ func (s *Service) open(ctx context.Context, tx *store.Tx, act mutation.Act, by p
 	}
 	active, err := store.ActiveMoveOfTask(ctx, tx, src.task.ID)
 	switch {
+	case err == nil && from != nil:
+		return active.ID, nil // a Run only asks; it does not retarget or retry a move
 	case err == nil:
 		return active.ID, s.retry(ctx, tx, act, active, target)
 	case !errors.Is(err, store.ErrNotFound):
@@ -277,16 +291,23 @@ func (s *Service) open(ctx context.Context, tx *store.Tx, act mutation.Act, by p
 	ev := act.Event(domain.EventMoveRequested, "move requested")
 	ev.ProjectID, ev.TaskID, ev.RunID = src.task.ProjectID, src.task.ID, src.run.ID
 	ev.Data = map[string]any{"move": string(m.ID), "worker": target, "forced": forced, "source_state": string(src.run.State)}
+	if from != nil {
+		ev.Data["requested_from_run"] = string(from.Run)
+	}
 	if forced {
 		ev.Level = domain.LevelWarn
 	}
 	if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
 		return "", err
 	}
+	after := map[string]any{"move": m.ID, "worker": target, "forced": forced, "principal": by.Principal.ID}
+	if from != nil {
+		after["requested_from_run"] = from.Run
+	}
 	return m.ID, tx.AppendAudit(ctx, store.AuditEntry{
 		Time: act.Now, ActorKind: act.Actor.Kind, ActorID: act.Actor.ID, Action: "task.move",
 		ResourceKind: "task", ResourceID: string(src.task.ID),
-		After:  map[string]any{"move": m.ID, "worker": target, "forced": forced, "principal": by.Principal.ID},
+		After:  after,
 		Result: "ok",
 	})
 }
