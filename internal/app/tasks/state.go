@@ -26,14 +26,19 @@ import (
 // one, which may be queued already. The state is then derived once more.
 type Rederive func(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID) error
 
-// NewRederive is the Rederive of the use cases; ids names the Runs of the retries.
-func NewRederive(ids *domain.IDGenerator) Rederive {
+// NewRederive is the Rederive of the use cases; ids names the Runs of the retries and
+// relay (optional) gives them the commit of the checkpoint they continue from.
+func NewRederive(ids *domain.IDGenerator, relay ...Relay) Rederive {
+	var r Relay
+	if len(relay) > 0 {
+		r = relay[0]
+	}
 	return func(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID) error {
-		return rederive(ctx, tx, act, ids, taskID)
+		return rederive(ctx, tx, act, ids, r, taskID)
 	}
 }
 
-func rederive(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.IDGenerator, taskID domain.ID) error {
+func rederive(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.IDGenerator, relay Relay, taskID domain.ID) error {
 	task, err := store.TaskByID(ctx, tx, taskID)
 	if err != nil {
 		return err
@@ -51,7 +56,7 @@ func rederive(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.I
 		return err
 	}
 	if domain.RetryDue(withDecision(taskView(task, project, summaries), pending)) {
-		if err := retryIn(ctx, tx, act, ids, task); err != nil {
+		if err := retryIn(ctx, tx, act, ids, relay, task); err != nil {
 			return err
 		}
 		if summaries, err = store.RunSummaries(ctx, tx, taskID); err != nil {

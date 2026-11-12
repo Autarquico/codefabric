@@ -337,7 +337,7 @@ type DrainForceResponse struct {
 	Runs   []ForcedRun `json:"runs"`
 }
 
-// ForcedRun is a Run that a forced drain cancelled. Captured says whether the
+// ForcedRun is a Run a forced drain asked a checkpoint of; it cancelled it unless Captured. Captured says whether the
 // pre-destructive checkpoint was published before the Run was cancelled;
 // otherwise Reason says why not (the Worker cannot capture, it failed, it was too slow).
 type ForcedRun struct {

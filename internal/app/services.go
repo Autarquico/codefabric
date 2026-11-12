@@ -95,6 +95,9 @@ type Config struct {
 func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opts ...runs.Option) *Services {
 	workersCfg := cfg.Workers
 	rederive := tasks.NewRederive(ids)
+	if cfg.Relay != nil {
+		rederive = tasks.NewRederive(ids, cfg.Relay)
+	}
 	runService := runs.New(db, clk, ids, runs.Rederive(rederive), opts...)
 	leaseService := leases.New(db, clk, ids, leases.Rederive(rederive))
 	checkpointService := checkpoints.New(db, clk, ids, checkpoints.Rederive(rederive), checkpointOptions(cfg)...)

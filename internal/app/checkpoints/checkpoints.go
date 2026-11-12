@@ -107,7 +107,7 @@ var triggers = []domain.CheckpointTrigger{
 }
 
 // suspends says whether a capture for the trigger leaves the Run suspended, to
-// continue elsewhere (§11.7: defer, move, drain), or lets it go on.
+// continue elsewhere (§11.7: defer, move, drain; and the pre-destructive one of a forced drain), or lets it go on.
 func suspends(t domain.CheckpointTrigger) bool {
 	_, ok := suspendReason[t]
 	return ok
@@ -119,6 +119,9 @@ var suspendReason = map[domain.CheckpointTrigger]domain.EndReason{
 	domain.CheckpointDefer: domain.EndDeferred,
 	domain.CheckpointMove:  domain.EndMoved,
 	domain.CheckpointDrain: domain.EndDrained,
+	// A forced drain keeps the work it is about to cancel: the Run stays suspended, to
+	// be resumed or moved, and the drain cancels only the Runs it could not capture.
+	domain.CheckpointPreDestructive: domain.EndDrained,
 }
 
 // Request puts a running or waiting Run in checkpointing, reserves the

@@ -54,7 +54,7 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Pre-destructivo
 - **Given** `drain --force`
 - **When** se ejecuta
-- **Then** checkpoint previo si el harness lo permite
+- **Then** checkpoint previo si el harness lo permite; el Run capturado queda suspendido (`end_reason: drained`) y se puede continuar con `cf task resume --worker X` o mover, y los Runs cuyo checkpoint falla o no llega a tiempo se cancelan
 
 ### Scenario: Ref fuera de la lista
 - **Given** un cliente autenticado

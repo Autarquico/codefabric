@@ -18,8 +18,9 @@ func newWorkerDrainCmd() *cobra.Command {
 		Short: "Stop a Worker from taking new Runs",
 		Long: "Stops the Worker from taking new Runs; the ones it has end on their own. With --move each Task that\n" +
 			"runs on it is checkpointed and continued on another Worker the scheduler chooses (`cf task move`).\n" +
-			"With --force its Runs are cancelled, each after a checkpoint the Controller asks first and waits for\n" +
-			"(checkpoint.pre_destructive_timeout); a Run whose checkpoint fails or is late is cancelled all the same.",
+			"With --force the Controller asks each of its Runs a checkpoint and waits for it\n" +
+			"(checkpoint.pre_destructive_timeout): a Run checkpointed is suspended, to go on elsewhere with\n" +
+			"`cf task resume --worker`; one whose checkpoint fails or is late is cancelled.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if move && force {
@@ -50,7 +51,7 @@ func newWorkerDrainCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&move, "move", false, "also move the Tasks that run on the Worker to other Workers")
-	cmd.Flags().BoolVar(&force, "force", false, "cancel the Runs of the Worker, after a checkpoint of each")
+	cmd.Flags().BoolVar(&force, "force", false, "suspend the Runs of the Worker after a checkpoint of each, and cancel those that cannot be checkpointed")
 	cmd.Flags().BoolVar(&yes, flagYes, false, "do not ask to confirm --force")
 	return cmd
 }
@@ -62,7 +63,7 @@ func drainForce(cmd *cobra.Command, ref string, yes bool) error {
 			return usageError(errors.New("without a terminal there is nobody to confirm: pass --" + flagYes))
 		}
 		ui := &prompter{in: bufferedInput(cmd.InOrStdin()), out: cmd.ErrOrStderr()}
-		ok, err := ui.confirm("Cancel the Runs of " + ref + "?")
+		ok, err := ui.confirm("Suspend (or cancel) the Runs of " + ref + "?")
 		if err != nil {
 			return err
 		}
@@ -82,13 +83,19 @@ func drainForce(cmd *cobra.Command, ref string, yes bool) error {
 }
 
 func printDrainForce(w io.Writer, out v1.DrainForceResponse) error {
-	if _, err := fmt.Fprintf(w, "Draining %s (%s); cancelled %d Run(s).\n", out.Worker.Name, out.Worker.State, len(out.Runs)); err != nil {
+	suspended := 0
+	for _, r := range out.Runs {
+		if r.Captured {
+			suspended++
+		}
+	}
+	if _, err := fmt.Fprintf(w, "Draining %s (%s); suspended %d Run(s), cancelled %d.\n", out.Worker.Name, out.Worker.State, suspended, len(out.Runs)-suspended); err != nil {
 		return err
 	}
 	for _, r := range out.Runs {
-		line := "checkpointed first"
+		line := "suspended after a checkpoint: resume it with cf task resume --worker"
 		if !r.Captured {
-			line = "no checkpoint: " + printable(r.Reason)
+			line = "cancelled, no checkpoint: " + printable(r.Reason)
 		}
 		if _, err := fmt.Fprintf(w, "  %s: %s\n", r.RunID, line); err != nil {
 			return err

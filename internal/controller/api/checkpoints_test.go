@@ -58,13 +58,21 @@ type checkpointFixture struct {
 
 func newCheckpointFixture(t *testing.T) *checkpointFixture {
 	t.Helper()
+	return newCheckpointFixtureWith(t, 0, api.Timeouts{})
+}
+
+// newCheckpointFixtureWith is the fixture of a Controller that waits preDestructiveWait for
+// the checkpoints of a forced drain and closes a response that takes longer than timeouts.Write.
+func newCheckpointFixtureWith(t *testing.T, preDestructiveWait time.Duration, timeouts api.Timeouts) *checkpointFixture {
+	t.Helper()
 	f := &checkpointFixture{relay: &tipRelay{tips: map[string]string{}}, project: "backend"}
 	var work *app.Services
 	f.testController = newController(t, time.Now(), func(c *api.Config) {
+		c.Timeouts = timeouts
 		bs, err := blob.New(t.TempDir(), c.Clock)
 		must(t, err)
 		c.Work = app.New(c.Store.(*store.DB), c.Clock, domain.NewIDGenerator(c.Clock.Now, rand.Reader),
-			app.Config{Workers: workers.Config{ControllerVersion: controllerVersion}, Blobs: bs, Relay: f.relay, CheckpointExclude: []string{"*.pem"}},
+			app.Config{Workers: workers.Config{ControllerVersion: controllerVersion}, Blobs: bs, Relay: f.relay, CheckpointExclude: []string{"*.pem"}, PreDestructiveWait: preDestructiveWait},
 			runs.WithRelay(f.relay))
 		work = c.Work
 	})
