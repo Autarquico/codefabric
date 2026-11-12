@@ -123,6 +123,27 @@ func TestScenario_Intervalo_AFailedCaptureIsNotAskedAgainWithinTheInterval(t *te
 	}
 }
 
+// A sweep while the capture is under way does not make the sweeper forget when it asked.
+func TestScenario_Intervalo_ASweepDuringACaptureKeepsTheThrottle(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	sweeper := e.app.Checkpoints.NewSweeper(autoInterval)
+	e.clock.Advance(autoInterval)
+	if n := sweeper.Sweep(t.Context(), quiet); n != 1 {
+		t.Fatalf("asked %d", n)
+	}
+	e.clock.Advance(time.Minute)
+	if n := sweeper.Sweep(t.Context(), quiet); n != 0 {
+		t.Fatalf("overlapped a capture under way: asked %d", n)
+	}
+	if _, err := r.failCheckpoint(e.intervalCheckpoints(r)[0].CheckpointID, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := sweeper.Sweep(t.Context(), quiet); n != 0 {
+		t.Fatalf("asked again %d after a failure within the interval", n)
+	}
+}
+
 // drainForce runs the forced drain in the background until the Controller is
 // waiting for the captures: its timer and its ticker.
 func (e *env) drainForce(worker string) <-chan v1.DrainForceResponse {

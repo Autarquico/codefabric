@@ -80,6 +80,13 @@ func (w *Sweeper) due(ctx context.Context, now time.Time) ([]domain.ID, error) {
 		if err != nil {
 			return err
 		}
+		for id, last := range w.asked {
+			// A Run that is capturing is not a candidate, but when its capture
+			// fails it is again and the throttle must still know when it was asked.
+			if run, err := store.RunByID(ctx, q, id); err == nil && run.State == domain.RunCheckpointing {
+				kept[id] = last
+			}
+		}
 		for _, c := range candidates {
 			last, asked := w.asked[c.RunID]
 			if asked {
