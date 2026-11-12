@@ -48,6 +48,34 @@ type Checkpoint struct {
 	// Exclude are the globs of the untracked paths a checkpoint leaves out of
 	// the capture. Unset, they are DefaultCheckpointExclude.
 	Exclude []string `json:"exclude,omitempty"`
+	// Interval is the time between the automatic checkpoints of a Run that is
+	// going. Unset or 0, there are none.
+	Interval Duration `json:"interval,omitempty"`
+	// PreDestructiveTimeout is how long `cf worker drain --force` waits for the
+	// checkpoints it asks before it cancels the Runs: the time a Worker may take
+	// to quiesce a harness (checkpoint.grace) and to publish what it captured.
+	// Unset, it is DefaultPreDestructiveTimeout; it never exceeds
+	// MaxPreDestructiveTimeout.
+	PreDestructiveTimeout Duration `json:"pre_destructive_timeout,omitempty"`
+}
+
+const (
+	// DefaultPreDestructiveTimeout is the default of checkpoint.pre_destructive_timeout:
+	// the default checkpoint.grace (30s, Appendix A) and a margin for the snapshot,
+	// the push and the upload of the native state.
+	DefaultPreDestructiveTimeout = 30*time.Second + 15*time.Second
+	// MaxPreDestructiveTimeout is the longest wait a forced drain accepts.
+	MaxPreDestructiveTimeout = 10 * time.Minute
+)
+
+// PreDestructiveWait is checkpoint.pre_destructive_timeout, with its default
+// when unset and its ceiling.
+func (c Checkpoint) PreDestructiveWait() time.Duration {
+	d := time.Duration(c.PreDestructiveTimeout)
+	if d <= 0 {
+		return DefaultPreDestructiveTimeout
+	}
+	return min(d, MaxPreDestructiveTimeout)
 }
 
 // DefaultCheckpointExclude is the default of checkpoint.exclude (Appendix A).
@@ -89,6 +117,12 @@ type GC struct {
 	// BlobGrace is how long an unreferenced blob is left alone: the time a
 	// writer has to reference what it has just stored. Unset, it is 24h.
 	BlobGrace Duration `json:"blob_grace,omitempty"`
+	// CheckpointIntervalKeep is how many automatic checkpoints (trigger
+	// interval) of a Run are kept. Unset, it is 5.
+	CheckpointIntervalKeep int `json:"checkpoint_interval_keep,omitempty"`
+	// CheckpointReservationTTL is how long the reservation of a checkpoint that
+	// was never published is kept. Unset, it is 7d.
+	CheckpointReservationTTL Duration `json:"checkpoint_reservation_ttl,omitempty"`
 }
 
 // Duration is a time.Duration written in JSON as text such as "45s".

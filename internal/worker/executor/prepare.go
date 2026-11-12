@@ -32,6 +32,10 @@ type Git interface {
 	Push(ctx context.Context, project, commit, branch string, a gitops.PushAuth, forbidden gitops.Forbidden) error
 	// PushRef pushes to a full ref; the ref of an orphan is only ever created.
 	PushRef(ctx context.Context, project, commit, ref string, a gitops.PushAuth, forbidden gitops.Forbidden) error
+	// Snapshot captures the worktree for a checkpoint as Seal does, but it
+	// records no ref and finalizes nothing: the commit is pushed to the ref of the
+	// checkpoint, and the Run is sealed at its exit as ever.
+	Snapshot(ctx context.Context, worktree string, in gitops.SnapshotIntent, forbidden gitops.Forbidden) (gitops.Sealed, error)
 }
 
 // RelayTLS are the PEM files git presents and trusts when it pushes: the
@@ -49,13 +53,13 @@ func (e *Executor) makeWorktree(ctx context.Context, r state.Run, spec specView,
 	if r.Repo == "" || r.Branch == "" {
 		return fmt.Errorf("this assignment was made before the Controller sent the repository and the branch of the Run: it cannot be prepared")
 	}
-	auth, err := og.credential(ctx)
+	auth, relay, err := e.sourceAccess(ctx, r, og)
 	if err != nil {
 		return err
 	}
 	return e.o.Git.Prepare(ctx, gitops.PrepareSpec{
 		Project: r.ProjectID, Run: r.RunID, LeaseEpoch: r.LeaseEpoch, Repo: r.Repo, SourceRef: spec.Source.Ref,
-		SourceCommit: r.SourceCommit, Branch: r.Branch, RunDir: e.runDir(r.Key), Auth: auth,
+		SourceCommit: r.SourceCommit, Branch: r.Branch, RunDir: e.runDir(r.Key), Auth: auth, Relay: relay,
 	}, worktree)
 }
 

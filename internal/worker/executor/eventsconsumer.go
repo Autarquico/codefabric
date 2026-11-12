@@ -138,11 +138,15 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 	}
 	next.Consumed += uint64(len(data))
 	needsInput, message, sawInit, sawResult := false, "", false, false
+	sessionID := ""
 	var asked []harness.Event
 	for _, ev := range events {
 		switch ev.Kind {
 		case harness.EventSessionStarted:
 			sawInit = true
+			if sessionID == "" {
+				sessionID = ev.SessionID
+			}
 			if next.Model != "" {
 				break
 			}
@@ -156,6 +160,13 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 			asked = append(asked, ev)
 		case harness.EventResult:
 			sawResult = true
+		}
+	}
+	if sessionID != "" && r.SessionID == "" && domain.Printable(sessionID) && len(sessionID) <= 256 {
+		// A harness that cannot name its session when it starts (Codex) says it in its
+		// events: it is kept for the capture of a checkpoint, as Launch.SessionID is.
+		if err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.SetSessionIDIfUnset(ctx, tx, r.Key, sessionID) }); err != nil {
+			return false, err
 		}
 	}
 	// The stop is ordered, and persisted, before the cursor moves: a daemon that
@@ -264,6 +275,7 @@ func (e *Executor) handleOf(adapter harness.Adapter, r state.Run, spec specView)
 	h := harness.Handle{
 		RunID: domain.ID(r.RunID), LeaseEpoch: r.LeaseEpoch, Mode: domain.Mode(spec.Mode), RunDir: dir,
 		Worktree: e.worktree(r.Key), OutputPath: filepath.Join(dir, execwrap.OutputLog), EventsPath: filepath.Join(dir, execwrap.EventsFile),
+		SessionID: r.SessionID,
 	}
 	withInput, err := e.launchedWithInput(r.Key)
 	if err != nil {

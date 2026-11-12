@@ -59,13 +59,13 @@ func TestPickCheckpoint_ByIDOrSeq(t *testing.T) {
 func TestPrintCheckpointSummary_RendersTheFourSections(t *testing.T) {
 	var out bytes.Buffer
 	c := v1.Checkpoint{
-		ID: "cp1", RunID: "run1", Seq: 2, Trigger: domain.CheckpointDefer, Ref: "refs/cf/checkpoints/cp1",
+		ID: "cp1", RunID: "run1", Seq: 2, Trigger: domain.CheckpointDefer, Consistency: domain.ConsistencyQuiesced, Ref: "refs/cf/checkpoints/cp1",
 		Summary: v1.CheckpointSummary{Progress: "p\n", Next: "n\n", Decisions: "d\n", Commands: "c\n"},
 	}
 	if err := printCheckpointSummary(&out, c); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"# Checkpoint 2 (defer) of run1", "## Progress\n\np\n", "## Next\n\nn\n", "## Decisions\n\nd\n", "## Commands\n\nc\n"} {
+	for _, want := range []string{"# Checkpoint 2 (defer) of run1", "Consistency: quiesced\n", "## Progress\n\np\n", "## Next\n\nn\n", "## Decisions\n\nd\n", "## Commands\n\nc\n"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
@@ -98,5 +98,24 @@ func TestPrintCheckpoints_NothingTheWorkerControlsReachesTheTerminalWithControlC
 	}
 	if !strings.Contains(show.String(), "a\n\t") {
 		t.Errorf("the newlines and tabs of the summary are lost:\n%q", show.String())
+	}
+}
+
+func TestCheckpointWarnings_AreShownSanitized(t *testing.T) {
+	cp := v1.Checkpoint{
+		ID: "cp1", RunID: "run1", Seq: 1, Trigger: domain.CheckpointManual, CreatedAt: time.Unix(0, 0),
+		Warnings: []string{"Secret in the session\x1b[2J: lines 3"},
+	}
+	var list, show bytes.Buffer
+	if err := printCheckpoints(&list, []v1.Checkpoint{cp}); err != nil {
+		t.Fatal(err)
+	}
+	if err := printCheckpointSummary(&show, cp); err != nil {
+		t.Fatal(err)
+	}
+	for name, out := range map[string]string{"list": list.String(), "show": show.String()} {
+		if !strings.Contains(out, "Secret in the session") || strings.ContainsRune(out, 0x1b) {
+			t.Errorf("%s: warning missing or unsanitized:\n%q", name, out)
+		}
 	}
 }

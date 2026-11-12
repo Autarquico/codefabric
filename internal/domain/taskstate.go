@@ -7,6 +7,9 @@ type Markers struct {
 	Cancelled         bool
 	Archived          bool
 	CompletedManually bool
+	// DecisionPending is set while a move of the Task has failed and waits for the
+	// user to move it again, resume it or cancel it: the Runs say nothing of it.
+	DecisionPending bool
 }
 
 // RetryView is the retry policy plus the attempts still available.
@@ -42,6 +45,10 @@ func DeriveTaskState(v TaskView) (TaskState, WaitingReason, error) {
 	return state, reason, err
 }
 
+// moveDecisionRow numbers the row of a failed move: outside the §11.7 table, which has no
+// row for it, it sits after the completion and before everything the Runs say.
+const moveDecisionRow = 15
+
 // taskRows is the §11.7 table: the first row whose condition holds wins.
 // Row 1 has two outcomes and so two entries; archived wins over cancelled (§11.7, B5).
 var taskRows = []struct {
@@ -53,6 +60,7 @@ var taskRows = []struct {
 	{1, func(f taskFacts) bool { return f.Markers.Archived }, TaskArchived, WaitingNone},
 	{1, func(f taskFacts) bool { return f.Markers.Cancelled }, TaskCancelled, WaitingNone},
 	{2, taskFacts.completionSatisfied, TaskCompleted, WaitingNone},
+	{moveDecisionRow, func(f taskFacts) bool { return f.Markers.DecisionPending }, TaskWaiting, WaitingDecision},
 	{3, func(f taskFacts) bool { return !f.DepsSatisfied }, TaskBlocked, WaitingNone},
 	{4, taskFacts.hasRunInProgress, TaskRunning, WaitingNone},
 	{5, func(f taskFacts) bool { return f.anyRunIn(RunWaitingInput) }, TaskWaiting, WaitingInput},

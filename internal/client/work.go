@@ -150,25 +150,40 @@ func (c *Client) ArchiveTask(ctx context.Context, ref, project string) (v1.Task,
 	return c.taskAction(ctx, "archive", ref, project, "")
 }
 
-// DeferTask, ResumeTask, MoveTask, ForkRun and PromoteRun are in the API
-// surface before their milestones are: the Controller answers CF_NOT_IMPLEMENTED.
+// ForkRun and PromoteRun are in the API surface before their milestones are:
+// the Controller answers CF_NOT_IMPLEMENTED.
 
-// DeferTask asks to suspend a Task's Run with a checkpoint (§11.4).
-func (c *Client) DeferTask(ctx context.Context, ref, project string) error {
-	_, err := c.taskAction(ctx, "defer", ref, project, "")
-	return err
+// DeferTask suspends a Task's Run with a checkpoint (§11.4). The Task is
+// waiting(deferred) once the Worker has published the capture.
+func (c *Client) DeferTask(ctx context.Context, ref, project, requestID string) (v1.Task, error) {
+	return c.taskAction(ctx, "defer", ref, project, requestID)
 }
 
-// ResumeTask asks to continue a deferred Task.
-func (c *Client) ResumeTask(ctx context.Context, ref, project string) error {
-	_, err := c.taskAction(ctx, "resume", ref, project, "")
-	return err
+// ResumeTask continues a deferred Task with a new Run from its last
+// checkpoint; worker, if not empty, is the only Worker that may take it.
+func (c *Client) ResumeTask(ctx context.Context, ref, project, worker, requestID string) (v1.ResumeTaskResponse, error) {
+	var out v1.ResumeTaskResponse
+	err := c.do(ctx, http.MethodPost, withQuery(refPath("tasks", ref, "resume"), scope(project)),
+		v1.ResumeTaskRequest{RequestID: requestID, Worker: worker}, &out)
+	return out, err
 }
 
-// MoveTask asks to continue a Task on another Worker.
-func (c *Client) MoveTask(ctx context.Context, ref, project string) error {
-	_, err := c.taskAction(ctx, "move", ref, project, "")
-	return err
+// MoveTask continues a Task on another Worker (§11.5): worker, if not empty, is
+// the only one that may take it. force marks lost the Run of an offline Worker
+// so that it can move from its last checkpoint. The answer is the move as it is
+// when the call returns; it goes on by itself.
+func (c *Client) MoveTask(ctx context.Context, ref, project, worker string, force bool, requestID string) (v1.MoveTaskResponse, error) {
+	var out v1.MoveTaskResponse
+	err := c.do(ctx, http.MethodPost, withQuery(refPath("tasks", ref, "move"), scope(project)),
+		v1.MoveTaskRequest{RequestID: requestID, Worker: worker, Force: force}, &out)
+	return out, err
+}
+
+// TaskMove is the last move of a Task; CF_NOT_FOUND if it never had one.
+func (c *Client) TaskMove(ctx context.Context, ref, project string) (v1.Move, error) {
+	var out v1.Move
+	err := c.do(ctx, http.MethodGet, withQuery(refPath("tasks", ref, "move"), scope(project)), nil, &out)
+	return out, err
 }
 
 // ForkRun asks to start a new Run from an existing one.

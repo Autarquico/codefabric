@@ -118,6 +118,10 @@ type Options struct {
 	// StopGrace is stop.grace (Appendix A): how long a harness has to end after
 	// it is asked to, before it is killed. It defaults to that of Appendix A.
 	StopGrace time.Duration
+	// CheckpointGrace is checkpoint.grace (Appendix A): how long a harness has
+	// to end when it is quiesced for a capture, before the group is killed. It
+	// defaults to that of Appendix A.
+	CheckpointGrace time.Duration
 	// WorktreeRetention is how long a published Run's worktree is kept; zero is
 	// DefaultWorktreeRetention.
 	WorktreeRetention time.Duration
@@ -202,6 +206,8 @@ type Executor struct {
 	redactPipe   []string
 	envArgv      []string
 	grace        time.Duration
+	// checkpointGrace is the grace of quiescing a harness for a capture.
+	checkpointGrace time.Duration
 	// jit delivers the secrets of a Run to its directory and takes them back.
 	jit *secretjit.Manager
 	// releases are the Runs whose secrets are being released.
@@ -269,6 +275,13 @@ type runMemo struct {
 	ackWait       bool          // the prepare waits for the Controller's ack of config_resolved, polled at exitTick
 	revoked       bool          // the harness's access to the secrets was taken back in this life of the daemon
 	noEnvProcess  bool          // launching the Environment supervisor failed: there is no process to wait for
+	// cancelCapture ends the capture of a checkpoint in progress, which a stop
+	// of the Controller does.
+	cancelCapture context.CancelFunc
+	// captureAt is when a capture that was not taken is tried again, captureWait
+	// the backoff of that retry.
+	captureAt   time.Time
+	captureWait time.Duration
 }
 
 // runLock serialises the changes to a Run. It exists only while someone holds
@@ -307,6 +320,9 @@ func New(o Options) (*Executor, error) {
 	}
 	if e.grace <= 0 {
 		e.grace = domain.Defaults().StopGrace
+	}
+	if e.checkpointGrace = o.CheckpointGrace; e.checkpointGrace <= 0 {
+		e.checkpointGrace = domain.Defaults().CheckpointGrace
 	}
 	if len(e.wrapper) == 0 || len(e.redactPipe) == 0 || len(o.PermissionServerArgv) == 0 {
 		self, err := os.Executable()

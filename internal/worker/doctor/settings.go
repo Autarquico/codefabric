@@ -27,6 +27,8 @@ type Settings struct {
 	// is every installed one, as before the join wizard. The command adapter
 	// is not a harness of this list: it is always there.
 	Harnesses []string `json:"harnesses,omitzero"`
+	// Checkpoint tunes how this Worker captures checkpoints.
+	Checkpoint Checkpoint `json:"checkpoint,omitzero"`
 	// Retention is how long this Worker keeps what it has already delivered.
 	Retention Retention `json:"retention,omitzero"`
 	// JournalMaxSize and JournalHardMax are journal.max_size and journal.hard_max
@@ -38,6 +40,13 @@ type Settings struct {
 	SetupPending bool `json:"setup_pending,omitempty"`
 	// Wizard is the progress of the join wizard, kept to resume it.
 	Wizard *Progress `json:"wizard,omitempty"`
+}
+
+// Checkpoint is checkpoint.* of the Worker config.
+type Checkpoint struct {
+	// Grace is how long a harness has to end when it is quiesced for a capture,
+	// before the group is killed. Unset, the default of Appendix A.
+	Grace config.Duration `json:"grace,omitempty"`
 }
 
 // Retention of a Worker, as JSON such as "7d".

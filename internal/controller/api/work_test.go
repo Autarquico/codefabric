@@ -134,9 +134,6 @@ func TestProjectsTasksRunsApi_FutureOperationsAnswerNotImplemented(t *testing.T)
 	ctx := t.Context()
 
 	for name, call := range map[string]func() error{
-		"defer":   func() error { return tc.owner.DeferTask(ctx, "anything", "") },
-		"resume":  func() error { return tc.owner.ResumeTask(ctx, "anything", "") },
-		"move":    func() error { return tc.owner.MoveTask(ctx, "anything", "") },
 		"fork":    func() error { return tc.owner.ForkRun(ctx, "anything") },
 		"promote": func() error { return tc.owner.PromoteRun(ctx, "anything") },
 	} {
@@ -146,8 +143,6 @@ func TestProjectsTasksRunsApi_FutureOperationsAnswerNotImplemented(t *testing.T)
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	status, _, _ := tc.call(tc.httpClientFor(tc.ownerDir), "POST", "/v1/tasks/x/defer", "{}")
-	wantStatus(t, status, http.StatusNotImplemented, "defer")
 }
 
 func TestProjectsTasksRunsApi_ErrorsAndStatuses(t *testing.T) {

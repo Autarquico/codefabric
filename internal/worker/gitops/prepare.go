@@ -26,6 +26,9 @@ type PrepareSpec struct {
 	RunDir string
 	// Auth, if set, makes the fetches from Repo authenticated (see OriginAuth).
 	Auth *OriginAuth
+	// Relay, if set, makes the source come from a checkpoint in the relay and
+	// not from Repo: nothing is fetched from, or sent to, the origin.
+	Relay *RelaySource
 }
 
 // SourceSpec is what the source commit of a Run is fetched from.
@@ -37,10 +40,13 @@ type SourceSpec struct {
 	SourceCommit string
 	// Auth, if set, makes the fetches from Repo authenticated (see OriginAuth).
 	Auth *OriginAuth
+	// Relay, if set, makes the source come from a checkpoint in the relay and
+	// not from Repo: nothing is fetched from, or sent to, the origin.
+	Relay *RelaySource
 }
 
 func (s PrepareSpec) source() SourceSpec {
-	return SourceSpec{Project: s.Project, Run: s.Run, Repo: s.Repo, SourceRef: s.SourceRef, SourceCommit: s.SourceCommit, Auth: s.Auth}
+	return SourceSpec{Project: s.Project, Run: s.Run, Repo: s.Repo, SourceRef: s.SourceRef, SourceCommit: s.SourceCommit, Auth: s.Auth, Relay: s.Relay}
 }
 
 // WrapperFile is the marker the wrapper of the harness writes first (execwrap).
@@ -159,6 +165,8 @@ func validateSource(s SourceSpec) error {
 		return errors.New("gitops: the Project of the Run is not a Project ID")
 	case !domain.ValidCommitID(s.SourceCommit):
 		return errors.New("gitops: the source commit is not a full commit ID")
+	case s.Relay != nil:
+		return s.Relay.check()
 	case s.Repo == "":
 		return errors.New("gitops: this assignment names no repository to fetch from")
 	case !domain.ValidRepoURL(s.Repo):
@@ -205,6 +213,9 @@ func (g *Git) hasCommit(ctx context.Context, bare, oid string) bool {
 func (g *Git) fetchCommit(ctx context.Context, bare string, s SourceSpec) error {
 	if g.hasCommit(ctx, bare, s.SourceCommit) {
 		return nil
+	}
+	if s.Relay != nil {
+		return g.fetchRelay(ctx, bare, s)
 	}
 	var refs string
 	if s.Auth != nil {

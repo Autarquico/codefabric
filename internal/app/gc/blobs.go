@@ -26,6 +26,8 @@ const (
 	refWorkflow
 	// refRecent: an upload newer than the grace period, which its Workflow may not have named yet.
 	refRecent
+	// refCheckpoint: the native state of a checkpoint.
+	refCheckpoint
 )
 
 // markSource says which blobs one kind of reference keeps alive. A new kind of
@@ -42,6 +44,7 @@ func (s *Service) markSources(now time.Time, planning bool) []markSource {
 			return store.LogsIndexDigests(ctx, q, false, rawCutoff, v)
 		}},
 		{refWorkflow, store.ManifestDigests},
+		{refCheckpoint, store.CheckpointDigests},
 		{refRecent, func(ctx context.Context, q store.Querier, v func(string)) error {
 			return store.UploadedSince(ctx, q, now.Add(-s.policy.BlobGrace), v)
 		}},
@@ -86,9 +89,9 @@ func (s *Service) scan(ctx context.Context, now time.Time, planning bool) (blobS
 	if err != nil {
 		return blobScan{}, err
 	}
-	live := refOutput | refWorkflow | refRecent
+	live := refOutput | refWorkflow | refRecent | refCheckpoint
 	if planning {
-		live = refOutputKept | refWorkflow | refRecent
+		live = refOutputKept | refWorkflow | refRecent | refCheckpoint
 	}
 	var out blobScan
 	notAfter := now.Add(-s.policy.BlobGrace)
@@ -143,6 +146,13 @@ func (s *Service) plan(ctx context.Context) (v1.GCReport, blobScan, error) {
 	})
 	if err != nil {
 		return rep, blobScan{}, err
+	}
+	if s.relay != nil {
+		cp, err := s.planCheckpoints(ctx, now)
+		if err != nil {
+			return rep, blobScan{}, err
+		}
+		rep.Items = append(rep.Items, cp...)
 	}
 	scan, err := s.scan(ctx, now, true)
 	if err != nil {
@@ -243,6 +253,9 @@ func (s *Service) referencedNow(ctx context.Context, tx *store.Tx) (map[string]b
 		return nil, err
 	}
 	if err := store.LogsIndexDigests(ctx, tx, false, time.Time{}, mark); err != nil {
+		return nil, err
+	}
+	if err := store.CheckpointDigests(ctx, tx, mark); err != nil {
 		return nil, err
 	}
 	return live, nil

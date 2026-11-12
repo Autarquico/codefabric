@@ -12,6 +12,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/app/inbox"
 	"github.com/Autarquico/codefabric/internal/app/leases"
 	"github.com/Autarquico/codefabric/internal/app/logs"
+	"github.com/Autarquico/codefabric/internal/app/moves"
 	"github.com/Autarquico/codefabric/internal/app/projects"
 	"github.com/Autarquico/codefabric/internal/app/reconciliation"
 	"github.com/Autarquico/codefabric/internal/app/refs"
@@ -34,9 +35,11 @@ type Services struct {
 	Runs     *runs.Service
 	// Checkpoints is the capture of a Run's checkpoints (§11.7, §23).
 	Checkpoints *checkpoints.Service
-	Workers     *workers.Service
-	Leases      *leases.Service
-	Scheduler   *scheduler.Service
+	// Moves are the Tasks continuing on another Worker, in durable stages (§11.5).
+	Moves     *moves.Service
+	Workers   *workers.Service
+	Leases    *leases.Service
+	Scheduler *scheduler.Service
 	// Workflows are the versioned configurations and the blobs they name (§8.9).
 	Workflows *workflows.Service
 	// Environments are the global, versioned definitions of how a worktree is
@@ -81,6 +84,9 @@ type Config struct {
 	History checkpoints.History
 	// CheckpointExclude are the globs a capture leaves out (checkpoint.exclude).
 	CheckpointExclude []string
+	// PreDestructiveWait is how long a forced drain waits for the checkpoints it
+	// asks before it cancels the Runs (checkpoint.pre_destructive_timeout).
+	PreDestructiveWait time.Duration
 }
 
 // New wires the use cases. Runs re-derive their Task through tasks.NewRederive,
@@ -89,27 +95,39 @@ type Config struct {
 func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opts ...runs.Option) *Services {
 	workersCfg := cfg.Workers
 	rederive := tasks.NewRederive(ids)
+	if cfg.Relay != nil {
+		rederive = tasks.NewRederive(ids, cfg.Relay)
+	}
 	runService := runs.New(db, clk, ids, runs.Rederive(rederive), opts...)
 	leaseService := leases.New(db, clk, ids, leases.Rederive(rederive))
+	checkpointService := checkpoints.New(db, clk, ids, checkpoints.Rederive(rederive), checkpointOptions(cfg)...)
+	taskService := tasks.New(db, clk, ids, runService, taskOptions(cfg, checkpointService)...)
+	reconciliationService := reconciliation.New(db, clk, reconciliation.Rederive(rederive), reconciliation.Config{
+		StartedAt: workersCfg.StartedAt, LostTimeout: cfg.RunLostTimeout, OfflineTTL: workersCfg.OfflineTTL,
+		Hooks: cfg.ReconciliationHooks,
+	})
+	moveService := moves.New(db, clk, ids, checkpointService, taskService, reconciliationService)
+	workersCfg.Force = workers.Force{
+		RequestCapture: checkpointService.RequestBeforeDestroy, AwaitCaptures: checkpointService.AwaitCaptures,
+		Wait: cfg.PreDestructiveWait, CancelLiveIn: runService.CancelLiveIn, MoveTasks: moveService.DrainMove,
+	}
 	return &Services{
-		Projects:    projects.New(db, clk, ids),
-		Tasks:       tasks.New(db, clk, ids, runService),
-		Runs:        runService,
-		Checkpoints: checkpoints.New(db, clk, ids, checkpoints.Rederive(rederive), checkpointOptions(cfg)...),
-		Workers:     workers.New(db, clk, workersCfg),
-		Leases:      leaseService,
-		Scheduler:   scheduler.New(db, clk, leaseService, workersCfg.StartedAt),
-		Reconciliation: reconciliation.New(db, clk, reconciliation.Rederive(rederive), reconciliation.Config{
-			StartedAt: workersCfg.StartedAt, LostTimeout: cfg.RunLostTimeout, OfflineTTL: workersCfg.OfflineTTL,
-			Hooks: cfg.ReconciliationHooks,
-		}),
-		Events:       events.New(db, clk),
-		Logs:         logs.New(db, clk),
-		Search:       search.New(db),
-		Inbox:        inbox.New(db),
-		Workflows:    workflows.New(db, clk, ids, cfg.Blobs, blobLimit(cfg.MaxBlobBytes)...),
-		Environments: environments.New(db, clk),
-		db:           db,
+		Projects:       projects.New(db, clk, ids),
+		Tasks:          taskService,
+		Moves:          moveService,
+		Runs:           runService,
+		Checkpoints:    checkpointService,
+		Workers:        workers.New(db, clk, workersCfg),
+		Leases:         leaseService,
+		Scheduler:      scheduler.New(db, clk, leaseService, workersCfg.StartedAt),
+		Reconciliation: reconciliationService,
+		Events:         events.New(db, clk),
+		Logs:           logs.New(db, clk),
+		Search:         search.New(db),
+		Inbox:          inbox.New(db),
+		Workflows:      workflows.New(db, clk, ids, cfg.Blobs, blobLimit(cfg.MaxBlobBytes)...),
+		Environments:   environments.New(db, clk),
+		db:             db,
 	}
 }
 
@@ -117,6 +135,14 @@ func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, cfg Config, opt
 // narrows a Task name that more than one Project has.
 func (s *Services) Resolve(ctx context.Context, kind domain.Kind, ref, project string) (v1.Resolved, error) {
 	return refs.Resolve(ctx, s.db, kind, ref, project)
+}
+
+func taskOptions(cfg Config, capture tasks.Capturer) []tasks.Option {
+	opts := []tasks.Option{tasks.WithCapturer(capture)}
+	if cfg.Relay != nil {
+		opts = append(opts, tasks.WithRelay(cfg.Relay))
+	}
+	return opts
 }
 
 func checkpointOptions(cfg Config) []checkpoints.Option {

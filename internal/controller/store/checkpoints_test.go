@@ -61,6 +61,7 @@ func TestCheckpoints_RoundTripKeepsEverything(t *testing.T) {
 	f := newLeaseFixture(t)
 	in := checkpointOf("cp_1", f.queuedRun(1).ID)
 	in.Trigger = domain.CheckpointMove
+	in.Consistency = domain.ConsistencyLive
 	in.Summary = domain.CheckpointSummary{Progress: "p", Next: "n", Decisions: "d", Commands: "c"}
 	in.NativeState = &domain.NativeState{Adapter: "claude-code", AdapterVersion: "1.4.0", Digest: "sha256:abc"}
 	in.ArtifactIDs = []domain.ID{"art_1", "art_2"}

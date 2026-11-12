@@ -26,6 +26,7 @@ type Project struct {
 	Defaults           v1.ProjectDefaults
 	RepoConfig         domain.RepoConfig
 	OriginSecret       string // ref of the secret that authenticates the origin fetch; "" for none
+	NativeState        bool   // whether checkpoints capture the harness's own state
 	CreatedAt          time.Time
 }
 
@@ -97,6 +98,11 @@ type Run struct {
 	// prepare_failed, true after an exit.
 	LineageParent domain.ID
 	HarnessRan    *bool
+	// LineageCheckpoint is the checkpoint a Run that continues starts from, and
+	// PinnedWorker the name of the only Worker it may be offered to; both "" for
+	// the Runs that have none.
+	LineageCheckpoint domain.ID
+	PinnedWorker      string
 
 	// LeaseID and WorkerID name the live lease and its Worker, or the accepted
 	// one a Run keeps after it ended (§10.4.5); both are "" for a Run that has
@@ -158,7 +164,7 @@ func jsonOrNil[T any](v *T) (any, error) {
 // --- Projects ---
 
 const projectColumns = `id, short_n, name, repo, default_branch,
-    COALESCE(default_workflow, ''), COALESCE(default_environment, ''), defaults, repo_config, COALESCE(origin_secret, ''), created_at`
+    COALESCE(default_workflow, ''), COALESCE(default_environment, ''), defaults, repo_config, COALESCE(origin_secret, ''), native_state, created_at`
 
 func scanProject(row rowScanner) (Project, error) {
 	var (
@@ -168,7 +174,7 @@ func scanProject(row rowScanner) (Project, error) {
 		created  int64
 	)
 	if err := row.Scan(&id, &p.Short, &p.Name, &p.Repo, &p.DefaultBranch,
-		&p.DefaultWorkflow, &p.DefaultEnvironment, &defaults, &p.RepoConfig, &p.OriginSecret, &created); err != nil {
+		&p.DefaultWorkflow, &p.DefaultEnvironment, &defaults, &p.RepoConfig, &p.OriginSecret, &p.NativeState, &created); err != nil {
 		return Project{}, scanErr(err, "project")
 	}
 	if err := json.Unmarshal([]byte(defaults), &p.Defaults); err != nil {
@@ -185,10 +191,10 @@ func (t *Tx) InsertProject(ctx context.Context, p Project) error {
 		return err
 	}
 	_, err = t.Exec(ctx,
-		`INSERT INTO projects (id, short_n, name, repo, default_branch, default_workflow, default_environment, defaults, repo_config, origin_secret, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO projects (id, short_n, name, repo, default_branch, default_workflow, default_environment, defaults, repo_config, origin_secret, native_state, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(p.ID), p.Short, p.Name, p.Repo, p.DefaultBranch,
-		nullable(p.DefaultWorkflow), nullable(p.DefaultEnvironment), string(defaults), repoConfigOf(p), nullable(p.OriginSecret), p.CreatedAt.UnixNano())
+		nullable(p.DefaultWorkflow), nullable(p.DefaultEnvironment), string(defaults), repoConfigOf(p), nullable(p.OriginSecret), p.NativeState, p.CreatedAt.UnixNano())
 	if err != nil {
 		return fmt.Errorf("store: inserting project: %w", err)
 	}
@@ -205,15 +211,15 @@ func repoConfigOf(p Project) string {
 }
 
 // UpdateProject replaces what a Project lets change: branch, workflow,
-// environment, defaults, repo config, origin secret and the repo aliases.
+// environment, defaults, repo config, origin secret, native state and the repo aliases.
 func (t *Tx) UpdateProject(ctx context.Context, p Project) error {
 	defaults, err := json.Marshal(p.Defaults)
 	if err != nil {
 		return err
 	}
 	_, err = t.Exec(ctx,
-		`UPDATE projects SET default_branch = ?, default_workflow = ?, default_environment = ?, defaults = ?, repo_config = ?, origin_secret = ? WHERE id = ?`,
-		p.DefaultBranch, nullable(p.DefaultWorkflow), nullable(p.DefaultEnvironment), string(defaults), repoConfigOf(p), nullable(p.OriginSecret), string(p.ID))
+		`UPDATE projects SET default_branch = ?, default_workflow = ?, default_environment = ?, defaults = ?, repo_config = ?, origin_secret = ?, native_state = ? WHERE id = ?`,
+		p.DefaultBranch, nullable(p.DefaultWorkflow), nullable(p.DefaultEnvironment), string(defaults), repoConfigOf(p), nullable(p.OriginSecret), p.NativeState, string(p.ID))
 	if err != nil {
 		return fmt.Errorf("store: updating project: %w", err)
 	}
@@ -439,7 +445,8 @@ const runColumns = `id, short_n, task_id, attempt, lineage_kind, spec, spec_dige
     exit_code, COALESCE(runtime_handle, ''), COALESCE(branch, ''), COALESCE(result_commit, ''), COALESCE(result_excluded, ''),
     COALESCE(lineage_parent_id, ''), harness_ran, COALESCE(workflow_id, ''), COALESCE(workflow_version, 0), COALESCE(workflow_digest, ''),
     COALESCE(environment_id, ''), COALESCE(environment_version, 0), COALESCE(environment_digest, ''),
-    COALESCE(effective_config, ''), COALESCE(effective_digest, ''), COALESCE(failure_code, ''), COALESCE(model, ''), COALESCE(effective_config_digest, '')`
+    COALESCE(effective_config, ''), COALESCE(effective_digest, ''), COALESCE(failure_code, ''), COALESCE(model, ''), COALESCE(effective_config_digest, ''),
+    COALESCE(lineage_checkpoint_id, ''), COALESCE(pinned_worker, '')`
 
 func scanRun(row rowScanner) (Run, error) {
 	var (
@@ -454,6 +461,7 @@ func scanRun(row rowScanner) (Run, error) {
 		parent            string
 		harnessRan        sql.NullBool
 		workflow          string
+		checkpoint        string
 	)
 	if err := row.Scan(&id, &r.Short, &task, &r.Attempt, &r.Lineage, &spec, &r.SpecDigest, &r.SourceCommit, &r.State,
 		&r.EndReason, &r.QueuedReason, &r.Publication, &r.Evaluation, &r.Runtime, &r.Promoted,
@@ -461,7 +469,8 @@ func scanRun(row rowScanner) (Run, error) {
 		&r.Branch, &r.ResultCommit, &excluded, &parent, &harnessRan,
 		&workflow, &r.Workflow.Version, &r.Workflow.Digest,
 		&r.Environment.ID, &r.Environment.Version, &r.Environment.Digest,
-		&r.EffectiveConfig, &r.EffectiveDigest, &r.FailureCode, &r.Model, &r.EffectiveConfigDigest); err != nil {
+		&r.EffectiveConfig, &r.EffectiveDigest, &r.FailureCode, &r.Model, &r.EffectiveConfigDigest,
+		&checkpoint, &r.PinnedWorker); err != nil {
 		return Run{}, scanErr(err, "run")
 	}
 	if excluded != "" {
@@ -481,7 +490,7 @@ func scanRun(row rowScanner) (Run, error) {
 	if harnessRan.Valid {
 		r.HarnessRan = &harnessRan.Bool
 	}
-	r.LineageParent = domain.ID(parent)
+	r.LineageParent, r.LineageCheckpoint = domain.ID(parent), domain.ID(checkpoint)
 	r.Workflow.ID = domain.ID(workflow)
 	return r, nil
 }
@@ -499,14 +508,15 @@ func (t *Tx) InsertRun(ctx context.Context, r Run) error {
 		`INSERT INTO runs (id, short_n, task_id, attempt, lineage_kind, spec, spec_digest, source_commit, state,
 		     end_reason, queued_reason, publication, evaluation, runtime, promoted, worker_id, created_at, started_at, finished_at, branch,
 		     lineage_parent_id, workflow_id, workflow_version, workflow_digest,
-		     environment_id, environment_version, environment_digest)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     environment_id, environment_version, environment_digest, lineage_checkpoint_id, pinned_worker)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(r.ID), r.Short, string(r.TaskID), r.Attempt, string(r.Lineage), string(r.Spec), r.SpecDigest, r.SourceCommit,
 		string(r.State), nullable(string(r.EndReason)), nullable(r.QueuedReason),
 		string(r.Publication), string(r.Evaluation), string(r.Runtime), r.Promoted, nullable(string(r.WorkerID)),
 		r.CreatedAt.UnixNano(), nanosOrNil(r.StartedAt), nanosOrNil(r.FinishedAt), nullable(r.Branch), nullable(string(r.LineageParent)),
 		nullable(string(r.Workflow.ID)), nullableInt(r.Workflow.Version), nullable(r.Workflow.Digest),
-		nullable(r.Environment.ID), nullableInt(r.Environment.Version), nullable(r.Environment.Digest))
+		nullable(r.Environment.ID), nullableInt(r.Environment.Version), nullable(r.Environment.Digest),
+		nullable(string(r.LineageCheckpoint)), nullable(r.PinnedWorker))
 	if err != nil {
 		return fmt.Errorf("store: inserting run: %w", err)
 	}

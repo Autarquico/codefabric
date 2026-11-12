@@ -76,11 +76,12 @@ func (g *Git) Push(ctx context.Context, project, commit, branch string, a PushAu
 	return g.PushRef(ctx, project, commit, "refs/heads/"+branch, a, forbidden)
 }
 
-// PushRef is Push to a full ref: a branch of CodeFabric, or the ref of an orphan.
+// PushRef is Push to a full ref: a branch of CodeFabric, the ref of an orphan or
+// the ref of a checkpoint.
 func (g *Git) PushRef(ctx context.Context, project, commit, ref string, a PushAuth, forbidden Forbidden) error {
 	branch, isBranch := strings.CutPrefix(ref, "refs/heads/")
 	switch {
-	case !isProject(project) || !domain.ValidCommitID(commit) || (isBranch && !domain.ValidBranch(branch)) || (!isBranch && !domain.ValidOrphanRef(ref)):
+	case !isProject(project) || !domain.ValidCommitID(commit) || (isBranch && !domain.ValidBranch(branch)) || (!isBranch && !domain.ValidOrphanRef(ref) && !domain.ValidCheckpointRef(ref)):
 		return &PushError{Class: PushLocal, Message: "the project, commit or branch is not valid"}
 	case a.URL == "" || a.Token == "" || a.Cert == "" || a.Key == "" || a.CA == "":
 		return &PushError{Class: PushLocal, Message: "the credentials for the relay are incomplete"}
@@ -89,29 +90,7 @@ func (g *Git) PushRef(ctx context.Context, project, commit, ref string, a PushAu
 		return err
 	}
 	bare := g.o.Paths.WorkerRepoDir(project)
-	// The keys of the TLS and of the proxy are those of this URL, which win over any
-	// the repository may carry for it or in general; the rest are in the scope of the
-	// command, above the configuration of the repository.
-	scoped := func(key string) string { return "http." + a.URL + "." + key }
-	config := [][2]string{
-		{"core.hooksPath", "/dev/null"},
-		{"core.askPass", ""},
-		{"credential.helper", ""},
-		{"http.followRedirects", "false"},
-		{"http.lowSpeedLimit", "1000"},
-		{"http.lowSpeedTime", "120"},
-		{"http.sslVerify", "true"},
-		{scoped("sslVerify"), "true"},
-		{scoped("sslCert"), a.Cert},
-		{scoped("sslKey"), a.Key},
-		{scoped("sslCAInfo"), a.CA},
-		{scoped("proxy"), ""},
-		{scoped("extraHeader"), "Authorization: Bearer " + a.Token},
-	}
-	env := append(isolatedEnv(bare), "GIT_CONFIG_COUNT="+strconv.Itoa(len(config)))
-	for i, kv := range config {
-		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
-	}
+	env := relayEnv(bare, a)
 	res, err := g.run(ctx, cmd{
 		dir: bare, env: env, timeout: g.pushTimeout(), secrets: []string{a.Token},
 		args: []string{"push", "--porcelain", "--no-verify", "--no-progress", "--no-follow-tags", "--end-of-options", a.URL, commit + ":" + ref},

@@ -74,8 +74,11 @@ type Project struct {
 	RepoConfig domain.RepoConfig `json:"repo_config"`
 	// OriginSecret is the ref of the secret that authenticates the fetch of the
 	// origin; absent if the repo is fetched without credentials.
-	OriginSecret string    `json:"origin_secret,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	OriginSecret string `json:"origin_secret,omitempty"`
+	// NativeState says whether the checkpoints of the Project capture the
+	// harness's own state; off unless the Project opts in.
+	NativeState bool      `json:"native_state"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // RepoURLs are every URL of the Project: the main repo, then the aliases.
@@ -111,6 +114,7 @@ type UpdateProjectRequest struct {
 	Retry              *Retry             `json:"retry,omitempty"`
 	RepoConfig         *domain.RepoConfig `json:"repo_config,omitempty"`
 	OriginSecret       *string            `json:"origin_secret,omitempty"`
+	NativeState        *bool              `json:"native_state,omitempty"`
 }
 
 // ListProjectsResponse is GET /v1/projects.
@@ -195,6 +199,98 @@ type UpdateTaskRequest struct {
 // ActionRequest is the body of the POST actions of a Task (cancel, complete, archive, ...).
 type ActionRequest struct {
 	RequestID string `json:"request_id,omitempty"`
+}
+
+// ResumeTaskRequest is the body of POST /v1/tasks/{ref}/resume. Worker, a name
+// or ID, makes the Run go to that Worker only.
+type ResumeTaskRequest struct {
+	RequestID string `json:"request_id,omitempty"`
+	Worker    string `json:"worker,omitempty"`
+}
+
+// ResumeTaskResponse is the Task after a resume and the Run that continues it.
+type ResumeTaskResponse struct {
+	Task         Task   `json:"task"`
+	RunID        string `json:"run_id"`
+	RunShort     string `json:"run_short_id"`
+	CheckpointID string `json:"checkpoint_id"`
+}
+
+// MoveTaskRequest is the body of POST /v1/tasks/{ref}/move. Worker, a name or ID,
+// is where the Task continues; empty lets the scheduler choose. Force has the
+// Controller mark lost the Run of a Worker that is offline, so that it can be
+// moved from its last checkpoint; the work done since is lost.
+type MoveTaskRequest struct {
+	RequestID string `json:"request_id,omitempty"`
+	Worker    string `json:"worker,omitempty"`
+	Force     bool   `json:"force,omitempty"`
+}
+
+// MoveTaskResponse is the Task and the move that continues it.
+type MoveTaskResponse struct {
+	Task Task `json:"task"`
+	Move Move `json:"move"`
+}
+
+// Move is a Task continuing on another Worker (§11.5). Stage is requested,
+// checkpointing, checkpointed, resuming, done or failed; it only advances.
+// Failure, when set, is why the stage could not be done: the Task waits for a
+// decision and `cf task move` retries from that stage. Loss is set when the
+// source Run was lost: the work after that checkpoint does not travel.
+type Move struct {
+	ID           string     `json:"id"`
+	TaskID       string     `json:"task_id"`
+	SourceRunID  string     `json:"source_run_id"`
+	TargetRunID  string     `json:"target_run_id,omitempty"`
+	Worker       string     `json:"worker,omitempty"`
+	Stage        string     `json:"stage"`
+	CheckpointID string     `json:"checkpoint_id,omitempty"`
+	Forced       bool       `json:"forced,omitempty"`
+	Failure      string     `json:"failure,omitempty"`
+	Loss         *MoveLoss  `json:"loss,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+}
+
+// MoveLoss says what a move from a lost Run gives up: everything the Run did
+// after the checkpoint it continues from, taken at CheckpointAt.
+type MoveLoss struct {
+	CheckpointID string    `json:"checkpoint_id"`
+	CheckpointAt time.Time `json:"checkpoint_at"`
+}
+
+// DrainMoveResponse is POST /v1/workers/{ref}/drain-move: the Worker, draining,
+// and the move of each Task that had a live Run on it. Skipped are the Tasks
+// that could not be moved, and why (a Run still preparing, one that is capturing).
+type DrainMoveResponse struct {
+	Worker  Worker        `json:"worker"`
+	Moves   []Move        `json:"moves"`
+	Skipped []MoveSkipped `json:"skipped"`
+}
+
+// DrainForceResponse is POST /v1/workers/{ref}/drain-force: the Worker, draining,
+// and what became of each Run it had: the checkpoint asked before it was cancelled.
+type DrainForceResponse struct {
+	Worker Worker      `json:"worker"`
+	Runs   []ForcedRun `json:"runs"`
+}
+
+// ForcedRun is a Run a forced drain asked a checkpoint of; it cancelled it unless Captured. Captured says whether the
+// pre-destructive checkpoint was published before the Run was cancelled;
+// otherwise Reason says why not (the Worker cannot capture, it failed, it was too slow).
+type ForcedRun struct {
+	RunID        string `json:"run_id"`
+	TaskID       string `json:"task_id"`
+	CheckpointID string `json:"checkpoint_id,omitempty"`
+	Captured     bool   `json:"captured"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+// MoveSkipped is a Task a drain could not move.
+type MoveSkipped struct {
+	TaskID string `json:"task_id"`
+	Reason string `json:"reason"`
 }
 
 // ListTasksResponse is GET /v1/tasks.

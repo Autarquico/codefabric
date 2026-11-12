@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -88,6 +89,8 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 	now := e.clock.Now()
 	published := false
 	var stops []v1.StopCommand
+	var quiesces []state.Key
+	var refusals []refusal
 	defer func() {
 		if published && err == nil {
 			e.kickPublisher() // after the transaction that stores the order has committed
@@ -98,6 +101,12 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 				if stopErr := e.stopOrdered(ctx, s); stopErr != nil && ctx.Err() == nil {
 					e.log.ErrorContext(ctx, "carrying out a stop; recovery resumes it", "run", s.RunID, "epoch", s.Epoch, "err", stopErr)
 				}
+			}
+			for _, k := range quiesces {
+				e.quiesce(ctx, k)
+			}
+			for _, f := range refusals {
+				e.refuse(ctx, f)
 			}
 		}
 	}()
@@ -122,6 +131,26 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 					return err
 				}
 				stops = append(stops, *c.Stop)
+				continue
+			}
+			if c.Type == domain.CommandCheckpoint && c.Checkpoint != nil {
+				if kind, _, err := domain.ParseID(c.Checkpoint.RunID); err != nil || kind != domain.KindRun || c.Checkpoint.Epoch == 0 || !validCheckpointOrder(c.Checkpoint) {
+					e.log.ErrorContext(ctx, "a checkpoint order does not name a Run and a checkpoint; it is ignored", "seq", c.Seq)
+					if err := state.SetCursor(ctx, tx, c.Seq); err != nil {
+						return err
+					}
+					continue
+				}
+				quiesce, refused, err := e.persistCheckpoint(ctx, tx, c)
+				if err != nil {
+					return err
+				}
+				if quiesce != nil {
+					quiesces = append(quiesces, *quiesce)
+				}
+				if refused != nil {
+					refusals = append(refusals, *refused)
+				}
 				continue
 			}
 			if c.Type == domain.CommandInput && c.Input != nil {
@@ -152,6 +181,13 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 				Branch: a.Branch, Repo: a.Repo,
 				CPU: a.Resources.CPU, MemoryMB: a.Resources.MemoryMB, Spec: a.Spec,
 				Harness: spec.Requirements.Harness, Mode: spec.Mode, CreatedAt: now,
+			}
+			if a.Continues != nil {
+				raw, err := json.Marshal(a.Continues)
+				if err != nil {
+					return err
+				}
+				run.Continues = string(raw)
 			}
 			inserted, err := state.InsertAssigned(ctx, tx, run)
 			if err != nil {

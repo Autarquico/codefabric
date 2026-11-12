@@ -28,6 +28,8 @@ type Config struct {
 	// down did not witness the silence, and the Workers had no Controller to
 	// heartbeat to. The zero value counts from the last sign of life alone.
 	StartedAt time.Time
+	// Force is what a forced drain needs; without it, DrainForce refuses.
+	Force Force
 }
 
 // minOfflineTTL is the shortest TTL that makes sense: the sweeper runs a third
@@ -41,6 +43,7 @@ type Service struct {
 	version string
 	ttl     time.Duration
 	started time.Time
+	force   Force
 }
 
 // New builds the service. The clock is the one the store was opened with.
@@ -48,7 +51,7 @@ func New(db *store.DB, clk clock.Clock, cfg Config) *Service {
 	if cfg.OfflineTTL < minOfflineTTL {
 		cfg.OfflineTTL = domain.Defaults().WorkerOfflineTTL
 	}
-	return &Service{db: db, clock: clk, version: cfg.ControllerVersion, ttl: cfg.OfflineTTL, started: cfg.StartedAt}
+	return &Service{db: db, clock: clk, version: cfg.ControllerVersion, ttl: cfg.OfflineTTL, started: cfg.StartedAt, force: cfg.Force}
 }
 
 // List returns the Workers, oldest first; removed ones only with includeRemoved.

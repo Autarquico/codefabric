@@ -58,7 +58,7 @@ func verdictOf(w *execwrap.Wrapper) procident.Verdict {
 // verified again; one nobody asked to stop is left as it is and looked at again
 // on the next tick: not knowing is no reason to stop a Run.
 func (e *Executor) unresolved(ctx context.Context, r state.Run, why string) (done bool) {
-	if r.Phase == state.PhaseStopping || r.Phase == state.PhaseStopUnverified {
+	if r.Phase == state.PhaseStopping || r.Phase == state.PhaseCheckpointing || r.Phase == state.PhaseStopUnverified {
 		return e.markUnverified(ctx, r, why)
 	}
 	level := slog.LevelDebug
@@ -96,6 +96,11 @@ func (e *Executor) settleExit(ctx context.Context, r state.Run, m markers) (done
 		default:
 			return e.unresolved(ctx, r, "the identity of the wrapper cannot be verified")
 		}
+	}
+	// The group is gone and the Run is not settled: a capture ordered of it is made
+	// first, since settling removes the ConfigDir that holds its session.
+	if !e.capturedBeforeSettle(ctx, r, m.exit) {
+		return false
 	}
 	e.endSession(ctx, r.Key)
 	fresh := e.refresh(r, m)
@@ -152,6 +157,9 @@ func (e *Executor) settleLost(ctx context.Context, r state.Run, m markers, v pro
 	if v == procident.Gone && !e.groupEmpty(ctx, w) {
 		_ = syscall.Kill(-w.PGID, syscall.SIGKILL)
 		return false
+	}
+	if !e.capturedBeforeSettle(ctx, r, nil) {
+		return false // the group is gone, which is all a capture needs
 	}
 	e.endSession(ctx, r.Key)
 	if m = e.refresh(r, m); m.exit != nil {

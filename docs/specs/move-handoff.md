@@ -1,19 +1,19 @@
 ---
 codename: codefabric
-title: "Move y handoff"
+title: Move y handoff
 type: task
-status: draft
+status: active
 priority: P1
 size: L
-issue: null
+issue: 169
 prs: []
-related_issues: []
+related_issues: [169]
 sub_issues: []
 depends_on: [defer-resume]
 supersedes: []
 related_specs: [codefabric-spec, phase-5-handoff]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-12
 ---
 
 # Move y handoff

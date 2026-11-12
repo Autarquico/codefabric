@@ -97,7 +97,7 @@ func (e *Executor) step(ctx context.Context, k state.Key) (done bool) {
 			return e.settleNeverRan(ctx, k, "preparing the Run failed: "+prepErr.Error())
 		}
 		return e.beginOrEnvironment(ctx, r)
-	case state.PhaseStarting, state.PhaseRunning, state.PhaseStopping:
+	case state.PhaseStarting, state.PhaseRunning, state.PhaseCheckpointing, state.PhaseStopping:
 		return e.poll(ctx, r)
 	case state.PhaseStopUnverified:
 		if e.retryDue(k) {
@@ -234,9 +234,14 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err := e.inputOfLaunch(r, spec, dir, &run); err != nil {
 		return err
 	}
-	launch, err := adapter.Start(ctx, e.o.Host, run)
+	launch, err := e.launchOf(ctx, adapter, r, run)
 	if err != nil {
 		return err
+	}
+	if launch.SessionID != "" {
+		if err := e.o.DB.WithTx(ctx, func(tx *state.Tx) error { return state.SetSessionID(ctx, tx, r.Key, launch.SessionID) }); err != nil {
+			return err
+		}
 	}
 	l := execwrap.Launch{
 		Argv: launch.Argv, Env: launch.Env, Dir: worktree, Mode: spec.Mode, Grace: e.grace,
@@ -408,8 +413,11 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 	if m.exit == nil && r.Phase.Live() {
 		e.releaseStartIfDue(ctx, r)
 	}
-	if r.Phase == state.PhaseStopping && m.exit == nil && e.firstLook(r.Key) {
-		// A stop the previous daemon began: the signal may not have been sent.
+	if m.exit == nil && m.started != nil && r.Phase == state.PhaseRunning {
+		e.captureLive(ctx, r)
+	}
+	if (r.Phase == state.PhaseStopping || r.Phase == state.PhaseCheckpointing) && m.exit == nil && e.firstLook(r.Key) {
+		// A stop, or a quiesce, the previous daemon began: the signal may not have been sent.
 		e.signalStop(ctx, r, m)
 	}
 	switch {
@@ -562,6 +570,8 @@ func (e *Executor) pollWrapper(ctx context.Context, r state.Run, m markers) (don
 			return e.adopt(ctx, r, m)
 		case state.PhaseStopping:
 			return e.escalateStop(ctx, r, m)
+		case state.PhaseCheckpointing:
+			e.escalateCheckpoint(ctx, r, m)
 		case state.PhaseStopUnverified:
 			// It can be verified now: the stop goes on from where it was, if one was ordered.
 			if _, err := state.StopOrderOf(ctx, e.o.DB.Reader(), r.Key); err != nil {

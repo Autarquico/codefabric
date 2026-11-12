@@ -34,6 +34,14 @@ type SessionPorter interface {
 	Import(ctx context.Context, in SessionImport, r io.Reader) (SessionImportResult, error)
 }
 
+// CheckpointFormatter is implemented by an adapter whose Resume takes the
+// archive of its SessionPorter.Export as the Data of a Checkpoint: it says the
+// Format that Resume expects, so that a Worker can build the Checkpoint of a
+// native state it downloaded.
+type CheckpointFormatter interface {
+	CheckpointFormat() string
+}
+
 // SessionRef names a session on this host.
 type SessionRef struct {
 	// ConfigDir is the configuration directory of the harness; empty is the

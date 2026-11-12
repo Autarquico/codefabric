@@ -21,3 +21,16 @@ func TestGCPolicy_TakesTheRetentionOfControllerJSON(t *testing.T) {
 		t.Fatalf("policy = %+v", p)
 	}
 }
+
+func TestGCPolicy_TakesTheCheckpointRetentionOfControllerJSON(t *testing.T) {
+	var cfg config.Controller
+	if err := json.Unmarshal([]byte(`{"gc":{"checkpoint_interval_keep":9,"checkpoint_reservation_ttl":"72h"}}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if p := daemon.GCPolicy(cfg); p.AutoCheckpoints != 9 || p.CheckpointReservation != 72*time.Hour {
+		t.Fatalf("policy = %+v", p)
+	}
+	if p := daemon.GCPolicy(config.Controller{}); p.AutoCheckpoints != 0 || p.CheckpointReservation != 0 {
+		t.Fatalf("unset values are for the GC to default, got %+v", p)
+	}
+}

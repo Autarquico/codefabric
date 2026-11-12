@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -64,8 +66,12 @@ type Announcement struct {
 // some of its modes is one of runtimeModes and Detect finds it installed; the
 // Worker then announces harness:<id>, harness:<id>:mode:<m> for each of
 // those modes and harness:<id>:config-isolation if it has ConfigIsolation, and
+// harness:<id>:version:<v> if its adapter says its version,
 // harness:<id>:structured-input:v1 if it has StructuredInput and what it needs
 // of the host (harness.StructuredInputChecker) is there.
+// It announces domain.CheckpointCapability when some harness it offers has
+// Capabilities.NativeCheckpoint: it then captures the checkpoints the Controller
+// orders (the Controller sends the order only to a Worker that announces it).
 // It always announces domain.RepoConfigCapability (it reads the repo
 // configuration of a Run), domain.WorkflowConfigCapability (it fetches and
 // materialises the Workflow a Run froze), domain.EnvironmentHostCapability (it runs the prepare
@@ -76,6 +82,7 @@ type Announcement struct {
 // next start. It waits for each Detect at most DetectTimeout, whether or not
 // the adapter honours its ctx.
 func Announce(ctx context.Context, host harness.Host, reg *harness.Registry, runtimeModes []domain.Mode) Announcement {
+	checkpoint := false
 	out := Announcement{Capabilities: []string{domain.HarnessModesMarker, domain.RepoConfigCapability, domain.WorkflowConfigCapability, domain.EnvironmentHostCapability}}
 	for _, id := range reg.IDs() {
 		a, _ := reg.Get(id)
@@ -85,11 +92,17 @@ func Announce(ctx context.Context, host harness.Host, reg *harness.Registry, run
 			continue
 		}
 		out.Capabilities = append(out.Capabilities, domain.HarnessCapability(id))
+		if v := versionOf(ctx, host, a); v != "" {
+			out.Capabilities = append(out.Capabilities, domain.HarnessCapability(id)+VersionCapabilityInfix+v)
+		}
 		for _, m := range h.Modes {
 			out.Capabilities = append(out.Capabilities, domain.HarnessModeCapability(id, m))
 		}
 		if a.Capabilities().ConfigIsolation {
 			out.Capabilities = append(out.Capabilities, domain.HarnessConfigIsolationCapability(id))
+		}
+		if a.Capabilities().NativeCheckpoint {
+			checkpoint = true
 		}
 		if a.Capabilities().StructuredInput {
 			if h.InputErr = structuredInputReady(ctx, host, a); h.InputErr == nil {
@@ -99,9 +112,35 @@ func Announce(ctx context.Context, host harness.Host, reg *harness.Registry, run
 			out.Harnesses[len(out.Harnesses)-1] = h
 		}
 	}
+	if checkpoint {
+		out.Capabilities = append(out.Capabilities, domain.CheckpointCapability)
+	}
 	slices.Sort(out.Capabilities)
 	out.Capabilities = slices.Compact(out.Capabilities)
 	return out
+}
+
+// VersionCapabilityInfix sits between harness:<id> and the version a Worker
+// announces: harness:<id>:version:<version>. The Controller reads its major to
+// decide whether the native state of a checkpoint can be restored here.
+const VersionCapabilityInfix = ":version:"
+
+// versionOf is the version of an offered harness as a token a capability can
+// hold, or "" if the adapter cannot say it or says what is not one: the Worker
+// then announces none and the Controller takes it as compatible.
+func versionOf(ctx context.Context, host harness.Host, a harness.Adapter) string {
+	ctx, cancel := context.WithTimeout(ctx, DetectTimeout)
+	defer cancel()
+	v, err := a.Version(ctx, host)
+	if err != nil || v == "" || len(v) > 64 {
+		return ""
+	}
+	for _, r := range v {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune(".-+_", r) || r > unicode.MaxASCII {
+			return ""
+		}
+	}
+	return v
 }
 
 // structuredInputReady is nil when the harness can be answered while it runs on

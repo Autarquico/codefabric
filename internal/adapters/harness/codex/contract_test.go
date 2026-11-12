@@ -110,7 +110,9 @@ func TestScenario_CodexAdapter_Contrato(t *testing.T) {
 			if err := os.WriteFile(h.OutputPath, []byte("Reading additional input from stdin...\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			writeRolloutAt(t, h.ConfigDir, rolloutBody(t))
 		},
+		ResumeFrom: []harness.Checkpoint{{Harness: codex.ID, Format: codex.CheckpointFormat, Data: otherCheckpointData(t)}},
 		ExpectEvents: []harness.Event{
 			{Kind: harness.EventSessionStarted, SessionID: "01a1819d-734d-7a60-88f8-293969dcf0bd"},
 			{Kind: harness.EventUsage, Usage: &harness.UsageEvent{

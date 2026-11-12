@@ -3,7 +3,6 @@ package claude
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +17,10 @@ import (
 // CheckpointFormat is the layout of the Data of a Checkpoint: the tar.gz of
 // Export (manifest, transcript and subagents of one session).
 const CheckpointFormat = "claude-session-tar-gz/v1"
+
+// CheckpointFormat is the Format of the Checkpoints this adapter resumes
+// (harness.CheckpointFormatter).
+func (Adapter) CheckpointFormat() string { return CheckpointFormat }
 
 // Checkpoint exports the session of the Run, which is no longer running: the
 // Worker stopped the process before asking. It is h.SessionID, the one Start
@@ -95,20 +98,12 @@ func (a Adapter) Resume(ctx context.Context, host harness.Host, run harness.RunS
 	return a.launch(host, run, plan)
 }
 
-// sessionHolds tells whether the transcript of the session contains prompt,
-// JSON-escaped, anywhere (it does not tell where). A prompt that the CLI wrote with other escapes
-// than ours is not found: it is sent again, which is the safe side.
+// sessionHolds tells whether the transcript of the session contains prompt
+// (see harness.TranscriptHolds).
 func sessionHolds(configDir, cwd, id, prompt string) (bool, error) {
 	raw, err := os.ReadFile(filepath.Join(sessionProjectDir(configDir, cwd, id), id+".jsonl")) //nolint:gosec // a file of the Run
 	if err != nil {
 		return false, fmt.Errorf("claude-code: reading the session %s: %w", id, err)
 	}
-	var needle bytes.Buffer
-	enc := json.NewEncoder(&needle)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(prompt); err != nil {
-		return false, err
-	}
-	quoted := bytes.TrimSpace(needle.Bytes())
-	return bytes.Contains(raw, quoted[1:len(quoted)-1]), nil
+	return harness.TranscriptHolds(raw, prompt)
 }

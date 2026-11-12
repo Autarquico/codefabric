@@ -100,7 +100,7 @@ func (s *Server) completeCheckpoint(w http.ResponseWriter, r *http.Request, c ca
 	if err := decodeBody(w, r, &req); err != nil {
 		return err
 	}
-	done := checkpoints.Completion{Epoch: req.LeaseEpoch, CheckpointID: cp, Commit: req.Commit, Excluded: req.Excluded}
+	done := checkpoints.Completion{Epoch: req.LeaseEpoch, CheckpointID: cp, Commit: req.Commit, Excluded: req.Excluded, Warnings: req.Warnings}
 	if n := req.NativeState; n != nil {
 		done.NativeState = &domain.NativeState{Adapter: n.Adapter, AdapterVersion: n.AdapterVersion, Digest: n.Digest}
 	}

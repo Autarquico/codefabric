@@ -19,7 +19,7 @@ const relayRefsKind = "relay_refs"
 //
 // It lists only the refs the GC may ever delete (branches cf/*/* and orphans);
 // DeleteRefs refuses any other, so a namespace the GC does not know, such as
-// refs/cf/checkpoints/* or refs/cf/snapshots/*, is out of reach by construction.
+// refs/cf/snapshots/*, is out of reach by construction; the refs of checkpoints are deleted by name.
 type Relay interface {
 	// Refs lists by Project the full names of those refs: refs/heads/cf/<task>/<run>
 	// and refs/cf/orphans/<run>-e<epoch>.

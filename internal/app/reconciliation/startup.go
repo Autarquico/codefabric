@@ -20,9 +20,14 @@ const readyTick = time.Second
 // runtime is not stopped has its stop ordered, in case the transaction that
 // ended it predates the orders (an upgrade), and its result is to be sealed if
 // its harness may have run. The timers of lost need nothing: they count from
-// the start of this process. It says how many Runs are live.
+// the start of this process. The moves that are not over resume on their own
+// (moves.Service.Run drives them from the stage they are in, once the gate of
+// the scheduler opens); it says how many there are, and how many Runs are live.
 func (s *Service) Startup(ctx context.Context, log *slog.Logger) error {
-	var live int
+	var (
+		live  int
+		moves []store.Move
+	)
 	err := s.db.WithTx(ctx, func(tx *store.Tx) error {
 		act := mutation.Act{Actor: systemActor, Now: s.clock.Now()}
 		ended, err := store.UnstoppedEndedRuns(ctx, tx)
@@ -39,12 +44,16 @@ func (s *Service) Startup(ctx context.Context, log *slog.Logger) error {
 			}
 		}
 		alive, err := store.LiveAcceptedRuns(ctx, tx)
+		if err != nil {
+			return err
+		}
 		live = len(alive)
+		moves, err = store.ActiveMoves(ctx, tx)
 		return err
 	})
 	if err == nil {
 		log.InfoContext(ctx, "the Controller starts: its Workers are to reconcile before the scheduler runs", "live_runs", live,
-			"started_at", s.cfg.StartedAt)
+			"moves_to_resume", len(moves), "started_at", s.cfg.StartedAt)
 	}
 	return err
 }

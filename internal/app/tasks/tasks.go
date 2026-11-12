@@ -30,12 +30,32 @@ type Service struct {
 	ids      *domain.IDGenerator
 	runs     *runs.Service
 	rederive Rederive
+	capture  Capturer
+	relay    Relay
 }
+
+// Option adjusts New.
+type Option func(*Service)
+
+// WithCapturer gives the service what defer asks a checkpoint of. Without one,
+// defer is CF_NOT_IMPLEMENTED.
+func WithCapturer(c Capturer) Option { return func(s *Service) { s.capture = c } }
+
+// WithRelay gives the service the relay a resume reads the commit of a
+// checkpoint from. Without one, resume cannot know it and refuses.
+func WithRelay(r Relay) Option { return func(s *Service) { s.relay = r } }
 
 // New builds the service. runs must have been built with a Rederive made by
 // NewRederive with the same ids.
-func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, runs *runs.Service) *Service {
-	return &Service{db: db, clock: clk, ids: ids, runs: runs, rederive: NewRederive(ids)}
+func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, runs *runs.Service, opts ...Option) *Service {
+	s := &Service{db: db, clock: clk, ids: ids, runs: runs, rederive: NewRederive(ids)}
+	for _, o := range opts {
+		o(s)
+	}
+	if s.relay != nil {
+		s.rederive = NewRederive(ids, s.relay)
+	}
+	return s
 }
 
 // Create makes a Task in a Project and, unless req.NoStart, its first Run.
@@ -119,6 +139,9 @@ func (s *Service) Cancel(ctx context.Context, by pki.Session, ref, project strin
 		if err := tx.UpdateTask(ctx, *t); err != nil {
 			return err
 		}
+		if err := endMoveIn(ctx, tx, act, t.ID, "the Task was cancelled", false); err != nil {
+			return err
+		}
 		if err := s.runs.CancelLiveIn(ctx, tx, act, t.ID); err != nil {
 			return err
 		}
@@ -138,6 +161,9 @@ func (s *Service) Complete(ctx context.Context, by pki.Session, ref, project str
 		}
 		t.CompletedManuallyAt = &act.Now
 		if err := tx.UpdateTask(ctx, *t); err != nil {
+			return err
+		}
+		if err := endMoveIn(ctx, tx, act, t.ID, "the Task was completed", false); err != nil {
 			return err
 		}
 		if err := s.runs.CancelLiveIn(ctx, tx, act, t.ID); err != nil {
@@ -164,6 +190,9 @@ func (s *Service) Archive(ctx context.Context, by pki.Session, ref, project stri
 		}
 		t.ArchivedAt = &act.Now
 		if err := tx.UpdateTask(ctx, *t); err != nil {
+			return err
+		}
+		if err := endMoveIn(ctx, tx, act, t.ID, "the Task was archived", false); err != nil {
 			return err
 		}
 		return audit(ctx, tx, act, "task.archived", *t, nil, nil)

@@ -49,13 +49,14 @@ func (s *Service) list(ctx context.Context, read func(store.Querier) ([]store.Ch
 
 func viewOf(c store.Checkpoint) v1.Checkpoint {
 	v := v1.Checkpoint{
-		ID: string(c.ID), RunID: string(c.RunID), Seq: c.Seq, Trigger: c.Trigger, Ref: c.SourceRef,
+		ID: string(c.ID), RunID: string(c.RunID), Seq: c.Seq, Trigger: c.Trigger, Consistency: c.Consistency, Ref: c.SourceRef,
 		Excluded: c.Excluded, CreatedAt: c.CreatedAt,
 		Summary: v1.CheckpointSummary(c.Summary),
 	}
 	if v.Excluded == nil {
 		v.Excluded = []string{}
 	}
+	v.Warnings = append([]string{}, c.Warnings...)
 	if n := c.NativeState; n != nil {
 		v.NativeState = &v1.NativeStateRef{Adapter: n.Adapter, AdapterVersion: n.AdapterVersion, Digest: n.Digest}
 	}

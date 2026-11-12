@@ -63,7 +63,7 @@ func (s *Service) SweepLost(ctx context.Context) (int, error) {
 		failed []error
 	)
 	for _, run := range due {
-		done, err := s.loseIfDue(ctx, run, false)
+		done, err := s.loseIfDue(ctx, run, "")
 		switch {
 		case err != nil:
 			failed = append(failed, fmt.Errorf("reconciliation: losing %s: %w", run.ID, err))
@@ -74,71 +74,97 @@ func (s *Service) SweepLost(ctx context.Context) (int, error) {
 	return lost, errors.Join(failed...)
 }
 
-func (s *Service) loseIfDue(ctx context.Context, candidate store.Run, identityGone bool) (bool, error) {
+// causeIdentityGone is why a Run is lost with no deadline after a restore.
+const causeIdentityGone = "worker identity gone"
+
+// ForceLoseIn loses a live Run now, without waiting for run_lost_timeout, because
+// a person asked to move it (§11.5): its Worker is offline and they accept to
+// lose what the Run did after its last checkpoint. It runs in the transaction of
+// the move, with act the person's, so the loss is theirs, audited with the move, and
+// undone with it if the move is refused. It says whether the Run was lost by this
+// call; a Run that has ended or is queued, or whose Worker is back, is left alone.
+func (s *Service) ForceLoseIn(ctx context.Context, tx *store.Tx, act mutation.Act, run domain.ID, by string) (bool, error) {
+	candidate, err := store.RunByID(ctx, tx, run)
+	if err != nil {
+		return false, err
+	}
+	return s.loseIn(ctx, tx, act, candidate, "forced by "+by, true)
+}
+
+// loseIfDue loses the Run when its deadline has passed or, if cause is not
+// empty, whatever the deadline.
+func (s *Service) loseIfDue(ctx context.Context, candidate store.Run, cause string) (bool, error) {
 	if h := s.cfg.Hooks.BeforeLose; h != nil {
 		h(candidate.ID)
 	}
 	done := false
-	err := s.db.WithTx(ctx, func(tx *store.Tx) error {
-		done = false
-		now := s.clock.Now()
-		run, err := store.RunByID(ctx, tx, candidate.ID)
-		if err != nil {
-			return err
-		}
-		if run.State.IsTerminal() || run.State == domain.RunQueued || run.LeaseID != candidate.LeaseID || run.LeaseState != domain.LeaseAccepted {
-			return nil
-		}
-		w, err := store.WorkerByID(ctx, tx, run.WorkerID)
-		if err != nil {
-			return err
-		}
-		lastSeen, deadline := s.lostDeadline(w)
-		if !identityGone && !now.After(deadline) {
-			return nil
-		}
-		status, err := store.RunStatusOf(ctx, tx, run)
-		if err != nil {
-			return err
-		}
-		next, err := domain.NextRunState(status, domain.RunEventLostTimeout)
-		if err != nil {
-			return err
-		}
-		task, err := store.TaskByID(ctx, tx, run.TaskID)
-		if err != nil {
-			return err
-		}
-		act := mutation.Act{Actor: systemActor, Now: now}
-		if err := tx.FinishRun(ctx, run, next.State, "", now); err != nil {
-			return err
-		}
-		from := run.State
-		run.State = next.State
-		if err := runs.EndByControllerIn(ctx, tx, act, &run, task, domain.StopLost); err != nil {
-			return err
-		}
-		ev := act.Event(domain.EventRunLost, "run lost")
-		ev.Level = "warn"
-		ev.ProjectID, ev.TaskID, ev.RunID, ev.WorkerID = task.ProjectID, task.ID, run.ID, w.ID
-		ev.Data = map[string]any{
-			"short_id": domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(), "from": string(from),
-			"last_seen": lastSeen, "controller_started_at": s.cfg.StartedAt, "deadline": deadline,
-			"timeout": s.cfg.LostTimeout.String(), "publication": string(run.Publication),
-		}
-		if identityGone {
-			ev.Data["cause"] = "worker identity gone"
-		}
-		if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
-			return err
-		}
-		if err := s.rederive(ctx, tx, act, task.ID); err != nil {
-			return err
-		}
-		done = true
-		return nil
+	err := s.db.WithTx(ctx, func(tx *store.Tx) (err error) {
+		done, err = s.loseIn(ctx, tx, mutation.Act{Actor: systemActor, Now: s.clock.Now()}, candidate, cause, false)
+		return err
 	})
 	return done, err
+}
+
+// loseIn is the transaction of loseIfDue. With offlineOnly the Run is lost only
+// if its Worker is offline or removed, whatever cause says about the deadline.
+func (s *Service) loseIn(ctx context.Context, tx *store.Tx, act mutation.Act, candidate store.Run, cause string, offlineOnly bool) (bool, error) {
+	now := act.Now
+	run, err := store.RunByID(ctx, tx, candidate.ID)
+	if err != nil {
+		return false, err
+	}
+	if run.State.IsTerminal() || run.State == domain.RunQueued || run.LeaseID != candidate.LeaseID || run.LeaseState != domain.LeaseAccepted {
+		return false, nil
+	}
+	w, err := store.WorkerByID(ctx, tx, run.WorkerID)
+	if err != nil {
+		return false, err
+	}
+	if offlineOnly && w.State != domain.WorkerOffline && w.State != domain.WorkerRemoved {
+		return false, nil
+	}
+	lastSeen, deadline := s.lostDeadline(w)
+	if cause == "" && !now.After(deadline) {
+		return false, nil
+	}
+	status, err := store.RunStatusOf(ctx, tx, run)
+	if err != nil {
+		return false, err
+	}
+	next, err := domain.NextRunState(status, domain.RunEventLostTimeout)
+	if err != nil {
+		return false, err
+	}
+	task, err := store.TaskByID(ctx, tx, run.TaskID)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.FinishRun(ctx, run, next.State, "", now); err != nil {
+		return false, err
+	}
+	from := run.State
+	run.State = next.State
+	if err := runs.EndByControllerIn(ctx, tx, act, &run, task, domain.StopLost); err != nil {
+		return false, err
+	}
+	ev := act.Event(domain.EventRunLost, "run lost")
+	ev.Level = "warn"
+	ev.ProjectID, ev.TaskID, ev.RunID, ev.WorkerID = task.ProjectID, task.ID, run.ID, w.ID
+	ev.Data = map[string]any{
+		"short_id": domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(), "from": string(from),
+		"last_seen": lastSeen, "controller_started_at": s.cfg.StartedAt, "deadline": deadline,
+		"timeout": s.cfg.LostTimeout.String(), "publication": string(run.Publication),
+	}
+	if cause != "" {
+		ev.Data["cause"] = cause
+	}
+	if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
+		return false, err
+	}
+	if err := s.rederive(ctx, tx, act, task.ID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RunLostSweeper sweeps every tenth of run_lost_timeout, at most a minute
@@ -177,7 +203,7 @@ func (s *Service) ReleaseReservationsOfGoneWorkers(ctx context.Context, reason s
 	}
 	lost := 0
 	for _, run := range live {
-		done, err := s.loseIfDue(ctx, run, true)
+		done, err := s.loseIfDue(ctx, run, causeIdentityGone)
 		if err != nil {
 			return lost, fmt.Errorf("reconciliation: losing %s: %w", run.ID, err)
 		}
