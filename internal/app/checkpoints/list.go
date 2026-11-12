@@ -56,6 +56,7 @@ func viewOf(c store.Checkpoint) v1.Checkpoint {
 	if v.Excluded == nil {
 		v.Excluded = []string{}
 	}
+	v.Warnings = append([]string{}, c.Warnings...)
 	if n := c.NativeState; n != nil {
 		v.NativeState = &v1.NativeStateRef{Adapter: n.Adapter, AdapterVersion: n.AdapterVersion, Digest: n.Digest}
 	}

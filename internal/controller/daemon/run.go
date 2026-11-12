@@ -207,7 +207,8 @@ func gcPolicy(cfg config.Controller) gc.Policy {
 		RunLogs: time.Duration(cfg.Retention.RunLogs), RawOutput: time.Duration(cfg.Retention.RawOutput),
 		BlobGrace: time.Duration(cfg.GC.BlobGrace), BatchSize: cfg.GC.BatchSize,
 		Interval: time.Duration(cfg.GC.Interval), MaxStorage: cfg.MaxStorage,
-		RelayBranches: time.Duration(cfg.Retention.RelayBranches),
+		RelayBranches:   time.Duration(cfg.Retention.RelayBranches),
+		AutoCheckpoints: cfg.GC.CheckpointIntervalKeep, CheckpointReservation: time.Duration(cfg.GC.CheckpointReservationTTL),
 	}
 }
 

@@ -14,10 +14,12 @@ import (
 type Checkpoint struct {
 	domain.Checkpoint
 	Excluded []string
+	// Warnings are what the Worker said of the capture, once published.
+	Warnings []string
 }
 
 const checkpointColumns = `id, run_id, seq, trigger, source_ref, native_adapter, native_adapter_version, native_digest,
-	summary_progress, summary_next, summary_decisions, summary_commands, excluded, artifact_ids, created_at`
+	summary_progress, summary_next, summary_decisions, summary_commands, excluded, artifact_ids, warnings, created_at`
 
 // InsertCheckpoint stores a checkpoint as the next of its Run: it takes Seq
 // from the Run's count (c.Seq is ignored) and returns the stored checkpoint.
@@ -58,14 +60,14 @@ func nonNil[T any](s []T) []T {
 
 func scanCheckpoint(row rowScanner) (Checkpoint, error) {
 	var (
-		c                        Checkpoint
-		id, run, trigger         string
-		adapter, version, digest *string
-		excluded, artifacts      string
-		created                  int64
+		c                             Checkpoint
+		id, run, trigger              string
+		adapter, version, digest      *string
+		excluded, artifacts, warnings string
+		created                       int64
 	)
 	if err := row.Scan(&id, &run, &c.Seq, &trigger, &c.SourceRef, &adapter, &version, &digest,
-		&c.Summary.Progress, &c.Summary.Next, &c.Summary.Decisions, &c.Summary.Commands, &excluded, &artifacts, &created); err != nil {
+		&c.Summary.Progress, &c.Summary.Next, &c.Summary.Decisions, &c.Summary.Commands, &excluded, &artifacts, &warnings, &created); err != nil {
 		return Checkpoint{}, scanErr(err, "checkpoint")
 	}
 	c.ID, c.RunID, c.Trigger = domain.ID(id), domain.ID(run), domain.CheckpointTrigger(trigger)
@@ -74,6 +76,9 @@ func scanCheckpoint(row rowScanner) (Checkpoint, error) {
 	}
 	if err := json.Unmarshal([]byte(excluded), &c.Excluded); err != nil {
 		return Checkpoint{}, fmt.Errorf("store: decoding excluded paths of %s: %w", id, err)
+	}
+	if err := json.Unmarshal([]byte(warnings), &c.Warnings); err != nil {
+		return Checkpoint{}, fmt.Errorf("store: decoding warnings of %s: %w", id, err)
 	}
 	if err := json.Unmarshal([]byte(artifacts), &c.ArtifactIDs); err != nil {
 		return Checkpoint{}, fmt.Errorf("store: decoding artifact ids of %s: %w", id, err)

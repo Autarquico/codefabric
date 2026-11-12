@@ -55,3 +55,25 @@ func TestProjectSet_WithoutTheFlagLeavesTheOriginSecretAlone(t *testing.T) {
 		t.Errorf("sent origin_secret %q without the flag", *f.got[0].OriginSecret)
 	}
 }
+
+func TestProjectSet_NativeStateOnOff(t *testing.T) {
+	f := &fakeProjectUpdater{}
+	runProjectSet(t, f, "--native-state", "on")
+	runProjectSet(t, f, "--native-state", "off")
+	runProjectSet(t, f, "--default-branch", "dev")
+	if v := f.got[0].NativeState; v == nil || !*v {
+		t.Errorf("on sent %v", v)
+	}
+	if v := f.got[1].NativeState; v == nil || *v {
+		t.Errorf("off sent %v", v)
+	}
+	if f.got[2].NativeState != nil {
+		t.Errorf("sent native_state without the flag")
+	}
+	opts := Options{projectUpdater: func(*cobra.Command) (projectUpdater, error) { return f, nil }}
+	var out, errOut bytes.Buffer
+	args := []string{"project", "set", "backend", "--native-state", "maybe"}
+	if code := RunContextWith(context.Background(), opts, args, strings.NewReader(""), &out, &errOut); code == 0 {
+		t.Error("a value other than on or off was accepted")
+	}
+}

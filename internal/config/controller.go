@@ -89,6 +89,12 @@ type GC struct {
 	// BlobGrace is how long an unreferenced blob is left alone: the time a
 	// writer has to reference what it has just stored. Unset, it is 24h.
 	BlobGrace Duration `json:"blob_grace,omitempty"`
+	// CheckpointIntervalKeep is how many automatic checkpoints (trigger
+	// interval) of a Run are kept. Unset, it is 5.
+	CheckpointIntervalKeep int `json:"checkpoint_interval_keep,omitempty"`
+	// CheckpointReservationTTL is how long the reservation of a checkpoint that
+	// was never published is kept. Unset, it is 7d.
+	CheckpointReservationTTL Duration `json:"checkpoint_reservation_ttl,omitempty"`
 }
 
 // Duration is a time.Duration written in JSON as text such as "45s".

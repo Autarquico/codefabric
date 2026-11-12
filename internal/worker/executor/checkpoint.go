@@ -85,7 +85,7 @@ func (e *Executor) persistCheckpoint(ctx context.Context, tx *state.Tx, c v1.Wor
 		exclude = config.DefaultCheckpointExclude()
 	}
 	created, err := state.BeginCapture(ctx, tx, state.Capture{
-		Key: k, CheckpointID: o.CheckpointID, Trigger: string(o.Trigger), Ref: o.Ref, Exclude: exclude, CreatedAt: now,
+		Key: k, CheckpointID: o.CheckpointID, Trigger: string(o.Trigger), Ref: o.Ref, Exclude: exclude, NativeState: o.NativeState, CreatedAt: now,
 	}, r.Phase)
 	if err != nil || !created {
 		return nil, nil, err
@@ -276,12 +276,12 @@ func (e *Executor) capture(ctx context.Context, r state.Run, c state.Capture) (o
 		}
 		return fail("pushing the capture failed: " + forbidden.Redact(briefErr(pushErr)))
 	}
-	native, retry := e.exportNativeState(ctx, cc, r, c, forbidden)
+	native, warnings, retry := e.exportNativeState(ctx, cc, r, c, forbidden)
 	if retry {
 		return "", true
 	}
 	_, err = cc.CompleteCheckpoint(ctx, r.RunID, c.CheckpointID, v1.CheckpointCompleteRequest{
-		LeaseEpoch: r.LeaseEpoch, Commit: sealed.Commit, NativeState: native, Excluded: sealed.Excluded,
+		LeaseEpoch: r.LeaseEpoch, Commit: sealed.Commit, NativeState: native, Excluded: sealed.Excluded, Warnings: warnings,
 	})
 	if err != nil {
 		return e.afterControllerError(ctx, r, err, fail)
@@ -338,32 +338,36 @@ func (e *Executor) failCapture(ctx context.Context, cc CheckpointClient, r state
 // the Run is left out with a warning in the log (names and lines, never values),
 // and the checkpoint is source and summary. retry says the upload did not get
 // through and is to be tried again.
-func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r state.Run, c state.Capture, forbidden gitops.Forbidden) (ref *v1.NativeStateRef, retry bool) {
+func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r state.Run, c state.Capture, forbidden gitops.Forbidden) (ref *v1.NativeStateRef, warnings []string, retry bool) {
+	if !c.NativeState {
+		return nil, nil, false
+	}
 	spec := parseSpec(r.Spec)
 	adapter, ok := e.harnesses.Get(spec.Requirements.Harness)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 	porter, ok := adapter.(harness.SessionPorter)
 	if !ok || r.SessionID == "" {
-		return nil, false
+		return nil, nil, false
 	}
 	h, err := e.handleOf(adapter, r, spec)
 	if err != nil {
 		e.log.WarnContext(ctx, "the native state of a Run is left out of its checkpoint: its handle cannot be rebuilt", "run", r.RunID, "err", err)
-		return nil, false
+		return nil, nil, false
 	}
 	sref := harness.SessionRef{ConfigDir: h.ConfigDir, Cwd: h.Worktree, SessionID: h.SessionID}
-	leave := func(why string) (*v1.NativeStateRef, bool) {
+	leave := func(why string) (*v1.NativeStateRef, []string, bool) {
 		e.log.WarnContext(ctx, "the native state of a Run is left out of its checkpoint: "+why, "run", r.RunID, "checkpoint", c.CheckpointID, "adapter", adapter.ID())
-		return nil, false
+		return nil, nil, false
 	}
 	files, err := porter.Locate(ctx, sref)
 	if err != nil {
 		return leave("its session was not found: " + forbidden.Redact(err.Error()))
 	}
 	if why := e.sessionHoldsSecrets(files, forbidden); why != "" {
-		return leave(why)
+		ref, _, retry := leave(why)
+		return ref, []string{"Secret in the session: " + why + "; the native state was left out of the checkpoint"}, retry
 	}
 	tmp, err := os.CreateTemp(e.o.Paths.WorkerDataDir(), "native-")
 	if err != nil {
@@ -374,7 +378,7 @@ func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r
 	manifest, err := porter.Export(ctx, sref, harness.ExportOptions{}, io.MultiWriter(tmp, sum))
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, true
+			return nil, nil, true
 		}
 		return leave("exporting its session failed: " + forbidden.Redact(err.Error()))
 	}
@@ -392,9 +396,9 @@ func (e *Executor) exportNativeState(ctx context.Context, cc CheckpointClient, r
 			return leave("the Controller refused it: " + coded.Message)
 		}
 		e.log.WarnContext(ctx, "uploading the native state of a Run failed; it will be tried again", "run", r.RunID, "err", err)
-		return nil, true
+		return nil, nil, true
 	}
-	return &v1.NativeStateRef{Adapter: adapter.ID(), AdapterVersion: manifest.Version, Digest: digest}, false
+	return &v1.NativeStateRef{Adapter: adapter.ID(), AdapterVersion: manifest.Version, Digest: digest}, nil, false
 }
 
 // sessionHoldsSecrets reads every file of the session for the values of the

@@ -91,6 +91,9 @@ type Options struct {
 	DoctorEvery time.Duration
 }
 
+// The Worker captures checkpoints through the client it talks to the Controller with.
+var _ executor.CheckpointClient = (*client.Client)(nil)
+
 // runtimeModes are the modes the Runtime runs a harness in: tmux gives an
 // interactive one a terminal and a headless one a log.
 var runtimeModes = []domain.Mode{domain.ModeHeadless, domain.ModeInteractive}
@@ -190,6 +193,7 @@ func Run(ctx context.Context, o Options) error {
 		PermissionServerArgv: o.PermissionServerArgv,
 		LogSecrets:           logSecrets,
 		WorktreeRetention:    time.Duration(d.settings.Retention.Worktrees),
+		CheckpointGrace:      time.Duration(d.settings.Checkpoint.Grace),
 	}
 	eo.AskpassScript = d.writeAskpassScript(ctx, o)
 	broker := authsync.New(authsync.Options{Clock: d.clock, Log: d.log})

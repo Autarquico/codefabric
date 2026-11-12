@@ -74,8 +74,11 @@ type Project struct {
 	RepoConfig domain.RepoConfig `json:"repo_config"`
 	// OriginSecret is the ref of the secret that authenticates the fetch of the
 	// origin; absent if the repo is fetched without credentials.
-	OriginSecret string    `json:"origin_secret,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	OriginSecret string `json:"origin_secret,omitempty"`
+	// NativeState says whether the checkpoints of the Project capture the
+	// harness's own state; off unless the Project opts in.
+	NativeState bool      `json:"native_state"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // RepoURLs are every URL of the Project: the main repo, then the aliases.
@@ -111,6 +114,7 @@ type UpdateProjectRequest struct {
 	Retry              *Retry             `json:"retry,omitempty"`
 	RepoConfig         *domain.RepoConfig `json:"repo_config,omitempty"`
 	OriginSecret       *string            `json:"origin_secret,omitempty"`
+	NativeState        *bool              `json:"native_state,omitempty"`
 }
 
 // ListProjectsResponse is GET /v1/projects.

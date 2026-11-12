@@ -100,3 +100,22 @@ func TestPrintCheckpoints_NothingTheWorkerControlsReachesTheTerminalWithControlC
 		t.Errorf("the newlines and tabs of the summary are lost:\n%q", show.String())
 	}
 }
+
+func TestCheckpointWarnings_AreShownSanitized(t *testing.T) {
+	cp := v1.Checkpoint{
+		ID: "cp1", RunID: "run1", Seq: 1, Trigger: domain.CheckpointManual, CreatedAt: time.Unix(0, 0),
+		Warnings: []string{"Secret in the session\x1b[2J: lines 3"},
+	}
+	var list, show bytes.Buffer
+	if err := printCheckpoints(&list, []v1.Checkpoint{cp}); err != nil {
+		t.Fatal(err)
+	}
+	if err := printCheckpointSummary(&show, cp); err != nil {
+		t.Fatal(err)
+	}
+	for name, out := range map[string]string{"list": list.String(), "show": show.String()} {
+		if !strings.Contains(out, "Secret in the session") || strings.ContainsRune(out, 0x1b) {
+			t.Errorf("%s: warning missing or unsanitized:\n%q", name, out)
+		}
+	}
+}
