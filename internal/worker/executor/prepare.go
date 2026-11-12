@@ -53,13 +53,13 @@ func (e *Executor) makeWorktree(ctx context.Context, r state.Run, spec specView,
 	if r.Repo == "" || r.Branch == "" {
 		return fmt.Errorf("this assignment was made before the Controller sent the repository and the branch of the Run: it cannot be prepared")
 	}
-	auth, err := og.credential(ctx)
+	auth, relay, err := e.sourceAccess(ctx, r, og)
 	if err != nil {
 		return err
 	}
 	return e.o.Git.Prepare(ctx, gitops.PrepareSpec{
 		Project: r.ProjectID, Run: r.RunID, LeaseEpoch: r.LeaseEpoch, Repo: r.Repo, SourceRef: spec.Source.Ref,
-		SourceCommit: r.SourceCommit, Branch: r.Branch, RunDir: e.runDir(r.Key), Auth: auth,
+		SourceCommit: r.SourceCommit, Branch: r.Branch, RunDir: e.runDir(r.Key), Auth: auth, Relay: relay,
 	}, worktree)
 }
 

@@ -104,11 +104,14 @@ type Run struct {
 	// SessionID is the native session of the harness (Launch.SessionID), "" if
 	// it has none or the Run predates it.
 	SessionID string
+	// Continues is the JSON of the v1.Continuation the assignment came with, ""
+	// for a Run that continues nothing.
+	Continues string
 }
 
 const runColumns = `run_id, lease_epoch, lease_id, run_short, task_id, project_id, command_seq, accept_by, source_commit,
     cpu, memory_mb, spec, harness, mode, phase, COALESCE(handle, ''), started_at, never_started, COALESCE(fenced_code, ''),
-    created_at, updated_at, branch, repo, orphaned_at, adopted, prepare_attempt, COALESCE(session_id, '')`
+    created_at, updated_at, branch, repo, orphaned_at, adopted, prepare_attempt, COALESCE(session_id, ''), COALESCE(continues, '')`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -118,18 +121,18 @@ func scanRun(row scanner) (Run, error) {
 		spec                       string
 		acceptBy, created, updated int64
 		started, orphaned          sql.NullInt64
-		phase                      string
+		phase, continues           string
 		never                      bool
 	)
 	if err := row.Scan(&r.RunID, &r.LeaseEpoch, &r.LeaseID, &r.RunShort, &r.TaskID, &r.ProjectID, &r.CommandSeq, &acceptBy,
 		&r.SourceCommit, &r.CPU, &r.MemoryMB, &spec, &r.Harness, &r.Mode, &phase, &r.Handle, &started, &never,
-		&r.FencedCode, &created, &updated, &r.Branch, &r.Repo, &orphaned, &r.Adopted, &r.PrepareAttempt, &r.SessionID); err != nil {
+		&r.FencedCode, &created, &updated, &r.Branch, &r.Repo, &orphaned, &r.Adopted, &r.PrepareAttempt, &r.SessionID, &continues); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Run{}, ErrNotFound
 		}
 		return Run{}, fmt.Errorf("state: scanning a run: %w", err)
 	}
-	r.Spec, r.Phase, r.NeverStarted = []byte(spec), Phase(phase), never
+	r.Spec, r.Phase, r.NeverStarted, r.Continues = []byte(spec), Phase(phase), never, continues
 	r.AcceptBy, r.CreatedAt, r.UpdatedAt = time.Unix(0, acceptBy).UTC(), time.Unix(0, created).UTC(), time.Unix(0, updated).UTC()
 	if started.Valid {
 		at := time.Unix(0, started.Int64).UTC()
@@ -167,12 +170,12 @@ func collectRuns(ctx context.Context, q Querier, query string, args ...any) ([]R
 func InsertAssigned(ctx context.Context, tx *Tx, r Run) (inserted bool, err error) {
 	res, err := tx.exec(ctx,
 		`INSERT INTO local_runs (run_id, lease_epoch, lease_id, run_short, task_id, project_id, command_seq, accept_by,
-		     source_commit, cpu, memory_mb, spec, harness, mode, phase, created_at, updated_at, branch, repo)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		     source_commit, cpu, memory_mb, spec, harness, mode, phase, created_at, updated_at, branch, repo, continues)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT DO NOTHING`,
 		r.RunID, r.LeaseEpoch, r.LeaseID, r.RunShort, r.TaskID, r.ProjectID, r.CommandSeq, r.AcceptBy.UnixNano(),
 		r.SourceCommit, r.CPU, r.MemoryMB, string(r.Spec), r.Harness, r.Mode, string(PhaseAssigned),
-		r.CreatedAt.UnixNano(), r.CreatedAt.UnixNano(), r.Branch, r.Repo)
+		r.CreatedAt.UnixNano(), r.CreatedAt.UnixNano(), r.Branch, r.Repo, nullText(r.Continues))
 	if err != nil {
 		return false, fmt.Errorf("state: inserting an assignment: %w", err)
 	}

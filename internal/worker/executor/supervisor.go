@@ -234,7 +234,7 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err := e.inputOfLaunch(r, spec, dir, &run); err != nil {
 		return err
 	}
-	launch, err := adapter.Start(ctx, e.o.Host, run)
+	launch, err := e.launchOf(ctx, adapter, r, run)
 	if err != nil {
 		return err
 	}

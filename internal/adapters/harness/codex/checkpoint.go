@@ -15,6 +15,10 @@ import (
 // Export (manifest and rollout of one session).
 const CheckpointFormat = "codex-session-tar-gz/v1"
 
+// CheckpointFormat is the Format of the Checkpoints this adapter resumes
+// (harness.CheckpointFormatter).
+func (Adapter) CheckpointFormat() string { return CheckpointFormat }
+
 // Checkpoint exports the session of the Run, which is no longer running: the
 // Worker stopped the process before asking. It is h.SessionID, the one Resume
 // said in its Launch; a Run that was started has none (Codex does not let Start

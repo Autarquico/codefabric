@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -180,6 +181,13 @@ func (e *Executor) persist(ctx context.Context, cmds []v1.WorkerCommand) (blocke
 				Branch: a.Branch, Repo: a.Repo,
 				CPU: a.Resources.CPU, MemoryMB: a.Resources.MemoryMB, Spec: a.Spec,
 				Harness: spec.Requirements.Harness, Mode: spec.Mode, CreatedAt: now,
+			}
+			if a.Continues != nil {
+				raw, err := json.Marshal(a.Continues)
+				if err != nil {
+					return err
+				}
+				run.Continues = string(raw)
 			}
 			inserted, err := state.InsertAssigned(ctx, tx, run)
 			if err != nil {
