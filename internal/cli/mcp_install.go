@@ -117,8 +117,8 @@ func (f *mcpFlags) tool() (mcpTool, error) {
 }
 
 func (f *mcpFlags) validate(withProfile bool) error {
-	if f.scope != "user" && f.scope != "project" {
-		return usageError(fmt.Errorf("--scope must be user or project, not %q", f.scope))
+	if err := validScope(f.scope); err != nil {
+		return err
 	}
 	if withProfile && !slices.Contains(mcpProfiles, f.profile) {
 		return usageError(fmt.Errorf("--profile must be one of %s, not %q", strings.Join(mcpProfiles, ", "), f.profile))
@@ -187,7 +187,7 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 		return res, err
 	}
 	res.Binary = bin
-	base, err := scopeBase(f.scope)
+	base, err := skillsBase(f.scope, tool.skillsDir)
 	if err != nil {
 		return res, err
 	}
@@ -235,7 +235,7 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 
 func uninstallMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult, error) {
 	res := mcpInstallResult{Tool: tool.name, Scope: f.scope}
-	base, err := scopeBase(f.scope)
+	base, err := skillsBase(f.scope, tool.skillsDir)
 	if err != nil {
 		return res, err
 	}
@@ -355,6 +355,31 @@ func scopeBase(scope string) (string, error) {
 		return "", fmt.Errorf("finding the home directory: %w", err)
 	}
 	return home, nil
+}
+
+func validScope(scope string) error {
+	if scope != "user" && scope != "project" {
+		return usageError(fmt.Errorf("--scope must be user or project, not %q", scope))
+	}
+	return nil
+}
+
+// skillsBase is scopeBase for a command that writes skills under skillsDir.
+// A repository is untrusted: when a directory on the way to the skill is a
+// symlink the write could land outside it, so the project scope refuses.
+// (The home of the user may link its dotfiles anywhere.)
+func skillsBase(scope, skillsDir string) (string, error) {
+	base, err := scopeBase(scope)
+	if err != nil || scope != "project" {
+		return base, err
+	}
+	for dir := skillsDir; dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		path := filepath.Join(base, dir)
+		if info, err := os.Lstat(path); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+			return "", symlinkError(path)
+		}
+	}
+	return base, nil
 }
 
 // skillFilePath is where the tool reads the skill under a scope base.

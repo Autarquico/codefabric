@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Autarquico/codefabric/internal/cli"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/support/prompt"
 	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
@@ -27,6 +28,8 @@ type setupSteps struct {
 	connect func(ctx context.Context, cmd *cobra.Command, p *prompt.Prompter) error
 	adopt   func(ctx context.Context, cmd *cobra.Command, p *prompt.Prompter) error
 	join    func(ctx context.Context, cmd *cobra.Command, p *prompt.Prompter) error
+	// skill offers the /handto skill of Claude Code to a client. Optional.
+	skill func(p *prompt.Prompter) error
 }
 
 func newSetupCmd(steps setupSteps) *cobra.Command {
@@ -60,11 +63,17 @@ func runSetup(cmd *cobra.Command, p *prompt.Prompter, steps setupSteps, role str
 		_, err := fmt.Fprintln(p.Out(), "El rol Controller queda fuera de `cf setup`: instálalo con `cf controller init`.")
 		return err
 	case roleClient:
-		return steps.connect(ctx, cmd, p)
+		if err := steps.connect(ctx, cmd, p); err != nil {
+			return err
+		}
+		return offerSkill(steps, p)
 	case roleWorker:
 		return steps.join(ctx, cmd, p)
 	case roleBoth:
 		if err := steps.connect(ctx, cmd, p); err != nil {
+			return err
+		}
+		if err := offerSkill(steps, p); err != nil {
 			return err
 		}
 		adopt, err := p.Confirm("¿Crear un Workflow con la configuración de este equipo (cf workflow adopt)?", false)
@@ -79,6 +88,30 @@ func runSetup(cmd *cobra.Command, p *prompt.Prompter, steps setupSteps, role str
 		return steps.join(ctx, cmd, p)
 	}
 	return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("--role must be client, worker or both, got %q", role), nil)
+}
+
+// offerSkill asks only on a terminal: a script that pipes the answers of
+// `cf setup` never gets a file written into ~/.claude it did not ask for.
+func offerSkill(steps setupSteps, p *prompt.Prompter) error {
+	if steps.skill == nil || !p.Input().IsTerminal() {
+		return nil
+	}
+	return steps.skill(p)
+}
+
+func installSkillStep(p *prompt.Prompter) error {
+	yes, err := p.Confirm("¿Instalar la skill /handto en Claude Code (cf claude install)?", false)
+	if err != nil || !yes {
+		return err
+	}
+	path, err := cli.InstallUserHandtoSkill()
+	if err != nil {
+		// A handto skill of someone else, or a home that cannot be written, does not stop the setup.
+		_, werr := fmt.Fprintf(p.Out(), "No se instaló la skill: %v\n", err)
+		return werr
+	}
+	_, err = fmt.Fprintf(p.Out(), "Skill /handto instalada en %s\n", path)
+	return err
 }
 
 func askRole(p *prompt.Prompter) (string, error) {
@@ -98,6 +131,7 @@ func askRole(p *prompt.Prompter) (string, error) {
 // binarySetupSteps are the flows of the real commands.
 func binarySetupSteps() setupSteps {
 	return setupSteps{
+		skill: installSkillStep,
 		connect: func(ctx context.Context, cmd *cobra.Command, p *prompt.Prompter) error {
 			invitation, err := p.Ask("Invitación de cliente", "")
 			if err != nil {

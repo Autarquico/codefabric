@@ -37,11 +37,17 @@ type Adapter interface {
 	ValidateConfig(ctx context.Context, host Host) (Validation, error)
 
 	// Start builds the process of a Run without starting it. It is
-	// idempotent: the same spec gives the same Launch and leaves the same
-	// files. A mode outside Capabilities().Modes is [ErrUnsupportedMode].
+	// idempotent: the same spec and the same files of the Run give the same
+	// Launch, and repeated it continues what an earlier Launch started instead
+	// of starting it again (so the Launch may differ from the first one). A
+	// mode outside Capabilities().Modes is [ErrUnsupportedMode].
 	Start(ctx context.Context, host Host, run RunSpec) (Launch, error)
-	// Resume is Start from a checkpoint, with its guarantees.
+	// Resume is Start from a checkpoint, with its guarantees. It may install
+	// the native state of the checkpoint in run.ConfigDir before building the
+	// Launch.
 	Resume(ctx context.Context, host Host, run RunSpec, cp Checkpoint) (Launch, error)
+	// Checkpoint captures the native state of the Run. The process is not
+	// running: the caller stops it before asking.
 	Checkpoint(ctx context.Context, host Host, h Handle) (Checkpoint, error)
 	// Stop asks the harness to stop. It is a courtesy: the authoritative stop
 	// is the signal to the process group, and [ErrUnsupported] means that is
@@ -116,6 +122,11 @@ type Handle struct {
 	// InputPath is the FIFO of the stdin of a Run that was started with
 	// RunSpec.StructuredInput; empty for one that was not.
 	InputPath string
+	// SessionID is the native session of the Run, as Launch.SessionID said it
+	// when the Run started. The Worker persists it and gives it back, so that
+	// Checkpoint captures that session and does not have to guess it. Empty for
+	// a Run that predates it, or for a harness that has no sessions.
+	SessionID string
 }
 
 // Detection is what Detect found.
