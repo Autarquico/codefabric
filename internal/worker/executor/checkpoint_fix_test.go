@@ -15,6 +15,7 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
 	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codefabric/internal/worker/gitops"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
 
@@ -56,6 +57,37 @@ func TestCheckpointCapture_ACaptureTheControllerDoesNotTakeIsRetriedWithBackoff(
 	waitFor(t, "the Run to be settled", func() bool { return r.e.step(t.Context(), k) })
 	if len(r.ctrl.completes) != 1 {
 		t.Errorf("completes = %d", len(r.ctrl.completes))
+	}
+}
+
+// A capture whose push got through and whose upload of the native state did not is retried
+// with the commit already pushed: the worktree is not sealed again, which would give a
+// commit the immutable ref refuses.
+func TestCheckpointCapture_ARetryAfterThePushReusesTheCommit(t *testing.T) {
+	r := newCpRig(t)
+	k, w := r.running(fakeSpec("do it", ""), "trap 'exit 0' TERM")
+	seals := 0
+	r.git.snapshot = func(gitops.SnapshotIntent, gitops.Forbidden) (gitops.Sealed, error) {
+		seals++
+		return gitops.Sealed{Commit: strings.Repeat(string(rune('0'+seals)), 40), Excluded: []string{".env"}}, nil
+	}
+	r.ctrl.putErr = errors.New("connection refused")
+	r.order(k)
+	r.endedByStop(k, w)
+	r.e.step(t.Context(), k)
+	if len(r.git.pushes) != 1 {
+		t.Fatalf("pushes = %d, want the first one", len(r.git.pushes))
+	}
+
+	r.ctrl.putErr = nil
+	r.clock.Advance(captureRetryMax)
+	waitFor(t, "the Run to be settled", func() bool { return r.e.step(t.Context(), k) })
+
+	if seals != 1 || len(r.git.pushes) != 1 {
+		t.Errorf("sealed %d times, pushed %d: the retry must reuse the pushed commit", seals, len(r.git.pushes))
+	}
+	if len(r.ctrl.completes) != 1 || r.ctrl.completes[0].Commit != strings.Repeat("1", 40) || !slices.Equal(r.ctrl.completes[0].Excluded, []string{".env"}) {
+		t.Errorf("completes = %+v", r.ctrl.completes)
 	}
 }
 

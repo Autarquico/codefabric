@@ -42,8 +42,9 @@ type cpCtrl struct {
 	// onComplete and onPut run when the call arrives.
 	onComplete func()
 	onPut      func()
-	// tokenErr, if set, is what CheckpointToken answers.
+	// tokenErr, if set, is what CheckpointToken answers, and putErr PutNativeState.
 	tokenErr error
+	putErr   error
 }
 
 func (c *cpCtrl) CheckpointToken(_ context.Context, run string, req v1.CheckpointTokenRequest) (v1.RelayTokenResponse, error) {
@@ -74,6 +75,9 @@ func (c *cpCtrl) FailCheckpoint(_ context.Context, _, id string, req v1.Checkpoi
 }
 
 func (c *cpCtrl) PutNativeState(_ context.Context, _, _ string, _ uint64, digest string, r io.Reader, size int64) (v1.NativeStateUploaded, error) {
+	if c.putErr != nil {
+		return v1.NativeStateUploaded{}, c.putErr
+	}
 	if c.onPut != nil {
 		c.onPut()
 	}

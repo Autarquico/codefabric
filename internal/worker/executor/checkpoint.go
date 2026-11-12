@@ -338,40 +338,12 @@ func (e *Executor) capture(ctx context.Context, r state.Run, c state.Capture) (o
 	if err != nil {
 		return fail("the capture cannot be checked for secrets: " + forbidden.Redact(err.Error()))
 	}
-	head, err := e.o.Git.Head(ctx, e.worktree(r.Key))
-	if err != nil {
-		return fail("HEAD of the worktree cannot be read: " + forbidden.Redact(err.Error()))
-	}
-	sealed, err := e.o.Git.Snapshot(ctx, e.worktree(r.Key), gitops.SnapshotIntent{
-		Project: r.ProjectID, ParentOID: head, At: c.CreatedAt, Exclude: c.Exclude,
-	}, forbidden)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", true
+	sealed := gitops.Sealed{Commit: c.PushedCommit, Excluded: c.PushedExcluded}
+	if c.PushedCommit == "" {
+		var done bool
+		if sealed, outcome, retry, done = e.sealAndPush(ctx, cc, r, c, forbidden, fail); !done {
+			return outcome, retry
 		}
-		return fail("capturing the worktree failed: " + forbidden.Redact(err.Error()))
-	}
-	tok, err := cc.CheckpointToken(ctx, r.RunID, v1.CheckpointTokenRequest{LeaseEpoch: r.LeaseEpoch, CheckpointID: c.CheckpointID, Commit: sealed.Commit})
-	if err != nil {
-		return e.afterControllerError(ctx, r, err, fail)
-	}
-	if tok.Ref != c.Ref {
-		return fail("the token is for another ref than the checkpoint's")
-	}
-	pushErr := e.o.Git.PushRef(ctx, r.ProjectID, sealed.Commit, c.Ref, gitops.PushAuth{
-		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
-		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
-	}, forbidden)
-	if ctx.Err() != nil {
-		return "", true
-	}
-	if pushErr != nil {
-		var pe *gitops.PushError
-		if errors.As(pushErr, &pe) && pe.Class == gitops.PushUnreachable {
-			e.log.WarnContext(ctx, "pushing a checkpoint failed; it will be tried again", "run", r.RunID, "err", pe.Message)
-			return "", true
-		}
-		return fail("pushing the capture failed: " + forbidden.Redact(briefErr(pushErr)))
 	}
 	native, warnings, retry := e.exportNativeState(ctx, cc, r, c, forbidden)
 	if retry {
@@ -385,6 +357,59 @@ func (e *Executor) capture(ctx context.Context, r state.Run, c state.Capture) (o
 	}
 	e.log.InfoContext(ctx, "checkpoint captured", "run", r.RunID, "checkpoint", c.CheckpointID, "commit", sealed.Commit, "excluded", len(sealed.Excluded), "native_state", native != nil)
 	return state.CaptureCompleted, false
+}
+
+// sealAndPush seals the worktree of the Run, asks the Controller for the right to push
+// the commit and pushes it to the ref of the checkpoint. ok says the commit is
+// pushed; otherwise outcome and retry say what became of the capture, as for capture.
+func (e *Executor) sealAndPush(ctx context.Context, cc CheckpointClient, r state.Run, c state.Capture, forbidden gitops.Forbidden, fail func(string) (string, bool)) (sealed gitops.Sealed, outcome string, retry, ok bool) {
+	stop := func(outcome string, retry bool) (gitops.Sealed, string, bool, bool) {
+		return gitops.Sealed{}, outcome, retry, false
+	}
+	head, err := e.o.Git.Head(ctx, e.worktree(r.Key))
+	if err != nil {
+		return stop(fail("HEAD of the worktree cannot be read: " + forbidden.Redact(err.Error())))
+	}
+	sealed, err = e.o.Git.Snapshot(ctx, e.worktree(r.Key), gitops.SnapshotIntent{
+		Project: r.ProjectID, ParentOID: head, At: c.CreatedAt, Exclude: c.Exclude,
+	}, forbidden)
+	if err != nil {
+		if ctx.Err() != nil {
+			return stop("", true)
+		}
+		return stop(fail("capturing the worktree failed: " + forbidden.Redact(err.Error())))
+	}
+	tok, err := cc.CheckpointToken(ctx, r.RunID, v1.CheckpointTokenRequest{LeaseEpoch: r.LeaseEpoch, CheckpointID: c.CheckpointID, Commit: sealed.Commit})
+	if err != nil {
+		return stop(e.afterControllerError(ctx, r, err, fail))
+	}
+	if tok.Ref != c.Ref {
+		return stop(fail("the token is for another ref than the checkpoint's"))
+	}
+	pushErr := e.o.Git.PushRef(ctx, r.ProjectID, sealed.Commit, c.Ref, gitops.PushAuth{
+		URL: e.o.Controller.RelayURL(tok.Path), Token: tok.Token,
+		Cert: e.o.RelayTLS.Cert, Key: e.o.RelayTLS.Key, CA: e.o.RelayTLS.CA,
+	}, forbidden)
+	if ctx.Err() != nil {
+		return stop("", true)
+	}
+	if pushErr != nil {
+		var pe *gitops.PushError
+		if errors.As(pushErr, &pe) && pe.Class == gitops.PushUnreachable {
+			e.log.WarnContext(ctx, "pushing a checkpoint failed; it will be tried again", "run", r.RunID, "err", pe.Message)
+			return stop("", true)
+		}
+		return stop(fail("pushing the capture failed: " + forbidden.Redact(briefErr(pushErr))))
+	}
+	// The ref is immutable: from here on a retry reuses this commit, since sealing
+	// the worktree again (the harness goes on writing) would give another one.
+	err = e.o.DB.WithTx(ctx, func(tx *state.Tx) error {
+		return state.MarkCapturePushed(ctx, tx, r.Key, c.CheckpointID, sealed.Commit, sealed.Excluded)
+	})
+	if err != nil {
+		e.log.WarnContext(ctx, "recording the push of a capture failed; a retry would seal the worktree again", "run", r.RunID, "err", err)
+	}
+	return sealed, "", false, true
 }
 
 // afterControllerError is what an error of the Controller means for a capture: a
