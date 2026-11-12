@@ -62,6 +62,20 @@ func TestWorkerCommandsNeedCredentialsAndTheirArguments(t *testing.T) {
 	}
 }
 
+func TestWorkerDrainForceAsksToConfirmAndExcludesMove(t *testing.T) {
+	isolatedMachine(t)
+	if code, _, _ := run(t, "worker", "drain", "box", "--force", "--move"); code != 2 {
+		t.Errorf("--force --move: exit %d, want a usage error", code)
+	}
+	if code, _, _ := run(t, "worker", "drain", "box", "--force"); code != 2 {
+		t.Errorf("--force without a terminal nor --yes: exit %d, want a usage error", code)
+	}
+	code, out, _ := run(t, "worker", "drain", "box", "--force", "--yes", "--json")
+	if env := errorOf(t, out); code != 6 || env["code"] != string(domain.CodeUnauthenticated) {
+		t.Errorf("--force --yes: exit %d, %v (it should go on to the Controller)", code, env)
+	}
+}
+
 func TestStateOfNamesTheCauseOfADegradedWorker(t *testing.T) {
 	for _, tt := range []struct {
 		w    v1.Worker

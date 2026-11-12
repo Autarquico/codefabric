@@ -151,6 +151,7 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		RunLostTimeout: cmp.Or(o.RunLostTimeout, time.Duration(cfg.RunLostTimeout)),
 		Blobs:          blobs, MaxBlobBytes: workflows.DefaultMaxBlobBytes,
 		Relay: checkpointRelay(gitRelay), History: checkpointHistory(gitRelay), CheckpointExclude: cfg.Checkpoint.Excluded(),
+		PreDestructiveWait: cfg.Checkpoint.PreDestructiveWait(),
 	}, runOpts...)
 	services.GC = gc.New(db, o.Clock, blobs, gcPolicy(cfg),
 		gcOptions(p, gitRelay, services.Moves)...)
@@ -186,6 +187,9 @@ func Start(ctx context.Context, o Options) (*Controller, error) {
 		})
 		background.Go(func() { services.Workers.RunSweeper(runCtx, o.Logger) })
 		background.Go(func() { services.GC.RunLoop(runCtx, o.Logger) })
+		background.Go(func() {
+			services.Checkpoints.NewSweeper(time.Duration(cfg.Checkpoint.Interval)).Run(runCtx, o.Logger)
+		})
 		background.Go(func() { services.Reconciliation.RunGate(runCtx, o.Logger) })
 		background.Go(func() { services.Reconciliation.RunLostSweeper(runCtx, o.Logger) })
 		background.Go(func() { services.Moves.Run(runCtx, services.Reconciliation.Ready(), o.Logger) })
