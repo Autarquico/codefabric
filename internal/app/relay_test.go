@@ -90,9 +90,9 @@ func TestScenario_GitRelayPublication_FetchNoAutorizado_Controller(t *testing.T)
 	_, err = e.authorize(other, project, false, "")
 	wantCode(t, err, domain.CodePolicyDenied)
 
-	// A client is not a Worker.
+	// A client may use the relay, but not with the token of a Worker's Run.
 	_, err = e.authorize(e.owner, project, false, tok.Token)
-	wantCode(t, err, domain.CodeUnauthenticated)
+	wantCode(t, err, domain.CodePolicyDenied)
 }
 
 func TestRelayAuth_EveryLinkOfTheChainIsCheckedOnEveryRequest(t *testing.T) {

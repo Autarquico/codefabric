@@ -37,6 +37,7 @@ var notActions = map[string]string{
 	"cf worker set-controller": "changes the address in this machine's Worker credentials",
 	"cf mcp install":           "registers cf in this machine's model CLIs", "cf mcp uninstall": "removes cf from this machine's model CLIs",
 	"cf claude install": "writes the /handto skill into this machine's Claude Code", "cf claude uninstall": "removes the /handto skill from this machine's Claude Code", "cf claude status": "read",
+	"cf handoff": "run by the /handto skill inside a Claude Code session, not from the TUI",
 	// Maintenance of the Controller's storage, run by whoever operates it.
 	"cf gc": "maintenance of the Controller, not something the TUI does to the cluster",
 	// Same command as an action that exists.
