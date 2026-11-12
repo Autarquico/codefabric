@@ -9,7 +9,6 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/mutation"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -120,10 +119,14 @@ func (s *Service) stop(ctx context.Context, m store.Move) (bool, error) {
 	case domain.RunSuspended, domain.RunLost:
 		return s.checkpointed(ctx, m, run)
 	case domain.RunRunning, domain.RunWaitingInput, domain.RunCheckpointing:
-		if _, err := s.capture.Request(ctx, pki.SystemSession(), run.ID, domain.CheckpointMove, "mv-"+string(m.ID)); err != nil {
-			return false, s.stageError(ctx, m, err)
-		}
-		return true, s.advance(ctx, m, store.MoveCheckpointing, store.MoveChange{}, "checkpoint ordered")
+		err := s.db.WithTx(ctx, func(tx *store.Tx) error {
+			act := s.act()
+			if _, err := s.capture.RequestIn(ctx, tx, act, run.ID, domain.CheckpointMove); err != nil {
+				return err
+			}
+			return s.advanceIn(ctx, tx, act, m, store.MoveCheckpointing, store.MoveChange{}, "checkpoint ordered")
+		})
+		return err == nil, s.stageError(ctx, m, err)
 	}
 	return true, s.end(ctx, m, fmt.Sprintf("the Run ended (%s) before it could be moved", run.State))
 }
@@ -168,12 +171,15 @@ func (s *Service) checkpointed(ctx context.Context, m store.Move, run store.Run)
 // is terminal here, which is what lets the target exist (§11.5). If it cannot be
 // prepared the move stays at this stage and the Task waits for a decision.
 func (s *Service) create(ctx context.Context, m store.Move) (bool, error) {
-	resp, err := s.resume.Resume(ctx, pki.SystemSession(), string(m.TaskID), "",
-		v1.ResumeTaskRequest{RequestID: "mv-" + string(m.ID), Worker: m.TargetWorker})
-	if err != nil {
-		return false, s.stageError(ctx, m, err)
-	}
-	return true, s.advance(ctx, m, store.MoveResuming, store.MoveChange{TargetRunID: domain.ID(resp.RunID)}, "target Run queued")
+	err := s.db.WithTx(ctx, func(tx *store.Tx) error {
+		act := s.act()
+		resp, err := s.resume.ResumeIn(ctx, tx, act, string(m.TaskID), "", v1.ResumeTaskRequest{Worker: m.TargetWorker})
+		if err != nil {
+			return err
+		}
+		return s.advanceIn(ctx, tx, act, m, store.MoveResuming, store.MoveChange{TargetRunID: domain.ID(resp.RunID)}, "target Run queued")
+	})
+	return err == nil, s.stageError(ctx, m, err)
 }
 
 // start waits for the Run on the target to leave queued and preparing. A Run
@@ -203,12 +209,15 @@ func (s *Service) runOf(ctx context.Context, id domain.ID) (run store.Run, err e
 // advance moves the stage on, with its event, in one transaction.
 func (s *Service) advance(ctx context.Context, m store.Move, to store.MoveStage, change store.MoveChange, message string) error {
 	return s.db.WithTx(ctx, func(tx *store.Tx) error {
-		act := s.act()
-		if err := tx.AdvanceMove(ctx, m.ID, m.Stage, to, change, act.Now); err != nil {
-			return err
-		}
-		return s.record(ctx, tx, act, m, to, message, "")
+		return s.advanceIn(ctx, tx, s.act(), m, to, change, message)
 	})
+}
+
+func (s *Service) advanceIn(ctx context.Context, tx *store.Tx, act mutation.Act, m store.Move, to store.MoveStage, change store.MoveChange, message string) error {
+	if err := tx.AdvanceMove(ctx, m.ID, m.Stage, to, change, act.Now); err != nil {
+		return err
+	}
+	return s.record(ctx, tx, act, m, to, message, "")
 }
 
 // end gives the move up (stage failed): the Run it moves, or what it needs,
@@ -224,9 +233,10 @@ func (s *Service) end(ctx context.Context, m store.Move, why string) error {
 }
 
 // stageError turns what stopped a stage into the failure of the move at that
-// stage: the Task waits for a decision and the move is retried from there. An
-// error that is not the domain's (the store, the context) is not the move's and
-// goes back to the caller, which tries again.
+// stage: the Task waits for a decision (the marker the derivation of the Task
+// reads) and the move is retried from there. nil stays nil. An error that is not
+// the domain's (the store, the context, another caller advancing the move first)
+// is not the move's and goes back to the caller, which tries again.
 func (s *Service) stageError(ctx context.Context, m store.Move, err error) error {
 	var de *domain.Error
 	if !errors.As(err, &de) {
@@ -237,35 +247,11 @@ func (s *Service) stageError(ctx context.Context, m store.Move, err error) error
 		if err := tx.SetMoveFailure(ctx, m.ID, m.Stage, de.Message, act.Now); err != nil {
 			return err
 		}
-		task, err := store.TaskByID(ctx, tx, m.TaskID)
-		if err != nil {
+		if err := s.derive(ctx, tx, act, m.TaskID); err != nil {
 			return err
-		}
-		if task.State != domain.TaskWaiting || task.WaitingReason != domain.WaitingDecision {
-			if err := s.waitForDecision(ctx, tx, act, task); err != nil {
-				return err
-			}
 		}
 		return s.record(ctx, tx, act, m, m.Stage, "move stage failed", de.Message)
 	})
-}
-
-// waitForDecision puts the Task in waiting(decision): the Task is derived from
-// its Runs and none of them says a move failed. The next change of a Run
-// derives it again, which is when the retry has made progress.
-func (s *Service) waitForDecision(ctx context.Context, tx *store.Tx, act mutation.Act, task store.Task) error {
-	if err := tx.SetTaskState(ctx, task.ID, domain.TaskWaiting, domain.WaitingDecision); err != nil {
-		return err
-	}
-	ev := act.Event(domain.EventTaskStateChanged, fmt.Sprintf("task %s -> %s", task.State, domain.TaskWaiting))
-	ev.ProjectID, ev.TaskID = task.ProjectID, task.ID
-	ev.Data = map[string]any{
-		"from": string(task.State), "from_waiting_reason": string(task.WaitingReason),
-		"to": string(domain.TaskWaiting), "waiting_reason": string(domain.WaitingDecision),
-		"short_id": domain.ShortID{Kind: domain.KindTask, N: task.Short}.String(), "name": task.Name,
-	}
-	_, _, err := tx.AppendEvent(ctx, ev)
-	return err
 }
 
 func (s *Service) record(ctx context.Context, tx *store.Tx, act mutation.Act, m store.Move, stage store.MoveStage, message, failure string) error {

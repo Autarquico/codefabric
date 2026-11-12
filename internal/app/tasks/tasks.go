@@ -136,6 +136,9 @@ func (s *Service) Cancel(ctx context.Context, by pki.Session, ref, project strin
 		if err := tx.UpdateTask(ctx, *t); err != nil {
 			return err
 		}
+		if err := dropFailedMove(ctx, tx, act, t.ID, "the Task was cancelled"); err != nil {
+			return err
+		}
 		if err := s.runs.CancelLiveIn(ctx, tx, act, t.ID); err != nil {
 			return err
 		}

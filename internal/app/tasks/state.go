@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -45,7 +46,11 @@ func rederive(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.I
 	if err != nil {
 		return err
 	}
-	if domain.RetryDue(taskView(task, project, summaries)) {
+	pending, err := decisionPending(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	if domain.RetryDue(withDecision(taskView(task, project, summaries), pending)) {
 		if err := retryIn(ctx, tx, act, ids, task); err != nil {
 			return err
 		}
@@ -53,7 +58,7 @@ func rederive(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.I
 			return err
 		}
 	}
-	state, reason, err := domain.DeriveTaskState(taskView(task, project, summaries))
+	state, reason, err := domain.DeriveTaskState(withDecision(taskView(task, project, summaries), pending))
 	if err != nil {
 		return err
 	}
@@ -74,6 +79,21 @@ func rederive(ctx context.Context, tx *store.Tx, act mutation.Act, ids *domain.I
 	}
 	_, _, err = tx.AppendEvent(ctx, ev)
 	return err
+}
+
+// decisionPending says whether a move of the Task failed and the user has yet to decide
+// (move it again, resume or cancel): the Task waits for that whatever its Runs say.
+func decisionPending(ctx context.Context, q store.Querier, taskID domain.ID) (bool, error) {
+	m, err := store.ActiveMoveOfTask(ctx, q, taskID)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil && m.Failure != "", err
+}
+
+func withDecision(v domain.TaskView, pending bool) domain.TaskView {
+	v.Markers.DecisionPending = pending
+	return v
 }
 
 // derive applies the §11.7 table. Dependencies arrive with Plans (Phase 8),

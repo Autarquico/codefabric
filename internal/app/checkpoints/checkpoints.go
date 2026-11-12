@@ -128,73 +128,83 @@ func (s *Service) Request(ctx context.Context, by pki.Session, runID domain.ID, 
 	}{runID, trigger}
 	return mutation.Do(ctx, s.db, s.clock, by, "run.checkpoint.request", requestID, req,
 		func(tx *store.Tx, act mutation.Act) (Requested, error) {
-			run, err := store.RunByID(ctx, tx, runID)
-			if err != nil {
-				return Requested{}, notFound(err, "run")
-			}
-			status, err := store.RunStatusOf(ctx, tx, run)
-			if err != nil {
-				return Requested{}, err
-			}
-			if _, err := domain.NextRunState(status, domain.RunEventCheckpointRequested); err != nil {
-				return Requested{}, err
-			}
-			if run.LeaseState != domain.LeaseAccepted {
-				return Requested{}, domain.NewError(domain.CodeInvalidTransition, "the Run has no accepted lease to capture under", nil)
-			}
-			l, err := store.LeaseByID(ctx, tx, run.LeaseID)
-			if err != nil {
-				return Requested{}, err
-			}
-			worker, err := store.WorkerByID(ctx, tx, l.WorkerID)
-			if err != nil {
-				return Requested{}, err
-			}
-			if !slices.Contains(worker.Report.Capabilities, domain.CheckpointCapability) {
-				return Requested{}, domain.NewError(domain.CodeCheckpointUnsupported,
-					"the Worker of this Run cannot capture checkpoints", map[string]any{"worker": string(worker.ID)})
-			}
-			task, err := store.TaskByID(ctx, tx, run.TaskID)
-			if err != nil {
-				return Requested{}, err
-			}
-			project, err := store.ProjectByID(ctx, tx, task.ProjectID)
-			if err != nil {
-				return Requested{}, err
-			}
-			if err := tx.BeginCheckpointing(ctx, run); err != nil {
-				return Requested{}, raced(err)
-			}
-			id := s.ids.New(domain.KindCheckpoint)
-			ref := domain.CheckpointRef(id)
-			if _, err := tx.InsertCheckpoint(ctx, store.Checkpoint{Checkpoint: domain.Checkpoint{
-				ID: id, RunID: run.ID, Trigger: trigger, SourceRef: ref, CreatedAt: act.Now,
-			}}); err != nil {
-				return Requested{}, err
-			}
-			payload, err := json.Marshal(Order{
-				RunID: string(run.ID), LeaseID: string(l.ID), Epoch: l.Epoch, CheckpointID: string(id), Trigger: trigger, Ref: ref,
-				RunShort: shortID(run), TaskID: string(task.ID), ProjectID: string(task.ProjectID), Exclude: s.exclude,
-				NativeState: project.NativeState,
-			})
-			if err != nil {
-				return Requested{}, fmt.Errorf("checkpoints: encoding the order: %w", err)
-			}
-			if _, err := tx.EnqueueCommand(ctx, store.WorkerCommand{
-				WorkerID: l.WorkerID, Type: domain.CommandCheckpoint, RunID: run.ID, LeaseID: l.ID, Epoch: l.Epoch,
-				Payload: payload, CreatedAt: act.Now,
-			}); err != nil {
-				return Requested{}, err
-			}
-			ev := runEvent(act, domain.EventRunCheckpointRequested, "checkpoint requested", run, task)
-			ev.Data = map[string]any{
-				"short_id": shortID(run), "checkpoint": string(id), "trigger": string(trigger), "from": string(run.State),
-			}
-			if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
-				return Requested{}, err
-			}
-			return Requested{CheckpointID: string(id), Ref: ref, RunState: string(domain.RunCheckpointing)}, nil
+			return s.RequestIn(ctx, tx, act, runID, trigger)
 		})
+}
+
+// RequestIn is Request inside the transaction of the caller, for the Controller acting
+// on its own with no session to answer to (a move resumed after a restart, §27.1): act
+// names who, and the caller makes it idempotent with the change it commits alongside.
+func (s *Service) RequestIn(ctx context.Context, tx *store.Tx, act mutation.Act, runID domain.ID, trigger domain.CheckpointTrigger) (Requested, error) {
+	if !slices.Contains(triggers, trigger) {
+		return Requested{}, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("unknown checkpoint trigger %q", trigger), nil)
+	}
+	run, err := store.RunByID(ctx, tx, runID)
+	if err != nil {
+		return Requested{}, notFound(err, "run")
+	}
+	status, err := store.RunStatusOf(ctx, tx, run)
+	if err != nil {
+		return Requested{}, err
+	}
+	if _, err := domain.NextRunState(status, domain.RunEventCheckpointRequested); err != nil {
+		return Requested{}, err
+	}
+	if run.LeaseState != domain.LeaseAccepted {
+		return Requested{}, domain.NewError(domain.CodeInvalidTransition, "the Run has no accepted lease to capture under", nil)
+	}
+	l, err := store.LeaseByID(ctx, tx, run.LeaseID)
+	if err != nil {
+		return Requested{}, err
+	}
+	worker, err := store.WorkerByID(ctx, tx, l.WorkerID)
+	if err != nil {
+		return Requested{}, err
+	}
+	if !slices.Contains(worker.Report.Capabilities, domain.CheckpointCapability) {
+		return Requested{}, domain.NewError(domain.CodeCheckpointUnsupported,
+			"the Worker of this Run cannot capture checkpoints", map[string]any{"worker": string(worker.ID)})
+	}
+	task, err := store.TaskByID(ctx, tx, run.TaskID)
+	if err != nil {
+		return Requested{}, err
+	}
+	project, err := store.ProjectByID(ctx, tx, task.ProjectID)
+	if err != nil {
+		return Requested{}, err
+	}
+	if err := tx.BeginCheckpointing(ctx, run); err != nil {
+		return Requested{}, raced(err)
+	}
+	id := s.ids.New(domain.KindCheckpoint)
+	ref := domain.CheckpointRef(id)
+	if _, err := tx.InsertCheckpoint(ctx, store.Checkpoint{Checkpoint: domain.Checkpoint{
+		ID: id, RunID: run.ID, Trigger: trigger, SourceRef: ref, CreatedAt: act.Now,
+	}}); err != nil {
+		return Requested{}, err
+	}
+	payload, err := json.Marshal(Order{
+		RunID: string(run.ID), LeaseID: string(l.ID), Epoch: l.Epoch, CheckpointID: string(id), Trigger: trigger, Ref: ref,
+		RunShort: shortID(run), TaskID: string(task.ID), ProjectID: string(task.ProjectID), Exclude: s.exclude,
+		NativeState: project.NativeState,
+	})
+	if err != nil {
+		return Requested{}, fmt.Errorf("checkpoints: encoding the order: %w", err)
+	}
+	if _, err := tx.EnqueueCommand(ctx, store.WorkerCommand{
+		WorkerID: l.WorkerID, Type: domain.CommandCheckpoint, RunID: run.ID, LeaseID: l.ID, Epoch: l.Epoch,
+		Payload: payload, CreatedAt: act.Now,
+	}); err != nil {
+		return Requested{}, err
+	}
+	ev := runEvent(act, domain.EventRunCheckpointRequested, "checkpoint requested", run, task)
+	ev.Data = map[string]any{
+		"short_id": shortID(run), "checkpoint": string(id), "trigger": string(trigger), "from": string(run.State),
+	}
+	if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
+		return Requested{}, err
+	}
+	return Requested{CheckpointID: string(id), Ref: ref, RunState: string(domain.RunCheckpointing)}, nil
 }
 
 // Completion is what a Worker reports of a capture that went through: the ref

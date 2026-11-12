@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"crypto/rand"
 	"errors"
 	"strings"
 	"testing"
@@ -8,7 +9,8 @@ import (
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
+	"github.com/Autarquico/codefabric/internal/app/mutation"
+	"github.com/Autarquico/codefabric/internal/app/tasks"
 	"github.com/Autarquico/codefabric/internal/controller/store"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -167,37 +169,103 @@ func TestScenario_MoveReinicio(t *testing.T) {
 	}
 }
 
-// A Controller that went down after the target was queued and before the move said
-// so goes on without queuing another.
-func TestScenario_MoveReinicioTrasCrearElDestino(t *testing.T) {
+// What the Controller does on its own for a move is the Controller's: its events say
+// "controller", with no identity of a user (nor a certificate) behind them.
+func TestScenario_MoveElControllerFirmaSusEventos(t *testing.T) {
 	e := newCheckpointEnv(t)
 	r := e.startedRun()
 	e.joinWorker("beta", harnessWorkerCaps(""))
-	out, err := e.moveTask(r, v1.MoveTaskRequest{Worker: "beta"})
+	_, err := e.moveTask(r, v1.MoveTaskRequest{Worker: "beta"})
 	must(t, err)
 	_, err = r.completeCheckpoint(e.checkpointOrders(r)[0].CheckpointID)
 	must(t, err)
-	// The sweep got as far as the stage checkpointed ...
-	moveID := domain.ID(out.Move.ID)
-	must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
-		cps, err := store.CheckpointsOfRun(t.Context(), tx, domain.ID(r.run.ID))
-		if err != nil {
-			return err
-		}
-		return tx.AdvanceMove(t.Context(), moveID, store.MoveCheckpointing, store.MoveCheckpointed,
-			store.MoveChange{CheckpointID: cps[0].ID}, e.clock.Now())
-	}))
-	// ... and queued the target, but went down before the stage that says so.
-	_, err = e.app.Tasks.Resume(t.Context(), pki.SystemSession(), e.taskOf(r), "",
-		v1.ResumeTaskRequest{RequestID: "mv-" + out.Move.ID, Worker: "beta"})
-	must(t, err)
-
-	e.restartWithRelay()
+	e.restartWithRelay() // after a restart nobody is logged in
 	e.sweepMoves()
-	m := e.moveOf(r)
-	wantStage(t, m, "resuming")
-	if all := e.taskRuns(r); len(all) != 2 || all[1].ID.String() != m.TargetRunID {
-		t.Fatalf("Runs = %d, target %s", len(all), m.TargetRunID)
+
+	want := domain.ActorRef{Kind: domain.ActorSystem, ID: "controller"}
+	for _, ev := range e.events(domain.EventMoveStageChanged, domain.EventRunCheckpointRequested, domain.EventRunQueued) {
+		if ev.Type == domain.EventRunQueued && ev.Message != "run queued: resume" {
+			continue // the first Run of the Task: a user's
+		}
+		if ev.Actor != want {
+			t.Errorf("%s (%s) by %+v, want %+v", ev.Type, ev.Message, ev.Actor, want)
+		}
+	}
+	if e.moveOf(r).Stage != "resuming" {
+		t.Fatalf("move = %+v", e.moveOf(r))
+	}
+}
+
+// failedMove leaves the move at the stage checkpointed, failed because the relay lost
+// the ref, with the Task waiting for a decision. It returns the tips to put back.
+func (e *env) failedMove(r *reporter) map[string]string {
+	e.t.Helper()
+	e.joinWorker("beta", harnessWorkerCaps(""))
+	_, err := e.moveTask(r, v1.MoveTaskRequest{Worker: "beta"})
+	must(e.t, err)
+	_, err = r.completeCheckpoint(e.checkpointOrders(r)[0].CheckpointID)
+	must(e.t, err)
+	tips := e.relay.tips
+	e.relay.tips = nil
+	e.sweepMoves()
+	if e.moveOf(r).Failure == "" {
+		e.t.Fatal("the move did not fail")
+	}
+	return tips
+}
+
+func (e *env) wantTask(r *reporter, state domain.TaskState, reason domain.WaitingReason) {
+	e.t.Helper()
+	task, err := e.app.Tasks.Get(e.t.Context(), e.taskOf(r), "")
+	must(e.t, err)
+	if task.State != state || task.WaitingReason != reason {
+		e.t.Fatalf("task = %s/%s, want %s/%s", task.State, task.WaitingReason, state, reason)
+	}
+}
+
+// The decision the user owes for a failed move is a fact of the Task, not a state that
+// the next derivation overwrites.
+func TestScenario_MoveFallidoEsperaDecisionAlRederivar(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	e.failedMove(r)
+	e.wantTask(r, domain.TaskWaiting, domain.WaitingDecision)
+
+	taskID := e.storedRun(r.run.ID).TaskID
+	must(t, e.db.WithTx(t.Context(), func(tx *store.Tx) error {
+		act := mutation.Act{Actor: domain.ActorRef{Kind: domain.ActorSystem, ID: "controller"}, Now: e.clock.Now()}
+		return tasks.NewRederive(domain.NewIDGenerator(e.clock.Now, rand.Reader))(t.Context(), tx, act, taskID)
+	}))
+	e.wantTask(r, domain.TaskWaiting, domain.WaitingDecision)
+}
+
+func TestScenario_MoveFallidoSeCierraAlReanudar(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	tips := e.failedMove(r)
+
+	e.relay.tips = tips
+	_, err := e.resumeTask(r, "beta")
+	must(t, err)
+	e.wantTask(r, domain.TaskQueued, domain.WaitingNone)
+	if m := e.moveOf(r); m.Stage != "failed" {
+		t.Fatalf("move = %s: the resume is the decision and ends it", m.Stage)
+	}
+	e.sweepMoves()
+	if n := len(e.taskRuns(r)); n != 2 {
+		t.Fatalf("%d Runs, want 2: the move must not queue another", n)
+	}
+}
+
+func TestScenario_MoveFallidoSeCierraAlCancelar(t *testing.T) {
+	e := newCheckpointEnv(t)
+	r := e.startedRun()
+	e.failedMove(r)
+
+	e.cancelTask(e.taskOf(r))
+	e.wantTask(r, domain.TaskCancelled, domain.WaitingNone)
+	if m := e.moveOf(r); m.Stage != "failed" {
+		t.Fatalf("move = %s", m.Stage)
 	}
 }
 

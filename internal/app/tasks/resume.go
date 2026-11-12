@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -30,50 +31,74 @@ func (s *Service) Resume(ctx context.Context, by pki.Session, ref, project strin
 			Request      v1.ResumeTaskRequest
 		}{ref, project, req},
 		func(tx *store.Tx, act mutation.Act) (v1.ResumeTaskResponse, error) {
-			id, err := resolveIn(ctx, tx, ref, project)
-			if err != nil {
-				return v1.ResumeTaskResponse{}, err
-			}
-			task, err := store.TaskByID(ctx, tx, id)
-			if err != nil {
-				return v1.ResumeTaskResponse{}, err
-			}
-			parent, err := latestRun(ctx, tx, task)
-			if err != nil {
-				return v1.ResumeTaskResponse{}, err
-			}
-			// A lost Run is terminal too, and the Controller no longer has authority over it
-			// (§10.4): it can be continued from its last checkpoint, as a move from an
-			// offline Worker does (§11.5).
-			if parent.State != domain.RunSuspended && parent.State != domain.RunLost {
-				return v1.ResumeTaskResponse{}, domain.NewError(domain.CodeInvalidTransition,
-					fmt.Sprintf("task %s is %s: only a deferred Task can be resumed", task.Name, task.State), map[string]any{"state": string(task.State)})
-			}
-			cp, err := lastCheckpoint(ctx, tx, parent)
-			if err != nil {
-				return v1.ResumeTaskResponse{}, err
-			}
-			commit, err := s.checkpointCommit(ctx, task, cp)
-			if err != nil {
-				return v1.ResumeTaskResponse{}, err
-			}
-			pin, err := workerName(ctx, tx, req.Worker)
-			if err != nil {
-				return v1.ResumeTaskResponse{}, err
-			}
-			run, err := s.continueIn(ctx, tx, act, task, parent, cp, commit, pin)
-			if err != nil {
-				return v1.ResumeTaskResponse{}, err
-			}
-			if err := s.rederive(ctx, tx, act, task.ID); err != nil {
-				return v1.ResumeTaskResponse{}, err
-			}
-			out := v1.ResumeTaskResponse{
-				RunID: string(run.ID), RunShort: domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(), CheckpointID: string(cp.ID),
-			}
-			out.Task, err = viewOf(ctx, tx, task.ID)
-			return out, err
+			return s.ResumeIn(ctx, tx, act, ref, project, req)
 		})
+}
+
+// ResumeIn is Resume inside the transaction of the caller, for the Controller acting on
+// its own with no session to answer to (a move resumed after a restart, §27.1): act
+// names who, and the caller makes it idempotent with the change it commits alongside.
+func (s *Service) ResumeIn(ctx context.Context, tx *store.Tx, act mutation.Act, ref, project string, req v1.ResumeTaskRequest) (v1.ResumeTaskResponse, error) {
+	id, err := resolveIn(ctx, tx, ref, project)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	task, err := store.TaskByID(ctx, tx, id)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	parent, err := latestRun(ctx, tx, task)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	// A lost Run is terminal too, and the Controller no longer has authority over it
+	// (§10.4): it can be continued from its last checkpoint, as a move from an
+	// offline Worker does (§11.5).
+	if parent.State != domain.RunSuspended && parent.State != domain.RunLost {
+		return v1.ResumeTaskResponse{}, domain.NewError(domain.CodeInvalidTransition,
+			fmt.Sprintf("task %s is %s: only a deferred Task can be resumed", task.Name, task.State), map[string]any{"state": string(task.State)})
+	}
+	cp, err := lastCheckpoint(ctx, tx, parent)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	commit, err := s.checkpointCommit(ctx, task, cp)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	pin, err := workerName(ctx, tx, req.Worker)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	run, err := s.continueIn(ctx, tx, act, task, parent, cp, commit, pin)
+	if err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	if err := dropFailedMove(ctx, tx, act, task.ID, "the Task was resumed"); err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	if err := s.rederive(ctx, tx, act, task.ID); err != nil {
+		return v1.ResumeTaskResponse{}, err
+	}
+	out := v1.ResumeTaskResponse{
+		RunID: string(run.ID), RunShort: domain.ShortID{Kind: domain.KindRun, N: run.Short}.String(), CheckpointID: string(cp.ID),
+	}
+	out.Task, err = viewOf(ctx, tx, task.ID)
+	return out, err
+}
+
+// dropFailedMove ends the move of the Task that failed and waits for a decision: the
+// decision (resume, cancel) is the end of it, and the move must not claim the Task again. A move that has not
+// failed is the caller's own (the Controller resuming it) and is left alone.
+func dropFailedMove(ctx context.Context, tx *store.Tx, act mutation.Act, taskID domain.ID, decision string) error {
+	m, err := store.ActiveMoveOfTask(ctx, tx, taskID)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && m.Failure == "") {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return tx.AdvanceMove(ctx, m.ID, m.Stage, store.MoveFailed, store.MoveChange{Failure: m.Failure + " (" + decision + ")"}, act.Now)
 }
 
 // continueIn queues the Run that continues parent from checkpoint cp, with the

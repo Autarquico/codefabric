@@ -21,14 +21,16 @@ import (
 	"github.com/Autarquico/codefabric/internal/support/clock"
 )
 
-// Capturer asks the Worker of a Run for a checkpoint (*checkpoints.Service).
+// Capturer asks the Worker of a Run for a checkpoint (*checkpoints.Service), in the
+// transaction of the move: the Controller drives a move with no session of a user.
 type Capturer interface {
-	Request(ctx context.Context, by pki.Session, run domain.ID, trigger domain.CheckpointTrigger, requestID string) (v1.CheckpointRequested, error)
+	RequestIn(ctx context.Context, tx *store.Tx, act mutation.Act, run domain.ID, trigger domain.CheckpointTrigger) (v1.CheckpointRequested, error)
 }
 
-// Resumer queues the Run that continues a Task from its last checkpoint (*tasks.Service).
+// Resumer queues the Run that continues a Task from its last checkpoint (*tasks.Service),
+// in the transaction of the move.
 type Resumer interface {
-	Resume(ctx context.Context, by pki.Session, ref, project string, req v1.ResumeTaskRequest) (v1.ResumeTaskResponse, error)
+	ResumeIn(ctx context.Context, tx *store.Tx, act mutation.Act, ref, project string, req v1.ResumeTaskRequest) (v1.ResumeTaskResponse, error)
 }
 
 // Loser marks a live Run lost at once (*reconciliation.Service).
@@ -44,11 +46,12 @@ type Service struct {
 	capture Capturer
 	resume  Resumer
 	lose    Loser
+	derive  tasks.Rederive
 }
 
 // New builds the service. The clock is the one the store was opened with.
 func New(db *store.DB, clk clock.Clock, ids *domain.IDGenerator, capture Capturer, resume Resumer, lose Loser) *Service {
-	return &Service{db: db, clock: clk, ids: ids, capture: capture, resume: resume, lose: lose}
+	return &Service{db: db, clock: clk, ids: ids, capture: capture, resume: resume, lose: lose, derive: tasks.NewRederive(ids)}
 }
 
 // Move starts the move of the Task to the Worker req.Worker (any the scheduler
@@ -358,8 +361,10 @@ func (s *Service) retry(ctx context.Context, tx *store.Tx, act mutation.Act, m s
 	ev := act.Event(domain.EventMoveStageChanged, "move retried")
 	ev.ProjectID, ev.TaskID = task.ProjectID, task.ID
 	ev.Data = map[string]any{"move": string(m.ID), "stage": string(m.Stage), "retry": true, "was": m.Failure}
-	_, _, err = tx.AppendEvent(ctx, ev)
-	return err
+	if _, _, err = tx.AppendEvent(ctx, ev); err != nil {
+		return err
+	}
+	return s.derive(ctx, tx, act, task.ID) // the decision is taken: the Runs say what the Task is
 }
 
 // answer is the Task and the move, read through q.

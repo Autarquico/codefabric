@@ -319,19 +319,7 @@ type Session struct {
 	// MCPSession is the session a human client declared in CF-MCP-Session,
 	// already validated. It only labels the actor of what the session changes.
 	MCPSession string
-
-	system bool
 }
-
-// SystemSession is the session of the Controller acting on its own, for an
-// operation it resumes with no request to answer to (a move after a restart,
-// §27.1). It cannot come from the wire: only code in the process builds it.
-func SystemSession() Session {
-	return Session{Principal: domain.Principal{ID: "controller", Kind: domain.KindClient}, system: true}
-}
-
-// IsSystem says whether the session is the Controller's own.
-func (s Session) IsSystem() bool { return s.system }
 
 // Session builds the session of an identity that has just been issued a
 // certificate, for callers that act as it without a TLS request (init).
