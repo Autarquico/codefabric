@@ -396,7 +396,7 @@ func TestScenario_HandtoAfterTheTaskWasCancelled(t *testing.T) {
 func TestHandto_ARefusedCreationIsNotReplayed(t *testing.T) {
 	local, c := machine(t, transcript()), newController(online("w"))
 	openedBy(t, local, 4242, ownTree)
-	c.refuse = domain.NewError(domain.CodeInvalidRequest, "a Task named \"x\" already exists in the Project", nil)
+	c.refuse = domain.NewError(domain.CodePolicyDenied, "Worker w does not admit the Project", nil)
 	if _, err := Do(t.Context(), c, local, request("w")); err == nil {
 		t.Fatal("the refusal was not reported")
 	}

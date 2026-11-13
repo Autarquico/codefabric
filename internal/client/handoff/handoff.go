@@ -278,9 +278,9 @@ func requireResumable(t v1.Task) error {
 		map[string]any{"state": string(t.State)})
 }
 
-// forgetRefused drops the pending request when the Controller refused it (a
-// name taken, a Task in the wrong state, a policy): the answer came, so a retry
-// must not replay it. Any other error may be a lost answer, and the request stays.
+// forgetRefused drops the pending request when the Controller refused it (an
+// invalid request, a Task in the wrong state, a policy): the answer came, so a
+// retry must not replay it. Any other error may be a lost answer, and the request stays.
 func forgetRefused(state session.State, id string, err error) error {
 	var de *domain.Error
 	if errors.As(err, &de) {
