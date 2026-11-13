@@ -34,7 +34,9 @@ Owner previsto en el bucle Develop: backend-eng.
   El Run es interactivo (`--interactive`) y su prompt de continuación y el nombre de la Task salen de la sesión
   (último mensaje del usuario, truncado). Imprime la Task, el Worker y `cf attach <task>`.
 - Sesión viva propia: se permite cuando el id es el de la sesión que llama; el export corta el jsonl tras el
-  último `tool_use` (la propia llamada). Tras el éxito, marcador local `handed-off`. (Enmienda) "la que llama" se
+  último `tool_use` (la propia llamada) solo si no le sigue un `tool_result`. (Enmienda, lab 2026-11-13) Claude
+  Code 2.1.319 aún no ha escrito la llamada cuando `cf` corre: si la última llamada tiene resultado, o no hay
+  ninguna, el jsonl va entero; cortar en una anterior perdería su resultado y los turnos posteriores. Tras el éxito, marcador local `handed-off`. (Enmienda) "la que llama" se
   verifica: el proceso `claude` dueño de la sesión (`~/.claude/sessions/<pid>.json` con ese `sessionId`) debe ser
   ancestro del proceso de `cf` (cadena de ppid, `/proc` o `ps`); si no, la sesión está abierta en otra ventana y se
   rechaza pidiendo cerrarla. En Codex la sesión que llama es la que dice `CODEX_SESSION_ID`.

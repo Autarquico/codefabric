@@ -24,8 +24,8 @@ const (
 	cwd       = "/work/repo"
 )
 
-// transcript is a session whose last tool call is the `cf handoff` of /handto, followed by
-// what Claude Code writes after it (the result) that must not travel.
+// transcript is a session whose last tool call is the `cf handoff` of /handto, still
+// running, followed by what Claude Code writes meanwhile, which must not travel.
 func transcript(extra ...string) string {
 	lines := []string{
 		`{"type":"user","sessionId":"` + sessionID + `","cwd":"` + cwd + `","version":"2.1.319","message":{"role":"user","content":"fix the login redirect, please"}}`,
@@ -36,7 +36,7 @@ func transcript(extra ...string) string {
 	lines = append(lines, extra...)
 	lines = append(lines,
 		`{"type":"assistant","sessionId":"`+sessionID+`","cwd":"`+cwd+`","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cf handoff --session `+sessionID+` --to w"}}]}}`,
-		`{"type":"user","sessionId":"`+sessionID+`","cwd":"`+cwd+`","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"AFTER_THE_CUT"}]}}`,
+		`{"type":"progress","sessionId":"`+sessionID+`","cwd":"`+cwd+`","toolUseID":"t1","data":{"output":"AFTER_THE_CUT"}}`,
 	)
 	return strings.Join(lines, "\n") + "\n"
 }
@@ -89,7 +89,9 @@ type fakeController struct {
 	// NewTask commit the Task and then fail, as a lost response does.
 	byRequest    map[string]v1.Task
 	loseResponse bool
-	resumed      []v1.ResumeTaskRequest
+	// refuse is what the next NewTask answers instead of creating.
+	refuse  error
+	resumed []v1.ResumeTaskRequest
 	// resumes counts the resumes the Controller committed (a replayed request_id is not one);
 	// loseResume makes the next one commit and then fail.
 	resumes    int
@@ -132,6 +134,10 @@ func (f *fakeController) NewTask(_ context.Context, _ string, req v1.CreateTaskR
 	f.sent = append(f.sent, req)
 	if t, ok := f.byRequest[req.RequestID]; ok && req.RequestID != "" {
 		return v1.CreateTaskResponse{Task: t}, nil
+	}
+	if err := f.refuse; err != nil {
+		f.refuse = nil
+		return v1.CreateTaskResponse{}, err
 	}
 	f.created = append(f.created, req)
 	if req.SnapshotReport != nil {
@@ -232,6 +238,31 @@ func TestScenario_Handto(t *testing.T) {
 	if res.Worker != "w" || res.Resumed || res.Attach != "cf attach "+req.Name {
 		t.Errorf("result %+v", res)
 	}
+}
+
+// Claude Code had not written the call of cf handoff when it ran (2.1.319, seen
+// in the lab): the session has no call, or only earlier ones with their
+// results, and goes whole.
+func TestScenario_HandtoBeforeTheCallIsOnDisk(t *testing.T) {
+	notYet := strings.Join([]string{
+		`{"type":"user","sessionId":"` + sessionID + `","cwd":"` + cwd + `","version":"2.1.319","message":{"role":"user","content":"remember ZAFIRO"}}`,
+		`{"type":"assistant","sessionId":"` + sessionID + `","cwd":"` + cwd + `","message":{"role":"assistant","content":[{"type":"text","text":"noted"}]}}`,
+		`{"type":"user","sessionId":"` + sessionID + `","cwd":"` + cwd + `","message":{"role":"user","content":"<command-name>/handto</command-name><command-args>w</command-args>"}}`,
+	}, "\n") + "\n"
+	local, c := machine(t, notYet), newController(online("w"))
+	openedBy(t, local, 4242, ownTree)
+
+	res, err := Do(t.Context(), c, local, request("w"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := archiveText(t, c.puts[c.created[0].NativeSeed.Digest])
+	if !strings.Contains(text, "ZAFIRO") || !strings.Contains(text, "noted") {
+		t.Errorf("the session did not travel whole:\n%s", text)
+	}
+	if res.Worker != "w" {
+		t.Errorf("result %+v", res)
+	}
 	rec, err := local.State.Get(sessionID)
 	if err != nil || rec.HandedOff == nil || rec.HandedOff.Task != "tsk_1" || rec.Task != "tsk_1" {
 		t.Errorf("marker and registry: %+v, %v", rec, err)
@@ -281,6 +312,16 @@ func TestScenario_WorkerDesconocido(t *testing.T) {
 	}
 }
 
+// A Worker degraded by another harness (codex without a login) still takes a
+// Claude Code session: the scheduler, not the client, weighs the failure.
+func TestScenario_HandtoADegradedWorker(t *testing.T) {
+	local, c := machine(t, transcript()), newController(v1.Worker{Name: "w", State: domain.WorkerDegraded})
+	openedBy(t, local, 4242, ownTree)
+	if _, err := Do(t.Context(), c, local, request("w")); err != nil || len(c.created) != 1 {
+		t.Fatalf("created %d: %v", len(c.created), err)
+	}
+}
+
 func TestScenario_SegundoHandto(t *testing.T) {
 	local, c := machine(t, transcript()), newController(online("w"), online("other"))
 	if _, err := Do(t.Context(), c, local, request("w")); err != nil {
@@ -307,6 +348,51 @@ func TestScenario_SegundoHandto(t *testing.T) {
 	}
 	if r := c.resumed[0]; r.Worker != "other" || !r.Force || r.NativeSeed == nil {
 		t.Errorf("resume request %+v", r)
+	}
+}
+
+// The Task the session went to was cancelled: nothing goes on there, and /handto
+// starts a new Task without --force (seen in the lab).
+func TestScenario_HandtoAfterTheTaskWasCancelled(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"))
+	if _, err := Do(t.Context(), c, local, request("w")); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := c.tasks["tsk_1"]
+	cancelled.State = domain.TaskCancelled
+	c.tasks["tsk_1"] = cancelled
+
+	res, err := Do(t.Context(), c, local, request("w"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.created) != 2 || len(c.resumed) != 0 || res.Resumed {
+		t.Fatalf("created %d, resumed %d: a new Task should start", len(c.created), len(c.resumed))
+	}
+	if c.created[1].Name == c.created[0].Name {
+		t.Errorf("the new Task takes the name the cancelled one keeps: %s", c.created[1].Name)
+	}
+	if rec, _ := local.State.Get(sessionID); rec.HandedOff == nil || rec.Task == "tsk_1" {
+		t.Errorf("the session is not bound to the new Task: %+v", rec)
+	}
+}
+
+// A creation the Controller refused is not replayed: the answer came.
+func TestHandto_ARefusedCreationIsNotReplayed(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"))
+	openedBy(t, local, 4242, ownTree)
+	c.refuse = domain.NewError(domain.CodeInvalidRequest, "a Task named \"x\" already exists in the Project", nil)
+	if _, err := Do(t.Context(), c, local, request("w")); err == nil {
+		t.Fatal("the refusal was not reported")
+	}
+	if rec, _ := local.State.Get(sessionID); rec.Pending != nil {
+		t.Fatalf("the refused request is still pending: %+v", rec.Pending)
+	}
+	if _, err := Do(t.Context(), c, local, request("w")); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.sent) != 2 || c.sent[0].RequestID == c.sent[1].RequestID {
+		t.Errorf("the retry replayed the refused request: %+v", c.sent)
 	}
 }
 

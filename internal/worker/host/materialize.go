@@ -243,7 +243,7 @@ func NewMaterializer(host harness.Host, opts ...MaterializerOption) *Materialize
 // secret refs whose adapter is no harness.SecretEscaper or names no escape for
 // it. The markers are written as they are, and the files that have them are
 // the Rendered of the result: no value is written here (see Render).
-func (m *Materializer) Materialize(ctx context.Context, a harness.Adapter, runDir string, snap harness.NativeSnapshot) (Materialization, error) {
+func (m *Materializer) Materialize(ctx context.Context, a harness.Adapter, runDir, worktree string, snap harness.NativeSnapshot) (Materialization, error) {
 	if !a.Capabilities().ConfigIsolation {
 		return Materialization{}, fmt.Errorf("materialize: harness %s: %w", a.ID(), harness.NewUnsupportedError("config isolation"))
 	}
@@ -263,7 +263,7 @@ func (m *Materializer) Materialize(ctx context.Context, a harness.Adapter, runDi
 	if err := m.reset(runDir); err != nil {
 		return Materialization{}, fmt.Errorf("materialize: clearing %s: %w", runDir, err)
 	}
-	done, err := m.build(ctx, a, runDir, snap, src)
+	done, err := m.build(ctx, a, runDir, worktree, snap, src)
 	if err != nil {
 		return Materialization{}, fmt.Errorf("materialize: harness %s: %w", a.ID(), err)
 	}
@@ -336,7 +336,7 @@ func (m *Materializer) reset(runDir string) error {
 	return m.fs.sync(runDir)
 }
 
-func (m *Materializer) build(ctx context.Context, a harness.Adapter, runDir string, snap harness.NativeSnapshot, src source) (Materialization, error) {
+func (m *Materializer) build(ctx context.Context, a harness.Adapter, runDir, worktree string, snap harness.NativeSnapshot, src source) (Materialization, error) {
 	staging := filepath.Join(runDir, stagingName)
 	if err := os.Mkdir(staging, 0o700); err != nil {
 		return Materialization{}, err
@@ -347,7 +347,7 @@ func (m *Materializer) build(ctx context.Context, a harness.Adapter, runDir stri
 			_ = os.RemoveAll(staging)
 		}
 	}()
-	applied, err := a.ApplyConfig(ctx, m.host, snap, harness.ApplyOptions{Target: harness.TargetRun{Dir: staging}, LinkAuth: true})
+	applied, err := a.ApplyConfig(ctx, m.host, snap, harness.ApplyOptions{Target: harness.TargetRun{Dir: staging, Worktree: worktree}, LinkAuth: true})
 	if err != nil {
 		return Materialization{}, fmt.Errorf("applying the configuration: %w", err)
 	}

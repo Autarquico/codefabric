@@ -140,13 +140,28 @@ It opens the TUI: home with live counts and activity, then views for Tasks, Work
 
 This is the whole journey of a Claude Code session: from your Mac to a Worker, between Workers, and back to your Mac. Each step names the command and what it prints.
 
-**1. Once per Project: keep the session in checkpoints.**
+**1. Once per Project: keep the session in checkpoints, and let its Runs use the token.**
 
 ```sh
 cf project set <project> --native-state on
+cf project secrets allow <project> claude/oauth-token
 ```
 
-It prints the Project; `Native state` reads `on`. Without it the Project does not accept sessions as seeds.
+The first prints the Project; `Native state` reads `on`. Without it the Project does not accept sessions as seeds. The second prints `Project <id> allows claude/oauth-token.`; without it the handoff is refused with `CF_POLICY_DENIED: harness claude-code needs the secrets claude/oauth-token`.
+
+A working copy belongs to the Project only if its `origin` is exactly one of the Project's URLs. If you clone with SSH and the Project has the HTTPS URL (or the other way round), add the other spelling:
+
+```sh
+cf project set <project> --add-repo git@github.com:<owner>/<repo>.git
+```
+
+Otherwise `/handto` says `no Project has the origin of this working directory as a repo URL`.
+
+A Run asks for 2 CPUs and 4 GB by default. A Worker that offers less never takes it, and the Run waits in `queued` (`cf run explain` says `memory_mb 4096 > ...`). Lower the default of the Project; the two flags go together:
+
+```sh
+cf project set <project> --cpu 2 --memory-mb 2048
+```
 
 **2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on, then on each such Worker:
 
@@ -155,6 +170,15 @@ cf worker secrets set claude/oauth-token
 ```
 
 It reads the token from stdin, or asks for it twice without echo on a terminal, and prints `Stored secret claude/oauth-token (...) ...`. A Worker without the secret is not offered the Run (`CF_SECRET_UNAVAILABLE` in `cf run explain`).
+
+The Worker service finds `claude` and `codex` in its own `PATH`, not in that of your shell: if `cf worker show <worker>` lacks `harness:claude-code` and the log says `harness not offered harness=claude-code status=not-installed`, link the binary into a directory of the service's `PATH`, such as `~/.local/bin` (a tool manager like mise installs it elsewhere), and restart the Worker.
+
+The agent commits as the git user of the Worker. Give each Worker one, or its commits fail with `Author identity unknown`:
+
+```sh
+git config --global user.name "<your name>"
+git config --global user.email "<your email>"
+```
 
 **3. Once on your Mac: install the skill.**
 

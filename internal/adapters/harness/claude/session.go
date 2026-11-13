@@ -203,8 +203,9 @@ func sessionConfigDir(dir string) (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
-// scanTranscript is harness.ScanTranscript of the lines of Claude Code: the cut
-// is after the last assistant line that has a tool_use.
+// scanTranscript is harness.ScanTranscript of the lines of Claude Code: a tool
+// call is an assistant line with a tool_use, its result a user line with a
+// tool_result.
 func scanTranscript(raw []byte, cut bool) ([]byte, harness.SessionManifest, error) {
 	return harness.ScanTranscript(ID, raw, cut, func(line []byte) (harness.TranscriptLine, error) {
 		var head struct {
@@ -218,8 +219,9 @@ func scanTranscript(raw []byte, cut bool) ([]byte, harness.SessionManifest, erro
 			return harness.TranscriptLine{}, err
 		}
 		return harness.TranscriptLine{
-			Version:  head.Version,
-			ToolCall: head.Type == "assistant" && hasToolUse(head.Message.Content),
+			Version:    head.Version,
+			ToolCall:   head.Type == "assistant" && hasBlock(head.Message.Content, "tool_use"),
+			ToolResult: head.Type == "user" && hasBlock(head.Message.Content, "tool_result"),
 		}, nil
 	})
 }
@@ -228,12 +230,12 @@ type contentBlock struct {
 	Type string `json:"type"`
 }
 
-func hasToolUse(content json.RawMessage) bool {
+func hasBlock(content json.RawMessage, kind string) bool {
 	var blocks []contentBlock
 	if json.Unmarshal(content, &blocks) != nil {
 		return false
 	}
-	return slices.ContainsFunc(blocks, func(b contentBlock) bool { return b.Type == "tool_use" })
+	return slices.ContainsFunc(blocks, func(b contentBlock) bool { return b.Type == kind })
 }
 
 // lineRewriter sets the top-level cwd of every line of JSON, and sessionId

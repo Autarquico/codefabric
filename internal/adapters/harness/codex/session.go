@@ -41,6 +41,11 @@ func isToolCall(payloadType string) bool {
 	return payloadType == "custom_tool_call" || payloadType == "function_call"
 }
 
+// isToolResult says whether a response_item payload is the output of a tool call.
+func isToolResult(payloadType string) bool {
+	return payloadType == "custom_tool_call_output" || payloadType == "function_call_output"
+}
+
 // sessionConfigDir is dir, or what Codex uses when it is empty: CODEX_HOME, or
 // ~/.codex.
 func sessionConfigDir(dir string) (string, error) {
@@ -163,8 +168,9 @@ func inspectLine(line []byte) (harness.TranscriptLine, error) {
 		return harness.TranscriptLine{}, err
 	}
 	return harness.TranscriptLine{
-		Version:  head.Payload.CLIVersion,
-		ToolCall: head.Type == lineResponse && isToolCall(head.Payload.Type),
+		Version:    head.Payload.CLIVersion,
+		ToolCall:   head.Type == lineResponse && isToolCall(head.Payload.Type),
+		ToolResult: head.Type == lineResponse && isToolResult(head.Payload.Type),
 	}, nil
 }
 

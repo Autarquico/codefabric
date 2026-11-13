@@ -149,9 +149,27 @@ func TestExportIsDeterministicAndHoldsTheRolloutAsItIs(t *testing.T) {
 	}
 }
 
-func TestExportCutsAfterTheLastToolCallBeforeItsOutput(t *testing.T) {
-	archive, m := export(t, harness.ExportOptions{CutAtToolUse: true})
-	_, content := untar(t, archive)
+// running is a rollout whose last call has no output yet, with a line Codex
+// writes after it while it runs: the shape of the session of $handto once the
+// call of cf handoff is on disk.
+func running(t *testing.T) harness.SessionRef {
+	t.Helper()
+	dir := t.TempDir()
+	body := strings.Join(fixtureLines(t)[:cutLines], "") +
+		`{"timestamp":"2026-11-12T09:30:15.800Z","ordinal":9,"type":"event_msg","payload":{"type":"exec_command_begin","call_id":"call_2"}}` + "\n"
+	writeRollout(t, dir, "2026/11/12", fixtureID, body)
+	ref := fixtureRef()
+	ref.ConfigDir = dir
+	return ref
+}
+
+func TestExportCutsAtTheCallWithNoOutput(t *testing.T) {
+	var buf bytes.Buffer
+	m, err := codex.Adapter{}.Export(t.Context(), running(t), harness.ExportOptions{CutAtToolUse: true}, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, content := untar(t, buf.Bytes())
 	want := strings.Join(fixtureLines(t)[:cutLines], "")
 	if got := content[fixtureID+".jsonl"]; got != want {
 		t.Errorf("cut transcript:\n%s\nwant:\n%s", got, want)
@@ -164,15 +182,24 @@ func TestExportCutsAfterTheLastToolCallBeforeItsOutput(t *testing.T) {
 	}
 }
 
-func TestExportCutNeedsAToolCall(t *testing.T) {
+// Every call has its output: the call of $handto is not on disk yet, and the session goes whole.
+func TestExportForTheCallerKeepsAnAnsweredSessionWhole(t *testing.T) {
+	_, m := export(t, harness.ExportOptions{CutAtToolUse: true})
+	if m.Cut || m.Lines != len(fixtureLines(t)) {
+		t.Errorf("manifest = %+v", m)
+	}
+}
+
+func TestExportWithNoToolCallGoesWhole(t *testing.T) {
 	dir := t.TempDir()
 	lines := fixtureLines(t)
 	plain := strings.Join([]string{lines[0], lines[1], lines[2], lines[10]}, "")
 	writeRollout(t, dir, "2026/11/12", fixtureID, plain)
 	ref := fixtureRef()
 	ref.ConfigDir = dir
-	if _, err := (codex.Adapter{}).Export(t.Context(), ref, harness.ExportOptions{CutAtToolUse: true}, io.Discard); err == nil {
-		t.Error("a session with no tool call was cut")
+	m, err := (codex.Adapter{}).Export(t.Context(), ref, harness.ExportOptions{CutAtToolUse: true}, io.Discard)
+	if err != nil || m.Cut || m.Lines != 4 {
+		t.Errorf("a session with no tool call: %+v %v", m, err)
 	}
 }
 
@@ -385,7 +412,11 @@ func TestImportRefusesWhatExportDoesNotWrite(t *testing.T) {
 }
 
 func TestCutThenImportThenExportIsTheCut(t *testing.T) {
-	cut, _ := export(t, harness.ExportOptions{CutAtToolUse: true})
+	var out bytes.Buffer
+	if _, err := (codex.Adapter{}).Export(t.Context(), running(t), harness.ExportOptions{CutAtToolUse: true}, &out); err != nil {
+		t.Fatal(err)
+	}
+	cut := out.Bytes()
 	dest := t.TempDir()
 	if _, err := (codex.Adapter{}).Import(t.Context(), harness.SessionImport{ConfigDir: dest, Cwd: fixtureCwd}, bytes.NewReader(cut)); err != nil {
 		t.Fatal(err)
