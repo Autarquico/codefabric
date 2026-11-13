@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/client/gitctx"
 	"github.com/Autarquico/codefabric/internal/client/session"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -90,7 +91,9 @@ type fakeController struct {
 	byRequest    map[string]v1.Task
 	loseResponse bool
 	// refuse is what the next NewTask answers instead of creating.
-	refuse  error
+	refuse error
+	// runs are the Runs of each Task, by id.
+	runs    map[string][]v1.Run
 	resumed []v1.ResumeTaskRequest
 	// resumes counts the resumes the Controller committed (a replayed request_id is not one);
 	// loseResume makes the next one commit and then fail.
@@ -113,6 +116,10 @@ func online(name string) v1.Worker { return v1.Worker{Name: name, State: domain.
 
 func (f *fakeController) Workers(context.Context, bool) ([]v1.Worker, error) {
 	return f.workers, nil
+}
+
+func (f *fakeController) Runs(_ context.Context, q client.RunQuery) ([]v1.Run, error) {
+	return f.runs[q.Task], nil
 }
 
 func (f *fakeController) Task(_ context.Context, ref, _ string) (v1.Task, error) {
@@ -361,6 +368,14 @@ func TestScenario_HandtoAfterTheTaskWasCancelled(t *testing.T) {
 	cancelled := c.tasks["tsk_1"]
 	cancelled.State = domain.TaskCancelled
 	c.tasks["tsk_1"] = cancelled
+
+	// Its Run is still being stopped: the harness may write, and the guard holds.
+	c.runs = map[string][]v1.Run{"tsk_1": {{State: domain.RunRunning}}}
+	var handed *session.HandedOffError
+	if _, err := Do(t.Context(), c, local, request("w")); !errors.As(err, &handed) {
+		t.Fatalf("a Task whose Run is still live freed the session: %v", err)
+	}
+	c.runs = map[string][]v1.Run{"tsk_1": {{State: domain.RunCancelled}}}
 
 	res, err := Do(t.Context(), c, local, request("w"))
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/client/gitctx"
 	"github.com/Autarquico/codefabric/internal/client/session"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -26,6 +27,7 @@ import (
 type Controller interface {
 	Workers(ctx context.Context, includeRemoved bool) ([]v1.Worker, error)
 	Task(ctx context.Context, ref, project string) (v1.Task, error)
+	Runs(ctx context.Context, f client.RunQuery) ([]v1.Run, error)
 	ProjectForDir(ctx context.Context, dir string) (v1.Project, error)
 	PutNativeSeed(ctx context.Context, project, digest string, r io.Reader, size int64) (v1.NativeSeedUploaded, error)
 	NewTask(ctx context.Context, dir string, req v1.CreateTaskRequest) (v1.CreateTaskResponse, error)
@@ -107,8 +109,10 @@ func Do(ctx context.Context, c Controller, sessions *session.Local, req Request)
 }
 
 // releaseEnded unlinks the session from its Task when that Task was cancelled
-// or archived: nothing goes on there, so the session is the work, and it is
-// handed off as one that never was, but for its name (see create).
+// or archived and none of its Runs is live: nothing goes on there, so the
+// session is the work, and it is handed off as one that never was, but for its
+// name (see create). A Run still stopping keeps the guard: its harness may
+// still be writing.
 func releaseEnded(ctx context.Context, c Controller, state session.State, id string, rec session.Record) (session.Record, error) {
 	if rec.Task == "" {
 		return rec, nil
@@ -119,6 +123,15 @@ func releaseEnded(ctx context.Context, c Controller, state session.State, id str
 	}
 	if t.State != domain.TaskCancelled && t.State != domain.TaskArchived {
 		return rec, nil
+	}
+	runs, err := c.Runs(ctx, client.RunQuery{Task: t.ID})
+	if err != nil {
+		return rec, err
+	}
+	for _, r := range runs {
+		if !r.State.IsTerminal() {
+			return rec, nil
+		}
 	}
 	if err := state.Unlink(id); err != nil {
 		return rec, err
