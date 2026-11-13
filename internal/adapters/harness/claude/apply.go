@@ -124,8 +124,8 @@ func applyRun(host harness.Host, snap harness.NativeSnapshot, t harness.TargetRu
 func runState(snap harness.NativeSnapshot, worktree string) ([]byte, error) {
 	state := object{onboardingField: true, bypassField: true}
 	if worktree != "" {
-		if real, err := filepath.EvalSymlinks(worktree); err == nil {
-			worktree = real
+		if resolved, err := filepath.EvalSymlinks(worktree); err == nil {
+			worktree = resolved
 		}
 		state[projectsField] = object{worktree: object{trustField: true}}
 	}

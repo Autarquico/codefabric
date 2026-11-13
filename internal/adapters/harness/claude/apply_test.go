@@ -91,13 +91,13 @@ func TestApplyRunTrustsTheWorktree(t *testing.T) {
 	if _, err := (claude.Adapter{}).ApplyConfig(t.Context(), h, snapshot(t, h), harness.ApplyOptions{Target: harness.TargetRun{Dir: dir, Worktree: worktree}}); err != nil {
 		t.Fatal(err)
 	}
-	real, err := filepath.EvalSymlinks(worktree)
+	resolved, err := filepath.EvalSymlinks(worktree)
 	if err != nil {
 		t.Fatal(err)
 	}
 	projects, _ := jsonOf(t, read(t, filepath.Join(dir, ".claude.json")))["projects"].(map[string]any)
-	if trust, _ := projects[real].(map[string]any); len(projects) != 1 || trust["hasTrustDialogAccepted"] != true {
-		t.Errorf("projects = %v, want %s trusted", projects, real)
+	if trust, _ := projects[resolved].(map[string]any); len(projects) != 1 || trust["hasTrustDialogAccepted"] != true {
+		t.Errorf("projects = %v, want %s trusted", projects, resolved)
 	}
 }
 
