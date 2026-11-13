@@ -27,9 +27,16 @@ const appliedFile = ".cf-applied.json"
 // servers it set.
 type applied map[string][]string
 
-// onboardingField is what Claude Code asks of .claude.json to not stop at the
-// first-run questions. It is made up for a Run and never in a snapshot.
-const onboardingField = "hasCompletedOnboarding"
+// The fields of .claude.json that keep Claude Code from stopping at a question
+// nobody in a Run answers: the first-run questions, the disclaimer of the
+// bypassPermissions mode Runs start in, and whether to trust the worktree.
+// They are made up for a Run and never in a snapshot.
+const (
+	onboardingField = "hasCompletedOnboarding"
+	bypassField     = "bypassPermissionsModeAccepted"
+	projectsField   = "projects"
+	trustField      = "hasTrustDialogAccepted"
+)
 
 // ApplyConfig writes snap to opts.Target.
 //
@@ -43,7 +50,7 @@ func (Adapter) ApplyConfig(_ context.Context, host harness.Host, snap harness.Na
 	}
 	switch t := opts.Target.(type) {
 	case harness.TargetRun:
-		return applyRun(host, snap, t.Dir, opts)
+		return applyRun(host, snap, t, opts)
 	case harness.TargetGlobal:
 		sel, err := harness.ComponentSet(opts.Components, func(n string) bool { _, ok := layoutOf(n); return ok })
 		if err != nil {
@@ -60,7 +67,8 @@ func (Adapter) ApplyConfig(_ context.Context, host harness.Host, snap harness.Na
 // mcpServers of snap and onboarding done. When asked, it links the login of
 // the host, if there is one: Claude Code writes it by replacing the file, so a
 // link is the §8.12 way.
-func applyRun(host harness.Host, snap harness.NativeSnapshot, dir string, opts harness.ApplyOptions) (harness.ApplyResult, error) {
+func applyRun(host harness.Host, snap harness.NativeSnapshot, t harness.TargetRun, opts harness.ApplyOptions) (harness.ApplyResult, error) {
+	dir := t.Dir
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return harness.ApplyResult{}, fmt.Errorf("claude-code: apply: %w", err)
@@ -81,7 +89,7 @@ func applyRun(host harness.Host, snap harness.NativeSnapshot, dir string, opts h
 	if opts.DryRun {
 		return res, nil
 	}
-	state, err := runState(snap)
+	state, err := runState(snap, t.Worktree)
 	if err != nil {
 		return harness.ApplyResult{}, err
 	}
@@ -111,9 +119,16 @@ func applyRun(host harness.Host, snap harness.NativeSnapshot, dir string, opts h
 	return res, nil
 }
 
-// runState is the .claude.json of a Run.
-func runState(snap harness.NativeSnapshot) ([]byte, error) {
-	state := object{onboardingField: true}
+// runState is the .claude.json of a Run. Claude Code keys the trust by the
+// real path of the folder it starts in.
+func runState(snap harness.NativeSnapshot, worktree string) ([]byte, error) {
+	state := object{onboardingField: true, bypassField: true}
+	if worktree != "" {
+		if resolved, err := filepath.EvalSymlinks(worktree); err == nil {
+			worktree = resolved
+		}
+		state[projectsField] = object{worktree: object{trustField: true}}
+	}
 	for _, c := range snap.Components {
 		if c.Name != MCPComponent {
 			continue

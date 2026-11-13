@@ -53,6 +53,11 @@ func claudeBody(id string, extra ...string) []string {
 	return append(lines, extra...)
 }
 
+// claudeInFlight is the tool call of cf handoff once Claude Code has written it: no result follows.
+func claudeInFlight(id string) string {
+	return claudeLine(id, "assistant", `[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"cf handoff"}}]`)
+}
+
 func (m machine) writeClaude(t *testing.T, id string, lines []string) string {
 	t.Helper()
 	p := filepath.Join(m.claudeHome, "projects", "-work-repo", id+".jsonl")
@@ -78,6 +83,11 @@ func codexBody(id string, extra ...string) []string {
 		codexLine(5, "response_item", `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}`),
 	}
 	return append(lines, extra...)
+}
+
+// codexInFlight is the tool call of $handto once Codex has written it: no output follows.
+func codexInFlight() string {
+	return codexLine(6, "response_item", `{"type":"function_call","call_id":"c2","name":"shell","arguments":"{}"}`)
 }
 
 // writeCodex writes the rollout and leaves it as quiet as a session that nobody has open.
@@ -139,11 +149,8 @@ func TestFindLooksInEveryHarnessAndSaysWhichHasIt(t *testing.T) {
 	}
 }
 
-func TestExportCutsAtTheLastToolUseOnlyForTheCaller(t *testing.T) {
+func TestExportCutsAtTheCallersToolCallOnlyForTheCaller(t *testing.T) {
 	m := newMachine(t)
-	m.writeClaude(t, claudeID, claudeBody(claudeID))
-	m.writeCodex(t, codexID, codexBody(codexID))
-
 	// Claude Code is the grandparent of this command; Codex tells its session through the environment.
 	m.openClaude(t, claudeID, 4242)
 	m.pidAlive = func(pid int) bool { return pid == 4242 }
@@ -154,15 +161,34 @@ func TestExportCutsAtTheLastToolUseOnlyForTheCaller(t *testing.T) {
 		}
 		return ""
 	}
-	for id, cutLines := range map[string]int{claudeID: 2, codexID: 3} {
+
+	m.writeClaude(t, claudeID, claudeBody(claudeID, claudeInFlight(claudeID)))
+	m.writeCodex(t, codexID, codexBody(codexID, codexInFlight()))
+	for id, cutLines := range map[string]int{claudeID: 5, codexID: 6} {
 		cut := export(t, m, ExportRequest{SessionID: id, Caller: true})
 		if !cut.Manifest.Cut || cut.Manifest.Lines != cutLines {
-			t.Errorf("%s: the cut should end at the tool call, line %d: %+v", id, cutLines, cut.Manifest)
+			t.Errorf("%s: the cut should end at the call still running, line %d: %+v", id, cutLines, cut.Manifest)
 		}
 		if !strings.HasPrefix(cut.Digest, "sha256:") {
 			t.Errorf("%s: digest %s", id, cut.Digest)
 		}
 	}
+
+	// The harness has not written the caller's call yet: every earlier call has its
+	// result, and cutting at one would lose it and the turns after it.
+	m.writeClaude(t, claudeID, claudeBody(claudeID))
+	m.writeCodex(t, codexID, codexBody(codexID))
+	for id, lines := range map[string]int{claudeID: 4, codexID: 5} {
+		if whole := export(t, m, ExportRequest{SessionID: id, Caller: true}); whole.Manifest.Cut || whole.Manifest.Lines != lines {
+			t.Errorf("%s: a session whose last call is answered should go whole, %d lines: %+v", id, lines, whole.Manifest)
+		}
+	}
+	m.writeClaude(t, claudeID, []string{claudeLine(claudeID, "user", `"hi"`), claudeLine(claudeID, "assistant", `[{"type":"text","text":"hello"}]`)})
+	if whole := export(t, m, ExportRequest{SessionID: claudeID, Caller: true}); whole.Manifest.Cut || whole.Manifest.Lines != 2 {
+		t.Errorf("a session with no tool call should go whole: %+v", whole.Manifest)
+	}
+
+	m.writeClaude(t, claudeID, claudeBody(claudeID, claudeInFlight(claudeID)))
 	m.pidAlive = func(int) bool { return false }
 	m.getenv = func(string) string { return "" }
 	if whole := export(t, m, ExportRequest{SessionID: claudeID}); whole.Manifest.Cut {
@@ -172,7 +198,7 @@ func TestExportCutsAtTheLastToolUseOnlyForTheCaller(t *testing.T) {
 
 func TestExportOfTheSessionTheEnvironmentNamesIsTheCallers(t *testing.T) {
 	m := newMachine(t)
-	p := m.writeCodex(t, codexID, codexBody(codexID))
+	p := m.writeCodex(t, codexID, codexBody(codexID, codexInFlight()))
 	now := time.Now()
 	if err := os.Chtimes(p, now, now); err != nil { // open, and written to just now
 		t.Fatal(err)
@@ -214,7 +240,7 @@ func TestExportBlocksWhatLooksLikeASecretUnlessAllowed(t *testing.T) {
 
 func TestExportRefusesAnOpenSessionExceptTheCallers(t *testing.T) {
 	m := newMachine(t)
-	m.writeClaude(t, claudeID, claudeBody(claudeID))
+	m.writeClaude(t, claudeID, claudeBody(claudeID, claudeInFlight(claudeID)))
 	m.openClaude(t, claudeID, 4242)
 
 	m.pidAlive = func(pid int) bool { return pid == 4242 }
@@ -242,7 +268,7 @@ func (m machine) processes(parents map[int]int, self int) {
 // only the Claude Code above this command in the process tree is.
 func TestExportClaimsOfTheCallerHoldOnlyForAnAncestorProcess(t *testing.T) {
 	m := newMachine(t)
-	m.writeClaude(t, claudeID, claudeBody(claudeID))
+	m.writeClaude(t, claudeID, claudeBody(claudeID, claudeInFlight(claudeID)))
 	m.openClaude(t, claudeID, 4242)
 	m.pidAlive = func(pid int) bool { return pid == 4242 }
 

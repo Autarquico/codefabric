@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Autarquico/codefabric/internal/client/handoff"
+	csession "github.com/Autarquico/codefabric/internal/client/session"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -109,20 +110,24 @@ func handoffFromClient(cmd *cobra.Command, opts Options, session, to string, o h
 }
 
 // handoffError is asUserError with, for the two guards a person lifts, the command
-// they would type to lift it.
+// they would type to lift it: a session that looks like it holds a secret, and one
+// handed off already (or a resume the Controller wants confirmed). Any other
+// refusal, a policy of the Project among them, is not lifted by a flag.
 func handoffError(err error, session, to string) error {
+	var o handoffOverrides
+	var sensitive *csession.SensitiveError
+	if errors.As(err, &sensitive) {
+		o.allowSensitive = true
+	}
 	err = asUserError(err)
 	var coded *domain.Error
 	if !errors.As(err, &coded) {
 		return err
 	}
-	var o handoffOverrides
-	switch coded.Code {
-	case domain.CodePolicyDenied:
-		o.allowSensitive = true
-	case domain.CodeConfirmationRequired:
+	if coded.Code == domain.CodeConfirmationRequired {
 		o.force = true
-	default:
+	}
+	if !o.force && !o.allowSensitive {
 		return err
 	}
 	return domain.NewError(coded.Code, coded.Message+"\nRun this yourself in your own terminal: "+o.command(session, to), coded.Details)

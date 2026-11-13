@@ -420,7 +420,7 @@ func materializedDigest(t *testing.T, home string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mat, err := host.NewMaterializer(h).Materialize(t.Context(), codex.Adapter{}, t.TempDir(), snap)
+	mat, err := host.NewMaterializer(h).Materialize(t.Context(), codex.Adapter{}, t.TempDir(), "", snap)
 	if err != nil {
 		t.Fatal(err)
 	}

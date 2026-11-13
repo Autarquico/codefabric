@@ -2,18 +2,18 @@
 codename: codefabric
 title: /handto desde Claude Code
 type: task
-status: active
+status: shipped
 priority: P1
 size: M
 issue: 164
-prs: [166]
+prs: [166, 172, 171]
 related_issues: [164]
 sub_issues: []
 depends_on: [defer-resume, dirty-snapshots-auto-checkpoints]
 supersedes: []
 related_specs: [codefabric-spec, phase-5-handoff, session-pull]
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-13
 ---
 
 # /handto desde Claude Code
@@ -34,10 +34,19 @@ Owner previsto en el bucle Develop: backend-eng.
   El Run es interactivo (`--interactive`) y su prompt de continuación y el nombre de la Task salen de la sesión
   (último mensaje del usuario, truncado). Imprime la Task, el Worker y `cf attach <task>`.
 - Sesión viva propia: se permite cuando el id es el de la sesión que llama; el export corta el jsonl tras el
-  último `tool_use` (la propia llamada). Tras el éxito, marcador local `handed-off`. (Enmienda) "la que llama" se
-  verifica: el proceso `claude` dueño de la sesión (`~/.claude/sessions/<pid>.json` con ese `sessionId`) debe ser
+  último `tool_use` (la propia llamada) solo si no le sigue un `tool_result`. (Enmienda, lab 2026-11-13) Claude
+  Code 2.1.319 aún no ha escrito la llamada cuando `cf` corre: si la última llamada tiene resultado, o no hay
+  ninguna, el jsonl va entero; cortar en una anterior perdería su resultado y los turnos posteriores. Tras el
+  éxito, marcador local `handed-off`. (Enmienda) "la que llama" se verifica: el proceso `claude` dueño de la sesión (`~/.claude/sessions/<pid>.json` con ese `sessionId`) debe ser
   ancestro del proceso de `cf` (cadena de ppid, `/proc` o `ps`); si no, la sesión está abierta en otra ventana y se
   rechaza pidiendo cerrarla. En Codex la sesión que llama es la que dice `CODEX_SESSION_ID`.
+- (Enmienda, lab 2026-11-13) Destino: un Worker `online` o `degraded`; el scheduler decide si lo degradado afecta
+  al harness de la sesión.
+- (Enmienda, lab 2026-11-13) Si la Task ligada está cancelada o archivada y ninguno de sus Runs sigue vivo, la
+  sesión se desliga y se libera el marcador sin `--force`: se trata como una sesión nueva, y la Task nueva lleva un
+  sufijo de su request para no chocar con el nombre de la terminada. Un Run aún parándose mantiene la guarda.
+- (Enmienda, lab 2026-11-13) Una petición que el Controller rechaza (request inválida, no encontrada, policy,
+  transición) no se reenvía en el reintento; cualquier otro error puede ser una respuesta perdida y se repite igual.
 - (Enmienda) Con Task ligada, el resume lleva snapshot solo si el árbol (por tree de git) cambió respecto al último
   handoff; si no, continúa del último checkpoint de la Task.
 - (Enmienda) `--force` y `--allow-sensitive-session` exigen TTY: Claude Code ejecuta Bash sin terminal y la skill no
@@ -67,14 +76,15 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **Then** un Run interactivo `running` en `w` con la sesión sembrada; lo no commiteado viaja por snapshot, el árbol local queda intacto, se imprime `cf attach` y `cf attach` muestra la sesión reanudada
 
 ### Scenario: Worker desconocido
-- **Given** ningún Worker llamado `foo` u offline
+- **Given** ningún Worker llamado `foo`, o uno que no está `online` ni `degraded`
 - **When** `/handto foo`
 - **Then** error `CF_*` con la lista de Workers y ninguna Task creada
 
 ### Scenario: Segundo handto
 - **Given** el marcador `handed-off` de esa sesión
 - **When** `/handto otro`
-- **Then** aviso de doble escritor; solo con `--force`, y entonces `resume` en el otro Worker, no una Task nueva
+- **Then** aviso de doble escritor; solo con `--force`, y entonces `resume` en el otro Worker, no una Task nueva.
+  Si la Task ligada está cancelada o archivada sin Runs vivos, no hay aviso: Task nueva con nombre sufijado
 
 ### Scenario: Turno en curso
 - **Given** el jsonl acaba en el `tool_use` de `cf handoff`

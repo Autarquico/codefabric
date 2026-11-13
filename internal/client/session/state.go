@@ -132,6 +132,12 @@ func (s State) SetPending(id string, p Pending) error {
 	return s.update(id, func(r *Record) { r.Pending = &p })
 }
 
+// ClearPending forgets a request the Controller refused: it was answered, so a
+// retry is a new request, not a replay.
+func (s State) ClearPending(id string) error {
+	return s.update(id, func(r *Record) { r.Pending = nil })
+}
+
 // MarkHandedOff leaves the marker: the session was seeded into task with the seed
 // whose digest is given, and binds it to the Task. tree is that of the snapshot that
 // went with it, "" if none did.
@@ -140,6 +146,13 @@ func (s State) MarkHandedOff(id, task, digest, tree string, at time.Time) error 
 		r.Task, r.Tree, r.Seed, r.Pending = task, tree, digest, nil
 		r.HandedOff = &HandedOff{Task: task, Digest: digest, At: at.UTC()}
 	})
+}
+
+// Unlink frees the session of a Task that is over (cancelled or archived): its
+// work goes on nowhere, so the marker, the binding and any request left pending
+// go, and the next handoff starts a new Task. Seed stays, as after a pull.
+func (s State) Unlink(id string) error {
+	return s.update(id, func(r *Record) { r.Task, r.Tree, r.HandedOff, r.Pending = "", "", nil, nil })
 }
 
 // ClearHandedOff takes the marker away, as the pull of the Task does once the session is

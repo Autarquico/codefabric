@@ -172,6 +172,14 @@ func TestHandoffError_NamesTheCommandThatLiftsTheGuard(t *testing.T) {
 	}
 }
 
+// A policy of the Project is not lifted by --allow-sensitive-session (seen in the lab).
+func TestHandoffError_OffersNoFlagForAPolicyOfTheProject(t *testing.T) {
+	err := handoffError(domain.NewError(domain.CodePolicyDenied, "harness claude-code needs the secrets claude/oauth-token", nil), "s-1", "w")
+	if strings.Contains(err.Error(), "Run this yourself") {
+		t.Errorf("%v", err)
+	}
+}
+
 func TestHandoffError_QuotesWhatTheUserWillPasteIntoAShell(t *testing.T) {
 	err := handoffError(&csession.HandedOffError{ID: "s", Task: "t"}, "s-1", "w; touch x #")
 	if want := "cf handoff --session s-1 --to 'w; touch x #' --force"; !strings.Contains(err.Error(), want) {

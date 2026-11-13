@@ -33,7 +33,7 @@ func TestRender_ConfigTomlInAnEventIsRedactedInEveryForm(t *testing.T) {
 
 	runDir := t.TempDir()
 	m := host.NewMaterializer(h)
-	mat, err := m.Materialize(t.Context(), codex.Adapter{}, runDir, snap)
+	mat, err := m.Materialize(t.Context(), codex.Adapter{}, runDir, "", snap)
 	if err != nil {
 		t.Fatalf("Materialize: %v", err)
 	}

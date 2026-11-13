@@ -120,14 +120,35 @@ func TestSession_ExportIsDeterministicAndLeavesOutLocalState(t *testing.T) {
 	}
 }
 
-func TestSession_ExportCutsAfterTheLastToolUse(t *testing.T) {
+// The call of cf handoff is not on disk yet: every call has its result, and
+// the caller's session goes whole.
+func TestSession_ExportForTheCallerKeepsAnAnsweredSessionWhole(t *testing.T) {
 	archive, m := exportSession(t, harness.ExportOptions{CutAtToolUse: true})
 	_, content := untar(t, archive)
-	if got := content[testSessionID+".jsonl"]; got != readData(t, "golden", "cut.jsonl") {
-		t.Fatalf("transcript = %s", got)
+	if content[testSessionID+".jsonl"] != string(sessionTranscript(t)) {
+		t.Fatal("the transcript changed")
 	}
-	if content["manifest.json"] != readData(t, "golden", "manifest-cut.json") || !m.Cut || m.Lines != 3 {
+	if content["manifest.json"] != readData(t, "golden", "manifest.json") || m.Cut || m.Lines != 5 {
 		t.Fatalf("manifest = %s", content["manifest.json"])
+	}
+}
+
+// inFlight is the call of cf handoff once Claude Code has written it: no result follows.
+const inFlight = `{"type":"assistant","sessionId":"11111111-2222-4333-8444-555555555555","cwd":"/Users/x/repo","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_9","name":"Bash","input":{"command":"cf handoff"}}]}}` + "\n"
+
+func TestSession_ScanCutsAtTheCallStillRunning(t *testing.T) {
+	whole := sessionTranscript(t)
+	running := append(bytes.Clone(whole), inFlight...)
+	got, m, err := scanTranscript(append(bytes.Clone(running), `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1"}]}}`+"\n"...), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Cut || m.Lines != 7 || len(got) <= len(running) {
+		t.Fatalf("a call with its result is not the caller's: %+v", m)
+	}
+	got, m, err = scanTranscript(running, true)
+	if err != nil || !bytes.Equal(got, running) || !m.Cut || m.Lines != 6 {
+		t.Fatalf("the cut should end at the call still running: %+v %v", m, err)
 	}
 }
 
@@ -243,19 +264,26 @@ func sessionTranscript(t *testing.T) []byte {
 
 // CODE-14: the tail of a live or killed session.
 func TestSession_ScanToleratesATailAfterTheCut(t *testing.T) {
-	whole := sessionTranscript(t)
-	wantCut, _, err := scanTranscript(whole, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	running := append(sessionTranscript(t), inFlight...)
 	for name, tail := range map[string]string{"incomplete": `{"type":"user","cwd":"/Users/x/re`, "not JSON": "garbage\n"} {
-		got, m, err := scanTranscript(append(bytes.Clone(whole), tail...), true)
+		got, m, err := scanTranscript(append(bytes.Clone(running), tail...), true)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if !bytes.Equal(got, wantCut) || !m.Cut || len(m.Warnings) != 0 {
+		if !bytes.Equal(got, running) || !m.Cut || len(m.Warnings) != 0 {
 			t.Errorf("%s: the cut changed: %s %+v", name, got, m)
 		}
+	}
+}
+
+func TestSession_ScanWithNothingToCutTreatsTheTailAsWithoutACut(t *testing.T) {
+	whole := sessionTranscript(t)
+	got, m, err := scanTranscript(append(bytes.Clone(whole), `{"type":"user","cwd":"/Users/x/re`...), true)
+	if err != nil || !bytes.Equal(got, whole) || m.Cut || len(m.Warnings) != 1 {
+		t.Errorf("incomplete: %+v %v", m, err)
+	}
+	if _, _, err := scanTranscript(append(bytes.Clone(whole), "garbage\n"...), true); err == nil {
+		t.Error("a complete last line that is not JSON was accepted")
 	}
 }
 

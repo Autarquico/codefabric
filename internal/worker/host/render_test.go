@@ -78,7 +78,7 @@ func newEscFixture(t *testing.T) *fixture {
 }
 
 func (f *fixture) materializeEsc(snap harness.NativeSnapshot) (Materialization, error) {
-	return f.m.Materialize(context.Background(), escMini{f.a}, f.runDir, snap)
+	return f.m.Materialize(context.Background(), escMini{f.a}, f.runDir, "", snap)
 }
 
 func TestTOMLBasicStringReadsBackWhatWasEscaped(t *testing.T) {

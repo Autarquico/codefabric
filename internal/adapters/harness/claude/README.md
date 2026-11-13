@@ -139,9 +139,13 @@ Registered in the binaries: `cmd/cf` and the Worker daemon
    the signal to the process group.
 
 A Run configuration also gets a `.claude.json` that no snapshot has: the
-`mcpServers` of the snapshot and `hasCompletedOnboarding: true`, so that
-Claude Code does not stop at its first-run questions. That field is made up
-for the Run; a global apply never writes it.
+`mcpServers` of the snapshot, `hasCompletedOnboarding: true`,
+`bypassPermissionsModeAccepted: true` and, for the worktree of the Run by its
+real path, `projects.<worktree>.hasTrustDialogAccepted: true`, so that Claude
+Code does not stop at its first-run questions, the disclaimer of the
+bypassPermissions mode or the question of trusting the folder: nobody is there
+to answer them. Those fields are made up for the Run; a global apply never
+writes them.
 
 ## Contract test against the real CLI
 

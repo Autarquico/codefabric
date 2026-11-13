@@ -31,11 +31,11 @@ func TestScenario_HarnessAdapterFramework_Aislamiento(t *testing.T) {
 	}
 	homeBefore := manifest(t, h.Home())
 
-	matA, err := m.Materialize(ctx, a, runA, snapshot("A"))
+	matA, err := m.Materialize(ctx, a, runA, "", snapshot("A"))
 	if err != nil {
 		t.Fatalf("Materialize A: %v", err)
 	}
-	matB, err := m.Materialize(ctx, a, runB, snapshot("B"))
+	matB, err := m.Materialize(ctx, a, runB, "", snapshot("B"))
 	if err != nil {
 		t.Fatalf("Materialize B: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestScenario_HarnessAdapterFramework_Aislamiento(t *testing.T) {
 
 	// Materialising A again gives the same digest and leaves B alone.
 	bBefore := manifest(t, runB)
-	again, err := m.Materialize(ctx, a, runA, snapshot("A"))
+	again, err := m.Materialize(ctx, a, runA, "", snapshot("A"))
 	if err != nil || again.Digest != matA.Digest {
 		t.Errorf("Materialize A again = %s, %v; want %s", again.Digest, err, matA.Digest)
 	}
@@ -86,7 +86,7 @@ func TestScenario_HarnessAdapterFramework_Aislamiento(t *testing.T) {
 	if err := os.Mkdir(runC, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if matC, err := m.Materialize(ctx, a, runC, snapshot("A")); err != nil || matC.Digest != matA.Digest {
+	if matC, err := m.Materialize(ctx, a, runC, "", snapshot("A")); err != nil || matC.Digest != matA.Digest {
 		t.Errorf("A in another Run = %s, %v; want %s", matC.Digest, err, matA.Digest)
 	}
 	sameManifest(t, "run B", bBefore, manifest(t, runB))
@@ -141,7 +141,7 @@ func newFixture(t *testing.T) *fixture {
 }
 
 func (f *fixture) materialize(snap harness.NativeSnapshot) (Materialization, error) {
-	return f.m.Materialize(context.Background(), f.a, f.runDir, snap)
+	return f.m.Materialize(context.Background(), f.a, f.runDir, "", snap)
 }
 
 func (f *fixture) must(snap harness.NativeSnapshot) Materialization {

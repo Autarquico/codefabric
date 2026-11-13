@@ -59,9 +59,9 @@ func TestScenario_ClaudeCodeAdapter_ApplyAislado(t *testing.T) {
 	if err != nil || target != filepath.Join(home, ".claude", ".credentials.json") {
 		t.Errorf("link = %q, %v", target, err)
 	}
-	// .claude.json: only mcpServers and the onboarding, markers unrendered.
+	// .claude.json: only mcpServers and what keeps the Run from stopping, markers unrendered.
 	state := jsonOf(t, read(t, filepath.Join(dir, ".claude.json")))
-	if len(state) != 2 || state["hasCompletedOnboarding"] != true {
+	if len(state) != 3 || state["hasCompletedOnboarding"] != true || state["bypassPermissionsModeAccepted"] != true {
 		t.Errorf(".claude.json = %v", state)
 	}
 	servers, _ := state["mcpServers"].(map[string]any)
@@ -83,6 +83,24 @@ func TestScenario_ClaudeCodeAdapter_ApplyAislado(t *testing.T) {
 	}
 }
 
+// An interactive Run stopped at "do you trust this folder?" until someone
+// attached (seen in the lab): the worktree is trusted by its real path.
+func TestApplyRunTrustsTheWorktree(t *testing.T) {
+	h, _ := newHost(t, nil)
+	worktree, dir := t.TempDir(), t.TempDir()
+	if _, err := (claude.Adapter{}).ApplyConfig(t.Context(), h, snapshot(t, h), harness.ApplyOptions{Target: harness.TargetRun{Dir: dir, Worktree: worktree}}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, _ := jsonOf(t, read(t, filepath.Join(dir, ".claude.json")))["projects"].(map[string]any)
+	if trust, _ := projects[resolved].(map[string]any); len(projects) != 1 || trust["hasTrustDialogAccepted"] != true {
+		t.Errorf("projects = %v, want %s trusted", projects, resolved)
+	}
+}
+
 func TestApplyRunWithoutLoginMakesNoLinkAndAnEmptySnapshotStillOnboards(t *testing.T) {
 	h, home := newHost(t, nil)
 	before := treeHash(t, home)
@@ -94,7 +112,7 @@ func TestApplyRunWithoutLoginMakesNoLinkAndAnEmptySnapshotStillOnboards(t *testi
 	if len(entries) != 1 || entries[0].Name() != ".claude.json" {
 		t.Errorf("the Run has %v", entries)
 	}
-	if got := jsonOf(t, read(t, filepath.Join(dir, ".claude.json"))); len(got) != 1 || got["hasCompletedOnboarding"] != true {
+	if got := jsonOf(t, read(t, filepath.Join(dir, ".claude.json"))); len(got) != 2 || got["hasCompletedOnboarding"] != true || got["bypassPermissionsModeAccepted"] != true {
 		t.Errorf(".claude.json = %v", got)
 	}
 	if treeHash(t, home) != before {

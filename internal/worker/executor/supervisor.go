@@ -208,7 +208,7 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 	if err := og.revoke(); err != nil {
 		return fmt.Errorf("%w: %s: taking the origin credential back: %w", errPrepareLater, domain.CodeSecretUnavailable, err)
 	}
-	mat, err := e.materialize(ctx, adapter, dir, snap)
+	mat, err := e.materialize(ctx, adapter, dir, worktree, snap)
 	if err != nil {
 		return err
 	}
@@ -290,11 +290,11 @@ func (e *Executor) prepare(ctx context.Context, r state.Run) error {
 // with the markers of its secrets unrendered, when the harness reads one per
 // Run; otherwise it does nothing and says nothing. The secrets are rendered
 // into it once they are delivered.
-func (e *Executor) materialize(ctx context.Context, adapter harness.Adapter, dir string, snap harness.NativeSnapshot) (host.Materialization, error) {
+func (e *Executor) materialize(ctx context.Context, adapter harness.Adapter, dir, worktree string, snap harness.NativeSnapshot) (host.Materialization, error) {
 	if !adapter.Capabilities().ConfigIsolation {
 		return host.Materialization{}, nil
 	}
-	m, err := e.materializer.Materialize(ctx, adapter, dir, snap)
+	m, err := e.materializer.Materialize(ctx, adapter, dir, worktree, snap)
 	if errors.Is(err, harness.ErrSecretUnavailable) {
 		return host.Materialization{}, fmt.Errorf("%s: %w", domain.CodeSecretUnavailable, err)
 	}

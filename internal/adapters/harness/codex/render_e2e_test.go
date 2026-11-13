@@ -40,7 +40,7 @@ func TestRender_EveryValueRoundTripsThroughConfigToml(t *testing.T) {
 
 	runDir := t.TempDir()
 	m := host.NewMaterializer(h)
-	mat, err := m.Materialize(t.Context(), codex.Adapter{}, runDir, snap)
+	mat, err := m.Materialize(t.Context(), codex.Adapter{}, runDir, "", snap)
 	if err != nil {
 		t.Fatalf("Materialize: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestApply_RejectsAMarkerOutsideABasicString(t *testing.T) {
 				Files: []harness.File{{Path: "config.toml", Content: []byte(content), SecretRefs: harness.SecretRefs([]byte(content))}},
 			}}}
 			h := homeWith(t, nil)
-			_, err := host.NewMaterializer(h).Materialize(t.Context(), codex.Adapter{}, t.TempDir(), snap)
+			_, err := host.NewMaterializer(h).Materialize(t.Context(), codex.Adapter{}, t.TempDir(), "", snap)
 			if err == nil || !strings.Contains(err.Error(), harness.ErrSecretUnavailable.Error()) {
 				t.Fatalf("err = %v, want ErrSecretUnavailable", err)
 			}

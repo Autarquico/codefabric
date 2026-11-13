@@ -17,7 +17,7 @@ func materializeWith(t *testing.T, opts ...MaterializerOption) (Materialization,
 	if err := os.Mkdir(run, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	mat, err := NewMaterializer(h, opts...).Materialize(context.Background(), newMini(), run, snapshot("A"))
+	mat, err := NewMaterializer(h, opts...).Materialize(context.Background(), newMini(), run, "", snapshot("A"))
 	if err != nil {
 		t.Fatalf("Materialize: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestMaterialize_AddsTheFilesOfItsHarnessToTheConfiguration(t *testing.T) {
 		t.Errorf("digest = %s, %v; recorded %s", d, err, mat.Digest)
 	}
 	again, err := NewMaterializer(h, WithFiles("mini", map[string][]byte{"skills/handto/SKILL.md": skill})).
-		Materialize(context.Background(), newMini(), run, snapshot("A"))
+		Materialize(context.Background(), newMini(), run, "", snapshot("A"))
 	if err != nil || again.Digest != mat.Digest {
 		t.Errorf("materialising again = %s, %v; want %s", again.Digest, err, mat.Digest)
 	}
@@ -70,7 +70,7 @@ func TestMaterialize_RefusesAFileOutsideTheConfiguration(t *testing.T) {
 	}
 	for _, name := range []string{"../escape", "/abs", "a/../../b"} {
 		_, err := NewMaterializer(h, WithFiles("mini", map[string][]byte{name: []byte("x")})).
-			Materialize(context.Background(), newMini(), run, snapshot("A"))
+			Materialize(context.Background(), newMini(), run, "", snapshot("A"))
 		if err == nil {
 			t.Errorf("%q: the file was accepted", name)
 		}

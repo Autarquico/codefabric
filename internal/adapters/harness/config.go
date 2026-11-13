@@ -108,9 +108,12 @@ type Target interface {
 }
 
 // TargetRun is the configuration directory of one Run (§8.12). Dir is empty
-// and ApplyConfig writes the snapshot alone into it.
+// and ApplyConfig writes the snapshot alone into it. Worktree, when set, is
+// the directory the harness runs in: an adapter whose CLI asks to trust a
+// folder records that it is trusted, since nobody would be there to answer.
 type TargetRun struct {
-	Dir string
+	Dir      string
+	Worktree string
 }
 
 // TargetGlobal is the native configuration under Host.Home, kept by the
