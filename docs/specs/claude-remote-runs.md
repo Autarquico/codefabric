@@ -1,13 +1,13 @@
 ---
 codename: codefabric
-title: "Los Runs remotos en Claude Code"
+title: Los Runs remotos en Claude Code
 type: task
-status: draft
+status: active
 priority: P2
 size: M
-issue: null
+issue: 180
 prs: []
-related_issues: []
+related_issues: [180]
 depends_on: [claude-handto]
 supersedes: []
 related_specs: [live-attach, claude-handto]
@@ -29,19 +29,30 @@ Owner previsto en el bucle Develop: backend-eng.
 
 **Entra:**
 - Ver desde Claude Code los Workers y sus Runs interactivos, marcados como remotos (Worker, estado, Task).
-- Desde esa lista, entrar en un Run remoto (lo que hoy es `cf attach`) y volver.
+- Desde esa lista, el comando exacto para entrar en un Run remoto (`cf attach <task>`), que se abre en otra
+  terminal.
+- Un segmento de la status line de Claude Code con los Runs remotos vivos (opcional al instalar).
 - Instalado por `cf claude install`, como la skill `handto`.
 
 **No entra:**
 - Cambiar Claude Code: solo se usan sus puntos de extensión.
 - Codex (después, si su CLI ofrece algo equivalente).
+- Entrar en el Run desde dentro de Claude Code: ninguna extensión documentada le cede la terminal a otro
+  programa y vuelve (ver Decisiones). Un panel (mod) de Claude Code queda como exploración posterior.
+
+## Decisiones
+
+- Enmienda 2026-11-15. Revisadas las páginas de Claude Code sobre skills, modo interactivo, status line,
+  hooks, MCP, sesiones y agent view (code.claude.com/docs/en/{skills,interactive-mode,statusline,hooks,mcp,
+  sessions,agent-view}): ninguna documenta cómo añadir filas a su lista de sesiones (`/resume`,
+  `claude agents`); la salida de un `` !`cmd` `` de skill se captura como texto, y no se documenta TTY para
+  `!`; la status line ejecuta un comando local y se refresca (`refreshInterval`). Es ausencia de API
+  documentada, no prueba de que no exista. Por eso el
+  scope es una skill que lista y una línea de estado, y entrar se hace con `cf attach` en otra terminal.
 
 ## Preguntas abiertas
 
-- **Punto de extensión.** Sin verificar qué ofrece Claude Code para esto: una skill o comando que liste
-  (mínimo), un panel o status line que se actualice, o integrarse con su lista de sesiones. Es lo primero
-  del plan; si solo cabe una skill, el scope se reduce a listar y dar el comando de attach.
-- Entrar desde Claude Code depende de `live-attach` si debe funcionar sin SSH.
+- `cf attach` sin SSH depende de `live-attach`.
 
 ## Criterios de aceptación
 
@@ -56,7 +67,14 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Entrar en un remoto
 - **Given** la lista con un Run remoto
 - **When** se elige entrar
-- **Then** se abre ese Run como con `cf attach`, y al salir se vuelve a Claude Code
+- **Then** la skill da el comando exacto (`cf attach <task>`) y ese comando, en otra terminal, abre el Run;
+  la sesión de Claude Code no se toca
+
+### Scenario: Status line
+- **Given** `cf claude install --statusline` en una máquina sin status line propia, y un Run remoto que arranca
+- **When** Claude Code está abierto y en reposo
+- **Then** la línea de estado muestra el Run remoto en menos de 15 s; sin `--statusline` no se toca la
+  configuración de la status line, y si ya hay una propia, la instalación no la sustituye y lo dice
 
 ### Scenario: Sin Controller
 - **Given** `cf` sin Controller alcanzable
