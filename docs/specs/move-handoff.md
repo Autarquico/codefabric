@@ -2,7 +2,7 @@
 codename: codefabric
 title: Move y handoff
 type: task
-status: active
+status: shipped
 priority: P1
 size: L
 issue: 169
@@ -13,7 +13,7 @@ depends_on: [defer-resume]
 supersedes: []
 related_specs: [codefabric-spec, phase-5-handoff]
 created: 2026-10-10
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 # Move y handoff

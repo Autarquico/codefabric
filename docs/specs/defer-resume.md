@@ -2,7 +2,7 @@
 codename: codefabric
 title: Defer y resume
 type: task
-status: active
+status: shipped
 priority: P1
 size: M
 issue: 161
@@ -13,7 +13,7 @@ depends_on: [checkpoint-capture]
 supersedes: []
 related_specs: [codefabric-spec, phase-5-handoff]
 created: 2026-10-10
-updated: 2026-11-11
+updated: 2026-11-13
 ---
 
 # Defer y resume

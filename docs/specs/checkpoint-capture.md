@@ -2,18 +2,18 @@
 codename: codefabric
 title: Captura de checkpoints
 type: task
-status: active
+status: shipped
 priority: P1
 size: L
 issue: 160
-prs: [167, 168, 170]
+prs: [167, 168, 170, 171]
 related_issues: [160]
 sub_issues: []
 depends_on: [claude-code-adapter, codex-adapter, logs-output-storage]
 supersedes: []
 related_specs: [codefabric-spec, phase-5-handoff]
 created: 2026-10-10
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 # Captura de checkpoints
