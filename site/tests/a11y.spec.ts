@@ -1,9 +1,10 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { BASE } from '../scripts/sync-docs.mjs';
 
 const PAGES = [
-  { name: 'landing', path: '/codefabric/' },
-  { name: 'getting-started', path: '/codefabric/getting-started/' },
+  { name: 'landing', path: BASE },
+  { name: 'getting-started', path: `${BASE}getting-started/` },
 ];
 const THEMES = ['light', 'dark'] as const;
 const VIEWPORTS = [

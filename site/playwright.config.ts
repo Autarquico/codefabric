@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { BASE } from './scripts/sync-docs.mjs';
 
 const PORT = 4331;
 
@@ -10,7 +11,7 @@ export default defineConfig({
   use: { baseURL: `http://127.0.0.1:${PORT}`, browserName: 'chromium' },
   webServer: {
     command: `npx astro preview --ignore-lock --host 127.0.0.1 --port ${PORT}`,
-    url: `http://127.0.0.1:${PORT}/codefabric/`,
+    url: `http://127.0.0.1:${PORT}${BASE}`,
     reuseExistingServer: !process.env.CI,
   },
 });

@@ -14,7 +14,7 @@ test('siteVersion reads a release tag, treats empty as unreleased and rejects an
 });
 
 test('the one-liner is the contract with the release workflow', () => {
-  assert.equal(installCommands('v0.2.0').latest, 'curl -fsSL https://github.com/Autarquico/codefabric/releases/latest/download/install.sh | sh');
+  assert.equal(installCommands('v0.2.0').latest, 'curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | sh');
   assert.equal(INSTALL_URL.endsWith('/releases/latest/download/install.sh'), true);
 });
 

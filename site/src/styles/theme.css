@@ -1,4 +1,4 @@
-/* CodeFabric theme: global signature -> base.yml -> landing.yml. Tokens first, Starlight mapping second. */
+/* Code Flock theme: global signature -> base.yml -> landing.yml. Tokens first, Starlight mapping second. */
 
 :root {
   /* spacing scale (4 8 12 16 24 32 48 64 96 128) */
@@ -42,10 +42,10 @@
   --cf-neutral-900: hsl(220 24% 10%);
   --cf-neutral-950: hsl(220 28% 6%);
 
-  /* loom indigo, dark mode (Starlight's default before its script runs) */
-  --cf-accent: #818cf8;
-  --cf-accent-hover: #a5b4fc;
-  --cf-accent-low: hsl(243 40% 18%);
+  /* flock blue, the logo's, dark mode (Starlight's default before its script runs) */
+  --cf-accent: #1a9bff;
+  --cf-accent-hover: #5cb8ff;
+  --cf-accent-low: hsl(210 60% 16%);
   --cf-on-accent: var(--cf-neutral-950);
   --cf-border: var(--cf-neutral-800);
   --cf-surface: var(--cf-neutral-900);
@@ -106,9 +106,9 @@
 }
 
 :root[data-theme='light'] {
-  --cf-accent: #4338ca;
-  --cf-accent-hover: #3730a3;
-  --cf-accent-low: hsl(243 80% 94%);
+  --cf-accent: #0a6fd1;
+  --cf-accent-hover: #075bb0;
+  --cf-accent-low: hsl(210 90% 94%);
   --cf-on-accent: #ffffff;
   --cf-border: var(--cf-neutral-200);
   --cf-surface: var(--cf-neutral-50);

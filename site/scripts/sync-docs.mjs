@@ -1,15 +1,17 @@
 // Copies docs/guide/*.md into the Starlight content folder, adapting them for the website.
 // docs/guide is the only source: nothing else under docs/ is ever published.
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { siteVersion } from './version.mjs';
 
 export const SITE = 'https://autarquico.github.io';
-export const BASE = '/codefabric/';
-export const REPO_URL = 'https://github.com/Autarquico/codefabric';
+export const BASE = '/codeflock/';
+export const REPO_URL = 'https://github.com/Autarquico/codeflock';
 export const GUIDE_DIR = 'docs/guide';
 export const GUIDE_PAGES = ['getting-started.md', 'concepts.md', 'cli.md', 'mcp.md', 'tui.md'];
+// Images of the guide travel with its pages, so they stay relative and Astro optimises them.
+export const GUIDE_IMAGES = 'img';
 const NOT_PUBLIC = [/^docs\/codefabric-spec\.md$/, /^docs\/specs(\/|$)/, /^docs\/adr(\/|$)/, /^docs\/runbooks(\/|$)/];
 
 // Astro bundles TuiFrame (and this module) into dist/.prerender, so the module's own location is not the
@@ -93,6 +95,7 @@ function rewriteDestination(destination, { file, base, ref, kindOf }) {
   if (kind === null) throw new Error(`${GUIDE_DIR}/${file}: link "${destination}" points to ${repoPath}, which does not exist`);
   const guideFile = repoPath.startsWith(`${GUIDE_DIR}/`) ? repoPath.slice(GUIDE_DIR.length + 1) : null;
   if (guideFile !== null && GUIDE_PAGES.includes(guideFile)) return `${routeFor(slugOf(guideFile), base)}${hash}`;
+  if (guideFile !== null && guideFile.startsWith(`${GUIDE_IMAGES}/`) && kind === 'file') return `./${guideFile}`;
   return `${REPO_URL}/${kind === 'dir' ? 'tree' : 'blob'}/${ref}/${repoPath}${hash}`;
 }
 
@@ -148,6 +151,8 @@ export function syncDocs({ root = contentRoot, out = outputDir, base = BASE, ref
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
   for (const { file, content } of pages) writeFileSync(path.join(out, file), content);
+  const images = path.join(root, GUIDE_DIR, GUIDE_IMAGES);
+  if (existsSync(images)) cpSync(images, path.join(out, GUIDE_IMAGES), { recursive: true });
   return GUIDE_PAGES;
 }
 

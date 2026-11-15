@@ -47,7 +47,7 @@ Generate the autocompletion script for a shell (`bash`, `zsh`, `fish`, `powershe
 
 ## `cf config`
 
-Inspect CodeFabric's configuration. `cf config paths` prints where it keeps its files; `cf config show` prints the effective configuration with secrets redacted.
+Inspect Code Flock's configuration. `cf config paths` prints where it keeps its files; `cf config show` prints the effective configuration with secrets redacted.
 
 ## `cf connect`
 
@@ -140,7 +140,7 @@ Escape sequences and control characters are removed so a Run cannot act on your 
 
 ## `cf mcp`
 
-Use CodeFabric from Claude Code or Codex. See [Use cf from Claude Code or Codex](../mcp/).
+Use Code Flock from Claude Code or Codex. See [Use cf from Claude Code or Codex](../mcp/).
 
 - `cf mcp serve [--profile read|execute|modify]`: the MCP server, over stdio. Default profile: `execute`. Standard output carries only the protocol; `--json` is rejected. The tool starts it; you rarely run it.
 - `cf mcp install --claude|--codex [--scope user|project] [--profile …] [--dry-run]`: register the server and write the `codefabric` skill. Idempotent.

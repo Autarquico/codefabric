@@ -18,7 +18,7 @@ layout:
     style: "two columns: verified | not verified"
     rule: "what only ran against the fake harness is said so"
   install:
-    one_liner: "curl -fsSL https://github.com/Autarquico/codefabric/releases/latest/download/install.sh | sh"
+    one_liner: "curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | sh"
     pinned: "same line with CF_VERSION=<tag>, injected at build from SITE_VERSION"
 density: breathable
 motion:
