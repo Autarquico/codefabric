@@ -1,7 +1,8 @@
 // Package taskpull is `cf task pull`: it brings the work of a Task from the relay to a
 // checkout of this machine, and the session of its harness to the home of the user
 // (§11.7). It never resets, stashes or cleans: it adds a branch, moves one that is
-// behind, and switches to it only when the tree is clean.
+// behind, and switches to it only when the tree is clean. It is also `cf run fetch`,
+// which brings the published result of a Run to a new branch.
 package taskpull
 
 import (
