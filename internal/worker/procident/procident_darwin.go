@@ -33,11 +33,17 @@ func startOf(pid int) (string, error) {
 // macOS moves it by milliseconds when it adjusts the clock.
 func bootOf() (string, error) { return unix.Sysctl("kern.bootsessionuuid") }
 
-// bootDrift is how far kern.boottime may move within one boot.
-const bootDrift = 5 * time.Second
+// bootDrift is how far kern.boottime may move within one boot: the clock
+// adjustments seen move it by milliseconds. Another boot is further away by the
+// whole uptime of the one before, so a second is no risk of taking one for the other.
+const bootDrift = time.Second
 
 func sameBoot(recorded string) (bool, error) {
-	if legacy, ok := parseBootTime(recorded); ok {
+	if strings.Contains(recorded, ".") {
+		legacy, ok := parseBootTime(recorded)
+		if !ok {
+			return false, fmt.Errorf("procident: %q is not a boot of this platform", recorded)
+		}
 		now, err := unix.SysctlTimeval("kern.boottime")
 		if err != nil {
 			return false, err
@@ -49,18 +55,23 @@ func sameBoot(recorded string) (bool, error) {
 }
 
 // parseBootTime reads a boot token of the earlier format, kern.boottime as
-// "sec.usec", which wrappers started before the uuid still carry.
+// "sec.usec" with six digits of microseconds, which wrappers started before the
+// uuid still carry.
 func parseBootTime(token string) (time.Time, bool) {
 	sec, usec, ok := strings.Cut(token, ".")
-	if !ok {
+	if !ok || !digits(sec) || len(usec) != 6 || !digits(usec) {
 		return time.Time{}, false
 	}
 	s, errS := strconv.ParseInt(sec, 10, 64)
 	u, errU := strconv.ParseInt(usec, 10, 64)
-	if errS != nil || errU != nil {
+	if errS != nil || errU != nil || s == 0 {
 		return time.Time{}, false
 	}
 	return time.Unix(s, u*int64(time.Microsecond)), true
+}
+
+func digits(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
 }
 
 func withinDrift(recorded, now time.Time) bool {

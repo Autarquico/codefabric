@@ -34,6 +34,16 @@ func TestVerifyReadsAKernBoottimeTokenWithItsDrift(t *testing.T) {
 	if v := procident.Verify(os.Getpid(), legacy(-time.Hour)); v != procident.Rebooted {
 		t.Errorf("kern.boottime an hour before: %v, want rebooted", v)
 	}
+	for _, bad := range []string{
+		fmt.Sprintf("%d.-1000000|%s", boot.Sec+1, own),
+		fmt.Sprintf("%d.5|%s", boot.Sec, own),
+		fmt.Sprintf("-%d.000000|%s", boot.Sec, own),
+		"99999999999999999999.000000|" + own,
+	} {
+		if v := procident.Verify(os.Getpid(), bad); v != procident.Unknown {
+			t.Errorf("malformed boot %q: %v, want unknown", bad, v)
+		}
+	}
 }
 
 func TestStartOfNamesTheBootByItsSessionUUID(t *testing.T) {
