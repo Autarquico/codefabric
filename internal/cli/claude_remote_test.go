@@ -316,24 +316,25 @@ func TestScenario_ClaudeRemoteRuns_StatusLine(t *testing.T) {
 			t.Errorf("the file changed: %s", after)
 		}
 	})
-	t.Run("an existing status line is kept and said so", func(t *testing.T) {
-		h := home(t)
-		path := filepath.Join(h, ".claude", "settings.json")
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		own := `{"statusLine":{"type":"command","command":"mine"}}`
-		if err := os.WriteFile(path, []byte(own), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		code, out, _ := runClaude(t, "install", "--statusline")
-		if code != 0 || !strings.Contains(out, "statusline: kept") || !strings.Contains(out, "not replaced") {
-			t.Fatalf("%d %q", code, out)
-		}
-		if after, _ := os.ReadFile(path); string(after) != own { //nolint:gosec // a path of the test
-			t.Errorf("the file changed: %s", after)
-		}
-	})
+	for _, own := range []string{`{"statusLine":{"type":"command","command":"mine"}}`, `{"statusLine":null}`} {
+		t.Run("an existing status line is kept and said so: "+own, func(t *testing.T) {
+			h := home(t)
+			path := filepath.Join(h, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(own), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			code, out, _ := runClaude(t, "install", "--statusline")
+			if code != 0 || !strings.Contains(out, "statusline: kept") || !strings.Contains(out, "not replaced") {
+				t.Fatalf("%d %q", code, out)
+			}
+			if after, _ := os.ReadFile(path); string(after) != own { //nolint:gosec // a path of the test
+				t.Errorf("the file changed: %s", after)
+			}
+		})
+	}
 	t.Run("--dry-run says what it would write and writes nothing", func(t *testing.T) {
 		h := home(t)
 		code, out, _ := runClaude(t, "install", "--statusline", "--dry-run")

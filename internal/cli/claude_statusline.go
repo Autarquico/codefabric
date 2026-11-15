@@ -43,7 +43,8 @@ type StatusLineResult struct {
 // settingsPath is the settings file of Claude Code under a scope base.
 func settingsPath(base string) string { return filepath.Join(base, ".claude", "settings.json") }
 
-// installStatusLine sets the statusLine of the settings file when there is none.
+// installStatusLine sets the statusLine of the settings file when it has none, not
+// even a null one.
 // The other keys stay as they are, byte for byte: the new key goes in before the
 // closing brace.
 func installStatusLine(path string, dryRun bool) (StatusLineResult, error) {
@@ -66,7 +67,7 @@ func installStatusLine(path string, dryRun bool) (StatusLineResult, error) {
 			return res, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("%s is not a JSON object, so the status line was not installed: %v", path, err), nil)
 		}
 	}
-	if current, ok := settings[statusLineKey]; ok && string(current) != "null" {
+	if _, ok := settings[statusLineKey]; ok {
 		res.Kept = true
 		return res, nil
 	}
