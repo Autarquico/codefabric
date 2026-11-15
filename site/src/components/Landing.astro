@@ -3,7 +3,7 @@ import '../styles/fonts.css';
 import '../styles/theme.css';
 import { BASE, REPO_URL, repoRef, routeFor } from '../../scripts/sync-docs.mjs';
 import { installCommands, siteVersion } from '../../scripts/version.mjs';
-import { landing } from '../i18n/landing.mjs';
+import { LANGUAGES, home, landing } from '../i18n/landing.mjs';
 import TuiFrame from './TuiFrame.astro';
 
 interface Props {
@@ -24,7 +24,7 @@ const fakeHarness = `${REPO_URL}/tree/${repoRef()}/internal/testutil/fakeharness
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Code Flock</title>
 		<meta name="description" content={t.description} />
-		<link rel="alternate" hreflang={t.other.lang} href={`${BASE}${t.other.path}`} />
+		{LANGUAGES.map((code) => <link rel="alternate" hreflang={code} href={new URL(home(code), Astro.site)} />)}
 		<link rel="icon" href={`${BASE}favicon.svg`} type="image/svg+xml" />
 		<script is:inline>
 			(() => {
@@ -41,14 +41,14 @@ const fakeHarness = `${REPO_URL}/tree/${repoRef()}/internal/testutil/fakeharness
 	<body>
 		<a class="skip" href="#main">{t.skip}</a>
 		<header>
-			<a class="wordmark" href={`${BASE}${lang === 'en' ? '' : `${lang}/`}`}>
+			<a class="wordmark" href={home(lang)}>
 				<img class="logo" src={`${BASE}img/logo.webp`} alt="" width="144" height="40" />
 				<span>Code Flock</span>
 			</a>
 			<nav aria-label={t.navLabel}>
 				<a href={docs} hreflang="en">{t.docs}</a>
 				<a href={REPO_URL}>GitHub</a>
-				<a href={`${BASE}${t.other.path}`} hreflang={t.other.lang} lang={t.other.lang}>{t.other.label}</a>
+				<a href={home(t.other.lang)} hreflang={t.other.lang} lang={t.other.lang}>{t.other.label}</a>
 			</nav>
 		</header>
 

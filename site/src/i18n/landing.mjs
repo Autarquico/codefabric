@@ -1,6 +1,12 @@
 // The words of the landing, one entry per language. The documentation is in English only,
 // so the Spanish entry says so where it links to it.
+import { BASE } from '../../scripts/sync-docs.mjs';
 import { UNRELEASED_NOTE } from '../../scripts/version.mjs';
+
+export const LANGUAGES = ['en', 'es'];
+
+// The landing of a language: English at the root, the others under their code.
+export const home = (lang) => (lang === 'en' ? BASE : `${BASE}${lang}/`);
 
 export const landing = {
 	en: {
@@ -9,7 +15,7 @@ export const landing = {
 		skip: 'Skip to content',
 		navLabel: 'Primary',
 		docs: 'Docs',
-		other: { lang: 'es', path: 'es/', label: 'Español' },
+		other: { lang: 'es', label: 'Español' },
 		badge: (version) => `${version ? `Release ${version}` : 'Unreleased build'} · early development`,
 		eyebrow: 'Code Flock / Local-first agent orchestration',
 		title: ['Your coding agents.', 'Your machines.', 'Your control.'],
@@ -78,7 +84,7 @@ export const landing = {
 		skip: 'Saltar al contenido',
 		navLabel: 'Principal',
 		docs: 'Docs',
-		other: { lang: 'en', path: '', label: 'English' },
+		other: { lang: 'en', label: 'English' },
 		badge: (version) => `${version ? `Release ${version}` : 'Build sin publicar'} · desarrollo temprano`,
 		eyebrow: 'Code Flock / Orquestación de agentes local-first',
 		title: ['Tus agentes de código.', 'Tus máquinas.', 'Tu control.'],
