@@ -71,7 +71,7 @@ cf worker run
 
 or install it as a service with `cf worker install-service` (systemd user service or launchd).
 
-On macOS the launchd agent lives in the session of the logged-in user: over SSH, on a Mac nobody is logged in to, `install-service` fails. There, run the Worker as a LaunchDaemon with `UserName` set to your user, so it starts at boot. Restart it with `sudo launchctl kickstart -k system/<label>`; stopping the process with a signal does not bring it back.
+On macOS `install-service` installs a launchd agent of your user. With nobody logged in it goes into the `user/<uid>` domain, with a warning: it runs, but after a restart launchd does not load it again until you log in. Over SSH, while you are logged in at the screen, it can fail with `exit status 125`. For a Worker that starts at boot without a login, run it as a LaunchDaemon with `UserName` set to your user. Restart it with `sudo launchctl kickstart -k system/<label>`; stopping the process with a signal does not bring it back.
 
 ## Connect another machine as a client
 
