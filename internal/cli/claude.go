@@ -250,15 +250,19 @@ func userSkill(k skillKind) *SkillStatus {
 	return &s
 }
 
-func newClaudeCmd() *cobra.Command { return newSkillsCmd(claudeSkills) }
-func newCodexCmd() *cobra.Command  { return newSkillsCmd(codexSkills) }
+func newClaudeCmd() *cobra.Command { return newSkillsCmd(claudeSkills, true) }
+func newCodexCmd() *cobra.Command  { return newSkillsCmd(codexSkills, false) }
 
 // newSkillsCmd is `cf claude` or `cf codex`: install, uninstall and status of the
 // skills of that harness, which share its command, label and directory.
-func newSkillsCmd(skills []skillKind) *cobra.Command {
+// withStatusLine adds what only Claude Code has: its status line.
+func newSkillsCmd(skills []skillKind, withStatusLine bool) *cobra.Command {
 	h := skills[0]
 	cmd := &cobra.Command{Use: h.command, Short: "Install into " + h.label + " what cf needs there: the " + skillNames(skills) + " skills"}
-	cmd.AddCommand(newSkillInstallCmd(skills), newSkillUninstallCmd(skills), newSkillStatusCmd(skills))
+	cmd.AddCommand(newSkillInstallCmd(skills, withStatusLine), newSkillUninstallCmd(skills), newSkillStatusCmd(skills))
+	if withStatusLine {
+		cmd.AddCommand(newClaudeStatusLineCmd())
+	}
 	return cmd
 }
 
@@ -337,26 +341,37 @@ func eachSkill(op func(k skillKind, base string) (SkillStatus, error)) func([]sk
 	}
 }
 
-func newSkillInstallCmd(skills []skillKind) *cobra.Command {
+func newSkillInstallCmd(skills []skillKind, withStatusLine bool) *cobra.Command {
 	h := skills[0]
 	var scope string
-	var force, dryRun bool
+	var force, dryRun, statusLine bool
+	use := "install [--scope user|project] [--force] [--dry-run]"
+	if withStatusLine {
+		use += " [--statusline]"
+	}
 	cmd := &cobra.Command{
-		Use:   "install [--scope user|project] [--force] [--dry-run]",
+		Use:   use,
 		Short: "Write the " + skillNames(skills) + " skills into " + filepath.ToSlash(filepath.Join("~", h.skillsDir)) + " (or the same directory of the repository)",
 		Long: "Write the handto skill, which hands a " + h.label + " session over to a Worker by " + h.invocation() + ", and the workers skill, which lists the Workers that can take it.\n" +
 			"They carry the version of this cf: the same version changes nothing and another one updates them.\n" +
 			"A skill of those names that cf did not write is not overwritten without --force.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return forEachSkill(cmd, skills, scope, func(skills []skillKind, base string) ([]SkillStatus, error) {
+			err := forEachSkill(cmd, skills, scope, func(skills []skillKind, base string) ([]SkillStatus, error) {
 				return installEach(skills, scope, base, force, dryRun)
 			})
+			if err != nil || !statusLine {
+				return err
+			}
+			return installStatusLineFor(cmd, h, scope, dryRun)
 		},
 	}
 	bindScope(cmd, &scope)
 	cmd.Flags().BoolVar(&force, "force", false, "replace a skill that cf did not write")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "say what would be written without writing it")
+	if withStatusLine {
+		cmd.Flags().BoolVar(&statusLine, "statusline", false, "also set the status line of Claude Code to show the Runs on Workers, when it has none")
+	}
 	return cmd
 }
 
@@ -422,4 +437,22 @@ func printSkill(out io.Writer, k skillKind, s SkillStatus) error {
 		_, err = fmt.Fprintf(out, "It was edited since cf wrote it: run `%s` to restore it.\n", k.installCommand())
 	}
 	return err
+}
+
+// installStatusLineFor writes the status line of the scope. With --json the note goes
+// to stderr so that stdout stays the one JSON value of the skills.
+func installStatusLineFor(cmd *cobra.Command, h skillKind, scope string, dryRun bool) error {
+	base, err := skillsBase(scope, filepath.Dir(h.skillsDir))
+	if err != nil {
+		return err
+	}
+	res, err := installStatusLine(settingsPath(base), dryRun)
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	if on, _ := cmd.Flags().GetBool(flagJSON); on {
+		out = cmd.ErrOrStderr()
+	}
+	return printStatusLine(out, res)
 }

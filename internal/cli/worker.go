@@ -36,13 +36,18 @@ func newWorkerListCmd() *cobra.Command {
 		Short: "List Workers with their resources and version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, cancel, err := boundedContext(cmd)
+			if err != nil {
+				return err
+			}
+			defer cancel()
 			c, err := openClient(cmd)
 			if err != nil {
 				return err
 			}
-			workers, err := c.Workers(cmd.Context(), all)
+			workers, err := c.Workers(ctx, all)
 			if err != nil {
-				return err
+				return unreachableOnTimeout(ctx, cmd, err)
 			}
 			if workers, err = filterWorkersByState(workers, states); err != nil {
 				return err
@@ -60,6 +65,7 @@ func newWorkerListCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "include removed Workers")
 	cmd.Flags().StringSliceVar(&states, "state", nil, "only Workers in these states, comma separated (for example online,degraded)")
+	addTimeoutFlag(cmd)
 	return cmd
 }
 

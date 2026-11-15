@@ -135,13 +135,13 @@ func TestDoctor_WarnsAboutTheCodexSkillOnlyWhenCodexIsInstalled(t *testing.T) {
 	}
 }
 
-func TestCodexWorkersSkill_RunsTheFilteredListAndCarriesNothingOfClaude(t *testing.T) {
+func TestCodexWorkersSkill_RunsTheListsAndCarriesNothingOfClaude(t *testing.T) {
 	out, err := renderSkill(codexWorkers, "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(out)
-	for _, want := range []string{"name: workers\n", "<!-- cf-version: v1 -->", "`cf worker list --state online,degraded`", "CF_*"} {
+	for _, want := range []string{"name: workers\n", "<!-- cf-version: v1 -->", "`cf worker list --timeout 10s`", "`cf ps --timeout 10s`", "`cf attach <task>`", "CF_*"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the Codex workers skill lacks %q", want)
 		}

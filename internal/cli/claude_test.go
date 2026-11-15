@@ -44,22 +44,22 @@ func TestHandtoSkill_FrontmatterIsExact(t *testing.T) {
 	}
 }
 
-func TestWorkersSkill_ListsOnlyWorkersThatCanTakeASession(t *testing.T) {
+func TestWorkersSkill_ListsWorkersAndRemoteRuns(t *testing.T) {
 	out, err := renderSkill(claudeWorkers, "v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "---\n" +
 		"name: workers\n" +
-		"description: List the CodeFabric Workers that can take a session right now. Use only when the user types /workers.\n" +
+		"description: List the CodeFabric Workers and the interactive Runs that are live on them, and say how to enter one. Use only when the user types /workers.\n" +
 		"disable-model-invocation: true\n" +
-		"allowed-tools: Bash(cf worker list*)\n" +
+		"allowed-tools: Bash(cf worker list --timeout 10s) Bash(cf ps --timeout 10s)\n" +
 		"---\n" +
 		"<!-- cf-version: v1.2.3 -->\n"
 	if !strings.HasPrefix(string(out), want) {
 		t.Errorf("frontmatter differs:\n%s", out)
 	}
-	if !strings.Contains(string(out), "!`cf worker list --state online,degraded`") {
+	if !strings.Contains(string(out), "!`cf worker list --timeout 10s`") {
 		t.Errorf("the body does not list the Workers:\n%s", out)
 	}
 }

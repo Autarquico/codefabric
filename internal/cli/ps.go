@@ -16,14 +16,19 @@ func newPsCmd() *cobra.Command {
 		Short: "List the Runs that are live, with their Workers and whether they can be attached",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, cancel, err := boundedContext(cmd)
+			if err != nil {
+				return err
+			}
+			defer cancel()
 			c, err := openClient(cmd)
 			if err != nil {
 				return err
 			}
 			project, _ := cmd.Flags().GetString(flagProject)
-			ps, err := c.Ps(cmd.Context(), project)
+			ps, err := c.Ps(ctx, project)
 			if err != nil {
-				return err
+				return unreachableOnTimeout(ctx, cmd, err)
 			}
 			if ps.Runs == nil {
 				ps.Runs = []v1.PsEntry{}
@@ -32,6 +37,7 @@ func newPsCmd() *cobra.Command {
 		},
 	}
 	addProjectFlag(cmd, "only the Runs of this Project")
+	addTimeoutFlag(cmd)
 	return cmd
 }
 
