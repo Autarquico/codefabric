@@ -1,7 +1,7 @@
 # CodeFabric — project design brief (layer 2). Absent keys inherit ~/.claude/design-system.yml.
 project:
   name: "CodeFabric"
-  url: "https://autarquico.github.io/codefabric/"
+  url: "https://autarquico.github.io/codeflock/"
   audience: "developers who run coding agents (Claude Code, Codex CLI) and own more than one machine"
   one_liner: "CodeFabric runs coding agents across a pool of your own machines"
 
