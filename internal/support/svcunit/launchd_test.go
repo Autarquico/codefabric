@@ -64,6 +64,19 @@ func TestLaunchd_AGraphicalDomainRefusedWithStatus125FallsBackToTheUserDomainWit
 	}
 }
 
+func TestLaunchd_TheFallbackDomainEnablesAnAgentDisabledThere(t *testing.T) {
+	e, fake := newLaunchd(t)
+	fake.Disabled["user/501"] = true
+	fake.Fail("launchctl bootstrap gui/501", svcunittest.Exit([]string{"launchctl"}, 125, "Domain does not support specified action"))
+	res := install(t, e, workerSpec())
+	if fake.Domain != "user/501" || res.Unit != "user/501/"+label {
+		t.Errorf("loaded in %q, unit %q", fake.Domain, res.Unit)
+	}
+	if !slices.Contains(fake.Calls(), "launchctl enable user/501/"+label) {
+		t.Errorf("not enabled: %q", fake.Calls())
+	}
+}
+
 func TestLaunchd_OtherBootstrapFailuresDoNotFallBack(t *testing.T) {
 	e, fake := newLaunchd(t)
 	boom := svcunittest.Exit([]string{"launchctl"}, 5, "Input/output error")

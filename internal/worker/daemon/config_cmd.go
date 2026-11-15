@@ -3,6 +3,9 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -67,7 +70,7 @@ func newConfigSetCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			apply, ok := settingKeys[args[0]]
 			if !ok {
-				return domain.NewError(domain.CodeInvalidRequest, "the settings that can be set are: disk-min-free", nil)
+				return domain.NewError(domain.CodeInvalidRequest, "the settings that can be set are: "+strings.Join(slices.Sorted(maps.Keys(settingKeys)), ", "), nil)
 			}
 			paths, err := config.ResolveFromEnv()
 			if err != nil {

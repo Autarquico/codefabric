@@ -192,10 +192,12 @@ A Run asks for 2 CPUs and 4 GB by default. A Worker that offers less never takes
 cf project set <project> --cpu 2 --memory-mb 2048
 ```
 
-**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on. It prints more than the token. Then on each such Worker, paste it all: `cf` keeps the line that starts with `sk-ant-oat` and says so.
+**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on. It prints more than the token, and `setup-token` is interactive, so it cannot be piped. At the prompt below, paste only the line that starts with `sk-ant-oat` (a terminal prompt reads one line). Or save the whole output to a file and feed that: `cf` keeps the `sk-ant-oat` line and says so.
 
 ```sh
 cf worker secrets set claude/oauth-token
+# or, from a file with the output of setup-token:
+cf worker secrets set claude/oauth-token < setup-token.txt
 ```
 
 It reads the token from stdin, or asks for it twice without echo on a terminal, and prints `Stored secret claude/oauth-token (...) ...`. A Worker without the secret is not offered the Run (`CF_SECRET_UNAVAILABLE` in `cf run explain`).

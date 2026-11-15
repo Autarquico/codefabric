@@ -189,7 +189,7 @@ func guessedSSHTarget(w v1.Worker) bool {
 
 func sshTargetOf(w v1.Worker) string {
 	if guessedSSHTarget(w) {
-		return w.SSHTarget + " (guessed from the hostname; set --ssh-target on `cf worker run` if other machines cannot reach it)"
+		return w.SSHTarget + " (guessed from the hostname; set --ssh-target on `cf worker run` or `cf worker install-service` if other machines cannot reach it)"
 	}
 	return dash(w.SSHTarget)
 }

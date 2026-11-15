@@ -167,12 +167,8 @@ func (m launchd) apply(o *op, s Spec, changed bool) error {
 			return err
 		}
 	}
-	if off, err := m.disabled(o, domain, s); err != nil {
+	if err := m.enableIfDisabled(o, domain, s); err != nil {
 		return err
-	} else if off {
-		if err := o.act("launchctl", "enable", o.res.Unit); err != nil {
-			return err
-		}
 	}
 	if len(loaded) == 0 {
 		return m.bootstrapFresh(o, domain, s)
@@ -200,7 +196,20 @@ func (m launchd) bootstrapFresh(o *op, domain string, s Spec) error {
 	}
 	o.warn("launchd refuses the graphical session of this user from this shell (an ssh session while someone is logged in at the console): the agent goes into %s, and launchd does not load it again after a restart until the user logs in", m.user())
 	o.res.Unit = m.user() + "/" + s.Label
+	if err := m.enableIfDisabled(o, m.user(), s); err != nil {
+		return err
+	}
 	return o.act("launchctl", "bootstrap", m.user(), m.path(s))
+}
+
+// enableIfDisabled enables the agent in the domain when launchd has it disabled
+// there, which would make bootstrap fail.
+func (m launchd) enableIfDisabled(o *op, domain string, s Spec) error {
+	off, err := m.disabled(o, domain, s)
+	if err != nil || !off {
+		return err
+	}
+	return o.act("launchctl", "enable", domain+"/"+s.Label)
 }
 
 // launchdDomainRefused is what launchctl bootstrap exits with when it cannot
