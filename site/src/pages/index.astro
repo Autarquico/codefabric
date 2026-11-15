@@ -20,12 +20,12 @@ const steps = [
 const journey = [
 	{ title: 'Hand it over', command: '/handto <worker>', text: 'From a Claude Code session on your laptop. Uncommitted files travel with it; your working tree is not touched.' },
 	{ title: 'Move it', command: 'cf task move', text: 'Take the session from one Worker to another. It resumes from a checkpoint, with its transcript.' },
-	{ title: 'Bring it back', command: 'cf task pull', text: 'Check the work out on a branch here and resume the same session with claude --resume.' },
+	{ title: 'Bring it back', command: 'cf task pull', text: 'The work arrives on a branch here, and the same session resumes with claude --resume.' },
 ];
 
 const next = [
 	{ title: 'Step inside a Run from the TUI', text: 'A live view of each Run, and a key to enter it and leave it, with no SSH: the session travels through the Controller. Several people can type at once, and the TUI shows who else is in.' },
-	{ title: 'A shell on the Worker', command: 'cf shell <run>', text: "A shell in the Run's worktree. Off by default; a policy turns it on, and every entry is recorded." },
+	{ title: "A shell in a Run's worktree", command: 'cf shell <run>', text: "Look at the files and the git of a Run next to its agent, on its Worker. Off by default; a policy turns it on, and every entry is recorded." },
 	{ title: 'Remote Runs in Claude Code', text: 'See the Workers and the Runs of the pool from Claude Code, marked as remote, and enter them from there.' },
 ];
 

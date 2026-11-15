@@ -71,7 +71,34 @@ cf worker run
 
 or install it as a service with `cf worker install-service` (systemd user service or launchd).
 
-On macOS `install-service` installs a launchd agent of your user. With nobody logged in it goes into the `user/<uid>` domain, with a warning: it runs, but after a restart launchd does not load it again until you log in. Over SSH, while you are logged in at the screen, it can fail with `exit status 125`. For a Worker that starts at boot without a login, run it as a LaunchDaemon with `UserName` set to your user. Restart it with `sudo launchctl kickstart -k system/<label>`; stopping the process with a signal does not bring it back.
+On macOS `install-service` installs a launchd agent of your user. With nobody logged in it goes into the `user/<uid>` domain, with a warning: it runs, but after a restart launchd does not load it again until you log in. Over SSH, while you are logged in at the screen, it can fail with `exit status 125`. For a Worker that starts at boot without a login, run it as a LaunchDaemon in `/Library/LaunchDaemons/com.codefabric.worker.plist` (owned by `root:wheel`, mode 644). Keep `AbandonProcessGroup`: without it, restarting the daemon kills the tmux sessions of its Runs.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.codefabric.worker</string>
+  <key>UserName</key><string>YOUR_USER</string>
+  <key>ProgramArguments</key>
+  <array><string>/Users/YOUR_USER/.local/bin/cf</string><string>worker</string><string>run</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>/Users/YOUR_USER</string>
+    <key>PATH</key><string>/Users/YOUR_USER/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>WorkingDirectory</key><string>/Users/YOUR_USER</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>AbandonProcessGroup</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/Users/YOUR_USER/Library/Logs/codefabric/com.codefabric.worker.log</string>
+  <key>StandardErrorPath</key><string>/Users/YOUR_USER/Library/Logs/codefabric/com.codefabric.worker.log</string>
+</dict>
+</plist>
+```
+
+Load it with `sudo launchctl bootstrap system /Library/LaunchDaemons/com.codefabric.worker.plist` and restart it with `sudo launchctl kickstart -k system/com.codefabric.worker`. `cf` ends cleanly on a signal, so launchd does not start it again after one: restart it with `kickstart`.
 
 ## Connect another machine as a client
 
@@ -230,7 +257,7 @@ If the Worker of the Run is down, `cf task pull --defer` cannot get a checkpoint
 These are specified and not built yet:
 
 - **Step inside a Run from the TUI.** A live view of each Run, and a key to enter it and leave it that is not the key of tmux, so it works with the TUI inside tmux. The session travels through the Controller, so `cf attach` will no longer need SSH to the Worker. Several people can type at once; the TUI shows who else is in, and `--read-only` stays.
-- **`cf shell <run>`.** A shell in the Run's worktree. Off by default, turned on by policy; every entry is recorded.
+- **`cf shell <run>`.** A shell in the Run's worktree, on its Worker. Off by default, turned on by policy; every entry is recorded.
 - **Remote Runs in Claude Code.** The Workers and Runs of the pool listed from Claude Code, marked as remote, and entered from there. `cf claude install` will set it up.
 
 ## What is tested, and what is not
