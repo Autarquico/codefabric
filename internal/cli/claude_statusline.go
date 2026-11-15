@@ -34,66 +34,87 @@ const (
 
 // StatusLineResult is what `cf claude install --statusline` did to the settings file.
 type StatusLineResult struct {
-	Path   string `json:"path"`
-	Action string `json:"action"` // created, kept
-	DryRun bool   `json:"dry_run,omitempty"`
-	Reason string `json:"reason,omitempty"`
+	Path   string
+	DryRun bool
+	// Kept is true when the file had a status line already, which is not replaced.
+	Kept bool
 }
 
 // settingsPath is the settings file of Claude Code under a scope base.
 func settingsPath(base string) string { return filepath.Join(base, ".claude", "settings.json") }
 
 // installStatusLine sets the statusLine of the settings file when there is none.
-// It merges into the JSON: the other keys are written back as they were read.
+// The other keys stay as they are, byte for byte: the new key goes in before the
+// closing brace.
 func installStatusLine(path string, dryRun bool) (StatusLineResult, error) {
 	res := StatusLineResult{Path: path, DryRun: dryRun}
-	settings := map[string]json.RawMessage{}
-	switch have, err := readRegular(path); {
+	mode := fs.FileMode(0o600)
+	var have []byte
+	switch read, err := readRegular(path); {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
 		return res, err
 	default:
-		if len(bytes.TrimSpace(have)) > 0 {
-			if err := json.Unmarshal(have, &settings); err != nil {
-				return res, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("%s is not a JSON object, so the status line was not installed: %v", path, err), nil)
-			}
+		have = bytes.TrimSpace(read)
+		if info, err := os.Stat(path); err == nil {
+			mode = info.Mode().Perm()
+		}
+	}
+	settings := map[string]json.RawMessage{}
+	if len(have) > 0 {
+		if err := json.Unmarshal(have, &settings); err != nil {
+			return res, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("%s is not a JSON object, so the status line was not installed: %v", path, err), nil)
 		}
 	}
 	if current, ok := settings[statusLineKey]; ok && string(current) != "null" {
-		res.Action = "kept"
-		res.Reason = "there is a status line already and it was not replaced"
+		res.Kept = true
 		return res, nil
 	}
-	res.Action = "created"
 	if dryRun {
 		return res, nil
 	}
-	line, err := json.Marshal(map[string]any{"type": "command", "command": statusLineCommand, "refreshInterval": statusLineRefreshSeconds})
+	entry, err := statusLineEntry()
 	if err != nil {
 		return res, err
 	}
-	settings[statusLineKey] = line
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return res, err
+	out := []byte("{\n" + entry + "\n}\n")
+	if len(settings) > 0 {
+		body := bytes.TrimRight(have[:len(have)-1], " \t\r\n")
+		out = append(body, ",\n"+entry+"\n}\n"...)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // the directory of Claude Code settings is readable
 		return res, err
 	}
-	return res, os.WriteFile(path, append(out, '\n'), 0o600)
+	return res, writeAtomic(path, out, mode)
+}
+
+// statusLineEntry is the `"statusLine": {...}` member, indented one level, with the
+// characters of the command as they are.
+func statusLineEntry() (string, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(map[string]any{"type": "command", "command": statusLineCommand, "refreshInterval": statusLineRefreshSeconds}); err != nil {
+		return "", err
+	}
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, bytes.TrimSpace(buf.Bytes()), "  ", "  "); err != nil {
+		return "", err
+	}
+	return `  "` + statusLineKey + `": ` + indented.String(), nil
 }
 
 func printStatusLine(out io.Writer, r StatusLineResult) error {
 	verb := "installed"
 	switch {
-	case r.Action == "kept":
+	case r.Kept:
 		verb = "kept"
 	case r.DryRun:
 		verb = "would be installed"
 	}
 	_, err := fmt.Fprintf(out, "statusline: %s  %s\n", verb, printable(r.Path))
-	if err == nil && r.Reason != "" {
-		_, err = fmt.Fprintln(out, r.Reason)
+	if err == nil && r.Kept {
+		_, err = fmt.Fprintln(out, "there is a status line already and it was not replaced")
 	}
 	return err
 }

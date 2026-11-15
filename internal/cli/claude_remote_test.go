@@ -1,14 +1,17 @@
 package cli
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
@@ -124,10 +127,52 @@ func TestScenario_ClaudeRemoteRuns_SinController(t *testing.T) {
 	if code, out, _ := run(t, "claude", "statusline"); code != 0 || out != "" {
 		t.Errorf("the status line failed hard or printed noise: %d %q", code, out)
 	}
+	if code, out, errOut := run(t, "--json", "ps", "--timeout", "-5s"); code == 0 || errorOf(t, out)["code"] != string(domain.CodeInvalidRequest) {
+		t.Errorf("a negative --timeout: %d %q %q", code, out, errOut)
+	}
 	// With no credentials at all it does not fail either.
 	isolatedMachine(t)
 	if code, out, _ := run(t, "claude", "statusline"); code != 0 || out != "" {
 		t.Errorf("without credentials: %d %q", code, out)
+	}
+}
+
+// A Controller that takes the connection and never answers, as a Tailscale peer that
+// is asleep does: only --timeout ends the call.
+func TestScenario_ClaudeRemoteRuns_SinController_QueNoContesta(t *testing.T) {
+	isolatedMachine(t)
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+	paths, err := config.ResolveFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeBundle(t, paths.CredentialsDir(), newTestCA(t), ln.Addr().String())
+	for _, args := range [][]string{{"ps", "--timeout", "1s"}, {"worker", "list", "--timeout", "1s"}} {
+		name := strings.Join(args, " ")
+		start := time.Now()
+		code, out, _ := run(t, append([]string{"--json"}, args...)...)
+		if code == 0 || errorOf(t, out)["code"] != string(domain.CodeControllerUnreachable) {
+			t.Errorf("cf %s: %d %q", name, code, out)
+		}
+		if took := time.Since(start); took > 2*time.Second {
+			t.Errorf("cf %s took %s with --timeout 1s", name, took)
+		}
+		if code, _, errOut := run(t, args...); code == 0 || !strings.Contains(errOut, string(domain.CodeControllerUnreachable)) {
+			t.Errorf("cf %s in human form: %d %q", name, code, errOut)
+		}
 	}
 }
 
@@ -201,6 +246,74 @@ func TestScenario_ClaudeRemoteRuns_StatusLine(t *testing.T) {
 		}
 		if got["model"] != "opus" || got["permissions"] == nil {
 			t.Errorf("other keys changed: %v", got)
+		}
+	})
+	t.Run("the other keys keep their order and their characters", func(t *testing.T) {
+		h := home(t)
+		path := filepath.Join(h, ".claude", "settings.json")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		own := "{\n  \"permissions\": {\"allow\": [\"Bash(a && b)\"]},\n  \"env\": {\"X\": \"<y>\"}\n}\n"
+		if err := os.WriteFile(path, []byte(own), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if code, _, errOut := runClaude(t, "install", "--statusline"); code != 0 {
+			t.Fatal(errOut)
+		}
+		after, _ := os.ReadFile(path) //nolint:gosec // a path of the test
+		if prefix := strings.TrimRight(strings.TrimSuffix(strings.TrimSpace(own), "}"), " \n"); !strings.HasPrefix(string(after), prefix) {
+			t.Errorf("the original bytes are not kept:\n%s", after)
+		}
+		if !strings.Contains(string(after), "\"statusLine\"") || strings.Contains(string(after), `\u00`) {
+			t.Errorf("settings:\n%s", after)
+		}
+		settingsOf(t, h)
+	})
+	t.Run("an empty object gets the status line without a stray comma", func(t *testing.T) {
+		h := home(t)
+		path := filepath.Join(h, ".claude", "settings.json")
+		_ = os.MkdirAll(filepath.Dir(path), 0o700)
+		_ = os.WriteFile(path, []byte("{}\n"), 0o600)
+		if code, _, errOut := runClaude(t, "install", "--statusline"); code != 0 {
+			t.Fatal(errOut)
+		}
+		if settingsOf(t, h)["statusLine"] == nil {
+			t.Error("no statusLine")
+		}
+	})
+	t.Run("--scope project writes the settings of the repository only", func(t *testing.T) {
+		h := home(t)
+		repo := t.TempDir()
+		if err := os.Mkdir(filepath.Join(repo, ".git"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(repo)
+		if code, _, errOut := runClaude(t, "install", "--statusline", "--scope", "project"); code != 0 {
+			t.Fatal(errOut)
+		}
+		raw, err := os.ReadFile(filepath.Join(repo, ".claude", "settings.json")) //nolint:gosec // a path of the test
+		if err != nil || !strings.Contains(string(raw), "cf claude statusline") {
+			t.Errorf("the repository settings: %v %s", err, raw)
+		}
+		for _, elsewhere := range []string{filepath.Join(h, ".claude", "settings.json"), filepath.Join(repo, ".claude", ".claude")} {
+			if _, err := os.Stat(elsewhere); !os.IsNotExist(err) {
+				t.Errorf("%s was written: %v", elsewhere, err)
+			}
+		}
+	})
+	t.Run("an existing status line under --dry-run is kept and nothing is written", func(t *testing.T) {
+		h := home(t)
+		path := filepath.Join(h, ".claude", "settings.json")
+		_ = os.MkdirAll(filepath.Dir(path), 0o700)
+		own := `{"statusLine":{"type":"command","command":"mine"}}`
+		_ = os.WriteFile(path, []byte(own), 0o600)
+		code, out, _ := runClaude(t, "install", "--statusline", "--dry-run")
+		if code != 0 || !strings.Contains(out, "statusline: kept") {
+			t.Fatalf("%d %q", code, out)
+		}
+		if after, _ := os.ReadFile(path); string(after) != own { //nolint:gosec // a path of the test
+			t.Errorf("the file changed: %s", after)
 		}
 	})
 	t.Run("an existing status line is kept and said so", func(t *testing.T) {
