@@ -49,6 +49,18 @@ cf controller run
 
 `cf controller init` also creates the owner credentials and a name for the owner's machine (`--name`). Once the Controller is running, `cf status` shows its version, uptime and database health.
 
+### The network between machines
+
+Every Worker and client dials the Controller at its advertised address (port 7443 by default), and a client reaches a Worker over ssh for `cf attach`. The recommended network is a [Tailscale](https://tailscale.com) tailnet: the machines reach each other by name wherever they are, and no port is open to the internet. Advertise the Controller's tailnet name; its host goes into the Controller's certificate, so use the name the other machines will dial:
+
+```sh
+cf controller init --advertise <controller>.<tailnet>.ts.net:7443
+```
+
+Tailscale only carries the traffic. Code Flock still authenticates every connection with its own certificates (mutual TLS), inside the tailnet too.
+
+If you use Tailscale SSH, leave the Workers out of `check` mode: it asks for a login in the browser from time to time, and the non-interactive ssh that `cf doctor` and `cf attach` rely on fails until you do.
+
 ## Add a Worker
 
 A Worker is a machine that runs Tasks. On the Controller's machine, create a single-use invitation:
