@@ -91,18 +91,20 @@ func (p *Proxy) Mode() Mode { return Mode(p.mode.Load()) }
 
 // SetMode switches the mode. Entering Reject resets the live connections;
 // leaving DropReplies resets the connections whose replies it may have lost.
+// The links are reset before the new mode is visible: a link that saw its
+// upstream end must not find DropReplies over and close the client cleanly
+// before the reset reaches it.
 func (p *Proxy) SetMode(m Mode) {
 	p.mu.Lock()
-	old := Mode(p.mode.Swap(int32(m)))
-	var doomed []*link
+	defer p.mu.Unlock()
+	old := p.Mode()
 	if m == Reject || (old == DropReplies && m != DropReplies) {
-		doomed = p.untrackAllLocked()
+		for _, l := range p.untrackAllLocked() {
+			p.reset(l.client, l.server)
+			l.resetOnce.Do(func() { close(l.wasReset) })
+		}
 	}
-	p.mu.Unlock()
-	for _, l := range doomed {
-		p.reset(l.client, l.server)
-		l.resetOnce.Do(func() { close(l.wasReset) })
-	}
+	p.mode.Store(int32(m))
 }
 
 // Heal returns the proxy to Up.
