@@ -1,13 +1,13 @@
 ---
 codename: codefabric
-title: "Entrar en un Run o un Worker desde el TUI"
+title: Entrar en un Run o un Worker desde el TUI
 type: task
-status: draft
+status: active
 priority: P1
 size: L
-issue: null
+issue: 179
 prs: []
-related_issues: []
+related_issues: [179]
 depends_on: [observe-attach-events, tui-views-actions]
 supersedes: [pty-relay-attach]
 related_specs: [codefabric-spec, claude-remote-runs]
@@ -47,8 +47,8 @@ Owner previsto en el bucle Develop: backend-eng (relay, Worker, API) y frontend-
 - **Escritores múltiples.** Todos los conectados pueden escribir, como en un tmux compartido; el TUI muestra
   quién más está dentro de ese Run. `--read-only` se mantiene.
 - **Shell en el Worker.** Abrir una shell en el worktree del Run (`cf shell <run>` y acción del TUI), para
-  mirar ficheros y git junto al agente, por el mismo relay. Opcional y desactivada por defecto: la habilita
-  la policy del Project o del Worker.
+  mirar ficheros y git junto al agente, por el mismo relay. Opcional y desactivada por defecto: la habilitan
+  a la vez la policy del Project y la del Worker.
 - Auditoría: cada entrada interactiva y cada shell queda en eventos (quién, qué Run o Worker, cuándo, cuánto).
 
 **No entra:**
@@ -62,6 +62,16 @@ Owner previsto en el bucle Develop: backend-eng (relay, Worker, API) y frontend-
   la gestión de claves por cliente y Worker.
 - La shell sobre un Worker cambia su modelo de seguridad (pasa a dar shells a quien la policy permita):
   por eso está desactivada por defecto y auditada.
+- Quién puede (enmienda 2026-11-15, tras la critique del plan): en v0.x todo cliente enrolado es una máquina
+  del owner. Ver y escribir en un Run: cualquier cliente. Shell: solo si la habilitan a la vez el Project
+  (`shell`) y el Worker (`allow_shell`, local, comprobado justo antes de lanzarla). Una identidad de Worker
+  nunca abre un attach. La shell tiene la autoridad del usuario del SO del Worker: el worktree no aísla.
+- Cada entrada es una cita de un solo uso, atada al cliente, al Worker, al Run, al epoch de su lease, al modo
+  (ver, escribir, shell) y a una caducidad. Un stream abierto se corta al revocar la identidad, al cambiar la
+  lease o al apagar el Controller.
+- SSH solo con `--ssh` explícito: sin vuelta automática a SSH si el Worker no ofrece el relay.
+- La salida es una tecla de `cf` (por defecto `ctrl+]`, configurable); el tmux de fuera tiene que dejarla
+  pasar, y la guía lo dice.
 
 ## Criterios de aceptación
 
@@ -104,10 +114,39 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **Then** error `CF_POLICY_DENIED` que nombra la policy, y ninguna shell abierta
 
 ### Scenario: Shell en el worktree
-- **Given** la shell habilitada y un Run en marcha
+- **Given** la shell habilitada en el Project y en el Worker, y un Run en marcha
 - **When** se pide `cf shell <run>`
 - **Then** se abre una shell en el worktree de ese Run en su Worker, a través del Controller, y queda un
   evento de auditoría con el usuario y la duración
+
+### Scenario: Shell vetada por el Worker
+- **Given** un Project con la shell habilitada y un Worker sin `allow_shell`
+- **When** se pide `cf shell <run>`
+- **Then** error `CF_POLICY_DENIED` que nombra la policy del Worker, y ninguna shell abierta; si el Worker la
+  retira después de pedirla y antes de lanzarla, tampoco se abre
+
+### Scenario: Cita de un solo uso
+- **Given** una entrada concedida a un cliente para un Run
+- **When** otro Worker la reclama, se reclama dos veces, se reclama caducada o con un epoch de lease viejo
+- **Then** se rechaza y no se abre nada; una identidad de Worker que pide entrar en un Run recibe
+  `CF_POLICY_DENIED`
+
+### Scenario: Stream que deja de valer
+- **Given** un cliente dentro de un Run
+- **When** se revoca su identidad, o la lease del Run cambia de epoch
+- **Then** el stream se corta en ambos extremos con un error `CF_*` y queda el evento de cierre
+
+### Scenario: Controller que se apaga
+- **Given** un cliente dentro de un Run
+- **When** el Controller se apaga
+- **Then** el stream se corta en ambos extremos, el cliente vuelve al TUI con un error `CF_*` y el Run sigue
+  `running` en su Worker
+
+### Scenario: Sin relay en el Worker
+- **Given** un Worker que no anuncia el relay
+- **When** se hace `cf attach <task>` sin `--ssh`
+- **Then** un error `CF_*` que dice que ese Worker solo admite `--ssh`, sin intentar SSH; con `--ssh` entra
+  como hoy
 
 ### Scenario: Worker que cae
 - **Given** un cliente dentro de un Run
@@ -126,4 +165,4 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ## Referencias
 
 - `docs/codefabric-spec.md` §5.4, §6
-- `docs/specs/observe-attach-events.md`, `docs/specs/tui-views-actions.md`, `docs/specs/pty-relay-attach.md`
+- `docs/specs/observe-attach-events.md`, `docs/specs/tui-views-actions.md`, `docs/specs/archive/2026-11-15-pty-relay-attach.md`

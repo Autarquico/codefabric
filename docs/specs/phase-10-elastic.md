@@ -38,8 +38,8 @@ Fase 10 del roadmap de `docs/codefabric-spec.md` (§43). Release objetivo: **v1.
 | `notifications-integrations` | Notificaciones e integraciones | M | `palette-search-notify`, `promote` |
 | `opencode-pi-adapters` | Adapters de OpenCode y Pi | M | `harness-adapter-framework` |
 | `remote-artifact-storage` | Almacenamiento remoto de artifacts | S | `retention-gc` |
-| `pty-relay-attach` | Attach por relay de PTY | M | `observe-attach-events` |
-| `v1-acceptance` | Aceptación v1.0 | M | `worker-provisioner`, `central-secrets`, `env-providers-devcontainer-mise-nix`, `notifications-integrations`, `opencode-pi-adapters`, `remote-artifact-storage`, `pty-relay-attach`, `scheduler-strategies-history`, `budgets-advanced`, `workflow-overlays-merged-offline`, `e2e-v0-5`, `e2e-v0-3`, `e2e-v0-3-tui`, `move-handoff`, `dirty-snapshots-auto-checkpoints`, `models-tui`, `provider-openrouter-google-harness-quota`, `e2e-v0-2` |
+| `live-attach` | Entrar en un Run o un Worker desde el TUI (absorbe `pty-relay-attach`) | L | `observe-attach-events`, `tui-views-actions` |
+| `v1-acceptance` | Aceptación v1.0 | M | `worker-provisioner`, `central-secrets`, `env-providers-devcontainer-mise-nix`, `notifications-integrations`, `opencode-pi-adapters`, `remote-artifact-storage`, `live-attach`, `scheduler-strategies-history`, `budgets-advanced`, `workflow-overlays-merged-offline`, `e2e-v0-5`, `e2e-v0-3`, `e2e-v0-3-tui`, `move-handoff`, `dirty-snapshots-auto-checkpoints`, `models-tui`, `provider-openrouter-google-harness-quota`, `e2e-v0-2` |
 
 **No entra:** lo asignado a otras fases en §43.
 
