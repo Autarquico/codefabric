@@ -17,10 +17,8 @@ import (
 // here and bound into the grant, so nothing of it is taken from the request.
 type AttachTicket struct {
 	Run        domain.ID
-	Short      string
 	Epoch      uint64
 	Worker     domain.ID
-	WorkerName string
 	Handle     v1.RuntimeHandle
 	Client     domain.ID
 	ClientName string
@@ -64,7 +62,7 @@ func (s *Service) AttachOpen(ctx context.Context, by pki.Session, ref, project, 
 			actor.Kind, actor.Session = domain.ActorMCP, by.MCPSession
 		}
 		out = AttachTicket{
-			Run: run.ID, Short: shortID(run.Short), Epoch: run.LeaseEpoch, Worker: worker.ID, WorkerName: worker.Name,
+			Run: run.ID, Epoch: run.LeaseEpoch, Worker: worker.ID,
 			Handle: check.handle, Client: ident.ID, ClientName: ident.Name, Actor: actor, Mode: mode,
 		}
 		return nil

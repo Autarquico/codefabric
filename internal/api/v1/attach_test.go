@@ -82,8 +82,12 @@ func TestReadFrame_MalformedInput(t *testing.T) {
 		})
 	}
 	// A lying length is refused before anything is allocated for it.
-	if _, err := ReadFrame(&countingReader{r: bytes.NewReader(header(1, 1<<31))}); !errors.Is(err, ErrBadFrame) {
+	lying := &countingReader{r: bytes.NewReader(header(1, 1<<31))}
+	if _, err := ReadFrame(lying); !errors.Is(err, ErrBadFrame) {
 		t.Errorf("err = %v", err)
+	}
+	if lying.n > len(header(1, 1<<31)) {
+		t.Errorf("read %d bytes past the header of a lying length", lying.n)
 	}
 }
 

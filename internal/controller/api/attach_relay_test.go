@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
 	"testing"
@@ -153,7 +152,7 @@ func recv[T any](t *testing.T, ch <-chan T, what string) T {
 	}
 }
 
-// takeRequest has the Worker poll and returns what it was asked, while the
+// request has the Worker poll and returns what it was asked, while the
 // client's open is still waiting for the Worker's end.
 func (f *attachFixture) request(w *client.Client, wid domain.ID, c *client.Client, mode string) (v1.AttachRequest, <-chan attachOpen) {
 	f.t.Helper()
@@ -494,6 +493,16 @@ func TestScenario_LiveAttach_ControllerQueSeApaga(t *testing.T) {
 	cc, wc, _ := f.join(f.owner, v1.AttachModeWrite)
 	f.waitFor("the session to be spliced", func() bool { return f.hub().Sessions() == 1 })
 	f.stop()
+	// Serve has returned, and the daemon closes the store next: the close of the
+	// session must be audited by now, with no waiting.
+	var closed int
+	must(t, f.db.Read(t.Context(), func(q store.Querier) error {
+		return q.QueryRow(t.Context(), `SELECT count(*) FROM events WHERE type = ? AND data LIKE ?`,
+			string(domain.EventAttachClosed), `%"reason":"`+v1.AttachCloseShutdown+`"%`).Scan(&closed)
+	}))
+	if closed != 1 {
+		t.Errorf("AttachClosed events of a Controller shutdown = %d, want 1", closed)
+	}
 	if code := readUntilError(t, cc); code != domain.CodeControllerUnreachable {
 		t.Errorf("client end: %s", code)
 	}
@@ -557,7 +566,7 @@ func TestAttach_ClientDetachTellsTheWorker(t *testing.T) {
 	}
 }
 
-func TestScenario_LiveAttach_DosEscritoresYUnaVista(t *testing.T) {
+func TestAttach_AViewSeesTheRunAndSendsNothingToIt(t *testing.T) {
 	f := newAttachFixture(t)
 	ownerC, ownerW, _ := f.join(f.owner, v1.AttachModeWrite)
 	laptopC, laptopW, _ := f.join(f.laptop, v1.AttachModeView)
@@ -627,7 +636,7 @@ func TestAttach_AWorkerCannotSpeakForTheController(t *testing.T) {
 }
 
 func TestAttach_ASlowClientIsCutWithoutHoldingUpTheOther(t *testing.T) {
-	f := newAttachFixture(t, func(c *attachhub.Config) { c.BufferBytes = 1 << 20 })
+	f := newAttachFixture(t)
 	ownerC, ownerW, _ := f.join(f.owner, v1.AttachModeWrite)
 	_, laptopW, _ := f.join(f.laptop, v1.AttachModeWrite) // never reads
 
@@ -693,7 +702,6 @@ func TestAttach_BytesBufferedBeforeTheUpgradeAreKept(t *testing.T) {
 	roots := f.httpClient().Transport.(*http.Transport).TLSClientConfig.RootCAs
 
 	req, opened := f.request(f.alpha, f.alphaID, f.owner, v1.AttachModeWrite)
-	_ = opened // the raw client below opens its own session
 	// Let the first request finish as it would, then do the raw one.
 	wc, err := f.alpha.DialAttach(t.Context(), req.SessionID)
 	must(t, err)
@@ -736,5 +744,4 @@ func TestAttach_BytesBufferedBeforeTheUpgradeAreKept(t *testing.T) {
 			break
 		}
 	}
-	_ = io.Discard
 }

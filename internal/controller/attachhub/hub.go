@@ -150,9 +150,12 @@ type Hub struct {
 	mu      sync.Mutex
 	closing bool
 	done    chan struct{}
-	workers map[domain.ID]*workerState
-	grants  map[string]*grantState
-	rooms   map[domain.ID][]*session // by Run, in order of arrival
+	// background counts what outlives the requests: the writers of every
+	// session and the audit of every close. Wait is for it.
+	background sync.WaitGroup
+	workers    map[domain.ID]*workerState
+	grants     map[string]*grantState
+	rooms      map[domain.ID][]*session // by Run, in order of arrival
 }
 
 // New builds a Hub.
@@ -176,7 +179,7 @@ func (h *Hub) worker(id domain.ID) *workerState {
 	return w
 }
 
-// wakeWorker wakes the polls of a Worker: they look at the queue again.
+// wakeAll wakes the polls of a Worker: they look at the queue again.
 func (w *workerState) wakeAll() {
 	close(w.wake)
 	w.wake = make(chan struct{})
@@ -405,7 +408,7 @@ func (p *Pending) Wait(ctx context.Context) error {
 	h, gs := p.h, p.gs
 	timer := h.cfg.Clock.NewTimer(max(gs.Expires.Sub(h.cfg.Clock.Now()), 0))
 	defer func() { timer.Stop() }()
-	armed := true
+	extended := false
 	for {
 		select {
 		case <-gs.ready:
@@ -421,9 +424,9 @@ func (p *Pending) Wait(ctx context.Context) error {
 			}
 			h.mu.Unlock()
 			// The Worker claimed in time and is on its way: give it the same time again.
-			if armed {
+			if !extended {
 				timer = h.cfg.Clock.NewTimer(h.cfg.PendingTTL)
-				armed = false
+				extended = true
 			} else {
 				h.kill(gs, errOffered())
 				return gs.err
@@ -448,7 +451,8 @@ func (h *Hub) kill(gs *grantState, err error) {
 }
 
 // killLocked ends a grant that is not connected: its place is given back and the
-// Worker's connection, if it came, is closed. A connected grant ends through its session.
+// Worker's connection, if it came, is closed. A grant whose entry was audited is
+// audited closed here, whatever ended it. A connected grant ends through its session.
 func (h *Hub) killLocked(gs *grantState, err error) {
 	if gs.state == stateConnected || gs.state == stateClosed {
 		return
@@ -459,6 +463,40 @@ func (h *Hub) killLocked(gs *grantState, err error) {
 	if gs.wconn != nil {
 		_ = gs.wconn.Close()
 	}
+	if gs.audited {
+		reason, code := closeOf(err)
+		h.auditClose(gs, reason, code)
+	}
+}
+
+// closeOf is how a grant that never connected is audited as closed: the hub
+// shutting down, the client leaving, or the grant refused.
+func closeOf(err error) (string, domain.Code) {
+	var de *domain.Error
+	switch {
+	case !errors.As(err, &de):
+		return v1.AttachCloseClient, ""
+	case de.Code == domain.CodeControllerUnreachable:
+		return v1.AttachCloseShutdown, de.Code
+	default:
+		return v1.AttachCloseProtocol, de.Code
+	}
+}
+
+// auditClose records, in the background, that the session of gs is closed. It is
+// the one place a close is audited, for a session and for a grant that never got
+// to be one. The hub's Wait covers it.
+func (h *Hub) auditClose(gs *grantState, reason string, code domain.Code) {
+	if h.cfg.Closed == nil {
+		return
+	}
+	c := Closed{Grant: gs.Grant, Opened: gs.opened, At: h.cfg.Clock.Now(), Reason: reason, Code: code}
+	h.background.Add(1)
+	go func() {
+		defer h.background.Done()
+		// The request that opened the session ended long ago.
+		h.cfg.Closed(context.Background(), c)
+	}()
 }
 
 // Open is the last check before the client's connection is taken, once Wait
@@ -483,7 +521,14 @@ func (p *Pending) Open(ctx context.Context) error {
 			return err
 		}
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	gs.opened, gs.audited = opened, h.cfg.Opened != nil
+	if gs.state != stateClaimed { // the grant died while the entry was written: its close is audited now
+		reason, code := closeOf(gs.err)
+		h.auditClose(gs, reason, code)
+		return gs.err
+	}
 	return nil
 }
 
@@ -499,15 +544,13 @@ func (p *Pending) Splice(conn net.Conn, r io.Reader) error {
 		err := gs.err
 		h.mu.Unlock()
 		_ = conn.Close()
-		if gs.audited && h.cfg.Closed != nil {
-			h.cfg.Closed(context.Background(), Closed{Grant: gs.Grant, Opened: gs.opened, At: h.cfg.Clock.Now(), Reason: v1.AttachCloseShutdown, Code: domain.CodeControllerUnreachable})
-		}
 		if err == nil {
 			err = errShuttingDown()
 		}
 		return err
 	}
-	s := h.newSession(gs, conn, r, gs.opened)
+	s := h.newSession(gs, conn, r)
+	h.background.Add(2) // the two writers, which start below
 	gs.state = stateConnected
 	h.rooms[gs.Run] = append(h.rooms[gs.Run], s)
 	h.broadcastPeersLocked(gs.Run)
@@ -518,7 +561,8 @@ func (p *Pending) Splice(conn net.Conn, r io.Reader) error {
 
 // Shutdown refuses what comes and closes what is open: requests are refused,
 // pollers return, and every session ends with CF_CONTROLLER_UNREACHABLE on both
-// ends. It returns at once; the connections close as their writers finish.
+// ends. It returns at once; the connections close as their writers finish, and
+// Wait is how to know they did.
 func (h *Hub) Shutdown() {
 	h.mu.Lock()
 	if h.closing {
@@ -540,16 +584,24 @@ func (h *Hub) Shutdown() {
 	}
 }
 
+// Wait blocks until every session's writers have flushed and every close is
+// audited, or until ctx ends, whose error it returns. It is meant for after
+// Shutdown: a session that opens later is not waited for.
+func (h *Hub) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() { h.background.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func newID() string {
 	var b [24]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		panic("attachhub: drawing a grant ID: " + err.Error()) // no caller can recover from a broken entropy source
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:])
-}
-
-// IsClosed reports whether err is the hub refusing because it is shutting down.
-func IsClosed(err error) bool {
-	var de *domain.Error
-	return errors.As(err, &de) && de.Code == domain.CodeControllerUnreachable
 }

@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -20,7 +19,6 @@ import (
 type session struct {
 	h      *Hub
 	gs     *grantState
-	opened time.Time
 	client *peer
 	worker *peer
 
@@ -29,9 +27,9 @@ type session struct {
 	once   sync.Once
 }
 
-func (h *Hub) newSession(gs *grantState, conn net.Conn, r io.Reader, opened time.Time) *session {
+func (h *Hub) newSession(gs *grantState, conn net.Conn, r io.Reader) *session {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &session{h: h, gs: gs, opened: opened, ctx: ctx, cancel: cancel}
+	s := &session{h: h, gs: gs, ctx: ctx, cancel: cancel}
 	s.client = newPeer(conn, bufReader(r, conn), h.cfg.BufferBytes, h.cfg.WriteTimeout, func(err error) { s.endOfWrite(err, true) })
 	s.worker = newPeer(gs.wconn, bufReader(gs.wr, gs.wconn), h.cfg.BufferBytes, h.cfg.WriteTimeout, func(err error) { s.endOfWrite(err, false) })
 	return s
@@ -45,9 +43,10 @@ func bufReader(r io.Reader, conn net.Conn) io.Reader {
 	return bufio.NewReaderSize(r, 2*v1.MaxFramePayload)
 }
 
+// start runs the session; the hub has already counted its two writers.
 func (s *session) start() {
-	go s.client.run()
-	go s.worker.run()
+	go func() { defer s.h.background.Done(); s.client.run() }()
+	go func() { defer s.h.background.Done(); s.worker.run() }()
 	go s.pump(s.client, s.worker, true)
 	go s.pump(s.worker, s.client, false)
 	go s.watch()
@@ -88,6 +87,7 @@ func (s *session) end(reason string, code domain.Code, msg string, kind endKind)
 		}
 		h.mu.Unlock()
 
+		h.auditClose(s.gs, reason, code) // counted before the writers can finish
 		errFrame := frameBytes(v1.ErrorFrame(code, msg))
 		slow := reason == v1.AttachCloseSlowClient || reason == v1.AttachCloseSlowWorker
 		switch kind {
@@ -103,10 +103,6 @@ func (s *session) end(reason string, code domain.Code, msg string, kind endKind)
 		case endQuiet:
 			s.client.finish(nil, false)
 			s.worker.finish(nil, true)
-		}
-		if h.cfg.Closed != nil {
-			// The request that opened the session ended long ago.
-			go h.cfg.Closed(context.WithoutCancel(s.ctx), Closed{Grant: s.gs.Grant, Opened: s.opened, At: h.cfg.Clock.Now(), Reason: reason, Code: code})
 		}
 	})
 }
@@ -183,7 +179,11 @@ func (s *session) pump(from, to *peer, fromClient bool) {
 			if perr != nil {
 				continue
 			}
-			to.send(frameBytes(f))
+			// Rebuilt from what it says, so a Worker cannot put its own bytes on a client's stream.
+			if !to.send(frameBytes(v1.ErrorFrame(e.Code, e.Message))) {
+				s.end(v1.AttachCloseSlowClient, domain.CodeInProgress, "this client reads too slowly: the session was cut", endBoth)
+				return
+			}
 			s.end(v1.AttachCloseWorker, e.Code, e.Message, endQuiet)
 			return
 		default: // peers: only the hub says who is in the Run

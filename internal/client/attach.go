@@ -144,12 +144,18 @@ func (c *Client) upgrade(ctx context.Context, method, path string, body []byte) 
 func (c *Client) AttachRequests(ctx context.Context, wait time.Duration) ([]v1.AttachRequest, error) {
 	q := url.Values{}
 	if wait > 0 {
-		q.Set("wait", strconv.FormatInt(int64(wait/time.Second), 10))
+		q.Set("wait", strconv.FormatInt(pollSeconds(wait), 10))
 	}
 	var out v1.AttachRequestsResponse
 	// The poll is slow by nature: it has no overall timeout but its ctx.
 	err := c.doOver(ctx, c.stream.Load(), maxResponse, http.MethodGet, withQuery("/v1/worker/attach-requests", q), nil, &out)
 	return out.Requests, err
+}
+
+// pollSeconds is a wait as the Controller takes it: whole seconds, rounded up
+// and never 0, which it reads as no wait at all (a Worker would spin on it).
+func pollSeconds(wait time.Duration) int64 {
+	return max(int64((wait+time.Second-1)/time.Second), 1)
 }
 
 // DialAttach opens the Worker end of the request sessionID, which AttachRequests

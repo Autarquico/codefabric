@@ -20,7 +20,7 @@ func wantCode(t *testing.T, err error, code domain.Code) {
 
 // live makes worker count as polling, and returns a function that ends the poll
 // and gives what it took.
-func live(t *testing.T, h *Hub, _ *clock.Fake, worker domain.ID) (stop func() []Grant) {
+func live(t *testing.T, h *Hub, worker domain.ID) (stop func() []Grant) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan []Grant, 1)
@@ -47,7 +47,7 @@ func TestOffer_NeedsALivePoll(t *testing.T) {
 	_, err := h.Offer(g)
 	wantCode(t, err, domain.CodeWorkerOffline)
 
-	stop := live(t, h, clk, "worker_a")
+	stop := live(t, h, "worker_a")
 	stop()
 	// Within the grace after a poll the Worker is asking again at once.
 	if !h.Live("worker_a") {
@@ -107,8 +107,8 @@ func TestPoll_ReturnsAfterTheWaitWithNothing(t *testing.T) {
 
 func TestClaim_OnlyADeliveredGrantOfItsWorkerOnce(t *testing.T) {
 	validations := 0
-	h, clk := newHub(Config{Validate: func(context.Context, Grant) error { validations++; return nil }})
-	stop := live(t, h, clk, "worker_a")
+	h, _ := newHub(Config{Validate: func(context.Context, Grant) error { validations++; return nil }})
+	stop := live(t, h, "worker_a")
 	p, err := h.Offer(Grant{Worker: "worker_a", Run: "run_1", Epoch: 1, Mode: "view"})
 	if err != nil {
 		t.Fatal(err)
@@ -135,9 +135,8 @@ func TestClaim_OnlyADeliveredGrantOfItsWorkerOnce(t *testing.T) {
 }
 
 func TestClaim_AGrantThatIsNotDeliveredCannotBeClaimed(t *testing.T) {
-	h, clk := newHub(Config{})
+	h, _ := newHub(Config{})
 	// A Worker that is live but whose poll takes nothing, so the grant stays queued.
-	_ = clk
 	h.mu.Lock()
 	h.worker("worker_b").polls = 1
 	h.mu.Unlock()
@@ -150,10 +149,10 @@ func TestClaim_AGrantThatIsNotDeliveredCannotBeClaimed(t *testing.T) {
 }
 
 func TestClaim_AStaleEpochKillsTheGrant(t *testing.T) {
-	h, clk := newHub(Config{Validate: func(context.Context, Grant) error {
+	h, _ := newHub(Config{Validate: func(context.Context, Grant) error {
 		return domain.NewError(domain.CodeStaleLease, "moved", nil)
 	}})
-	stop := live(t, h, clk, "worker_a")
+	stop := live(t, h, "worker_a")
 	p, err := h.Offer(Grant{Worker: "worker_a", Run: "run_1", Epoch: 1, Mode: "view"})
 	if err != nil {
 		t.Fatal(err)
@@ -171,8 +170,8 @@ func TestClaim_AStaleEpochKillsTheGrant(t *testing.T) {
 }
 
 func TestShutdown_EndsWhatWaits(t *testing.T) {
-	h, clk := newHub(Config{})
-	stop := live(t, h, clk, "worker_a")
+	h, _ := newHub(Config{})
+	stop := live(t, h, "worker_a")
 	defer stop()
 	h.mu.Lock()
 	h.worker("worker_b").polls = 1
@@ -191,7 +190,5 @@ func TestShutdown_EndsWhatWaits(t *testing.T) {
 		t.Fatal("a request kept waiting after the shutdown")
 	}
 	_, err = h.Offer(Grant{Worker: "worker_a", Run: "run_1", Mode: "view"})
-	if !IsClosed(err) {
-		t.Errorf("offer after shutdown: %v", err)
-	}
+	wantCode(t, err, domain.CodeControllerUnreachable)
 }

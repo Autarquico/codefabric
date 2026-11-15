@@ -230,6 +230,12 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
+		// Shutdown does not wait for the hooks, nor for hijacked connections:
+		// the attach sessions are flushed and their close audited before Serve
+		// returns, for the daemon closes the store right after.
+		if err := s.attach.Wait(shutdownCtx); err != nil {
+			s.log.Warn("attach: sessions were still closing when the shutdown timed out", "err", err)
+		}
 	}()
 	err := srv.ServeTLS(ln, "", "")
 	if errors.Is(err, http.ErrServerClosed) {
