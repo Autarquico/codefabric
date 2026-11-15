@@ -84,21 +84,9 @@ func (c attachCheck) err() error {
 func (s *Service) AttachTarget(ctx context.Context, by pki.Session, ref, project string) (v1.AttachTarget, error) {
 	var out v1.AttachTarget
 	err := s.db.Read(ctx, func(q store.Querier) error {
-		run, err := s.attachRun(ctx, q, by, ref, project)
+		run, worker, check, err := s.attachOf(ctx, q, by, ref, project)
 		if err != nil {
 			return err
-		}
-		var worker *store.Worker
-		if run.WorkerID != "" {
-			w, err := store.WorkerByID(ctx, q, run.WorkerID)
-			if err != nil {
-				return err
-			}
-			worker = &w
-		}
-		check := attachable(run, worker)
-		if !check.ok {
-			return check.err()
 		}
 		out = v1.AttachTarget{
 			RunID: string(run.ID), RunShort: shortID(run.Short), LeaseEpoch: run.LeaseEpoch,
@@ -108,6 +96,28 @@ func (s *Service) AttachTarget(ctx context.Context, by pki.Session, ref, project
 		return nil
 	})
 	return out, err
+}
+
+// attachOf finds the Run of ref and its Worker and decides whether it can be
+// attached: the error is the refusal, and the Worker is set when there is none.
+func (s *Service) attachOf(ctx context.Context, q store.Querier, by pki.Session, ref, project string) (store.Run, *store.Worker, attachCheck, error) {
+	run, err := s.attachRun(ctx, q, by, ref, project)
+	if err != nil {
+		return store.Run{}, nil, attachCheck{}, err
+	}
+	var worker *store.Worker
+	if run.WorkerID != "" {
+		w, err := store.WorkerByID(ctx, q, run.WorkerID)
+		if err != nil {
+			return store.Run{}, nil, attachCheck{}, err
+		}
+		worker = &w
+	}
+	check := attachable(run, worker)
+	if !check.ok {
+		return store.Run{}, nil, check, check.err()
+	}
+	return run, worker, check, nil
 }
 
 func (s *Service) attachRun(ctx context.Context, q store.Querier, by pki.Session, ref, project string) (store.Run, error) {

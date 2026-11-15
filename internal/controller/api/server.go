@@ -13,6 +13,7 @@ import (
 
 	"github.com/Autarquico/codefabric/internal/app"
 	"github.com/Autarquico/codefabric/internal/buildinfo"
+	"github.com/Autarquico/codefabric/internal/controller/attachhub"
 	"github.com/Autarquico/codefabric/internal/controller/pki"
 	"github.com/Autarquico/codefabric/internal/controller/relay"
 	"github.com/Autarquico/codefabric/internal/support/clock"
@@ -93,6 +94,10 @@ type Config struct {
 	// Relay is the git relay (§22.1); nil when this machine cannot serve one,
 	// and then its routes answer CF_INTERNAL.
 	Relay *relay.Relay
+	// Attach tunes the relay of attach; the Server wires what it needs of the
+	// Controller (the clock, the checks and the audit) over it, and a zero field
+	// takes its default.
+	Attach attachhub.Config
 }
 
 // Server is the Controller API over mutual TLS.
@@ -113,6 +118,7 @@ type Server struct {
 	routes       map[string]route
 	health       healthCache
 	streams      *streamHub
+	attach       *attachhub.Hub
 }
 
 // New builds the server and its route table. It fails when Config.Work is missing.
@@ -177,6 +183,8 @@ func New(c Config) (*Server, error) {
 	}
 	s.registerOutputRoutes()
 	s.registerObserveRoutes()
+	s.attach = s.newAttachHub(c.Attach)
+	s.registerAttachRoutes()
 	if s.work.Logs != nil {
 		s.registerLogRoutes()
 	}
@@ -212,6 +220,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	// The streams hold their handlers for as long as they live: shutdown ends
 	// them at once, instead of waiting for shutdownTimeout.
 	srv.RegisterOnShutdown(s.streams.shutdown)
+	// So do the attach sessions, which are hijacked connections the http.Server
+	// no longer tracks: both ends of each get an error frame and are closed.
+	srv.RegisterOnShutdown(s.attach.Shutdown)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
