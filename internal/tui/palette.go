@@ -181,7 +181,7 @@ func (p *palette) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 			p.fail("Attach failed", msg.failure, "")
 			return p, nil, false
 		}
-		return p, tea.ExecProcess(msg.session.Cmd(), attachEnded(msg.from, msg.target, msg.session)), false
+		return p, tea.Exec(msg.session.Command(), attachEnded(msg.from, msg.target, msg.session)), false
 	case attachEndedMsg:
 		p.mode, p.busy = modeBusy, "Checking the attach…"
 		return p, func() tea.Msg {

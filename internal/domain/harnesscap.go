@@ -37,6 +37,11 @@ const OriginAskpassCapability = "origin-askpass:v1"
 // announces it: one that does not know it would block its queue.
 const CheckpointCapability = "checkpoint:v1"
 
+// AttachRelayCapability is that of a Worker that opens the Worker end of an
+// attach relay through the Controller (live-attach spec). A client without ssh
+// access to the Worker can only attach to a Worker that announces it.
+const AttachRelayCapability = "attach-relay:v1"
+
 // StructuredInputCapability is that of a Worker whose harness can be answered
 // while it runs: it reports input_requested and input_delivered and executes
 // the `input` order. The Worker announces it per harness

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"maps"
-	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/cli"
 	"github.com/Autarquico/codefabric/internal/cli/actions"
 )
 
@@ -232,7 +232,7 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 			b.notice = &Notice{Title: "Attach failed", Failure: msg.failure}
 			return b, nil, false
 		}
-		return b, tea.ExecProcess(msg.session.Cmd(), attachEnded(msg.from, msg.target, msg.session)), false
+		return b, tea.Exec(msg.session.Command(), attachEnded(msg.from, msg.target, msg.session)), false
 	case attachEndedMsg:
 		b.busy = "Checking the attach…"
 		return b, func() tea.Msg {
@@ -266,18 +266,16 @@ func attachEnded(asker from, target Row, session Attachment) func(error) tea.Msg
 	}
 }
 
-// exitDetail says how the process of an attach ended.
+// exitDetail says how the session of an attach ended.
 func exitDetail(runErr error) string {
-	var exit *exec.ExitError
+	var status cli.ExitStatus
 	switch {
 	case runErr == nil:
-		return "ssh exited 0"
-	case errors.As(runErr, &exit) && exit.ExitCode() >= 0:
-		return "ssh exited " + strconv.Itoa(exit.ExitCode())
-	case errors.As(runErr, &exit):
-		return "ssh ended by a signal"
+		return "session exited 0"
+	case errors.As(runErr, &status):
+		return "session exited " + strconv.Itoa(int(status))
 	}
-	return "ssh could not start: " + runErr.Error()
+	return "session could not start: " + runErr.Error()
 }
 
 func (b *browser) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {

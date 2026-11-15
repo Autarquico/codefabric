@@ -9,19 +9,34 @@ const (
 	NotAttachableNoSSHTarget        = "no_ssh_target"
 	NotAttachableRuntimeUnsupported = "runtime_unsupported"
 	NotAttachableSSHFailed          = "ssh_failed"
+	// NotAttachableRelayUnsupported is the reason when the transport asked for
+	// is the relay and the Worker does not announce it.
+	NotAttachableRelayUnsupported = "relay_unsupported"
+)
+
+// Transports a Run can be attached through (AttachTarget.Transports).
+const (
+	// AttachTransportRelay goes through the Controller: no ssh to the Worker.
+	AttachTransportRelay = "relay"
+	// AttachTransportSSH goes straight to the Worker over ssh.
+	AttachTransportSSH = "ssh"
 )
 
 // AttachTarget is GET /v1/runs/{ref}/attach: what a client needs to open the
 // session of a Run on its Worker. Everything about the Worker is what the
 // Worker announced; the client checks it before it runs anything.
 type AttachTarget struct {
-	RunID      string        `json:"run_id"`
-	RunShort   string        `json:"run_short_id"`
-	LeaseEpoch uint64        `json:"lease_epoch"`
-	Worker     WorkerRef     `json:"worker"`
-	SSHTarget  string        `json:"ssh_target"`
-	Handle     RuntimeHandle `json:"handle"`
-	Binary     string        `json:"binary"`
+	RunID      string    `json:"run_id"`
+	RunShort   string    `json:"run_short_id"`
+	LeaseEpoch uint64    `json:"lease_epoch"`
+	Worker     WorkerRef `json:"worker"`
+	// Transports are the ways the Run can be attached now (AttachTransport*).
+	Transports []string `json:"transports"`
+	// SSHTarget and Binary are what the ssh transport needs; they are empty
+	// when the Worker cannot be reached over ssh.
+	SSHTarget string        `json:"ssh_target,omitempty"`
+	Handle    RuntimeHandle `json:"handle"`
+	Binary    string        `json:"binary,omitempty"`
 }
 
 // WorkerRef names a Worker.
@@ -39,6 +54,9 @@ type PsEntry struct {
 	Worker        *PsWorker `json:"worker"`
 	Attachable    bool      `json:"attachable"`
 	NotAttachable string    `json:"not_attachable_reason,omitempty"`
+	// Transports are the ways `cf attach` could open it (AttachTransport*);
+	// empty when it is not attachable.
+	Transports []string `json:"transports,omitempty"`
 }
 
 // PsTask is the Task of a PsEntry.

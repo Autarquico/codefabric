@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/app/refs"
@@ -16,22 +17,27 @@ import (
 // is offline or removed; `cf attach` answers it with CF_WORKER_OFFLINE.
 const reasonWorkerOffline = "worker_offline"
 
-// attachCheck is why a Run cannot be attached, or that it can.
+// attachCheck is why a Run cannot be attached, or that it can, and through
+// which transports.
 type attachCheck struct {
-	ok     bool
-	reason string
-	code   domain.Code
-	handle v1.RuntimeHandle
-	target string
-	binary string
+	ok         bool
+	reason     string
+	code       domain.Code
+	handle     v1.RuntimeHandle
+	transports []string
+	target     string
+	binary     string
 }
 
-// attachable is the one decision `cf attach` and `cf ps` share. In order: a
-// headless Run has no terminal; a Run that is over, or whose session is not
-// active or whose handle is not known, is not running; a Worker that is offline
-// or removed cannot be reached; and the Worker must have announced a valid
-// ssh target and a valid binary for the runtime of the handle. A Worker that
-// is draining or degraded can be attached to: it is reachable.
+// attachable is the one decision `cf attach` and `cf ps` share, in two parts.
+// Eligibility is about the Run: a headless Run has no terminal; a Run that is
+// over, or whose session is not active or whose handle is not known, is not
+// running; a Worker that is offline or removed cannot be reached; and the
+// runtime of the handle must be one that can be attached. The transports are
+// about the Worker: the relay if it announces attach-relay:v1, ssh if it has
+// announced a valid ssh target and a valid binary. An eligible Run is
+// attachable if at least one transport is available. A Worker that is draining
+// or degraded can be attached to: it is reachable.
 func attachable(r store.Run, w *store.Worker) attachCheck {
 	no := func(code domain.Code, reason string) attachCheck { return attachCheck{code: code, reason: reason} }
 	if specMode(r.Spec) == domain.ModeHeadless {
@@ -45,14 +51,27 @@ func attachable(r store.Run, w *store.Worker) attachCheck {
 	if !w.State.Reachable() {
 		return no(domain.CodeWorkerOffline, reasonWorkerOffline)
 	}
-	if !domain.ValidSSHTarget(w.Report.SSHTarget) {
-		return no(domain.CodeRunNotAttachable, v1.NotAttachableNoSSHTarget)
-	}
-	binary := w.Report.AttachBinaries[handle.Runtime]
-	if !domain.ValidAttachRuntime(handle.Runtime) || !domain.ValidAttachBinary(binary) {
+	if !domain.ValidAttachRuntime(handle.Runtime) {
 		return no(domain.CodeRunNotAttachable, v1.NotAttachableRuntimeUnsupported)
 	}
-	return attachCheck{ok: true, handle: handle, target: w.Report.SSHTarget, binary: binary}
+	out := attachCheck{handle: handle}
+	if slices.Contains(w.Report.Capabilities, domain.AttachRelayCapability) {
+		out.transports = append(out.transports, v1.AttachTransportRelay)
+	}
+	sshOK := domain.ValidSSHTarget(w.Report.SSHTarget)
+	binary := w.Report.AttachBinaries[handle.Runtime]
+	if sshOK && domain.ValidAttachBinary(binary) {
+		out.transports = append(out.transports, v1.AttachTransportSSH)
+		out.target, out.binary = w.Report.SSHTarget, binary
+	}
+	if len(out.transports) == 0 {
+		if !sshOK {
+			return no(domain.CodeRunNotAttachable, v1.NotAttachableNoSSHTarget)
+		}
+		return no(domain.CodeRunNotAttachable, v1.NotAttachableRuntimeUnsupported)
+	}
+	out.ok = true
+	return out
 }
 
 func (c attachCheck) err() error {
@@ -83,8 +102,8 @@ func (s *Service) AttachTarget(ctx context.Context, by pki.Session, ref, project
 		}
 		out = v1.AttachTarget{
 			RunID: string(run.ID), RunShort: shortID(run.Short), LeaseEpoch: run.LeaseEpoch,
-			Worker:    v1.WorkerRef{ID: string(worker.ID), Name: worker.Name},
-			SSHTarget: check.target, Handle: check.handle, Binary: check.binary,
+			Worker:     v1.WorkerRef{ID: string(worker.ID), Name: worker.Name},
+			Transports: check.transports, SSHTarget: check.target, Handle: check.handle, Binary: check.binary,
 		}
 		return nil
 	})
@@ -163,6 +182,7 @@ func (s *Service) Ps(ctx context.Context, by pki.Session, project string) (v1.Ps
 			}
 			if check := attachable(r, worker); check.ok {
 				entry.Attachable = true
+				entry.Transports = check.transports
 			} else {
 				entry.NotAttachable = check.reason
 			}

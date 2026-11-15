@@ -29,22 +29,55 @@ import (
 // that is never started by these tests.
 type fakeTerminal struct{ requests []cli.AttachRequest }
 
-func (f *fakeTerminal) Attach(context.Context, cli.AttachRequest, cli.TerminalIO) (int, error) {
-	return 0, errors.New("the TUI attaches through Command")
-}
-
-func (f *fakeTerminal) Command(_ context.Context, req cli.AttachRequest) (*exec.Cmd, error) {
+func (f *fakeTerminal) Open(_ context.Context, req cli.AttachRequest) (cli.Session, error) {
 	f.requests = append(f.requests, req)
-	return exec.CommandContext(context.Background(), "ssh", "-t", "worker", "attach"), nil
+	return nil, nil
 }
 
-// session is the attach of the SDK over the fake Terminal, with nothing of the
-// Controller: Finish maps exit 0 and 255 without asking it anything.
-type session struct{ *cli.AttachSession }
+// procCommand is a process as the tea.ExecCommand of an attach: what ends it
+// reaches Finish as the exit status the CLI reads (cli.ExitStatus), as in the binary.
+type procCommand struct{ cmd *exec.Cmd }
 
-func (s session) Cmd() *exec.Cmd { return s.AttachSession.Cmd }
+// The streams are the program's unless the test gave the process its own, as tea.ExecProcess does.
+func (p procCommand) SetStdin(r io.Reader) {
+	if p.cmd.Stdin == nil {
+		p.cmd.Stdin = r
+	}
+}
 
-func (s session) Finish(err error) error { return s.AttachSession.Finish(context.Background(), err) }
+func (p procCommand) SetStdout(w io.Writer) {
+	if p.cmd.Stdout == nil {
+		p.cmd.Stdout = w
+	}
+}
+
+func (p procCommand) SetStderr(w io.Writer) {
+	if p.cmd.Stderr == nil {
+		p.cmd.Stderr = w
+	}
+}
+
+func (p procCommand) Run() error {
+	var exit *exec.ExitError
+	switch err := p.cmd.Run(); {
+	case err == nil:
+		return nil
+	case errors.As(err, &exit):
+		return cli.ExitStatus(exit.ExitCode())
+	default:
+		return err
+	}
+}
+
+// session is an attach over a process, with nothing of the Controller: Finish
+// maps exit 0 and 255 without asking it anything.
+type session struct{ cmd *exec.Cmd }
+
+func (s session) Command() tea.ExecCommand { return procCommand(s) }
+
+func (s session) Finish(err error) error {
+	return (&cli.AttachSession{}).Finish(context.Background(), err)
+}
 
 type fakeBackend struct {
 	mu       sync.Mutex
@@ -85,11 +118,10 @@ func (f *fakeBackend) Attach(id string, in actions.Input) (Attachment, *actions.
 	if f.session != nil {
 		return f.session, nil
 	}
-	cmd, err := f.term.Command(context.Background(), cli.AttachRequest{RunID: in.Target})
-	if err != nil {
+	if _, err := f.term.Open(context.Background(), cli.AttachRequest{RunID: in.Target}); err != nil {
 		return nil, actions.FailureOf(err)
 	}
-	return session{&cli.AttachSession{Cmd: cmd}}, nil
+	return session{exec.CommandContext(context.Background(), "ssh", "-t", "worker", "attach")}, nil
 }
 
 func (f *fakeBackend) Timeline(taskID string) (Timeline, error) {
@@ -205,7 +237,7 @@ func press(t *testing.T, m *Model, s string) (execs int) {
 }
 
 // drive runs a command like the program would and gives its messages to the
-// shell. An attach that is ready to run (tea.ExecProcess) is counted, and its
+// shell. An attach that is ready to run (tea.Exec) is counted, and its
 // process is not run: TestScenario_TuiViewsActions_Attach runs it for real.
 func drive(t *testing.T, m *Model, cmd tea.Cmd) (execs int) {
 	t.Helper()
@@ -438,7 +470,7 @@ type ranAttach struct {
 	finished chan error // the exit Finish was given
 }
 
-func (a ranAttach) Cmd() *exec.Cmd { return a.cmd }
+func (a ranAttach) Command() tea.ExecCommand { return procCommand{a.cmd} }
 
 func (a ranAttach) Finish(runErr error) error {
 	a.finished <- runErr
@@ -467,8 +499,8 @@ func TestScenario_TuiViewsActions_Attach(t *testing.T) {
 		shell string
 		want  []string
 	}{
-		{"exit 0", "touch ran; exit 0", []string{"Back from auth-refactor (t-4k2m) · ssh exited 0", "Tasks · 4"}},
-		{"exit 255", "touch ran; exit 255", []string{"! Attach ended with an error", string(domain.CodeRunNotAttachable), "ssh exited 255"}},
+		{"exit 0", "touch ran; exit 0", []string{"Back from auth-refactor (t-4k2m) · session exited 0", "Tasks · 4"}},
+		{"exit 255", "touch ran; exit 255", []string{"! Attach ended with an error", string(domain.CodeRunNotAttachable), "session exited 255"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -541,9 +573,9 @@ func TestScenario_TuiViewsActions_Attach(t *testing.T) {
 }
 
 func exitCode(err error) int {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return exit.ExitCode()
+	var status cli.ExitStatus
+	if errors.As(err, &status) {
+		return int(status)
 	}
 	return 0
 }
@@ -578,7 +610,7 @@ func TestScenario_TuiViewsActions_Attach_TheCallbackDoesNotAskTheController(t *t
 
 type slowAttach struct{ asked, release chan struct{} }
 
-func (slowAttach) Cmd() *exec.Cmd { return nil }
+func (slowAttach) Command() tea.ExecCommand { return nil }
 
 func (s slowAttach) Finish(error) error {
 	close(s.asked)
@@ -593,11 +625,10 @@ func TestScenario_TuiViewsActions_Attach_ExitCodesReachTheErrorPanel(t *testing.
 	sess, _ := be.Attach("run.attach", actions.Input{Target: "tsk_1"})
 	end := func(runErr error) { feed(t, m, attachEnded(from(m.router.Top().(*browser).id), target, sess)(runErr)) }
 
-	exit255 := exec.CommandContext(context.Background(), "sh", "-c", "exit 255").Run()
-	end(exit255)
+	end(cli.ExitStatus(255))
 	got := frame(m)
 	for _, want := range []string{
-		"! Attach ended with an error", string(domain.CodeRunNotAttachable), "ssh exited 255",
+		"! Attach ended with an error", string(domain.CodeRunNotAttachable), "session exited 255",
 		"ssh could not open the session", "ssh could not open the session: check you can ssh to the Worker",
 	} {
 		if !strings.Contains(got, want) {
@@ -608,7 +639,7 @@ func TestScenario_TuiViewsActions_Attach_ExitCodesReachTheErrorPanel(t *testing.
 
 	press(t, m, "esc")
 	end(errors.New("fork/exec ssh: not found"))
-	if got := frame(m); !strings.Contains(got, "ssh could not start") {
+	if got := frame(m); !strings.Contains(got, "session could not start") {
 		t.Errorf("a process that did not start is not shown:\n%s", got)
 	}
 }
