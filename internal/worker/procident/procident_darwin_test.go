@@ -34,6 +34,9 @@ func TestVerifyReadsAKernBoottimeTokenWithItsDrift(t *testing.T) {
 	if v := procident.Verify(os.Getpid(), legacy(50*time.Millisecond)); v != procident.Same {
 		t.Errorf("kern.boottime moved by 50ms: %v, want same", v)
 	}
+	if v := procident.Verify(os.Getpid(), legacy(-3*time.Second)); v != procident.Same {
+		t.Errorf("kern.boottime moved by 3s: %v, want same", v)
+	}
 	if v := procident.Verify(os.Getpid(), legacyOf(50*time.Millisecond, "another-start")); v != procident.Rebooted {
 		t.Errorf("within the drift, another start: %v, want rebooted (nothing to signal)", v)
 	}

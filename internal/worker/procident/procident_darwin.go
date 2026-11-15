@@ -34,8 +34,9 @@ func startOf(pid int) (string, error) {
 func bootOf() (string, error) { return unix.Sysctl("kern.bootsessionuuid") }
 
 // bootDrift is how far kern.boottime may move within one boot: the clock
-// adjustments seen move it by milliseconds.
-const bootDrift = time.Second
+// adjustments seen move it by milliseconds. A boot within it is only likely
+// this one, so a wide margin authorizes no signal.
+const bootDrift = 5 * time.Second
 
 // sameBoot compares a recorded boot with this one. A token of the earlier
 // format, kern.boottime, is at most likely this boot: the wall clock it comes
