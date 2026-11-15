@@ -42,9 +42,12 @@ Owner previsto en el bucle Develop: backend-eng.
 
 ## Decisiones
 
-- Enmienda 2026-11-15. Comprobado en la documentación de Claude Code: no hay punto de extensión que añada
-  filas a su lista de sesiones (`/resume`, `claude agents`); una skill o un comando `!` capturan la salida
-  y no ceden la TTY; la status line ejecuta un comando local y se refresca (`refreshInterval`). Por eso el
+- Enmienda 2026-11-15. Revisadas las páginas de Claude Code sobre skills, modo interactivo, status line,
+  hooks, MCP, sesiones y agent view (code.claude.com/docs/en/{skills,interactive-mode,statusline,hooks,mcp,
+  sessions,agent-view}): ninguna documenta cómo añadir filas a su lista de sesiones (`/resume`,
+  `claude agents`); la salida de un `` !`cmd` `` de skill se captura como texto, y no se documenta TTY para
+  `!`; la status line ejecuta un comando local y se refresca (`refreshInterval`). Es ausencia de API
+  documentada, no prueba de que no exista. Por eso el
   scope es una skill que lista y una línea de estado, y entrar se hace con `cf attach` en otra terminal.
 
 ## Preguntas abiertas
@@ -66,6 +69,12 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **When** se elige entrar
 - **Then** la skill da el comando exacto (`cf attach <task>`) y ese comando, en otra terminal, abre el Run;
   la sesión de Claude Code no se toca
+
+### Scenario: Status line
+- **Given** `cf claude install --statusline` en una máquina sin status line propia, y un Run remoto que arranca
+- **When** Claude Code está abierto y en reposo
+- **Then** la línea de estado muestra el Run remoto en menos de 15 s; sin `--statusline` no se toca la
+  configuración de la status line, y si ya hay una propia, la instalación no la sustituye y lo dice
 
 ### Scenario: Sin Controller
 - **Given** `cf` sin Controller alcanzable

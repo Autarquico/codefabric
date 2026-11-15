@@ -47,8 +47,8 @@ Owner previsto en el bucle Develop: backend-eng (relay, Worker, API) y frontend-
 - **Escritores múltiples.** Todos los conectados pueden escribir, como en un tmux compartido; el TUI muestra
   quién más está dentro de ese Run. `--read-only` se mantiene.
 - **Shell en el Worker.** Abrir una shell en el worktree del Run (`cf shell <run>` y acción del TUI), para
-  mirar ficheros y git junto al agente, por el mismo relay. Opcional y desactivada por defecto: la habilita
-  la policy del Project o del Worker.
+  mirar ficheros y git junto al agente, por el mismo relay. Opcional y desactivada por defecto: la habilitan
+  a la vez la policy del Project y la del Worker.
 - Auditoría: cada entrada interactiva y cada shell queda en eventos (quién, qué Run o Worker, cuándo, cuánto).
 
 **No entra:**
@@ -114,10 +114,27 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **Then** error `CF_POLICY_DENIED` que nombra la policy, y ninguna shell abierta
 
 ### Scenario: Shell en el worktree
-- **Given** la shell habilitada y un Run en marcha
+- **Given** la shell habilitada en el Project y en el Worker, y un Run en marcha
 - **When** se pide `cf shell <run>`
 - **Then** se abre una shell en el worktree de ese Run en su Worker, a través del Controller, y queda un
   evento de auditoría con el usuario y la duración
+
+### Scenario: Shell vetada por el Worker
+- **Given** un Project con la shell habilitada y un Worker sin `allow_shell`
+- **When** se pide `cf shell <run>`
+- **Then** error `CF_POLICY_DENIED` que nombra la policy del Worker, y ninguna shell abierta; si el Worker la
+  retira después de pedirla y antes de lanzarla, tampoco se abre
+
+### Scenario: Cita de un solo uso
+- **Given** una entrada concedida a un cliente para un Run
+- **When** otro Worker la reclama, se reclama dos veces, se reclama caducada o con un epoch de lease viejo
+- **Then** se rechaza y no se abre nada; una identidad de Worker que pide entrar en un Run recibe
+  `CF_POLICY_DENIED`
+
+### Scenario: Stream que deja de valer
+- **Given** un cliente dentro de un Run
+- **When** se revoca su identidad, o la lease del Run cambia de epoch
+- **Then** el stream se corta en ambos extremos con un error `CF_*` y queda el evento de cierre
 
 ### Scenario: Worker que cae
 - **Given** un cliente dentro de un Run
