@@ -66,7 +66,10 @@ const notVerified = [
 	<body>
 		<a class="skip" href="#main">Skip to content</a>
 		<header>
-			<a class="wordmark" href={BASE}>Code Flock</a>
+			<a class="wordmark" href={BASE}>
+				<img class="logo" src={`${BASE}img/logo.webp`} alt="" width="144" height="40" />
+				<span>Code Flock</span>
+			</a>
 			<nav aria-label="Primary">
 				<a href={routeFor('getting-started')}>Docs</a>
 				<a href={REPO_URL}>GitHub</a>
@@ -83,6 +86,16 @@ const notVerified = [
 					<a class="button primary" href={routeFor('getting-started')}>Read the docs</a>
 					<a class="button" href={REPO_URL}>View on GitHub</a>
 				</div>
+				<img
+					class="fleet"
+					src={`${BASE}img/fleet.webp`}
+					srcset={`${BASE}img/fleet-960.webp 960w, ${BASE}img/fleet.webp 1672w`}
+					sizes="(min-width: 72rem) 68rem, 100vw"
+					width="1672"
+					height="941"
+					decoding="async"
+					alt="A developer starts Tasks from one screen. The Controller sends them to Workers on a MacBook, a Linux server and a Mac mini, where agents run them in their own worktrees and send back branches; the Controller keeps backups."
+				/>
 			</section>
 
 			<section aria-labelledby="how-title">
@@ -225,6 +238,30 @@ const notVerified = [
 		justify-content: space-between;
 		min-height: 4rem;
 		border-bottom: 1px solid var(--cf-border);
+	}
+	.logo {
+		display: none;
+		height: 2.5rem;
+		width: auto;
+	}
+	:root[data-theme='dark'] .logo {
+		display: block;
+	}
+	:root[data-theme='dark'] .wordmark span {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+	.fleet {
+		display: block;
+		width: 100%;
+		height: auto;
+		margin-top: var(--cf-space-7);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-surface);
 	}
 	.wordmark {
 		display: inline-flex;

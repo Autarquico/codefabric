@@ -14,10 +14,10 @@ mode:
 
 color:
   accent:
-    name: "loom indigo"
-    hex_light: "#4338ca"
-    hex_dark: "#818cf8"
-    note: "single accent: links, primary button, focus ring, command names; never for status"
+    name: "flock blue"
+    hex_light: "#0a6fd1"
+    hex_dark: "#1a9bff"
+    note: "the logo's blue; single accent: links, primary button, focus ring, command names; never for status"
   neutrals_override: ""   # cold (global)
 
 typography:
