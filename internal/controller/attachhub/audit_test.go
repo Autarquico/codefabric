@@ -75,7 +75,7 @@ func waitHub(t *testing.T, h *Hub) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	if err := h.Wait(ctx); err != nil {
+	if err := h.Close(ctx); err != nil {
 		t.Fatalf("the hub did not settle: %v", err)
 	}
 }
@@ -104,6 +104,17 @@ func TestShutdownAfterOpen_IsAuditedClosedOnceAndSpliceRefuses(t *testing.T) {
 	got := a.closes()
 	if len(got) != 1 || got[0].Reason != v1.AttachCloseShutdown || got[0].Code != domain.CodeControllerUnreachable {
 		t.Fatalf("closes = %+v, want one of the shutdown", got)
+	}
+}
+
+func TestClose_AuditsAGrantOpenedButNotYetSplicedBeforeItReturns(t *testing.T) {
+	var a audit
+	h, _ := newHub(a.config(Config{}))
+	openedRequest(t, h)
+	waitHub(t, h)
+	got := a.closes()
+	if len(got) != 1 || got[0].Reason != v1.AttachCloseShutdown {
+		t.Fatalf("closes when Close returned = %+v, want one of the shutdown", got)
 	}
 }
 

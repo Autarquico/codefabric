@@ -233,7 +233,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		// Shutdown does not wait for the hooks, nor for hijacked connections:
 		// the attach sessions are flushed and their close audited before Serve
 		// returns, for the daemon closes the store right after.
-		if err := s.attach.Wait(shutdownCtx); err != nil {
+		if err := s.attach.Close(shutdownCtx); err != nil {
 			s.log.Warn("attach: sessions were still closing when the shutdown timed out", "err", err)
 		}
 	}()

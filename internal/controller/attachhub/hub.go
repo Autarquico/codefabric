@@ -562,7 +562,7 @@ func (p *Pending) Splice(conn net.Conn, r io.Reader) error {
 // Shutdown refuses what comes and closes what is open: requests are refused,
 // pollers return, and every session ends with CF_CONTROLLER_UNREACHABLE on both
 // ends. It returns at once; the connections close as their writers finish, and
-// Wait is how to know they did.
+// Close is how to know they did.
 func (h *Hub) Shutdown() {
 	h.mu.Lock()
 	if h.closing {
@@ -584,10 +584,10 @@ func (h *Hub) Shutdown() {
 	}
 }
 
-// Wait blocks until every session's writers have flushed and every close is
-// audited, or until ctx ends, whose error it returns. It is meant for after
-// Shutdown: a session that opens later is not waited for.
-func (h *Hub) Wait(ctx context.Context) error {
+// Close shuts the hub down and blocks until every session's writers have flushed
+// and every close is audited, or until ctx ends, whose error it returns.
+func (h *Hub) Close(ctx context.Context) error {
+	h.Shutdown()
 	done := make(chan struct{})
 	go func() { h.background.Wait(); close(done) }()
 	select {
