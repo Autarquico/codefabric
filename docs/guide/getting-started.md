@@ -36,6 +36,26 @@ Check it works:
 cf version
 ```
 
+## The network between machines
+
+Every Worker and client dials the Controller at its advertised address (port 7443 by default), and a client reaches a Worker over ssh for `cf attach`. The recommended network is a [Tailscale](https://tailscale.com) tailnet: the machines reach each other by name wherever they are. Decide it before you start the Controller: these flags go on its first `cf controller init`. Advertise the Controller's tailnet name, since its host goes into the Controller's certificate, and bind it to the tailnet address so the API is not reachable from anywhere else:
+
+```sh
+cf controller init --advertise <controller>.<tailnet>.ts.net:7443 --listen <tailnet-ip>:7443
+```
+
+Without `--listen` the Controller listens on every interface, on the advertised port (`0.0.0.0:7443` by default); on a machine with a public address, keep that port closed with a firewall.
+
+A Worker tells clients to reach it over ssh as `<user>@<hostname>`, which is often not its tailnet name (on a Mac, `Name-MacBook-Pro.local`). Give it its tailnet name when you install or run it, with the same flag on `cf worker run`:
+
+```sh
+cf worker install-service --ssh-target <user>@<worker>.<tailnet>.ts.net
+```
+
+Tailscale only carries the traffic. The Controller's API still authenticates every Worker and client with its own certificates (mutual TLS), inside the tailnet too. `cf attach` uses the OpenSSH client: plain ssh authenticates with your keys, Tailscale SSH with your tailnet identity and its policy.
+
+If you use Tailscale SSH in `check` mode, it asks for a login in the browser from time to time. Until you do, the ssh check of `cf doctor` warns that it cannot reach that Worker, and `cf attach` waits for that login.
+
 ## Start a Controller
 
 The Controller is the one process that holds the state. Create it once, then run it:
