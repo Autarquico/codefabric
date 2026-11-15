@@ -68,11 +68,11 @@ func Verify(pid int, token string) Verdict {
 	if !ok || boot == "" || start == "" {
 		return Unknown
 	}
-	now, err := bootOf()
+	same, err := sameBoot(boot)
 	if err != nil {
 		return Unknown
 	}
-	if now != boot {
+	if !same {
 		return Rebooted
 	}
 	current, err := startOf(pid)

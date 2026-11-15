@@ -55,3 +55,8 @@ func startOf(pid int) (string, error) {
 }
 
 func bootOf() (string, error) { return bootID() }
+
+func sameBoot(recorded string) (bool, error) {
+	now, err := bootID()
+	return recorded == now, err
+}
