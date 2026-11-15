@@ -8,10 +8,11 @@ on:
 permissions:
   contents: read
 
-# A new push to a PR cancels the CI of its previous commit; runs on main always finish.
+# A new push to a PR cancels the CI of its previous commit. Every other run gets a group of its own:
+# a shared group would drop a pending run on main, and a release needs the checks of its exact commit.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   lint:
