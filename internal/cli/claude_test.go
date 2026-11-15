@@ -334,7 +334,7 @@ func TestInstall_ForeignSkillDoesNotHideTheOthers(t *testing.T) {
 	if _, err := os.Stat(skillPath(claudeHandto, home)); err != nil {
 		t.Errorf("handto was not written: %v", err)
 	}
-	if b, _ := os.ReadFile(foreign); string(b) != mine {
+	if b, _ := os.ReadFile(foreign); string(b) != mine { //nolint:gosec // a path of the test
 		t.Error("the foreign skill was overwritten")
 	}
 }
