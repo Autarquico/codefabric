@@ -1,13 +1,13 @@
 ---
 codename: codefabric
-title: "El CLI pasa a llamarse cof"
+title: El CLI pasa a llamarse cof
 type: task
-status: draft
+status: active
 priority: P1
 size: L
 issue: null
 prs: []
-related_issues: []
+related_issues: [195]
 depends_on: []
 supersedes: []
 related_specs: []
