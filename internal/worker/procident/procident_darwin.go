@@ -34,24 +34,32 @@ func startOf(pid int) (string, error) {
 func bootOf() (string, error) { return unix.Sysctl("kern.bootsessionuuid") }
 
 // bootDrift is how far kern.boottime may move within one boot: the clock
-// adjustments seen move it by milliseconds. Another boot is further away by the
-// whole uptime of the one before, so a second is no risk of taking one for the other.
+// adjustments seen move it by milliseconds.
 const bootDrift = time.Second
 
-func sameBoot(recorded string) (bool, error) {
+// sameBoot compares a recorded boot with this one. A token of the earlier
+// format, kern.boottime, is at most likely this boot: the wall clock it comes
+// from can be corrected across a reboot.
+func sameBoot(recorded string) (bootMatch, error) {
 	if strings.Contains(recorded, ".") {
 		legacy, ok := parseBootTime(recorded)
 		if !ok {
-			return false, fmt.Errorf("procident: %q is not a boot of this platform", recorded)
+			return otherBoot, fmt.Errorf("procident: %q is not a boot of this platform", recorded)
 		}
 		now, err := unix.SysctlTimeval("kern.boottime")
 		if err != nil {
-			return false, err
+			return otherBoot, err
 		}
-		return withinDrift(legacy, time.Unix(now.Unix())), nil
+		if withinDrift(legacy, time.Unix(now.Unix())) {
+			return likelyBoot, nil
+		}
+		return otherBoot, nil
 	}
 	now, err := bootOf()
-	return recorded == now, err
+	if err != nil || recorded != now {
+		return otherBoot, err
+	}
+	return thisBoot, nil
 }
 
 // parseBootTime reads a boot token of the earlier format, kern.boottime as

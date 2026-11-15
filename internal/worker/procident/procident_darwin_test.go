@@ -13,7 +13,9 @@ import (
 )
 
 // A token recorded before the boot session uuid carries kern.boottime, which
-// macOS moves by milliseconds when it adjusts the clock: that is the same boot.
+// macOS moves by milliseconds when it adjusts the clock. Within that drift it is
+// only likely the same boot: the process is the same if its start matches, and
+// otherwise nothing may be signalled on its account.
 func TestVerifyReadsAKernBoottimeTokenWithItsDrift(t *testing.T) {
 	start, err := procident.StartOf(os.Getpid())
 	if err != nil {
@@ -24,12 +26,16 @@ func TestVerifyReadsAKernBoottimeTokenWithItsDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := func(shift time.Duration) string {
+	legacyOf := func(shift time.Duration, start string) string {
 		at := time.Unix(boot.Unix()).Add(shift)
-		return fmt.Sprintf("%d.%06d|%s", at.Unix(), at.Nanosecond()/1000, own)
+		return fmt.Sprintf("%d.%06d|%s", at.Unix(), at.Nanosecond()/1000, start)
 	}
+	legacy := func(shift time.Duration) string { return legacyOf(shift, own) }
 	if v := procident.Verify(os.Getpid(), legacy(50*time.Millisecond)); v != procident.Same {
 		t.Errorf("kern.boottime moved by 50ms: %v, want same", v)
+	}
+	if v := procident.Verify(os.Getpid(), legacyOf(50*time.Millisecond, "another-start")); v != procident.Rebooted {
+		t.Errorf("within the drift, another start: %v, want rebooted (nothing to signal)", v)
 	}
 	if v := procident.Verify(os.Getpid(), legacy(-time.Hour)); v != procident.Rebooted {
 		t.Errorf("kern.boottime an hour before: %v, want rebooted", v)
