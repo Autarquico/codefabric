@@ -1,0 +1,445 @@
+---
+import '../styles/fonts.css';
+import '../styles/theme.css';
+import { BASE, REPO_URL, repoRef, routeFor } from '../../scripts/sync-docs.mjs';
+import { installCommands, siteVersion } from '../../scripts/version.mjs';
+import { LANGUAGES, home, landing } from '../i18n/landing.mjs';
+import TuiFrame from './TuiFrame.astro';
+
+interface Props {
+	lang: keyof typeof landing;
+}
+const { lang } = Astro.props;
+const t = landing[lang];
+const version = siteVersion();
+const commands = installCommands(version);
+const docs = routeFor('getting-started');
+const fakeHarness = `${REPO_URL}/tree/${repoRef()}/internal/testutil/fakeharness`;
+---
+
+<!doctype html>
+<html lang={lang} data-theme="dark">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Code Flock</title>
+		<meta name="description" content={t.description} />
+		{LANGUAGES.map((code) => <link rel="alternate" hreflang={code} href={new URL(home(code), Astro.site)} />)}
+		<link rel="icon" href={`${BASE}favicon.svg`} type="image/svg+xml" />
+		<script is:inline>
+			(() => {
+				try {
+					const stored = localStorage.getItem('starlight-theme');
+					const dark = stored ? stored === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+					document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+				} catch {
+					document.documentElement.dataset.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				}
+			})();
+		</script>
+	</head>
+	<body>
+		<a class="skip" href="#main">{t.skip}</a>
+		<header>
+			<a class="wordmark" href={home(lang)}>
+				<img class="logo" src={`${BASE}img/logo.webp`} alt="" width="144" height="40" />
+				<span>Code Flock</span>
+			</a>
+			<nav aria-label={t.navLabel}>
+				<a href={docs} hreflang="en">{t.docs}</a>
+				<a href={REPO_URL}>GitHub</a>
+				<a href={home(t.other.lang)} hreflang={t.other.lang} lang={t.other.lang}>{t.other.label}</a>
+			</nav>
+		</header>
+
+		<main id="main">
+			<section class="hero" aria-labelledby="hero-title">
+				<p class="badge">{t.badge(version)}</p>
+				<p class="eyebrow">{t.eyebrow}</p>
+				<h1 id="hero-title"><span>{t.title[0]}</span> <span>{t.title[1]}</span> <em>{t.title[2]}</em></h1>
+				<p class="lead">{t.lead}</p>
+				<div class="actions">
+					<a class="button primary" href={docs} hreflang="en">{t.readDocs}</a>
+					<a class="button" href={REPO_URL}>{t.viewGithub}</a>
+				</div>
+				<img
+					class="fleet"
+					src={`${BASE}img/fleet.webp`}
+					srcset={`${BASE}img/fleet-960.webp 960w, ${BASE}img/fleet.webp 1752w`}
+					sizes="(min-width: 72rem) 68rem, 100vw"
+					width="1752"
+					height="897"
+					decoding="async"
+					alt={t.fleetAlt}
+				/>
+			</section>
+
+			<section aria-labelledby="how-title">
+				<h2 id="how-title">{t.how}</h2>
+				<ol class="steps">
+					{t.steps.map(({ title, command, text }) => (
+						<li>
+							<h3>{title}</h3>
+							<p><code>{command}</code></p>
+							<p>{text}</p>
+						</li>
+					))}
+				</ol>
+			</section>
+
+			<section aria-labelledby="journey-title">
+				<h2 id="journey-title">{t.journeyTitle}</h2>
+				<p class="intro">{t.journeyIntro}</p>
+				<ol class="steps">
+					{t.journey.map(({ title, command, text }) => (
+						<li>
+							<h3>{title}</h3>
+							<p><code>{command}</code></p>
+							<p>{text}</p>
+						</li>
+					))}
+				</ol>
+			</section>
+
+			<section aria-labelledby="tui-title">
+				<h2 id="tui-title">{t.tui}</h2>
+				<div class="frames">
+					{t.frames.map(({ file, title, text }) => <TuiFrame file={file} title={title} text={text} label={t.frame.label} caption={t.frame.caption} />)}
+				</div>
+			</section>
+
+			<section aria-labelledby="next-title">
+				<h2 id="next-title">{t.nextTitle}</h2>
+				<p class="intro">{t.nextIntro[0]} <a href={`${REPO_URL}/tree/${repoRef()}/docs/specs`}>{t.nextIntro[1]}</a> {t.nextIntro[2]}</p>
+				<ul class="steps">
+					{t.next.map(({ title, command, text }) => (
+						<li>
+							<h3>{title}</h3>
+							{command && <p><code>{command}</code></p>}
+							<p>{text}</p>
+						</li>
+					))}
+				</ul>
+			</section>
+
+			<section aria-labelledby="claims-title">
+				<h2 id="claims-title">{t.claimsTitle}</h2>
+				<div class="claims">
+					<div>
+						<h3>{t.verifiedTitle}</h3>
+						<ul>{t.verified.map((text) => <li>{text}</li>)}</ul>
+					</div>
+					<div>
+						<h3>{t.notVerifiedTitle}</h3>
+						<ul>
+							{t.notVerified.map(({ text, fakeHarness: link }) => (
+								<li>
+									{text}
+									{link && <> <a href={fakeHarness}>{link}</a>.</>}
+								</li>
+							))}
+						</ul>
+					</div>
+				</div>
+			</section>
+
+			<section aria-labelledby="install-title">
+				<h2 id="install-title">{t.install}</h2>
+				<p class="intro">
+					{version ? <>{t.release} <code>{version}</code>.</> : t.unreleased} {t.installer[0]} <code>cf</code> {t.installer[1]} <code>~/.local/bin</code>{t.installer[2]}
+				</p>
+				<h3>{t.latest}</h3>
+				<div class="scroll" role="region" aria-label={t.latestLabel} tabindex="0"><pre><code>{commands.latest}</code></pre></div>
+				<h3>{t.pinned}</h3>
+				<div class="scroll" role="region" aria-label={t.pinnedLabel} tabindex="0"><pre><code>{commands.pinned}</code></pre></div>
+				<p class="intro"><a href={docs} hreflang="en">{t.gettingStarted}</a></p>
+			</section>
+		</main>
+
+		<footer>
+			<p>{t.licence[0]} <a href={`${REPO_URL}/blob/${repoRef()}/LICENSE`}>{t.licence[1]}</a>.</p>
+			<p><a href={REPO_URL}>GitHub</a> · <a href={docs} hreflang="en">{t.docs}</a> · {t.fontLicences}: <a href={`${BASE}licenses/fonts/fraunces.txt`}>Fraunces</a> · <a href={`${BASE}licenses/fonts/ibm-plex-sans.txt`}>IBM Plex Sans</a> · <a href={`${BASE}licenses/fonts/ibm-plex-mono.txt`}>IBM Plex Mono</a></p>
+		</footer>
+	</body>
+</html>
+
+<style is:global>
+	html {
+		background: var(--cf-bg);
+		color: var(--cf-text);
+		font-family: var(--cf-font-body);
+		font-size: 100%;
+		line-height: 1.5;
+	}
+	body {
+		margin: 0;
+		background: var(--cf-bg);
+	}
+</style>
+
+<style>
+	.skip {
+		position: absolute;
+		left: var(--cf-space-4);
+		top: -4rem;
+		padding: var(--cf-space-3) var(--cf-space-4);
+		background: var(--cf-accent);
+		color: var(--cf-on-accent);
+		border-radius: var(--cf-radius-control);
+	}
+	.skip:focus {
+		top: var(--cf-space-4);
+	}
+	a {
+		color: var(--cf-accent);
+		text-underline-offset: 0.2em;
+	}
+	a:hover {
+		color: var(--cf-accent-hover);
+	}
+	a:focus-visible {
+		outline: 2px solid var(--cf-accent);
+		outline-offset: 2px;
+	}
+	header,
+	main,
+	footer {
+		width: min(100% - 2 * var(--cf-space-4), 64rem);
+		margin-inline: auto;
+	}
+	header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		min-height: 4rem;
+		border-bottom: 1px solid var(--cf-border);
+	}
+	.logo {
+		display: none;
+		height: 2.5rem;
+		width: auto;
+	}
+	:root[data-theme='dark'] .logo {
+		display: block;
+	}
+	:root[data-theme='dark'] .wordmark span {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+	.fleet {
+		display: block;
+		width: 100%;
+		height: auto;
+		margin-top: var(--cf-space-7);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-surface);
+	}
+	.wordmark {
+		display: inline-flex;
+		align-items: center;
+		min-height: var(--cf-tap-target);
+		font-family: var(--cf-font-heading);
+		font-size: var(--sl-text-xl);
+		font-weight: 500;
+		color: var(--cf-text-strong);
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	nav {
+		display: flex;
+		gap: var(--cf-space-4);
+	}
+	nav a {
+		display: inline-flex;
+		align-items: center;
+		min-height: var(--cf-tap-target);
+		color: var(--cf-text);
+	}
+	main > section {
+		padding-block: var(--cf-space-8);
+		border-bottom: 1px solid var(--cf-border);
+	}
+	main > section:last-child {
+		border-bottom: 0;
+	}
+	h1,
+	h2,
+	h3 {
+		color: var(--cf-text-strong);
+		line-height: var(--sl-line-height-headings);
+	}
+	h1,
+	h2 {
+		font-family: var(--cf-font-heading);
+		font-weight: 500;
+		letter-spacing: -0.01em;
+		margin: 0 0 var(--cf-space-5);
+	}
+	h1 {
+		font-size: clamp(2.375rem, 7vw, 3.75rem);
+		max-width: 20ch;
+	}
+	h1 span,
+	h1 em {
+		display: block;
+	}
+	h1 em {
+		font-style: italic;
+		color: var(--cf-accent);
+	}
+	h2 {
+		font-size: var(--sl-text-4xl);
+	}
+	h3 {
+		margin: var(--cf-space-5) 0 var(--cf-space-3);
+		font-size: var(--sl-text-lg);
+		font-weight: 600;
+	}
+	code {
+		font-family: var(--cf-font-mono);
+		font-size: 0.9em;
+	}
+	.eyebrow {
+		margin: 0 0 var(--cf-space-3);
+		font-family: var(--cf-font-mono);
+		font-size: var(--sl-text-sm);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--cf-text-muted);
+	}
+	.badge {
+		display: inline-block;
+		margin: 0 0 var(--cf-space-5);
+		padding: var(--cf-space-1) var(--cf-space-3);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-pill);
+		font-family: var(--cf-font-mono);
+		font-size: var(--sl-text-sm);
+		color: var(--cf-text);
+	}
+	.lead {
+		max-width: 40rem;
+		margin: 0 0 var(--cf-space-6);
+		font-size: var(--sl-text-xl);
+		line-height: 1.5;
+	}
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--cf-space-3);
+	}
+	.button {
+		display: inline-flex;
+		align-items: center;
+		min-height: var(--cf-tap-target);
+		padding-inline: var(--cf-space-5);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-control);
+		color: var(--cf-text-strong);
+		text-decoration: none;
+		font-weight: 500;
+		transition: background-color var(--cf-duration-instant) var(--cf-ease);
+	}
+	.button:hover {
+		color: var(--cf-text-strong);
+		background: var(--cf-surface);
+	}
+	.button.primary {
+		background: var(--cf-accent);
+		border-color: var(--cf-accent);
+		color: var(--cf-on-accent);
+	}
+	.button.primary:hover {
+		background: var(--cf-accent-hover);
+		color: var(--cf-on-accent);
+	}
+	.steps {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+		gap: var(--cf-space-4);
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.steps li {
+		min-width: 0;
+		padding: var(--cf-space-5);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-surface);
+		background: var(--cf-surface);
+	}
+	.steps h3 {
+		margin-top: 0;
+	}
+	.steps p {
+		margin: 0 0 var(--cf-space-3);
+	}
+	.steps code {
+		color: var(--cf-accent);
+		font-weight: 500;
+	}
+	.frames {
+		display: grid;
+		gap: var(--cf-space-6);
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.claims {
+		display: grid;
+		gap: var(--cf-space-4);
+		grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+	}
+	.claims > div {
+		min-width: 0;
+		padding: var(--cf-space-5);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-surface);
+	}
+	.claims h3 {
+		margin-top: 0;
+	}
+	.claims ul {
+		margin: 0;
+		padding-left: var(--cf-space-5);
+		display: grid;
+		gap: var(--cf-space-3);
+	}
+	.intro {
+		max-width: 40rem;
+		margin: 0 0 var(--cf-space-5);
+	}
+	.scroll {
+		overflow-x: auto;
+		margin-bottom: var(--cf-space-4);
+		border: 1px solid var(--cf-border);
+		border-radius: var(--cf-radius-surface);
+		background: var(--cf-surface);
+	}
+	.scroll pre {
+		margin: 0;
+		padding: var(--cf-space-4);
+		width: max-content;
+		color: var(--cf-text-strong);
+	}
+	footer {
+		padding-block: var(--cf-space-7);
+		border-top: 1px solid var(--cf-border);
+		color: var(--cf-text-muted);
+	}
+	footer p {
+		margin: 0 0 var(--cf-space-2);
+	}
+	footer a {
+		display: inline-flex;
+		align-items: center;
+		min-height: var(--cf-tap-target);
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.button {
+			transition: none;
+		}
+	}
+</style>
