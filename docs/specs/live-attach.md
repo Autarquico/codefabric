@@ -136,6 +136,18 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **When** se revoca su identidad, o la lease del Run cambia de epoch
 - **Then** el stream se corta en ambos extremos con un error `CF_*` y queda el evento de cierre
 
+### Scenario: Controller que se apaga
+- **Given** un cliente dentro de un Run
+- **When** el Controller se apaga
+- **Then** el stream se corta en ambos extremos, el cliente vuelve al TUI con un error `CF_*` y el Run sigue
+  `running` en su Worker
+
+### Scenario: Sin relay en el Worker
+- **Given** un Worker que no anuncia el relay
+- **When** se hace `cf attach <task>` sin `--ssh`
+- **Then** un error `CF_*` que dice que ese Worker solo admite `--ssh`, sin intentar SSH; con `--ssh` entra
+  como hoy
+
 ### Scenario: Worker que cae
 - **Given** un cliente dentro de un Run
 - **When** el Worker pierde la conexión
@@ -153,4 +165,4 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ## Referencias
 
 - `docs/codefabric-spec.md` §5.4, §6
-- `docs/specs/observe-attach-events.md`, `docs/specs/tui-views-actions.md`, `docs/specs/pty-relay-attach.md`
+- `docs/specs/observe-attach-events.md`, `docs/specs/tui-views-actions.md`, `docs/specs/archive/2026-11-15-pty-relay-attach.md`

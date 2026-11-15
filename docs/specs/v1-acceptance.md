@@ -9,7 +9,7 @@ issue: null
 prs: []
 related_issues: []
 sub_issues: []
-depends_on: [worker-provisioner, central-secrets, env-providers-devcontainer-mise-nix, notifications-integrations, opencode-pi-adapters, remote-artifact-storage, pty-relay-attach, scheduler-strategies-history, budgets-advanced, workflow-overlays-merged-offline, e2e-v0-5, e2e-v0-3, e2e-v0-3-tui, move-handoff, dirty-snapshots-auto-checkpoints, models-tui, provider-openrouter-google-harness-quota, e2e-v0-2]
+depends_on: [worker-provisioner, central-secrets, env-providers-devcontainer-mise-nix, notifications-integrations, opencode-pi-adapters, remote-artifact-storage, live-attach, scheduler-strategies-history, budgets-advanced, workflow-overlays-merged-offline, e2e-v0-5, e2e-v0-3, e2e-v0-3-tui, move-handoff, dirty-snapshots-auto-checkpoints, models-tui, provider-openrouter-google-harness-quota, e2e-v0-2]
 supersedes: []
 related_specs: [codefabric-spec, phase-10-elastic]
 created: 2026-10-10
