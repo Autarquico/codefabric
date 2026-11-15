@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -164,6 +165,15 @@ func TestScenario_Restore_OtherHostKeepsIdsAndDigestsAndWorkersOnlyChangeAddress
 		return strings.Contains(out, "e2e: finished"), out
 	})
 	oldLogs := c.mustCF(c.Observer, "logs", "--run", before.ID).Stdout
+	// The backup must be a quiescent point: a segment sealed after it was taken
+	// would be sealed again by the restored Controller, and only on that side.
+	c.Eventually("the output of the Run to be sealed into blobs", func() (bool, string) {
+		sealed, err := outputSealed(c, before.ID)
+		if err != nil {
+			c.t.Fatal(err)
+		}
+		return sealed, "not sealed"
+	})
 
 	file, _ := c.Backup("restore", "--passphrase-file", c.writePassphraseFile())
 	oldBlobs := backedUpBlobs(t, file) // not the live store: the sealer of the Controller may add a blob after the backup
@@ -206,6 +216,21 @@ func TestScenario_Restore_OtherHostKeepsIdsAndDigestsAndWorkersOnlyChangeAddress
 	if got := c.Run(c.Observer, next.ID); got.ID != next.ID {
 		t.Errorf("run show %s = %s", next.ID, RunStage(got))
 	}
+}
+
+// outputSealed is whether the output of the Run is closed and every byte of it is in a blob.
+func outputSealed(c *Cluster, runID string) (sealed bool, err error) {
+	err = readOnly(c.H.Context(), c.Ctl.Paths.DatabaseFile(), func(tx *sql.Tx) error {
+		var rows, open int
+		if err := tx.QueryRowContext(c.H.Context(),
+			`SELECT COUNT(*), COALESCE(SUM(closed_at IS NULL OR end_offset > sealed_offset), 0) FROM run_output WHERE run_id = ?`,
+			runID).Scan(&rows, &open); err != nil {
+			return err
+		}
+		sealed = rows > 0 && open == 0
+		return nil
+	})
+	return
 }
 
 // backedUpBlobs are the SHA-256 of the blobs a backup holds, by path below the blob store.
