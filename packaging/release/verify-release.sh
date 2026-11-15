@@ -15,7 +15,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 want=$(printf '%s\n' \
-	"cf_${version}_darwin_arm64.tar.gz" "cf_${version}_linux_amd64.tar.gz" "cf_${version}_linux_arm64.tar.gz" \
+	"cf_${version}_darwin_amd64.tar.gz" "cf_${version}_darwin_arm64.tar.gz" "cf_${version}_linux_amd64.tar.gz" "cf_${version}_linux_arm64.tar.gz" \
 	checksums.txt checksums.txt.sig install.sh install.sh.sig | LC_ALL=C sort)
 got=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' | LC_ALL=C sort)
 [ "$got" = "$want" ] || { printf 'verify-release: unexpected asset inventory for %s\nwant:\n%s\ngot:\n%s\n' "$tag" "$want" "$got" >&2; exit 1; }

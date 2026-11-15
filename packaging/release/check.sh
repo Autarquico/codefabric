@@ -2,7 +2,7 @@
 # Assert a finalized release directory is complete and verifiable.
 # Usage: check.sh DIST INSTALL_SH
 #   INSTALL_SH  the install.sh at the release commit: it is the trust root, and DIST/install.sh must be
-#               byte-identical to it. checksums.txt must list exactly the three tarballs, which must exist
+#               byte-identical to it. checksums.txt must list exactly the four tarballs, which must exist
 #               and match, and both signatures must verify.
 set -eu
 
@@ -29,7 +29,7 @@ version=$(sed -n 's/^version: //p;1q' "$dist/checksums.txt")
 printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || fail "checksums.txt has no valid version header"
 
 expected=""
-for target in darwin_arm64 linux_amd64 linux_arm64; do
+for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
 	expected="$expected cf_${version#v}_$target.tar.gz"
 done
 listed=$(sed 1d "$dist/checksums.txt" | awk '{ print $2 }' | LC_ALL=C sort | tr '\n' ' ')
@@ -43,5 +43,5 @@ for name in $expected; do
 	[ "$sum" = "$(sha256_of "$dist/$name")" ] || fail "$name does not match its checksum"
 	tar -tzf "$dist/$name" | grep -qx 'cf' || fail "$name does not contain cf"
 done
-[ "$(find "$dist" -maxdepth 1 -name 'cf_*.tar.gz' | wc -l | tr -d ' ')" -eq 3 ] || fail "dist holds tarballs beyond the three listed"
+[ "$(find "$dist" -maxdepth 1 -name 'cf_*.tar.gz' | wc -l | tr -d ' ')" -eq 4 ] || fail "dist holds tarballs beyond the four listed"
 echo "release-check: $dist ok ($version)"

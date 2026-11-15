@@ -38,6 +38,13 @@ esac
 EOF
 chmod 755 "$SHIM/uname"
 
+# sysctl is faked too: the installer asks it only whether the shell runs translated by Rosetta.
+cat >"$SHIM/sysctl" <<'EOF'
+#!/bin/sh
+echo "${FAKE_PROC_TRANSLATED:-0}"
+EOF
+chmod 755 "$SHIM/sysctl"
+
 # Two release keys: KEY_A is the trusted one baked into its install.sh copy, KEY_B is an unrelated signer.
 KEY_A=$TMP/keyA
 KEY_B=$TMP/keyB

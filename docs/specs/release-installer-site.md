@@ -45,7 +45,7 @@ Esto no sustituye a [binary-distribution-upgrade](binary-distribution-upgrade.md
   - `build`: GoReleaser, sin secretos ni permisos de escritura. Deja registrado el digest de lo que construye.
   - `sign-publish`: corre en el environment `release`, con el owner como revisor obligatorio. Antes de firmar comprueba que el tag está en main y que el digest coincide con el del build. Firma, verifica contra la raíz de confianza de `install.sh` y publica con `gh release create`. Un tag con `-` sale como prerelease.
 - **`install.sh` en POSIX sh, para `curl -fsSL …/install.sh | sh`:**
-  - Plataformas: linux amd64/arm64 y darwin arm64.
+  - Plataformas: linux y darwin, ambos amd64/arm64.
   - Lleva `allowed_signers` y `revoked_keys` embebidos, y una autoverificación de `ssh-keygen` (OpenSSH ≥ 8.2).
   - Resuelve `CF_VERSION` (vX.Y.Z, o `latest` a través de la redirección de GitHub). Verifica la firma de `checksums.txt`, que la cabecera sea de esa versión y el sha256 del archivo. Solo después instala `cf` de forma atómica en `CF_INSTALL_DIR` (por defecto `~/.local/bin`).
   - Al terminar dice si ese directorio está en el PATH y sugiere `cf setup` o `cf controller init`. No ejecuta nada por su cuenta.
@@ -74,7 +74,7 @@ Esto no sustituye a [binary-distribution-upgrade](binary-distribution-upgrade.md
 **No entra:**
 - Canales stable/beta firmados y su re-firma periódica, SBOM, provenance attestation, builds reproducibles y avisos de licencias de terceros. Quedan como followup.
 - `cf worker upgrade`, `/v1/binaries` y auto-update ([binary-distribution-upgrade](binary-distribution-upgrade.md)).
-- Paquetes de distribución (deb, rpm) y darwin/amd64.
+- Paquetes de distribución (deb, rpm).
 - Que `install.sh` ejecute `cf setup`. Solo instala y sugiere.
 
 ## Criterios de aceptación
@@ -97,7 +97,7 @@ Cada scenario se implementa como un test `TestScenario_*`, o como un job de CI q
 - **Then** sale con 5 porque las checksums firmadas son de otra versión
 
 ### Scenario: Plataforma no soportada
-- **Given** `uname` informa darwin/x86_64 o un sistema que no es Linux ni Darwin
+- **Given** `uname` informa un sistema que no es Linux ni Darwin
 - **When** se ejecuta `install.sh`
 - **Then** sale con 3 antes de descargar nada
 
@@ -114,7 +114,7 @@ Cada scenario se implementa como un test `TestScenario_*`, o como un job de CI q
 ### Scenario: Conjunto publicado
 - **Given** un tag válido aprobado en el environment `release`
 - **When** termina `release.yml`
-- **Then** la release contiene los tres tarballs, `checksums.txt`, `checksums.txt.sig`, `install.sh` e `install.sh.sig`, y `install.sh` verifica `checksums.txt.sig` con su raíz embebida
+- **Then** la release contiene los cuatro tarballs, `checksums.txt`, `checksums.txt.sig`, `install.sh` e `install.sh.sig`, y `install.sh` verifica `checksums.txt.sig` con su raíz embebida
 
 ### Scenario: Fórmula derivada
 - **Given** el `checksums.txt` firmado de una vX.Y.Z

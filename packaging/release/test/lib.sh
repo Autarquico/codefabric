@@ -19,10 +19,10 @@ assert_no_requests() { [ "$(requests)" -eq 0 ] || fail "the server saw $(request
 
 # --- release fixture -------------------------------------------------------
 
-# make_dist DIR [MODE]: the three platform tarballs, each holding a fake cf that prints the bare version.
+# make_dist DIR [MODE]: the four platform tarballs, each holding a fake cf that prints the bare version.
 make_dist() {
 	mkdir -p "$1"
-	for target in linux_amd64 linux_arm64 darwin_arm64; do
+	for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
 		python3 -I "$RELEASE_DIR/test/mktar.py" "$1/cf_${BARE_VERSION}_$target.tar.gz" "${2:-ok}" "$BARE_VERSION"
 	done
 }
@@ -65,7 +65,7 @@ assert_install_dir_untouched() {
 	[ "$(ls -A "$T/bin")" = "cf" ] || fail "the install dir holds more than cf: $(ls -A "$T/bin")"
 }
 
-# run_install INSTALL_SH [args...]; knobs: INST_VERSION INST_BASE INST_PATH FAKE_UNAME_S FAKE_UNAME_M.
+# run_install INSTALL_SH [args...]; knobs: INST_VERSION INST_BASE INST_PATH FAKE_UNAME_S FAKE_UNAME_M FAKE_PROC_TRANSLATED.
 # Sets rc and writes the combined output to $T/out. The fake uname defaults to Linux x86_64 so the tests do not
 # depend on the host. CF_VERSION=latest needs publish_latest (server.py redirects <base>/latest).
 run_install() {
@@ -75,7 +75,7 @@ run_install() {
 	mkdir -p "$T/home"
 	env PATH="${INST_PATH:-$SHIM:$PATH}" HOME="$T/home" \
 		CF_RELEASE_BASE_URL="${INST_BASE:-$URL/$TEST_NAME}" CF_INSTALL_DIR="$T/bin" CF_VERSION="${INST_VERSION-$VERSION}" \
-		FAKE_UNAME_S="${FAKE_UNAME_S:-Linux}" FAKE_UNAME_M="${FAKE_UNAME_M:-x86_64}" \
+		FAKE_UNAME_S="${FAKE_UNAME_S:-Linux}" FAKE_UNAME_M="${FAKE_UNAME_M:-x86_64}" FAKE_PROC_TRANSLATED="${FAKE_PROC_TRANSLATED:-0}" \
 		"$(command -v sh)" "$script" "$@" >"$T/out" 2>&1 || rc=$?
 }
 

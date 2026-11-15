@@ -1,8 +1,8 @@
 # Distribución con Homebrew
 
 `codefabric` se publica en un tap propio, `autarquico/homebrew-tap`, como la fórmula
-**`codefabric`**, que instala el binario `cf`. Plataformas: macOS arm64, Linux amd64 y Linux arm64
-(las mismas que `install.sh`, sin darwin/amd64).
+**`codefabric`**, que instala el binario `cf`. Plataformas: macOS arm64 y amd64, Linux amd64 y Linux arm64
+(las mismas que `install.sh`).
 
 ## La fórmula es un artefacto derivado
 

@@ -48,12 +48,14 @@ digest_of() {
 }
 
 darwin_arm64=$(digest_of darwin_arm64)
+darwin_amd64=$(digest_of darwin_amd64)
 linux_arm64=$(digest_of linux_arm64)
 linux_amd64=$(digest_of linux_amd64)
 
 sed -e "s|@BASE_URL@|$base_url|g" \
 	-e "s|@VERSION@|$version|g" \
 	-e "s|@SHA_DARWIN_ARM64@|$darwin_arm64|" \
+	-e "s|@SHA_DARWIN_AMD64@|$darwin_amd64|" \
 	-e "s|@SHA_LINUX_ARM64@|$linux_arm64|" \
 	-e "s|@SHA_LINUX_AMD64@|$linux_amd64|" \
 	"$template" >"$out"
