@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { siteVersion } from './version.mjs';
 
 export const SITE = 'https://autarquico.github.io';
-export const BASE = '/codefabric/';
-export const REPO_URL = 'https://github.com/Autarquico/codefabric';
+export const BASE = '/codeflock/';
+export const REPO_URL = 'https://github.com/Autarquico/codeflock';
 export const GUIDE_DIR = 'docs/guide';
 export const GUIDE_PAGES = ['getting-started.md', 'concepts.md', 'cli.md', 'mcp.md', 'tui.md'];
 const NOT_PUBLIC = [/^docs\/codefabric-spec\.md$/, /^docs\/specs(\/|$)/, /^docs\/adr(\/|$)/, /^docs\/runbooks(\/|$)/];

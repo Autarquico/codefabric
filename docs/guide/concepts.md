@@ -1,9 +1,9 @@
 ---
 title: Concepts
-description: The parts of CodeFabric and how they relate, in the words the CLI and the TUI use.
+description: The parts of Code Flock and how they relate, in the words the CLI and the TUI use.
 ---
 
-CodeFabric runs coding agents across a pool of machines you own. You say what you want done; it finds a machine, runs an agent there, and keeps the record.
+Code Flock runs coding agents across a pool of machines you own. You say what you want done; it finds a machine, runs an agent there, and keeps the record.
 
 ## Machines
 
@@ -11,7 +11,7 @@ CodeFabric runs coding agents across a pool of machines you own. You say what yo
 
 **Worker.** A machine that runs Runs. It runs a daemon (`cf worker run`), announces which harnesses it has, keeps a clone of each repository it has worked on and does the work in isolated Git worktrees. You choose how much of the machine it contributes (CPUs, memory, disk, concurrent Runs) and when it accepts work (`always`, `idle` or `manual`). A Worker can be drained so that it takes no new Runs and the ones it has go on.
 
-**Client.** A machine from which you use CodeFabric: the `cf` commands and the TUI. Clients enrol with an invitation (`cf connect`). One machine can be a client, a Worker, or both, with separate credentials for each.
+**Client.** A machine from which you use Code Flock: the `cf` commands and the TUI. Clients enrol with an invitation (`cf connect`). One machine can be a client, a Worker, or both, with separate credentials for each.
 
 Invitations are single-use and short-lived: `cf controller token create --client` or `--worker`.
 
@@ -36,7 +36,7 @@ The inbox also lists failures that need a decision. By default a harness skips i
 
 ## Harnesses
 
-A harness is the program that drives the coding agent. CodeFabric does not replace it, and does not translate its configuration into a common format. Each has its own adapter.
+A harness is the program that drives the coding agent. Code Flock does not replace it, and does not translate its configuration into a common format. Each has its own adapter.
 
 | Harness | What it is |
 | --- | --- |

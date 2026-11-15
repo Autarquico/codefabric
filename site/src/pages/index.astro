@@ -8,7 +8,7 @@ import TuiFrame from '../components/TuiFrame.astro';
 const version = siteVersion();
 const commands = installCommands(version);
 const description =
-	'CodeFabric runs coding agents (Claude Code, Codex CLI) across a pool of your own machines. Early development: what is verified and what is not is stated on the page.';
+	'Code Flock runs coding agents (Claude Code, Codex CLI) across a pool of your own machines. Early development: what is verified and what is not is stated on the page.';
 
 const steps = [
 	{ title: 'Start the Controller', command: 'cf controller init', text: 'Run the Controller on one machine. Other machines join it with an invitation, through cf setup.' },
@@ -38,7 +38,7 @@ const notVerified = [
 	{ text: 'The end-to-end tests drive a scripted fake harness. Sessions with the real Claude Code and Codex CLI are not part of the automated suite.', href: `${REPO_URL}/tree/${repoRef()}/internal/testutil/fakeharness`, link: 'The fake harness' },
 	{ text: 'Handing a real Claude Code session to a Worker, moving it to another and pulling it back was checked by hand on Linux and macOS Workers. It is not part of the automated suite.' },
 	{ text: 'The installer has not yet been run on a clean machine against a published release.' },
-	{ text: 'CodeFabric is in early development. Expect rough edges and changes between versions.' },
+	{ text: 'Code Flock is in early development. Expect rough edges and changes between versions.' },
 	{ text: 'The latest-release install command follows the newest GitHub release. Pin a version if you need to stay on one.' },
 ];
 ---
@@ -48,7 +48,7 @@ const notVerified = [
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>CodeFabric</title>
+		<title>Code Flock</title>
 		<meta name="description" content={description} />
 		<link rel="icon" href={`${BASE}favicon.svg`} type="image/svg+xml" />
 		<script is:inline>
@@ -66,7 +66,7 @@ const notVerified = [
 	<body>
 		<a class="skip" href="#main">Skip to content</a>
 		<header>
-			<a class="wordmark" href={BASE}>CodeFabric</a>
+			<a class="wordmark" href={BASE}>Code Flock</a>
 			<nav aria-label="Primary">
 				<a href={routeFor('getting-started')}>Docs</a>
 				<a href={REPO_URL}>GitHub</a>
@@ -77,7 +77,7 @@ const notVerified = [
 			<section class="hero" aria-labelledby="hero-title">
 				<p class="badge">{version ? `Release ${version}` : 'Unreleased build'} · early development</p>
 				<h1 id="hero-title">Your agents, on <em>your</em> machines.</h1>
-				<p class="lead">CodeFabric runs coding agents (Claude Code, Codex CLI) across a pool of your own machines. You think in Projects and Tasks; it picks the Worker, runs the agent and publishes each Run as a branch.</p>
+				<p class="lead">Code Flock runs coding agents (Claude Code, Codex CLI) across a pool of your own machines. You think in Projects and Tasks; it picks the Worker, runs the agent and publishes each Run as a branch.</p>
 				<div class="actions">
 					<a class="button primary" href={routeFor('getting-started')}>Read the docs</a>
 					<a class="button" href={REPO_URL}>View on GitHub</a>
@@ -168,7 +168,7 @@ const notVerified = [
 		</main>
 
 		<footer>
-			<p>CodeFabric is open source under the <a href={`${REPO_URL}/blob/${repoRef()}/LICENSE`}>Apache-2.0 licence</a>.</p>
+			<p>Code Flock is open source under the <a href={`${REPO_URL}/blob/${repoRef()}/LICENSE`}>Apache-2.0 licence</a>.</p>
 			<p><a href={REPO_URL}>GitHub</a> · <a href={routeFor('getting-started')}>Docs</a> · Font licences: <a href={`${BASE}licenses/fonts/fraunces.txt`}>Fraunces</a> · <a href={`${BASE}licenses/fonts/ibm-plex-sans.txt`}>IBM Plex Sans</a> · <a href={`${BASE}licenses/fonts/ibm-plex-mono.txt`}>IBM Plex Mono</a></p>
 		</footer>
 	</body>

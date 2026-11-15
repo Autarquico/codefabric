@@ -8,7 +8,7 @@ import { GUIDE_PAGES, splitFrontMatter, syncDocs, transformPage } from './sync-d
 const known = new Set(['docs/guide/cli.md', 'docs/guide/tui.md', 'docs/guide/mcp.md', 'docs/guide/concepts.md', 'docs/guide/getting-started.md', 'docs/codefabric-spec.md', 'internal/tui', 'README.md']);
 const kindOf = (p) => (!known.has(p) ? null : p === 'internal/tui' ? 'dir' : 'file');
 const FM = '---\ntitle: T\ndescription: D\n---\n';
-const page = (source, file = 'concepts.md') => transformPage({ file, source: source.startsWith('---') ? source : FM + source, base: '/codefabric/', ref: 'v0.2.0', kindOf });
+const page = (source, file = 'concepts.md') => transformPage({ file, source: source.startsWith('---') ? source : FM + source, base: '/codeflock/', ref: 'v0.2.0', kindOf });
 
 test('front matter is required with title and description, and passed through verbatim', () => {
   const { frontMatter, body } = splitFrontMatter('---\ntitle: "A: b"\ndescription: D\n---\n\nText\n', 'x.md');
@@ -28,10 +28,10 @@ test('a body "# " heading is demoted (the title is the front matter\'s); code is
 
 test('links between guide pages become site routes, others point at the tag', () => {
   const out = page('# T\nSee [CLI](cli.md#flags), [TUI](./tui.md), [Concepts](../concepts/), [tui source](../../internal/tui) and [home](https://example.com).');
-  assert.match(out, /\]\(\/codefabric\/cli\/#flags\)/);
-  assert.match(out, /\]\(\/codefabric\/tui\/\)/);
-  assert.match(out, /\]\(\/codefabric\/concepts\/\)/);
-  assert.match(out, /\]\(https:\/\/github\.com\/Autarquico\/codefabric\/tree\/v0\.2\.0\/internal\/tui\)/);
+  assert.match(out, /\]\(\/codeflock\/cli\/#flags\)/);
+  assert.match(out, /\]\(\/codeflock\/tui\/\)/);
+  assert.match(out, /\]\(\/codeflock\/concepts\/\)/);
+  assert.match(out, /\]\(https:\/\/github\.com\/Autarquico\/codeflock\/tree\/v0\.2\.0\/internal\/tui\)/);
   assert.match(out, /\]\(https:\/\/example\.com\)/);
 });
 

@@ -8,7 +8,7 @@ export default defineConfig({
   trailingSlash: 'always',
   integrations: [
     starlight({
-      title: 'CodeFabric',
+      title: 'Code Flock',
       description: 'Run coding agents across a pool of your own machines.',
       components: { Search: './src/components/Search.astro' },
       customCss: ['./src/styles/fonts.css', './src/styles/theme.css'],

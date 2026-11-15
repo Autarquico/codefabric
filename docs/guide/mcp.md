@@ -3,7 +3,7 @@ title: Use cf from Claude Code or Codex
 description: Register the cf MCP server in Claude Code or Codex, choose a profile, and drive Tasks from the model without leaving the session.
 ---
 
-`cf mcp serve` is an MCP server that lets Claude Code or Codex use CodeFabric from inside their own session: create a Task, wait for it, read its output and answer it when it needs input. The model gets a fixed set of tools. It has no shell and cannot read secrets.
+`cf mcp serve` is an MCP server that lets Claude Code or Codex use Code Flock from inside their own session: create a Task, wait for it, read its output and answer it when it needs input. The model gets a fixed set of tools. It has no shell and cannot read secrets.
 
 The server speaks stdio and uses the identity of the client you enrolled with `cf connect`, so it needs a connected machine. You normally do not run it yourself; the tool starts it.
 
@@ -14,7 +14,7 @@ cf mcp install --claude
 cf mcp install --codex
 ```
 
-Each command registers the server with the CLI of that tool (`claude mcp add`, `codex mcp add`), so `claude` or `codex` must be on your `PATH`; if it is not, the command fails before writing anything. It also writes the `codefabric` skill, which tells the model when to use CodeFabric and how. The command is idempotent: running it again replaces the registration and leaves a skill that is already current alone.
+Each command registers the server with the CLI of that tool (`claude mcp add`, `codex mcp add`), so `claude` or `codex` must be on your `PATH`; if it is not, the command fails before writing anything. It also writes the `codefabric` skill, which tells the model when to use Code Flock and how. The command is idempotent: running it again replaces the registration and leaves a skill that is already current alone.
 
 | Flag | Meaning |
 | --- | --- |
@@ -68,7 +68,7 @@ A profile is fixed when the server starts. A tool outside the profile is not lis
 
 Every `events_wait` answer carries a `cursor`. Passing it as `after_cursor` in the next call means no event is lost between calls. Taking the first cursor before `tasks_create` closes the gap at the start: without `after_cursor` the wait starts from now, and an event emitted between `tasks_create` and that call would be missed. After a wait that returns no events, the model reads `tasks_get` once, in case the Task already finished, and waits again. A cursor older than the retention window fails with `CF_CURSOR_EXPIRED`.
 
-To try it, ask the model something like: "Run the tests of this repository on CodeFabric and tell me what fails." To see the needs-input step, ask the model to create the Task with `permissions: ask` and answer what it asks; see [Getting started](../getting-started/).
+To try it, ask the model something like: "Run the tests of this repository on Code Flock and tell me what fails." To see the needs-input step, ask the model to create the Task with `permissions: ask` and answer what it asks; see [Getting started](../getting-started/).
 
 ## request_id
 

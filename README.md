@@ -1,10 +1,10 @@
-# CodeFabric
+# Code Flock
 
-CodeFabric (`cf`) is a local-first control plane for running, moving, observing and comparing coding agents (Claude Code, Codex CLI, …) across a dynamic pool of machines.
+Code Flock (`cf`) is a local-first control plane for running, moving, observing and comparing coding agents (Claude Code, Codex CLI, …) across a dynamic pool of machines.
 
-> *Tasks belong to CodeFabric; Runs happen on Workers.*
+> *Tasks belong to Code Flock; Runs happen on Workers.*
 
-You think in **Projects → Tasks → Results**. CodeFabric takes care of **Workers → Workflows → Harnesses → Models → Logs → Scheduling**.
+You think in **Projects → Tasks → Results**. Code Flock takes care of **Workers → Workflows → Harnesses → Models → Logs → Scheduling**.
 
 ## Status
 

@@ -8,7 +8,7 @@ This page takes you from nothing to a Task running on a Worker. It assumes a Git
 ## Install
 
 ```sh
-curl -fsSL https://github.com/Autarquico/codefabric/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | sh
 ```
 
 The installer puts `cf` in `~/.local/bin`. Two variables change that:
@@ -19,7 +19,7 @@ The installer puts `cf` in `~/.local/bin`. Two variables change that:
 | `CF_INSTALL_DIR` | Where to put `cf`. Default: `~/.local/bin`. |
 
 ```sh
-curl -fsSL https://github.com/Autarquico/codefabric/releases/latest/download/install.sh | CF_VERSION=v0.2.0 CF_INSTALL_DIR=/usr/local/bin sh
+curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | CF_VERSION=v0.2.0 CF_INSTALL_DIR=/usr/local/bin sh
 ```
 
 Supported platforms: Linux (amd64, arm64) and macOS on Apple silicon (arm64). Anything else is refused before downloading.
@@ -102,7 +102,7 @@ Load it with `sudo launchctl bootstrap system /Library/LaunchDaemons/com.codefab
 
 ## Connect another machine as a client
 
-To use CodeFabric from a machine that is not the Controller:
+To use Code Flock from a machine that is not the Controller:
 
 ```sh
 cf controller token create --client      # on the Controller
