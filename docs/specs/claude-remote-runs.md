@@ -1,13 +1,13 @@
 ---
 codename: codefabric
-title: "Los Runs remotos en Claude Code"
+title: Los Runs remotos en Claude Code
 type: task
-status: draft
+status: active
 priority: P2
 size: M
 issue: null
 prs: []
-related_issues: []
+related_issues: [180]
 depends_on: [claude-handto]
 supersedes: []
 related_specs: [live-attach, claude-handto]
