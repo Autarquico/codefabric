@@ -71,6 +71,8 @@ cf worker run
 
 or install it as a service with `cf worker install-service` (systemd user service or launchd).
 
+On macOS the launchd agent lives in the session of the logged-in user: over SSH, on a Mac nobody is logged in to, `install-service` fails. There, run the Worker as a LaunchDaemon with `UserName` set to your user, so it starts at boot. Restart it with `sudo launchctl kickstart -k system/<label>`; stopping the process with a signal does not bring it back.
+
 ## Connect another machine as a client
 
 To use CodeFabric from a machine that is not the Controller:
@@ -163,7 +165,7 @@ A Run asks for 2 CPUs and 4 GB by default. A Worker that offers less never takes
 cf project set <project> --cpu 2 --memory-mb 2048
 ```
 
-**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on, then on each such Worker:
+**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on. It prints more than the token: keep only the line that starts with `sk-ant-oat`. Then on each such Worker:
 
 ```sh
 cf worker secrets set claude/oauth-token
@@ -222,6 +224,14 @@ The branch is the one the Task started from if the checkpoint contains it, and `
 If the Worker of the Run is down, `cf task pull --defer` cannot get a checkpoint: it says so, and that the Run becomes lost when its lease expires, after which `cf task pull <task>` brings the last checkpoint it published.
 
 [The CLI reference](../cli/) has every flag of these commands.
+
+## Coming next
+
+These are specified and not built yet:
+
+- **Step inside a Run from the TUI.** A live view of each Run, and a key to enter it and leave it that is not the key of tmux, so it works with the TUI inside tmux. The session travels through the Controller, so `cf attach` will no longer need SSH to the Worker. Several people can type at once; the TUI shows who else is in, and `--read-only` stays.
+- **`cf shell <run>`.** A shell in the Run's worktree. Off by default, turned on by policy; every entry is recorded.
+- **Remote Runs in Claude Code.** The Workers and Runs of the pool listed from Claude Code, marked as remote, and entered from there. `cf claude install` will set it up.
 
 ## What is tested, and what is not
 
