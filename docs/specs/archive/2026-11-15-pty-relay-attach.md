@@ -1,8 +1,8 @@
 ---
 codename: codefabric
-title: "Attach por relay de PTY"
+title: Attach por relay de PTY
 type: task
-status: draft
+status: abandoned
 priority: P2
 size: M
 issue: null
@@ -13,7 +13,9 @@ depends_on: [observe-attach-events]
 supersedes: []
 related_specs: [codefabric-spec, phase-10-elastic]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-11-15
+abandoned_at: 2026-11-15
+abandoned_reason: "Absorbida por live-attach (#179)"
 ---
 
 # Attach por relay de PTY
