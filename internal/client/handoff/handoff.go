@@ -187,9 +187,10 @@ func create(ctx context.Context, c Controller, state session.State, ref session.
 			return v1.Task{}, "", "", err
 		}
 		// A session freed from a Task that ended gives the name that Task keeps: the new
-		// one takes a suffix of its request.
+		// one takes a suffix of its request. Records unlinked before Released existed
+		// show the same as a seed without a Task.
 		requestID, name := newRequestID(), TaskName(last, ref.ID)
-		if rec.Released != "" {
+		if rec.Released != "" || (rec.Task == "" && rec.Seed != "") {
 			name += "-" + requestID[len(requestID)-4:]
 		}
 		p = &session.Pending{

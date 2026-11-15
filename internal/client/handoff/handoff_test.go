@@ -396,6 +396,24 @@ func TestScenario_HandtoAfterTheTaskWasCancelled(t *testing.T) {
 	}
 }
 
+// A record unlinked before Released existed has a seed and no Task: the cancelled Task
+// still keeps its name, so the new one must not take it.
+func TestScenario_HandtoFromALegacyUnlinkedRecord(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"))
+	dir := t.TempDir()
+	local.State = session.NewState(dir)
+	legacy := `{"seed":"` + strings.Repeat("d", 64) + `"}`
+	if err := os.WriteFile(filepath.Join(dir, sessionID+".json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Do(t.Context(), c, local, request("w")); err != nil {
+		t.Fatal(err)
+	}
+	if want := TaskName("fix the login redirect, please", sessionID); c.created[0].Name == want {
+		t.Errorf("the new Task takes the name the cancelled one keeps: %s", want)
+	}
+}
+
 // The Task of the second handoff ended too: the third takes a name that neither of
 // the two Tasks that were freed keeps.
 func TestScenario_HandtoAfterEachTaskEnded(t *testing.T) {
