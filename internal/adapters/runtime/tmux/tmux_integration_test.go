@@ -141,7 +141,7 @@ func TestCaptureAndGate(t *testing.T) {
 	dir := t.TempDir()
 	gate, capture := filepath.Join(dir, "ready"), filepath.Join(dir, "output.log")
 	// The command waits for the gate, as the wrapper does, and then prints.
-	script := `while [ ! -e ` + gate + ` ]; do sleep 0.05; done; echo first-line; echo second-line`
+	script := `while [ ! -e ` + gate + ` ]; do sleep 0.05; done; echo first-line; echo second-line; exec sleep 60`
 	h, err := r.Start(t.Context(), cfruntime.Spec{
 		Name: cfruntime.NameFor("run_d", 1), Dir: dir, Command: sh(script), Capture: capture, Ready: gate,
 	})
@@ -153,12 +153,18 @@ func TestCaptureAndGate(t *testing.T) {
 		return strings.Contains(string(raw), "first-line") && strings.Contains(string(raw), "second-line")
 	})
 	// Adopting the session wires nothing twice: no duplicate output.
-	if _, err := r.Start(t.Context(), cfruntime.Spec{
+	again, err := r.Start(t.Context(), cfruntime.Spec{
 		Name: cfruntime.NameFor("run_d", 1), Dir: dir, Command: sh(script), Capture: capture, Ready: gate,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	_ = h
+	if again != h {
+		t.Errorf("the second Start returned %+v, want the adopted session %+v", again, h)
+	}
+	if st, err := r.Status(t.Context(), h); err != nil || !st.Alive {
+		t.Errorf("the adopted session = %+v, %v", st, err)
+	}
 	raw, _ := readFile(capture)
 	if strings.Count(string(raw), "first-line") != 1 {
 		t.Errorf("captured %q", raw)
