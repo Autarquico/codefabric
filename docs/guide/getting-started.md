@@ -57,9 +57,9 @@ Every Worker and client dials the Controller at its advertised address (port 744
 cf controller init --advertise <controller>.<tailnet>.ts.net:7443 --listen <tailnet-ip>:7443
 ```
 
-Without `--listen` the Controller listens on every interface (`0.0.0.0:7443`); on a machine with a public address, keep that port closed with a firewall.
+Without `--listen` the Controller listens on every interface, on the advertised port (`0.0.0.0:7443` by default); on a machine with a public address, keep that port closed with a firewall.
 
-Tailscale only carries the traffic. The Controller's API still authenticates every Worker and client with its own certificates (mutual TLS), inside the tailnet too. The ssh to a Worker is ordinary OpenSSH, with its own keys.
+Tailscale only carries the traffic. The Controller's API still authenticates every Worker and client with its own certificates (mutual TLS), inside the tailnet too. `cf attach` uses the OpenSSH client: plain ssh authenticates with your keys, Tailscale SSH with your tailnet identity and its policy.
 
 If you use Tailscale SSH in `check` mode, it asks for a login in the browser from time to time. Until you do, the ssh check of `cf doctor` warns that it cannot reach that Worker, and `cf attach` waits for that login.
 
