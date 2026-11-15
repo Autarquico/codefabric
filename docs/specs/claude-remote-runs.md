@@ -5,7 +5,7 @@ type: task
 status: active
 priority: P2
 size: M
-issue: null
+issue: 180
 prs: []
 related_issues: [180]
 depends_on: [claude-handto]

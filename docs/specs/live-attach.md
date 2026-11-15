@@ -5,7 +5,7 @@ type: task
 status: active
 priority: P1
 size: L
-issue: null
+issue: 179
 prs: []
 related_issues: [179]
 depends_on: [observe-attach-events, tui-views-actions]
