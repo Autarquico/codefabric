@@ -76,8 +76,9 @@ const notVerified = [
 		<main id="main">
 			<section class="hero" aria-labelledby="hero-title">
 				<p class="badge">{version ? `Release ${version}` : 'Unreleased build'} · early development</p>
-				<h1 id="hero-title">Your agents, on <em>your</em> machines.</h1>
-				<p class="lead">Code Flock runs coding agents (Claude Code, Codex CLI) across a pool of your own machines. You think in Projects and Tasks; it picks the Worker, runs the agent and publishes each Run as a branch.</p>
+				<p class="eyebrow">Code Flock / Local-first agent orchestration</p>
+				<h1 id="hero-title"><span>Your coding agents.</span> <span>Your machines.</span> <em>Your control.</em></h1>
+				<p class="lead">Run Claude Code and Codex across your own fleet. Keep tasks alive, isolate every run, and ship results as branches you review and merge.</p>
 				<div class="actions">
 					<a class="button primary" href={routeFor('getting-started')}>Read the docs</a>
 					<a class="button" href={REPO_URL}>View on GitHub</a>
@@ -267,7 +268,11 @@ const notVerified = [
 	}
 	h1 {
 		font-size: clamp(2.375rem, 7vw, 3.75rem);
-		max-width: 16ch;
+		max-width: 20ch;
+	}
+	h1 span,
+	h1 em {
+		display: block;
 	}
 	h1 em {
 		font-style: italic;
@@ -284,6 +289,14 @@ const notVerified = [
 	code {
 		font-family: var(--cf-font-mono);
 		font-size: 0.9em;
+	}
+	.eyebrow {
+		margin: 0 0 var(--cf-space-3);
+		font-family: var(--cf-font-mono);
+		font-size: var(--sl-text-sm);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--cf-text-muted);
 	}
 	.badge {
 		display: inline-block;
