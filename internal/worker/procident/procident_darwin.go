@@ -3,7 +3,10 @@ package procident
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -26,10 +29,60 @@ func startOf(pid int) (string, error) {
 	return fmt.Sprintf("%d.%06d", t.Sec, t.Usec), nil
 }
 
-func bootOf() (string, error) {
-	t, err := unix.SysctlTimeval("kern.boottime")
-	if err != nil {
-		return "", err
+// bootOf is the boot session uuid. kern.boottime is not an identity of the boot:
+// macOS moves it by milliseconds when it adjusts the clock.
+func bootOf() (string, error) { return unix.Sysctl("kern.bootsessionuuid") }
+
+// bootDrift is how far kern.boottime may move within one boot: the clock
+// adjustments seen move it by milliseconds. A boot within it is only likely
+// this one, so a wide margin authorizes no signal.
+const bootDrift = 5 * time.Second
+
+// sameBoot compares a recorded boot with this one. A token of the earlier
+// format, kern.boottime, is at most likely this boot: the wall clock it comes
+// from can be corrected across a reboot.
+func sameBoot(recorded string) (bootMatch, error) {
+	if strings.Contains(recorded, ".") {
+		legacy, ok := parseBootTime(recorded)
+		if !ok {
+			return otherBoot, fmt.Errorf("procident: %q is not a boot of this platform", recorded)
+		}
+		now, err := unix.SysctlTimeval("kern.boottime")
+		if err != nil {
+			return otherBoot, err
+		}
+		if withinDrift(legacy, time.Unix(now.Unix())) {
+			return likelyBoot, nil
+		}
+		return otherBoot, nil
 	}
-	return fmt.Sprintf("%d.%06d", t.Sec, t.Usec), nil
+	now, err := bootOf()
+	if err != nil || recorded != now {
+		return otherBoot, err
+	}
+	return thisBoot, nil
+}
+
+// parseBootTime reads a boot token of the earlier format, kern.boottime as
+// "sec.usec" with six digits of microseconds, which wrappers started before the
+// uuid still carry.
+func parseBootTime(token string) (time.Time, bool) {
+	sec, usec, ok := strings.Cut(token, ".")
+	if !ok || !digits(sec) || len(usec) != 6 || !digits(usec) {
+		return time.Time{}, false
+	}
+	s, errS := strconv.ParseInt(sec, 10, 64)
+	u, errU := strconv.ParseInt(usec, 10, 64)
+	if errS != nil || errU != nil || s == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(s, u*int64(time.Microsecond)), true
+}
+
+func digits(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
+func withinDrift(recorded, now time.Time) bool {
+	return now.Sub(recorded).Abs() <= bootDrift
 }

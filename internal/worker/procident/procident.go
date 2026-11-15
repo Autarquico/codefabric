@@ -27,15 +27,29 @@ const (
 	Different
 	// Unknown: the platform or the system would not say, or there is no usable token.
 	Unknown
-	// Rebooted: the token is of another boot of the machine. No process survives
-	// a reboot, so the process is gone and, whoever has the pid now, nothing in
-	// the machine is its group: nothing may be signalled on its account.
+	// Rebooted: the token is of another boot of the machine, or of a boot that
+	// cannot be told apart from this one and the process is not there. No process
+	// survives a reboot, so the process is gone and, whoever has the pid now,
+	// nothing in the machine is its group: nothing may be signalled on its account.
 	Rebooted
 )
 
 func (v Verdict) String() string {
 	return [...]string{"gone", "same", "different", "unknown", "rebooted"}[v]
 }
+
+// bootMatch is how a recorded boot compares with the boot of now.
+type bootMatch int
+
+const (
+	// thisBoot: the recorded boot is this one.
+	thisBoot bootMatch = iota
+	// otherBoot: the recorded boot is another one.
+	otherBoot
+	// likelyBoot: the recorded boot cannot be told apart from this one, but is
+	// not known to be it.
+	likelyBoot
+)
 
 // ErrUnverifiable is returned where the platform has no way to read when a
 // process started.
@@ -68,14 +82,22 @@ func Verify(pid int, token string) Verdict {
 	if !ok || boot == "" || start == "" {
 		return Unknown
 	}
-	now, err := bootOf()
+	match, err := sameBoot(boot)
 	if err != nil {
 		return Unknown
 	}
-	if now != boot {
+	if match == otherBoot {
 		return Rebooted
 	}
 	current, err := startOf(pid)
+	if match == likelyBoot && (err != nil || current != start) {
+		if err != nil && !errors.Is(err, ErrGone) {
+			return Unknown
+		}
+		// A boot that is only likely this one says nothing about a process that
+		// is not there: nothing may be signalled on its account.
+		return Rebooted
+	}
 	switch {
 	case errors.Is(err, ErrGone):
 		return Gone
