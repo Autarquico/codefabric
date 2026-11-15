@@ -25,7 +25,7 @@ Open the live session of a Run in this terminal, over ssh: `cf attach <task|run>
 
 ## `cf claude`
 
-Install into Claude Code what cf needs there: the `/handto` skill, which hands the session you are in over to a Worker (`/handto <worker>`), and the `/workers` skill, which lists the Workers that can take it (`online` or `degraded`). The skills are embedded in the binary and carries the version of the `cf` that wrote it.
+Install into Claude Code what cf needs there: the `/handto` skill, which hands the session you are in over to a Worker (`/handto <worker>`), and the `/workers` skill, which lists the Workers that can take it (`online` or `degraded`). The skills are embedded in the binary and carry the version of the `cf` that wrote them.
 
 - `cf claude install [--scope user|project] [--force] [--dry-run]`: write them to `~/.claude/skills/handto/SKILL.md` and `~/.claude/skills/workers/SKILL.md` (`--scope project`: `.claude/skills/` of the repository). Idempotent: the same version changes nothing and another version updates it. A `handto` skill that cf did not write is not overwritten without `--force`.
 - `cf claude uninstall [--scope user|project]`: remove the skills that cf wrote. One it did not write stays.

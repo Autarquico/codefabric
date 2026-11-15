@@ -79,7 +79,7 @@ func TestWorkerTransitions_RegisteringDecidesOnlineOrDegradedByVersion(t *testin
 }
 
 func TestWorkerTransitions_RegisteringHappensOnlyFromJoining(t *testing.T) {
-	for _, state := range append(liveWorkerStates[1:], WorkerOffline, WorkerRemoved) {
+	for _, state := range WorkerStates[1:] {
 		cur := WorkerStatus{State: state}
 		if state == WorkerOffline {
 			cur.BeforeOffline = WorkerOnline

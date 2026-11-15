@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -81,6 +82,7 @@ type SkillStatus struct {
 	Action  string `json:"action,omitempty"`
 	Version string `json:"version,omitempty"` // of the cf that wrote it, when it carries one
 	DryRun  bool   `json:"dry_run,omitempty"`
+	Reason  string `json:"reason,omitempty"` // why it was skipped
 }
 
 // skillMarkerVersion is the cf version in the marker, which sits on the line
@@ -146,7 +148,8 @@ func classifySkill(k skillKind, scope, base, version string, want []byte) (Skill
 }
 
 // installSkill writes the skill. It does nothing when it is current, updates
-// one written by another cf and refuses one that cf did not write unless force.
+// one written by another cf and refuses one that cf did not write unless force:
+// then the status comes back as skipped together with the error.
 func installSkill(k skillKind, scope, base, version string, force, dryRun bool) (SkillStatus, error) {
 	want, err := renderSkill(k, version)
 	if err != nil {
@@ -163,8 +166,9 @@ func installSkill(k skillKind, scope, base, version string, force, dryRun bool) 
 		return s, nil
 	case skillForeign:
 		if !force {
-			return SkillStatus{}, domain.NewError(domain.CodeConfirmationRequired,
-				fmt.Sprintf("%s is a skill named %s that cf did not write; use --force to replace it", s.Path, k.name), nil)
+			s.Action = "skipped"
+			s.Reason = fmt.Sprintf("%s is a skill named %s that cf did not write; use --force to replace it", s.Path, k.name)
+			return s, domain.NewError(domain.CodeConfirmationRequired, s.Reason, nil)
 		}
 		s.Action = "replaced"
 	case skillOutdated:
@@ -204,24 +208,32 @@ func uninstallSkill(k skillKind, scope, base string) (SkillStatus, error) {
 	return s, nil
 }
 
-// InstallUserHandtoSkill is what `cf setup` offers a client: the skills of Claude Code
-// under the home of the user, and the path of the handto one. A skill that cf did not
-// write is left alone.
-func InstallUserHandtoSkill() (path string, err error) {
+// InstallUserSkills is what `cf setup` offers a client: the skills of Claude Code under
+// the home of the user. A skill that cf did not write is left alone. Every skill is tried;
+// the statuses say what happened to each and the error is the first one that occurred.
+func InstallUserSkills() ([]SkillStatus, error) {
 	base, err := scopeBase("user")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	for _, k := range claudeSkills {
-		s, err := installSkill(k, "user", base, buildinfo.Get().Version, false, false)
-		if err != nil {
-			return "", err
+	return installEach(claudeSkills, "user", base, false, false)
+}
+
+// installEach installs every skill even when one fails, and returns the statuses
+// of the ones that have one together with the first error.
+func installEach(skills []skillKind, scope, base string, force, dryRun bool) ([]SkillStatus, error) {
+	var first error
+	results := make([]SkillStatus, 0, len(skills))
+	for _, k := range skills {
+		s, err := installSkill(k, scope, base, buildinfo.Get().Version, force, dryRun)
+		if s.Name != "" {
+			results = append(results, s)
 		}
-		if k.name == claudeHandto.name {
-			path = s.Path
+		if err != nil && first == nil {
+			first = err
 		}
 	}
-	return path, nil
+	return results, first
 }
 
 // userSkill is the state of the skill under the home, or nil when it
@@ -245,9 +257,21 @@ func newCodexCmd() *cobra.Command  { return newSkillsCmd(codexSkills) }
 // skills of that harness, which share its command, label and directory.
 func newSkillsCmd(skills []skillKind) *cobra.Command {
 	h := skills[0]
-	cmd := &cobra.Command{Use: h.command, Short: "Install into " + h.label + " what cf needs there: the handto and workers skills"}
+	cmd := &cobra.Command{Use: h.command, Short: "Install into " + h.label + " what cf needs there: the " + skillNames(skills) + " skills"}
 	cmd.AddCommand(newSkillInstallCmd(skills), newSkillUninstallCmd(skills), newSkillStatusCmd(skills))
 	return cmd
+}
+
+// skillNames reads "handto and workers", "a, b and c".
+func skillNames(skills []skillKind) string {
+	names := make([]string, len(skills))
+	for i, k := range skills {
+		names[i] = k.name
+	}
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 func bindScope(cmd *cobra.Command, scope *string) {
@@ -269,28 +293,48 @@ func (k skillKind) invocation() string {
 }
 
 // forEachSkill applies one operation to each skill of a harness and emits the
-// results together, in the order of the skills. It stops at the first error.
-func forEachSkill(cmd *cobra.Command, skills []skillKind, scope string, do func(k skillKind, base string) (SkillStatus, error)) error {
+// results together, in the order of the skills. A skill that fails does not stop
+// the others; it is reported when it has a status, and the first error is returned
+// after the emission.
+func forEachSkill(cmd *cobra.Command, skills []skillKind, scope string, do func(skills []skillKind, base string) ([]SkillStatus, error)) error {
 	base, err := skills[0].base(scope)
 	if err != nil {
 		return err
 	}
-	results := make([]SkillStatus, 0, len(skills))
+	results, first := do(skills, base)
+	byName := make(map[string]skillKind, len(skills))
 	for _, k := range skills {
-		s, err := do(k, base)
-		if err != nil {
-			return err
-		}
-		results = append(results, s)
+		byName[k.name] = k
 	}
-	return emit(cmd, results, func(out io.Writer) error {
-		for i, s := range results {
-			if err := printSkill(out, skills[i], s); err != nil {
+	if err := emit(cmd, results, func(out io.Writer) error {
+		for _, s := range results {
+			if err := printSkill(out, byName[s.Name], s); err != nil {
 				return err
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	return first
+}
+
+// eachSkill lifts an operation on one skill to all of them, continuing after an error.
+func eachSkill(op func(k skillKind, base string) (SkillStatus, error)) func([]skillKind, string) ([]SkillStatus, error) {
+	return func(skills []skillKind, base string) ([]SkillStatus, error) {
+		var first error
+		results := make([]SkillStatus, 0, len(skills))
+		for _, k := range skills {
+			s, err := op(k, base)
+			if s.Name != "" {
+				results = append(results, s)
+			}
+			if err != nil && first == nil {
+				first = err
+			}
+		}
+		return results, first
+	}
 }
 
 func newSkillInstallCmd(skills []skillKind) *cobra.Command {
@@ -299,14 +343,14 @@ func newSkillInstallCmd(skills []skillKind) *cobra.Command {
 	var force, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "install [--scope user|project] [--force] [--dry-run]",
-		Short: "Write the handto and workers skills into " + filepath.ToSlash(filepath.Join("~", h.skillsDir)) + " (or the same directory of the repository)",
+		Short: "Write the " + skillNames(skills) + " skills into " + filepath.ToSlash(filepath.Join("~", h.skillsDir)) + " (or the same directory of the repository)",
 		Long: "Write the handto skill, which hands a " + h.label + " session over to a Worker by " + h.invocation() + ", and the workers skill, which lists the Workers that can take it.\n" +
 			"They carry the version of this cf: the same version changes nothing and another one updates them.\n" +
 			"A skill of those names that cf did not write is not overwritten without --force.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return forEachSkill(cmd, skills, scope, func(k skillKind, base string) (SkillStatus, error) {
-				return installSkill(k, scope, base, buildinfo.Get().Version, force, dryRun)
+			return forEachSkill(cmd, skills, scope, func(skills []skillKind, base string) ([]SkillStatus, error) {
+				return installEach(skills, scope, base, force, dryRun)
 			})
 		},
 	}
@@ -321,12 +365,12 @@ func newSkillUninstallCmd(skills []skillKind) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "uninstall [--scope user|project]",
 		Short: "Remove the skills that cf wrote",
-		Long:  "Remove the handto and workers skills. One that cf did not write stays where it is.",
+		Long:  "Remove the " + skillNames(skills) + " skills. One that cf did not write stays where it is.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return forEachSkill(cmd, skills, scope, func(k skillKind, base string) (SkillStatus, error) {
+			return forEachSkill(cmd, skills, scope, eachSkill(func(k skillKind, base string) (SkillStatus, error) {
 				return uninstallSkill(k, scope, base)
-			})
+			}))
 		},
 	}
 	bindScope(cmd, &scope)
@@ -340,9 +384,9 @@ func newSkillStatusCmd(skills []skillKind) *cobra.Command {
 		Short: "Say whether the skills are installed and of which version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return forEachSkill(cmd, skills, scope, func(k skillKind, base string) (SkillStatus, error) {
+			return forEachSkill(cmd, skills, scope, eachSkill(func(k skillKind, base string) (SkillStatus, error) {
 				return skillStatus(k, scope, base, buildinfo.Get().Version)
-			})
+			}))
 		},
 	}
 	bindScope(cmd, &scope)
@@ -357,12 +401,19 @@ func printSkill(out io.Writer, k skillKind, s SkillStatus) error {
 		if s.Version != "" {
 			verb += " (cf " + s.Version + ")"
 		}
-	case s.DryRun && s.Action != "unchanged":
+	case s.DryRun && s.Action != "unchanged" && s.Action != "skipped":
 		verb = "would be " + verb
 	}
 	_, err := fmt.Fprintf(out, "%s skill: %s  %s\n", k.name, verb, printable(s.Path))
-	if err != nil || s.Action != "" {
+	if err != nil {
 		return err
+	}
+	if s.Reason != "" {
+		_, err = fmt.Fprintln(out, s.Reason)
+		return err
+	}
+	if s.Action != "" {
+		return nil
 	}
 	switch s.State {
 	case skillOutdated:

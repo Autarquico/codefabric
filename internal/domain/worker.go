@@ -14,6 +14,11 @@ const (
 	WorkerRemoved  WorkerState = "removed"
 )
 
+// WorkerStates lists every Worker state.
+var WorkerStates = []WorkerState{
+	WorkerJoining, WorkerOnline, WorkerDegraded, WorkerDraining, WorkerDrained, WorkerOffline, WorkerRemoved,
+}
+
 // Reachable says whether the machine of a Worker in this state answers: the
 // ones that are neither offline nor removed. It is derived, never stored (§3.4).
 func (s WorkerState) Reachable() bool { return s != WorkerOffline && s != WorkerRemoved }

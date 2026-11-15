@@ -63,19 +63,14 @@ func newWorkerListCmd() *cobra.Command {
 	return cmd
 }
 
-var workerStates = []domain.WorkerState{
-	domain.WorkerJoining, domain.WorkerOnline, domain.WorkerDegraded,
-	domain.WorkerDraining, domain.WorkerDrained, domain.WorkerOffline, domain.WorkerRemoved,
-}
-
 // filterWorkersByState keeps the Workers in one of the states; none given keeps all.
 // The result is never nil, so that --json prints a list.
 func filterWorkersByState(workers []v1.Worker, states []string) ([]v1.Worker, error) {
 	kept := []v1.Worker{}
 	for _, s := range states {
-		if !slices.Contains(workerStates, domain.WorkerState(s)) {
+		if !slices.Contains(domain.WorkerStates, domain.WorkerState(s)) {
 			return nil, domain.NewError(domain.CodeInvalidRequest,
-				fmt.Sprintf("unknown Worker state %q; use one of %v", s, workerStates), nil)
+				fmt.Sprintf("unknown Worker state %q; use one of %v", s, domain.WorkerStates), nil)
 		}
 	}
 	for _, w := range workers {

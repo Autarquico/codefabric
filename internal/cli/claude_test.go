@@ -312,3 +312,51 @@ func TestDoctorSkill_WarnsWhenMissingOrStaleWithTheAction(t *testing.T) {
 		t.Error("an unknown state must not be reported")
 	}
 }
+
+func TestInstall_ForeignSkillDoesNotHideTheOthers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mine := "---\nname: workers\n---\nmy own skill\n"
+	foreign := skillPath(claudeWorkers, home)
+	if err := os.MkdirAll(filepath.Dir(foreign), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(foreign, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runClaude(t, "install")
+	if code == 0 || !strings.Contains(errOut, "did not write") {
+		t.Errorf("the refusal must fail the command: %d %q", code, errOut)
+	}
+	if !strings.Contains(out, "handto skill: created") || !strings.Contains(out, "workers skill: skipped") || !strings.Contains(out, "use --force") {
+		t.Errorf("each skill must be reported: %q", out)
+	}
+	if _, err := os.Stat(skillPath(claudeHandto, home)); err != nil {
+		t.Errorf("handto was not written: %v", err)
+	}
+	if b, _ := os.ReadFile(foreign); string(b) != mine {
+		t.Error("the foreign skill was overwritten")
+	}
+}
+
+func TestInstallUserSkills_ReportsWhatWasWrittenBesideTheRefusal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	foreign := skillPath(claudeWorkers, home)
+	if err := os.MkdirAll(filepath.Dir(foreign), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(foreign, []byte("---\nname: workers\n---\nmine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := InstallUserSkills()
+	if err == nil || len(got) != 2 || got[0].Action != "created" || got[1].Action != "skipped" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestSkillNames(t *testing.T) {
+	if got := skillNames(claudeSkills); got != "handto and workers" {
+		t.Errorf("got %q", got)
+	}
+}
