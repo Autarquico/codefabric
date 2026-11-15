@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: L
 issue: null
-prs: []
+prs: [196]
 related_issues: [195]
 depends_on: []
 supersedes: []
