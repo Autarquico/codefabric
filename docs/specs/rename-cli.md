@@ -43,11 +43,14 @@ como contrato (códigos de error, keyring, config de repo, formato de backup) se
   - launchd: `com.codefabric.worker` y `com.codefabric.controller` pasan a `com.codeflock.worker` y `com.codeflock.controller`.
   - `cof worker install-service` y `cof controller install-service` son los únicos que migran los directorios en
     una máquina con servicio. Lo hacen en este orden: paran y quitan la unidad antigua, mueven los directorios,
-    escriben la unidad nueva con las rutas `COF_*` y el mismo `TMUX_TMPDIR`, arrancan, y comprueban que el socket
-    de tmux de los Runs no ha cambiado.
+    escriben la unidad nueva con las rutas `COF_*` y el mismo `TMUX_TMPDIR`, y arrancan.
+  - El nombre del socket de tmux se deriva del directorio de datos (`tmux.SocketName`), así que cambia con la
+    migración y los Runs vivos no se podrían adoptar. Por eso la migración de un Worker exige que no tenga Runs
+    vivos: si los tiene, no cambia nada y pide `cof worker drain` y esperar a que terminen.
 - **Paquetes.**
   - El tarball lleva `cof` y un `cf` de transición.
-  - `install.sh` sustituye por el de transición un `cf` que sea de Code Flock, porque `cf version` lo identifica.
+  - `install.sh` sustituye por el de transición un `cf` que sea de Code Flock, es decir, uno cuya salida de
+    `cf version --json` sea la de Code Flock.
     Otro `cf` no lo toca, y lo dice.
   - La fórmula de Homebrew pasa a llamarse `codeflock` e instala solo `cof`, sin el de transición porque choca con
     `cf-cli`. `codefabric` queda como alias o como fórmula obsoleta que apunta a `codeflock`.
@@ -89,12 +92,18 @@ como contrato (códigos de error, keyring, config de repo, formato de backup) se
 - **Then** se instala `codeflock` con `cof`, y el `cf` antiguo de la fórmula desaparece.
 
 ### Scenario: Actualizar un Worker con servicio de usuario
-- **Given** un Worker con `cf-worker` (systemd) o `com.codefabric.worker` en LaunchAgents, sus directorios `codefabric` y Runs vivos
+- **Given** un Worker con `cf-worker` (systemd) o `com.codefabric.worker` en LaunchAgents, sus directorios `codefabric` y sin Runs vivos
 - **When** se instala la versión nueva y se ejecuta `cof worker install-service`
 - **Then** el servicio antiguo se para y se quita, y los directorios se mueven
-- **And** el nuevo arranca con el mismo enrolamiento, Runs, journal y secretos
-- **And** los Runs vivos se adoptan
+- **And** el nuevo arranca con el mismo enrolamiento, historial de Runs, journal y secretos
 - **And** `cof worker list` lo ve online con la versión nueva.
+
+### Scenario: Migrar un Worker con Runs vivos
+- **Given** un Worker con el servicio antiguo y Runs vivos
+- **When** se ejecuta `cof worker install-service`
+- **Then** no cambia nada, ni el servicio ni los directorios
+- **And** dice cuántos Runs vivos hay y pide `cof worker drain` y esperar a que terminen
+- **And** sale con error.
 
 ### Scenario: Actualizar un Controller
 - **Given** un Controller con `cf-controller` o `com.codefabric.controller`
@@ -104,7 +113,7 @@ como contrato (códigos de error, keyring, config de repo, formato de backup) se
 
 ### Scenario: Worker con un LaunchDaemon del sistema
 - **Given** `/Library/LaunchDaemons/com.codefabric.worker.plist` instalado
-- **When** se ejecuta `cof worker install-service` sin ser root
+- **When** se ejecuta `cof worker install-service`, como el usuario o como root, porque `install-service` no gestiona LaunchDaemons
 - **Then** no cambia nada, ni el servicio ni los directorios
 - **And** imprime los comandos exactos con sudo (bootout del antiguo, mover los directorios, bootstrap del plist nuevo)
 - **And** sale con error.
@@ -165,8 +174,9 @@ como contrato (códigos de error, keyring, config de repo, formato de backup) se
 
 ## Notas técnicas / riesgos
 
-- **Medido en main (6a2d8b9):** unos 200 ficheros que no son Go contienen comandos `cf …`. 931 ficheros Go
-  contienen `codefabric`, en su mayoría por la ruta del módulo, que no entra aquí.
+- **Volumen:** `git grep -l -E '\bcf (do|ps|attach|worker|run|task|claude|setup)\b' -- ':!*.go' | wc -l` da
+  la cuenta de ficheros que no son Go con comandos `cf …`, y `git grep -l codefabric -- '*.go'` la de los Go,
+  que nombran `codefabric` sobre todo por la ruta del módulo. Se miden al empezar T1.
 - **Variables que lee el código hoy:** `CF_CONFIG_DIR` y `CF_DATA_DIR` (`internal/config/paths.go:107,111`), y
   `CF_VERSION`, `CF_INSTALL_DIR` y `CF_RELEASE_BASE_URL` (`install.sh`). `CF_HOME` y `CF_TOKEN` no existen.
 - **Nombres de servicio:** `internal/worker/daemon/service.go:164` y `internal/controller/daemon/service.go:27`.
