@@ -171,13 +171,27 @@ Free          %s
 Health        %s
 Journal       %s
 Capabilities  %s
+SSH target    %s
 Last seen     %s
 Created       %s
 `, w.ID, w.Short, w.Name, stateOf(w), dash(w.Hostname), dash(w.OS), dash(w.Arch), dash(w.DaemonVersion), compatible,
 		dash(w.Epoch), w.Availability, w.ActiveRuns, w.MaxConcurrentRuns,
 		capacityOf(w.Resources.Total), capacityOf(w.Resources.Allocatable), capacityOf(w.Resources.Free),
-		healthOf(w.Health), journalOf(w), dash(strings.Join(w.Capabilities, ", ")), lastSeen(w), local(w.CreatedAt))
+		healthOf(w.Health), journalOf(w), dash(strings.Join(w.Capabilities, ", ")), sshTargetOf(w), lastSeen(w), local(w.CreatedAt))
 	return err
+}
+
+// guessedSSHTarget says whether the target a Worker announced is the one it
+// makes up, <user>@<hostname>, rather than one it was given with --ssh-target.
+func guessedSSHTarget(w v1.Worker) bool {
+	return w.SSHTarget != "" && w.Hostname != "" && strings.HasSuffix(w.SSHTarget, "@"+w.Hostname)
+}
+
+func sshTargetOf(w v1.Worker) string {
+	if guessedSSHTarget(w) {
+		return w.SSHTarget + " (guessed from the hostname; set --ssh-target on `cf worker run` if other machines cannot reach it)"
+	}
+	return dash(w.SSHTarget)
 }
 
 // journalOf is the backlog the Worker last reported and when it last discarded logs or output.

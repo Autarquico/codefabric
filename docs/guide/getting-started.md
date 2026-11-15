@@ -71,7 +71,7 @@ cf worker run
 
 or install it as a service with `cf worker install-service` (systemd user service or launchd).
 
-On macOS `install-service` installs a launchd agent of your user. With nobody logged in it goes into the `user/<uid>` domain, with a warning: it runs, but after a restart launchd does not load it again until you log in. Over SSH, while you are logged in at the screen, it can fail with `exit status 125`. For a Worker that starts at boot without a login, run it as a LaunchDaemon in `/Library/LaunchDaemons/com.codefabric.worker.plist` (owned by `root:wheel`, mode 644). Keep `AbandonProcessGroup`: without it, restarting the daemon kills the tmux sessions of its Runs.
+On macOS `install-service` installs a launchd agent of your user. With nobody logged in it goes into the `user/<uid>` domain, with a warning: it runs, but after a restart launchd does not load it again until you log in. Over SSH, while someone is logged in at the screen, launchd refuses `gui/<uid>` with `exit status 125`: `install-service` then falls back to `user/<uid>` with the same warning. For a Worker that starts at boot without a login, run it as a LaunchDaemon in `/Library/LaunchDaemons/com.codefabric.worker.plist` (owned by `root:wheel`, mode 644). Keep `AbandonProcessGroup`: without it, restarting the daemon kills the tmux sessions of its Runs.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -192,7 +192,7 @@ A Run asks for 2 CPUs and 4 GB by default. A Worker that offers less never takes
 cf project set <project> --cpu 2 --memory-mb 2048
 ```
 
-**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on. It prints more than the token: keep only the line that starts with `sk-ant-oat`. Then on each such Worker:
+**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on. It prints more than the token. Then on each such Worker, paste it all: `cf` keeps the line that starts with `sk-ant-oat` and says so.
 
 ```sh
 cf worker secrets set claude/oauth-token

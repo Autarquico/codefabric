@@ -211,7 +211,8 @@ Run and administer Workers.
 - `join <invitation | ->`: enrol this machine as a Worker, with a wizard in a terminal. Flags include `--name`, `--max-concurrent`, `--cpu-max`, `--memory-max`, `--disk-max`, `--availability always|idle|manual`, `--resume`, `--non-interactive` and `--yes`.
 - `run`: run the Worker daemon until interrupted.
 - `doctor`: check this machine as a Worker: tmux, git, disk, harnesses and their logins.
-- `list`, `show`: Workers with their resources and version.
+- `config show`, `config set disk-min-free <20%|50GiB>`: print the settings that stay on this machine, or change the free disk below which the doctor fails, keeping the others.
+- `list`, `show`: Workers with their resources and version; `show` also gives the ssh target the Worker announced, and says when it is a guess from the hostname (set `--ssh-target` on `cf worker run`).
 - `drain`, `undrain`: stop a Worker from taking new Runs, or let it take them again. `drain --move` also moves each Task that runs on the Worker (`cf task move`, the scheduler chooses where); Tasks that cannot be moved are listed with why; a Run still being prepared is one of them: run `drain --move` again once it has started. `drain --force` suspends the Runs it can checkpoint and cancels the rest, after asking each a checkpoint (see [Automatic checkpoints](#automatic-checkpoints)); it asks you to confirm, or takes `--yes`, and cannot be combined with `--move`.
 - `remove`: remove a Worker and revoke its credentials (only without active Runs).
 - `secrets`: manage the secrets this Worker holds for Runs.

@@ -175,7 +175,7 @@ func (m launchd) apply(o *op, s Spec, changed bool) error {
 		}
 	}
 	if len(loaded) == 0 {
-		return o.act("launchctl", "bootstrap", domain, path)
+		return m.bootstrapFresh(o, domain, s)
 	}
 	switch {
 	case changed:
@@ -188,6 +188,24 @@ func (m launchd) apply(o *op, s Spec, changed bool) error {
 	}
 	return nil
 }
+
+// bootstrapFresh loads a new agent. Over ssh, while someone is logged in at the
+// console, launchd refuses the graphical domain with exit status 125 even
+// though it exists: the agent goes into the user domain then.
+func (m launchd) bootstrapFresh(o *op, domain string, s Spec) error {
+	err := o.act("launchctl", "bootstrap", domain, m.path(s))
+	var failed *CommandError
+	if domain != m.gui() || !errors.As(err, &failed) || failed.Code != launchdDomainRefused {
+		return err
+	}
+	o.warn("launchd refuses the graphical session of this user from this shell (an ssh session while someone is logged in at the console): the agent goes into %s, and launchd does not load it again after a restart until the user logs in", m.user())
+	o.res.Unit = m.user() + "/" + s.Label
+	return o.act("launchctl", "bootstrap", m.user(), m.path(s))
+}
+
+// launchdDomainRefused is what launchctl bootstrap exits with when it cannot
+// enter the domain from this session.
+const launchdDomainRefused = 125
 
 func (m launchd) uninstall(o *op, s Spec) error {
 	path := m.path(s)
