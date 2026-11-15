@@ -29,19 +29,27 @@ Owner previsto en el bucle Develop: backend-eng.
 
 **Entra:**
 - Ver desde Claude Code los Workers y sus Runs interactivos, marcados como remotos (Worker, estado, Task).
-- Desde esa lista, entrar en un Run remoto (lo que hoy es `cf attach`) y volver.
+- Desde esa lista, el comando exacto para entrar en un Run remoto (`cf attach <task>`), que se abre en otra
+  terminal.
+- Un segmento de la status line de Claude Code con los Runs remotos vivos (opcional al instalar).
 - Instalado por `cf claude install`, como la skill `handto`.
 
 **No entra:**
 - Cambiar Claude Code: solo se usan sus puntos de extensión.
 - Codex (después, si su CLI ofrece algo equivalente).
+- Entrar en el Run desde dentro de Claude Code: ninguna extensión documentada le cede la terminal a otro
+  programa y vuelve (ver Decisiones). Un panel (mod) de Claude Code queda como exploración posterior.
+
+## Decisiones
+
+- Enmienda 2026-11-15. Comprobado en la documentación de Claude Code: no hay punto de extensión que añada
+  filas a su lista de sesiones (`/resume`, `claude agents`); una skill o un comando `!` capturan la salida
+  y no ceden la TTY; la status line ejecuta un comando local y se refresca (`refreshInterval`). Por eso el
+  scope es una skill que lista y una línea de estado, y entrar se hace con `cf attach` en otra terminal.
 
 ## Preguntas abiertas
 
-- **Punto de extensión.** Sin verificar qué ofrece Claude Code para esto: una skill o comando que liste
-  (mínimo), un panel o status line que se actualice, o integrarse con su lista de sesiones. Es lo primero
-  del plan; si solo cabe una skill, el scope se reduce a listar y dar el comando de attach.
-- Entrar desde Claude Code depende de `live-attach` si debe funcionar sin SSH.
+- `cf attach` sin SSH depende de `live-attach`.
 
 ## Criterios de aceptación
 
@@ -56,7 +64,8 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ### Scenario: Entrar en un remoto
 - **Given** la lista con un Run remoto
 - **When** se elige entrar
-- **Then** se abre ese Run como con `cf attach`, y al salir se vuelve a Claude Code
+- **Then** la skill da el comando exacto (`cf attach <task>`) y ese comando, en otra terminal, abre el Run;
+  la sesión de Claude Code no se toca
 
 ### Scenario: Sin Controller
 - **Given** `cf` sin Controller alcanzable

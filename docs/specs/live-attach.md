@@ -62,6 +62,16 @@ Owner previsto en el bucle Develop: backend-eng (relay, Worker, API) y frontend-
   la gestión de claves por cliente y Worker.
 - La shell sobre un Worker cambia su modelo de seguridad (pasa a dar shells a quien la policy permita):
   por eso está desactivada por defecto y auditada.
+- Quién puede (enmienda 2026-11-15, tras la critique del plan): en v0.x todo cliente enrolado es una máquina
+  del owner. Ver y escribir en un Run: cualquier cliente. Shell: solo si la habilitan a la vez el Project
+  (`shell`) y el Worker (`allow_shell`, local, comprobado justo antes de lanzarla). Una identidad de Worker
+  nunca abre un attach. La shell tiene la autoridad del usuario del SO del Worker: el worktree no aísla.
+- Cada entrada es una cita de un solo uso, atada al cliente, al Worker, al Run, al epoch de su lease, al modo
+  (ver, escribir, shell) y a una caducidad. Un stream abierto se corta al revocar la identidad, al cambiar la
+  lease o al apagar el Controller.
+- SSH solo con `--ssh` explícito: sin vuelta automática a SSH si el Worker no ofrece el relay.
+- La salida es una tecla de `cf` (por defecto `ctrl+]`, configurable); el tmux de fuera tiene que dejarla
+  pasar, y la guía lo dice.
 
 ## Criterios de aceptación
 
