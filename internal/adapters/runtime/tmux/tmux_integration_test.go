@@ -141,7 +141,7 @@ func TestCaptureAndGate(t *testing.T) {
 	dir := t.TempDir()
 	gate, capture := filepath.Join(dir, "ready"), filepath.Join(dir, "output.log")
 	// The command waits for the gate, as the wrapper does, and then prints.
-	script := `while [ ! -e ` + gate + ` ]; do sleep 0.05; done; echo first-line; echo second-line`
+	script := `while [ ! -e ` + gate + ` ]; do sleep 0.05; done; echo first-line; echo second-line; exec sleep 60`
 	h, err := r.Start(t.Context(), cfruntime.Spec{
 		Name: cfruntime.NameFor("run_d", 1), Dir: dir, Command: sh(script), Capture: capture, Ready: gate,
 	})

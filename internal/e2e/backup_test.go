@@ -166,7 +166,7 @@ func TestScenario_Restore_OtherHostKeepsIdsAndDigestsAndWorkersOnlyChangeAddress
 	oldLogs := c.mustCF(c.Observer, "logs", "--run", before.ID).Stdout
 
 	file, _ := c.Backup("restore", "--passphrase-file", c.writePassphraseFile())
-	oldBlobs := fileDigests(t, c.Ctl.Paths.DataDir+"/blobs")
+	oldBlobs := backedUpBlobs(t, file) // not the live store: the sealer of the Controller may add a blob after the backup
 	if len(oldBlobs) == 0 {
 		t.Fatal("the Controller has no blob: the comparison of digests would prove nothing")
 	}
@@ -206,6 +206,20 @@ func TestScenario_Restore_OtherHostKeepsIdsAndDigestsAndWorkersOnlyChangeAddress
 	if got := c.Run(c.Observer, next.ID); got.ID != next.ID {
 		t.Errorf("run show %s = %s", next.ID, RunStage(got))
 	}
+}
+
+// backedUpBlobs are the SHA-256 of the blobs a backup holds, by path below the blob store.
+func backedUpBlobs(t *testing.T, file string) map[string]string {
+	t.Helper()
+	const prefix = "data/blobs/"
+	out := map[string]string{}
+	for name, raw := range backupContents(t, file) {
+		if rel, ok := strings.CutPrefix(name, prefix); ok {
+			sum := sha256.Sum256(raw)
+			out[rel] = hex.EncodeToString(sum[:])
+		}
+	}
+	return out
 }
 
 func sameDigests(a, b map[string]string) bool {

@@ -379,6 +379,8 @@ type diffFake struct {
 	states []string
 	req    v1.ApplyWorkflowRequest
 	polled int
+	// polls, when set, receives a signal for every poll of the order.
+	polls chan struct{}
 }
 
 func (f *diffFake) ApplyWorkflow(_ context.Context, req v1.ApplyWorkflowRequest) (v1.ApplyWorkflowResponse, error) {
@@ -393,6 +395,9 @@ func (f *diffFake) WorkflowApply(context.Context, string) (v1.WorkflowApply, err
 	defer f.mu.Unlock()
 	state := f.states[min(f.polled, len(f.states)-1)]
 	f.polled++
+	if f.polls != nil {
+		f.polls <- struct{}{}
+	}
 	return v1.WorkflowApply{
 		ID: "ap1", Worker: "box", DryRun: true, State: state, Error: "disk full",
 		Result: json.RawMessage(`{"changes":[{"path":"a.md"}]}`),
@@ -417,12 +422,15 @@ func diff(t *testing.T, f *diffFake, clk *clock.Fake, advance ...time.Duration) 
 			t.Fatal(err)
 		}
 		clk.Advance(d)
+		if f.polls != nil {
+			<-f.polls // one tick, one poll: the next Advance cannot be swallowed
+		}
 	}
 	return <-done
 }
 
 func TestWorkflowsDiffWaitsForThePlan(t *testing.T) {
-	f := &diffFake{states: []string{v1.ApplyStateRunning, v1.ApplyStateApplied}}
+	f := &diffFake{states: []string{v1.ApplyStateRunning, v1.ApplyStateApplied}, polls: make(chan struct{}, 2)}
 	res := diff(t, f, clock.NewFake(time.Unix(0, 0)), 500*time.Millisecond, 500*time.Millisecond)
 	if res == nil || res.IsError {
 		t.Fatalf("%+v", res)
@@ -446,7 +454,7 @@ func TestWorkflowsDiffTimesOutWithTheOrderToFollow(t *testing.T) {
 }
 
 func TestWorkflowsDiffFailedOrderIsAnError(t *testing.T) {
-	f := &diffFake{states: []string{v1.ApplyStateFailed}}
+	f := &diffFake{states: []string{v1.ApplyStateFailed}, polls: make(chan struct{}, 1)}
 	res := diff(t, f, clock.NewFake(time.Unix(0, 0)), 500*time.Millisecond)
 	if res == nil || !res.IsError || structured(t, res)["code"] != string(domain.CodeInternal) {
 		t.Fatalf("result = %+v, want the failure of the order", res)
