@@ -4,6 +4,7 @@ import { BASE } from '../scripts/sync-docs.mjs';
 
 const PAGES = [
   { name: 'landing', path: BASE },
+  { name: 'landing-es', path: `${BASE}es/` },
   { name: 'getting-started', path: `${BASE}getting-started/` },
 ];
 const THEMES = ['light', 'dark'] as const;

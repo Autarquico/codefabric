@@ -6,19 +6,21 @@ interface Props {
 	file: string;
 	title: string;
 	text: string;
+	label: string;
+	caption: string;
 }
-const { file, title, text } = Astro.props;
+const { file, title, text, label, caption } = Astro.props;
 const frame = readGolden(contentRoot, file);
 const source = `${REPO_URL}/blob/${repoRef()}/${GOLDEN_DIR}/${file}`;
 ---
 
 <figure>
 	<p class="text">{text}</p>
-	<div class="scroll" role="region" aria-label={`${title}, terminal frame`} tabindex="0">
+	<div class="scroll" role="region" aria-label={`${title}, ${label}`} tabindex="0">
 		<pre>{frame}</pre>
 	</div>
 	<figcaption>
-		Rendered by the TUI test suite with fixture data. Source: <a href={source}><code>{file}</code></a>
+		{caption} <a href={source}><code>{file}</code></a>
 	</figcaption>
 </figure>
 
