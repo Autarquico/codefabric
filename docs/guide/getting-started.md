@@ -51,15 +51,17 @@ cf controller run
 
 ### The network between machines
 
-Every Worker and client dials the Controller at its advertised address (port 7443 by default), and a client reaches a Worker over ssh for `cf attach`. The recommended network is a [Tailscale](https://tailscale.com) tailnet: the machines reach each other by name wherever they are, and no port is open to the internet. Advertise the Controller's tailnet name; its host goes into the Controller's certificate, so use the name the other machines will dial:
+Every Worker and client dials the Controller at its advertised address (port 7443 by default), and a client reaches a Worker over ssh for `cf attach`. The recommended network is a [Tailscale](https://tailscale.com) tailnet: the machines reach each other by name wherever they are. Advertise the Controller's tailnet name, since its host goes into the Controller's certificate, and bind it to the tailnet address so the API is not reachable from anywhere else:
 
 ```sh
-cf controller init --advertise <controller>.<tailnet>.ts.net:7443
+cf controller init --advertise <controller>.<tailnet>.ts.net:7443 --listen <tailnet-ip>:7443
 ```
 
-Tailscale only carries the traffic. Code Flock still authenticates every connection with its own certificates (mutual TLS), inside the tailnet too.
+Without `--listen` the Controller listens on every interface (`0.0.0.0:7443`); on a machine with a public address, keep that port closed with a firewall.
 
-If you use Tailscale SSH, leave the Workers out of `check` mode: it asks for a login in the browser from time to time, and the non-interactive ssh that `cf doctor` and `cf attach` rely on fails until you do.
+Tailscale only carries the traffic. The Controller's API still authenticates every Worker and client with its own certificates (mutual TLS), inside the tailnet too. The ssh to a Worker is ordinary OpenSSH, with its own keys.
+
+If you use Tailscale SSH in `check` mode, it asks for a login in the browser from time to time. Until you do, the ssh check of `cf doctor` warns that it cannot reach that Worker, and `cf attach` waits for that login.
 
 ## Add a Worker
 
