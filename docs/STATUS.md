@@ -9,27 +9,16 @@
 ## Done esta semana
 
 <!-- pm-sync:done-this-week -->
-- #17 Fase 2 — Claude/Codex y Workflows
-- #22 Workflows: apply, drift y lock de configuración
-- #25 Doctor y wizard de join
-- #26 E2E v0.2
-- #82 Backend keyring de secrets
-- #83 Credencial de origin vía GIT_ASKPASS
-- #93 Fase 3 — TUI
-- #94 Suscripciones del Client SDK
-- #95 TUI: shell y home
-- #96 TUI: vistas y acciones
-- #97 Needs-input e Inbox
-- #98 Paleta, búsqueda y notificaciones
-- #99 E2E del TUI
-- #100 Almacenamiento de logs y output
-- #102 Flaky: TestWhatTheRedactionHoldsBackIsFlushedOnEveryEnd/cancellation (gitops)
-- #131 Instalador firmado, release y sitio
-- #136 Servidor MCP
 - #146 Retention y GC
 - #148 Degradación del journal y replay
 - #149 Backup y restore
 - #150 E2E v0.3 (recovery)
+- #160 Captura de checkpoints
+- #161 Defer y resume
+- #162 Snapshots dirty y checkpoints automáticos
+- #163 Traer la Task al checkout local
+- #164 /handto desde Claude Code
+- #169 Move y handoff
 <!-- /pm-sync:done-this-week -->
 
 ---
