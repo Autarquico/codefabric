@@ -50,7 +50,7 @@ Plataformas v0.x:
 | Rol | Soportado | Notas |
 |-----|-----------|-------|
 | Controller | Linux amd64/arm64 | macOS sólo para desarrollo |
-| Worker | Linux amd64/arm64, macOS arm64 | WSL2 cuenta como Linux |
+| Worker | Linux amd64/arm64, macOS arm64/amd64 | WSL2 cuenta como Linux |
 | Cliente | Linux, macOS | Windows nativo fuera de v0.x |
 
 Objetivos de escala (dimensionan SQLite single-writer y el diseño de streaming):

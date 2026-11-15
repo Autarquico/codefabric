@@ -57,6 +57,17 @@ TestScenario_VerifiedInstall_darwinAmd64() {
 	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf was not installed on darwin/amd64"
 }
 
+TestScenario_VerifiedInstall_darwinRosettaPicksArm64() {
+	good_release "$KEY_A"
+	serve_dist
+	seen=$(wc -l <"$TMP/server.log")
+	FAKE_UNAME_S=Darwin FAKE_UNAME_M=x86_64 FAKE_PROC_TRANSLATED=1 run_install "$KEY_A/install.sh"
+	assert_rc 0
+	tail -n +"$((seen + 1))" "$TMP/server.log" >"$T/requests"
+	grep -q "\"GET /$TEST_NAME/$VERSION/cf_${BARE_VERSION}_darwin_arm64.tar.gz" "$T/requests" || fail "the darwin_arm64 tarball was not requested under Rosetta"
+	! grep -q "darwin_amd64" "$T/requests" || fail "the Intel tarball was requested under Rosetta"
+}
+
 # The real cf, built with the GoReleaser ldflags and packed like its archive (LICENSE, README.md, cf), signed and
 # installed over HTTP: proves the version injection and the archive layout, which the fake fixtures cannot.
 TestScenario_VerifiedInstall_realBinary() {

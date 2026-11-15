@@ -56,6 +56,10 @@ detect_platform() {
 		aarch64 | arm64) ARCH=arm64 ;;
 		*) die 3 "unsupported architecture: $(uname -m)" ;;
 	esac
+	# A shell running under Rosetta on Apple silicon reports x86_64; the native binary is the right one.
+	if [ "$OS" = darwin ] && [ "$ARCH" = amd64 ] && have sysctl && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
+		ARCH=arm64
+	fi
 }
 
 require_commands() {
