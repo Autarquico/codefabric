@@ -25,17 +25,17 @@ Open the live session of a Run in this terminal, over ssh: `cf attach <task|run>
 
 ## `cf claude`
 
-Install into Claude Code what cf needs there: the `/handto` skill, which hands the session you are in over to a Worker (`/handto <worker>`). The skill is embedded in the binary and carries the version of the `cf` that wrote it.
+Install into Claude Code what cf needs there: the `/handto` skill, which hands the session you are in over to a Worker (`/handto <worker>`), and the `/workers` skill, which lists the Workers that can take it (`online` or `degraded`). The skills are embedded in the binary and carry the version of the `cf` that wrote them.
 
-- `cf claude install [--scope user|project] [--force] [--dry-run]`: write it to `~/.claude/skills/handto/SKILL.md` (`--scope project`: `.claude/skills/` of the repository). Idempotent: the same version changes nothing and another version updates it. A `handto` skill that cf did not write is not overwritten without `--force`.
-- `cf claude uninstall [--scope user|project]`: remove the skill that cf wrote. One it did not write stays.
-- `cf claude status [--scope user|project]`: `missing`, `current`, `outdated` (another version of cf), `modified` (cf wrote it, then it was edited; `install` restores it) or `foreign`. With `--json`, the same as an object.
+- `cf claude install [--scope user|project] [--force] [--dry-run]`: write them to `~/.claude/skills/handto/SKILL.md` and `~/.claude/skills/workers/SKILL.md` (`--scope project`: `.claude/skills/` of the repository). Idempotent: the same version changes nothing and another version updates it. A `handto` skill that cf did not write is not overwritten without `--force`.
+- `cf claude uninstall [--scope user|project]`: remove the skills that cf wrote. One it did not write stays.
+- `cf claude status [--scope user|project]`: `missing`, `current`, `outdated` (another version of cf), `modified` (cf wrote it, then it was edited; `install` restores it) or `foreign`. One line per skill. With `--json`, a list with one object per skill.
 
 `cf doctor` warns when the user skill is missing, of another version or edited since cf wrote it, and `cf setup` offers to install it to a client on a terminal. The skill runs `cf handoff` (see below).
 
 ## `cf codex`
 
-The same for Codex: `cf codex install|uninstall|status [--scope user|project]` manages the `handto` skill in `~/.agents/skills/handto/SKILL.md` (`--scope project`: `.agents/skills/` of the repository), with the same rules as `cf claude` (versioned, idempotent, a foreign `handto` is not overwritten without `--force`). Codex has no slash commands with arguments: you ask for it by name (`$handto omarch02`) and the skill runs `cf handoff --to <worker>`, which reads the session from `CODEX_SESSION_ID`. `cf doctor` warns when the skill is missing and `codex` is on the `PATH`.
+The same for Codex: `cf codex install|uninstall|status [--scope user|project]` manages the `handto` and `workers` skills in `~/.agents/skills/<name>/SKILL.md` (`--scope project`: `.agents/skills/` of the repository), with the same rules as `cf claude` (versioned, idempotent, a foreign `handto` is not overwritten without `--force`). Codex has no slash commands with arguments: you ask for it by name (`$handto omarch02`) and the skill runs `cf handoff --to <worker>`, which reads the session from `CODEX_SESSION_ID`. `cf doctor` warns when the skill is missing and `codex` is on the `PATH`.
 
 ## `cf client`
 
@@ -212,7 +212,7 @@ Run and administer Workers.
 - `run`: run the Worker daemon until interrupted.
 - `doctor`: check this machine as a Worker: tmux, git, disk, harnesses and their logins.
 - `config show`, `config set disk-min-free <20%|50GiB>`: print the settings that stay on this machine, or change the free disk below which the doctor fails, keeping the others.
-- `list`, `show`: Workers with their resources and version; `show` also gives the ssh target the Worker announced, and says when it is a guess from the hostname (set `--ssh-target` on `cf worker run`).
+- `list`, `show`: Workers with their resources and version. `list --state online,degraded` keeps only the Workers in those states (`--all` also lists the removed ones). `show` also gives the ssh target the Worker announced, and says when it is a guess from the hostname (set `--ssh-target` on `cf worker run`).
 - `drain`, `undrain`: stop a Worker from taking new Runs, or let it take them again. `drain --move` also moves each Task that runs on the Worker (`cf task move`, the scheduler chooses where); Tasks that cannot be moved are listed with why; a Run still being prepared is one of them: run `drain --move` again once it has started. `drain --force` suspends the Runs it can checkpoint and cancels the rest, after asking each a checkpoint (see [Automatic checkpoints](#automatic-checkpoints)); it asks you to confirm, or takes `--yes`, and cannot be combined with `--move`.
 - `remove`: remove a Worker and revoke its credentials (only without active Runs).
 - `secrets`: manage the secrets this Worker holds for Runs.

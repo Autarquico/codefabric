@@ -77,6 +77,9 @@ type DoctorReport struct {
 	HandtoSkill *DoctorSkill `json:"handto_skill,omitempty"`
 	// CodexHandtoSkill is the same for Codex; absent when Codex is not installed.
 	CodexHandtoSkill *DoctorSkill `json:"codex_handto_skill,omitempty"`
+	// WorkersSkill and CodexWorkersSkill are the same for the workers skill.
+	WorkersSkill      *DoctorSkill `json:"workers_skill,omitempty"`
+	CodexWorkersSkill *DoctorSkill `json:"codex_workers_skill,omitempty"`
 }
 
 // DoctorSkill is the skill as the doctor found it. A missing or stale one is
@@ -88,20 +91,20 @@ type DoctorSkill struct {
 	Action  string `json:"action,omitempty"`
 }
 
-func doctorSkill(k handtoKind, s *HandtoSkill) *DoctorSkill {
+func doctorSkill(k skillKind, s *SkillStatus) *DoctorSkill {
 	if s == nil {
 		return nil
 	}
 	d := &DoctorSkill{State: s.State, Version: s.Version}
 	switch s.State {
 	case skillMissing:
-		d.Warning = "la skill handto de " + k.label + " no está instalada"
+		d.Warning = "la skill " + k.name + " de " + k.label + " no está instalada"
 	case skillOutdated:
-		d.Warning = "la skill handto de " + k.label + " es de otra versión de cf (" + s.Version + ")"
+		d.Warning = "la skill " + k.name + " de " + k.label + " es de otra versión de cf (" + s.Version + ")"
 	case skillModified:
-		d.Warning = "la skill handto de " + k.label + " fue editada después de que cf la escribiera"
+		d.Warning = "la skill " + k.name + " de " + k.label + " fue editada después de que cf la escribiera"
 	case skillForeign:
-		d.Warning = "hay una skill handto de " + k.label + " que cf no escribió; " + k.installCommand() + " --force la reemplaza"
+		d.Warning = "hay una skill " + k.name + " de " + k.label + " que cf no escribió; " + k.installCommand() + " --force la reemplaza"
 		return d
 	default:
 		return d
@@ -110,13 +113,13 @@ func doctorSkill(k handtoKind, s *HandtoSkill) *DoctorSkill {
 	return d
 }
 
-// codexHandtoSkill is the state of the Codex skill, or nil when Codex is not on this
+// codexUserSkill is the state of a Codex skill, or nil when Codex is not on this
 // machine (there is nothing to warn about) or the state cannot be told.
-func codexHandtoSkill() *HandtoSkill {
+func codexUserSkill(k skillKind) *SkillStatus {
 	if _, err := exec.LookPath("codex"); err != nil {
 		return nil
 	}
-	return userHandtoSkill(codexHandto)
+	return userSkill(k)
 }
 
 // DoctorController is the Controller as the doctor found it.
@@ -158,8 +161,10 @@ func newDoctorCmd(open func(*cobra.Command) (doctorStore, error), probe sshProbe
 			if err != nil {
 				return err
 			}
-			rep.HandtoSkill = doctorSkill(claudeHandto, userHandtoSkill(claudeHandto))
-			rep.CodexHandtoSkill = doctorSkill(codexHandto, codexHandtoSkill())
+			rep.HandtoSkill = doctorSkill(claudeHandto, userSkill(claudeHandto))
+			rep.CodexHandtoSkill = doctorSkill(codexHandto, codexUserSkill(codexHandto))
+			rep.WorkersSkill = doctorSkill(claudeWorkers, userSkill(claudeWorkers))
+			rep.CodexWorkersSkill = doctorSkill(codexWorkers, codexUserSkill(codexWorkers))
 			return emit(cmd, rep, func(out io.Writer) error { return printDoctor(out, rep) })
 		},
 	}
@@ -234,7 +239,7 @@ func attachProblem(ctx context.Context, announced string, probe sshProbe) string
 
 func printDoctor(out io.Writer, rep DoctorReport) error {
 	fmt.Fprintf(out, "Controller  ok  %s  %s\n", dash(rep.Controller.Address), dash(rep.Controller.Version))
-	for _, d := range []*DoctorSkill{rep.HandtoSkill, rep.CodexHandtoSkill} {
+	for _, d := range []*DoctorSkill{rep.HandtoSkill, rep.CodexHandtoSkill, rep.WorkersSkill, rep.CodexWorkersSkill} {
 		if d == nil || d.Warning == "" {
 			continue
 		}

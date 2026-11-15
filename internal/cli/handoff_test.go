@@ -189,3 +189,24 @@ func TestHandoffError_QuotesWhatTheUserWillPasteIntoAShell(t *testing.T) {
 		t.Errorf("shellQuote = %s", got)
 	}
 }
+
+func TestHandoffError_QuotesASessionIdThatIsNotAnId(t *testing.T) {
+	err := handoffError(&csession.HandedOffError{ID: "s", Task: "t"}, "$(touch x); id", "w")
+	if want := "cf handoff --session '$(touch x); id' --to w --force"; !strings.Contains(err.Error(), want) {
+		t.Errorf("%v does not contain %s", err, want)
+	}
+}
+
+func TestScenario_HandoffForceWithAllowSensitiveAsksForBothInTheCommand(t *testing.T) {
+	t.Setenv(client.RunSocketEnv, "")
+	t.Setenv("HOME", t.TempDir())
+	const id = "11111111-2222-4333-8444-555555555555"
+	args := []string{"--session", id, "--to", "w", "--force", "--allow-sensitive-session"}
+	want := "cf handoff --session " + id + " --to w --force --allow-sensitive-session"
+	if code, _, errOut := runHandoffWith(t, strings.NewReader(""), args...); code == 0 || !strings.Contains(errOut, "CF_CONFIRMATION_REQUIRED") || !strings.Contains(errOut, want) {
+		t.Errorf("without a terminal: exit %d, err %q; want the command %q", code, errOut, want)
+	}
+	if code, _, errOut := runHandoffWith(t, terminal{strings.NewReader("")}, args...); code == 0 || !strings.Contains(errOut, errNoController.Error()) {
+		t.Errorf("with a terminal: exit %d, err %q; want it to get as far as the Controller", code, errOut)
+	}
+}

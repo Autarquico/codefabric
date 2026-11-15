@@ -101,6 +101,27 @@ func TestApplyRunTrustsTheWorktree(t *testing.T) {
 	}
 }
 
+// A worktree that is not an absolute path or does not exist would be trusted under a
+// key that Claude Code never looks up: it is an error, not a silent raw path.
+func TestApplyRunRefusesAWorktreeItCannotResolve(t *testing.T) {
+	h, _ := newHost(t, nil)
+	for name, worktree := range map[string]string{
+		"relative": "repo/checkout",
+		"missing":  filepath.Join(t.TempDir(), "gone"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			_, err := (claude.Adapter{}).ApplyConfig(t.Context(), h, snapshot(t, h), harness.ApplyOptions{Target: harness.TargetRun{Dir: dir, Worktree: worktree}})
+			if err == nil || !strings.Contains(err.Error(), "worktree") {
+				t.Fatalf("err = %v", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, ".claude.json")); !os.IsNotExist(statErr) {
+				t.Errorf("the state was written anyway: %v", statErr)
+			}
+		})
+	}
+}
+
 func TestApplyRunWithoutLoginMakesNoLinkAndAnEmptySnapshotStillOnboards(t *testing.T) {
 	h, home := newHost(t, nil)
 	before := treeHash(t, home)

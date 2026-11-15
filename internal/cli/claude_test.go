@@ -21,7 +21,7 @@ func runClaude(t *testing.T, args ...string) (code int, stdout, stderr string) {
 }
 
 func TestHandtoSkill_FrontmatterIsExact(t *testing.T) {
-	out, err := renderHandto(claudeHandto, "v1.2.3")
+	out, err := renderSkill(claudeHandto, "v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,40 +37,79 @@ func TestHandtoSkill_FrontmatterIsExact(t *testing.T) {
 	if !strings.HasPrefix(string(out), want) {
 		t.Errorf("frontmatter differs:\n%s", out)
 	}
-	for _, line := range []string{"!`cf worker list`", "cf handoff --session ${CLAUDE_SESSION_ID} --to $worker", "/exit", "cf attach <task>", "CF_*"} {
+	for _, line := range []string{"!`cf worker list --state online,degraded`", "cf handoff --session ${CLAUDE_SESSION_ID} --to $worker", "/exit", "cf attach <task>", "CF_*"} {
 		if !strings.Contains(string(out), line) {
 			t.Errorf("the body lacks %q", line)
 		}
 	}
 }
 
+func TestWorkersSkill_ListsOnlyWorkersThatCanTakeASession(t *testing.T) {
+	out, err := renderSkill(claudeWorkers, "v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\n" +
+		"name: workers\n" +
+		"description: List the CodeFabric Workers that can take a session right now. Use only when the user types /workers.\n" +
+		"disable-model-invocation: true\n" +
+		"allowed-tools: Bash(cf worker list*)\n" +
+		"---\n" +
+		"<!-- cf-version: v1.2.3 -->\n"
+	if !strings.HasPrefix(string(out), want) {
+		t.Errorf("frontmatter differs:\n%s", out)
+	}
+	if !strings.Contains(string(out), "!`cf worker list --state online,degraded`") {
+		t.Errorf("the body does not list the Workers:\n%s", out)
+	}
+}
+
+func TestClaudeCmd_InstallsAndRemovesBothSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if code, out, errOut := runClaude(t, "install"); code != 0 || !strings.Contains(out, "handto skill: created") || !strings.Contains(out, "workers skill: created") {
+		t.Fatalf("install: %d %s %s", code, out, errOut)
+	}
+	for _, name := range []string{"handto", "workers"} {
+		if _, err := os.Stat(filepath.Join(home, ".claude", "skills", name, "SKILL.md")); err != nil {
+			t.Errorf("%s was not written: %v", name, err)
+		}
+	}
+	if code, out, _ := runClaude(t, "uninstall"); code != 0 || strings.Count(out, "removed") != 2 {
+		t.Fatalf("uninstall: %d %s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "workers")); !os.IsNotExist(err) {
+		t.Error("the workers skill stayed")
+	}
+}
+
 func TestHandtoSkill_RejectsAVersionThatBreaksTheMarker(t *testing.T) {
 	for _, v := range []string{"", "a b", "x-->", "v1\n2"} {
-		if _, err := renderHandto(claudeHandto, v); err == nil {
-			t.Errorf("renderHandto(claudeHandto, %q) accepted it", v)
+		if _, err := renderSkill(claudeHandto, v); err == nil {
+			t.Errorf("renderSkill(claudeHandto, %q) accepted it", v)
 		}
 	}
 }
 
 func TestScenario_InstallIdempotente(t *testing.T) {
 	home := t.TempDir()
-	if s, err := installHandto(claudeHandto, "user", home, "v1", false, false); err != nil || s.Action != "created" {
+	if s, err := installSkill(claudeHandto, "user", home, "v1", false, false); err != nil || s.Action != "created" {
 		t.Fatalf("first install: %+v, %v", s, err)
 	}
-	before, _ := os.Stat(handtoPath(claudeHandto, home))
-	if s, err := installHandto(claudeHandto, "user", home, "v1", false, false); err != nil || s.Action != "unchanged" {
+	before, _ := os.Stat(skillPath(claudeHandto, home))
+	if s, err := installSkill(claudeHandto, "user", home, "v1", false, false); err != nil || s.Action != "unchanged" {
 		t.Fatalf("same version: %+v, %v", s, err)
 	}
-	if after, _ := os.Stat(handtoPath(claudeHandto, home)); !after.ModTime().Equal(before.ModTime()) {
+	if after, _ := os.Stat(skillPath(claudeHandto, home)); !after.ModTime().Equal(before.ModTime()) {
 		t.Error("the same version rewrote the file")
 	}
-	if s, _ := handtoStatus(claudeHandto, "user", home, "v2"); s.State != skillOutdated || s.Version != "v1" {
+	if s, _ := skillStatus(claudeHandto, "user", home, "v2"); s.State != skillOutdated || s.Version != "v1" {
 		t.Errorf("status under v2 = %+v", s)
 	}
-	if s, err := installHandto(claudeHandto, "user", home, "v2", false, false); err != nil || s.Action != "updated" {
+	if s, err := installSkill(claudeHandto, "user", home, "v2", false, false); err != nil || s.Action != "updated" {
 		t.Fatalf("other version: %+v, %v", s, err)
 	}
-	if s, _ := handtoStatus(claudeHandto, "user", home, "v2"); s.State != skillCurrent {
+	if s, _ := skillStatus(claudeHandto, "user", home, "v2"); s.State != skillCurrent {
 		t.Errorf("status = %+v", s)
 	}
 }
@@ -78,49 +117,49 @@ func TestScenario_InstallIdempotente(t *testing.T) {
 func TestScenario_InstallIdempotente_Foreign(t *testing.T) {
 	home := t.TempDir()
 	mine := "---\nname: handto\n---\nmy own skill\n"
-	if err := os.MkdirAll(filepath.Dir(handtoPath(claudeHandto, home)), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(skillPath(claudeHandto, home)), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(handtoPath(claudeHandto, home), []byte(mine), 0o600); err != nil {
+	if err := os.WriteFile(skillPath(claudeHandto, home), []byte(mine), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := installHandto(claudeHandto, "user", home, "v1", false, false)
+	_, err := installSkill(claudeHandto, "user", home, "v1", false, false)
 	var de *domain.Error
 	if !errors.As(err, &de) || de.Code != domain.CodeConfirmationRequired {
 		t.Fatalf("a foreign skill without --force: %v", err)
 	}
-	if b, _ := os.ReadFile(handtoPath(claudeHandto, home)); string(b) != mine {
+	if b, _ := os.ReadFile(skillPath(claudeHandto, home)); string(b) != mine {
 		t.Error("a foreign skill was overwritten without force")
 	}
-	if s, err := installHandto(claudeHandto, "user", home, "v1", true, false); err != nil || s.Action != "replaced" {
+	if s, err := installSkill(claudeHandto, "user", home, "v1", true, false); err != nil || s.Action != "replaced" {
 		t.Fatalf("force: %+v, %v", s, err)
 	}
 }
 
 func TestHandtoStatus_EditedIsNotAnotherVersion(t *testing.T) {
 	home := t.TempDir()
-	if _, err := installHandto(claudeHandto, "user", home, "v1", false, false); err != nil {
+	if _, err := installSkill(claudeHandto, "user", home, "v1", false, false); err != nil {
 		t.Fatal(err)
 	}
-	f, err := os.OpenFile(handtoPath(claudeHandto, home), os.O_APPEND|os.O_WRONLY, 0)
+	f, err := os.OpenFile(skillPath(claudeHandto, home), os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _ = f.WriteString("an edit\n")
 	_ = f.Close()
-	s, _ := handtoStatus(claudeHandto, "user", home, "v1")
+	s, _ := skillStatus(claudeHandto, "user", home, "v1")
 	if s.State != skillModified {
 		t.Fatalf("status = %+v", s)
 	}
 	var out bytes.Buffer
-	_ = printHandtoSkill(&out, claudeHandto, s)
+	_ = printSkill(&out, claudeHandto, s)
 	if strings.Contains(out.String(), "another version") || !strings.Contains(out.String(), "edited") {
 		t.Errorf("message: %s", out.String())
 	}
 	if d := doctorSkill(claudeHandto, &s); d.Warning == "" || strings.Contains(d.Warning, "otra versión") || d.Action != "cf claude install" {
 		t.Errorf("doctor: %+v", d)
 	}
-	if s, err := installHandto(claudeHandto, "user", home, "v1", false, false); err != nil || s.Action != "restored" {
+	if s, err := installSkill(claudeHandto, "user", home, "v1", false, false); err != nil || s.Action != "restored" {
 		t.Fatalf("install: %+v, %v", s, err)
 	}
 }
@@ -128,18 +167,18 @@ func TestHandtoStatus_EditedIsNotAnotherVersion(t *testing.T) {
 func TestHandtoStatus_MarkerOnlyCountsRightAfterTheFrontmatter(t *testing.T) {
 	home := t.TempDir()
 	body := "---\nname: handto\n---\nquoting:\n<!-- cf-version: v1 -->\n"
-	_ = os.MkdirAll(filepath.Dir(handtoPath(claudeHandto, home)), 0o700)
-	_ = os.WriteFile(handtoPath(claudeHandto, home), []byte(body), 0o600)
-	if s, _ := handtoStatus(claudeHandto, "user", home, "v1"); s.State != skillForeign {
+	_ = os.MkdirAll(filepath.Dir(skillPath(claudeHandto, home)), 0o700)
+	_ = os.WriteFile(skillPath(claudeHandto, home), []byte(body), 0o600)
+	if s, _ := skillStatus(claudeHandto, "user", home, "v1"); s.State != skillForeign {
 		t.Errorf("status = %+v", s)
 	}
-	if s, err := uninstallHandto(claudeHandto, "user", home); err != nil || s.Action != "kept" {
+	if s, err := uninstallSkill(claudeHandto, "user", home); err != nil || s.Action != "kept" {
 		t.Errorf("uninstall: %+v, %v", s, err)
 	}
 }
 
 func TestHandtoSkill_NeverLetsTheModelOverrideAGuard(t *testing.T) {
-	out, _ := renderHandto(claudeHandto, "v1")
+	out, _ := renderSkill(claudeHandto, "v1")
 	for _, want := range []string{
 		"Never add flags to `cf handoff`",
 		"run it themselves in their own terminal",
@@ -183,12 +222,12 @@ func TestClaudeProjectScope_RefusesSymlinkedClaudeDirs(t *testing.T) {
 
 func TestInstall_DryRunWritesNothing(t *testing.T) {
 	home := t.TempDir()
-	if s, err := installHandto(claudeHandto, "user", home, "v1", false, true); err != nil || s.Action != "created" || !s.DryRun {
+	if s, err := installSkill(claudeHandto, "user", home, "v1", false, true); err != nil || s.Action != "created" || !s.DryRun {
 		t.Fatalf("%+v, %v", s, err)
 	}
 	var out bytes.Buffer
-	_ = printHandtoSkill(&out, claudeHandto, HandtoSkill{Action: "created", DryRun: true, Path: "p"})
-	_ = printHandtoSkill(&out, claudeHandto, HandtoSkill{Action: "unchanged", DryRun: true, Path: "p"})
+	_ = printSkill(&out, claudeHandto, SkillStatus{Action: "created", DryRun: true, Path: "p"})
+	_ = printSkill(&out, claudeHandto, SkillStatus{Action: "unchanged", DryRun: true, Path: "p"})
 	if !strings.Contains(out.String(), "would be created") || strings.Contains(out.String(), "would be unchanged") {
 		t.Errorf("dry-run copy: %s", out.String())
 	}
@@ -199,25 +238,25 @@ func TestInstall_DryRunWritesNothing(t *testing.T) {
 
 func TestUninstall_OnlyRemovesWhatIsOurs(t *testing.T) {
 	home := t.TempDir()
-	if s, err := uninstallHandto(claudeHandto, "user", home); err != nil || s.Action != "absent" {
+	if s, err := uninstallSkill(claudeHandto, "user", home); err != nil || s.Action != "absent" {
 		t.Fatalf("absent: %+v, %v", s, err)
 	}
-	if _, err := installHandto(claudeHandto, "user", home, "v1", false, false); err != nil {
+	if _, err := installSkill(claudeHandto, "user", home, "v1", false, false); err != nil {
 		t.Fatal(err)
 	}
-	if s, err := uninstallHandto(claudeHandto, "user", home); err != nil || s.Action != "removed" {
+	if s, err := uninstallSkill(claudeHandto, "user", home); err != nil || s.Action != "removed" {
 		t.Fatalf("removed: %+v, %v", s, err)
 	}
-	if _, err := os.Stat(filepath.Dir(handtoPath(claudeHandto, home))); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Dir(skillPath(claudeHandto, home))); !os.IsNotExist(err) {
 		t.Error("the empty directory of the skill stayed")
 	}
 	foreign := "someone else's\n"
-	_ = os.MkdirAll(filepath.Dir(handtoPath(claudeHandto, home)), 0o700)
-	_ = os.WriteFile(handtoPath(claudeHandto, home), []byte(foreign), 0o600)
-	if s, err := uninstallHandto(claudeHandto, "user", home); err != nil || s.Action != "kept" {
+	_ = os.MkdirAll(filepath.Dir(skillPath(claudeHandto, home)), 0o700)
+	_ = os.WriteFile(skillPath(claudeHandto, home), []byte(foreign), 0o600)
+	if s, err := uninstallSkill(claudeHandto, "user", home); err != nil || s.Action != "kept" {
 		t.Fatalf("foreign: %+v, %v", s, err)
 	}
-	if b, _ := os.ReadFile(handtoPath(claudeHandto, home)); string(b) != foreign {
+	if b, _ := os.ReadFile(skillPath(claudeHandto, home)); string(b) != foreign {
 		t.Error("a foreign skill was removed")
 	}
 }
@@ -228,9 +267,14 @@ func TestClaudeCmd_InstallStatusUninstallOverHome(t *testing.T) {
 		t.Fatalf("install: %d %s %s", code, out, errOut)
 	}
 	code, out, _ := runClaude(t, "status", "--json")
-	var s HandtoSkill
-	if err := json.Unmarshal([]byte(out), &s); err != nil || code != 0 || s.State != skillCurrent || s.Scope != "user" {
+	var skills []SkillStatus
+	if err := json.Unmarshal([]byte(out), &skills); err != nil || code != 0 || len(skills) != 2 {
 		t.Fatalf("status: %d %s %v", code, out, err)
+	}
+	for i, name := range []string{"handto", "workers"} {
+		if s := skills[i]; s.Name != name || s.State != skillCurrent || s.Scope != "user" {
+			t.Errorf("status of %s: %+v", name, s)
+		}
 	}
 	if code, out, _ := runClaude(t, "install"); code != 0 || !strings.Contains(out, "unchanged") {
 		t.Fatalf("second install: %d %s", code, out)
@@ -243,14 +287,21 @@ func TestClaudeCmd_InstallStatusUninstallOverHome(t *testing.T) {
 	}
 }
 
+func TestDoctorSkill_NamesTheSkillItWarnsAbout(t *testing.T) {
+	d := doctorSkill(claudeWorkers, &SkillStatus{State: skillMissing})
+	if !strings.Contains(d.Warning, "la skill workers de Claude Code") || d.Action != "cf claude install" {
+		t.Errorf("doctor: %+v", d)
+	}
+}
+
 func TestDoctorSkill_WarnsWhenMissingOrStaleWithTheAction(t *testing.T) {
 	for _, tc := range []struct {
-		skill HandtoSkill
+		skill SkillStatus
 		warns bool
 	}{
-		{HandtoSkill{State: skillMissing}, true},
-		{HandtoSkill{State: skillOutdated, Version: "v0"}, true},
-		{HandtoSkill{State: skillCurrent}, false},
+		{SkillStatus{State: skillMissing}, true},
+		{SkillStatus{State: skillOutdated, Version: "v0"}, true},
+		{SkillStatus{State: skillCurrent}, false},
 	} {
 		d := doctorSkill(claudeHandto, &tc.skill)
 		if (d.Warning != "") != tc.warns || (tc.warns && d.Action != "cf claude install") {
@@ -259,5 +310,53 @@ func TestDoctorSkill_WarnsWhenMissingOrStaleWithTheAction(t *testing.T) {
 	}
 	if doctorSkill(claudeHandto, nil) != nil {
 		t.Error("an unknown state must not be reported")
+	}
+}
+
+func TestInstall_ForeignSkillDoesNotHideTheOthers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mine := "---\nname: workers\n---\nmy own skill\n"
+	foreign := skillPath(claudeWorkers, home)
+	if err := os.MkdirAll(filepath.Dir(foreign), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(foreign, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runClaude(t, "install")
+	if code == 0 || !strings.Contains(errOut, "did not write") {
+		t.Errorf("the refusal must fail the command: %d %q", code, errOut)
+	}
+	if !strings.Contains(out, "handto skill: created") || !strings.Contains(out, "workers skill: skipped") || !strings.Contains(out, "use --force") {
+		t.Errorf("each skill must be reported: %q", out)
+	}
+	if _, err := os.Stat(skillPath(claudeHandto, home)); err != nil {
+		t.Errorf("handto was not written: %v", err)
+	}
+	if b, _ := os.ReadFile(foreign); string(b) != mine { //nolint:gosec // a path of the test
+		t.Error("the foreign skill was overwritten")
+	}
+}
+
+func TestInstallUserSkills_ReportsWhatWasWrittenBesideTheRefusal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	foreign := skillPath(claudeWorkers, home)
+	if err := os.MkdirAll(filepath.Dir(foreign), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(foreign, []byte("---\nname: workers\n---\nmine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := InstallUserSkills()
+	if err == nil || len(got) != 2 || got[0].Action != "created" || got[1].Action != "skipped" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestSkillNames(t *testing.T) {
+	if got := skillNames(claudeSkills); got != "handto and workers" {
+		t.Errorf("got %q", got)
 	}
 }

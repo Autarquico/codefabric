@@ -124,9 +124,11 @@ func applyRun(host harness.Host, snap harness.NativeSnapshot, t harness.TargetRu
 func runState(snap harness.NativeSnapshot, worktree string) ([]byte, error) {
 	state := object{onboardingField: true, bypassField: true}
 	if worktree != "" {
-		if resolved, err := filepath.EvalSymlinks(worktree); err == nil {
-			worktree = resolved
+		resolved, err := trustedPath(worktree)
+		if err != nil {
+			return nil, err
 		}
+		worktree = resolved
 		state[projectsField] = object{worktree: object{trustField: true}}
 	}
 	for _, c := range snap.Components {
@@ -140,6 +142,19 @@ func runState(snap harness.NativeSnapshot, worktree string) ([]byte, error) {
 		state[MCPComponent] = o[MCPComponent]
 	}
 	return encodeObject(state)
+}
+
+// trustedPath is the real path of the worktree, the key of its trust. It has to be
+// absolute and exist: a raw path would trust a folder other than the one Claude Code starts in.
+func trustedPath(worktree string) (string, error) {
+	if !filepath.IsAbs(worktree) {
+		return "", fmt.Errorf("claude-code: apply: the worktree %q is not an absolute path", worktree)
+	}
+	resolved, err := filepath.EvalSymlinks(worktree)
+	if err != nil {
+		return "", fmt.Errorf("claude-code: apply: resolving the worktree: %w", err)
+	}
+	return resolved, nil
 }
 
 func filePerm(f harness.File) fs.FileMode {

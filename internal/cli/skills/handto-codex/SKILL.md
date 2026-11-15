@@ -10,7 +10,7 @@ Hand this session over to the CodeFabric Worker that the user names.
 
 ## Steps
 
-1. If the user did not name a Worker, run `cf worker list`, show the list and ask which one. Do not hand anything over until they name it.
+1. If the user did not name a Worker, run `cf worker list --state online,degraded`, show the list and ask which one. Do not hand anything over until they name it.
 2. Run exactly this command, once, with the name of the Worker (the session is the one in `CODEX_SESSION_ID`, which `cf` reads itself):
 
    `cf handoff --to <worker>`

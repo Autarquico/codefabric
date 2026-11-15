@@ -100,18 +100,22 @@ func offerSkill(steps setupSteps, p *prompt.Prompter) error {
 }
 
 func installSkillStep(p *prompt.Prompter) error {
-	yes, err := p.Confirm("¿Instalar la skill /handto en Claude Code (cf claude install)?", false)
+	yes, err := p.Confirm("¿Instalar las skills /handto y /workers en Claude Code (cf claude install)?", false)
 	if err != nil || !yes {
 		return err
 	}
-	path, err := cli.InstallUserHandtoSkill()
+	skills, err := cli.InstallUserSkills()
+	for _, s := range skills {
+		if _, werr := fmt.Fprintf(p.Out(), "Skill /%s: %s en %s\n", s.Name, s.Action, s.Path); werr != nil {
+			return werr
+		}
+	}
 	if err != nil {
-		// A handto skill of someone else, or a home that cannot be written, does not stop the setup.
-		_, werr := fmt.Fprintf(p.Out(), "No se instaló la skill: %v\n", err)
+		// A skill of someone else, or a home that cannot be written, does not stop the setup.
+		_, werr := fmt.Fprintf(p.Out(), "No se instaló alguna skill: %v\n", err)
 		return werr
 	}
-	_, err = fmt.Fprintf(p.Out(), "Skill /handto instalada en %s\n", path)
-	return err
+	return nil
 }
 
 func askRole(p *prompt.Prompter) (string, error) {

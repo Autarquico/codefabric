@@ -32,6 +32,9 @@ type Record struct {
 	// marker it outlives the pull: it is what tells a later pull of the same Task
 	// that the Task was seeded from here.
 	Seed string `json:"seed,omitempty"`
+	// Released is the Task the session was freed from when that Task ended (see Unlink):
+	// a Task that keeps its name, which the next one of this session must not take.
+	Released string `json:"released,omitempty"`
 	// HandedOff is set while the work of the session continues somewhere else: writing
 	// in the local session now would make two writers.
 	HandedOff *HandedOff `json:"handed_off,omitempty"`
@@ -152,7 +155,12 @@ func (s State) MarkHandedOff(id, task, digest, tree string, at time.Time) error 
 // work goes on nowhere, so the marker, the binding and any request left pending
 // go, and the next handoff starts a new Task. Seed stays, as after a pull.
 func (s State) Unlink(id string) error {
-	return s.update(id, func(r *Record) { r.Task, r.Tree, r.HandedOff, r.Pending = "", "", nil, nil })
+	return s.update(id, func(r *Record) {
+		if r.Task != "" {
+			r.Released = r.Task
+		}
+		r.Task, r.Tree, r.HandedOff, r.Pending = "", "", nil, nil
+	})
 }
 
 // ClearHandedOff takes the marker away, as the pull of the Task does once the session is

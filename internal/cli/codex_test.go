@@ -28,7 +28,7 @@ func mustRead(t *testing.T, path string) []byte {
 }
 
 func TestCodexHandtoSkill_AsksForNoFlagsAndNoSessionArgument(t *testing.T) {
-	out, err := renderHandto(codexHandto, "v1")
+	out, err := renderSkill(codexHandto, "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestCodexHandtoSkill_AsksForNoFlagsAndNoSessionArgument(t *testing.T) {
 	if strings.Contains(text, "CLAUDE_SESSION_ID") || strings.Contains(text, "allowed-tools") || strings.Contains(text, "$worker") {
 		t.Errorf("the Codex skill carries what only Claude Code understands:\n%s", text)
 	}
-	if got := handtoMarkerVersion(out); got != "v1" {
+	if got := skillMarkerVersion(out); got != "v1" {
 		t.Errorf("marker version %q", got)
 	}
 }
@@ -132,5 +132,35 @@ func TestDoctor_WarnsAboutTheCodexSkillOnlyWhenCodexIsInstalled(t *testing.T) {
 	}
 	if _, out, _ := runDoctorHere(t, f, probe); strings.Contains(out, "aviso:") {
 		t.Errorf("installed, yet: %q", out)
+	}
+}
+
+func TestCodexWorkersSkill_RunsTheFilteredListAndCarriesNothingOfClaude(t *testing.T) {
+	out, err := renderSkill(codexWorkers, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	for _, want := range []string{"name: workers\n", "<!-- cf-version: v1 -->", "`cf worker list --state online,degraded`", "CF_*"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the Codex workers skill lacks %q", want)
+		}
+	}
+	if strings.Contains(text, "allowed-tools") || strings.Contains(text, "!`") {
+		t.Errorf("the Codex workers skill carries what only Claude Code understands:\n%s", text)
+	}
+}
+
+func TestCodexInstall_WritesBothSkillsUnderAgents(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if code, out, errOut := runCodex(t, "install"); code != 0 || !strings.Contains(out, "workers skill: created") {
+		t.Fatalf("install: %d %q %q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills", "workers", "SKILL.md")); err != nil {
+		t.Error(err)
+	}
+	if code, out, _ := runCodex(t, "uninstall"); code != 0 || strings.Count(out, "removed") != 2 {
+		t.Errorf("uninstall: %d %q", code, out)
 	}
 }
