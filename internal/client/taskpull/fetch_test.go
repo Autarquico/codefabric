@@ -122,9 +122,12 @@ func TestFetchRun_RefusesBranchNamesThatAreNotNewPlainBranches(t *testing.T) {
 	gitIn(t, w.mac, "checkout", "-q", "main")
 	gitIn(t, w.mac, "branch", "-D", "other")
 
-	for _, name := range []string{"@{-1}", "-f", "bad..name", "main"} {
-		if _, err := taskpull.FetchRun(t.Context(), f, "run-7", w.mac, name); err == nil {
-			t.Errorf("--branch %q was accepted", name)
+	for name, code := range map[string]domain.Code{
+		"@{-1}": domain.CodeInvalidRequest, "-f": domain.CodeInvalidRequest,
+		"bad..name": domain.CodeInvalidRequest, "main": domain.CodeInvalidTransition,
+	} {
+		if _, err := taskpull.FetchRun(t.Context(), f, "run-7", w.mac, name); !isCode(err, code) {
+			t.Errorf("--branch %q: %v, want %s", name, err, code)
 		}
 		if branchExists(t, w.mac, "other") {
 			t.Fatalf("--branch %q created the branch it expands to", name)

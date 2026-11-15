@@ -104,9 +104,11 @@ func (r repo) checkedOut(ctx context.Context) (map[string]bool, error) {
 	return branches, nil
 }
 
+// validBranch says whether name is a branch name as it is written: git also accepts
+// shorthands such as @{-1}, which it expands to another branch.
 func (r repo) validBranch(ctx context.Context, name string) bool {
-	ok, err := r.ok(ctx, "check-ref-format", "--branch", name)
-	return err == nil && ok
+	out, err := r.run(ctx, "check-ref-format", "--branch", name)
+	return err == nil && out == name
 }
 
 // subject is the first line of the message of a commit.
