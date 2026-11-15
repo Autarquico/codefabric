@@ -40,7 +40,9 @@ func newWorkerListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			workers, err := c.Workers(cmd.Context(), all)
+			ctx, cancel := boundedContext(cmd)
+			defer cancel()
+			workers, err := c.Workers(ctx, all)
 			if err != nil {
 				return err
 			}
@@ -60,6 +62,7 @@ func newWorkerListCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "include removed Workers")
 	cmd.Flags().StringSliceVar(&states, "state", nil, "only Workers in these states, comma separated (for example online,degraded)")
+	addTimeoutFlag(cmd)
 	return cmd
 }
 

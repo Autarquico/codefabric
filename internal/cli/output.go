@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 
@@ -40,4 +41,18 @@ func dialController(controller string) (*client.Client, error) {
 		opts = append(opts, client.WithController(controller))
 	}
 	return client.Open(paths.CredentialsDir(), opts...)
+}
+
+// addTimeoutFlag lets a command that a skill runs give up instead of waiting for a
+// Controller that does not answer.
+func addTimeoutFlag(cmd *cobra.Command) {
+	cmd.Flags().Duration(flagTimeout, 0, "give up after this long, for example 10s (default: the limits of the client)")
+}
+
+// boundedContext is the context of the command, cut at --timeout when given.
+func boundedContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {
+	if d, _ := cmd.Flags().GetDuration(flagTimeout); d > 0 {
+		return context.WithTimeout(cmd.Context(), d)
+	}
+	return cmd.Context(), func() {}
 }

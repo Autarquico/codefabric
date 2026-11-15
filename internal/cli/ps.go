@@ -21,7 +21,9 @@ func newPsCmd() *cobra.Command {
 				return err
 			}
 			project, _ := cmd.Flags().GetString(flagProject)
-			ps, err := c.Ps(cmd.Context(), project)
+			ctx, cancel := boundedContext(cmd)
+			defer cancel()
+			ps, err := c.Ps(ctx, project)
 			if err != nil {
 				return err
 			}
@@ -32,6 +34,7 @@ func newPsCmd() *cobra.Command {
 		},
 	}
 	addProjectFlag(cmd, "only the Runs of this Project")
+	addTimeoutFlag(cmd)
 	return cmd
 }
 
