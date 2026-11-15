@@ -48,6 +48,15 @@ TestScenario_VerifiedInstall_darwinArm64() {
 	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf was not installed on darwin/arm64"
 }
 
+TestScenario_VerifiedInstall_darwinAmd64() {
+	good_release "$KEY_A"
+	serve_dist
+	FAKE_UNAME_S=Darwin FAKE_UNAME_M=x86_64 run_install "$KEY_A/install.sh"
+	assert_rc 0
+	grep -q "\"GET /$TEST_NAME/$VERSION/cf_${BARE_VERSION}_darwin_amd64.tar.gz" "$TMP/server.log" || fail "the darwin_amd64 tarball was not requested"
+	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf was not installed on darwin/amd64"
+}
+
 # The real cf, built with the GoReleaser ldflags and packed like its archive (LICENSE, README.md, cf), signed and
 # installed over HTTP: proves the version injection and the archive layout, which the fake fixtures cannot.
 TestScenario_VerifiedInstall_realBinary() {
@@ -55,7 +64,7 @@ TestScenario_VerifiedInstall_realBinary() {
 	goos=$(go env GOOS)
 	goarch=$(go env GOARCH)
 	case "$goos/$goarch" in
-		linux/amd64 | linux/arm64 | darwin/arm64) ;;
+		linux/amd64 | linux/arm64 | darwin/amd64 | darwin/arm64) ;;
 		*) echo "SKIP: $goos/$goarch has no release tarball"; return 0 ;;
 	esac
 	pkg=github.com/Autarquico/codefabric/internal/buildinfo
@@ -160,13 +169,6 @@ TestScenario_HeaderOtherVersion() {
 }
 
 # --- Unsupported platform ------------------------------------------------------
-
-TestScenario_UnsupportedPlatform_darwinIntel() {
-	FAKE_UNAME_S=Darwin FAKE_UNAME_M=x86_64 run_install "$KEY_A/install.sh"
-	assert_rc 3
-	assert_out_contains "darwin/amd64"
-	assert_no_requests
-}
 
 TestScenario_UnsupportedPlatform_freebsd() {
 	FAKE_UNAME_S=FreeBSD FAKE_UNAME_M=amd64 run_install "$KEY_A/install.sh"

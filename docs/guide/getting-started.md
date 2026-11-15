@@ -22,7 +22,7 @@ The installer puts `cf` in `~/.local/bin`. Two variables change that:
 curl -fsSL https://github.com/Autarquico/codefabric/releases/latest/download/install.sh | CF_VERSION=v0.2.0 CF_INSTALL_DIR=/usr/local/bin sh
 ```
 
-Supported platforms: Linux (amd64, arm64) and macOS on Apple silicon (arm64). Anything else is refused before downloading.
+Supported platforms: Linux (amd64, arm64) and macOS (amd64, arm64). Anything else is refused before downloading.
 
 Before it installs anything, the script checks an OpenSSH signature on the list of checksums, then the checksum of the archive. It needs OpenSSH 8.2 or later (`ssh-keygen`). If a check fails, nothing is written to the install directory. At the end it tells you whether the directory is on your `PATH` and suggests a next step; it does not run anything else.
 

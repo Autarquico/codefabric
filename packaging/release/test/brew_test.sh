@@ -23,7 +23,7 @@ TestScenario_FormulaDerivada_valid() {
 	good_release "$KEY_A"
 	brew_formula "$VERSION"
 	assert_rc 0
-	for target in darwin_arm64 linux_arm64 linux_amd64; do
+	for target in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
 		name="cf_${BARE_VERSION}_$target.tar.gz"
 		grep -qF "url \"$BREW_BASE/$VERSION/$name\"" "$T/out" || fail "no url for $target"
 		grep -qF "sha256 \"$(hash_of "$T/dist/$name")\"" "$T/out" || fail "no sha256 for $target"

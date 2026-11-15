@@ -19,10 +19,10 @@ assert_no_requests() { [ "$(requests)" -eq 0 ] || fail "the server saw $(request
 
 # --- release fixture -------------------------------------------------------
 
-# make_dist DIR [MODE]: the three platform tarballs, each holding a fake cf that prints the bare version.
+# make_dist DIR [MODE]: the four platform tarballs, each holding a fake cf that prints the bare version.
 make_dist() {
 	mkdir -p "$1"
-	for target in linux_amd64 linux_arm64 darwin_arm64; do
+	for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
 		python3 -I "$RELEASE_DIR/test/mktar.py" "$1/cf_${BARE_VERSION}_$target.tar.gz" "${2:-ok}" "$BARE_VERSION"
 	done
 }

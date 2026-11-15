@@ -165,10 +165,10 @@ e imprime `--- PASS: TestScenario_*`).
 
 | Scenario de la spec | Tests (`TestScenario_...`) | Job |
 |---------------------|----------------------------|-----|
-| Instalación verificada | `VerifiedInstall`, `InstallTarget_*`, `LatestVersion_*`, `PortableAwk_*`, `VerifiedInstall_replacesPreviousBinary`, `_hintsWhenDirNotOnPath`, `_armLinux`, `_darwinArm64`, `_realBinary` (`installer_test.sh`) | `installer` (`ci.yml`) |
+| Instalación verificada | `VerifiedInstall`, `InstallTarget_*`, `LatestVersion_*`, `PortableAwk_*`, `VerifiedInstall_replacesPreviousBinary`, `_hintsWhenDirNotOnPath`, `_armLinux`, `_darwinArm64`, `_darwinAmd64`, `_realBinary` (`installer_test.sh`) | `installer` (`ci.yml`) |
 | Firma o checksum inválidos | `BadSignatureOrChecksum_tamperedChecksums`, `_signedByOtherKey`, `_archiveShaMismatch`, `_missingSignature`, `_revokedKey`, `_wrongPrincipal`, `_wrongNamespace`; endurecimiento en `Hardening_*` (`installer_test.sh`) | `installer` |
 | Cabecera de otra versión | `HeaderOtherVersion` (`installer_test.sh`) | `installer` |
-| Plataforma no soportada | `UnsupportedPlatform_darwinIntel`, `_freebsd`, `_unknownArch` (`installer_test.sh`) | `installer` |
+| Plataforma no soportada | `UnsupportedPlatform_freebsd`, `_unknownArch` (`installer_test.sh`) | `installer` |
 | Placeholder sin clave | `Placeholder` (`installer_test.sh`) | `installer` |
 | Puertas de la release | `ReleaseGates_*` (`gates_test.sh`: `require-checks.sh` y `tag-in-main.sh`) | `gates` y `sign-publish` (paso «tag must point into main») de `release.yml`; `installer` ejecuta los tests |
 | Conjunto publicado | `PublishedSet_*` (`published_test.sh`: `check.sh` y `verify-release.sh`) | `sign-publish` de `release.yml` (`check.sh`, `verify-release.sh`); `installer` ejecuta los tests |

@@ -8,6 +8,10 @@ class Codefabric < Formula
       url "@BASE_URL@/v@VERSION@/cf_@VERSION@_darwin_arm64.tar.gz"
       sha256 "@SHA_DARWIN_ARM64@"
     end
+    on_intel do
+      url "@BASE_URL@/v@VERSION@/cf_@VERSION@_darwin_amd64.tar.gz"
+      sha256 "@SHA_DARWIN_AMD64@"
+    end
   end
 
   on_linux do

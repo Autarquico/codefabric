@@ -7,7 +7,7 @@ LDFLAGS  := -s -w \
 	-X $(MODULE)/internal/buildinfo.commit=$(COMMIT) \
 	-X $(MODULE)/internal/buildinfo.date=$(DATE)
 GORELEASER ?= go run github.com/goreleaser/goreleaser/v2@v2.18.3
-TARGETS  := linux/amd64 linux/arm64 darwin/arm64
+TARGETS  := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
 export CGO_ENABLED := 0
 

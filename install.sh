@@ -56,7 +56,6 @@ detect_platform() {
 		aarch64 | arm64) ARCH=arm64 ;;
 		*) die 3 "unsupported architecture: $(uname -m)" ;;
 	esac
-	[ "$OS-$ARCH" != darwin-amd64 ] || die 3 'unsupported platform: darwin/amd64 (releases cover linux amd64/arm64 and darwin arm64)'
 }
 
 require_commands() {

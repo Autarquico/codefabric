@@ -1,6 +1,6 @@
 #!/bin/sh
 # Turn the GoReleaser tarballs into the signed release set.
-# Writes checksums.txt (line 1 "version: vX.Y.Z", then "<sha256>  <tarball>" for exactly the three
+# Writes checksums.txt (line 1 "version: vX.Y.Z", then "<sha256>  <tarball>" for exactly the four
 # tarballs), copies install.sh next to it, and signs both.
 # Usage: finalize.sh DIST VERSION
 # Env:   CF_SIGNING_KEY_FILE, CF_INSTALL_SH (the install.sh to ship; default the repo's)
@@ -21,11 +21,11 @@ sha256_of() {
 	if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 
-targets='linux_amd64 linux_arm64 darwin_arm64'
+targets='linux_amd64 linux_arm64 darwin_amd64 darwin_arm64'
 for target in $targets; do
 	[ -f "$dist/cf_${version#v}_$target.tar.gz" ] || { echo "missing tarball for $target in $dist" >&2; exit 1; }
 done
-[ "$(find "$dist" -maxdepth 1 -name 'cf_*.tar.gz' | wc -l | tr -d ' ')" -eq 3 ] || { echo "dist must hold exactly the three tarballs" >&2; exit 1; }
+[ "$(find "$dist" -maxdepth 1 -name 'cf_*.tar.gz' | wc -l | tr -d ' ')" -eq 4 ] || { echo "dist must hold exactly the four tarballs" >&2; exit 1; }
 
 {
 	printf 'version: %s\n' "$version"

@@ -22,7 +22,7 @@ Requires Go (see `go.mod`) and, for integration tests, `git` and `tmux`.
 make build          # bin/cf, static, no cgo
 make test           # unit tests
 make lint           # golangci-lint v2, including layering rules
-make cross          # linux/amd64, linux/arm64, darwin/arm64
+make cross          # linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
 ```
 
 ```bash

@@ -2,7 +2,7 @@ name: release
 
 # Builds, signs and publishes a release. Runs only for v* tags. The build job runs third-party code and
 # holds no secret and no write permission; only sign-publish, in the protected `release` environment,
-# sees the signing key, and it executes nothing from the build but data (the three tarballs, after their
+# sees the signing key, and it executes nothing from the build but data (the four tarballs, after their
 # digest and inventory are checked). The release is a draft until it has been verified as published.
 on:
   push:
@@ -64,7 +64,7 @@ jobs:
         run: |
           cd dist
           sha256sum cf_*.tar.gz >SHA256SUMS
-          [ "$(wc -l <SHA256SUMS | tr -d ' ')" -eq 3 ]
+          [ "$(wc -l <SHA256SUMS | tr -d ' ')" -eq 4 ]
           echo "digest=$(sha256sum SHA256SUMS | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -100,9 +100,9 @@ jobs:
           [ -n "$WANT_DIGEST" ]
           [ "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = "$WANT_DIGEST" ]
           sha256sum -c SHA256SUMS
-          [ "$(wc -l <SHA256SUMS | tr -d ' ')" -eq 3 ]
+          [ "$(wc -l <SHA256SUMS | tr -d ' ')" -eq 4 ]
           [ "$(find . -mindepth 1 -type f ! -name SHA256SUMS | sed 's|^\./||' | sort)" = "$(awk '{print $2}' SHA256SUMS | sort)" ]
-          [ "$(find . -mindepth 1 | wc -l | tr -d ' ')" -eq 4 ]
+          [ "$(find . -mindepth 1 | wc -l | tr -d ' ')" -eq 5 ]
           rm SHA256SUMS
       - name: write checksums.txt and sign it and install.sh
         env:
