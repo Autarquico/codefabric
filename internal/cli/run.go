@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/client/taskpull"
 )
 
 func newDoCmd(sessions SessionsFactory) *cobra.Command {
@@ -18,7 +20,7 @@ func newDoCmd(sessions SessionsFactory) *cobra.Command {
 
 func newRunCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "run", Short: "Inspect and explain Runs"}
-	cmd.AddCommand(newRunListCmd(), newRunShowCmd(), newRunExplainCmd(), newRunPublishCmd(), newRunCheckpointCmd(),
+	cmd.AddCommand(newRunListCmd(), newRunShowCmd(), newRunExplainCmd(), newRunPublishCmd(), newRunFetchCmd(), newRunCheckpointCmd(),
 		newFutureRunCmd("fork", "Start a new Run from an existing one", (*client.Client).ForkRun),
 		newFutureRunCmd("promote", "Promote the result of a Run", (*client.Client).PromoteRun))
 	return cmd
@@ -112,6 +114,38 @@ func newRunPublishCmd() *cobra.Command {
 			})
 		},
 	}
+}
+
+func newRunFetchCmd() *cobra.Command {
+	var branch string
+	cmd := &cobra.Command{
+		Use:   "fetch <run>",
+		Short: "Bring the published result of a Run into this repository, on a new local branch",
+		Long: "Fetches the branch a Run published from the relay of its Project and creates a local branch at its\n" +
+			"result: the Run's own branch (cf/<task>/<run>) unless --branch names another. A branch that exists is\n" +
+			"never moved, and nothing is checked out.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := openClient(cmd)
+			if err != nil {
+				return err
+			}
+			dir, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			res, err := taskpull.FetchRun(cmd.Context(), c, args[0], dir, branch)
+			if err != nil {
+				return err
+			}
+			return emit(cmd, res, func(w io.Writer) error {
+				_, err := fmt.Fprintf(w, "Run %s: %s on branch %s (%s).\n", res.Run, res.Commit, printable(res.Branch), res.Outcome)
+				return err
+			})
+		},
+	}
+	cmd.Flags().StringVar(&branch, "branch", "", "the local branch to create (default: the Run's own branch)")
+	return cmd
 }
 
 // newFutureRunCmd is like newFutureTaskCmd, for a Run.

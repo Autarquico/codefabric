@@ -160,7 +160,9 @@ List the Runs that are live, with their Workers and whether they can be attached
 
 ## `cf run`
 
-Inspect and explain Runs. Subcommands: `list`, `show` (a Run and the configuration it froze), `explain` (why a Run waits, Worker by Worker) and `publish` (try again to publish the result of a Run whose publication failed). `fork` and `promote` exist but are not implemented yet.
+Inspect and explain Runs. Subcommands: `list`, `show` (a Run and the configuration it froze), `explain` (why a Run waits, Worker by Worker), `publish` (try again to publish the result of a Run whose publication failed) and `fetch`. `fork` and `promote` exist but are not implemented yet.
+
+`cf run fetch <run> [--branch <name>]` brings the result a Run published into the repository of this directory: it fetches the Run's branch from the relay and creates a local branch at the result, `cf/<task>/<run>` unless `--branch` names another. A branch that already exists is never moved (the command refuses if it points elsewhere), and nothing is checked out. It fails with `CF_INVALID_TRANSITION` if the Run has not published a result.
 
 `cf run checkpoint` captures and lists checkpoints (the Run's source pushed to a ref of the relay, plus the harness's own state when the harness supports it):
 
