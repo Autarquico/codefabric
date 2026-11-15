@@ -286,6 +286,31 @@ func TestRestartNeeded_ADaemonThatStartedWhileTheJoinWasPendingAsksForARestart(t
 	}
 }
 
+func TestRestartNeeded_ChangingTheDiskThresholdAsksForARestartUnlessAnOverrideWins(t *testing.T) {
+	paths := config.Paths{ConfigDir: t.TempDir(), DataDir: t.TempDir()}
+	if err := doctor.SaveSettings(paths, doctor.Settings{Name: "w1", DiskMinFree: "20%"}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := doctor.LoadSettings(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &daemon{settings: s}
+	needed, overridden := d.restartNeeded(Options{Paths: paths}), d.restartNeeded(Options{Paths: paths, DiskMinFree: "5%"})
+	if needed() {
+		t.Fatal("a restart is needed before anything changed")
+	}
+	if err := doctor.SaveSettings(paths, doctor.Settings{Name: "w1", DiskMinFree: "10%"}); err != nil {
+		t.Fatal(err)
+	}
+	if !needed() {
+		t.Error("the daemon keeps the old threshold and does not ask for a restart")
+	}
+	if overridden() {
+		t.Error("a restart is asked for a threshold the override makes irrelevant")
+	}
+}
+
 func TestDoctor_RestartNeededFailsTheSetupComponent(t *testing.T) {
 	h, err := localhost.New(localhost.Options{Home: t.TempDir(), Env: os.Environ()})
 	if err != nil {

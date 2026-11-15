@@ -155,3 +155,84 @@ func TestAnswerFence(t *testing.T) {
 		})
 	}
 }
+
+const pastedToken = "sk-ant-oat01-Zq8vSentinel7Hc2LmP0xR4tW9yB" //nolint:gosec // a fake token
+
+func storedValue(t *testing.T, w *keyringWorker, ref string) string {
+	t.Helper()
+	got, err := w.store.Get(t.Context(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(got.Value)
+}
+
+func TestSecretsSet_OAuthTokenKeepsTheTokenLineOfWhatSetupTokenPrints(t *testing.T) {
+	w := newKeyringWorker(t)
+	pasted := "Your OAuth token (valid for 1 year):\n\n" + pastedToken + "\n\nStore this token securely.\n"
+	out, err := cf(t, pasted, "set", "claude/oauth-token")
+	if err != nil {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	if !strings.Contains(out, "kept the token line from the pasted output") || strings.Contains(out, pastedToken) {
+		t.Errorf("output = %s", out)
+	}
+	if got := storedValue(t, w, "claude/oauth-token"); got != pastedToken {
+		t.Errorf("the stored value is not the token line (%d bytes)", len(got))
+	}
+}
+
+func TestSecretsSet_OAuthTokenOfOneLineIsStoredAsGiven(t *testing.T) {
+	w := newKeyringWorker(t)
+	out, err := cf(t, "not-a-token-at-all-but-one-line\n", "set", "claude/oauth-token")
+	if err != nil || strings.Contains(out, "kept the token line") {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	if got := storedValue(t, w, "claude/oauth-token"); got != "not-a-token-at-all-but-one-line" {
+		t.Errorf("stored %q", got)
+	}
+}
+
+func TestSecretsSet_OAuthTokenOfSeveralLinesWithoutExactlyOneTokenIsRefused(t *testing.T) {
+	for name, pasted := range map[string]string{
+		"none": "Your OAuth token:\nsomething else\n",
+		"two":  pastedToken + "\n" + pastedToken + "x\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newKeyringWorker(t)
+			out, err := cf(t, pasted, "set", "claude/oauth-token")
+			if err == nil || !strings.Contains(err.Error(), "sk-ant-oat") || strings.Contains(out+err.Error(), pastedToken) {
+				t.Fatalf("set: %v: %s", err, out)
+			}
+			if _, err := w.store.Get(t.Context(), "claude/oauth-token"); err == nil {
+				t.Error("something was stored")
+			}
+		})
+	}
+}
+
+func TestSecretsSet_OAuthTokenCutByTheInputCapIsRefusedNotExtracted(t *testing.T) {
+	w := newKeyringWorker(t)
+	if out, err := cf(t, pastedToken, "set", "claude/oauth-token"); err != nil {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	pasted := strings.Repeat("preamble\n", domain.MaxSecretValueLen/9) + pastedToken + "\nmore\n"
+	out, err := cf(t, pasted, "set", "claude/oauth-token")
+	if err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	if got := storedValue(t, w, "claude/oauth-token"); got != pastedToken {
+		t.Errorf("the working credential was overwritten with %d bytes", len(got))
+	}
+}
+
+func TestSecretsSet_OtherRefsKeepAMultilineValue(t *testing.T) {
+	w := newKeyringWorker(t)
+	value := "first line of a key\n" + pastedToken + "\nlast line"
+	if out, err := cf(t, value, "set", "ssh/key"); err != nil {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	if got := storedValue(t, w, "ssh/key"); got != value {
+		t.Errorf("stored %q", got)
+	}
+}

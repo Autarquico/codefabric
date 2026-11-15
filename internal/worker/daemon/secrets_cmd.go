@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
 	"github.com/Autarquico/codefabric/internal/adapters/secrets"
 	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
 	"github.com/Autarquico/codefabric/internal/adapters/secrets/keyring"
@@ -254,12 +256,46 @@ func readValue(ctx context.Context, in io.Reader, prompt io.Writer, ref string) 
 	select {
 	case raw := <-read:
 		value, _ := bytes.CutSuffix(raw, []byte("\n"))
+		if ref == claude.OAuthTokenRef && len(value) <= domain.MaxSecretValueLen { // input cut at the cap may hold a cut token
+			var err error
+			if value, err = oauthTokenLine(value, prompt); err != nil {
+				return nil, err
+			}
+		}
 		return value, checkValue(value)
 	case err := <-failed:
 		return nil, fmt.Errorf("reading the value from stdin: %w", err)
 	case <-ctx.Done():
 		return nil, cancelled()
 	}
+}
+
+// oauthTokenPattern is the token `claude setup-token` makes.
+var oauthTokenPattern = regexp.MustCompile(`^sk-ant-oat\S+$`)
+
+// oauthTokenLine is the token of what was pasted from `claude setup-token`,
+// which prints more than the token. A value of one line is left as it is.
+func oauthTokenLine(value []byte, notice io.Writer) ([]byte, error) {
+	var lines [][]byte
+	for line := range bytes.SplitSeq(value, []byte("\n")) {
+		if line = bytes.TrimSpace(line); len(line) > 0 {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) <= 1 {
+		return value, nil
+	}
+	var found [][]byte
+	for _, line := range lines {
+		if oauthTokenPattern.Match(line) {
+			found = append(found, line)
+		}
+	}
+	if len(found) != 1 {
+		return nil, invalid("the input has several lines and not exactly one is a token of the form sk-ant-oat...: paste only the token. Nothing was stored")
+	}
+	_, _ = fmt.Fprintln(notice, "kept the token line from the pasted output")
+	return found[0], nil
 }
 
 // checkValue is domain.CheckSecretValue with a message of its own: a value cut

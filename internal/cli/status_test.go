@@ -64,3 +64,21 @@ func TestPrintWorker_ShowsTheBacklogAndTheLastDiscardEvenWithNoBacklog(t *testin
 		t.Errorf("output lacks %q:\n%s", want, out.String())
 	}
 }
+
+func TestPrintWorker_SaysWhenTheSSHTargetIsGuessedFromTheHostname(t *testing.T) {
+	for name, tc := range map[string]struct{ target, want, notWant string }{
+		"guessed":    {"alex@mini", "alex@mini (guessed from the hostname", ""},
+		"configured": {"alex@mini.lab:2222", "SSH target    alex@mini.lab:2222\n", "guessed"},
+		"none":       {"", "SSH target    -\n", "guessed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := printWorker(&out, v1.Worker{Name: "mini", Hostname: "mini", SSHTarget: tc.target}); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out.String(), tc.want) || tc.notWant != "" && strings.Contains(out.String(), tc.notWant) {
+				t.Errorf("output:\n%s", out.String())
+			}
+		})
+	}
+}

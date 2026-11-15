@@ -202,7 +202,11 @@ func diagnose(ctx context.Context, store doctorStore, probe sshProbe, overrides 
 		go func() {
 			defer wg.Done()
 			if reason := attachProblem(ctx, cmp.Or(overrides[w.Name], w.SSHTarget), probe); reason != "" {
-				rep.Workers[i].Warnings = []string{"attach no funcionará en " + w.Name + ": " + reason}
+				warning := "attach no funcionará en " + w.Name + ": " + reason
+				if overrides[w.Name] == "" && guessedSSHTarget(w) {
+					warning += " (el Worker lo adivinó por su hostname: fija --ssh-target en `cf worker run` o `cf worker install-service`)"
+				}
+				rep.Workers[i].Warnings = []string{warning}
 			}
 		}()
 	}

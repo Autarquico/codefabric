@@ -90,15 +90,18 @@ func (d *daemon) startDoctor(ctx context.Context, o Options) error {
 
 // restartNeeded says whether the config changed in a way this daemon, which
 // computed its harnesses at start, does not follow: the join finished after it
-// started pending, or the offered harnesses are not those it started with.
+// started pending, the offered harnesses are not those it started with, or the
+// disk threshold is not the one it reads at start (unless an override wins).
 func (d *daemon) restartNeeded(o Options) func() bool {
 	startedPending, started := d.settings.SetupPending, slices.Clone(d.settings.Harnesses)
+	startedMinFree := d.settings.DiskMinFree
 	return func() bool {
 		now, err := doctor.LoadSettings(o.Paths)
 		if err != nil {
 			return false
 		}
-		return startedPending && !now.SetupPending || !doctor.SameHarnesses(started, now.Harnesses)
+		minFreeChanged := o.DiskMinFree == "" && now.DiskMinFree != startedMinFree
+		return startedPending && !now.SetupPending || !doctor.SameHarnesses(started, now.Harnesses) || minFreeChanged
 	}
 }
 
