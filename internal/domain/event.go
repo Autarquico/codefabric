@@ -85,6 +85,12 @@ const (
 	EventConfirmationRequested EventType = "ConfirmationRequested"
 	EventConfirmationResolved  EventType = "ConfirmationResolved"
 
+	// EventAttachOpened and EventAttachClosed audit a live attach through the
+	// relay: who (the client identity), which Run and Worker, in which mode, and,
+	// on close, for how long and why.
+	EventAttachOpened EventType = "AttachOpened"
+	EventAttachClosed EventType = "AttachClosed"
+
 	EventArtifactCreated     EventType = "ArtifactCreated"
 	EventEvaluationStarted   EventType = "EvaluationStarted"
 	EventEvaluationCompleted EventType = "EvaluationCompleted"

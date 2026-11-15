@@ -52,6 +52,7 @@ type testController struct {
 	logs      *logBuffer
 	owner     *client.Client
 	ownerDir  string
+	srv       *api.Server
 	stop      func() // shuts the server down and waits for it; the cleanup does it too
 }
 
@@ -113,6 +114,7 @@ func buildController(t *testing.T, start time.Time, routes func(*api.Server), gi
 	}
 	srv, err := api.New(cfg)
 	must(t, err)
+	tc.srv = srv
 	if routes != nil {
 		routes(srv)
 	}
