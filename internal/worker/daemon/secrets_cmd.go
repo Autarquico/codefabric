@@ -256,7 +256,7 @@ func readValue(ctx context.Context, in io.Reader, prompt io.Writer, ref string) 
 	select {
 	case raw := <-read:
 		value, _ := bytes.CutSuffix(raw, []byte("\n"))
-		if ref == claude.OAuthTokenRef {
+		if ref == claude.OAuthTokenRef && len(value) <= domain.MaxSecretValueLen { // input cut at the cap may hold a cut token
 			var err error
 			if value, err = oauthTokenLine(value, prompt); err != nil {
 				return nil, err

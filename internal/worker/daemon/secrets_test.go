@@ -211,6 +211,21 @@ func TestSecretsSet_OAuthTokenOfSeveralLinesWithoutExactlyOneTokenIsRefused(t *t
 	}
 }
 
+func TestSecretsSet_OAuthTokenCutByTheInputCapIsRefusedNotExtracted(t *testing.T) {
+	w := newKeyringWorker(t)
+	if out, err := cf(t, pastedToken, "set", "claude/oauth-token"); err != nil {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	pasted := strings.Repeat("preamble\n", domain.MaxSecretValueLen/9) + pastedToken + "\nmore\n"
+	out, err := cf(t, pasted, "set", "claude/oauth-token")
+	if err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	if got := storedValue(t, w, "claude/oauth-token"); got != pastedToken {
+		t.Errorf("the working credential was overwritten with %d bytes", len(got))
+	}
+}
+
 func TestSecretsSet_OtherRefsKeepAMultilineValue(t *testing.T) {
 	w := newKeyringWorker(t)
 	value := "first line of a key\n" + pastedToken + "\nlast line"
