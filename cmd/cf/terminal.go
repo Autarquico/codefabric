@@ -38,23 +38,13 @@ func errRejectedTarget() error {
 		map[string]any{"reason": "invalid_ssh_target"})
 }
 
-func (sshTerminal) Attach(ctx context.Context, req cli.AttachRequest, stdio cli.TerminalIO) (int, error) {
-	argv, err := remoteArgv(req)
-	if err != nil {
-		return 0, err
+// Open prepares the session of req over its transport. The relay through the
+// Controller is not in this build yet: asking for it is refused, and ssh is
+// never started in its place.
+func (sshTerminal) Open(ctx context.Context, req cli.AttachRequest) (cli.Session, error) {
+	if req.Transport != cli.TransportSSH {
+		return nil, domain.NewError(domain.CodeNotImplemented, "attach over the "+req.Transport+" transport is not available in this build; use --ssh", nil)
 	}
-	code, err := ssh.Attach(ctx, ssh.Options{}, req.Target, argv, ssh.Stdio{In: stdio.In, Out: stdio.Out, Err: stdio.Err})
-	switch {
-	case errors.Is(err, ssh.ErrRejected):
-		return 0, errRejectedTarget()
-	case err != nil:
-		return 0, domain.NewError(domain.CodeRunNotAttachable, "ssh could not be started on this machine",
-			map[string]any{"reason": v1.NotAttachableSSHFailed})
-	}
-	return code, nil
-}
-
-func (sshTerminal) Command(ctx context.Context, req cli.AttachRequest) (*exec.Cmd, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -70,5 +60,20 @@ func (sshTerminal) Command(ctx context.Context, req cli.AttachRequest) (*exec.Cm
 		return nil, domain.NewError(domain.CodeRunNotAttachable, "ssh could not be prepared on this machine",
 			map[string]any{"reason": v1.NotAttachableSSHFailed})
 	}
-	return cmd, nil
+	return sshSession{cmd: cmd}, nil
+}
+
+// sshSession is an ssh process that has not started. Like ssh.Attach, it does
+// not end ssh when a context ends: the terminal's own interrupt reaches it.
+type sshSession struct{ cmd *exec.Cmd }
+
+// Run starts ssh on the terminal and returns its exit status: 0 when the person
+// detached, 255 when ssh itself failed or was ended by a signal.
+func (s sshSession) Run(stdio cli.TerminalIO) (int, error) {
+	code, err := ssh.Run(s.cmd, ssh.Stdio{In: stdio.In, Out: stdio.Out, Err: stdio.Err})
+	if err != nil {
+		return 0, domain.NewError(domain.CodeRunNotAttachable, "ssh could not be started on this machine",
+			map[string]any{"reason": v1.NotAttachableSSHFailed})
+	}
+	return code, nil
 }

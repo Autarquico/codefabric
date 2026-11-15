@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -254,5 +255,36 @@ func TestRunViewsCarryTheModeAndWhetherTheWorkerIsReachable(t *testing.T) {
 	}
 	if run.WorkerReachable != nil {
 		t.Errorf("a Run with no Worker has worker_reachable %v", *run.WorkerReachable)
+	}
+}
+
+func TestAttach_EligibilityIsSeparateFromTheTransports(t *testing.T) {
+	e := newEnv(t)
+	relayOnly, _ := e.interactiveRun("alpha", announce("", nil), withCapabilities(domain.AttachRelayCapability))
+	got, reason, code := e.attachReason(relayOnly.ID)
+	if code != "" || !slices.Equal(got.Transports, []string{v1.AttachTransportRelay}) || got.SSHTarget != "" || got.Binary != "" {
+		t.Errorf("relay without ssh: %+v, %s %s", got, code, reason)
+	}
+	sshOnly, _ := e.interactiveRun("beta")
+	if got, _, code := e.attachReason(sshOnly.ID); code != "" || !slices.Equal(got.Transports, []string{v1.AttachTransportSSH}) {
+		t.Errorf("ssh only: %+v, %s", got, code)
+	}
+	both, _ := e.interactiveRun("gamma", withCapabilities(domain.AttachRelayCapability))
+	if got, _, code := e.attachReason(both.ID); code != "" || !slices.Equal(got.Transports, []string{v1.AttachTransportRelay, v1.AttachTransportSSH}) {
+		t.Errorf("both: %+v, %s", got, code)
+	}
+	// Eligibility still comes first: the relay does not attach a Run that is not running.
+	queued := e.queuedRun("p-q", func(r *v1.CreateTaskRequest) { r.Name, r.Mode = "q-task", domain.ModeInteractive })
+	if _, reason, _ := e.attachReason(queued.ID); reason != v1.NotAttachableNotRunning {
+		t.Errorf("queued: %s", reason)
+	}
+	ps, err := e.app.Runs.Ps(t.Context(), e.owner, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range ps.Runs {
+		if r.ID == relayOnly.ID && (!r.Attachable || !slices.Equal(r.Transports, []string{v1.AttachTransportRelay})) {
+			t.Errorf("ps of the relay-only Run: %+v", r)
+		}
 	}
 }

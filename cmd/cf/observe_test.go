@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -26,29 +25,29 @@ import (
 	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
 )
 
-// commandTerminal hands out a process and keeps the request it was built for.
+// commandTerminal hands out a session and keeps the request it was opened for.
 type commandTerminal struct {
 	spyTerminal
 	req cli.AttachRequest
 }
 
-func (c *commandTerminal) Command(_ context.Context, req cli.AttachRequest) (*exec.Cmd, error) {
+func (c *commandTerminal) Open(ctx context.Context, req cli.AttachRequest) (cli.Session, error) {
 	c.req = req
-	return c.spyTerminal.Command(context.Background(), req)
+	return c.spyTerminal.Open(ctx, req)
 }
 
 // spyTerminal records that it was reached.
 type spyTerminal struct{ calls atomic.Int32 }
 
-func (s *spyTerminal) Command(context.Context, cli.AttachRequest) (*exec.Cmd, error) {
+func (s *spyTerminal) Open(context.Context, cli.AttachRequest) (cli.Session, error) {
 	s.calls.Add(1)
-	return exec.CommandContext(context.Background(), "true"), nil
+	return doneSession{}, nil
 }
 
-func (s *spyTerminal) Attach(context.Context, cli.AttachRequest, cli.TerminalIO) (int, error) {
-	s.calls.Add(1)
-	return 0, nil
-}
+// doneSession is a session that ends at once, detached.
+type doneSession struct{}
+
+func (doneSession) Run(cli.TerminalIO) (int, error) { return 0, nil }
 
 // liveCF is a cf command running under a context, whose output a test reads as it comes.
 type liveCF struct {
@@ -261,7 +260,7 @@ func TestObserveAttachEvents_AttachChecksTheTargetTheOverrideAndTheTerminalBefor
 	// The seam of the TUI: the same checks and the same override, and a process instead of a session.
 	term := &commandTerminal{}
 	session, err := cli.PrepareAttach(t.Context(), term, cli.AttachParams{Ref: "auth-race", ReadOnly: true})
-	if err != nil || session.Cmd == nil || term.req.Target.Host != "trusted" || term.req.RunID != r.run.ID || !term.req.ReadOnly {
+	if err != nil || session == nil || term.req.Target.Host != "trusted" || term.req.RunID != r.run.ID || !term.req.ReadOnly {
 		t.Fatalf("PrepareAttach = %+v, %v; request %+v", session, err, term.req)
 	}
 	if _, err := cli.PrepareAttach(t.Context(), term, cli.AttachParams{Ref: "auth-race", SSHTarget: "-oProxyCommand=x"}); !isCode(err, domain.CodeRunNotAttachable) {
@@ -276,12 +275,20 @@ func TestObserveAttachEvents_AttachChecksTheTargetTheOverrideAndTheTerminalBefor
 	if err := session.Finish(t.Context(), nil); err != nil {
 		t.Fatalf("detached: %v", err)
 	}
-	sshDown := exec.CommandContext(t.Context(), "sh", "-c", "exit 255").Run()
-	if err := session.Finish(t.Context(), sshDown); !isCode(err, domain.CodeRunNotAttachable) {
+	if err := session.Finish(t.Context(), cli.ExitStatus(255)); !isCode(err, domain.CodeRunNotAttachable) {
 		t.Fatalf("ssh failed (255): %v", err)
 	}
 	// A Run that is not the one asked for.
 	fails(t, 3, domain.CodeNotFound, "attach", "run-99")
+}
+
+// The relay is not in this build: the ssh Terminal refuses it rather than
+// opening ssh in its place.
+func TestObserveAttachEvents_TheSSHTerminalRefusesTheRelay(t *testing.T) {
+	_, err := sshTerminal{}.Open(t.Context(), cli.AttachRequest{Transport: cli.TransportRelay})
+	if !isCode(err, domain.CodeNotImplemented) {
+		t.Fatalf("relay: %v", err)
+	}
 }
 
 func isCode(err error, code domain.Code) bool {

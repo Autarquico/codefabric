@@ -45,6 +45,7 @@ var attachHints = map[string]string{
 	v1.NotAttachableSSHFailed:          "ssh could not open the session: check you can ssh to the Worker, or set attach.ssh_targets in client.json.",
 	v1.NotAttachableNoSSHTarget:        "No ssh target is known for the Worker: set attach.ssh_targets in client.json or give --ssh-target.",
 	v1.NotAttachableRuntimeUnsupported: "The Run's runtime cannot be attached from here: follow its output in the Logs view.",
+	v1.NotAttachableRelayUnsupported:   "The Worker does not offer attach through the Controller: use --ssh to attach over ssh.",
 	"invalid_ssh_target":               "The ssh target is not [user@]host[:port]: fix attach.ssh_targets in client.json or --ssh-target.",
 	"target_mismatch":                  "The Run is no longer where it was: refresh the view and try again.",
 }

@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -68,5 +70,76 @@ func TestVerifyTarget_OnlyTheRunAskedForUnderItsLiveLeaseOnItsWorkerIsObeyed(t *
 		if !errors.As(err, &coded) || coded.Code != domain.CodeRunNotAttachable || coded.Details["reason"] != "target_mismatch" {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+func TestAttachTransport_TheDefaultIsSSHUntilTheRelayExists(t *testing.T) {
+	if DefaultAttachTransport() != TransportSSH || transportOf(false) != DefaultAttachTransport() || transportOf(true) != TransportSSH {
+		t.Errorf("default %q, flag-less %q, --ssh %q", DefaultAttachTransport(), transportOf(false), transportOf(true))
+	}
+}
+
+func TestAttachTransport_ATransportTheWorkerDoesNotOfferIsRefusedNamingSSH(t *testing.T) {
+	sshOnly := v1.AttachTarget{Transports: []string{v1.AttachTransportSSH}}
+	if got := transportsOf(sshOnly); !slices.Contains(got, TransportSSH) || slices.Contains(got, TransportRelay) {
+		t.Errorf("transports = %v", got)
+	}
+	if got := transportsOf(v1.AttachTarget{}); !slices.Equal(got, []string{TransportSSH}) {
+		t.Errorf("a Controller without the list = %v", got)
+	}
+	var coded *domain.Error
+	err := noTransport(TransportRelay)
+	if !errors.As(err, &coded) || coded.Code != domain.CodeRunNotAttachable ||
+		coded.Details["reason"] != v1.NotAttachableRelayUnsupported || !strings.Contains(coded.Message, "--ssh") {
+		t.Errorf("relay: %v", err)
+	}
+	if err := noTransport(TransportSSH); !errors.As(err, &coded) || coded.Details["reason"] != v1.NotAttachableNoSSHTarget {
+		t.Errorf("ssh: %v", err)
+	}
+}
+
+type fakeSession struct {
+	code int
+	err  error
+	got  TerminalIO
+}
+
+func (f *fakeSession) Run(io TerminalIO) (int, error) { f.got = io; return f.code, f.err }
+
+func TestAttachSession_RunsTheSessionOnTheTerminalItIsGiven(t *testing.T) {
+	in, out := strings.NewReader(""), &strings.Builder{}
+	for _, tc := range []struct {
+		name string
+		sess *fakeSession
+		want error
+	}{
+		{"detached", &fakeSession{}, nil},
+		{"status", &fakeSession{code: 255}, ExitStatus(255)},
+		{"failed to start", &fakeSession{err: errors.New("boom")}, nil},
+	} {
+		s := &AttachSession{session: tc.sess}
+		s.SetStdin(in)
+		s.SetStdout(out)
+		s.SetStderr(out)
+		err := s.Run()
+		switch {
+		case tc.name == "failed to start" && err == nil, tc.name != "failed to start" && !errors.Is(err, tc.want):
+			t.Errorf("%s: Run = %v", tc.name, err)
+		}
+		if tc.sess.got.In != in || tc.sess.got.Out != out {
+			t.Errorf("%s: the session did not get the terminal", tc.name)
+		}
+	}
+}
+
+// The transports in `cf ps` come from the Controller: a control character in
+// them does not reach the terminal.
+func TestPs_TheTransportColumnDropsControlCharacters(t *testing.T) {
+	var out strings.Builder
+	if err := printPs(&out, []v1.PsEntry{{Transports: []string{"ssh\x1b[2J"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsRune(out.String(), '\x1b') || !strings.Contains(out.String(), "ssh[2J") {
+		t.Fatalf("ps table:\n%q", out.String())
 	}
 }

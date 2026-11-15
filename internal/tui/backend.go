@@ -2,7 +2,8 @@ package tui
 
 import (
 	"context"
-	"os/exec"
+
+	tea "charm.land/bubbletea/v2"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli"
@@ -32,10 +33,11 @@ type Timeline struct {
 	Capped bool
 }
 
-// Attachment is a verified attach that the TUI runs with tea.ExecProcess.
+// Attachment is a verified attach that the TUI runs with tea.Exec.
 type Attachment interface {
-	Cmd() *exec.Cmd
-	// Finish turns how the process ended into the answer `cf attach` gives.
+	// Command is the session, to run on the terminal the TUI hands over.
+	Command() tea.ExecCommand
+	// Finish turns how the session ended into the answer `cf attach` gives.
 	Finish(runErr error) error
 }
 
@@ -280,7 +282,7 @@ type sdkAttachment struct {
 	session *cli.AttachSession
 }
 
-func (a sdkAttachment) Cmd() *exec.Cmd { return a.session.Cmd }
+func (a sdkAttachment) Command() tea.ExecCommand { return a.session }
 
 func (a sdkAttachment) Finish(runErr error) error { return a.session.Finish(a.ctx, runErr) }
 

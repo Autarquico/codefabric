@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os/exec"
+	"slices"
 	"strconv"
 
 	"github.com/spf13/cobra"
@@ -16,24 +16,40 @@ import (
 )
 
 // Terminal opens the session of a Run in the terminal of the person. cmd/cf
-// composes it from the adapters (ssh and the runtime's attach command): the CLI
-// is a client of the Controller and knows neither.
+// composes it from the adapters (ssh and the runtime's attach command, and the
+// relay through the Controller): the CLI is a client of the Controller and
+// knows none of them.
 type Terminal interface {
-	// Attach returns the exit status of the attach: 0 when the person detached,
-	// 255 when the transport itself failed. An error is a refusal or a failure to start.
-	Attach(ctx context.Context, req AttachRequest, stdio TerminalIO) (int, error)
-	// Command is the same session as a process that is not started and has no
-	// streams wired, for a caller that suspends its own screen to run it (the
-	// TUI, through tea.ExecProcess). The refusals are those of Attach.
-	Command(ctx context.Context, req AttachRequest) (*exec.Cmd, error)
+	// Open prepares the session of req over req.Transport without starting it.
+	// An error is a refusal or a failure to prepare; nothing was run.
+	Open(ctx context.Context, req AttachRequest) (Session, error)
 }
 
-// AttachRequest is what the CLI has checked and the Terminal runs: the Run and
-// epoch the session must belong to, the handle and the binary the Worker gave,
-// and the machine to reach.
+// Session is an attach that is ready to run, whatever its transport.
+type Session interface {
+	// Run runs the session in the terminal of the person until it ends and
+	// returns its exit status: 0 when the person detached, 255 when the
+	// transport itself failed. An error is a failure to start.
+	Run(stdio TerminalIO) (int, error)
+}
+
+// Transports `cf attach` can choose between: the values of AttachTarget.Transports.
+const (
+	TransportSSH   = v1.AttachTransportSSH
+	TransportRelay = v1.AttachTransportRelay
+)
+
+// DefaultAttachTransport is the transport `cf attach` and the TUI use when the
+// person does not choose one. It is the only place that says so.
+func DefaultAttachTransport() string { return TransportSSH }
+
+// AttachRequest is what the CLI has checked and the Terminal opens: the Run and
+// epoch the session must belong to, the transport, the handle, and, for ssh,
+// the binary the Worker gave and the machine to reach.
 type AttachRequest struct {
 	RunID      string
 	LeaseEpoch uint64
+	Transport  string
 	Handle     v1.RuntimeHandle
 	Binary     string
 	Target     domain.SSHTarget
@@ -55,12 +71,13 @@ func newAttachCmd(term Terminal) *cobra.Command {
 	var (
 		readOnly  bool
 		sshTarget string
+		viaSSH    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "attach <task|run>",
 		Short: "Open the live session of a Run in this terminal; closing it does not end the Run",
-		Long: "Open the interactive session of a Run, or of the latest live Run of a Task, over ssh.\n" +
-			"The machine to reach and the program to run on it are what the Worker announced; they are\n" +
+		Long: "Open the interactive session of a Run, or of the latest live Run of a Task, over ssh (--ssh).\n" +
+			"For ssh, the machine to reach and the program to run on it are what the Worker announced; they are\n" +
 			"claims of that machine, and --ssh-target (or attach.ssh_targets in client.json) says where to\n" +
 			"go instead. Detach with the runtime's own keys (tmux: Ctrl-b d): the Run goes on.",
 		Args: cobra.ExactArgs(1),
@@ -70,7 +87,7 @@ func newAttachCmd(term Terminal) *cobra.Command {
 				return err
 			}
 			project := refScope(cmd, c)
-			req, err := resolveAttach(cmd.Context(), c, args[0], project, sshTarget)
+			req, err := resolveAttach(cmd.Context(), c, args[0], project, sshTarget, transportOf(viaSSH))
 			if err != nil {
 				return err
 			}
@@ -81,7 +98,11 @@ func newAttachCmd(term Terminal) *cobra.Command {
 			if term == nil {
 				return errNoTerminal()
 			}
-			code, err := term.Attach(cmd.Context(), req, TerminalIO{In: cmd.InOrStdin(), Out: cmd.OutOrStdout(), Err: cmd.ErrOrStderr()})
+			session, err := term.Open(cmd.Context(), req)
+			if err != nil {
+				return err
+			}
+			code, err := session.Run(TerminalIO{In: cmd.InOrStdin(), Out: cmd.OutOrStdout(), Err: cmd.ErrOrStderr()})
 			if err != nil {
 				return err
 			}
@@ -89,6 +110,7 @@ func newAttachCmd(term Terminal) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&readOnly, "read-only", false, "attach without sending what you type to the Run")
+	cmd.Flags().BoolVar(&viaSSH, "ssh", false, "attach over ssh straight to the Worker (the default in this build)")
 	cmd.Flags().StringVar(&sshTarget, "ssh-target", "", "reach the Worker at this [user@]host[:port] instead of the one it announced")
 	addProjectFlag(cmd, "the Project that narrows a Task name")
 	return cmd
@@ -103,32 +125,80 @@ type AttachParams struct {
 	// SSHTarget overrides where to connect, as the --ssh-target flag does.
 	SSHTarget string
 	ReadOnly  bool
+	// Transport is the one to attach through (TransportSSH, TransportRelay);
+	// empty is DefaultAttachTransport.
+	Transport string
 	// Controller is the --controller of this call; empty is the stored one.
 	Controller string
 }
 
-// AttachSession is a verified attach that the caller runs itself: Cmd, with its
-// streams wired by the caller, and then Finish with how it ended.
+// AttachSession is a verified attach that the caller runs itself, with its
+// streams wired by the caller, and then Finish with how it ended. It has the
+// methods of a bubbletea tea.ExecCommand (this package does not import it), so
+// the TUI suspends its screen with tea.Exec and runs it.
 type AttachSession struct {
-	Cmd *exec.Cmd
+	session Session
+	in      io.Reader
+	out     io.Writer
+	err     io.Writer
 
 	c       *client.Client
 	ref     string
 	project string
 }
 
+// SetStdin wires the input of the terminal Run uses.
+func (s *AttachSession) SetStdin(r io.Reader) { s.in = r }
+
+// SetStdout wires the output of the terminal Run uses.
+func (s *AttachSession) SetStdout(w io.Writer) { s.out = w }
+
+// SetStderr wires the error output of the terminal Run uses.
+func (s *AttachSession) SetStderr(w io.Writer) { s.err = w }
+
+// Run runs the session and returns how it ended as Finish reads it: nil when
+// the person detached, an ExitStatus for any other status, or the error of a
+// failure to start.
+func (s *AttachSession) Run() error {
+	code, err := s.session.Run(TerminalIO{In: s.in, Out: s.out, Err: s.err})
+	switch {
+	case err != nil:
+		return err
+	case code != 0:
+		return ExitStatus(code)
+	}
+	return nil
+}
+
+// ExitStatus is the error of a session that ended with a status other than 0.
+type ExitStatus int
+
+func (e ExitStatus) Error() string { return "the attach ended with status " + strconv.Itoa(int(e)) }
+
+// transportOf is the transport the flags ask for.
+func transportOf(viaSSH bool) string {
+	if viaSSH {
+		return TransportSSH
+	}
+	return DefaultAttachTransport()
+}
+
 // PrepareAttach does what `cf attach` does before it runs anything: resolves the
-// target at the Controller, verifies it against the Run, applies the ssh target
-// override, and has the Terminal build the process. The TUI runs the process
-// with tea.ExecProcess and hands the outcome to Finish, so both clients refuse
-// and map exit statuses the same way.
+// target at the Controller, verifies it against the Run, chooses the transport,
+// applies the ssh target override, and has the Terminal open the session. The
+// TUI runs it with tea.Exec and hands the outcome to Finish, so both clients
+// refuse and map exit statuses the same way.
 func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachSession, error) {
 	c, err := dialController(p.Controller)
 	if err != nil {
 		return nil, err
 	}
 	project := scopeOf(ctx, c, p.Project)
-	req, err := resolveAttach(ctx, c, p.Ref, project, p.SSHTarget)
+	transport := p.Transport
+	if transport == "" {
+		transport = DefaultAttachTransport()
+	}
+	req, err := resolveAttach(ctx, c, p.Ref, project, p.SSHTarget, transport)
 	if err != nil {
 		return nil, err
 	}
@@ -136,28 +206,27 @@ func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachS
 	if term == nil {
 		return nil, errNoTerminal()
 	}
-	cmd, err := term.Command(ctx, req)
+	session, err := term.Open(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &AttachSession{Cmd: cmd, c: c, ref: p.Ref, project: project}, nil
+	return &AttachSession{session: session, c: c, ref: p.Ref, project: project}, nil
 }
 
-// Finish turns how the process ended (the error tea.ExecProcess hands back,
-// nil when ssh exited 0) into the answer `cf attach` would give.
+// Finish turns how Run ended (nil when the person detached) into the answer
+// `cf attach` would give.
 func (s *AttachSession) Finish(ctx context.Context, runErr error) error {
-	var exit *exec.ExitError
+	var status ExitStatus
+	var coded *domain.Error
 	switch {
 	case runErr == nil:
 		return attachExit(ctx, s.c, s.ref, s.project, 0)
-	case errors.As(runErr, &exit):
-		code := exit.ExitCode()
-		if code < 0 {
-			code = sshFailed // ended by a signal
-		}
-		return attachExit(ctx, s.c, s.ref, s.project, code)
+	case errors.As(runErr, &status):
+		return attachExit(ctx, s.c, s.ref, s.project, int(status))
+	case errors.As(runErr, &coded):
+		return runErr
 	}
-	return notAttachable(v1.NotAttachableSSHFailed, "ssh could not be started on this machine")
+	return notAttachable(v1.NotAttachableSSHFailed, "the session could not be started on this machine")
 }
 
 func errNoTerminal() error {
@@ -186,13 +255,23 @@ const sshFailed = 255
 // run: the target must be of the Run that was asked for, under the lease it
 // holds, on the Worker it names. An override of the person wins over the
 // announcement of the Worker.
-func resolveAttach(ctx context.Context, c *client.Client, ref, project, override string) (AttachRequest, error) {
+func resolveAttach(ctx context.Context, c *client.Client, ref, project, override, transport string) (AttachRequest, error) {
 	target, err := c.AttachTarget(ctx, ref, project)
 	if err != nil {
 		return AttachRequest{}, err
 	}
 	if err := verifyTarget(ctx, c, ref, project, target); err != nil {
 		return AttachRequest{}, err
+	}
+	if !slices.Contains(transportsOf(target), transport) {
+		return AttachRequest{}, noTransport(transport)
+	}
+	req := AttachRequest{RunID: target.RunID, LeaseEpoch: target.LeaseEpoch, Transport: transport, Handle: target.Handle}
+	if transport != TransportSSH {
+		if !domain.ValidAttachRuntime(target.Handle.Runtime) {
+			return AttachRequest{}, notAttachable(v1.NotAttachableRuntimeUnsupported, "the Worker named a runtime that cannot be attached")
+		}
+		return req, nil
 	}
 	text := target.SSHTarget
 	if override == "" {
@@ -216,7 +295,27 @@ func resolveAttach(ctx context.Context, c *client.Client, ref, project, override
 	if !domain.ValidAttachBinary(target.Binary) || !domain.ValidAttachRuntime(target.Handle.Runtime) {
 		return AttachRequest{}, notAttachable(v1.NotAttachableRuntimeUnsupported, "the Worker named a program that is not an absolute path")
 	}
-	return AttachRequest{RunID: target.RunID, LeaseEpoch: target.LeaseEpoch, Handle: target.Handle, Binary: target.Binary, Target: ssh}, nil
+	req.Binary, req.Target = target.Binary, ssh
+	return req, nil
+}
+
+// transportsOf is what the Controller says the Run can be attached through. A
+// Controller that predates the list only knew ssh.
+func transportsOf(t v1.AttachTarget) []string {
+	if len(t.Transports) == 0 {
+		return []string{TransportSSH}
+	}
+	return t.Transports
+}
+
+// noTransport is the refusal for a transport the Worker does not offer: nothing
+// is started, and in particular ssh is not a fallback for the relay.
+func noTransport(transport string) error {
+	if transport == TransportRelay {
+		return notAttachable(v1.NotAttachableRelayUnsupported,
+			"the Worker does not offer attach through the Controller: nothing was run; use --ssh to attach over ssh")
+	}
+	return notAttachable(v1.NotAttachableNoSSHTarget, "the Worker offers no ssh target to attach over: nothing was run")
 }
 
 // runDirectory is what the Controller says of Runs and Tasks, apart from the

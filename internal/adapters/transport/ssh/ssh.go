@@ -122,8 +122,14 @@ func Attach(ctx context.Context, o Options, target domain.SSHTarget, remote []st
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
+	return Run(cmd, io)
+}
+
+// Run runs a Process on the terminal of the person and returns its exit status
+// as Attach does. An error is only a failure to start ssh.
+func Run(cmd *exec.Cmd, io Stdio) (int, error) {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = io.In, io.Out, io.Err
-	err = cmd.Run()
+	err := cmd.Run()
 	var exit *exec.ExitError
 	switch {
 	case err == nil:

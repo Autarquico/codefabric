@@ -10,7 +10,7 @@
  ! Attach ended with an error
  Code          CF_RUN_NOT_ATTACHABLE  exit 8
  What          ssh could not open the session (it printed why)
- Process       ssh exited 255
+ Process       session exited 255
  Try           ssh could not open the session: check you can ssh to the Worker,
                or set attach.ssh_targets in client.json.
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -35,7 +36,7 @@ func newPsCmd() *cobra.Command {
 }
 
 func printPs(out io.Writer, runs []v1.PsEntry) error {
-	w := newTable(out, "RUN\tTASK\tSTATE\tRUNTIME\tMODE\tWORKER\tREACHABLE\tSTARTED")
+	w := newTable(out, "RUN\tTASK\tSTATE\tRUNTIME\tMODE\tWORKER\tREACHABLE\tTRANSPORT\tSTARTED")
 	for _, r := range runs {
 		worker, reachable := "-", "-"
 		if r.Worker != nil {
@@ -48,8 +49,12 @@ func printPs(out io.Writer, runs []v1.PsEntry) error {
 		if r.StartedAt != nil {
 			started = local(*r.StartedAt)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			printable(r.Short), printable(r.Task.Name), r.State, r.Runtime, dash(string(r.Mode)), printable(worker), reachable, started)
+		transports := "-"
+		if len(r.Transports) > 0 {
+			transports = printable(strings.Join(r.Transports, ","))
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			printable(r.Short), printable(r.Task.Name), r.State, r.Runtime, dash(string(r.Mode)), printable(worker), reachable, transports, started)
 	}
 	return w.Flush()
 }

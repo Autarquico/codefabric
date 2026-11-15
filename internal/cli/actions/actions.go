@@ -127,7 +127,7 @@ var descriptors = []Descriptor{
 		Args: with(flags("kind", "project", "limit"), Arg{Name: "query", Required: true}),
 	},
 
-	{ID: "run.attach", Title: "Attach to run", Target: Run, Path: []string{"attach"}, Terminal: true, Args: flags("read-only", "ssh-target", "project")},
+	{ID: "run.attach", Title: "Attach to run", Target: Run, Path: []string{"attach"}, Terminal: true, Args: flags("read-only", "ssh", "ssh-target", "project")},
 	{ID: "run.fork", Title: "Fork run", Target: Run, Path: []string{"run", "fork"}},
 	{ID: "run.promote", Title: "Promote run", Target: Run, Path: []string{"run", "promote"}},
 	{ID: "run.publish", Destructive: true, Title: "Publish run", Target: Run, Path: []string{"run", "publish"}},
@@ -259,8 +259,8 @@ func (r Runner) exec(ctx context.Context, argv []string) Result {
 }
 
 // Attach prepares an action that takes over the terminal, with the checks of
-// the command, and returns the session: its Cmd for the caller to run (the TUI,
-// with tea.ExecProcess) and Finish to turn how it ended into the command's answer.
+// the command, and returns the session: the caller runs it (the TUI,
+// with tea.Exec) and Finish to turn how it ended into the command's answer.
 func (r Runner) Attach(ctx context.Context, id string, in Input) (*cli.AttachSession, *Failure) {
 	d, ok := Lookup(id)
 	if !ok || !d.Terminal {
@@ -279,9 +279,19 @@ func (r Runner) Attach(ctx context.Context, id string, in Input) (*cli.AttachSes
 			return nil, asFailure(invalid(d.Title + ": read-only is not a boolean"))
 		}
 	}
+	transport := ""
+	if v := in.Values["ssh"]; v != "" {
+		viaSSH, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, asFailure(invalid(d.Title + ": ssh is not a boolean"))
+		}
+		if viaSSH {
+			transport = cli.TransportSSH
+		}
+	}
 	session, err := cli.PrepareAttach(ctx, r.Options.Terminal, cli.AttachParams{
 		Ref: in.Target, Project: in.Values["project"], SSHTarget: in.Values["ssh-target"],
-		ReadOnly: readOnly, Controller: in.Controller,
+		ReadOnly: readOnly, Transport: transport, Controller: in.Controller,
 	})
 	if err != nil {
 		return nil, asFailure(err)

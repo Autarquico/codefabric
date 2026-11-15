@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli"
@@ -95,17 +96,16 @@ func TestSDKBackend_Attach_ARefusalIsAFailureAndNoSession(t *testing.T) {
 	}
 }
 
-func TestSDKAttachment_ExposesTheProcessAndMapsItsExit(t *testing.T) {
-	cmd := exec.CommandContext(context.Background(), "ssh", "-t", "worker")
-	a := sdkAttachment{ctx: context.Background(), session: &cli.AttachSession{Cmd: cmd}}
-	if a.Cmd() != cmd {
-		t.Error("Cmd is not the process of the session")
+func TestSDKAttachment_ExposesTheSessionAndMapsItsExit(t *testing.T) {
+	session := &cli.AttachSession{}
+	a := sdkAttachment{ctx: context.Background(), session: session}
+	if a.Command() != tea.ExecCommand(session) {
+		t.Error("Command is not the session")
 	}
 	if err := a.Finish(nil); err != nil {
 		t.Errorf("exit 0 answered %v", err)
 	}
-	exit255 := exec.CommandContext(context.Background(), "sh", "-c", "exit 255").Run()
-	failure := actions.FailureOf(a.Finish(exit255))
+	failure := actions.FailureOf(a.Finish(cli.ExitStatus(255)))
 	if failure.Code != domain.CodeRunNotAttachable {
 		t.Errorf("exit 255 answered %v", fmt.Sprint(failure.Code))
 	}
