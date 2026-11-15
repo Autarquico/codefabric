@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -29,8 +30,9 @@ func newWorkerCmd() *cobra.Command {
 
 func newWorkerListCmd() *cobra.Command {
 	var all bool
+	var states []string
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   "list [--state <state>[,<state>...]]",
 		Short: "List Workers with their resources and version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -42,8 +44,8 @@ func newWorkerListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if workers == nil {
-				workers = []v1.Worker{}
+			if workers, err = filterWorkersByState(workers, states); err != nil {
+				return err
 			}
 			return emit(cmd, v1.ListWorkersResponse{Workers: workers}, func(out io.Writer) error {
 				w := newTable(out, "ID\tNAME\tSTATE\tVERSION\tCPU\tMEMORY\tRUNS\tLAST SEEN")
@@ -57,7 +59,31 @@ func newWorkerListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "include removed Workers")
+	cmd.Flags().StringSliceVar(&states, "state", nil, "only Workers in these states, comma separated (for example online,degraded)")
 	return cmd
+}
+
+var workerStates = []domain.WorkerState{
+	domain.WorkerJoining, domain.WorkerOnline, domain.WorkerDegraded,
+	domain.WorkerDraining, domain.WorkerDrained, domain.WorkerOffline, domain.WorkerRemoved,
+}
+
+// filterWorkersByState keeps the Workers in one of the states; none given keeps all.
+// The result is never nil, so that --json prints a list.
+func filterWorkersByState(workers []v1.Worker, states []string) ([]v1.Worker, error) {
+	kept := []v1.Worker{}
+	for _, s := range states {
+		if !slices.Contains(workerStates, domain.WorkerState(s)) {
+			return nil, domain.NewError(domain.CodeInvalidRequest,
+				fmt.Sprintf("unknown Worker state %q; use one of %v", s, workerStates), nil)
+		}
+	}
+	for _, w := range workers {
+		if len(states) == 0 || slices.Contains(states, string(w.State)) {
+			kept = append(kept, w)
+		}
+	}
+	return kept, nil
 }
 
 // newWorkerSetControllerCmd changes the address stored in the Worker's credentials.

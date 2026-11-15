@@ -26,5 +26,7 @@ func HandtoInRun(version string) ([]byte, error) {
 		return nil, fmt.Errorf("version %q cannot be written into the skill", version)
 	}
 	out := bytes.ReplaceAll(handtoTemplate, []byte(versionVar), []byte(version))
+	// `cf handoff --list` takes no --state: it lists the Workers a Run may move to.
+	out = bytes.ReplaceAll(out, []byte("cf worker list --state online,degraded"), []byte("cf handoff --list"))
 	return bytes.ReplaceAll(out, []byte("cf worker list"), []byte("cf handoff --list")), nil
 }

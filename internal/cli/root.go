@@ -217,7 +217,7 @@ func newRootCmd(opts Options) *cobra.Command {
 		newProjectCmd(openProjectUpdater(opts)), newTaskCmd(opts.Sessions), newDoCmd(opts.Sessions), newRunCmd(), newWorkerCmd(),
 		newAttachCmd(opts.Terminal), newPsCmd(), newInboxCmd(), newEventsCmd(), newLogsCmd(), newSearchCmd(),
 		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)),
-		newDoctorCmd(openDoctorStore(opts), probeOf(opts)), newNotifyCmd(opts.Native), newMCPCmd(), newClaudeCmd(), newHandtoCmd(codexHandto), newHandoffCmd(opts), newGCCmd(), newStorageCmd())
+		newDoctorCmd(openDoctorStore(opts), probeOf(opts)), newNotifyCmd(opts.Native), newMCPCmd(), newClaudeCmd(), newCodexCmd(), newHandoffCmd(opts), newGCCmd(), newStorageCmd())
 	return root
 }
 

@@ -63,9 +63,12 @@ type Materialization struct {
 	// afterwards: Digest is not what it holds later.
 	Digest string `json:"digest"`
 	// SourceDigest names the snapshot it was materialised from.
-	SourceDigest string            `json:"source_digest"`
-	Components   []ComponentDigest `json:"components"`
-	AuthLinks    []string          `json:"auth_links"`
+	SourceDigest string `json:"source_digest"`
+	// Worktree is the worktree of the Run it was materialised for, "" if it had none: the
+	// adapter may have put it in the configuration (the trust of the directory).
+	Worktree   string            `json:"worktree,omitempty"`
+	Components []ComponentDigest `json:"components"`
+	AuthLinks  []string          `json:"auth_links"`
 	// AuthCopies are the private copies of the auth of the host (see
 	// harness.ApplyResult). The harness rewrites them, so the digest leaves
 	// them out and a copy it rewrote does not invalidate the materialisation.
@@ -219,6 +222,10 @@ func NewMaterializer(host harness.Host, opts ...MaterializerOption) *Materialize
 // Materialize gives the Run whose directory is runDir the configuration snap
 // of the adapter a, in ConfigDir(runDir), and returns its Materialization.
 //
+// worktree is the directory where the harness will work, which the adapter may write
+// into the configuration (see harness.TargetRun); "" when the Run has none. A
+// materialisation made for another worktree is not reused: it is rebuilt.
+//
 // It is called only while the Run is accepted, before the harness can have
 // touched the directory: from then on the directory is the harness's and is
 // never rebuilt nor digested again. It is idempotent and recovers from a
@@ -254,7 +261,7 @@ func (m *Materializer) Materialize(ctx context.Context, a harness.Adapter, runDi
 	if src.rendered, err = renderedOf(a, snap); err != nil {
 		return Materialization{}, fmt.Errorf("materialize: harness %s: %w", a.ID(), err)
 	}
-	if done, ok := m.reusable(runDir, src); ok {
+	if done, ok := m.reusable(runDir, worktree, src); ok {
 		if err := os.RemoveAll(filepath.Join(runDir, stagingName)); err != nil {
 			return Materialization{}, fmt.Errorf("materialize: %w", err)
 		}
@@ -271,13 +278,14 @@ func (m *Materializer) Materialize(ctx context.Context, a harness.Adapter, runDi
 }
 
 // reusable is the materialisation of runDir, when one is done for src and
-// its directory still digests to what it says: unrendered, with the markers.
+// its directory still digests to what it says: unrendered, with the markers, and
+// made for the same worktree.
 // A tree that has been rendered (or half rendered, with a temporary file of
 // a render left in it) digests to something else, so it is not reused: it is
 // rebuilt, which removes every value it held, and rendered again.
-func (m *Materializer) reusable(runDir string, src source) (Materialization, bool) {
+func (m *Materializer) reusable(runDir, worktree string, src source) (Materialization, bool) {
 	rec, err := ReadMaterialization(runDir)
-	if err != nil || rec.Harness != src.harness || rec.SourceDigest != src.digest {
+	if err != nil || rec.Harness != src.harness || rec.SourceDigest != src.digest || rec.Worktree != worktree {
 		return Materialization{}, false
 	}
 	dir := rec.ConfigDir
@@ -372,7 +380,7 @@ func (m *Materializer) build(ctx context.Context, a harness.Adapter, runDir, wor
 		return Materialization{}, fmt.Errorf("syncing %s: %w", runDir, err)
 	}
 	rec := Materialization{
-		Schema: recordSchema, Harness: src.harness, Digest: digest, SourceDigest: src.digest,
+		Schema: recordSchema, Harness: src.harness, Digest: digest, SourceDigest: src.digest, Worktree: worktree,
 		Components: src.components, AuthLinks: links, AuthCopies: copies, Rendered: src.rendered, At: m.host.Clock().Now(),
 	}
 	if rec.AuthLinks == nil {

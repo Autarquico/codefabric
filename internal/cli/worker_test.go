@@ -90,3 +90,38 @@ func TestStateOfNamesTheCauseOfADegradedWorker(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterWorkersByState(t *testing.T) {
+	workers := []v1.Worker{
+		{Name: "a", State: domain.WorkerOnline},
+		{Name: "b", State: domain.WorkerOffline},
+		{Name: "c", State: domain.WorkerDegraded},
+	}
+	names := func(ws []v1.Worker) string {
+		var out []string
+		for _, w := range ws {
+			out = append(out, w.Name)
+		}
+		return strings.Join(out, ",")
+	}
+	for _, tt := range []struct {
+		states []string
+		want   string
+	}{
+		{nil, "a,b,c"},
+		{[]string{"online", "degraded"}, "a,c"},
+		{[]string{"offline"}, "b"},
+		{[]string{"drained"}, ""},
+	} {
+		got, err := filterWorkersByState(workers, tt.states)
+		if err != nil || names(got) != tt.want || got == nil {
+			t.Errorf("--state %v = %q, %v; want %q", tt.states, names(got), err, tt.want)
+		}
+	}
+	if _, err := filterWorkersByState(workers, []string{"onlin"}); err == nil {
+		t.Error("an unknown state was accepted")
+	}
+	if got, _ := filterWorkersByState(nil, nil); got == nil {
+		t.Error("no Workers must still be a list")
+	}
+}

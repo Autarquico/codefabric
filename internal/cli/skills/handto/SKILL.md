@@ -12,9 +12,9 @@ allowed-tools: Bash(cf handoff *) Bash(cf worker list*)
 
 Hand this session over to the CodeFabric Worker `$worker`.
 
-Workers known to CodeFabric right now:
+Workers that can take the session right now (online or degraded):
 
-!`cf worker list`
+!`cf worker list --state online,degraded`
 
 ## Steps
 

@@ -245,6 +245,10 @@ func TestScenario_Handto(t *testing.T) {
 	if res.Worker != "w" || res.Resumed || res.Attach != "cf attach "+req.Name {
 		t.Errorf("result %+v", res)
 	}
+	rec, err := local.State.Get(sessionID)
+	if err != nil || rec.HandedOff == nil || rec.HandedOff.Task != "tsk_1" || rec.Task != "tsk_1" || rec.Released != "" {
+		t.Errorf("marker and link of the session to its Task: %+v, %v", rec, err)
+	}
 }
 
 // Claude Code had not written the call of cf handoff when it ran (2.1.319, seen
@@ -389,6 +393,30 @@ func TestScenario_HandtoAfterTheTaskWasCancelled(t *testing.T) {
 	}
 	if rec, _ := local.State.Get(sessionID); rec.HandedOff == nil || rec.Task == "tsk_1" {
 		t.Errorf("the session is not bound to the new Task: %+v", rec)
+	}
+}
+
+// The Task of the second handoff ended too: the third takes a name that neither of
+// the two Tasks that were freed keeps.
+func TestScenario_HandtoAfterEachTaskEnded(t *testing.T) {
+	local, c := machine(t, transcript()), newController(online("w"))
+	names := map[string]bool{}
+	for i, task := range []string{"tsk_1", "tsk_2", "tsk_3"} {
+		if _, err := Do(t.Context(), c, local, request("w")); err != nil {
+			t.Fatalf("handoff %d: %v", i+1, err)
+		}
+		name := c.created[i].Name
+		if names[name] {
+			t.Fatalf("handoff %d takes %q, which an earlier Task keeps", i+1, name)
+		}
+		names[name] = true
+		ended := c.tasks[task]
+		ended.State = domain.TaskArchived
+		c.tasks[task] = ended
+		c.runs = map[string][]v1.Run{task: {{State: domain.RunCancelled}}}
+		if rec, _ := local.State.Get(sessionID); rec.Task != task {
+			t.Fatalf("handoff %d: the session is bound to %q", i+1, rec.Task)
+		}
 	}
 }
 

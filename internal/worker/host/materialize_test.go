@@ -434,6 +434,30 @@ func TestMaterialize_EmptySnapshotIsAnEmptyConfiguration(t *testing.T) {
 	f.assertDone(empty)
 }
 
+func TestMaterialize_AMaterialisationOfAnotherWorktreeIsNotReused(t *testing.T) {
+	f := newFixture(t)
+	materialize := func(worktree string) Materialization {
+		t.Helper()
+		mat, err := f.m.Materialize(context.Background(), f.a, f.runDir, worktree, snapshot("A"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return mat
+	}
+	if mat := materialize("/work/a"); mat.Worktree != "/work/a" {
+		t.Fatalf("first: %+v", mat)
+	}
+	if mat := materialize("/work/a"); mat.Worktree != "/work/a" {
+		t.Errorf("the same worktree: %+v", mat)
+	}
+	if mat := materialize("/work/b"); mat.Worktree != "/work/b" {
+		t.Errorf("another worktree was reused: %+v", mat)
+	}
+	if rec, err := ReadMaterialization(f.runDir); err != nil || rec.Worktree != "/work/b" {
+		t.Errorf("record: %+v, %v", rec, err)
+	}
+}
+
 func TestMaterialize_RecordsTheComponentsAndTheTime(t *testing.T) {
 	f := newFixture(t)
 	mat := f.must(snapshot("A"))
