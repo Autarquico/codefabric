@@ -5,6 +5,8 @@ description: The parts of Code Flock and how they relate, in the words the CLI a
 
 Code Flock runs coding agents across a pool of machines you own. You say what you want done; it finds a machine, runs an agent there, and keeps the record.
 
+![The local Controller holds Projects, Tasks and Runs, and schedules each Run on a Worker: a Mac, a Linux machine or a Mac mini. On each Worker the Run gets an isolated worktree and a tmux session where Claude Code or Codex CLI works, with its logs and checkpoints. The result is a branch, and the Controller records it in the Task's history.](img/architecture.webp)
+
 ## Machines
 
 **Controller.** The one process that holds the state: Projects, Tasks, Runs, events and the scheduler. It has a database, its own certificate authority and an API. Workers and clients talk to it over mutually authenticated TLS. There is one per installation (`cf controller init`, `cf controller run`).
@@ -22,10 +24,6 @@ Invitations are single-use and short-lived: `cf controller token create --client
 **Task.** What you want achieved, independent of where it runs: a name, a prompt, a Project and a starting ref. A Task has a state (`queued`, `running`, `waiting`, `completed`, `failed`, `cancelled`, `archived`). A waiting Task says why: it has not started, it needs input, it was deferred, it needs a decision, or it needs review. Its completion policy says what makes it done: `first_success`, `promote` or `manual`.
 
 **Run.** One attempt at a Task, on one Worker, in one worktree, with one harness. A Task can have several Runs, for example when a Run fails and is retried. A Run's state includes `queued`, `preparing`, `running`, `waiting_input`, `completed`, `failed`, `cancelled` and `lost`. The result of a Run is published as a branch. If publication fails, `cf run publish` tries again.
-
-If a Worker goes down, `cf task move` continues the Task on another Worker from its last checkpoint:
-
-![A Worker fails while a Run is going; its last checkpoint goes to another Worker, where a new Run continues the Task in its own worktree, and the result is published as a branch.](img/task-move.webp)
 
 `cf run explain` says why a Run is waiting or where it went, Worker by Worker, so scheduling is never a black box.
 
