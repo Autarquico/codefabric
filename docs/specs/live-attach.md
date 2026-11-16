@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: L
 issue: 179
-prs: [191, 194, 197, 198, 199]
+prs: [191, 194, 197, 198, 199, 200]
 related_issues: [179]
 depends_on: [observe-attach-events, tui-views-actions]
 supersedes: [pty-relay-attach]
