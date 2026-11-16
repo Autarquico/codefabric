@@ -201,7 +201,7 @@ func TestScenario_ObserveAttachEvents_Attach(t *testing.T) {
 		t.Fatalf("ps = %+v", listed)
 	}
 
-	terminal := o.attach(nil)
+	terminal := o.attach(nil, "--ssh")
 	eventually(t, "the attach client to be on the session of the Worker", func() bool { return o.clients() == 1 })
 
 	// What cf asked ssh to run.
@@ -241,7 +241,7 @@ func TestObserveAttachEvents_ReadOnlyAttachDoesNotSendInput(t *testing.T) {
 	o := newObserveBox(t, holdScript)
 	typed := filepath.Join(o.worktree, "typed.txt")
 
-	readOnly := o.attach(nil, "--read-only")
+	readOnly := o.attach(nil, "--read-only", "--ssh")
 	eventually(t, "the client", func() bool { return o.clients() == 1 })
 	if !strings.Contains(readFile(o.sshLog), "'-r'") {
 		t.Fatalf("ssh was not asked for -r:\n%s", readFile(o.sshLog))
@@ -254,7 +254,7 @@ func TestObserveAttachEvents_ReadOnlyAttachDoesNotSendInput(t *testing.T) {
 	readOnly.kill()
 	eventually(t, "the client to leave", func() bool { return o.clients() == 0 })
 
-	writable := o.attach(nil)
+	writable := o.attach(nil, "--ssh")
 	eventually(t, "the client", func() bool { return o.clients() == 1 })
 	writable.send("yes", "Enter")
 	eventually(t, "the input to arrive", func() bool { return readFile(typed) == "yes" })
@@ -268,7 +268,7 @@ func TestObserveAttachEvents_SSHFailureIsReported(t *testing.T) {
 	o := newObserveBox(t, holdScript)
 	out := filepath.Join(t.TempDir(), "out")
 	exe, _ := os.Executable()
-	script := fmt.Sprintf("%s attach auth-race --json > %s; echo $? > %s.code", exe, out, out)
+	script := fmt.Sprintf("%s attach auth-race --ssh --json > %s; echo $? > %s.code", exe, out, out)
 	inTerminal(t, o.attachEnv("FAKE_SSH_EXIT=255"), "sh", "-c", script)
 	eventually(t, "cf attach to end", func() bool { return fileExists(out + ".code") })
 	if code := readFile(out + ".code"); code != "8" {
@@ -344,7 +344,7 @@ func TestScenario_ObserveAttachEvents_ClienteCerrado(t *testing.T) {
 	o := newObserveBox(t, holdScript)
 	use(t, o.client)
 
-	terminal := o.attach(nil)
+	terminal := o.attach(nil, "--ssh")
 	eventually(t, "attach", func() bool { return o.clients() == 1 })
 	terminal.send("hello", "Enter")
 	events := startCFProcess(t, o.client, "events", "--follow", "--json")

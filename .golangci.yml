@@ -116,6 +116,14 @@ linters:
               desc: an adapter does not know the use cases
             - pkg: github.com/Autarquico/codefabric/internal/worker
               desc: an adapter does not know the Worker that uses it
+        # pty runs a command under a pseudo-terminal: the standard library and
+        # creack/pty are all it needs, and the only package that links the latter.
+        pty:
+          list-mode: strict
+          files: ["**/internal/adapters/pty/**", "!$test"]
+          allow:
+            - $gostd
+            - github.com/creack/pty
         # The git relay serves repositories; who may use them is decided above it.
         relay:
           list-mode: lax

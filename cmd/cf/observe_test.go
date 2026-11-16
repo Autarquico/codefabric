@@ -225,7 +225,7 @@ func TestObserveAttachEvents_AttachChecksTheTargetTheOverrideAndTheTerminalBefor
 	spy := &spyTerminal{}
 	attach := func(args ...string) (int, map[string]any) {
 		var out, errOut strings.Builder
-		code := cli.RunContextWith(t.Context(), cli.Options{Terminal: spy}, append([]string{"attach"}, append(args, "--json")...), strings.NewReader(""), &out, &errOut, daemon.Command())
+		code := cli.RunContextWith(t.Context(), cli.Options{Terminal: spy}, append([]string{"attach", "--ssh"}, append(args, "--json")...), strings.NewReader(""), &out, &errOut, daemon.Command())
 		return code, errorOf(t, out.String())
 	}
 	// Everything checks out, and then there is no terminal on stdin: nothing is run.
@@ -259,14 +259,14 @@ func TestObserveAttachEvents_AttachChecksTheTargetTheOverrideAndTheTerminalBefor
 	}
 	// The seam of the TUI: the same checks and the same override, and a process instead of a session.
 	term := &commandTerminal{}
-	session, err := cli.PrepareAttach(t.Context(), term, cli.AttachParams{Ref: "auth-race", ReadOnly: true})
+	session, err := cli.PrepareAttach(t.Context(), term, cli.AttachParams{Ref: "auth-race", ReadOnly: true, Transport: cli.TransportSSH})
 	if err != nil || session == nil || term.req.Target.Host != "trusted" || term.req.RunID != r.run.ID || !term.req.ReadOnly {
 		t.Fatalf("PrepareAttach = %+v, %v; request %+v", session, err, term.req)
 	}
-	if _, err := cli.PrepareAttach(t.Context(), term, cli.AttachParams{Ref: "auth-race", SSHTarget: "-oProxyCommand=x"}); !isCode(err, domain.CodeRunNotAttachable) {
+	if _, err := cli.PrepareAttach(t.Context(), term, cli.AttachParams{Ref: "auth-race", SSHTarget: "-oProxyCommand=x", Transport: cli.TransportSSH}); !isCode(err, domain.CodeRunNotAttachable) {
 		t.Fatalf("a bad override: %v", err)
 	}
-	if _, err := cli.PrepareAttach(t.Context(), nil, cli.AttachParams{Ref: "auth-race"}); !isCode(err, domain.CodeNotImplemented) {
+	if _, err := cli.PrepareAttach(t.Context(), nil, cli.AttachParams{Ref: "auth-race", Transport: cli.TransportSSH}); !isCode(err, domain.CodeNotImplemented) {
 		t.Fatalf("no Terminal: %v", err)
 	}
 	if _, err := cli.PrepareAttach(t.Context(), term, cli.AttachParams{Ref: "run-99"}); !isCode(err, domain.CodeNotFound) {
@@ -282,12 +282,15 @@ func TestObserveAttachEvents_AttachChecksTheTargetTheOverrideAndTheTerminalBefor
 	fails(t, 3, domain.CodeNotFound, "attach", "run-99")
 }
 
-// The relay is not in this build: the ssh Terminal refuses it rather than
-// opening ssh in its place.
-func TestObserveAttachEvents_TheSSHTerminalRefusesTheRelay(t *testing.T) {
-	_, err := sshTerminal{}.Open(t.Context(), cli.AttachRequest{Transport: cli.TransportRelay})
-	if !isCode(err, domain.CodeNotImplemented) {
-		t.Fatalf("relay: %v", err)
+// The Terminal opens the transport that was asked for and no other: a relay
+// with no connection to the Controller is refused (not run over ssh), and so is
+// a transport it does not know.
+func TestObserveAttachEvents_TheTerminalNeverSubstitutesATransport(t *testing.T) {
+	if _, err := (sshTerminal{}).Open(t.Context(), cli.AttachRequest{Transport: cli.TransportRelay}); !isCode(err, domain.CodeInternal) {
+		t.Fatalf("relay without a client: %v", err)
+	}
+	if _, err := (sshTerminal{}).Open(t.Context(), cli.AttachRequest{Transport: "carrier-pigeon"}); !isCode(err, domain.CodeNotImplemented) {
+		t.Fatalf("unknown transport: %v", err)
 	}
 }
 

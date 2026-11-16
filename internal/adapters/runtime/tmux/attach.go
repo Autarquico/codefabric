@@ -44,3 +44,28 @@ func AttachArgv(h cfruntime.Handle, binary, run string, epoch uint64, readOnly b
 	}
 	return argv, nil
 }
+
+var _ cfruntime.AttachCommander = (*Runtime)(nil)
+
+// AttachCommand is the tmux client that attaches to the session of h on this
+// machine: the same command the ssh path runs, with the environment of the
+// Runtime so that it reaches the same server. It needs Check to have found
+// tmux. Each client is its own: tmux shares the session between them and sizes
+// each one apart, and ending one leaves the session as it is.
+func (r *Runtime) AttachCommand(h cfruntime.Handle, readOnly bool) (cfruntime.Command, error) {
+	r.attachMu.Lock()
+	binary := r.attach
+	r.attachMu.Unlock()
+	if binary == "" {
+		return cfruntime.Command{}, fmt.Errorf("%w: tmux was not found on this machine", ErrNotAttachable)
+	}
+	session, err := r.session(h)
+	if err != nil {
+		return cfruntime.Command{}, fmt.Errorf("%w: %w", ErrNotAttachable, err)
+	}
+	args := []string{"-L", r.socket, "-f", "/dev/null", "attach-session", "-t", "=" + session}
+	if readOnly {
+		args = append(args, "-r")
+	}
+	return cfruntime.Command{Path: binary, Args: args, Env: r.environment()}, nil
+}

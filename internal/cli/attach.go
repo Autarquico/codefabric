@@ -40,13 +40,17 @@ const (
 )
 
 // DefaultAttachTransport is the transport `cf attach` and the TUI use when the
-// person does not choose one. It is the only place that says so.
-func DefaultAttachTransport() string { return TransportSSH }
+// person does not choose one: the Controller's relay, which needs no ssh to the
+// Worker. A Worker that does not offer it is refused, not given ssh in its
+// place. It is the only place that says so.
+func DefaultAttachTransport() string { return TransportRelay }
 
 // AttachRequest is what the CLI has checked and the Terminal opens: the Run and
 // epoch the session must belong to, the transport, the handle, and, for ssh,
-// the binary the Worker gave and the machine to reach.
+// the binary the Worker gave and the machine to reach. Client is the SDK client
+// the request was resolved with: the relay opens its stream through it.
 type AttachRequest struct {
+	Client     *client.Client
 	RunID      string
 	LeaseEpoch uint64
 	Transport  string
@@ -76,10 +80,12 @@ func newAttachCmd(term Terminal) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "attach <task|run>",
 		Short: "Open the live session of a Run in this terminal; closing it does not end the Run",
-		Long: "Open the interactive session of a Run, or of the latest live Run of a Task, over ssh (--ssh).\n" +
-			"For ssh, the machine to reach and the program to run on it are what the Worker announced; they are\n" +
-			"claims of that machine, and --ssh-target (or attach.ssh_targets in client.json) says where to\n" +
-			"go instead. Detach with the runtime's own keys (tmux: Ctrl-b d): the Run goes on.",
+		Long: "Open the interactive session of a Run, or of the latest live Run of a Task, through the Controller:\n" +
+			"no ssh to the Worker is needed. Everyone attached can type, as in a shared tmux; --read-only only\n" +
+			"watches. Detach with Ctrl-] (or the runtime's own keys, tmux: Ctrl-b d): the Run goes on.\n" +
+			"A Worker that does not offer the relay only admits --ssh, which attaches straight to it. For ssh, the\n" +
+			"machine to reach and the program to run on it are what the Worker announced; they are claims of\n" +
+			"that machine, and --ssh-target (or attach.ssh_targets in client.json) says where to go instead.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := openClient(cmd)
@@ -110,7 +116,7 @@ func newAttachCmd(term Terminal) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&readOnly, "read-only", false, "attach without sending what you type to the Run")
-	cmd.Flags().BoolVar(&viaSSH, "ssh", false, "attach over ssh straight to the Worker (the default in this build)")
+	cmd.Flags().BoolVar(&viaSSH, "ssh", false, "attach over ssh straight to the Worker instead of through the Controller")
 	cmd.Flags().StringVar(&sshTarget, "ssh-target", "", "reach the Worker at this [user@]host[:port] instead of the one it announced")
 	addProjectFlag(cmd, "the Project that narrows a Task name")
 	return cmd
@@ -266,7 +272,7 @@ func resolveAttach(ctx context.Context, c *client.Client, ref, project, override
 	if !slices.Contains(transportsOf(target), transport) {
 		return AttachRequest{}, noTransport(transport)
 	}
-	req := AttachRequest{RunID: target.RunID, LeaseEpoch: target.LeaseEpoch, Transport: transport, Handle: target.Handle}
+	req := AttachRequest{Client: c, RunID: target.RunID, LeaseEpoch: target.LeaseEpoch, Transport: transport, Handle: target.Handle}
 	if transport != TransportSSH {
 		if !domain.ValidAttachRuntime(target.Handle.Runtime) {
 			return AttachRequest{}, notAttachable(v1.NotAttachableRuntimeUnsupported, "the Worker named a runtime that cannot be attached")
@@ -313,7 +319,7 @@ func transportsOf(t v1.AttachTarget) []string {
 func noTransport(transport string) error {
 	if transport == TransportRelay {
 		return notAttachable(v1.NotAttachableRelayUnsupported,
-			"the Worker does not offer attach through the Controller: nothing was run; use --ssh to attach over ssh")
+			"this Worker does not offer attach through the Controller and only supports --ssh: nothing was run; use --ssh to attach over ssh")
 	}
 	return notAttachable(v1.NotAttachableNoSSHTarget, "the Worker offers no ssh target to attach over: nothing was run")
 }

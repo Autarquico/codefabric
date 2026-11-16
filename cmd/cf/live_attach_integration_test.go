@@ -4,22 +4,265 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli"
+	"github.com/Autarquico/codefabric/internal/client"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
+
+// chatScript is a Run that reads lines until "quit", logging each one in
+// typed.txt, and then waits for the go file: a terminal that several people can
+// type into, as the relay lets them.
+const chatScript = `touch ready
+echo hello-from-run
+while read line; do
+  echo "$line" >> typed.txt
+  [ "$line" = quit ] && break
+done
+n=0
+while [ ! -e go ]; do
+  n=$((n+1)); [ "$n" -gt 2400 ] && exit 99
+  sleep 0.05
+done
+echo finished-line`
+
+// screen is what the terminal of the person shows.
+func (o *outer) screen() string { return o.tmux("capture-pane", "-p", "-t", "0") }
+
+// detach types the key of cf that leaves a relay session.
+func (o *outer) detach() { o.send("C-]") }
+
+// typed is what the Run has read.
+func (o *observeBox) typed() string { return readFile(filepath.Join(o.worktree, "typed.txt")) }
+
+// finishChat ends the Run the way it asks to end: a line, and the go file.
+func (o *observeBox) finishChat() {
+	o.t.Helper()
+	if _, err := o.workerTmux("send-keys", "-t", "="+o.session+":", "quit", "Enter"); err != nil {
+		o.t.Fatal(err)
+	}
+	o.release(o.run.ID)
+	if r := o.waitPublished(o.run.ID); r.State != domain.RunCompleted {
+		o.t.Errorf("Run = %+v", r)
+	}
+}
+
+// ended says whether the terminal of the person is gone: cf exited in it.
+func (o *outer) ended() bool { return o.tmux("list-sessions", "-F", "#{session_name}") == "" }
+
+// TestScenario_LiveAttach_AttachSinSSH: with no ssh at all (the one in the PATH
+// logs what it is asked, and is never run), `cf attach` opens the session of the
+// Run through the Controller: what is typed arrives, the screen of the Run
+// comes back, and detaching leaves the Run where it was.
+func TestScenario_LiveAttach_AttachSinSSH(t *testing.T) {
+	o := newObserveBox(t, chatScript)
+	use(t, o.client)
+	listed := ok[v1.PsResponse](t, "ps")
+	if len(listed.Runs) != 1 || !slices.Contains(listed.Runs[0].Transports, v1.AttachTransportRelay) {
+		t.Fatalf("ps = %+v", listed)
+	}
+
+	terminal := o.attach(nil)
+	eventually(t, "the relay client to be on the session of the Worker", func() bool { return o.clients() == 1 })
+	eventually(t, "the screen of the Run", func() bool { return strings.Contains(terminal.screen(), "hello-from-run") })
+	terminal.send("typed over the relay", "Enter")
+	eventually(t, "the Run to read the line", func() bool { return o.typed() == "typed over the relay" })
+	eventually(t, "the echo on the terminal of the person", func() bool {
+		return strings.Count(terminal.screen(), "typed over the relay") >= 1
+	})
+	if got := readFile(o.sshLog); got != "" {
+		t.Fatalf("ssh was asked for something:\n%s", got)
+	}
+
+	terminal.detach()
+	eventually(t, "the client to leave the session", func() bool { return o.clients() == 0 })
+	eventually(t, "cf attach to exit", terminal.ended)
+	if !o.sessionAlive() || o.reconcileBox.run(o.run.ID).State != domain.RunRunning {
+		t.Fatal("detaching ended the Run")
+	}
+	o.finishChat()
+}
+
+// TestScenario_LiveAttach_SoloLectura: with --read-only the person sees the
+// Run and what they type never reaches it, not even by the detach key's side.
+func TestScenario_LiveAttach_SoloLectura(t *testing.T) {
+	o := newObserveBox(t, chatScript)
+	use(t, o.client)
+
+	view := o.attach(nil, "--read-only")
+	eventually(t, "the view to be on the session", func() bool { return o.clients() == 1 })
+	eventually(t, "the screen of the Run", func() bool { return strings.Contains(view.screen(), "hello-from-run") })
+	view.send("nope", "Enter")
+	time.Sleep(1500 * time.Millisecond)
+	if got := o.typed(); got != "" {
+		t.Fatalf("a read-only attach sent input: %q", got)
+	}
+	view.detach()
+	eventually(t, "the view to leave", func() bool { return o.clients() == 0 })
+	eventually(t, "cf attach to exit", view.ended)
+
+	// A writer after it does reach the Run: the Worker was never wedged.
+	writer := o.attach(nil)
+	eventually(t, "the writer", func() bool { return o.clients() == 1 })
+	writer.send("yes", "Enter")
+	eventually(t, "the input to arrive", func() bool { return o.typed() == "yes" })
+	writer.detach()
+	o.finishChat()
+}
+
+// TestScenario_LiveAttach_DosEscritores: two people in the Run, both type, the
+// Run reads both and each sees the other on their screen; the peers each client
+// gets name both.
+func TestScenario_LiveAttach_DosEscritores(t *testing.T) {
+	o := newObserveBox(t, chatScript)
+	use(t, o.client)
+
+	a, b := o.attach(nil), o.attach(nil)
+	eventually(t, "both clients to be on the session", func() bool { return o.clients() == 2 })
+	a.send("from-a", "Enter")
+	eventually(t, "the line of a", func() bool { return strings.Contains(o.typed(), "from-a") })
+	b.send("from-b", "Enter")
+	eventually(t, "the line of b", func() bool { return strings.Contains(o.typed(), "from-b") })
+	if got := strings.Fields(o.typed()); !slices.Equal(got, []string{"from-a", "from-b"}) {
+		t.Fatalf("the Run read %q", got)
+	}
+	eventually(t, "a to see b", func() bool { return strings.Contains(a.screen(), "from-b") })
+	eventually(t, "b to see a", func() bool { return strings.Contains(b.screen(), "from-a") })
+	a.detach()
+	b.detach()
+	eventually(t, "both to leave", func() bool { return o.clients() == 0 })
+
+	// At the level of the client: the Controller tells each one who is in the Run.
+	c, err := client.Open(o.client.CredentialsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := c.OpenAttach(t.Context(), o.run.ID, "", v1.AttachModeWrite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Close() }()
+	if got := nextPeers(t, first); len(got) != 1 || got[0].Mode != v1.AttachModeWrite {
+		t.Fatalf("alone: %+v", got)
+	}
+	second, err := c.OpenAttach(t.Context(), o.run.ID, "", v1.AttachModeView)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	for _, conn := range []*client.AttachConn{first, second} {
+		var modes []string
+		for _, p := range awaitPeers(t, conn, 2) {
+			modes = append(modes, p.Mode)
+		}
+		slices.Sort(modes)
+		if !slices.Equal(modes, []string{v1.AttachModeView, v1.AttachModeWrite}) {
+			t.Fatalf("peers of both = %v", modes)
+		}
+	}
+	_ = first.Detach()
+	_ = second.Detach()
+	eventually(t, "the clients to leave", func() bool { return o.clients() == 0 })
+	o.finishChat()
+}
+
+// nextPeers reads frames until a list of peers comes.
+func nextPeers(t *testing.T, c *client.AttachConn) []v1.AttachPeer {
+	t.Helper()
+	for {
+		f, err := c.ReadFrame()
+		if err != nil {
+			t.Fatalf("waiting for peers: %v", err)
+		}
+		switch f.Type {
+		case v1.FramePeers:
+			peers, err := v1.ParsePeers(f.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return peers
+		case v1.FrameError:
+			t.Fatalf("the stream was cut: %v", client.StreamError(f))
+		}
+	}
+}
+
+// awaitPeers reads until a list of n peers comes.
+func awaitPeers(t *testing.T, c *client.AttachConn, n int) []v1.AttachPeer {
+	t.Helper()
+	for {
+		if peers := nextPeers(t, c); len(peers) == n {
+			return peers
+		}
+	}
+}
+
+// TestScenario_LiveAttach_WorkerQueCae: the Worker is killed while a person is
+// attached: they see the cut with CF_WORKER_OFFLINE and cf exits; once the
+// Worker is back they can attach again.
+func TestScenario_LiveAttach_WorkerQueCae(t *testing.T) {
+	o := newObserveBox(t, chatScript)
+	use(t, o.client)
+	exe, _ := os.Executable()
+
+	attach := func(name string) (*outer, string) {
+		out := filepath.Join(t.TempDir(), name)
+		term := inTerminal(t, o.attachEnv(), "sh", "-c", fmt.Sprintf("%s attach auth-race 2> %s.err; echo $? > %s.code", exe, out, out))
+		return term, out
+	}
+	first, firstOut := attach("first")
+	eventually(t, "the client to be on the session", func() bool { return o.clients() == 1 })
+	eventually(t, "the screen of the Run", func() bool { return strings.Contains(first.screen(), "hello-from-run") })
+
+	o.daemon.kill()
+	eventually(t, "cf attach to end", func() bool { return fileExists(firstOut + ".code") })
+	if got, want := readFile(firstOut+".code"), fmt.Sprint(domain.ExitCode(domain.CodeWorkerOffline)); got != want || !strings.Contains(readFile(firstOut+".err"), string(domain.CodeWorkerOffline)) {
+		t.Fatalf("exit %s (want %s), stderr %q", got, want, readFile(firstOut+".err"))
+	}
+	eventually(t, "the tmux client to be gone", func() bool { return o.clients() == 0 })
+	if !o.sessionAlive() {
+		t.Fatal("the Run's session died with the Worker's connection")
+	}
+
+	// The Worker comes back, and the person can go in again (until its first poll is in, the Controller says it is offline).
+	o.startWith("--ssh-target", "tester@fake-worker:2222")
+	var again *outer
+	eventually(t, "attaching again to work", func() bool {
+		term, out := attach(fmt.Sprint("again-", time.Now().UnixNano()))
+		for range 40 {
+			if o.clients() == 1 {
+				again = term
+				return true
+			}
+			if fileExists(out + ".code") {
+				term.kill()
+				return false
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		term.kill()
+		return false
+	})
+	again.send("back", "Enter")
+	eventually(t, "the Run to read the line", func() bool { return o.typed() == "back" })
+	again.detach()
+	o.finishChat()
+}
 
 // TestScenario_LiveAttach_SinRelayEnElWorker: a Worker that does not announce
 // attach-relay:v1 offers ssh and nothing else. Asking for the relay is refused
 // with CF_RUN_NOT_ATTACHABLE (relay_unsupported) before anything is run, and
 // ssh is not a silent fallback; with --ssh the session opens as it always did.
 func TestScenario_LiveAttach_SinRelayEnElWorker(t *testing.T) {
-	o := newObserveBox(t, holdScript)
+	o := newObserveBox(t, holdScript, "--no-attach-relay")
 	use(t, o.client)
 
 	// cf ps says how the Run can be attached.
@@ -43,6 +286,15 @@ func TestScenario_LiveAttach_SinRelayEnElWorker(t *testing.T) {
 	}
 	if term.calls.Load() != 0 || readFile(o.sshLog) != "" {
 		t.Fatalf("the terminal was reached %d times, ssh log %q", term.calls.Load(), readFile(o.sshLog))
+	}
+
+	// The command says so too, with the status of a Run that cannot be attached, and no ssh.
+	refused := filepath.Join(t.TempDir(), "refused")
+	exe, _ := os.Executable()
+	inTerminal(t, o.attachEnv(), "sh", "-c", fmt.Sprintf("%s attach auth-race --json > %s; echo $? > %s.code", exe, refused, refused))
+	eventually(t, "cf attach to end", func() bool { return fileExists(refused + ".code") })
+	if got := readFile(refused + ".code"); got != "8" || !strings.Contains(readFile(refused), v1.NotAttachableRelayUnsupported) || readFile(o.sshLog) != "" {
+		t.Fatalf("exit %s, output %s, ssh log %q", got, readFile(refused), readFile(o.sshLog))
 	}
 
 	// With --ssh the session opens as today.

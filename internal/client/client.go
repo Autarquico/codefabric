@@ -182,6 +182,10 @@ func (c *Client) useCertificates(certs []tls.Certificate) {
 			RootCAs:      c.roots,
 			ServerName:   c.serverName,
 			Certificates: certs,
+			// An attach is an Upgrade, which only HTTP/1.1 has: a server that
+			// offers h2 must not be given the choice, for any request of this
+			// client may be the one that upgrades.
+			NextProtos: []string{"http/1.1"},
 		},
 	}
 	// A redirect could carry a token or certificate elsewhere.

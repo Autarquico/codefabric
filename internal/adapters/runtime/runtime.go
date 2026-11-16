@@ -128,3 +128,18 @@ type Runtime interface {
 type AttachBinaryProvider interface {
 	AttachBinary() (runtime, path string)
 }
+
+// Command is a program to run on this machine, with the environment it needs.
+type Command struct {
+	Path string
+	Args []string
+	Env  []string
+}
+
+// AttachCommander is implemented by a Runtime whose sessions this machine can
+// attach to itself: it says which command, run under a terminal, is a client of
+// the session of a handle. Closing that client leaves the session alone.
+// readOnly makes a client that cannot type into the session.
+type AttachCommander interface {
+	AttachCommand(h Handle, readOnly bool) (Command, error)
+}
