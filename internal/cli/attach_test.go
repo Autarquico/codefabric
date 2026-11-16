@@ -73,8 +73,8 @@ func TestVerifyTarget_OnlyTheRunAskedForUnderItsLiveLeaseOnItsWorkerIsObeyed(t *
 	}
 }
 
-func TestAttachTransport_TheDefaultIsSSHUntilTheRelayExists(t *testing.T) {
-	if DefaultAttachTransport() != TransportSSH || transportOf(false) != DefaultAttachTransport() || transportOf(true) != TransportSSH {
+func TestAttachTransport_TheDefaultIsTheRelayAndSSHIsAskedFor(t *testing.T) {
+	if DefaultAttachTransport() != TransportRelay || transportOf(false) != DefaultAttachTransport() || transportOf(true) != TransportSSH {
 		t.Errorf("default %q, flag-less %q, --ssh %q", DefaultAttachTransport(), transportOf(false), transportOf(true))
 	}
 }

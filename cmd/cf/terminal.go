@@ -38,11 +38,19 @@ func errRejectedTarget() error {
 		map[string]any{"reason": "invalid_ssh_target"})
 }
 
-// Open prepares the session of req over its transport. The relay through the
-// Controller is not in this build yet: asking for it is refused, and ssh is
-// never started in its place.
+// Open prepares the session of req over its transport: the relay of the
+// Controller, or ssh. Nothing is run, and nothing is opened with the Controller,
+// until the session runs. Whatever the transport the Worker offers, the one that
+// was asked for is the one used: ssh is never started in the place of the relay.
 func (sshTerminal) Open(ctx context.Context, req cli.AttachRequest) (cli.Session, error) {
-	if req.Transport != cli.TransportSSH {
+	switch req.Transport {
+	case cli.TransportRelay:
+		if req.Client == nil {
+			return nil, domain.NewError(domain.CodeInternal, "the attach was prepared without a connection to the Controller", nil)
+		}
+		return relaySession{ctx: ctx, req: req}, nil
+	case cli.TransportSSH:
+	default:
 		return nil, domain.NewError(domain.CodeNotImplemented, "attach over the "+req.Transport+" transport is not available in this build; use --ssh", nil)
 	}
 	if err := ctx.Err(); err != nil {

@@ -15,7 +15,7 @@ import (
 const (
 	runID    = "run_01J8ZQ4M5N6P7R8S9T0V1W2X3Y"
 	otherRun = "run_01J8ZQ4M5N6P7R8S9T0V1W2X4Z"
-	bin      = "/opt/homebrew/bin/tmux"
+	bin      = "/fake/bin/tmux"
 )
 
 func handleOf(socket, session string) cfruntime.Handle {
@@ -94,6 +94,51 @@ func TestResolveBinary_OnlyAPlainExecutableRegularFileAtAnAcceptablePath(t *test
 		}
 		if strings.Contains(path, " ") {
 			t.Errorf("path %q", path)
+		}
+	}
+}
+
+func TestAttachCommand_IsTheSameClientAsSSHRunsOnThisServer(t *testing.T) {
+	r, err := New(Options{Socket: "cf-0123456789ab", TmpDir: "/srv/tmux", OwnTmpDir: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := r.HandleFor(domain.SessionName(runID, 3))
+	if _, err := r.AttachCommand(h, false); !errors.Is(err, ErrNotAttachable) {
+		t.Fatalf("before Check found tmux: %v", err)
+	}
+	r.attach = bin
+	// The keys of the server are locked first; a tmux that does nothing stands for it.
+	log := filepath.Join(t.TempDir(), "calls")
+	fake := filepath.Join(t.TempDir(), "tmux")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho \"$*\" >> "+log+"\n"), 0o700); err != nil { //nolint:gosec // a script of the test
+		t.Fatal(err)
+	}
+	r.binary = fake
+	cmd, err := r.AttachCommand(h, false)
+	calls, _ := os.ReadFile(log) //nolint:gosec // a file of the test
+	for _, want := range []string{"set-option -g prefix None", "set-option -g prefix2 None", "unbind-key -a -T root", "bind-key -n C-] detach-client"} {
+		if !strings.Contains(string(calls), want) {
+			t.Errorf("AttachCommand did not run %q; ran:\n%s", want, calls)
+		}
+	}
+	want := []string{"-L", "cf-0123456789ab", "-f", "/dev/null", "attach-session", "-t", "=" + domain.SessionName(runID, 3)}
+	if err != nil || cmd.Path != bin || !slices.Equal(cmd.Args, want) || !slices.Contains(cmd.Env, "TMUX_TMPDIR=/srv/tmux") {
+		t.Fatalf("command = %+v, %v", cmd, err)
+	}
+	ro, _ := r.AttachCommand(h, true)
+	if got := ro.Args[len(ro.Args)-1]; got != "-r" {
+		t.Errorf("a read-only client ends in %q", got)
+	}
+	// The same arguments the ssh path builds.
+	viaSSH, _ := AttachArgv(h, bin, runID, 3, true)
+	if !slices.Equal(append([]string{ro.Path}, ro.Args...), viaSSH) {
+		t.Errorf("relay %q, ssh %q", ro.Args, viaSSH)
+	}
+	// A handle of another server, or of another runtime, is not attached.
+	for _, bad := range []cfruntime.Handle{handleOf("cf-other", domain.SessionName(runID, 3)), {Runtime: "docker", Ref: "x"}} {
+		if _, err := r.AttachCommand(bad, false); !errors.Is(err, ErrNotAttachable) {
+			t.Errorf("%+v: %v", bad, err)
 		}
 	}
 }

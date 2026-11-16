@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path"
@@ -43,4 +44,37 @@ func AttachArgv(h cfruntime.Handle, binary, run string, epoch uint64, readOnly b
 		argv = append(argv, "-r")
 	}
 	return argv, nil
+}
+
+var _ cfruntime.AttachCommander = (*Runtime)(nil)
+
+// AttachCommand is the tmux client that attaches to the session of h on this
+// machine: the same command the ssh path runs, with the environment of the
+// Runtime so that it reaches the same server. It needs Check to have found
+// tmux. Each client is its own: tmux shares the session between them and sizes
+// each one apart, and ending one leaves the session as it is. It locks the
+// keys of the server first (LockKeys).
+func (r *Runtime) AttachCommand(h cfruntime.Handle, readOnly bool) (cfruntime.Command, error) {
+	r.attachMu.Lock()
+	binary := r.attach
+	r.attachMu.Unlock()
+	if binary == "" {
+		return cfruntime.Command{}, fmt.Errorf("%w: tmux was not found on this machine", ErrNotAttachable)
+	}
+	session, err := r.session(h)
+	if err != nil {
+		return cfruntime.Command{}, fmt.Errorf("%w: %w", ErrNotAttachable, err)
+	}
+	// A server that was started before the keys were locked is locked now: the
+	// client must not be able to leave the pane of its Run.
+	ctx, cancel := context.WithTimeout(context.Background(), waitDelay)
+	defer cancel()
+	if err := r.LockKeys(ctx); err != nil {
+		return cfruntime.Command{}, fmt.Errorf("%w: %w", ErrNotAttachable, err)
+	}
+	args := []string{"-L", r.socket, "-f", "/dev/null", "attach-session", "-t", "=" + session}
+	if readOnly {
+		args = append(args, "-r")
+	}
+	return cfruntime.Command{Path: binary, Args: args, Env: r.environment()}, nil
 }

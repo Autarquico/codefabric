@@ -159,7 +159,7 @@ cf attach <task>           # the live session; closing it does not end the Run
 cf task show <task>        # the Task and its Runs
 ```
 
-`cf attach` goes over ssh to the Worker and opens the Run's session. Detach with the keys of the session itself (in tmux, Ctrl-b d); the Run keeps going.
+`cf attach` goes over ssh to the Worker and opens the Run's session. Detach with Ctrl-]; the Run keeps going.
 
 ## When a Task needs you
 

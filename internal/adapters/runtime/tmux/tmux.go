@@ -154,10 +154,44 @@ func (r *Runtime) Start(ctx context.Context, spec cfruntime.Spec) (cfruntime.Han
 			}
 		}
 	}
+	if err := r.LockKeys(ctx); err != nil {
+		// A command that ended at once took the server with it: nothing is left to lock.
+		if alive, checkErr := r.hasSession(ctx, spec.Name); checkErr != nil || alive {
+			return cfruntime.Handle{}, err
+		}
+	}
 	if err := r.Wire(ctx, spec); err != nil {
 		return cfruntime.Handle{}, err
 	}
 	return h, nil
+}
+
+// DetachKey is the key, in tmux's notation, that leaves a session: the Ctrl-]
+// of cf, the same on every way of attaching.
+const DetachKey = "C-]"
+
+// LockKeys leaves a client of this server with one key: DetachKey, which
+// detaches. The prefix is None, so no prefix key (new-window, the command
+// prompt, run-shell...) can be reached, and every other key of the root table is
+// unbound. A person attached, through the relay or ssh, can then type only into
+// the pane of the Run, never open a shell or a tmux command. It does not change
+// how the Run behaves, and it can be repeated: the Worker applies it when it
+// starts a session and again before each attach, so a server that predates it is
+// covered too.
+func (r *Runtime) LockKeys(ctx context.Context) error {
+	steps := [][]string{
+		{"set-option", "-g", "prefix", "None"},
+		{"set-option", "-g", "prefix2", "None"},
+		{"set-option", "-g", "mouse", "off"},
+		{"unbind-key", "-a", "-T", "root"},
+		{"bind-key", "-n", DetachKey, "detach-client"},
+	}
+	for _, args := range steps {
+		if _, stderr, err := r.exec(ctx, args...); err != nil {
+			return fmt.Errorf("tmux: locking the keys (%s): %w (%s)", args[0], err, strings.TrimSpace(stderr))
+		}
+	}
+	return nil
 }
 
 // Wire captures the output of the terminal and then opens the gate, in that

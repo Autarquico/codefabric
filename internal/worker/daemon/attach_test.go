@@ -4,9 +4,12 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/user"
+	"slices"
 	"testing"
 
+	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
@@ -16,7 +19,7 @@ import (
 // attachRuntime is a Runtime that can say which program attaches to its sessions.
 type attachRuntime struct{ recordingRuntime }
 
-func (*attachRuntime) AttachBinary() (string, string) { return "tmux", "/opt/homebrew/bin/tmux" }
+func (*attachRuntime) AttachBinary() (string, string) { return "tmux", "/fake/tmux" }
 
 func runWith(t *testing.T, paths config.Paths, mutate func(*daemon.Options)) {
 	t.Helper()
@@ -34,7 +37,7 @@ func TestRun_AnnouncesHowToAttachWhatItIsToldAndTheBinaryOfItsRuntime(t *testing
 	c.join("box", paths)
 	runWith(t, paths, func(o *daemon.Options) { o.SSHTarget = "alex@box.lan:2222" })
 	w := c.eventually("box", "the announcement", func(w v1.Worker) bool { return w.State == domain.WorkerOnline })
-	if w.SSHTarget != "alex@box.lan:2222" || w.AttachBinaries["tmux"] != "/opt/homebrew/bin/tmux" || len(w.AttachBinaries) != 1 {
+	if w.SSHTarget != "alex@box.lan:2222" || w.AttachBinaries["tmux"] != "/fake/tmux" || len(w.AttachBinaries) != 1 {
 		t.Fatalf("Worker = %+v", w)
 	}
 }
@@ -80,4 +83,38 @@ func asCoded(err error, into **domain.Error) bool {
 		*into = e
 	}
 	return ok
+}
+
+// relayRuntime is a Runtime that tmux-like clients can attach to from this machine.
+type relayRuntime struct{ attachRuntime }
+
+func (*relayRuntime) AttachCommand(cfruntime.Handle, bool) (cfruntime.Command, error) {
+	path, _ := exec.LookPath("tmux") // never run here; a path of this machine, not a layout of one
+	return cfruntime.Command{Path: path}, nil
+}
+
+// The relay of attach is announced only by a Worker that runs its loop: one
+// whose Runtime can attach from this machine, and that was not told to leave it
+// to ssh. Stopping the daemon ends the loop (the cleanup of runWith waits for it).
+func TestRun_AnnouncesTheAttachRelayOnlyWhenItRunsIt(t *testing.T) {
+	for name, tc := range map[string]struct {
+		runtime cfruntime.Runtime
+		off     bool
+		want    bool
+	}{
+		"a runtime that attaches":      {runtime: &relayRuntime{}, want: true},
+		"told to leave it to ssh":      {runtime: &relayRuntime{}, off: true},
+		"a runtime that cannot attach": {runtime: &attachRuntime{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newController(t)
+			paths := machine(t)
+			c.join("box", paths)
+			runWith(t, paths, func(o *daemon.Options) { o.Runtime, o.NoAttachRelay = tc.runtime, tc.off })
+			w := c.eventually("box", "online", func(w v1.Worker) bool { return w.State == domain.WorkerOnline })
+			if got := slices.Contains(w.Capabilities, domain.AttachRelayCapability); got != tc.want {
+				t.Errorf("announces the relay = %v, want %v (capabilities %v)", got, tc.want, w.Capabilities)
+			}
+		})
+	}
 }

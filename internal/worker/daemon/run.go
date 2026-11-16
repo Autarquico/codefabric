@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/user"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -31,6 +32,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/support/redact"
 	"github.com/Autarquico/codefabric/internal/support/slogtee"
 	"github.com/Autarquico/codefabric/internal/worker/applier"
+	"github.com/Autarquico/codefabric/internal/worker/attachrelay"
 	"github.com/Autarquico/codefabric/internal/worker/authsync"
 	"github.com/Autarquico/codefabric/internal/worker/doctor"
 	"github.com/Autarquico/codefabric/internal/worker/executor"
@@ -76,6 +78,9 @@ type Options struct {
 	// ([user@]host[:port]). Empty announces <user>@<hostname> when that is a
 	// valid target; "none" announces nothing, and the Runs cannot be attached.
 	SSHTarget string
+	// NoAttachRelay keeps this Worker from offering attach through the
+	// Controller: its clients can only attach with --ssh.
+	NoAttachRelay bool
 	// OutputInterval replaces the second between the passes that send output, for tests.
 	OutputInterval time.Duration
 	// Harnesses replace the adapters this Worker offers, for tests; nil is
@@ -238,9 +243,16 @@ func Run(ctx context.Context, o Options) error {
 			d.attachBinaries = map[string]string{name: path}
 		}
 	}
+	var relay *attachrelay.Relay
+	if !o.NoAttachRelay {
+		relay = d.attachRelay(ctx, eo.Runtime, c, db)
+	}
 	g, gctx := errgroup.WithContext(ctx)
 	takeApplies := d.takeApplies(gctx, g, ap)
+	firstBeat := make(chan struct{})
+	var beatOnce sync.Once
 	d.onResponse = func(r v1.HeartbeatResponse) {
+		beatOnce.Do(func() { close(firstBeat) })
 		takeApplies(r)
 		// A heartbeat taken is this daemon held as the current one: it may ask for grants.
 		ex.HeartbeatTaken()
@@ -277,7 +289,46 @@ func Run(ctx context.Context, o Options) error {
 	g.Go(func() error { return logJournal.Run(gctx) })
 	g.Go(func() error { return shipper.Run(gctx) })
 	g.Go(func() error { return degrader.Run(gctx) })
+	if relay != nil {
+		g.Go(func() error {
+			// The Controller refuses the poll of a Worker that has not yet announced
+			// the capability: the relay starts once a heartbeat has been taken.
+			select {
+			case <-firstBeat:
+			case <-gctx.Done():
+				return nil
+			}
+			return relay.Run(gctx)
+		})
+	}
 	return g.Wait()
+}
+
+// attachRelay is the Worker end of the relay of attach, or nil when this Worker
+// cannot run one: it has no tmux to attach with (the Runtime found none, or is
+// not one that can be attached). The capability is announced only here, in the
+// same breath as the loop that answers it is built, and Run starts the loop
+// right after: a Worker never offers a relay it is not running.
+func (d *daemon) attachRelay(ctx context.Context, rt cfruntime.Runtime, c *client.Client, db *state.DB) *attachrelay.Relay {
+	art, ok := rt.(attachrelay.Runtime)
+	if !ok || len(d.attachBinaries) == 0 {
+		return nil
+	}
+	d.capabilities = slices.Sorted(slices.Values(append(slices.Clone(d.capabilities), domain.AttachRelayCapability)))
+	d.log.InfoContext(ctx, "attach relay offered")
+	return attachrelay.New(attachrelay.Options{
+		Controller: attachrelay.FromClient(c), Runtime: art, Clock: d.clock, Log: d.log,
+		Live: func(ctx context.Context, runID string, epoch uint64) (bool, error) {
+			run, err := state.RunBy(ctx, db.Reader(), state.Key{RunID: runID, LeaseEpoch: epoch})
+			switch {
+			case errors.Is(err, state.ErrNotFound):
+				return false, nil
+			case err != nil:
+				return false, err
+			}
+			return run.Phase.Live(), nil
+		},
+	})
 }
 
 // teeLogs keeps a structured copy of what the daemon logs from here on in the

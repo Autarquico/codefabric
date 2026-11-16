@@ -147,6 +147,7 @@ func newRunCmd() *cobra.Command {
 	var (
 		interval  time.Duration
 		sshTarget string
+		noRelay   bool
 		minFree   string
 	)
 	cmd := &cobra.Command{
@@ -162,7 +163,7 @@ func newRunCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return Run(ctx, Options{
-				Paths: paths, Controller: controller, Interval: interval, SSHTarget: sshTarget, DiskMinFree: minFree,
+				Paths: paths, Controller: controller, Interval: interval, SSHTarget: sshTarget, DiskMinFree: minFree, NoAttachRelay: noRelay,
 				Logger: slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil)),
 			})
 		},
@@ -173,6 +174,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&minFree, "disk-min-free", "", "fail below this free disk, 20% or 50GiB (default: the Worker config, then 20%)")
 	cmd.Flags().DurationVar(&interval, "heartbeat-interval", 0, "time between heartbeats (default: that of Appendix A)")
 	_ = cmd.Flags().MarkHidden("heartbeat-interval")
+	cmd.Flags().BoolVar(&noRelay, "no-attach-relay", false, "do not offer attach through the Controller: clients attach to this Worker with --ssh only")
 	return cmd
 }
 
