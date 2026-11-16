@@ -6,13 +6,13 @@ status: active
 priority: P1
 size: L
 issue: 179
-prs: [191, 194]
+prs: [191, 194, 197]
 related_issues: [179]
 depends_on: [observe-attach-events, tui-views-actions]
 supersedes: [pty-relay-attach]
 related_specs: [codefabric-spec, claude-remote-runs]
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-16
 ---
 
 # Entrar en un Run o un Worker desde el TUI
