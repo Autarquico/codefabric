@@ -795,3 +795,35 @@ func TestAttach_AScreenIsClampedAndUnaudited(t *testing.T) {
 	}
 	must(t, writer.Detach())
 }
+
+// A panel that only watches is not "who else is inside": a writer's peers list
+// never has it, however many come and go.
+func TestAttach_AScreenIsNotAPeer(t *testing.T) {
+	f := newAttachFixture(t)
+	ctx := t.Context()
+	writer, _, _ := f.join(f.owner, v1.AttachModeWrite)
+	ownerID, err := f.owner.Describe()
+	must(t, err)
+	readPeers(t, writer, ownerID.IdentityID)
+
+	polled := f.pollAsync(f.alpha)
+	f.waitFor("the Worker's poll", func() bool { return f.hub().Live(f.alphaID) })
+	opened := make(chan *client.ScreenStream, 1)
+	go func() {
+		s, err := f.laptop.OpenScreen(ctx, f.run.ID, "", 0)
+		must(t, err)
+		opened <- s
+	}()
+	reqs := recv(t, polled, "the screen request")
+	wc, err := f.alpha.DialAttach(ctx, reqs[0].SessionID)
+	must(t, err)
+	t.Cleanup(func() { _ = wc.Close() })
+	f.waitFor("the screen to be spliced", func() bool { return f.hub().Sessions() == 2 })
+	s := recv(t, opened, "the screen stream")
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Someone else joins while the panel is there: the list the writer gets has
+	// the two of them and not the panel (readPeers waits for exactly this list).
+	_, _, _ = f.join(f.owner, v1.AttachModeView)
+	readPeers(t, writer, ownerID.IdentityID, ownerID.IdentityID)
+}

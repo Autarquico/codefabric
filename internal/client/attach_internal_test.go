@@ -1,6 +1,8 @@
 package client
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -65,3 +67,41 @@ func TestAttach_UpgradesAgainstAServerThatOffersHTTP2(t *testing.T) {
 		t.Errorf("the request came over %v", got)
 	}
 }
+
+// The newest screen is returned even when a frame that is not a screen follows
+// it: an idle Run sends nothing more, and the panel must not wait for it.
+func TestScreenStream_ReturnsTheLatestScreenBeforeAPeersFrame(t *testing.T) {
+	var wire bytes.Buffer
+	peers, err := v1.PeersFrame(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []v1.Frame{v1.DataFrame([]byte("old")), v1.DataFrame([]byte("screen-1")), peers} {
+		if err := v1.WriteFrame(&wire, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &ScreenStream{conn: newAttachConn(blockingAfter{Reader: &wire})}
+	got := make(chan []byte, 1)
+	go func() { b, _ := s.Next(); got <- b }()
+	select {
+	case b := <-got:
+		if string(b) != "screen-1" {
+			t.Fatalf("Next = %q, want the latest screen", b)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next withheld the screen it had: a peers frame after it made it block")
+	}
+}
+
+// blockingAfter reads what is in Reader, then blocks like a stream with nothing new.
+type blockingAfter struct{ io.Reader }
+
+func (b blockingAfter) Read(p []byte) (int, error) {
+	if n, err := b.Reader.Read(p); n > 0 || err == nil {
+		return n, nil
+	}
+	select {} // the test ends first; the goroutine is left, as a stuck read would be
+}
+func (blockingAfter) Write(p []byte) (int, error) { return len(p), nil }
+func (blockingAfter) Close() error                { return nil }

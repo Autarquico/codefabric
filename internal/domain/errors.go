@@ -5,6 +5,11 @@ import "fmt"
 // Code is a stable, machine-readable error identifier (§40).
 type Code string
 
+// ReasonNotRunning is details.reason of a CF_RUN_NOT_ATTACHABLE whose Run has no
+// live session. The wire says it too (v1.NotAttachableNotRunning), and adapters,
+// which cannot import the wire, say it through here.
+const ReasonNotRunning = "not_running"
+
 // Error codes of §40, plus the two the wire needs (CF_INVALID_REQUEST, CF_INTERNAL).
 const (
 	CodeWorkerOffline            Code = "CF_WORKER_OFFLINE"

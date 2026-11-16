@@ -20,6 +20,10 @@ const MaxScreenBytes = v1.MaxFramePayload
 // captureTimeout bounds one capture of the pane, on real time.
 const captureTimeout = 2 * time.Second
 
+// captureWarnEvery is how often a capture that keeps failing on a live session is
+// logged: once when it starts to fail, then once per this.
+const captureWarnEvery = time.Minute
+
 // screenStream serves the mode "screen" of one attach: no pty and no tmux client,
 // just the pane read at the granted rate. The whole screen is sent each time it
 // changed, never a diff. The Controller connection may be slow: the capture loop
@@ -70,6 +74,7 @@ func (r *Relay) screenStream(ctx context.Context, conn Stream, req v1.AttachRequ
 	tick := r.o.Clock.NewTicker(every)
 	defer tick.Stop()
 	var last []byte
+	var warned time.Time // when a failing capture was last logged; zero while captures succeed
 	first := true
 	for {
 		if !first {
@@ -97,11 +102,16 @@ func (r *Relay) screenStream(ctx context.Context, conn Stream, req v1.AttachRequ
 				r.farewell(conn, v1.ErrorFrame(end.Code, end.Message))
 				return
 			}
+			if now := r.o.Clock.Now(); warned.IsZero() || now.Sub(warned) >= captureWarnEvery {
+				warned = now
+				r.o.Log.WarnContext(ctx, "attach relay: capturing the screen failed", "run", req.RunID, "err", err)
+			}
 			continue // a failed capture is one screen missed, not the end
 		}
+		warned = time.Time{}
 		if len(screen) > MaxScreenBytes {
 			r.o.Log.WarnContext(ctx, "attach relay: the screen is too big; ending the stream", "run", req.RunID, "bytes", len(screen))
-			r.farewell(conn, v1.ErrorFrame(domain.CodeInvalidRequest, "the screen of this Run is too big to stream"))
+			r.farewell(conn, v1.ErrorFrame(domain.CodeRunNotAttachable, "the screen of this Run is too big to preview"))
 			return
 		}
 		if last != nil && bytes.Equal(screen, last) {
@@ -130,6 +140,5 @@ func (r *Relay) screenEnded(ctx context.Context, h cfruntime.Handle, err error) 
 		return domain.NewError(domain.CodeRunNotAttachable, "the Run is not running on this Worker",
 			map[string]any{"reason": v1.NotAttachableNotRunning})
 	}
-	r.o.Log.WarnContext(ctx, "attach relay: capturing the screen failed", "err", err)
 	return nil
 }

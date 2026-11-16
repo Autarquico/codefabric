@@ -31,7 +31,7 @@ func (r *Runtime) Snapshot(ctx context.Context, h cfruntime.Handle) ([]byte, err
 		return []byte(stdout), nil
 	case isMissing(err):
 		return nil, domain.NewError(domain.CodeRunNotAttachable, "the session of this Run is not on this Worker",
-			map[string]any{"reason": "not_running"})
+			map[string]any{"reason": domain.ReasonNotRunning})
 	}
 	return nil, fmt.Errorf("tmux: capturing session %s: %w (%s)", session, err, strings.TrimSpace(stderr))
 }

@@ -554,7 +554,9 @@ func (p *Pending) Splice(conn net.Conn, r io.Reader) error {
 	h.background.Add(2) // the two writers, which start below
 	gs.state = stateConnected
 	h.rooms[gs.Run] = append(h.rooms[gs.Run], s)
-	h.broadcastPeersLocked(gs.Run)
+	if !s.isScreen() {
+		h.broadcastPeersLocked(gs.Run)
+	}
 	h.mu.Unlock()
 	s.start()
 	return nil

@@ -55,13 +55,13 @@ func (s *ScreenStream) Next() ([]byte, error) {
 		switch f.Type {
 		case v1.FrameData:
 			latest = f.Payload
-			if s.conn.r.Buffered() < v1.FrameHeaderBytes {
-				return latest, nil // nothing more waiting: this is the newest
-			}
 		case v1.FrameError:
 			return nil, StreamError(f)
 		case v1.FrameClose:
 			return nil, io.EOF
+		}
+		if latest != nil && s.conn.r.Buffered() < v1.FrameHeaderBytes {
+			return latest, nil // nothing more waiting, whatever the last frame was: this is the newest
 		}
 	}
 }

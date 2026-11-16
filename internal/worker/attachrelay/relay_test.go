@@ -62,6 +62,7 @@ func (c *fakeController) DialAttach(context.Context, string) (Stream, error) {
 type fakeRuntime struct {
 	alive    bool
 	readOnly chan bool
+	screen   *screenSource // what Snapshot gives; nil is an empty screen
 }
 
 func (fakeRuntime) HandleFor(name string) cfruntime.Handle {
