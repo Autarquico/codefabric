@@ -83,7 +83,9 @@ func (s *session) end(reason string, code domain.Code, msg string, kind endKind)
 			delete(h.rooms, s.gs.Run)
 		} else {
 			h.rooms[s.gs.Run] = room
-			h.broadcastPeersLocked(s.gs.Run)
+			if !s.isScreen() {
+				h.broadcastPeersLocked(s.gs.Run)
+			}
 		}
 		h.mu.Unlock()
 
@@ -241,11 +243,20 @@ func reasonOf(code domain.Code) string {
 	}
 }
 
+// isScreen is a session that only watches the screen of the Run: a panel is not
+// "who else is inside", so it is neither listed nor told the list.
+func (s *session) isScreen() bool { return s.gs.Mode == v1.AttachModeScreen }
+
 // broadcastPeersLocked tells every client of the Run who is in it. The list is
 // built from the grants, which name identities the Controller authenticated, and
-// nothing a client or a Worker said about itself.
+// nothing a client or a Worker said about itself. Screen sessions are not in it.
 func (h *Hub) broadcastPeersLocked(run domain.ID) {
-	room := h.rooms[run]
+	var room []*session
+	for _, s := range h.rooms[run] {
+		if !s.isScreen() {
+			room = append(room, s)
+		}
+	}
 	peers := make([]v1.AttachPeer, 0, len(room))
 	for _, s := range room {
 		peers = append(peers, v1.AttachPeer{ID: string(s.gs.Client), Name: s.gs.ClientName, Mode: s.gs.Mode})

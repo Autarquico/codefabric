@@ -62,8 +62,11 @@ func TestSessionEchoesWhatIsTypedAndSizesTheTerminal(t *testing.T) {
 
 func TestSessionDefaultsToEightyByTwentyFourAndSetsTerm(t *testing.T) {
 	s := start(t, pty.Options{Path: "/bin/sh", Args: []string{"-c", "stty size; echo term=$TERM"}, Env: []string{"TERM=dumb", "PATH=/usr/bin:/bin"}})
-	readUntil(t, s, "24 80")
-	readUntil(t, s, "term="+pty.Term)
+	// One read: the two lines may come in one chunk, and readUntil drops what
+	// follows what it waits for.
+	if out := readUntil(t, s, "term="+pty.Term); !strings.Contains(out, "24 80") {
+		t.Errorf("the terminal is not 80x24: %q", out)
+	}
 }
 
 func TestSessionReportsTheExitStatusAndEndsTheReader(t *testing.T) {

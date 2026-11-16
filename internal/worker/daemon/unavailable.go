@@ -27,3 +27,7 @@ func (unavailable) HandleFor(name string) cfruntime.Handle {
 }
 
 func (unavailable) List(context.Context) ([]string, error) { return nil, nil }
+
+func (unavailable) Snapshot(context.Context, cfruntime.Handle) ([]byte, error) {
+	return nil, cfruntime.UnsupportedSnapshot("none")
+}

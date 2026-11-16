@@ -117,6 +117,18 @@ type Runtime interface {
 	// List names the sessions of Runs the Runtime has, whoever started them:
 	// those whose name NameFor could have written.
 	List(ctx context.Context) ([]string, error)
+	// Snapshot is the screen of the session as it is now, with its colours and
+	// attributes (SGR) and its lines separated by newlines. A Runtime that cannot
+	// say returns UnsupportedSnapshot; a
+	// session that is not there is a CF_RUN_NOT_ATTACHABLE.
+	Snapshot(ctx context.Context, h Handle) ([]byte, error)
+}
+
+// UnsupportedSnapshot is the error of a Runtime that has no screen to show: a
+// coded one, so that the relay passes it on as CF_RUN_NOT_ATTACHABLE.
+func UnsupportedSnapshot(runtime string) error {
+	return domain.NewError(domain.CodeRunNotAttachable, "the "+runtime+" runtime cannot show the screen of a session",
+		map[string]any{"reason": "snapshot_unsupported"})
 }
 
 // AttachBinaryProvider is implemented by a Runtime that sessions can be

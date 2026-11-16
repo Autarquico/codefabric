@@ -348,3 +348,7 @@ func TestScenario_WorkflowApplyDriftLockB_WorkflowAplicadoGlobalmente(t *testing
 		t.Errorf("config_key = %q, want %s", st.ConfigKey, f.v1.Digest)
 	}
 }
+
+func (r *holdRuntime) Snapshot(context.Context, cfruntime.Handle) ([]byte, error) {
+	return nil, cfruntime.UnsupportedSnapshot("hold")
+}

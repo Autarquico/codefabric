@@ -24,6 +24,7 @@ type AttachTicket struct {
 	ClientName string
 	Actor      domain.ActorRef
 	Mode       string
+	Hz         int // granted rate of a screen stream; 0 in every other mode
 }
 
 // AttachOpen decides whether the caller may open an attach of the Run of ref in
@@ -32,11 +33,16 @@ type AttachTicket struct {
 // also needs the policy of the Project and of the Worker (requireShell). The Run must be attachable
 // through the relay: a Worker that does not announce it is CF_RUN_NOT_ATTACHABLE
 // (relay_unsupported), whatever else it offers.
-func (s *Service) AttachOpen(ctx context.Context, by pki.Session, ref, project, mode string) (AttachTicket, error) {
+//
+// A screen stream is authorized as a view (any enrolled client, never a Worker)
+// and is granted a rate of hz screens a second, clamped to what v1 allows. It is
+// not audited as an entry: the spec audits interactive entries and shells, and a
+// panel that only watches would fill the log; see the Controller's wiring.
+func (s *Service) AttachOpen(ctx context.Context, by pki.Session, ref, project, mode string, hz int) (AttachTicket, error) {
 	switch mode {
-	case v1.AttachModeView, v1.AttachModeWrite, v1.AttachModeShell:
+	case v1.AttachModeView, v1.AttachModeWrite, v1.AttachModeShell, v1.AttachModeScreen:
 	default:
-		return AttachTicket{}, domain.NewError(domain.CodeInvalidRequest, `mode is "view", "write" or "shell"`, nil)
+		return AttachTicket{}, domain.NewError(domain.CodeInvalidRequest, `mode is "view", "write", "shell" or "screen"`, nil)
 	}
 	var out AttachTicket
 	err := s.db.Read(ctx, func(q store.Querier) error {
@@ -67,6 +73,9 @@ func (s *Service) AttachOpen(ctx context.Context, by pki.Session, ref, project, 
 		out = AttachTicket{
 			Run: run.ID, Epoch: run.LeaseEpoch, Worker: worker.ID,
 			Handle: check.handle, Client: ident.ID, ClientName: ident.Name, Actor: actor, Mode: mode,
+		}
+		if mode == v1.AttachModeScreen {
+			out.Hz = v1.ClampScreenHz(hz)
 		}
 		return nil
 	})
