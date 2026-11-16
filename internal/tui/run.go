@@ -14,9 +14,11 @@ import (
 
 // Run opens the TUI over the Controller of c and returns when the user quits,
 // ctx ends, or the Controller revokes the credentials. The actions of its views
-// run with the composition of the binary, in runner.
-func Run(ctx context.Context, c *client.Client, runner actions.Runner) error {
-	return run(ctx, SubscribeOverview(c), Options{Backend: NewBackend(ctx, c, runner), Feeds: SubscribeFeeds(c)})
+// run with the composition of the binary, in runner. detachKey is how the key
+// that leaves a session reads ("Ctrl-]"), shown wherever the TUI offers to enter
+// a Run; "" shows none.
+func Run(ctx context.Context, c *client.Client, runner actions.Runner, detachKey string) error {
+	return run(ctx, SubscribeOverview(c), Options{Backend: NewBackend(ctx, c, runner), Feeds: SubscribeFeeds(c), DetachKey: detachKey})
 }
 
 // run is Run over any Source and program options (tests drive it headless).

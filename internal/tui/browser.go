@@ -151,20 +151,15 @@ type browser struct {
 	menu    *Menu
 	form    *Form
 	confirm *Confirm
-	notice  *Notice
-	flash   string
+	handoff        // notice, flash, busy: the terminal actions and the failure line
 	warn    string // something the person asked for that cannot be done
-	busy    string
 	tl      timeline
 	vs      versions
 	// The live view: whether the panel is on is the TUI's (prefs); the stream
-	// is the one of the selected item. inExec is an attach holding the terminal,
-	// during which nothing is followed. verb names what the last terminal
-	// action was, for what the failure line says.
-	prefs  *livePrefs
-	panel  liveFeed
-	inExec bool
-	verb   string
+	// is the one of the selected item; during an attach (handoff.inExec) nothing
+	// is followed.
+	prefs *livePrefs
+	panel liveFeed
 }
 
 func (b *browser) screenID() uint64 { return b.id }
@@ -270,29 +265,11 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 			b.flash = "✓ " + msg.action.Title + " · " + msg.target.Label
 		}
 	case screenOpenedMsg, screenFrameMsg:
-		cmd, _ := b.panel.handle(from(b.id), msg)
+		cmd := b.panel.handle(from(b.id), msg)
 		return b, cmd, false
-	case attachReadyMsg:
-		b.busy, b.warn = "", ""
-		if msg.failure != nil {
-			b.notice = &Notice{Title: b.verbTitle() + " failed", Failure: msg.failure}
-			return b, nil, false
-		}
-		b.inExec = true
-		b.panel.close()
-		return b, tea.Exec(msg.session.Command(), attachEnded(msg.from, msg.target, msg.session)), false
-	case attachEndedMsg:
-		b.busy = "Checking the attach…"
-		return b, func() tea.Msg {
-			return attachExitMsg{from: msg.from, target: msg.target, runErr: msg.runErr, finishErr: msg.session.Finish(msg.runErr)}
-		}, false
-	case attachExitMsg:
-		b.busy, b.warn, b.inExec = "", "", false
-		if msg.finishErr != nil {
-			b.notice = &Notice{Title: b.verbTitle() + " ended with an error", Failure: actions.FailureOf(msg.finishErr), Detail: exitDetail(msg.runErr)}
-		} else {
-			b.flash = "Back from " + msg.target.Label + " · " + exitDetail(msg.runErr)
-		}
+	case attachReadyMsg, attachEndedMsg, attachExitMsg:
+		b.warn = ""
+		return b, b.update(msg, b.panel.close), false
 	case timelineMsg:
 		if msg.task == b.tl.task && msg.stamp == b.tl.stamp {
 			b.tl.Timeline, b.tl.err, b.tl.loading = msg.timeline, msg.err, false
@@ -303,14 +280,6 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 		}
 	}
 	return b, nil, false
-}
-
-// verbTitle is what the last terminal action was called: Attach or Shell.
-func (b *browser) verbTitle() string {
-	if b.verb == "" {
-		return "Attach"
-	}
-	return b.verb
 }
 
 // attachEnded is what the shell hears when the process of an attach ends. It
@@ -485,14 +454,7 @@ func (b *browser) start(d actions.Descriptor, row Row, values map[string]string)
 		in.Target = ""
 	}
 	if d.Terminal {
-		b.verb = "Attach"
-		if d.ID == "run.shell" {
-			b.verb = "Shell"
-		}
-		return func() tea.Msg {
-			session, failure := backend.Attach(d.ID, in)
-			return attachReadyMsg{from: asker, target: row, session: session, failure: failure}
-		}
+		return b.begin(backend, asker, d, row, in)
 	}
 	return func() tea.Msg {
 		return actionDoneMsg{from: asker, action: d, target: row, result: backend.Run(d.ID, in)}

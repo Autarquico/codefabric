@@ -129,8 +129,24 @@ func (a ClientAttach) DetachByte() (byte, error) {
 	return 0, fmt.Errorf("attach.detach_key: %q is not a key cf can read", key)
 }
 
+// DetachLabel is how the detach key is spelled to a person: "Ctrl-]", "Ctrl-G".
+// It is "" when the key is not valid, so that what shows it shows nothing
+// rather than a key that does not work.
+func (a ClientAttach) DetachLabel() string {
+	if _, err := a.DetachByte(); err != nil {
+		return ""
+	}
+	key := a.DetachKey
+	if key == "" {
+		key = DefaultDetachKey
+	}
+	return "Ctrl-" + strings.ToUpper(key[len("ctrl+"):])
+}
+
 // LoadClient reads client.json; a machine without one trusts the announcements.
 // A target in it that is not a valid ssh target is an error here, not later.
+// The detach key is not checked here: only attaching needs it, so a bad one
+// stops an attach (DetachByte) and nothing else that reads this file.
 func LoadClient(p Paths) (Client, error) {
 	raw, err := os.ReadFile(p.ClientConfigFile())
 	if errors.Is(err, fs.ErrNotExist) {
@@ -149,9 +165,6 @@ func LoadClient(p Paths) (Client, error) {
 		if !domain.ValidSSHTarget(target) {
 			return Client{}, fmt.Errorf("config: %s: attach.ssh_targets[%q] is not [user@]host[:port]", p.ClientConfigFile(), worker)
 		}
-	}
-	if _, err := c.Attach.DetachByte(); err != nil {
-		return Client{}, fmt.Errorf("config: %s: %w", p.ClientConfigFile(), err)
 	}
 	if err := c.Notify.validate(); err != nil {
 		return Client{}, fmt.Errorf("config: %s: %w", p.ClientConfigFile(), err)

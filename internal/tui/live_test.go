@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -88,10 +89,13 @@ type fakeStream struct {
 	sent   bool
 }
 
-func (f *fakeBackend) OpenScreen(run string, hz int) (ScreenStream, error) {
+func (f *fakeBackend) OpenScreen(ctx context.Context, run string, hz int) (ScreenStream, error) {
 	s := f.screens
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.opened = append(s.opened, fmt.Sprintf("%s@%d", run, hz))
 	if err := s.openErr[run]; err != nil {
 		return nil, err
@@ -235,7 +239,13 @@ func liveFixture(n int) ([]v1.Task, []v1.Run) {
 // liveShell opens the shell at route ("t" or "r") with n live Runs, in a terminal of w by h.
 func liveShell(t *testing.T, be *fakeBackend, route string, w, h, n int) (*Model, *pump) {
 	t.Helper()
-	m := New(Options{Clock: func() time.Time { return now }, Location: time.UTC, Backend: be})
+	return liveShellLeaving(t, be, route, w, h, n, "Ctrl-]")
+}
+
+// liveShellLeaving is liveShell with the detach key the TUI was told of.
+func liveShellLeaving(t *testing.T, be *fakeBackend, route string, w, h, n int, leave string) (*Model, *pump) {
+	t.Helper()
+	m := New(Options{Clock: func() time.Time { return now }, Location: time.UTC, Backend: be, DetachKey: leave})
 	p := &pump{t: t, m: m, msgs: make(chan tea.Msg, 256)}
 	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	connect(m)
@@ -288,7 +298,7 @@ func TestScenario_LiveView_Panel_Tasks(t *testing.T) {
 	if got := be.screens.askedFor(); fmt.Sprint(got) != "[run_1@2]" {
 		t.Errorf("the panel asked for %v, want the selected Task's Run at 2 Hz", got)
 	}
-	p.until("the peers", p.showing("also inside: mbp, omarch01"))
+	p.until("the peers", p.showing("inside: mbp, omarch01"))
 	onlyColours(t, m)
 	compareGolden(t, "live-tasks-120x32.golden", frame(m))
 }
@@ -332,7 +342,7 @@ func TestScenario_LiveView_Panel_ReasonLines(t *testing.T) {
 		{"not attachable", domain.NewError(domain.CodeRunNotAttachable, "the Run ended", nil), "This run cannot be watched now"},
 		{"old worker", domain.NewError(domain.CodeNotImplemented, "no screen stream", nil), "This worker is too old for the live view"},
 		{"worker offline", domain.NewError(domain.CodeWorkerOffline, "gone", nil), "The worker is offline"},
-		{"policy", domain.NewError(domain.CodePolicyDenied, "the Worker does not allow the live view (allow_screen)", nil), "Not allowed: the Worker does not allow the live view (allow_screen)"},
+		{"policy", domain.NewError(domain.CodePolicyDenied, "this identity may not watch Runs of the Worker: policy "+domain.PolicyWorkerAllowShell, nil), "Not allowed: this identity may not watch Runs of the Worker: policy " + domain.PolicyWorkerAllowShell},
 	}
 	var golden strings.Builder
 	for _, tc := range cases {
@@ -456,7 +466,7 @@ func TestScenario_LiveView_Panel_AStreamThatOpensLateIsClosed(t *testing.T) {
 	b.Sync(m.context())
 	var opened screenOpenedMsg
 	for _, run := range []string{"run_1"} {
-		stream, err := be.OpenScreen(run, panelHz)
+		stream, err := be.OpenScreen(context.Background(), run, panelHz)
 		opened = screenOpenedMsg{from: from(b.id), run: run, gen: b.panel.gen, stream: stream, err: err}
 	}
 	m.Update(key("down")) // another Run is selected: the generation moves on
@@ -531,14 +541,14 @@ func TestScenario_LiveView_Peers_ShowInThePanelTitle(t *testing.T) {
 	be.screens.peers["run_1"] = []v1.AttachPeer{{ID: "c1", Name: "mbp", Mode: v1.AttachModeWrite}, {ID: "c2", Name: "mbp", Mode: v1.AttachModeView}, {ID: "c3", Name: "omarch01", Mode: v1.AttachModeWrite}}
 	m, p := liveShell(t, be, "r", 120, 32, 1)
 	p.key("v")
-	p.until("the peers", p.showing("also inside: mbp ×2, omarch01"))
+	p.until("the peers", p.showing("inside: mbp ×2, omarch01"))
 	if strings.Contains(frame(m), "mbp, mbp") {
 		t.Error("a client that is inside twice is named twice")
 	}
 	if got := alsoInside(nil); got != "" {
 		t.Errorf("nobody inside is %q", got)
 	}
-	if got := alsoInside([]string{"a", "b", "c", "d", "e"}); got != "also inside: a, b, c +2" {
+	if got := alsoInside([]string{"a", "b", "c", "d", "e"}); got != "inside: a, b, c +2" {
 		t.Errorf("many peers: %q", got)
 	}
 }
@@ -557,12 +567,12 @@ func TestScenario_LiveView_Shell_Action(t *testing.T) {
 
 func TestScenario_LiveView_Shell_PolicyDeniedIsTheFailureLine(t *testing.T) {
 	be := newBackend()
-	be.failure = actions.FailureOf(domain.NewError(domain.CodePolicyDenied, "the shell is not enabled by the policy of the Project (shell)", nil))
+	be.failure = actions.FailureOf(domain.NewError(domain.CodePolicyDenied, "the shell is not allowed: policy "+domain.PolicyProjectShell, nil))
 	m, p := liveShell(t, be, "r", 120, 32, 1)
 	p.key("s")
 	p.until("the failure", p.showing("CF_POLICY_DENIED"))
 	got := frame(m)
-	for _, want := range []string{"! Shell failed", "the policy of the Project (shell)"} {
+	for _, want := range []string{"! Shell failed", "policy project.shell"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the failure lacks %q:\n%s", want, got)
 		}
@@ -595,7 +605,7 @@ func TestScenario_LiveView_Grid_ThreeAndSeven(t *testing.T) {
 			p.key("V")
 			shown := min(n, gridMax)
 			p.until("every cell", func() bool { return strings.Count(frame(m), "41 tests passed") == shown })
-			p.until("the peers", p.showing("also inside: mbp"))
+			p.until("the peers", p.showing("inside: mbp"))
 			onlyColours(t, m)
 			if got := fmt.Sprint(be.screens.askedFor()); strings.Count(got, "@1") != shown || strings.Contains(got, "@2") {
 				t.Errorf("the cells asked for %v, want %d streams at 1 Hz", got, shown)
@@ -756,10 +766,10 @@ func TestLiveFeed_IgnoresWhatIsNotItsOwn(t *testing.T) {
 	var f liveFeed
 	var closed atomic.Int32
 	stale := &countingStream{closed: &closed}
-	if _, mine := f.handle(from(1), screenOpenedMsg{gen: 99, stream: stale}); mine || closed.Load() != 1 {
-		t.Errorf("a stream of another generation was kept (mine=%v, closed=%d)", mine, closed.Load())
+	if cmd := f.handle(from(1), screenOpenedMsg{gen: 99, stream: stale}); cmd != nil || closed.Load() != 1 {
+		t.Errorf("a stream of another generation was kept (cmd=%v, closed=%d)", cmd != nil, closed.Load())
 	}
-	if _, mine := f.handle(from(1), screenFrameMsg{gen: 99, screen: []byte("x")}); mine || len(f.lines) != 0 {
+	if cmd := f.handle(from(1), screenFrameMsg{gen: 99, screen: []byte("x")}); cmd != nil || len(f.lines) != 0 {
 		t.Error("a screen of another generation was drawn")
 	}
 	err := errors.New("boom")
@@ -801,4 +811,102 @@ func attachedBy(be *fakeBackend) []string {
 	be.mu.Lock()
 	defer be.mu.Unlock()
 	return append([]string(nil), be.attached...)
+}
+
+// The key that leaves a Run is on screen wherever the TUI offers to enter one,
+// as the person configured it: once inside, the keys go to the Run.
+func TestScenario_LiveView_Leave_TheConfiguredKeyIsAlwaysInView(t *testing.T) {
+	be := newBackend()
+	serving(be, 2)
+	m, p := liveShellLeaving(t, be, "r", 120, 32, 2, "Ctrl-G")
+	p.key("v")
+	p.until("the screen", p.showing("41 tests passed"))
+	if got := frame(m); !strings.Contains(got, "[enter] Enter run · Ctrl-G leaves") || strings.Contains(got, "Ctrl-]") {
+		t.Errorf("the panel does not say how to leave with the configured key:\n%s", got)
+	}
+	compareGolden(t, "live-leave-runs-120x32.golden", frame(m))
+
+	p.key("V")
+	p.until("the cells", p.showing("r-0002"))
+	if got := frame(m); !strings.Contains(got, "[enter] Enter run · Ctrl-G leaves") {
+		t.Errorf("the grid does not say how to leave:\n%s", got)
+	}
+	compareGolden(t, "live-leave-grid-160x40.golden", frame(m))
+}
+
+// Without a key to name (a config that is not valid), the label is the plain one.
+func TestScenario_LiveView_Leave_NoKeyNoClaim(t *testing.T) {
+	be := newBackend()
+	serving(be, 1)
+	m, p := liveShellLeaving(t, be, "r", 120, 32, 1, "")
+	p.key("v")
+	p.until("the screen", p.showing("41 tests passed"))
+	if got := frame(m); !strings.Contains(got, "[enter] Enter run") || strings.Contains(got, "leaves") {
+		t.Errorf("a key that is not known is claimed:\n%s", got)
+	}
+}
+
+// Names that come from the network (clients, Workers) never carry a control
+// into the frame, in the panel or in the grid. What is left of an escape once
+// its control bytes are gone is plain text, which a terminal does not act on.
+func TestScenario_LiveView_Names_NeverCarryAnEscape(t *testing.T) {
+	const evil = "\x1b[2Jevil\x1b]0;pwned\x07\x9b31m\x9d52;c;aGk=\x07\x1bPq\x1b\\"
+	be := newBackend()
+	serving(be, 1)
+	be.screens.peers["run_1"] = []v1.AttachPeer{{ID: "c1", Name: evil, Mode: v1.AttachModeWrite}}
+	m, p := liveShell(t, be, "r", 120, 32, 1)
+	m.Update(feedMsg{RouteWorkers, client.Update[[]v1.Worker]{Kind: client.UpdateSnapshot, State: []v1.Worker{{ID: "wrk_1", Name: evil, Short: "w-1"}}}})
+	p.key("v")
+	p.until("the peer", p.showing("evil"))
+	onlyColours(t, m)
+	p.key("V")
+	p.until("the cell", p.showing("r-0001"))
+	p.until("the peer in the cell", p.showing("evil"))
+	onlyColours(t, m)
+}
+
+func TestExpandTabs_AndCropCountThem(t *testing.T) {
+	if got := expandTabs("a\tb"); got != "a       b" {
+		t.Errorf("a tab after one cell: %q", got)
+	}
+	if got := expandTabs("\x1b[31mab\x1b[0m\tc"); got != "\x1b[31mab\x1b[0m      c" {
+		t.Errorf("a tab after colours: %q", got)
+	}
+	for _, line := range crop(screenLines([]byte("a\tb\tc\td\te\tf")), 10, 1) {
+		if w := ansi.StringWidth(line); w > 10+len(margin) {
+			t.Errorf("a line with tabs is %d cells wide in a panel of 10: %q", w, line)
+		}
+	}
+}
+
+// A stream that is still opening for a selection that was left is cancelled,
+// not left to finish and be closed.
+func TestLiveFeed_AnOpeningThatWasLeftIsCancelled(t *testing.T) {
+	be := &waitingBackend{started: make(chan struct{})}
+	var f liveFeed
+	cmd := f.open(be, from(1), "run_1", panelHz)
+	done := make(chan tea.Msg)
+	go func() { done <- cmd() }()
+	<-be.started
+	f.close()
+	select {
+	case msg := <-done:
+		if opened, ok := msg.(screenOpenedMsg); !ok || opened.err == nil {
+			t.Errorf("the opening answered %#v, want an error", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the opening of a stream that was left still waits")
+	}
+}
+
+// waitingBackend opens nothing: it waits for the context to end.
+type waitingBackend struct {
+	Backend
+	started chan struct{}
+}
+
+func (w *waitingBackend) OpenScreen(ctx context.Context, _ string, _ int) (ScreenStream, error) {
+	close(w.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
 }

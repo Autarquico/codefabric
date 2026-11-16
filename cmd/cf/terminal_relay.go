@@ -21,10 +21,10 @@ import (
 )
 
 // detachKeyOf is the detach key of this machine, as the byte the terminal sends
-// and as the person spells it: the one in client.json, or ctrl+] (tmux's C-] on
-// the Worker stays as a fallback). A config that cannot be read is an error,
-// not a silent default: a person who set a key would otherwise not know theirs
-// does nothing.
+// and as the person reads it ("Ctrl-]"): the one in client.json, or Ctrl-]
+// (tmux's C-] on the Worker stays as a fallback). A config that cannot be read,
+// or a key that is not valid, is an error, not a silent default: a person who
+// set a key would otherwise not know theirs does nothing.
 func detachKeyOf() (byte, string, error) {
 	paths, err := config.ResolveFromEnv()
 	if err != nil {
@@ -35,11 +35,25 @@ func detachKeyOf() (byte, string, error) {
 		return 0, "", domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
 	}
 	key, err := cfg.Attach.DetachByte()
-	name := cfg.Attach.DetachKey
-	if name == "" {
-		name = config.DefaultDetachKey
+	if err != nil {
+		return 0, "", domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
 	}
-	return key, name, err
+	return key, cfg.Attach.DetachLabel(), nil
+}
+
+// detachLabelOf is the detach key as a person reads it ("Ctrl-]"), for the TUI
+// to show before it hands over the terminal. A config that cannot be read, or a
+// key that is not valid, gives "": the attach says why when it is tried.
+func detachLabelOf() string {
+	paths, err := config.ResolveFromEnv()
+	if err != nil {
+		return ""
+	}
+	cfg, err := config.LoadClient(paths)
+	if err != nil {
+		return ""
+	}
+	return cfg.Attach.DetachLabel()
 }
 
 // screenReset undoes the modes a tmux client sets on a terminal: it leaves the

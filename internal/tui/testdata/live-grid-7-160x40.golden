@@ -1,6 +1,6 @@
  CODEFABRIC                                                                                                                                           ● healthy
  ──────────────── Grid · 7 live ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- ─› auth-refactor · r-0001 · linux ──────────────────│── infra · r-0002 · macbook · also inside: mbp ─────│── payments · r-0003 · linux ───────────────────────
+ ─› auth-refactor · r-0001 (try 1) · linux ──────────│── infra · r-0002 (try 1) · macbook · inside: mbp ──│── payments · r-0003 (try 1) · linux ───────────────
   compiling auth middleware                          │ compiling auth middleware                          │ compiling auth middleware
   ✓ 41 tests passed�2J                               │ ✓ 41 tests passed�2J                               │ ✓ 41 tests passed�2J
   a very long line that goes on and on and on and on │ a very long line that goes on and on and on and on │ a very long line that goes on and on and on and on 
@@ -17,7 +17,7 @@
                                                      │                                                    │
                                                      │                                                    │
                                                      │                                                    │
- ── frontend · r-0004 · macbook ─────────────────────│── billing · r-0005 · linux ────────────────────────│── search · r-0006 · macbook ───────────────────────
+ ── frontend · r-0004 (try 1) · macbook ─────────────│── billing · r-0005 (try 1) · linux ────────────────│── search · r-0006 (try 1) · macbook ───────────────
   compiling auth middleware                          │ compiling auth middleware                          │ compiling auth middleware
   ✓ 41 tests passed�2J                               │ ✓ 41 tests passed�2J                               │ ✓ 41 tests passed�2J
   a very long line that goes on and on and on and on │ a very long line that goes on and on and on and on │ a very long line that goes on and on and on and on 
@@ -34,7 +34,7 @@
                                                      │                                                    │
                                                      │                                                    │
                                                      │                                                    │
- +1 more
+ +1 more, in the Runs view: r-0007 (try 1)
 
  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [←↑↓→] Move [enter] Enter run [esc] Back [q] Quit
+ [←↑↓→] Move [enter] Enter run · Ctrl-] leaves [esc] Back [q] Quit

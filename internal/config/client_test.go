@@ -92,8 +92,24 @@ func TestClientAttach_DetachKey(t *testing.T) {
 	for _, bad := range []string{"ctrl+c", "ctrl+d", "ctrl+z", "ctrl+m", "ctrl+i", "q", "alt+x", "ctrl+", "ctrl+ab", "f5"} {
 		raw, _ := json.Marshal(map[string]any{"attach": map[string]string{"detach_key": bad}})
 		write(string(raw))
-		if _, err := config.LoadClient(p); err == nil {
+		c, err := config.LoadClient(p)
+		if err != nil {
+			t.Errorf("detach_key %q stops everything that loads the client config: %v", bad, err)
+			continue
+		}
+		if _, err := c.Attach.DetachByte(); err == nil {
 			t.Errorf("detach_key %q was accepted", bad)
+		}
+		if label := c.Attach.DetachLabel(); label != "" {
+			t.Errorf("detach_key %q is labelled %q", bad, label)
+		}
+	}
+}
+
+func TestClientAttach_DetachLabel(t *testing.T) {
+	for key, want := range map[string]string{"": "Ctrl-]", "ctrl+]": "Ctrl-]", "ctrl+g": "Ctrl-G", "CTRL+G": "Ctrl-G", "ctrl+\\": "Ctrl-\\"} {
+		if got := (config.ClientAttach{DetachKey: key}).DetachLabel(); got != want {
+			t.Errorf("%q is labelled %q, want %q", key, got, want)
 		}
 	}
 }

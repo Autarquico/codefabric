@@ -45,7 +45,7 @@ Ctrl-] leaves `cf attach` and `cf shell`, and the same key leaves a session you 
 { "attach": { "detach_key": "ctrl+g" } }
 ```
 
-The value is `ctrl+` and a letter, or one of `ctrl+]`, `ctrl+\`, `ctrl+^` and `ctrl+_` (in JSON, `"ctrl+\\"`). Keys the session needs are refused: `ctrl+c`, `ctrl+d`, `ctrl+z`, and `ctrl+h`, `ctrl+i`, `ctrl+j`, `ctrl+m` (Backspace, Tab and Enter). An invalid value is an error when you attach, not a silent default. If you run `cf` inside tmux, the key must not be tmux's prefix (`ctrl+b` by default) or another key tmux binds in the root table, or tmux takes it first. The Worker's tmux keeps `C-]` bound to detach as a fallback, whatever you set here.
+The value is `ctrl+` and a letter, or one of `ctrl+]`, `ctrl+\`, `ctrl+^` and `ctrl+_` (in JSON, `"ctrl+\\"`). Keys the session needs are refused: `ctrl+c`, `ctrl+d`, `ctrl+z`, and `ctrl+h`, `ctrl+i`, `ctrl+j`, `ctrl+m` (Backspace, Tab and Enter). An invalid value is an error when you attach or enter a Run from the TUI, not a silent default; it does not stop `cf notify`, `cf doctor` or anything else that reads `client.json`. If you run `cf` inside tmux, the key must not be tmux's prefix (`ctrl+b` by default) or another key tmux binds in the root table, or tmux takes it first. The Worker's tmux keeps `C-]` bound to detach as a fallback, whatever you set here.
 
 ## `cf claude`
 

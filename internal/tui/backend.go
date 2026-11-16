@@ -22,8 +22,8 @@ type Backend interface {
 	// Timeline is the latest events of a Task and its Runs, oldest first.
 	Timeline(taskID string) (Timeline, error)
 	// OpenScreen opens the read-only screen stream of a Run at hz screens a
-	// second. The caller closes it.
-	OpenScreen(run string, hz int) (ScreenStream, error)
+	// second. The caller closes it, or cancels ctx while it is still opening.
+	OpenScreen(ctx context.Context, run string, hz int) (ScreenStream, error)
 	// History is the versions of a Workflow, newest first.
 	History(workflow string) ([]v1.WorkflowVersion, error)
 }
@@ -282,12 +282,28 @@ func (b sdkBackend) Timeline(taskID string) (Timeline, error) {
 	return Timeline{Events: events, Capped: true}, nil
 }
 
-func (b sdkBackend) OpenScreen(run string, hz int) (ScreenStream, error) {
-	stream, err := b.screens.OpenScreen(b.ctx, run, "", hz)
+// OpenScreen ends with ctx, as with the backend's own: whichever ends first.
+func (b sdkBackend) OpenScreen(ctx context.Context, run string, hz int) (ScreenStream, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(b.ctx, cancel)
+	stream, err := b.screens.OpenScreen(ctx, run, "", hz)
 	if err != nil {
+		stop()
+		cancel()
 		return nil, err
 	}
-	return stream, nil
+	return &boundScreen{ScreenStream: stream, release: func() { stop(); cancel() }}, nil
+}
+
+// boundScreen is a stream that lets go of its context when it is closed.
+type boundScreen struct {
+	*client.ScreenStream
+	release func()
+}
+
+func (s *boundScreen) Close() error {
+	defer s.release()
+	return s.ScreenStream.Close()
 }
 
 func (b sdkBackend) History(workflow string) ([]v1.WorkflowVersion, error) {

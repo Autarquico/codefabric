@@ -31,7 +31,7 @@ func (o *observeBox) tui(extraEnv ...string) *outer {
 	return inTerminal(o.t, o.attachEnv(extraEnv...), exe)
 }
 
-// liveGone fails if the text is not on the screen within d: the panel shows what
+// within fails if the text is not on the screen within d: the panel shows what
 // a Run wrote in under a second.
 func within(t *testing.T, d time.Duration, what string, ok func() bool) {
 	t.Helper()
@@ -167,6 +167,7 @@ func TestScenario_LiveAttach_EntrarYSalir(t *testing.T) {
 	eventually(t, "the Task", func() bool { return strings.Contains(term.screen(), "auth-race") })
 	term.send("v")
 	eventually(t, "the panel", func() bool { return strings.Contains(term.screen(), "hello-from-run") })
+	eventually(t, "the key to leave, as configured", func() bool { return strings.Contains(term.screen(), "Ctrl-G leaves") })
 	before := listOf(term.screen())
 	outerBefore := term.state()
 
@@ -209,6 +210,10 @@ func TestScenario_LiveAttach_EntrarYSalir(t *testing.T) {
 // and the TUI of a third terminal lists both in the title of its panel, and shows
 // what each types. (Both are the same enrolled client, "laptop", so the panel
 // names it with how many times it is inside: the box enrolls one client.)
+//
+// Not covered: that the two writers are told apart by name. The box enrolls one
+// client, so both are "laptop", and the assertion is on the count (×2), which
+// is what the panel says of a client that is inside twice.
 func TestScenario_LiveAttach_DosEscritoresYPanel(t *testing.T) {
 	o := newObserveBox(t, chatScript)
 	use(t, o.client)
@@ -220,7 +225,7 @@ func TestScenario_LiveAttach_DosEscritoresYPanel(t *testing.T) {
 	term.send("t")
 	eventually(t, "the Task", func() bool { return strings.Contains(term.screen(), "auth-race") })
 	term.send("v")
-	eventually(t, "both listed", func() bool { return strings.Contains(term.screen(), "also inside: laptop ×2") })
+	eventually(t, "both listed", func() bool { return strings.Contains(term.screen(), "inside: laptop ×2") })
 
 	a.send("from-a", "Enter")
 	b.send("from-b", "Enter")
@@ -234,7 +239,7 @@ func TestScenario_LiveAttach_DosEscritoresYPanel(t *testing.T) {
 	// One leaves: the list follows.
 	b.detach()
 	eventually(t, "one left", func() bool {
-		return strings.Contains(term.screen(), "also inside: laptop") && !strings.Contains(term.screen(), "×2")
+		return strings.Contains(term.screen(), "inside: laptop") && !strings.Contains(term.screen(), "×2")
 	})
 	a.detach()
 	eventually(t, "both to leave", func() bool { return o.clients() == 0 })

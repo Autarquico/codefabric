@@ -25,7 +25,7 @@ func (b *browser) enterLabel() string {
 	if b.livePanel() && b.state != nil {
 		if row, ok := b.list.selected(b.rows); ok {
 			if _, why := b.spec.live(b.state, row); why == "" {
-				return "Enter run"
+				return b.prefs.enterRun()
 			}
 		}
 	}
@@ -61,7 +61,7 @@ func (b *browser) livePane(c RenderContext, row Row, ok bool, room int) []string
 	case why != "":
 		return []string{margin + c.Theme.Faint.Render(ansi.Truncate(why, c.inner(), "…"))}
 	case b.panel.reason != "":
-		return []string{margin + c.Theme.Warning.Render(ansi.Truncate(b.panel.reason, c.inner(), "…"))}
+		return []string{margin + c.Theme.Warning.Render(ansi.Truncate(b.panel.reason+retryHint, c.inner(), "…"))}
 	case !b.panel.waited:
 		return []string{margin + c.Theme.Faint.Render("Connecting to the live view…")}
 	}
@@ -79,7 +79,7 @@ func liveOfRun(s *State, row Row) (v1.Run, string) {
 }
 
 // liveOfTask is the live Run of a row of the Tasks view: the Task's newest Run
-// that has a screen. With none, the reason of its newest Run.
+// that has a screen, else its newest Run (and the reason it has none).
 func liveOfTask(s *State, row Row) (v1.Run, string) {
 	var best v1.Run
 	found := false
@@ -87,9 +87,8 @@ func liveOfTask(s *State, row Row) (v1.Run, string) {
 		if r.TaskID != row.ID {
 			continue
 		}
-		better := !found || (liveRun(r) != liveRun(best) && liveRun(r)) ||
-			(liveRun(r) == liveRun(best) && r.CreatedAt.After(best.CreatedAt))
-		if better {
+		live, bestLive := liveRun(r), liveRun(best)
+		if !found || (live && !bestLive) || (live == bestLive && r.CreatedAt.After(best.CreatedAt)) {
 			best, found = r, true
 		}
 	}

@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -41,7 +43,21 @@ type ScreenStream interface {
 
 // livePrefs is what the TUI remembers of the live view for its whole session,
 // shared by the views that have it: whether the panel is on.
-type livePrefs struct{ panel bool }
+type livePrefs struct {
+	panel bool
+	// leave is how the key that leaves a session reads ("Ctrl-]"), or "" when
+	// it is not known.
+	leave string
+}
+
+// enterRun is the label of the key that enters a Run: it says how to leave,
+// because once inside the keys go to the Run, not to the TUI.
+func (p *livePrefs) enterRun() string {
+	if p == nil || p.leave == "" {
+		return "Enter run"
+	}
+	return "Enter run · " + p.leave + " leaves"
+}
 
 // Messages of a stream in flight. gen says which opening they belong to: what
 // arrives for a generation that was let go of is dropped (and a stream that
@@ -72,6 +88,7 @@ type liveFeed struct {
 	run    string // the Run it follows; "" when it follows nothing
 	gen    uint64
 	stream ScreenStream
+	cancel context.CancelFunc // ends the opening of the stream, and the stream with it
 	// lines are the sanitized screen, ready to be cropped; peers are the names
 	// of who else is inside.
 	lines  []string
@@ -84,13 +101,16 @@ type liveFeed struct {
 func (f *liveFeed) following(run string) bool { return f.run == run && f.gen != 0 }
 
 // open starts following run, and ends what it followed before. Nothing is
-// asked of the network here: the command that returns does it.
+// asked of the network here: the command that returns does it. The opening
+// runs under a context that close cancels, so an opening for a selection that
+// was left is cut short instead of holding a slot of the Worker.
 func (f *liveFeed) open(backend Backend, asker from, run string, hz int) tea.Cmd {
 	f.close()
 	gen := lastLiveGen.Add(1)
-	*f = liveFeed{run: run, gen: gen}
+	ctx, cancel := context.WithCancel(context.Background())
+	*f = liveFeed{run: run, gen: gen, cancel: cancel}
 	return func() tea.Msg {
-		stream, err := backend.OpenScreen(run, hz)
+		stream, err := backend.OpenScreen(ctx, run, hz)
 		return screenOpenedMsg{from: asker, run: run, gen: gen, stream: stream, err: err}
 	}
 }
@@ -98,6 +118,9 @@ func (f *liveFeed) open(backend Backend, asker from, run string, hz int) tea.Cmd
 // close lets go of the stream. A command waiting in its Next is freed by it and
 // answers for a generation that is no longer the feed's.
 func (f *liveFeed) close() {
+	if f.cancel != nil {
+		f.cancel()
+	}
 	if f.stream != nil {
 		_ = f.stream.Close()
 	}
@@ -123,37 +146,37 @@ func (f *liveFeed) next(asker from) tea.Cmd {
 	}
 }
 
-// handle folds a message of a stream into the feed. mine is false for what is
-// not about this feed's generation (the caller may ignore it); a stream that
-// opens for a feed that let go of it is closed here.
-func (f *liveFeed) handle(asker from, msg tea.Msg) (cmd tea.Cmd, mine bool) {
+// handle folds a message of a stream into the feed. What is not about this
+// feed's generation is dropped, and a stream that opens for a feed that let go
+// of it is closed here.
+func (f *liveFeed) handle(asker from, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case screenOpenedMsg:
 		if f.gen != msg.gen {
 			if msg.stream != nil {
 				_ = msg.stream.Close()
 			}
-			return nil, false
+			return nil
 		}
 		if msg.err != nil {
 			f.fail(liveReason(msg.err))
-			return nil, true
+			return nil
 		}
 		f.stream = msg.stream
-		return f.next(asker), true
+		return f.next(asker)
 	case screenFrameMsg:
 		if f.gen != msg.gen || f.stream == nil {
-			return nil, false
+			return nil
 		}
 		if msg.err != nil {
 			f.fail(liveReason(msg.err))
-			return nil, true
+			return nil
 		}
 		f.lines, f.waited, f.reason = screenLines(msg.screen), true, ""
 		f.peers = peerNames(msg.peers)
-		return f.next(asker), true
+		return f.next(asker)
 	}
-	return nil, false
+	return nil
 }
 
 // screenLines is a captured screen made safe to draw: the Worker's bytes are
@@ -163,10 +186,51 @@ func (f *liveFeed) handle(asker from, msg tea.Msg) (cmd tea.Cmd, mine bool) {
 // height, and what matters is above them.
 func screenLines(raw []byte) []string {
 	lines := strings.Split(string(supscreen.Sanitize(raw)), "\n")
+	for i, line := range lines {
+		lines[i] = expandTabs(line)
+	}
 	for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
+}
+
+// tabStop is the width of a tab in a terminal.
+const tabStop = 8
+
+// expandTabs turns each tab into the spaces that reach the next tab stop.
+// ansi.Truncate and ansi.StringWidth count a tab as no width at all, while a
+// terminal moves to the stop: a line with tabs would overflow the panel and
+// push the borders of the grid. Colours (SGR) take no room and are kept.
+func expandTabs(line string) string {
+	if !strings.Contains(line, "\t") {
+		return line
+	}
+	var out strings.Builder
+	col := 0
+	for i := 0; i < len(line); {
+		if line[i] == 0x1b { // an SGR: ESC [ ... m, the only escape Sanitize leaves
+			end := i + 1
+			for end < len(line) && (end == i+1 || line[end] < 0x40 || line[end] > 0x7e) {
+				end++
+			}
+			end = min(end+1, len(line))
+			out.WriteString(line[i:end])
+			i = end
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[i:])
+		if r == '\t' {
+			n := tabStop - col%tabStop
+			out.WriteString(strings.Repeat(" ", n))
+			col += n
+		} else {
+			out.WriteString(line[i : i+size])
+			col += ansi.StringWidth(line[i : i+size])
+		}
+		i += size
+	}
+	return out.String()
 }
 
 // crop is the screen in width cells and height lines, without wrapping: a line
@@ -187,6 +251,10 @@ func crop(lines []string, width, height int) []string {
 	return out
 }
 
+// retryHint ends the reason the panel shows: the panel does not try again by
+// itself, it does when the selection changes or the toggle is pressed twice.
+const retryHint = " · press v twice to retry"
+
 // liveReason is the line the panel shows in place of a screen, for the error a
 // stream ended with. A code the person can act on has words of its own.
 func liveReason(err error) string {
@@ -203,7 +271,7 @@ func liveReason(err error) string {
 	case domain.CodeNotImplemented:
 		return "This worker is too old for the live view: update it"
 	case domain.CodeWorkerOffline:
-		return "The worker is offline: the live view needs it"
+		return "The worker is offline, so there is no live view"
 	case domain.CodePolicyDenied:
 		return "Not allowed: " + printable(coded.Message)
 	}
@@ -233,14 +301,15 @@ func peerNames(peers []v1.AttachPeer) []string {
 	return names
 }
 
-// alsoInside is the part of a title that says who else is in the Run, at most
-// three names: "also inside: mbp, omarch01".
+// alsoInside is the part of a title that says who is in the Run, at most three
+// names: "inside: mbp, omarch01". It does not say "also": the Controller lists
+// every client that is inside, and that can be this machine in another terminal.
 func alsoInside(names []string) string {
 	if len(names) == 0 {
 		return ""
 	}
 	shown := names[:min(len(names), 3)]
-	text := "also inside: " + strings.Join(shown, ", ")
+	text := "inside: " + strings.Join(shown, ", ")
 	if more := len(names) - len(shown); more > 0 {
 		text += " +" + strconv.Itoa(more)
 	}

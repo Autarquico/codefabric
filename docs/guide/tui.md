@@ -68,16 +68,16 @@ Each view adds its own keys, and shows them in its footer:
 
 ## The live view
 
-In Tasks and Runs, `v` turns on a panel that shows the current screen of the selected Run, read-only. It replaces the detail pane while it is on, and its title says which Run it shows, on which Worker, and who else is inside (`also inside: mbp, omarch01`; a client that is in twice shows once, as `mbp ×2`). The panel is off when the TUI starts and stays as you leave it for the rest of the session, in every view that has it.
+In Tasks and Runs, `v` turns on a panel that shows the current screen of the selected Run, read-only. It replaces the detail pane while it is on, and its title says which Run it shows, on which Worker, and who is inside (`inside: mbp, omarch01`; a client that is in twice shows once, as `mbp ×2`, and that can be your own machine in another terminal). The panel is off when the TUI starts and stays as you leave it for the rest of the session, in every view that has it.
 
 - It applies to a Run that is interactive and running on a Worker you can reach. In Tasks it follows the Task's live Run. For any other item it shows one line saying why there is no screen.
 - It refreshes twice a second, through the Controller. Moving the selection, hiding the panel or leaving the view closes its stream.
 - What the Worker captured is cleaned before it is drawn: colours and text stay, and every other terminal sequence (title, clipboard, cursor moves, queries) is dropped. Lines are cut to the panel, not wrapped.
-- When the Controller or the Worker refuses, the panel shows the reason instead of the screen: the Run is over (`CF_RUN_NOT_ATTACHABLE`), the Worker is too old for the live view (`CF_NOT_IMPLEMENTED`), the Worker is offline (`CF_WORKER_OFFLINE`) or a policy forbids it (`CF_POLICY_DENIED`). It does not try again by itself: move the selection, or press `v` twice.
+- When the Controller or the Worker refuses, the panel shows the reason instead of the screen: the Run is over (`CF_RUN_NOT_ATTACHABLE`), the Worker is too old for the live view (`CF_NOT_IMPLEMENTED`), the Worker is offline (`CF_WORKER_OFFLINE`) or a policy forbids it (`CF_POLICY_DENIED`). It does not try again by itself, and the line says so: move the selection, or press `v` twice.
 
 ### The grid
 
-`V`, from Tasks or Runs, opens a grid of the live interactive Runs: one cell each, refreshed once a second, with a title line of Task, Run, Worker and who else is inside. At most six cells are drawn, and the rest are counted (`+1 more`): every cell is a capture on a Worker, and the screen streams of a Worker share a limit of 16. The cells re-flow when the terminal is resized.
+`V`, from Tasks or Runs, opens a grid of the live interactive Runs: one cell each, refreshed once a second, with a title line of Task, Run (named as in the panel), Worker and who is inside. At most six cells are drawn, and the rest are counted (`+1 more, in the Runs view: r-0007 (try 1)`, naming them; the six shown are the first in the order of the Runs view): every cell is a capture on a Worker, and the screen streams of a Worker share a limit of 16. The cells re-flow when the terminal is resized.
 
 | Key | Action |
 | --- | --- |
@@ -87,7 +87,7 @@ In Tasks and Runs, `v` turns on a panel that shows the current screen of the sel
 
 ## Attaching
 
-`enter` on the panel, or `a` on a Task or Run, enters its live session full screen and interactive, as `cf attach` does, through the Controller. Everyone attached can type. Leave with the detach key of `cf`, **Ctrl-]** by default: you return to the same place in the TUI (the same view, selection, scroll, panel or grid) and the Run goes on. `s` opens a shell in the worktree of the Run instead, as [`cf shell`](../cli/#cf-shell) does; it is off unless the Project and the Worker both allow it, and when they do not, the failure line shows the `CF_POLICY_DENIED` message with the policy it names.
+`enter` on the panel, or `a` on a Task or Run, enters its live session full screen and interactive, as `cf attach` does, through the Controller. Everyone attached can type. Leave with the detach key of `cf`, **Ctrl-]** by default, which the footer of the panel and of the grid shows next to `enter` (`Enter run · Ctrl-] leaves`, with your key if you changed it): you return to the same place in the TUI (the same view, selection, scroll, panel or grid) and the Run goes on. `s` opens a shell in the worktree of the Run instead, as [`cf shell`](../cli/#cf-shell) does; it is off unless the Project and the Worker both allow it, and when they do not, the failure line shows the `CF_POLICY_DENIED` message with the policy it names.
 
 The detach key is the key of `cf`, not of tmux, so it works when the TUI itself runs inside tmux, provided the tmux around it lets the key through (Ctrl-] is not bound by default; change `detach_key` if yours is). While you are attached, `cf` reads the key itself and never sends anything to the tmux of your terminal. On the Worker, the Run's tmux still binds `C-]` to detach as a fallback, whatever you configure. The key is set in [`client.json`](../cli/#the-detach-key).
 

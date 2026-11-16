@@ -29,27 +29,25 @@ func gridSpec() viewSpec {
 	return viewSpec{
 		route: RouteGrid, title: "Grid", kind: actions.None, readOnly: true,
 		needs: []Route{RouteTasks, RouteRuns, RouteWorkers},
-		open:  func(env screenEnv) Screen { return newGrid(env.Backend) },
+		open:  func(env screenEnv) Screen { return newGrid(env.Backend, env.prefs) },
 	}
 }
 
 type gridScreen struct {
 	id      uint64
 	backend Backend
+	prefs   *livePrefs
 	cells   map[string]*liveFeed // by Run ID, for the Runs on show
 	shown   []string             // Run IDs on show, in order
 	more    int                  // live Runs that do not fit
 	focus   string               // Run ID
 	cols    int                  // columns of the last layout, for the arrow keys
 	state   *State
-	inExec  bool
-	busy    string
-	flash   string
-	notice  *Notice
+	handoff // notice, flash, busy: the terminal actions and the failure line
 }
 
-func newGrid(backend Backend) *gridScreen {
-	return &gridScreen{id: lastScreenID.Add(1), backend: backend, cells: map[string]*liveFeed{}}
+func newGrid(backend Backend, prefs *livePrefs) *gridScreen {
+	return &gridScreen{id: lastScreenID.Add(1), backend: backend, prefs: prefs, cells: map[string]*liveFeed{}}
 }
 
 func (g *gridScreen) screenID() uint64 { return g.id }
@@ -147,7 +145,7 @@ func (g *gridScreen) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screenOpenedMsg:
 		if cell := g.cells[msg.run]; cell != nil {
-			cmd, _ := cell.handle(from(g.id), msg)
+			cmd := cell.handle(from(g.id), msg)
 			return g, cmd, false
 		}
 		if msg.stream != nil {
@@ -155,30 +153,11 @@ func (g *gridScreen) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 		}
 	case screenFrameMsg:
 		if cell := g.cells[msg.run]; cell != nil {
-			cmd, _ := cell.handle(from(g.id), msg)
+			cmd := cell.handle(from(g.id), msg)
 			return g, cmd, false
 		}
-	case attachReadyMsg:
-		g.busy = ""
-		if msg.failure != nil {
-			g.notice = &Notice{Title: "Attach failed", Failure: msg.failure}
-			return g, nil, false
-		}
-		g.inExec = true
-		g.closeAll()
-		return g, tea.Exec(msg.session.Command(), attachEnded(msg.from, msg.target, msg.session)), false
-	case attachEndedMsg:
-		g.busy = "Checking the attach…"
-		return g, func() tea.Msg {
-			return attachExitMsg{from: msg.from, target: msg.target, runErr: msg.runErr, finishErr: msg.session.Finish(msg.runErr)}
-		}, false
-	case attachExitMsg:
-		g.busy, g.inExec = "", false
-		if msg.finishErr != nil {
-			g.notice = &Notice{Title: "Attach ended with an error", Failure: actions.FailureOf(msg.finishErr), Detail: exitDetail(msg.runErr)}
-		} else {
-			g.flash = "Back from " + msg.target.Label + " · " + exitDetail(msg.runErr)
-		}
+	case attachReadyMsg, attachEndedMsg, attachExitMsg:
+		return g, g.update(msg, g.closeAll), false
 	case tea.KeyPressMsg:
 		return g.press(msg.String())
 	}
@@ -232,13 +211,12 @@ func (g *gridScreen) enter() tea.Cmd {
 			run = r
 		}
 	}
-	target := Row{ID: run.ID, Label: runName(run)}
-	g.busy = "Attach to run…"
-	backend, asker := g.backend, from(g.id)
-	return func() tea.Msg {
-		session, failure := backend.Attach("run.attach", actions.Input{Target: target.ID})
-		return attachReadyMsg{from: asker, target: target, session: session, failure: failure}
+	d, found := actions.Lookup("run.attach")
+	if !found {
+		return nil
 	}
+	target := Row{ID: run.ID, Label: runName(run)}
+	return g.begin(g.backend, from(g.id), d, target, actions.Input{Target: target.ID})
 }
 
 // Render draws the cells, the focused one marked, and under them how many live
@@ -312,9 +290,19 @@ func (g *gridScreen) cellsLines(c RenderContext, room int) []string {
 		}
 	}
 	if g.more > 0 {
-		lines = append(lines, margin+c.Theme.Faint.Render("+"+strconv.Itoa(g.more)+" more"))
+		lines = append(lines, margin+c.Theme.Faint.Render(ansi.Truncate(g.moreLine(), c.inner(), "…")))
 	}
 	return lines
+}
+
+// moreLine names the live Runs that did not fit, the ones after the first six
+// in the order of the Runs view, which is where to reach them.
+func (g *gridScreen) moreLine() string {
+	var names []string
+	for _, r := range liveRuns(g.state)[len(g.shown):] {
+		names = append(names, printable(runName(r)))
+	}
+	return "+" + strconv.Itoa(g.more) + " more, in the Runs view: " + strings.Join(names, ", ")
 }
 
 // cell is one Run: a title line over its screen, exactly width cells wide and
@@ -332,7 +320,7 @@ func (g *gridScreen) cell(c RenderContext, run string, width, height int) []stri
 		peers = feed.peers
 	}
 	focused := run == g.focus
-	text := printable(joinParts(taskOf(c.State, r.TaskID), r.Short, workerNameOf(c.State, r.WorkerID), alsoInside(peers)))
+	text := printable(joinParts(taskOf(c.State, r.TaskID), runName(r), workerNameOf(c.State, r.WorkerID), alsoInside(peers)))
 	style, mark := c.Theme.Faint, "─ "
 	if focused {
 		style, mark = c.Theme.Accent, "› "
@@ -374,5 +362,5 @@ func (g *gridScreen) footer(c RenderContext) []string {
 	if g.notice != nil {
 		return keyHints(c, Hint{"any key", "Dismiss"})
 	}
-	return keyHints(c, Hint{"←↑↓→", "Move"}, Hint{"enter", "Enter run"}, Hint{"esc", "Back"}, Hint{"q", "Quit"})
+	return keyHints(c, Hint{"←↑↓→", "Move"}, Hint{"enter", g.prefs.enterRun()}, Hint{"esc", "Back"}, Hint{"q", "Quit"})
 }

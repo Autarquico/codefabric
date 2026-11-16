@@ -20,6 +20,9 @@ type Options struct {
 	Backend Backend
 	// Feeds follow the lists of the views while they are open.
 	Feeds Feeds
+	// DetachKey is how the key that leaves a session reads, "Ctrl-]": the live
+	// view says it next to the key that enters. "" says nothing.
+	DetachKey string
 }
 
 type (
@@ -57,8 +60,8 @@ func New(opts Options) *Model {
 	if opts.Location == nil {
 		opts.Location = time.Local
 	}
-	m := &Model{opts: opts, router: NewRouter(Home{}), theme: NewTheme(true), views: specs(), ctx: context.Background(), feeding: map[Route]context.CancelFunc{}, prefs: &livePrefs{}}
-	env := screenEnv{Backend: opts.Backend, Feeds: opts.Feeds, ctx: func() context.Context { return m.ctx }, send: m.tell}
+	m := &Model{opts: opts, router: NewRouter(Home{}), theme: NewTheme(true), views: specs(), ctx: context.Background(), feeding: map[Route]context.CancelFunc{}, prefs: &livePrefs{leave: opts.DetachKey}}
+	env := screenEnv{Backend: opts.Backend, Feeds: opts.Feeds, ctx: func() context.Context { return m.ctx }, send: m.tell, prefs: m.prefs}
 	for route, spec := range m.views {
 		switch {
 		case spec.open != nil:

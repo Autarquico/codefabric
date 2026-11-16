@@ -34,7 +34,7 @@ func TestDetachKeyOf_ComesFromTheClientConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CF_CONFIG_DIR", dir)
 	t.Setenv("CF_DATA_DIR", t.TempDir())
-	if key, name, err := detachKeyOf(); err != nil || key != 0x1d || name != "ctrl+]" {
+	if key, name, err := detachKeyOf(); err != nil || key != 0x1d || name != "Ctrl-]" {
 		t.Fatalf("no config: %#x %q %v, want Ctrl-]", key, name, err)
 	}
 	write := func(text string) {
@@ -44,7 +44,7 @@ func TestDetachKeyOf_ComesFromTheClientConfig(t *testing.T) {
 		}
 	}
 	write(`{"attach":{"detach_key":"ctrl+g"}}`)
-	if key, name, err := detachKeyOf(); err != nil || key != 0x07 || name != "ctrl+g" {
+	if key, name, err := detachKeyOf(); err != nil || key != 0x07 || name != "Ctrl-G" {
 		t.Fatalf("ctrl+g: %#x %q %v", key, name, err)
 	}
 	write(`{"attach":{"detach_key":"ctrl+c"}}`)

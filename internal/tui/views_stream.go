@@ -24,6 +24,7 @@ type screenEnv struct {
 	Feeds   Feeds
 	ctx     func() context.Context
 	send    func(tea.Msg)
+	prefs   *livePrefs
 }
 
 // activityView is the whole activity stream (§19.3): the same events the home
