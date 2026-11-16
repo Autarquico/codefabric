@@ -151,3 +151,39 @@ func TestRun_AnnouncesTheShellOnlyWithAllowShellAndTheRelay(t *testing.T) {
 		})
 	}
 }
+
+// allow_shell is followed live: the capability appears and goes while the Worker
+// stays online, and it is not a failing setup that would keep Runs away.
+func TestRun_TheShellCapabilityFollowsAllowShellWithoutARestart(t *testing.T) {
+	c := newController(t)
+	paths := machine(t)
+	c.join("box", paths)
+	runWith(t, paths, func(o *daemon.Options) { o.Runtime = &relayRuntime{} })
+	c.eventually("box", "online without the shell", func(w v1.Worker) bool {
+		return w.State == domain.WorkerOnline && !slices.Contains(w.Capabilities, domain.AttachShellCapability)
+	})
+	set := func(on bool) {
+		t.Helper()
+		s, err := doctor.LoadSettings(paths)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.AllowShell = on
+		if err := doctor.SaveSettings(paths, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(true)
+	c.eventually("box", "the shell announced", func(w v1.Worker) bool {
+		return w.State == domain.WorkerOnline && slices.Contains(w.Capabilities, domain.AttachShellCapability)
+	})
+	set(false)
+	w := c.eventually("box", "the shell withdrawn", func(w v1.Worker) bool {
+		return w.State == domain.WorkerOnline && !slices.Contains(w.Capabilities, domain.AttachShellCapability)
+	})
+	for _, comp := range w.Health.Components {
+		if comp.Name == doctor.SetupComponent && comp.Status == v1.ComponentFail {
+			t.Errorf("allow_shell made the setup fail: %+v", comp)
+		}
+	}
+}

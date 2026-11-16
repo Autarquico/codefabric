@@ -371,9 +371,7 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 		return
 	}
 	if err := r.recheck(req); err != nil { // a shell is allowed up to the moment it starts
-		var coded *domain.Error
-		_ = errors.As(err, &coded)
-		r.farewell(conn, v1.ErrorFrame(coded.Code, coded.Message))
+		r.farewell(conn, v1.ErrorFrame(err.Code, err.Message))
 		return
 	}
 	term, err := r.o.Start(cmd, cols, rows)

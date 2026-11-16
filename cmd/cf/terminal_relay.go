@@ -82,10 +82,9 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 	// tmux writes this itself when it detaches a client; when the session ends
 	// any other way (Ctrl-], a signal, a cut stream) nobody does, and the person
 	// would be left on tmux's alternate screen. It goes out before the terminal is restored.
-	// A shell is not tmux and leaves nothing to undo.
-	if mode != v1.AttachModeShell {
-		defer func() { _, _ = io.WriteString(stdio.Out, screenReset) }()
-	}
+	// A shell needs it too: the programs in it (an editor, a pager) set modes of
+	// their own that nobody undoes when Ctrl-] ends it.
+	defer func() { _, _ = io.WriteString(stdio.Out, screenReset) }()
 
 	cancel, err := newCancel()
 	if err != nil {

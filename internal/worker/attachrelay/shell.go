@@ -31,7 +31,7 @@ type Account struct {
 }
 
 // ShellOptions is what the relay needs to open a shell. A shell runs only when
-// both AllowShell and Worktree are set.
+// both Allow and Worktree are set.
 type ShellOptions struct {
 	// Allow says whether this Worker's own settings (allow_shell) allow a shell
 	// right now. It is read again at each request, and again right before the
@@ -93,7 +93,7 @@ func (r *Relay) prepareShell(ctx context.Context, req v1.AttachRequest) (cfrunti
 
 // recheck is the answer to "does this Worker allow this request": for a shell,
 // only if its own setting is on now. Other modes have nothing to check.
-func (r *Relay) recheck(req v1.AttachRequest) error {
+func (r *Relay) recheck(req v1.AttachRequest) *domain.Error {
 	if req.Mode != v1.AttachModeShell || (r.o.Shell.Allow != nil && r.o.Shell.Allow()) {
 		return nil
 	}

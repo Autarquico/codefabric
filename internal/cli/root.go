@@ -151,6 +151,10 @@ func jsonRequested(root *cobra.Command, args []string) bool {
 // envelope goes to stdout, so a script parses one stream whether or not the
 // command worked. Errors without a code are unclassified (1).
 func report(stdout, stderr io.Writer, err error, asJSON, debug bool) int {
+	var shell ShellStatus
+	if errors.As(err, &shell) {
+		return int(shell) // the shell's own status: not an error of cf, so nothing is printed
+	}
 	var coded *domain.Error
 	isCoded := errors.As(err, &coded)
 	if !isCoded {

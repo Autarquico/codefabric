@@ -155,6 +155,7 @@ type AttachSession struct {
 	c       *client.Client
 	ref     string
 	project string
+	shell   bool // a shell in the worktree: its status is the person's, not an attach failure
 }
 
 // SetStdin wires the input of the terminal Run uses.
@@ -223,12 +224,17 @@ func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachS
 	if err != nil {
 		return nil, err
 	}
-	return &AttachSession{session: session, c: c, ref: p.Ref, project: project}, nil
+	return &AttachSession{session: session, c: c, ref: p.Ref, project: project, shell: p.Shell}, nil
 }
 
 // Finish turns how Run ended (nil when the person detached) into the answer
 // `cf attach` would give.
 func (s *AttachSession) Finish(ctx context.Context, runErr error) error {
+	if s.shell {
+		// The TUI shows the status of the shell itself; only a failure of the relay is an error.
+		_, err := shellEnd(runErr)
+		return err
+	}
 	var status ExitStatus
 	var coded *domain.Error
 	switch {

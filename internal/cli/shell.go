@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/spf13/cobra"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
@@ -43,16 +45,37 @@ func newShellCmd(term Terminal) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if code == 0 {
-				return nil
+			if code != 0 {
+				return ShellStatus(code)
 			}
-			// The shell ended with an error: say why the Run cannot be reached now, if that is it.
-			if _, err := c.AttachTarget(cmd.Context(), args[0], project); err != nil {
-				return err
-			}
-			return notAttachable("shell_failed", "the shell exited with status "+strconv.Itoa(code))
+			return nil
 		},
 	}
 	addProjectFlag(cmd, "the Project that narrows a Task name")
 	return cmd
+}
+
+// ShellStatus is the error of a shell that ended by itself with a status other
+// than 0. It is the status of the person's last command, not a failure of the
+// attach: `cf shell` exits with it and prints nothing (no CF_* code).
+type ShellStatus int
+
+func (e ShellStatus) Error() string { return "the shell exited with status " + strconv.Itoa(int(e)) }
+
+// shellEnd splits how a shell session ended into the status of the shell, which
+// is the person's, and the error that belongs to the attach, which is only the
+// relay's or the policy's (a CF_* error). Ctrl-] and an exit of the shell with
+// status 0 are both status 0. `cf shell` and the TUI action read it the same way.
+func shellEnd(runErr error) (status int, failure error) {
+	var exit ExitStatus
+	var coded *domain.Error
+	switch {
+	case runErr == nil:
+		return 0, nil
+	case errors.As(runErr, &exit):
+		return int(exit), nil
+	case errors.As(runErr, &coded):
+		return 0, runErr
+	}
+	return 0, notAttachable(v1.NotAttachableSSHFailed, "the session could not be started on this machine")
 }

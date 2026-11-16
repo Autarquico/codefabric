@@ -36,7 +36,7 @@ func (s *Service) AttachOpen(ctx context.Context, by pki.Session, ref, project, 
 	switch mode {
 	case v1.AttachModeView, v1.AttachModeWrite, v1.AttachModeShell:
 	default:
-		return AttachTicket{}, domain.NewError(domain.CodeInvalidRequest, `mode is "view" or "write"`, nil)
+		return AttachTicket{}, domain.NewError(domain.CodeInvalidRequest, `mode is "view", "write" or "shell"`, nil)
 	}
 	var out AttachTicket
 	err := s.db.Read(ctx, func(q store.Querier) error {

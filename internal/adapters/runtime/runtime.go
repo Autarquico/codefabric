@@ -136,7 +136,11 @@ type Command struct {
 	Env  []string
 	// Dir is where it runs; empty is where the Worker is.
 	Dir string
-	// KillGroup says that ending it ends every process it started, not only it.
+	// KillGroup says that ending the session kills what shares the terminal with
+	// the command, not only the command: the jobs a shell started, each in a
+	// process group of its own. It does not reach a process that left the terminal
+	// on purpose (setsid, nohup with a disown), which has the authority of the OS
+	// user anyway; the details are on pty.Options.KillGroup.
 	KillGroup bool
 }
 

@@ -127,7 +127,7 @@ func newProjectShowCmd() *cobra.Command {
 func printProject(w io.Writer, p v1.Project) error {
 	d := p.Defaults
 	_, err := fmt.Fprintf(w, "ID           %s (%s)\nName         %s\nRepo         %s\n%sBranch       %s\nWorkflow     %s\nEnvironment  %s\nRepo config  %s\nOrigin auth  %s\nNative state %s\nShell        %s\nMode         %s\nCompletion   %s\nResources    %s\nRetry        %s\nCreated      %s\n",
-		p.ID, p.Short, p.Name, p.Repo, aliasLines(p.RepoAliases), p.DefaultBranch, dash(p.DefaultWorkflow), dash(p.DefaultEnvironment), dash(string(p.RepoConfig)), dash(p.OriginSecret), nativeStateLabel(p.NativeState), nativeStateLabel(p.Shell),
+		p.ID, p.Short, p.Name, p.Repo, aliasLines(p.RepoAliases), p.DefaultBranch, dash(p.DefaultWorkflow), dash(p.DefaultEnvironment), dash(string(p.RepoConfig)), dash(p.OriginSecret), onOffLabel(p.NativeState), onOffLabel(p.Shell),
 		dash(string(d.Mode)), dash(string(d.Completion)), resourcesLabel(d.Resources), retryLabel(d.Retry), local(p.CreatedAt))
 	return err
 }
@@ -142,7 +142,7 @@ func onOff(flag, v string) (bool, error) {
 	return false, usageError(fmt.Errorf("%s is on or off, not %q", flag, v))
 }
 
-func nativeStateLabel(on bool) string {
+func onOffLabel(on bool) string {
 	if on {
 		return "on"
 	}

@@ -78,8 +78,8 @@ func newConfigSetCmd() *cobra.Command {
 		Long: "Change a setting of this Worker, keeping the others. disk-min-free is the free disk below\n" +
 			"which the doctor fails, a percentage such as 20% or a size such as 50GiB. allow_shell (true or false,\n" +
 			"false by default) lets `cf shell` open a shell in the worktree of a Run on this Worker, as the user the\n" +
-			"Worker runs as; the Project must allow it too. Turning it off takes effect at once, turning it on at the\n" +
-			"next start of the Worker.",
+			"Worker runs as; the Project must allow it too. The Worker announces and withdraws the shell as the\n" +
+			"setting changes, with no restart and without touching its Runs; a shell already open is not cut.",
 		Example: "  cf worker config set disk-min-free 10%\n  cf worker config set allow_shell true",
 		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {

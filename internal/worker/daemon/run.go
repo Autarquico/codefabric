@@ -315,12 +315,9 @@ func (d *daemon) attachRelay(ctx context.Context, rt cfruntime.Runtime, c *clien
 	if !ok || len(d.attachBinaries) == 0 {
 		return nil
 	}
-	d.capabilities = append(slices.Clone(d.capabilities), domain.AttachRelayCapability)
-	if d.settings.AllowShell {
-		d.capabilities = append(d.capabilities, domain.AttachShellCapability)
-	}
-	d.capabilities = slices.Sorted(slices.Values(d.capabilities))
-	d.log.InfoContext(ctx, "attach relay offered", "shell", d.settings.AllowShell)
+	d.capabilities = slices.Sorted(slices.Values(append(slices.Clone(d.capabilities), domain.AttachRelayCapability)))
+	d.relayRuns = true
+	d.log.InfoContext(ctx, "attach relay offered")
 	return attachrelay.New(attachrelay.Options{
 		Shell:      d.shellOptions(),
 		Controller: attachrelay.FromClient(c), Runtime: art, Clock: d.clock, Log: d.log,
@@ -506,7 +503,9 @@ type daemon struct {
 	doctorAt    time.Time
 	components  []v1.ComponentHealth
 
-	capabilities   []string
+	capabilities []string
+	// relayRuns says that this daemon runs the relay of attach; the shell is announced only then.
+	relayRuns      bool
 	sshTarget      string            // what clients attach through; "" announces none
 	defaultSSH     bool              // announce <user>@<hostname>
 	attachBinaries map[string]string // runtime name to the absolute path that attaches
@@ -586,7 +585,7 @@ func (d *daemon) heartbeat(ctx context.Context) (v1.HeartbeatRequest, error) {
 	return v1.HeartbeatRequest{
 		Epoch: d.epoch, Generation: d.generation, DaemonVersion: d.version,
 		Hostname: info.Hostname, OS: info.OS, Arch: info.Arch,
-		Capabilities: d.capabilities,
+		Capabilities: d.announcedCapabilities(),
 		Total:        v1.Capacity{CPU: info.CPU, MemoryMB: info.MemoryMB, DiskMB: info.DiskMB},
 		Health:       health,
 		SSHTarget:    d.announcedSSHTarget(info.Hostname), AttachBinaries: d.attachBinaries,

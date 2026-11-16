@@ -64,7 +64,7 @@ func setAllowShell(t *testing.T, b *reconcileBox, on bool) {
 	}
 }
 
-// shellOutcome runs `cf shell --json` in a terminal that is not interactive for
+// shellError runs `cf shell --json` in a terminal that is not interactive for
 // the test and returns the error it printed.
 func (o *observeBox) shellError() (status string, e shellError) {
 	o.t.Helper()
@@ -202,6 +202,30 @@ func TestScenario_LiveAttach_ShellEnElWorktree(t *testing.T) {
 	}
 	if _, has := closed.Data["duration_ms"]; !has {
 		t.Errorf("the close has no duration: %+v", closed.Data)
+	}
+	o.finishChat()
+}
+
+// TestScenario_LiveAttach_ShellRestauraLaTerminal: a program in the shell (an
+// editor, a pager) sets modes on the terminal of the person; leaving with Ctrl-]
+// kills the shell before it can undo them, so cf leaves the terminal as it found it.
+func TestScenario_LiveAttach_ShellRestauraLaTerminal(t *testing.T) {
+	o := newShellBox(t, true, true)
+	use(t, o.client)
+	exe, _ := os.Executable()
+	code := filepath.Join(t.TempDir(), "code")
+	term := inTerminal(t, o.attachEnv(), "sh", "-c", fmt.Sprintf("%s shell auth-race; echo $? > %s; sleep 120", exe, code))
+	term.send("echo up-$((20+22))", "Enter") // what the shell answers shows it is open
+	eventually(t, "the shell to answer", func() bool { return strings.Contains(term.screen(), "up-42") })
+	term.send(`printf '\033[?1049h\033[?25l'`, "Enter")
+	eventually(t, "the shell to have set its modes", func() bool { return strings.Contains(term.modes(), "alternate=1") })
+	term.detach()
+	eventually(t, "cf shell to end", func() bool { return fileExists(code) })
+	if got := term.modes(); got != "alternate=0 cursor=1 mouse=0" {
+		t.Errorf("after Ctrl-] the terminal is %q", got)
+	}
+	if got := strings.TrimSpace(readFile(code)); got != "0" {
+		t.Errorf("Ctrl-] ended cf shell with %q, want 0", got)
 	}
 	o.finishChat()
 }
