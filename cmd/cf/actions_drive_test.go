@@ -149,6 +149,7 @@ func TestScenario_TuiViewsActions_ParidadCLI_EjecutaCadaAccion(t *testing.T) {
 		"project.secrets.deny":  {actions.Input{Target: "p1", Values: vals("ref", "env:TOKEN")}, []string{"project", "secrets", "deny", "p1", "env:TOKEN"}},
 		"environment.apply":     {actions.Input{Values: vals("file", envFile)}, []string{"environment", "apply", "--file=" + envFile}},
 		"run.attach":            {actions.Input{Target: "r1"}, []string{"attach", "r1"}},
+		"run.shell":             {actions.Input{Target: "r1"}, []string{"shell", "r1"}},
 	}
 
 	opts := cli.Options{Terminal: &spyTerminal{}}

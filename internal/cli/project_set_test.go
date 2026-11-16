@@ -77,3 +77,19 @@ func TestProjectSet_NativeStateOnOff(t *testing.T) {
 		t.Error("a value other than on or off was accepted")
 	}
 }
+
+func TestProjectSet_ShellOnOff(t *testing.T) {
+	f := &fakeProjectUpdater{}
+	runProjectSet(t, f, "--shell", "on")
+	runProjectSet(t, f, "--shell", "off")
+	runProjectSet(t, f, "--default-branch", "dev")
+	if v := f.got[0].Shell; v == nil || !*v {
+		t.Errorf("on sent %v", v)
+	}
+	if v := f.got[1].Shell; v == nil || *v {
+		t.Errorf("off sent %v", v)
+	}
+	if f.got[2].Shell != nil {
+		t.Errorf("sent shell without the flag")
+	}
+}

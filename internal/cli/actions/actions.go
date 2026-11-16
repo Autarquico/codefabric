@@ -128,6 +128,7 @@ var descriptors = []Descriptor{
 	},
 
 	{ID: "run.attach", Title: "Attach to run", Target: Run, Path: []string{"attach"}, Terminal: true, Args: flags("read-only", "ssh", "ssh-target", "project")},
+	{ID: "run.shell", Title: "Shell in the worktree of run", Target: Run, Path: []string{"shell"}, Terminal: true, Args: flags("project")},
 	{ID: "run.fork", Title: "Fork run", Target: Run, Path: []string{"run", "fork"}},
 	{ID: "run.promote", Title: "Promote run", Target: Run, Path: []string{"run", "promote"}},
 	{ID: "run.publish", Destructive: true, Title: "Publish run", Target: Run, Path: []string{"run", "publish"}},
@@ -291,7 +292,7 @@ func (r Runner) Attach(ctx context.Context, id string, in Input) (*cli.AttachSes
 	}
 	session, err := cli.PrepareAttach(ctx, r.Options.Terminal, cli.AttachParams{
 		Ref: in.Target, Project: in.Values["project"], SSHTarget: in.Values["ssh-target"],
-		ReadOnly: readOnly, Transport: transport, Controller: in.Controller,
+		ReadOnly: readOnly, Transport: transport, Controller: in.Controller, Shell: id == "run.shell",
 	})
 	if err != nil {
 		return nil, asFailure(err)

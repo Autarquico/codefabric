@@ -34,8 +34,30 @@ const (
 type Options struct {
 	Path       string
 	Args       []string
-	Env        []string
+	Env        []string // the whole environment of the command (plus TERM): nothing is inherited
 	Cols, Rows uint16
+	// Dir is the working directory of the command; empty is that of this process.
+	Dir string
+	// KillGroup makes the end of the session (Close, or the command ending by
+	// itself) kill the processes that share the terminal with the command, not only
+	// the command: a shell leaves its jobs behind otherwise, and job control gives
+	// each job a process group of its own, so killing the command's group is not
+	// enough.
+	//
+	// What it guarantees: when Close is called while the command runs, every
+	// process that still has the pty as its controlling terminal is killed, group
+	// by group, before the pty is closed, and none is left or the deadline of
+	// the sweep passed. When the command ends by itself the kernel drops the
+	// terminal from its session at once, so the terminal can no longer be asked
+	// for its processes; then the groups seen on it at the last look (every
+	// pollEvery) are killed, so a job that had run for less than that may stay.
+	// What it does not cover: a process that left the terminal on purpose
+	// (setsid, or nohup with a disown that drops the tty) is out of scope, as the
+	// command has the authority of the OS user anyway. The kills are by process
+	// group of processes found on the terminal, never by the pid of the command
+	// once it has been reaped. The terminal is read from /proc on Linux and with
+	// ps -t elsewhere; if that cannot be done, only the group of the command is killed.
+	KillGroup bool
 }
 
 // Session is a command running under a pty. Read gives what it prints and Write
@@ -48,6 +70,13 @@ type Session struct {
 	done   chan struct{}
 	status int
 
+	killGroup bool
+	tty       string // the device of the slave side, the terminal of the command
+
+	mu     sync.Mutex
+	seen   []proc // what the terminal had at the last look, while the command runs
+	closed bool   // Close has swept the terminal: seen is stale
+
 	closeOnce sync.Once
 }
 
@@ -59,14 +88,27 @@ func Start(o Options) (*Session, error) {
 	}
 	cmd := exec.Command(o.Path, o.Args...) //nolint:gosec,noctx // the caller built the command from a handle it checked; Close, not a context, ends it
 	cmd.Env = withTerm(o.Env)
+	cmd.Dir = o.Dir
 	master, err := creack.StartWithSize(cmd, &creack.Winsize{Cols: cols, Rows: rows})
 	if err != nil {
 		return nil, fmt.Errorf("pty: starting %s: %w", o.Path, err)
 	}
-	s := &Session{cmd: cmd, master: master, done: make(chan struct{})}
+	s := &Session{cmd: cmd, master: master, done: make(chan struct{}), killGroup: o.KillGroup}
+	if f, ok := cmd.Stdin.(*os.File); ok { // the slave: closed by now, but it still has its name
+		s.tty = f.Name()
+		if !strings.HasPrefix(s.tty, "/") {
+			s.tty = "/dev/" + s.tty // Linux names it pts/N
+		}
+	}
+	if s.killGroup {
+		go s.watchTerminal()
+	}
 	go func() {
 		err := cmd.Wait()
 		s.status = exitStatus(err)
+		if s.killGroup {
+			s.killLeftBehind()
+		}
 		close(s.done)
 	}()
 	return s, nil
@@ -120,13 +162,17 @@ func (s *Session) ExitStatus() int {
 	return s.status
 }
 
-// Close ends the command (hangup first, then kill) and releases the pty. It
+// Close ends the command (hangup first, then kill) and releases the pty. With
+// KillGroup it first kills everything that has the terminal (see Options). It
 // waits for the command, and can be called again.
 func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
 		select {
 		case <-s.done:
 		default:
+			if s.killGroup {
+				s.sweepTerminal()
+			}
 			// Closing the master hangs the terminal up, which is how a tmux client detaches.
 			_ = s.master.Close()
 			select {

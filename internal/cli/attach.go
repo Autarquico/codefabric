@@ -58,6 +58,8 @@ type AttachRequest struct {
 	Binary     string
 	Target     domain.SSHTarget
 	ReadOnly   bool
+	// Shell opens a shell in the worktree of the Run instead of its session (cf shell).
+	Shell bool
 }
 
 // TerminalIO is the terminal of the person.
@@ -134,6 +136,8 @@ type AttachParams struct {
 	// Transport is the one to attach through (TransportSSH, TransportRelay);
 	// empty is DefaultAttachTransport.
 	Transport string
+	// Shell opens a shell in the worktree of the Run (cf shell), always through the relay.
+	Shell bool
 	// Controller is the --controller of this call; empty is the stored one.
 	Controller string
 }
@@ -151,6 +155,7 @@ type AttachSession struct {
 	c       *client.Client
 	ref     string
 	project string
+	shell   bool // a shell in the worktree: its status is the person's, not an attach failure
 }
 
 // SetStdin wires the input of the terminal Run uses.
@@ -201,6 +206,9 @@ func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachS
 	}
 	project := scopeOf(ctx, c, p.Project)
 	transport := p.Transport
+	if p.Shell {
+		transport = TransportRelay // there is no shell over ssh
+	}
 	if transport == "" {
 		transport = DefaultAttachTransport()
 	}
@@ -208,7 +216,7 @@ func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachS
 	if err != nil {
 		return nil, err
 	}
-	req.ReadOnly = p.ReadOnly
+	req.ReadOnly, req.Shell = p.ReadOnly, p.Shell
 	if term == nil {
 		return nil, errNoTerminal()
 	}
@@ -216,12 +224,17 @@ func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachS
 	if err != nil {
 		return nil, err
 	}
-	return &AttachSession{session: session, c: c, ref: p.Ref, project: project}, nil
+	return &AttachSession{session: session, c: c, ref: p.Ref, project: project, shell: p.Shell}, nil
 }
 
 // Finish turns how Run ended (nil when the person detached) into the answer
 // `cf attach` would give.
 func (s *AttachSession) Finish(ctx context.Context, runErr error) error {
+	if s.shell {
+		// The TUI shows the status of the shell itself; only a failure of the relay is an error.
+		_, err := shellEnd(runErr)
+		return err
+	}
 	var status ExitStatus
 	var coded *domain.Error
 	switch {

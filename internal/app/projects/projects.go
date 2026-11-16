@@ -136,7 +136,7 @@ func View(p store.Project) v1.Project {
 		ID: string(p.ID), Short: domain.ShortID{Kind: domain.KindProject, N: p.Short}.String(),
 		Name: p.Name, Repo: p.Repo, RepoAliases: append([]string{}, p.RepoAliases...), DefaultBranch: p.DefaultBranch,
 		DefaultWorkflow: p.DefaultWorkflow, DefaultEnvironment: p.DefaultEnvironment,
-		Defaults: p.Defaults, RepoConfig: p.RepoConfig, OriginSecret: p.OriginSecret, NativeState: p.NativeState, CreatedAt: p.CreatedAt,
+		Defaults: p.Defaults, RepoConfig: p.RepoConfig, OriginSecret: p.OriginSecret, NativeState: p.NativeState, Shell: p.Shell, CreatedAt: p.CreatedAt,
 	}
 }
 
@@ -161,6 +161,9 @@ func apply(p *store.Project, req v1.UpdateProjectRequest) error {
 	}
 	if req.NativeState != nil {
 		p.NativeState = *req.NativeState
+	}
+	if req.Shell != nil {
+		p.Shell = *req.Shell
 	}
 	if req.Mode != nil {
 		p.Defaults.Mode = *req.Mode

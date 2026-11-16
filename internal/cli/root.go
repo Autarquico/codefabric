@@ -151,6 +151,10 @@ func jsonRequested(root *cobra.Command, args []string) bool {
 // envelope goes to stdout, so a script parses one stream whether or not the
 // command worked. Errors without a code are unclassified (1).
 func report(stdout, stderr io.Writer, err error, asJSON, debug bool) int {
+	var shell ShellStatus
+	if errors.As(err, &shell) {
+		return int(shell) // the shell's own status: not an error of cf, so nothing is printed
+	}
 	var coded *domain.Error
 	isCoded := errors.As(err, &coded)
 	if !isCoded {
@@ -215,7 +219,7 @@ func newRootCmd(opts Options) *cobra.Command {
 	flags.Bool(flagDebug, false, "show the details of an error")
 	root.AddCommand(newVersionCmd(), newStatusCmd(), newConnectCmd(), newClientCmd(), newConfigCmd(),
 		newProjectCmd(openProjectUpdater(opts)), newTaskCmd(opts.Sessions), newDoCmd(opts.Sessions), newRunCmd(), newWorkerCmd(),
-		newAttachCmd(opts.Terminal), newPsCmd(), newInboxCmd(), newEventsCmd(), newLogsCmd(), newSearchCmd(),
+		newAttachCmd(opts.Terminal), newShellCmd(opts.Terminal), newPsCmd(), newInboxCmd(), newEventsCmd(), newLogsCmd(), newSearchCmd(),
 		newWorkflowCmd(workflowDepsOf(opts)), newEnvironmentCmd(openEnvironmentStore(opts)),
 		newDoctorCmd(openDoctorStore(opts), probeOf(opts)), newNotifyCmd(opts.Native), newMCPCmd(), newClaudeCmd(), newCodexCmd(), newHandoffCmd(opts), newGCCmd(), newStorageCmd())
 	return root

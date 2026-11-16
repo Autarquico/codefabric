@@ -134,6 +134,14 @@ type Command struct {
 	Path string
 	Args []string
 	Env  []string
+	// Dir is where it runs; empty is where the Worker is.
+	Dir string
+	// KillGroup says that ending the session kills what shares the terminal with
+	// the command, not only the command: the jobs a shell started, each in a
+	// process group of its own. It does not reach a process that left the terminal
+	// on purpose (setsid, nohup with a disown), which has the authority of the OS
+	// user anyway; the details are on pty.Options.KillGroup.
+	KillGroup bool
 }
 
 // AttachCommander is implemented by a Runtime whose sessions this machine can

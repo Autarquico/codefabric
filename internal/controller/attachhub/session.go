@@ -135,7 +135,7 @@ func frameBytes(f v1.Frame) []byte {
 // the client sends is forwarded to the Worker only in write mode, and what either
 // end says about who is in the Run is never forwarded, for only the hub says it.
 func (s *session) pump(from, to *peer, fromClient bool) {
-	write := s.gs.Mode == v1.AttachModeWrite
+	write := s.gs.Mode != v1.AttachModeView // a shell types too
 	for {
 		f, err := v1.ReadFrame(from.r)
 		if err != nil {

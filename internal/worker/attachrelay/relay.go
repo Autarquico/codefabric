@@ -94,7 +94,7 @@ type StartTerminal func(cmd cfruntime.Command, cols, rows uint16) (Terminal, err
 
 // StartPty is the StartTerminal of this machine.
 func StartPty(cmd cfruntime.Command, cols, rows uint16) (Terminal, error) {
-	return pty.Start(pty.Options{Path: cmd.Path, Args: cmd.Args, Env: cmd.Env, Cols: cols, Rows: rows})
+	return pty.Start(pty.Options{Path: cmd.Path, Args: cmd.Args, Env: cmd.Env, Dir: cmd.Dir, KillGroup: cmd.KillGroup, Cols: cols, Rows: rows})
 }
 
 // Options parameterise New; the zero value of a field is its default.
@@ -103,6 +103,7 @@ type Options struct {
 	Runtime    Runtime
 	// Live says whether the Run holds the lease epoch on this Worker and has not ended.
 	Live  func(ctx context.Context, runID string, leaseEpoch uint64) (bool, error)
+	Shell ShellOptions  // what a shell request needs; its zero value refuses every one
 	Start StartTerminal // defaults to StartPty
 	Clock clock.Clock
 	Log   *slog.Logger
@@ -256,6 +257,9 @@ func (r *Relay) serve(ctx context.Context, req v1.AttachRequest) {
 // command of the client of tmux. The handle of the request is not used: the
 // session is the one this Runtime names for that Run and epoch.
 func (r *Relay) prepare(ctx context.Context, req v1.AttachRequest) (cfruntime.Command, error) {
+	if req.Mode == v1.AttachModeShell {
+		return r.prepareShell(ctx, req)
+	}
 	if req.Mode != v1.AttachModeView && req.Mode != v1.AttachModeWrite {
 		return cfruntime.Command{}, domain.NewError(domain.CodeNotImplemented, "this Worker does not open a "+req.Mode+" session", nil)
 	}
@@ -310,7 +314,7 @@ type read struct {
 
 // splice moves frames between the stream and the terminal until either ends.
 func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, cmd cfruntime.Command) {
-	write := req.Mode == v1.AttachModeWrite
+	write := req.Mode == v1.AttachModeWrite || req.Mode == v1.AttachModeShell
 	stop := make(chan struct{})
 	frames := make(chan read)
 	var wg sync.WaitGroup
@@ -364,6 +368,10 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 	}
 	if ctx.Err() != nil {
 		r.farewell(conn, v1.ErrorFrame(domain.CodeWorkerOffline, "the Worker is shutting down"))
+		return
+	}
+	if err := r.recheck(req); err != nil { // a shell is allowed up to the moment it starts
+		r.farewell(conn, v1.ErrorFrame(err.Code, err.Message))
 		return
 	}
 	term, err := r.o.Start(cmd, cols, rows)
