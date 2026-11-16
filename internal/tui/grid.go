@@ -349,9 +349,7 @@ func (g *gridScreen) cell(c RenderContext, run string, width, height int) []stri
 	case feed.reason != "":
 		body = []string{" " + c.Theme.Warning.Render(ansi.Truncate(feed.reason, width-1, "…"))}
 	default:
-		for _, line := range crop(feed.lines, width-len(margin), height-1) {
-			body = append(body, line)
-		}
+		body = append(body, crop(feed.lines, width-len(margin), height-1)...)
 	}
 	for len(body) < height-1 {
 		body = append(body, "")

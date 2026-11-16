@@ -40,8 +40,7 @@ type fakeScreens struct {
 	nextErr  map[string]error // Next fails after the first screen
 	opened   []string         // "run@hz", in the order they were asked
 	open     int              // streams not closed
-	handed   int
-	inNext   sync.WaitGroup // goroutines inside Next
+	inNext   sync.WaitGroup   // goroutines inside Next
 	feed     map[string]chan []byte
 	closedBy map[string]int
 }
