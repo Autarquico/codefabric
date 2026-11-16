@@ -73,7 +73,7 @@ In Tasks and Runs, `v` turns on a panel that shows the current screen of the sel
 - It applies to a Run that is interactive and running on a Worker you can reach. In Tasks it follows the Task's live Run. For any other item it shows one line saying why there is no screen.
 - It refreshes twice a second, through the Controller. Moving the selection, hiding the panel or leaving the view closes its stream.
 - What the Worker captured is cleaned before it is drawn: colours and text stay, and every other terminal sequence (title, clipboard, cursor moves, queries) is dropped. Lines are cut to the panel, not wrapped.
-- When the Controller or the Worker refuses, the panel shows the reason instead of the screen: the Run is over (`CF_RUN_NOT_ATTACHABLE`), the Worker is too old for the live view (`CF_NOT_IMPLEMENTED`), the Worker is offline (`CF_WORKER_OFFLINE`) or a policy forbids it (`CF_POLICY_DENIED`). It does not try again by itself, and the line says so: move the selection, or press `v` twice.
+- When the Controller or the Worker refuses, the panel shows the reason instead of the screen: the Run is over (`CF_RUN_NOT_ATTACHABLE`), the Worker is too old for the live view (`CF_NOT_IMPLEMENTED`), or the Worker is offline (`CF_WORKER_OFFLINE`). It does not try again by itself: move the selection, or press `v` twice; the line says so when a retry can help (the Worker offline), and not when it cannot (the Run is over, the Worker is too old).
 
 ### The grid
 

@@ -216,7 +216,7 @@ func (g *gridScreen) enter() tea.Cmd {
 		return nil
 	}
 	target := Row{ID: run.ID, Label: runName(run)}
-	return g.begin(g.backend, from(g.id), d, target, actions.Input{Target: target.ID})
+	return g.begin(g.backend, from(g.id), d, target, actions.Input{Target: target.ID}, g.prefs.leaveKey())
 }
 
 // Render draws the cells, the focused one marked, and under them how many live

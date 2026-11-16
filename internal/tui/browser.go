@@ -440,7 +440,6 @@ func (b *browser) start(d actions.Descriptor, row Row, values map[string]string)
 	if b.busy != "" {
 		return nil
 	}
-	b.busy = d.Title + "…"
 	backend, asker := b.backend, from(b.id)
 	in := actions.Input{Target: row.ID, Values: values}
 	if row.Target != "" {
@@ -454,8 +453,9 @@ func (b *browser) start(d actions.Descriptor, row Row, values map[string]string)
 		in.Target = ""
 	}
 	if d.Terminal {
-		return b.begin(backend, asker, d, row, in)
+		return b.begin(backend, asker, d, row, in, b.prefs.leaveKey())
 	}
+	b.busy = d.Title + "…"
 	return func() tea.Msg {
 		return actionDoneMsg{from: asker, action: d, target: row, result: backend.Run(d.ID, in)}
 	}

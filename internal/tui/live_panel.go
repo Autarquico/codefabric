@@ -61,7 +61,11 @@ func (b *browser) livePane(c RenderContext, row Row, ok bool, room int) []string
 	case why != "":
 		return []string{margin + c.Theme.Faint.Render(ansi.Truncate(why, c.inner(), "…"))}
 	case b.panel.reason != "":
-		return []string{margin + c.Theme.Warning.Render(ansi.Truncate(b.panel.reason+retryHint, c.inner(), "…"))}
+		reason := b.panel.reason
+		if b.panel.retry {
+			reason = ansi.Truncate(reason, max(c.inner()-ansi.StringWidth(retryHint), 8), "…") + retryHint
+		}
+		return []string{margin + c.Theme.Warning.Render(ansi.Truncate(reason, c.inner(), "…"))}
 	case !b.panel.waited:
 		return []string{margin + c.Theme.Faint.Render("Connecting to the live view…")}
 	}

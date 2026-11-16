@@ -36,7 +36,7 @@ func detachKeyOf() (byte, string, error) {
 	}
 	key, err := cfg.Attach.DetachByte()
 	if err != nil {
-		return 0, "", domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
+		return 0, "", domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("config: %s: %v", paths.ClientConfigFile(), err), nil)
 	}
 	return key, cfg.Attach.DetachLabel(), nil
 }

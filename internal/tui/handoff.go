@@ -20,8 +20,12 @@ type handoff struct {
 
 // begin prepares the session of d on row. The command it returns asks the
 // Backend, which may take long, so Update never waits for it.
-func (h *handoff) begin(backend Backend, asker from, d actions.Descriptor, row Row, in actions.Input) tea.Cmd {
+func (h *handoff) begin(backend Backend, asker from, d actions.Descriptor, row Row, in actions.Input, leave string) tea.Cmd {
 	h.busy, h.verb = d.Title+"…", "Attach"
+	if leave != "" {
+		// Once the session opens the keys go to the Run: say now how to leave.
+		h.busy += " · " + leave + " leaves"
+	}
 	if d.ID == "run.shell" {
 		h.verb = "Shell"
 	}

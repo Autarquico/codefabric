@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,5 +51,7 @@ func TestDetachKeyOf_ComesFromTheClientConfig(t *testing.T) {
 	write(`{"attach":{"detach_key":"ctrl+c"}}`)
 	if _, _, err := detachKeyOf(); err == nil {
 		t.Fatal("a detach key that would break the session was accepted")
+	} else if !strings.Contains(err.Error(), filepath.Join(dir, "client.json")) {
+		t.Errorf("the error does not name the file to fix: %v", err)
 	}
 }

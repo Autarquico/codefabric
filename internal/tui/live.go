@@ -50,6 +50,14 @@ type livePrefs struct {
 	leave string
 }
 
+// leaveKey is how the key that leaves a session reads, "" when not known.
+func (p *livePrefs) leaveKey() string {
+	if p == nil {
+		return ""
+	}
+	return p.leave
+}
+
 // enterRun is the label of the key that enters a Run: it says how to leave,
 // because once inside the keys go to the Run, not to the TUI.
 func (p *livePrefs) enterRun() string {
@@ -95,6 +103,7 @@ type liveFeed struct {
 	peers  []string
 	waited bool   // a screen has arrived
 	reason string // why there is no screen: one line, empty while there is one or one is coming
+	retry  bool   // whether trying again can change the reason
 }
 
 // following says whether the feed has a stream, or is opening one, for run.
@@ -130,11 +139,12 @@ func (f *liveFeed) close() {
 // fail ends the stream and leaves a reason standing: the panel says why, and
 // the feed still follows the Run, so nothing opens it again until the selection
 // changes or the person retries.
-func (f *liveFeed) fail(reason string) {
+func (f *liveFeed) fail(err error) {
+	reason, retry := liveReason(err), retryable(err)
 	if f.stream != nil {
 		_ = f.stream.Close()
 	}
-	f.stream, f.lines, f.peers, f.waited, f.reason = nil, nil, nil, false, reason
+	f.stream, f.lines, f.peers, f.waited, f.reason, f.retry = nil, nil, nil, false, reason, retry
 }
 
 // next is the command that waits for the next screen of the stream.
@@ -159,7 +169,7 @@ func (f *liveFeed) handle(asker from, msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.err != nil {
-			f.fail(liveReason(msg.err))
+			f.fail(msg.err)
 			return nil
 		}
 		f.stream = msg.stream
@@ -169,7 +179,7 @@ func (f *liveFeed) handle(asker from, msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.err != nil {
-			f.fail(liveReason(msg.err))
+			f.fail(msg.err)
 			return nil
 		}
 		f.lines, f.waited, f.reason = screenLines(msg.screen), true, ""
@@ -251,8 +261,9 @@ func crop(lines []string, width, height int) []string {
 	return out
 }
 
-// retryHint ends the reason the panel shows: the panel does not try again by
-// itself, it does when the selection changes or the toggle is pressed twice.
+// retryHint ends the reason the panel shows when trying again can change it:
+// the panel does not retry by itself, it does when the selection changes or the
+// toggle is pressed twice.
 const retryHint = " · press v twice to retry"
 
 // liveReason is the line the panel shows in place of a screen, for the error a
@@ -276,6 +287,21 @@ func liveReason(err error) string {
 		return "Not allowed: " + printable(coded.Message)
 	}
 	return "The live view stopped: " + string(coded.Code) + " " + printable(coded.Message)
+}
+
+// retryable says whether a retry can change the reason: a Worker that is
+// offline or a stream that broke may come back; a Run that is over, or a Worker
+// too old for the live view, does not.
+func retryable(err error) bool {
+	var coded *domain.Error
+	if !errors.As(err, &coded) {
+		return true
+	}
+	switch coded.Code {
+	case domain.CodeRunNotAttachable, domain.CodeNotImplemented, domain.CodePolicyDenied:
+		return false
+	}
+	return true
 }
 
 // peerNames is who else is inside, by the names the Controller knows them by.

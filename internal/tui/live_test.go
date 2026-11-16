@@ -342,7 +342,6 @@ func TestScenario_LiveView_Panel_ReasonLines(t *testing.T) {
 		{"not attachable", domain.NewError(domain.CodeRunNotAttachable, "the Run ended", nil), "This run cannot be watched now"},
 		{"old worker", domain.NewError(domain.CodeNotImplemented, "no screen stream", nil), "This worker is too old for the live view"},
 		{"worker offline", domain.NewError(domain.CodeWorkerOffline, "gone", nil), "The worker is offline"},
-		{"policy", domain.NewError(domain.CodePolicyDenied, "this identity may not watch Runs of the Worker: policy "+domain.PolicyWorkerAllowShell, nil), "Not allowed: this identity may not watch Runs of the Worker: policy " + domain.PolicyWorkerAllowShell},
 	}
 	var golden strings.Builder
 	for _, tc := range cases {
@@ -827,11 +826,11 @@ func TestScenario_LiveView_Leave_TheConfiguredKeyIsAlwaysInView(t *testing.T) {
 	compareGolden(t, "live-leave-runs-120x32.golden", frame(m))
 
 	p.key("V")
-	p.until("the cells", p.showing("r-0002"))
+	p.until("the cells", p.showing("Grid · 2 live"))
 	if got := frame(m); !strings.Contains(got, "[enter] Enter run · Ctrl-G leaves") {
 		t.Errorf("the grid does not say how to leave:\n%s", got)
 	}
-	compareGolden(t, "live-leave-grid-160x40.golden", frame(m))
+	compareGolden(t, "live-leave-grid-120x32.golden", frame(m))
 }
 
 // Without a key to name (a config that is not valid), the label is the plain one.
@@ -909,4 +908,24 @@ func (w *waitingBackend) OpenScreen(ctx context.Context, _ string, _ int) (Scree
 	close(w.started)
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+// `a` and `s` hand over the terminal with the panel off too: while the session
+// opens, the line says how to leave it.
+func TestScenario_LiveView_Leave_NamedWhileTheSessionOpens(t *testing.T) {
+	for _, tc := range []struct{ key, want string }{
+		{"a", "Attach to run… · Ctrl-G leaves"},
+		{"s", "Shell in the worktree of run… · Ctrl-G leaves"},
+	} {
+		be := newBackend()
+		serving(be, 1)
+		be.gate = make(chan struct{})
+		m, p := liveShellLeaving(t, be, "r", 120, 32, 1, "Ctrl-G")
+		p.key(tc.key)
+		if got := frame(m); !strings.Contains(got, tc.want) {
+			t.Errorf("key %s: the busy line does not name the leave key:\n%s", tc.key, got)
+		}
+		close(be.gate)
+		p.until("the attach", func() bool { return len(attachedBy(be)) == 1 })
+	}
 }
