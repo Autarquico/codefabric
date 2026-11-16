@@ -57,7 +57,7 @@ func Start(o Options) (*Session, error) {
 	if cols == 0 || rows == 0 {
 		cols, rows = DefaultCols, DefaultRows
 	}
-	cmd := exec.Command(o.Path, o.Args...) //nolint:gosec // the caller built the command from a handle it checked
+	cmd := exec.Command(o.Path, o.Args...) //nolint:gosec,noctx // the caller built the command from a handle it checked; Close, not a context, ends it
 	cmd.Env = withTerm(o.Env)
 	master, err := creack.StartWithSize(cmd, &creack.Winsize{Cols: cols, Rows: rows})
 	if err != nil {

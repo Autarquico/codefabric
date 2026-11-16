@@ -86,8 +86,6 @@ type fakeTerm struct {
 	mu      sync.Mutex
 	written []byte
 	resizes [][2]uint16
-	cols    uint16
-	rows    uint16
 }
 
 func newTerm() *fakeTerm { return &fakeTerm{out: make(chan []byte, 1024), done: make(chan struct{})} }

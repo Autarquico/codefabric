@@ -29,8 +29,8 @@ const (
 	DefaultMaxSessions     = 16
 	DefaultOutputBudget    = 1 << 20
 	DefaultFirstResizeWait = 250 * time.Millisecond
-	DefaultBackoffMin      = time.Second
-	DefaultBackoffMax      = 30 * time.Second
+	DefaultBackoffFloor    = time.Second
+	DefaultBackoffCeiling  = 30 * time.Second
 	DefaultFarewellGrace   = 2 * time.Second
 	DefaultDialTimeout     = 10 * time.Second
 
@@ -141,8 +141,8 @@ func New(o Options) *Relay {
 	}
 	set(&o.PollWait, DefaultPollWait)
 	set(&o.FirstResizeWait, DefaultFirstResizeWait)
-	set(&o.BackoffMin, DefaultBackoffMin)
-	set(&o.BackoffMax, DefaultBackoffMax)
+	set(&o.BackoffMin, DefaultBackoffFloor)
+	set(&o.BackoffMax, DefaultBackoffCeiling)
 	set(&o.FarewellGrace, DefaultFarewellGrace)
 	set(&o.DialTimeout, DefaultDialTimeout)
 	if o.MaxSessions <= 0 {

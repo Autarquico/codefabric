@@ -2,6 +2,7 @@ package pty_test
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -61,7 +62,7 @@ func TestSessionDefaultsToEightyByTwentyFourAndSetsTerm(t *testing.T) {
 func TestSessionReportsTheExitStatusAndEndsTheReader(t *testing.T) {
 	s := start(t, pty.Options{Path: "/bin/sh", Args: []string{"-c", "echo bye; exit 3"}})
 	readUntil(t, s, "bye")
-	if _, err := io.Copy(io.Discard, s); err != nil && err != io.EOF {
+	if _, err := io.Copy(io.Discard, s); err != nil && !errors.Is(err, io.EOF) {
 		t.Logf("drain: %v", err)
 	}
 	if got := s.ExitStatus(); got != 3 {
