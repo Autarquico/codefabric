@@ -29,8 +29,8 @@ func newShellRig(t *testing.T) *shellRig {
 	s.rig = newRig(t, func(o *Options) {
 		o.Start = func(cmd cfruntime.Command, cols, rows uint16) (Terminal, error) {
 			s.launched <- cmd
-			s.rig.opens <- [2]uint16{cols, rows}
-			return s.rig.term, nil
+			s.opens <- [2]uint16{cols, rows}
+			return s.term, nil
 		}
 		o.Shell = ShellOptions{
 			Allow: s.allow.Load,
