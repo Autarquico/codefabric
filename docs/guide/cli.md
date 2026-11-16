@@ -17,7 +17,7 @@ Run `cf` with no arguments in a terminal to open [the TUI](../tui/). Otherwise i
 
 ## `cf attach`
 
-Open the live session of a Run in this terminal, through the Controller, with no ssh to the Worker: `cf attach <task|run>`. Everyone attached can type, as in a shared tmux, and each sees the others. Closing it does not end the Run; detach with Ctrl-] (or tmux's own Ctrl-b d when you can type). If the Worker drops, `cf attach` exits with `CF_WORKER_OFFLINE`; attach again when it is back. A Worker that does not offer the relay (`cf worker run --no-attach-relay`, or one that predates it) is refused with an error that says it only supports `--ssh`: ssh is never used unless asked for.
+Open the live session of a Run in this terminal, through the Controller, with no ssh to the Worker: `cf attach <task|run>`. Everyone attached can type, as in a shared tmux, and each sees the others. Closing it does not end the Run; detach with Ctrl-]. The Run's tmux has no other keys: no prefix, no new windows, no command prompt, so nobody attached can open a shell on the Worker. If the Worker drops, `cf attach` exits with `CF_WORKER_OFFLINE`; attach again when it is back. A Worker that does not offer the relay (`cf worker run --no-attach-relay`, or one that predates it) is refused with an error that says it only supports `--ssh`: ssh is never used unless asked for.
 
 - `--read-only`: watch without sending what you type.
 - `--ssh`: attach over ssh straight to the Worker instead (needs the ssh target below).

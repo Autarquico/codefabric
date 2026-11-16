@@ -339,10 +339,23 @@ func TestRelay_CutsAConnectionThatReadsTooSlowly(t *testing.T) {
 			return false
 		}
 	})
-	// The pipe is closed after the grace: reading finds the end (or the error frame, if it fit).
+	// The cut is told by an error frame if it fits, and the stream ends in any case.
 	_ = c.SetReadDeadline(time.Now().Add(wait))
-	if _, err := io.Copy(io.Discard, c); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
-		t.Logf("drain: %v", err)
+	var told *v1.Frame
+	for {
+		f, err := v1.ReadFrame(c)
+		if err != nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+				t.Fatalf("the stream did not end: %v", err)
+			}
+			break
+		}
+		if f.Type == v1.FrameError {
+			told = &f
+		}
+	}
+	if told != nil {
+		wantError(t, *told, domain.CodeInProgress)
 	}
 }
 
@@ -380,45 +393,103 @@ func TestRelay_AFailedDialDoesNotOpenATerminal(t *testing.T) {
 	}
 }
 
-func TestRelay_BacksOffOnErrorsAndStartsOverAfterAGoodPoll(t *testing.T) {
+// pollWaits drives the loop on a fake clock and says how long it waits before
+// asking again, step by step: each call checks that the Worker is silent a
+// millisecond before the wait is over and asks at the end of it.
+type pollWaits struct {
+	t    *testing.T
+	ctx  context.Context
+	fake *clock.Fake
+	ctl  *fakeController
+}
+
+func newPollWaits(t *testing.T, tune func(*Options)) (*pollWaits, *rig) {
+	t.Helper()
 	fake := clock.NewFake(time.Unix(1_700_000_000, 0))
-	r := newRig(t, func(o *Options) { o.Clock = fake; o.BackoffMin = time.Second; o.BackoffMax = 4 * time.Second })
+	r := newRig(t, func(o *Options) {
+		o.Clock = fake
+		o.BackoffMin, o.BackoffMax = time.Second, 4*time.Second
+		if tune != nil {
+			tune(o)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	t.Cleanup(cancel)
+	return &pollWaits{t: t, ctx: ctx, fake: fake, ctl: r.ctl}, r
+}
+
+func (w *pollWaits) asked() {
+	w.t.Helper()
+	select {
+	case <-w.ctl.calls:
+	case <-w.ctx.Done():
+		w.t.Fatal("the Worker did not ask")
+	}
+}
+
+// waits is that the Worker, now sleeping, asks again after exactly d.
+func (w *pollWaits) waits(d time.Duration) {
+	w.t.Helper()
+	if err := w.fake.BlockUntil(w.ctx, 1); err != nil {
+		w.t.Fatalf("the Worker is not waiting: %v", err)
+	}
+	w.fake.Advance(d - time.Millisecond)
+	select {
+	case <-w.ctl.calls:
+		w.t.Fatalf("asked again before %s", d)
+	default:
+	}
+	w.fake.Advance(time.Millisecond)
+	w.asked()
+}
+
+func TestRelay_BacksOffOnErrorsAndStartsOverAfterAGoodPoll(t *testing.T) {
+	w, r := newPollWaits(t, nil)
+	boom := domain.NewError(domain.CodeControllerUnreachable, "down", nil)
+	// Two failures, a poll that works (and is empty at once), a failure again.
+	r.ctl.polls <- poll{err: boom}
+	r.ctl.polls <- poll{err: boom}
+	r.ctl.polls <- poll{}
+	r.ctl.polls <- poll{err: boom}
+	r.run()
+	w.asked()
+	w.waits(time.Second)     // after the first failure
+	w.waits(2 * time.Second) // the second doubles it
+	w.waits(time.Second)     // the good poll empty at once: the guard, BackoffMin
+	w.waits(time.Second)     // and the failure after it starts over: 1s, not 4s
+}
+
+func TestRelay_BackoffStopsAtTheMaximum(t *testing.T) {
+	w, r := newPollWaits(t, nil)
 	boom := domain.NewError(domain.CodeControllerUnreachable, "down", nil)
 	for range 4 {
 		r.ctl.polls <- poll{err: boom}
 	}
 	r.run()
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
-	defer cancel()
-	calls := func(n int) {
-		t.Helper()
-		for range n {
-			select {
-			case <-r.ctl.calls:
-			case <-ctx.Done():
-				t.Fatal("the Worker did not ask again")
-			}
-		}
+	w.asked()
+	for _, d := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 4 * time.Second} {
+		w.waits(d)
 	}
-	calls(1)
-	// The waits are 1s, 2s, 4s, 4s: one second is not enough for the second.
-	for i, step := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 4 * time.Second} {
-		if err := fake.BlockUntil(ctx, 1); err != nil {
-			t.Fatalf("no wait after failure %d: %v", i+1, err)
-		}
-		if i > 0 {
-			fake.Advance(step - time.Millisecond)
-			select {
-			case <-r.ctl.calls:
-				t.Fatalf("asked again %s after failure %d, before its backoff", step-time.Millisecond, i+1)
-			case <-time.After(30 * time.Millisecond):
-			}
-			fake.Advance(time.Millisecond)
-		} else {
-			fake.Advance(step)
-		}
-		calls(1)
-	}
+}
+
+func TestRelay_DoesNotSpinOnAControllerThatAnswersEmptyAtOnce(t *testing.T) {
+	w, r := newPollWaits(t, nil)
+	r.ctl.polls <- poll{}
+	r.ctl.polls <- poll{}
+	r.run()
+	w.asked()
+	w.waits(time.Second) // an empty answer with no wait is not asked again for BackoffMin
+	w.waits(time.Second)
+}
+
+func TestRelay_AsksAtOnceAfterAnEmptyPollThatWasHeld(t *testing.T) {
+	w, r := newPollWaits(t, nil)
+	r.run()
+	w.asked()
+	// The Controller held the poll for as long as BackoffMin: nothing to wait for.
+	w.fake.Advance(time.Second)
+	r.ctl.polls <- poll{}
+	w.asked()
 }
 
 func TestBackoffDoublesAndStopsAtTheMaximum(t *testing.T) {

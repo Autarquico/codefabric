@@ -68,7 +68,7 @@ Each view adds its own keys, and shows them in its footer:
 
 ## Attaching
 
-`a` on a Task or Run attaches to its live session, as `cf attach` does. Detach with the keys of the session itself (in tmux, Ctrl-b d); the Run goes on, and you return to the TUI. A live view of each Run, with a key of its own to enter and leave it, is planned: see [Coming next](../getting-started/#coming-next).
+`a` on a Task or Run attaches to its live session, as `cf attach` does. Detach with Ctrl-]; the Run goes on, and you return to the TUI. A live view of each Run, with a key of its own to enter and leave it, is planned: see [Coming next](../getting-started/#coming-next).
 
 ## Terminal size
 

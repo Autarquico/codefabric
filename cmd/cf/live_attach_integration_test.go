@@ -91,6 +91,33 @@ func TestScenario_LiveAttach_AttachSinSSH(t *testing.T) {
 	o.finishChat()
 }
 
+// modes is what the terminal of the person is in: its alternate screen, cursor
+// and mouse reporting, as the outer tmux tracks them.
+func (o *outer) modes() string {
+	return o.tmux("display-message", "-p", "-t", "0", "alternate=#{alternate_on} cursor=#{cursor_flag} mouse=#{mouse_any_flag}")
+}
+
+// TestScenario_LiveAttach_TerminalRestaurada: leaving with Ctrl-] ends the
+// stream before tmux can say anything, so cf itself leaves the terminal as it
+// found it: out of the alternate screen, with the cursor and no mouse reporting.
+func TestScenario_LiveAttach_TerminalRestaurada(t *testing.T) {
+	o := newObserveBox(t, chatScript)
+	use(t, o.client)
+	exe, _ := os.Executable()
+	code := filepath.Join(t.TempDir(), "code")
+	term := inTerminal(t, o.attachEnv(), "sh", "-c", fmt.Sprintf("%s attach auth-race; echo $? > %s; sleep 120", exe, code))
+	eventually(t, "the screen of the Run", func() bool { return strings.Contains(term.screen(), "hello-from-run") })
+	if got := term.modes(); !strings.Contains(got, "alternate=1") {
+		t.Fatalf("while attached the terminal is %q: the test would prove nothing", got)
+	}
+	term.detach()
+	eventually(t, "cf attach to end", func() bool { return fileExists(code) })
+	if got := term.modes(); got != "alternate=0 cursor=1 mouse=0" {
+		t.Errorf("after Ctrl-] the terminal is %q", got)
+	}
+	o.finishChat()
+}
+
 // TestScenario_LiveAttach_SoloLectura: with --read-only the person sees the
 // Run and what they type never reaches it, not even by the detach key's side.
 func TestScenario_LiveAttach_SoloLectura(t *testing.T) {
@@ -101,10 +128,6 @@ func TestScenario_LiveAttach_SoloLectura(t *testing.T) {
 	eventually(t, "the view to be on the session", func() bool { return o.clients() == 1 })
 	eventually(t, "the screen of the Run", func() bool { return strings.Contains(view.screen(), "hello-from-run") })
 	view.send("nope", "Enter")
-	time.Sleep(1500 * time.Millisecond)
-	if got := o.typed(); got != "" {
-		t.Fatalf("a read-only attach sent input: %q", got)
-	}
 	view.detach()
 	eventually(t, "the view to leave", func() bool { return o.clients() == 0 })
 	eventually(t, "cf attach to exit", view.ended)
@@ -113,6 +136,8 @@ func TestScenario_LiveAttach_SoloLectura(t *testing.T) {
 	writer := o.attach(nil)
 	eventually(t, "the writer", func() bool { return o.clients() == 1 })
 	writer.send("yes", "Enter")
+	// The Run reads in order: that what it has read is exactly "yes" is the proof
+	// that "nope", typed first, never reached it.
 	eventually(t, "the input to arrive", func() bool { return o.typed() == "yes" })
 	writer.detach()
 	o.finishChat()
@@ -215,7 +240,7 @@ func TestScenario_LiveAttach_WorkerQueCae(t *testing.T) {
 
 	attach := func(name string) (*outer, string) {
 		out := filepath.Join(t.TempDir(), name)
-		term := inTerminal(t, o.attachEnv(), "sh", "-c", fmt.Sprintf("%s attach auth-race 2> %s.err; echo $? > %s.code", exe, out, out))
+		term := inTerminal(t, o.attachEnv(), "sh", "-c", fmt.Sprintf("%s attach auth-race 2> %s.err; echo $? > %s.code; sleep 120", exe, out, out))
 		return term, out
 	}
 	first, firstOut := attach("first")
@@ -226,6 +251,9 @@ func TestScenario_LiveAttach_WorkerQueCae(t *testing.T) {
 	eventually(t, "cf attach to end", func() bool { return fileExists(firstOut + ".code") })
 	if got, want := readFile(firstOut+".code"), fmt.Sprint(domain.ExitCode(domain.CodeWorkerOffline)); got != want || !strings.Contains(readFile(firstOut+".err"), string(domain.CodeWorkerOffline)) {
 		t.Fatalf("exit %s (want %s), stderr %q", got, want, readFile(firstOut+".err"))
+	}
+	if got := first.modes(); got != "alternate=0 cursor=1 mouse=0" {
+		t.Errorf("after the cut the terminal is %q", got)
 	}
 	eventually(t, "the tmux client to be gone", func() bool { return o.clients() == 0 })
 	if !o.sessionAlive() {

@@ -444,3 +444,88 @@ func TestACaptureFilterThatNeverAcknowledgesKeepsTheGateClosed(t *testing.T) {
 		t.Error("the command ran")
 	}
 }
+
+// listKeys is what a client of the session can reach: the bindings of
+// the root and prefix tables.
+func listKeys(t *testing.T, socket string) (root, prefix string) {
+	t.Helper()
+	list := func(table string) string {
+		out, err := exec.CommandContext(t.Context(), "tmux", "-L", socket, "-f", "/dev/null", "list-keys", "-T", table).CombinedOutput() //nolint:gosec // a tmux of the test
+		if err != nil {
+			t.Fatalf("list-keys -T %s: %v (%s)", table, err, out)
+		}
+		return string(out)
+	}
+	return list("root"), list("prefix")
+}
+
+func tmuxOption(t *testing.T, socket, option string) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "tmux", "-L", socket, "-f", "/dev/null", "show-options", "-gv", option).CombinedOutput() //nolint:gosec // a tmux of the test
+	if err != nil {
+		t.Fatalf("show-options %s: %v (%s)", option, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// assertOnlyDetach fails unless a client can do nothing but detach: no prefix, and
+// in the root table only Ctrl-], bound to detach-client.
+func assertOnlyDetach(t *testing.T, socket string) {
+	t.Helper()
+	for _, o := range []string{"prefix", "prefix2"} {
+		if got := tmuxOption(t, socket, o); got != "None" {
+			t.Errorf("%s = %q, want None", o, got)
+		}
+	}
+	if got := tmuxOption(t, socket, "mouse"); got != "off" {
+		t.Errorf("mouse = %q, want off", got)
+	}
+	root, _ := listKeys(t, socket)
+	lines := strings.Split(strings.TrimSpace(root), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], "C-]") || !strings.HasSuffix(lines[0], "detach-client") {
+		t.Errorf("the root table is %q, want only C-] detach-client", root)
+	}
+	for _, cmd := range []string{"new-window", "split-window", "command-prompt", "respawn", "run-shell"} {
+		if strings.Contains(root, cmd) {
+			t.Errorf("the root table binds %s", cmd)
+		}
+	}
+}
+
+func TestStartLocksTheKeysOfTheServer(t *testing.T) {
+	r := newRuntime(t)
+	spec := cfruntime.Spec{Name: cfruntime.NameFor("run_k", 1), Dir: t.TempDir(), Command: sh("sleep 60")}
+	h, err := r.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := strings.SplitN(h.Ref, "/", 2)[0]
+	assertOnlyDetach(t, socket)
+	// Without a prefix nothing of the prefix table can be typed: its bindings are there but unreachable.
+	if got := tmuxOption(t, socket, "prefix"); got != "None" {
+		t.Errorf("prefix = %q", got)
+	}
+}
+
+func TestAttachCommandLocksAServerThatWasStartedWithoutIt(t *testing.T) {
+	r := newRuntime(t)
+	name := cfruntime.NameFor("run_l", 1)
+	h := r.HandleFor(name)
+	socket := strings.SplitN(h.Ref, "/", 2)[0]
+	// A server of an older Worker: plain tmux, default keys.
+	if out, err := exec.CommandContext(t.Context(), "tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", name, "sleep 60").CombinedOutput(); err != nil { //nolint:gosec // a tmux of the test
+		t.Fatalf("new-session: %v (%s)", err, out)
+	}
+	if got := tmuxOption(t, socket, "prefix"); got != "C-b" {
+		t.Fatalf("the server was not made with default keys: prefix = %q", got)
+	}
+	if _, err := r.AttachCommand(h, false); err != nil {
+		t.Fatal(err)
+	}
+	assertOnlyDetach(t, socket)
+	// And again: it can be repeated.
+	if _, err := r.AttachCommand(h, true); err != nil {
+		t.Fatal(err)
+	}
+	assertOnlyDetach(t, socket)
+}

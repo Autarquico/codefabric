@@ -82,7 +82,7 @@ func newAttachCmd(term Terminal) *cobra.Command {
 		Short: "Open the live session of a Run in this terminal; closing it does not end the Run",
 		Long: "Open the interactive session of a Run, or of the latest live Run of a Task, through the Controller:\n" +
 			"no ssh to the Worker is needed. Everyone attached can type, as in a shared tmux; --read-only only\n" +
-			"watches. Detach with Ctrl-] (or the runtime's own keys, tmux: Ctrl-b d): the Run goes on.\n" +
+			"watches. Detach with Ctrl-]: the Run goes on.\n" +
 			"A Worker that does not offer the relay only admits --ssh, which attaches straight to it. For ssh, the\n" +
 			"machine to reach and the program to run on it are what the Worker announced; they are claims of\n" +
 			"that machine, and --ssh-target (or attach.ssh_targets in client.json) says where to go instead.",

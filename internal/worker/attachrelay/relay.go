@@ -243,7 +243,7 @@ func (r *Relay) serve(ctx context.Context, req v1.AttachRequest) {
 		if !errors.As(refusal, &coded) {
 			coded = domain.NewError(domain.CodeInternal, "this Worker could not open the session", nil)
 		}
-		log.InfoContext(ctx, "attach relay: refused", "code", coded.Code, "why", coded.Message)
+		log.InfoContext(ctx, "attach relay: refused", "code", coded.Code, "why", coded.Message, "cause", refusal)
 		r.farewell(conn, v1.ErrorFrame(coded.Code, coded.Message))
 		return
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"sync"
@@ -22,6 +23,11 @@ import (
 // keys work too for a writer, but a read-only attach has none: nothing it types
 // reaches the Run, and this key is read here.
 const detachKey = 0x1d
+
+// screenReset undoes the modes a tmux client sets on a terminal: it leaves the
+// alternate screen, shows the cursor, turns off mouse reporting and bracketed
+// paste, resets the scroll region and the attributes.
+const screenReset = "\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[r\x1b[m"
 
 // relaySession is an attach through the Controller that has not started. It
 // belongs here and not in internal/cli because it owns the terminal: raw mode,
@@ -65,6 +71,10 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 		return 0, domain.NewError(domain.CodeInternal, "the terminal could not be put in raw mode", nil)
 	}
 	defer func() { _ = term.Restore(fd, saved) }()
+	// tmux writes this itself when it detaches a client; when the session ends
+	// any other way (Ctrl-], a signal, a cut stream) nobody does, and the person
+	// would be left on tmux's alternate screen. It goes out before the terminal is restored.
+	defer func() { _, _ = io.WriteString(stdio.Out, screenReset) }()
 
 	cancel, err := newCancel()
 	if err != nil {
@@ -116,6 +126,9 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 		pumpKeys(fd, cancel, mode == v1.AttachModeWrite, conn, detach)
 	}()
 	defer cancel.fire() // before wg.Wait: the reader of keys stops at once
+	// Before wg.Wait too: a write blocked on a Controller that stopped reading
+	// is freed by closing the stream, and so the terminal can be restored.
+	defer func() { _ = conn.Close() }()
 
 	for {
 		f, err := conn.ReadFrame()

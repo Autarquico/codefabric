@@ -15,7 +15,7 @@ import (
 const (
 	runID    = "run_01J8ZQ4M5N6P7R8S9T0V1W2X3Y"
 	otherRun = "run_01J8ZQ4M5N6P7R8S9T0V1W2X4Z"
-	bin      = "/opt/homebrew/bin/tmux"
+	bin      = "/fake/bin/tmux"
 )
 
 func handleOf(socket, session string) cfruntime.Handle {
@@ -108,7 +108,20 @@ func TestAttachCommand_IsTheSameClientAsSSHRunsOnThisServer(t *testing.T) {
 		t.Fatalf("before Check found tmux: %v", err)
 	}
 	r.attach = bin
+	// The keys of the server are locked first; a tmux that does nothing stands for it.
+	log := filepath.Join(t.TempDir(), "calls")
+	fake := filepath.Join(t.TempDir(), "tmux")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho \"$*\" >> "+log+"\n"), 0o700); err != nil { //nolint:gosec // a script of the test
+		t.Fatal(err)
+	}
+	r.binary = fake
 	cmd, err := r.AttachCommand(h, false)
+	calls, _ := os.ReadFile(log) //nolint:gosec // a file of the test
+	for _, want := range []string{"set-option -g prefix None", "set-option -g prefix2 None", "unbind-key -a -T root", "bind-key -n C-] detach-client"} {
+		if !strings.Contains(string(calls), want) {
+			t.Errorf("AttachCommand did not run %q; ran:\n%s", want, calls)
+		}
+	}
 	want := []string{"-L", "cf-0123456789ab", "-f", "/dev/null", "attach-session", "-t", "=" + domain.SessionName(runID, 3)}
 	if err != nil || cmd.Path != bin || !slices.Equal(cmd.Args, want) || !slices.Contains(cmd.Env, "TMUX_TMPDIR=/srv/tmux") {
 		t.Fatalf("command = %+v, %v", cmd, err)
