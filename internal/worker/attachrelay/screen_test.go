@@ -113,7 +113,7 @@ func TestScreen_RateIsTheGrantedOneClamped(t *testing.T) {
 	<-screens.calls
 	frame(t, r.client)
 	setScreen("b", nil)
-	r.clk.BlockUntil(context.Background(), 1) //nolint:errcheck // ctx never ends
+	_ = r.clk.BlockUntil(context.Background(), 1) // ctx never ends
 	r.clk.Advance(200 * time.Millisecond)
 	select {
 	case <-screens.calls:

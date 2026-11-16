@@ -27,17 +27,17 @@ type AttachTicket struct {
 	Hz         int // granted rate of a screen stream; 0 in every other mode
 }
 
-// A screen stream is authorized as a view (any enrolled client, never a Worker)
-// and is granted a rate of hz screens a second, clamped to what v1 allows. It is
-// not audited as an entry: the spec audits interactive entries and shells, and a
-// panel that only watches would fill the log; see the Controller's wiring.
-//
 // AttachOpen decides whether the caller may open an attach of the Run of ref in
 // mode, and binds it. In v0.x every client enrolled is a machine of the owner, so
 // any client may view or write; an identity that is not a client may not. A shell
 // also needs the policy of the Project and of the Worker (requireShell). The Run must be attachable
 // through the relay: a Worker that does not announce it is CF_RUN_NOT_ATTACHABLE
 // (relay_unsupported), whatever else it offers.
+//
+// A screen stream is authorized as a view (any enrolled client, never a Worker)
+// and is granted a rate of hz screens a second, clamped to what v1 allows. It is
+// not audited as an entry: the spec audits interactive entries and shells, and a
+// panel that only watches would fill the log; see the Controller's wiring.
 func (s *Service) AttachOpen(ctx context.Context, by pki.Session, ref, project, mode string, hz int) (AttachTicket, error) {
 	switch mode {
 	case v1.AttachModeView, v1.AttachModeWrite, v1.AttachModeShell, v1.AttachModeScreen:
