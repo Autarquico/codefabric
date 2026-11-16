@@ -77,8 +77,12 @@ type Project struct {
 	OriginSecret string `json:"origin_secret,omitempty"`
 	// NativeState says whether the checkpoints of the Project capture the
 	// harness's own state; off unless the Project opts in.
-	NativeState bool      `json:"native_state"`
-	CreatedAt   time.Time `json:"created_at"`
+	NativeState bool `json:"native_state"`
+	// Shell says whether a shell may be opened in the worktree of a Run of the
+	// Project (cf shell); off unless the Project opts in, and the Worker must
+	// allow it too.
+	Shell     bool      `json:"shell"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // RepoURLs are every URL of the Project: the main repo, then the aliases.
@@ -115,6 +119,7 @@ type UpdateProjectRequest struct {
 	RepoConfig         *domain.RepoConfig `json:"repo_config,omitempty"`
 	OriginSecret       *string            `json:"origin_secret,omitempty"`
 	NativeState        *bool              `json:"native_state,omitempty"`
+	Shell              *bool              `json:"shell,omitempty"`
 }
 
 // ListProjectsResponse is GET /v1/projects.

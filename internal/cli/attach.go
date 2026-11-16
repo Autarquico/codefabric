@@ -58,6 +58,8 @@ type AttachRequest struct {
 	Binary     string
 	Target     domain.SSHTarget
 	ReadOnly   bool
+	// Shell opens a shell in the worktree of the Run instead of its session (cf shell).
+	Shell bool
 }
 
 // TerminalIO is the terminal of the person.
@@ -134,6 +136,8 @@ type AttachParams struct {
 	// Transport is the one to attach through (TransportSSH, TransportRelay);
 	// empty is DefaultAttachTransport.
 	Transport string
+	// Shell opens a shell in the worktree of the Run (cf shell), always through the relay.
+	Shell bool
 	// Controller is the --controller of this call; empty is the stored one.
 	Controller string
 }
@@ -201,6 +205,9 @@ func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachS
 	}
 	project := scopeOf(ctx, c, p.Project)
 	transport := p.Transport
+	if p.Shell {
+		transport = TransportRelay // there is no shell over ssh
+	}
 	if transport == "" {
 		transport = DefaultAttachTransport()
 	}
@@ -208,7 +215,7 @@ func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachS
 	if err != nil {
 		return nil, err
 	}
-	req.ReadOnly = p.ReadOnly
+	req.ReadOnly, req.Shell = p.ReadOnly, p.Shell
 	if term == nil {
 		return nil, errNoTerminal()
 	}

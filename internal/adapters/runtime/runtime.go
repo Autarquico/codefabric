@@ -134,6 +134,10 @@ type Command struct {
 	Path string
 	Args []string
 	Env  []string
+	// Dir is where it runs; empty is where the Worker is.
+	Dir string
+	// KillGroup says that ending it ends every process it started, not only it.
+	KillGroup bool
 }
 
 // AttachCommander is implemented by a Runtime whose sessions this machine can

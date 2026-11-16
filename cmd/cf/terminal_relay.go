@@ -49,9 +49,13 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 	}
 	fd := int(in.Fd()) //nolint:gosec // a descriptor
 	mode := v1.AttachModeWrite
-	if s.req.ReadOnly {
+	switch {
+	case s.req.Shell:
+		mode = v1.AttachModeShell
+	case s.req.ReadOnly:
 		mode = v1.AttachModeView
 	}
+	writes := mode != v1.AttachModeView
 	conn, err := s.req.Client.OpenAttach(s.ctx, s.req.RunID, "", mode)
 	if err != nil {
 		return 0, err
@@ -60,10 +64,14 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 
 	if stdio.Err != nil {
 		how := "writing"
-		if mode != v1.AttachModeWrite {
+		if mode == v1.AttachModeView {
 			how = "read-only"
 		}
-		_, _ = fmt.Fprintf(stdio.Err, "attached to %s (%s); Ctrl-] detaches, the Run goes on\r\n", s.req.RunID, how)
+		if mode == v1.AttachModeShell {
+			_, _ = fmt.Fprintf(stdio.Err, "shell in the worktree of %s; Ctrl-] closes it, the Run goes on\r\n", s.req.RunID)
+		} else {
+			_, _ = fmt.Fprintf(stdio.Err, "attached to %s (%s); Ctrl-] detaches, the Run goes on\r\n", s.req.RunID, how)
+		}
 	}
 	saved, err := term.MakeRaw(fd)
 	if err != nil {
@@ -74,7 +82,10 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 	// tmux writes this itself when it detaches a client; when the session ends
 	// any other way (Ctrl-], a signal, a cut stream) nobody does, and the person
 	// would be left on tmux's alternate screen. It goes out before the terminal is restored.
-	defer func() { _, _ = io.WriteString(stdio.Out, screenReset) }()
+	// A shell is not tmux and leaves nothing to undo.
+	if mode != v1.AttachModeShell {
+		defer func() { _, _ = io.WriteString(stdio.Out, screenReset) }()
+	}
 
 	cancel, err := newCancel()
 	if err != nil {
@@ -106,7 +117,7 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 				return
 			case sig := <-sigs:
 				if sig == syscall.SIGWINCH {
-					if mode == v1.AttachModeWrite {
+					if writes {
 						sendSize(conn, fd)
 					}
 					continue
@@ -116,14 +127,14 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 			}
 		}
 	}()
-	if mode == v1.AttachModeWrite {
+	if writes {
 		sendSize(conn, fd)
 	}
 
 	wg.Add(1)
 	go func() { // the keys of the person
 		defer wg.Done()
-		pumpKeys(fd, cancel, mode == v1.AttachModeWrite, conn, detach)
+		pumpKeys(fd, cancel, writes, conn, detach)
 	}()
 	defer cancel.fire() // before wg.Wait: the reader of keys stops at once
 	// Before wg.Wait too: a write blocked on a Controller that stopped reading

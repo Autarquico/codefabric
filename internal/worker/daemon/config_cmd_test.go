@@ -62,3 +62,32 @@ func TestWorkerConfigShow_PrintsTheSettings(t *testing.T) {
 		t.Errorf("exit %d: %q %q", code, out, errOut)
 	}
 }
+
+func TestWorkerConfigSet_AllowShellIsOffByDefaultAndTakesTrueOrFalse(t *testing.T) {
+	doctorMachine(t)
+	paths, err := config.ResolveFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := doctor.LoadSettings(paths); s.AllowShell {
+		t.Fatal("a Worker allows a shell by default")
+	}
+	if code, _, errOut := cf(t, "worker", "config", "set", "allow_shell", "true"); code != 0 {
+		t.Fatal(errOut)
+	}
+	if s, _ := doctor.LoadSettings(paths); !s.AllowShell {
+		t.Error("allow_shell true did not turn it on")
+	}
+	if code, _, _ := cf(t, "worker", "config", "set", "allow_shell", "yes"); code == 0 {
+		t.Error("allow_shell yes was accepted")
+	}
+	if s, _ := doctor.LoadSettings(paths); !s.AllowShell {
+		t.Error("a refused value changed the setting")
+	}
+	if code, _, errOut := cf(t, "worker", "config", "set", "allow_shell", "false"); code != 0 {
+		t.Fatal(errOut)
+	}
+	if s, _ := doctor.LoadSettings(paths); s.AllowShell {
+		t.Error("allow_shell false did not turn it off")
+	}
+}

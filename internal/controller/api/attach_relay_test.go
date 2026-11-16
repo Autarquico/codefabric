@@ -409,7 +409,7 @@ func TestAttachOpen_ModesAndEligibility(t *testing.T) {
 		}
 		wantCode(t, err, code)
 	}
-	wantCode2(v1.AttachModeShell, f.run.ID, domain.CodePolicyDenied) // reserved for a later version
+	wantCode2(v1.AttachModeShell, f.run.ID, domain.CodePolicyDenied) // the Project has no shell
 	wantCode2("root", f.run.ID, domain.CodeInvalidRequest)
 	wantCode2("", f.run.ID, domain.CodeInvalidRequest)
 	wantCode2(v1.AttachModeView, "run_01JA0000000000000000000000", domain.CodeNotFound)

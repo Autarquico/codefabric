@@ -187,6 +187,7 @@ func Run(ctx context.Context, o Options) error {
 	// One reading of the config decides what this run of the daemon offers, and
 	// is what a later change is compared with (restartNeeded): the wizard may
 	// write it at any time.
+	d.paths = o.Paths
 	if d.settings, err = doctor.LoadSettings(o.Paths); err != nil {
 		d.log.WarnContext(ctx, "the Worker config cannot be read: every harness is offered", "err", err)
 		d.settings = doctor.Settings{}
@@ -314,9 +315,14 @@ func (d *daemon) attachRelay(ctx context.Context, rt cfruntime.Runtime, c *clien
 	if !ok || len(d.attachBinaries) == 0 {
 		return nil
 	}
-	d.capabilities = slices.Sorted(slices.Values(append(slices.Clone(d.capabilities), domain.AttachRelayCapability)))
-	d.log.InfoContext(ctx, "attach relay offered")
+	d.capabilities = append(slices.Clone(d.capabilities), domain.AttachRelayCapability)
+	if d.settings.AllowShell {
+		d.capabilities = append(d.capabilities, domain.AttachShellCapability)
+	}
+	d.capabilities = slices.Sorted(slices.Values(d.capabilities))
+	d.log.InfoContext(ctx, "attach relay offered", "shell", d.settings.AllowShell)
 	return attachrelay.New(attachrelay.Options{
+		Shell:      d.shellOptions(),
 		Controller: attachrelay.FromClient(c), Runtime: art, Clock: d.clock, Log: d.log,
 		Live: func(ctx context.Context, runID string, epoch uint64) (bool, error) {
 			run, err := state.RunBy(ctx, db.Reader(), state.Key{RunID: runID, LeaseEpoch: epoch})
@@ -474,6 +480,8 @@ func (d *daemon) announce(ctx context.Context, h harness.Host, adapters []harnes
 }
 
 type daemon struct {
+	// paths are where this Worker keeps its config and worktrees.
+	paths config.Paths
 	// settings is the Worker config as this run of the daemon read it at start.
 	settings doctor.Settings
 	client   *client.Client

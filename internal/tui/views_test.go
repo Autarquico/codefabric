@@ -410,7 +410,7 @@ func TestScenario_TuiViewsActions_Menu_IsBuiltFromTheRegistry(t *testing.T) {
 	}
 	runs := viewShellWith(t, newBackend(), "r")
 	runs.Update(feedMsg{RouteRuns, client.Update[[]v1.Run]{Kind: client.UpdateSnapshot, State: runsFixture()}})
-	if got := titles(runs); fmt.Sprint(got) != "[run.attach run.publish]" {
+	if got := titles(runs); fmt.Sprint(got) != "[run.attach run.shell run.publish]" {
 		t.Errorf("run menu: %v", got)
 	}
 	workers := viewShellWith(t, newBackend(), "w")

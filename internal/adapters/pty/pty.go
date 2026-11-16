@@ -34,8 +34,13 @@ const (
 type Options struct {
 	Path       string
 	Args       []string
-	Env        []string
+	Env        []string // the whole environment of the command (plus TERM): nothing is inherited
 	Cols, Rows uint16
+	// Dir is the working directory of the command; empty is that of this process.
+	Dir string
+	// KillGroup makes Close end every process of the command's group, not only the
+	// command: a shell leaves its jobs behind otherwise.
+	KillGroup bool
 }
 
 // Session is a command running under a pty. Read gives what it prints and Write
@@ -48,6 +53,8 @@ type Session struct {
 	done   chan struct{}
 	status int
 
+	killGroup bool
+
 	closeOnce sync.Once
 }
 
@@ -59,11 +66,12 @@ func Start(o Options) (*Session, error) {
 	}
 	cmd := exec.Command(o.Path, o.Args...) //nolint:gosec,noctx // the caller built the command from a handle it checked; Close, not a context, ends it
 	cmd.Env = withTerm(o.Env)
+	cmd.Dir = o.Dir
 	master, err := creack.StartWithSize(cmd, &creack.Winsize{Cols: cols, Rows: rows})
 	if err != nil {
 		return nil, fmt.Errorf("pty: starting %s: %w", o.Path, err)
 	}
-	s := &Session{cmd: cmd, master: master, done: make(chan struct{})}
+	s := &Session{cmd: cmd, master: master, done: make(chan struct{}), killGroup: o.KillGroup}
 	go func() {
 		err := cmd.Wait()
 		s.status = exitStatus(err)
@@ -134,6 +142,11 @@ func (s *Session) Close() error {
 			case <-time.After(killGrace):
 				_ = s.cmd.Process.Kill()
 			}
+		}
+		if s.killGroup {
+			// The command leads a session of its own (the pty makes it one), so its
+			// process group is its pid: whatever it left running goes with it.
+			_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
 		}
 		_ = s.master.Close()
 	})

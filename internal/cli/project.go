@@ -126,8 +126,8 @@ func newProjectShowCmd() *cobra.Command {
 
 func printProject(w io.Writer, p v1.Project) error {
 	d := p.Defaults
-	_, err := fmt.Fprintf(w, "ID           %s (%s)\nName         %s\nRepo         %s\n%sBranch       %s\nWorkflow     %s\nEnvironment  %s\nRepo config  %s\nOrigin auth  %s\nNative state %s\nMode         %s\nCompletion   %s\nResources    %s\nRetry        %s\nCreated      %s\n",
-		p.ID, p.Short, p.Name, p.Repo, aliasLines(p.RepoAliases), p.DefaultBranch, dash(p.DefaultWorkflow), dash(p.DefaultEnvironment), dash(string(p.RepoConfig)), dash(p.OriginSecret), nativeStateLabel(p.NativeState),
+	_, err := fmt.Fprintf(w, "ID           %s (%s)\nName         %s\nRepo         %s\n%sBranch       %s\nWorkflow     %s\nEnvironment  %s\nRepo config  %s\nOrigin auth  %s\nNative state %s\nShell        %s\nMode         %s\nCompletion   %s\nResources    %s\nRetry        %s\nCreated      %s\n",
+		p.ID, p.Short, p.Name, p.Repo, aliasLines(p.RepoAliases), p.DefaultBranch, dash(p.DefaultWorkflow), dash(p.DefaultEnvironment), dash(string(p.RepoConfig)), dash(p.OriginSecret), nativeStateLabel(p.NativeState), nativeStateLabel(p.Shell),
 		dash(string(d.Mode)), dash(string(d.Completion)), resourcesLabel(d.Resources), retryLabel(d.Retry), local(p.CreatedAt))
 	return err
 }
@@ -176,6 +176,7 @@ func newProjectSetCmd(open func(*cobra.Command) (projectUpdater, error)) *cobra.
 		branch, workflow, environment string
 		mode, completion, repoConfig  string
 		originSecret, nativeState     string
+		shell                         string
 		cpu, memoryMB                 int
 		addRepos, removeRepos         []string
 	)
@@ -209,6 +210,13 @@ func newProjectSetCmd(open func(*cobra.Command) (projectUpdater, error)) *cobra.
 				}
 				req.NativeState = &on
 			}
+			if f.Changed("shell") {
+				on, err := onOff("--shell", shell)
+				if err != nil {
+					return err
+				}
+				req.Shell = &on
+			}
 			if f.Changed("mode") {
 				m := domain.Mode(mode)
 				req.Mode = &m
@@ -241,6 +249,7 @@ func newProjectSetCmd(open func(*cobra.Command) (projectUpdater, error)) *cobra.
 	f.StringVar(&repoConfig, "repo-config", "", "whether the repo may carry .codefabric/project.yaml: allow or deny")
 	f.StringVar(&originSecret, "origin-secret", "", "ref of the secret that authenticates the origin (empty clears it; https only; the Project must allow it)")
 	f.StringVar(&nativeState, "native-state", "", "whether checkpoints capture the harness's own state (the session): on or off")
+	f.StringVar(&shell, "shell", "", "whether `cf shell` may open a shell in the worktree of a Run of this Project (the Worker must allow it too): on or off")
 	f.StringVar(&mode, "mode", "", "default mode: headless or interactive")
 	f.StringVar(&completion, "completion", "", "default completion: first_success, promote or manual")
 	f.StringArrayVar(&addRepos, "add-repo", nil, "another URL of the repository; repeatable. A working copy belongs to the Project if its origin is exactly one of its URLs")

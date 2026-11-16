@@ -3,8 +3,11 @@ package pty_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -89,5 +92,31 @@ func TestCloseEndsACommandThatDoesNotStop(t *testing.T) {
 func TestStartOfAMissingProgramFails(t *testing.T) {
 	if _, err := pty.Start(pty.Options{Path: "/nonexistent/prog"}); err == nil {
 		t.Error("a missing program started")
+	}
+}
+
+// A shell leaves its jobs behind when it dies; with KillGroup closing the session
+// ends them too, and the working directory is the one asked for.
+func TestClose_KillGroupEndsWhatTheCommandStarted(t *testing.T) {
+	dir := t.TempDir()
+	s := start(t, pty.Options{Path: "/bin/sh", Args: []string{"-c", "sleep 600 & echo job=$! cwd=$(pwd -P); wait"}, Dir: dir, KillGroup: true, Env: []string{"PATH=/usr/bin:/bin"}})
+	out := readUntil(t, s, "cwd=")
+	var job int
+	if _, err := fmt.Sscanf(out[strings.Index(out, "job="):], "job=%d", &job); err != nil || job == 0 {
+		t.Fatalf("no job in %q: %v", out, err)
+	}
+	if want, _ := filepath.EvalSymlinks(dir); !strings.Contains(out, "cwd="+want) {
+		t.Errorf("cwd: %q, want %q", out, want)
+	}
+	if err := syscall.Kill(job, 0); err != nil {
+		t.Fatalf("the job is not running: %v", err)
+	}
+	_ = s.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for syscall.Kill(job, 0) == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := syscall.Kill(job, 0); err == nil {
+		t.Error("the job outlived the session")
 	}
 }

@@ -24,6 +24,19 @@ Open the live session of a Run in this terminal, through the Controller, with no
 - `--ssh-target [user@]host[:port]`: reach the Worker there instead of where it announced itself.
 - `--project`: narrow a Task name.
 
+## `cf shell`
+
+Open a shell in the worktree of a Run, on the Worker that holds it, through the same relay as `cf attach`: `cf shell <task|run>`. It is for looking at files and git next to the agent. Closing it (Ctrl-], or exiting the shell) ends the shell and never the Run. There is no `--ssh`.
+
+It is off by default and needs two keys, both on:
+
+- The Project: `cf project set <project> --shell on|off` (`cf project show` prints it). Without it, `cf shell` fails with `CF_POLICY_DENIED` naming `project.shell`.
+- The Worker, locally on its machine: `cf worker config set allow_shell true|false`. The Worker announces the shell only while it is on (a change makes the Worker restart to announce it); without it `cf shell` fails with `CF_POLICY_DENIED` naming `worker.allow_shell`. The Worker reads the setting again right before it launches the shell, so turning it off stops the shells not yet started.
+
+The shell is the login shell of the OS user the Worker runs as (from `/etc/passwd`, else `/bin/sh`), started with `-l` in the worktree of the Run, and it is not a tmux session. Its environment is minimal (`HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `LANG`, `TERM`): it does not inherit the environment of the Worker. It has the authority of that OS user: the worktree does not isolate it. Every shell is audited: the `attach.opened` and `attach.closed` events carry the user, the Run, the Worker, the mode `shell` and the duration.
+
+- `--project`: narrow a Task name.
+
 ## `cf claude`
 
 Install into Claude Code what cf needs there: the `/handto` skill, which hands the session you are in over to a Worker (`/handto <worker>`), and the `/workers` skill, which lists the Workers and the Runs that are live on them. The skills are embedded in the binary and carry the version of the `cf` that wrote them.

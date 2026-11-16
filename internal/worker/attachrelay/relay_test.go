@@ -227,10 +227,10 @@ func TestRelay_RefusesARunWhoseSessionIsMissing(t *testing.T) {
 	}
 }
 
-func TestRelay_RefusesAShell(t *testing.T) {
+func TestRelay_RefusesAShellItWasNotAllowedToOpen(t *testing.T) {
 	r := newRig(t, nil)
 	r.run()
-	wantError(t, frame(t, r.ask(v1.AttachModeShell)), domain.CodeNotImplemented)
+	wantError(t, frame(t, r.ask(v1.AttachModeShell)), domain.CodePolicyDenied)
 }
 
 func TestRelay_ViewModeNeverWritesToTheTerminal(t *testing.T) {

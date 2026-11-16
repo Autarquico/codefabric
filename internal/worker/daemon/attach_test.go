@@ -14,6 +14,7 @@ import (
 	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/daemon"
+	"github.com/Autarquico/codefabric/internal/worker/doctor"
 )
 
 // attachRuntime is a Runtime that can say which program attaches to its sessions.
@@ -114,6 +115,38 @@ func TestRun_AnnouncesTheAttachRelayOnlyWhenItRunsIt(t *testing.T) {
 			w := c.eventually("box", "online", func(w v1.Worker) bool { return w.State == domain.WorkerOnline })
 			if got := slices.Contains(w.Capabilities, domain.AttachRelayCapability); got != tc.want {
 				t.Errorf("announces the relay = %v, want %v (capabilities %v)", got, tc.want, w.Capabilities)
+			}
+		})
+	}
+}
+
+// The shell is announced only by a Worker that runs the relay and whose
+// allow_shell is on: the Controller does not grant a shell to one that does not.
+func TestRun_AnnouncesTheShellOnlyWithAllowShellAndTheRelay(t *testing.T) {
+	for name, tc := range map[string]struct {
+		allow, relayOff bool
+		want            bool
+	}{
+		"allowed, with the relay": {allow: true, want: true},
+		"not allowed":             {},
+		"allowed but no relay":    {allow: true, relayOff: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newController(t)
+			paths := machine(t)
+			c.join("box", paths)
+			s, err := doctor.LoadSettings(paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.AllowShell = tc.allow
+			if err := doctor.SaveSettings(paths, s); err != nil {
+				t.Fatal(err)
+			}
+			runWith(t, paths, func(o *daemon.Options) { o.Runtime, o.NoAttachRelay = &relayRuntime{}, tc.relayOff })
+			w := c.eventually("box", "online", func(w v1.Worker) bool { return w.State == domain.WorkerOnline })
+			if got := slices.Contains(w.Capabilities, domain.AttachShellCapability); got != tc.want {
+				t.Errorf("announces the shell = %v, want %v (capabilities %v)", got, tc.want, w.Capabilities)
 			}
 		})
 	}
