@@ -28,10 +28,20 @@ func (s *Server) newAttachHub(cfg attachhub.Config) *attachhub.Hub {
 	cfg.Validate = func(ctx context.Context, g attachhub.Grant) error {
 		return s.work.Runs.AttachStillValid(ctx, g.Client, g.Worker, g.Run, g.Epoch)
 	}
+	// A screen stream is a panel that only watches: the spec audits interactive
+	// entries and shells, so its open and close go to the debug log and nowhere else.
 	cfg.Opened = func(ctx context.Context, g attachhub.Grant, at time.Time) error {
+		if g.Mode == v1.AttachModeScreen {
+			s.log.DebugContext(ctx, "attach: screen stream opened", "run", string(g.Run), "client", string(g.Client), "hz", g.Hz)
+			return nil
+		}
 		return s.work.Runs.RecordAttachOpened(ctx, attachRecord(g, at))
 	}
 	cfg.Closed = func(ctx context.Context, c attachhub.Closed) {
+		if c.Grant.Mode == v1.AttachModeScreen {
+			s.log.DebugContext(ctx, "attach: screen stream closed", "run", string(c.Grant.Run), "client", string(c.Grant.Client), "reason", c.Reason)
+			return
+		}
 		ctx, cancel := context.WithTimeout(ctx, attachAuditTimeout)
 		defer cancel()
 		rec := attachRecord(c.Grant, c.At)
@@ -87,13 +97,13 @@ func (s *Server) openAttach(w http.ResponseWriter, r *http.Request, c caller) er
 	if err := decodeBody(w, r, &req); err != nil {
 		return err
 	}
-	ticket, err := s.work.Runs.AttachOpen(r.Context(), c.Session, r.PathValue("ref"), r.URL.Query().Get("project"), req.Mode)
+	ticket, err := s.work.Runs.AttachOpen(r.Context(), c.Session, r.PathValue("ref"), r.URL.Query().Get("project"), req.Mode, req.Hz)
 	if err != nil {
 		return err
 	}
 	pending, err := s.attach.Offer(attachhub.Grant{
 		Client: ticket.Client, ClientName: ticket.ClientName, Actor: ticket.Actor, Worker: ticket.Worker,
-		Run: ticket.Run, Epoch: ticket.Epoch, Mode: ticket.Mode, Handle: ticket.Handle,
+		Run: ticket.Run, Epoch: ticket.Epoch, Mode: ticket.Mode, Hz: ticket.Hz, Handle: ticket.Handle,
 	})
 	if err != nil {
 		return err
@@ -136,7 +146,7 @@ func (s *Server) attachRequests(w http.ResponseWriter, r *http.Request, c caller
 	out := v1.AttachRequestsResponse{Requests: make([]v1.AttachRequest, 0, len(grants))}
 	for _, g := range grants {
 		out.Requests = append(out.Requests, v1.AttachRequest{
-			SessionID: g.ID, RunID: string(g.Run), LeaseEpoch: g.Epoch, Mode: g.Mode, Handle: g.Handle,
+			SessionID: g.ID, RunID: string(g.Run), LeaseEpoch: g.Epoch, Mode: g.Mode, Hz: g.Hz, Handle: g.Handle,
 			Client: v1.AttachPeer{ID: string(g.Client), Name: g.ClientName, Mode: g.Mode}, ExpiresAt: g.Expires,
 		})
 	}

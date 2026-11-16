@@ -52,6 +52,7 @@ type Grant struct {
 	Run        domain.ID
 	Epoch      uint64
 	Mode       string
+	Hz         int // screens per second of a screen stream, already clamped
 	Handle     v1.RuntimeHandle
 	Expires    time.Time // set by the hub
 }

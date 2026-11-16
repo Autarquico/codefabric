@@ -142,3 +142,23 @@ func TestAttachCommand_IsTheSameClientAsSSHRunsOnThisServer(t *testing.T) {
 		}
 	}
 }
+
+func TestSnapshotArgs_ReadTheExactSessionKeepingItsAttributes(t *testing.T) {
+	got := snapshotArgs(domain.SessionName(runID, 3))
+	want := []string{"capture-pane", "-p", "-e", "-t", "=" + domain.SessionName(runID, 3) + ":"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+	// The command runs behind the runtime's base: the Worker's server, no config.
+	r := &Runtime{socket: "cf-0123456789ab"}
+	if full := append(r.base(), got...); !slices.Equal(full[:4], []string{"-L", "cf-0123456789ab", "-f", "/dev/null"}) {
+		t.Fatalf("full = %q", full)
+	}
+}
+
+func TestSnapshot_RefusesAHandleOfAnotherRuntime(t *testing.T) {
+	r := &Runtime{socket: "cf-0123456789ab"}
+	if _, err := r.Snapshot(t.Context(), cfruntime.Handle{Runtime: "other", Ref: "x"}); err == nil {
+		t.Fatal("a handle of another runtime was captured")
+	}
+}

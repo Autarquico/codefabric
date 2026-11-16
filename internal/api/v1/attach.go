@@ -29,7 +29,28 @@ const (
 	AttachModeView  = "view"
 	AttachModeWrite = "write"
 	AttachModeShell = "shell"
+	// AttachModeScreen is a read-only stream of the screen of the Run: no
+	// terminal is opened on the Worker, which sends the whole screen (one data
+	// frame each) whenever it changed, at the rate the client asked for.
+	AttachModeScreen = "screen"
 )
+
+// The rate of a screen stream, in screens per second: what a client may ask for
+// in AttachOpenRequest.Hz and what it gets when it asks for none.
+const (
+	ScreenMinHz     = 1
+	ScreenMaxHz     = 4
+	ScreenDefaultHz = 2
+)
+
+// ClampScreenHz is the rate a screen stream is granted for the one asked: 0 is
+// the default and anything else is kept between the least and the most.
+func ClampScreenHz(hz int) int {
+	if hz == 0 {
+		return ScreenDefaultHz
+	}
+	return min(max(hz, ScreenMinHz), ScreenMaxHz)
+}
 
 // Why an attach was closed (details of AttachClosed, and what the hub tells apart).
 const (
@@ -48,6 +69,8 @@ const (
 // AttachOpenRequest is the body of POST /v1/runs/{ref}/attach/stream.
 type AttachOpenRequest struct {
 	Mode string `json:"mode"`
+	// Hz is the rate of a screen stream; the Controller clamps it. Other modes ignore it.
+	Hz int `json:"hz,omitempty"`
 }
 
 // AttachPeer is someone inside the session of a Run, as the Controller knows
@@ -65,6 +88,7 @@ type AttachRequest struct {
 	RunID      string        `json:"run_id"`
 	LeaseEpoch uint64        `json:"lease_epoch"`
 	Mode       string        `json:"mode"`
+	Hz         int           `json:"hz,omitempty"` // granted rate of a screen stream
 	Handle     RuntimeHandle `json:"handle"`
 	Client     AttachPeer    `json:"client"`
 	ExpiresAt  time.Time     `json:"expires_at"`

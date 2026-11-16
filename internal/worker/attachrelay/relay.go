@@ -76,6 +76,7 @@ type Runtime interface {
 	HandleFor(name string) cfruntime.Handle
 	Status(ctx context.Context, h cfruntime.Handle) (cfruntime.Status, error)
 	cfruntime.AttachCommander
+	Snapshot(ctx context.Context, h cfruntime.Handle) ([]byte, error)
 }
 
 // Terminal is a command under a pty.
@@ -249,7 +250,11 @@ func (r *Relay) serve(ctx context.Context, req v1.AttachRequest) {
 		return
 	}
 	log.InfoContext(ctx, "attach relay: session opened", "client", req.Client.ID)
-	r.splice(ctx, conn, req, cmd)
+	if req.Mode == v1.AttachModeScreen {
+		r.screenStream(ctx, conn, req)
+	} else {
+		r.splice(ctx, conn, req, cmd)
+	}
 	log.InfoContext(ctx, "attach relay: session closed")
 }
 
@@ -260,7 +265,7 @@ func (r *Relay) prepare(ctx context.Context, req v1.AttachRequest) (cfruntime.Co
 	if req.Mode == v1.AttachModeShell {
 		return r.prepareShell(ctx, req)
 	}
-	if req.Mode != v1.AttachModeView && req.Mode != v1.AttachModeWrite {
+	if req.Mode != v1.AttachModeView && req.Mode != v1.AttachModeWrite && req.Mode != v1.AttachModeScreen {
 		return cfruntime.Command{}, domain.NewError(domain.CodeNotImplemented, "this Worker does not open a "+req.Mode+" session", nil)
 	}
 	notRunning := func(msg string) error {
@@ -282,6 +287,9 @@ func (r *Relay) prepare(ctx context.Context, req v1.AttachRequest) (cfruntime.Co
 		return cfruntime.Command{}, err
 	case !st.Alive:
 		return cfruntime.Command{}, notRunning("the session of this Run is not on this Worker")
+	}
+	if req.Mode == v1.AttachModeScreen {
+		return cfruntime.Command{}, nil // no client of tmux: see screenStream
 	}
 	cmd, err := r.o.Runtime.AttachCommand(handle, req.Mode == v1.AttachModeView)
 	if err != nil {

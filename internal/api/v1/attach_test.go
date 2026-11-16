@@ -152,3 +152,11 @@ func FuzzReadFrame(f *testing.F) {
 		}
 	})
 }
+
+func TestClampScreenHz(t *testing.T) {
+	for in, want := range map[int]int{-5: ScreenMinHz, 0: ScreenDefaultHz, 1: 1, 2: 2, 4: 4, 5: ScreenMaxHz, 1000: ScreenMaxHz} {
+		if got := ClampScreenHz(in); got != want {
+			t.Errorf("ClampScreenHz(%d) = %d, want %d", in, got, want)
+		}
+	}
+}

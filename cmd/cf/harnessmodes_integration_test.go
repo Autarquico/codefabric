@@ -126,3 +126,7 @@ func TestScenario_HarnessAdapterFramework_ModoNoSoportado_Daemon(t *testing.T) {
 		t.Errorf("Run = %+v", run)
 	}
 }
+
+func (r *idleRuntime) Snapshot(context.Context, cfruntime.Handle) ([]byte, error) {
+	return nil, cfruntime.UnsupportedSnapshot("idle")
+}

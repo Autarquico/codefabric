@@ -529,3 +529,23 @@ func TestAttachCommandLocksAServerThatWasStartedWithoutIt(t *testing.T) {
 	}
 	assertOnlyDetach(t, socket)
 }
+
+func TestSnapshot_IsTheScreenOfTheSessionWithItsColours(t *testing.T) {
+	r := newRuntime(t)
+	h, err := r.Start(t.Context(), cfruntime.Spec{
+		Name: "cf-run_snapshot_1", Dir: t.TempDir(),
+		Command: sh(`printf 'plain\n\033[31mred\033[0m\n'; sleep 30`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	eventually(t, "the screen to have the text", func() bool {
+		b, err := r.Snapshot(t.Context(), h)
+		got = string(b)
+		return err == nil && strings.Contains(got, "plain") && strings.Contains(got, "\x1b[31mred")
+	})
+	if _, err := r.Snapshot(t.Context(), r.HandleFor("cf-run_snapshot_missing")); err == nil || !strings.Contains(err.Error(), "CF_RUN_NOT_ATTACHABLE") {
+		t.Errorf("a session that is not there: %v", err)
+	}
+}

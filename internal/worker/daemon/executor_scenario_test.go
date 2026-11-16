@@ -259,3 +259,7 @@ func componentStatus(h v1.Health, name string) string {
 	}
 	return ""
 }
+
+func (r *recordingRuntime) Snapshot(context.Context, cfruntime.Handle) ([]byte, error) {
+	return nil, cfruntime.UnsupportedSnapshot("recording")
+}

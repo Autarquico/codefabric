@@ -579,3 +579,7 @@ func (l *syncLog) String() string {
 	defer l.mu.Unlock()
 	return l.buf.String()
 }
+
+func (r *fakeRuntime) Snapshot(context.Context, cfruntime.Handle) ([]byte, error) {
+	return nil, cfruntime.UnsupportedSnapshot("fake")
+}
