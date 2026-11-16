@@ -19,7 +19,7 @@ import (
 
 // shellSecretName is a variable of the environment of the Worker that a shell
 // must never see.
-const shellSecretName = "CF_TEST_WORKER_SECRET"
+const shellSecretName = "CF_TEST_WORKER_SECRET" //nolint:gosec // the name of a test variable, not a credential
 
 // newShellBox is newObserveBox with the policy of the shell chosen: whether the
 // Project has it on, and whether the Worker allows it when it starts. The daemon
