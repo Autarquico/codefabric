@@ -84,7 +84,11 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 	// would be left on tmux's alternate screen. It goes out before the terminal is restored.
 	// A shell needs it too: the programs in it (an editor, a pager) set modes of
 	// their own that nobody undoes when Ctrl-] ends it.
-	defer func() { _, _ = io.WriteString(stdio.Out, screenReset) }()
+	// It is for a terminal only: written to a file or a pipe it would come before
+	// what cf prints there, such as the error of --json.
+	if isTerminal(stdio.Out) {
+		defer func() { _, _ = io.WriteString(stdio.Out, screenReset) }()
+	}
 
 	cancel, err := newCancel()
 	if err != nil {
@@ -165,6 +169,12 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 }
 
 // sendSize tells the Worker the size of the terminal, if it can be read.
+// isTerminal reports whether w is a terminal.
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd())) //nolint:gosec // a descriptor
+}
+
 func sendSize(conn *client.AttachConn, fd int) {
 	if cols, rows, err := term.GetSize(fd); err == nil && cols > 0 && rows > 0 {
 		_ = conn.Resize(uint16(cols), uint16(rows)) //nolint:gosec // a terminal size fits 16 bits

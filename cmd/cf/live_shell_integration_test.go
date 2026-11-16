@@ -232,8 +232,7 @@ func TestScenario_LiveAttach_ShellRestauraLaTerminal(t *testing.T) {
 
 // TestScenario_LiveAttach_ShellVetadaPorElWorker: a Worker that does not allow a
 // shell is refused with CF_POLICY_DENIED naming worker.allow_shell; and a Worker
-// that withdraws it after announcing it, so that the Controller grants the shell,
-// opens nothing either.
+// that withdraws it after announcing it opens nothing either.
 func TestScenario_LiveAttach_ShellVetadaPorElWorker(t *testing.T) {
 	t.Run("sin allow_shell", func(t *testing.T) {
 		o := newShellBox(t, true, false)
@@ -253,17 +252,17 @@ func TestScenario_LiveAttach_ShellVetadaPorElWorker(t *testing.T) {
 	t.Run("retirada tras pedirla", func(t *testing.T) {
 		o := newShellBox(t, true, true)
 		use(t, o.client)
-		// The Worker announced the shell when it started; now it withdraws it. The
-		// Controller still grants (it has the announcement), and the Worker refuses
-		// when the request reaches it, before launching anything.
+		// The Worker announced the shell when it started; now it withdraws it. Who
+		// refuses depends on a race: the Controller, if the new announcement reached
+		// it first, or else the Worker, which checks again before launching anything
+		// (its own tests pin that path). Either way it is CF_POLICY_DENIED naming
+		// worker.allow_shell, and nothing opens.
 		setAllowShell(t, o.reconcileBox, false)
 		status, e := o.shellError()
-		if status == "0" || e.Code != domain.CodePolicyDenied || !strings.Contains(e.Message, domain.PolicyWorkerAllowShell) {
+		named := e.Details["policy"] == domain.PolicyWorkerAllowShell || strings.Contains(e.Message, domain.PolicyWorkerAllowShell)
+		if status == "0" || e.Code != domain.CodePolicyDenied || !named {
 			t.Fatalf("exit %s, error %+v", status, e)
 		}
-		eventually(t, "the Worker to have refused it", func() bool {
-			return strings.Contains(o.daemon.out.String(), "refused") && strings.Contains(o.daemon.out.String(), "mode=shell")
-		})
 		if pids := o.shellsOfWorker(); len(pids) != 0 {
 			t.Errorf("shells on the Worker: %v", pids)
 		}
