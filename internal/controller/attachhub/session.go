@@ -244,32 +244,46 @@ func reasonOf(code domain.Code) string {
 }
 
 // isScreen is a session that only watches the screen of the Run: a panel is not
-// "who else is inside", so it is neither listed nor told the list.
+// "who else is inside", so it is never listed. It is told the list, so that the
+// panel can say who is inside.
 func (s *session) isScreen() bool { return s.gs.Mode == v1.AttachModeScreen }
 
-// broadcastPeersLocked tells every client of the Run who is in it. The list is
-// built from the grants, which name identities the Controller authenticated, and
-// nothing a client or a Worker said about itself. Screen sessions are not in it.
-func (h *Hub) broadcastPeersLocked(run domain.ID) {
-	var room []*session
+// peersBytesLocked is the peers frame of a Run: who is in it, built from the
+// grants, which name identities the Controller authenticated, and nothing a
+// client or a Worker said about itself. Screen sessions are not in it.
+func (h *Hub) peersBytesLocked(run domain.ID) ([]byte, bool) {
+	peers := make([]v1.AttachPeer, 0, len(h.rooms[run]))
 	for _, s := range h.rooms[run] {
 		if !s.isScreen() {
-			room = append(room, s)
+			peers = append(peers, v1.AttachPeer{ID: string(s.gs.Client), Name: s.gs.ClientName, Mode: s.gs.Mode})
 		}
-	}
-	peers := make([]v1.AttachPeer, 0, len(room))
-	for _, s := range room {
-		peers = append(peers, v1.AttachPeer{ID: string(s.gs.Client), Name: s.gs.ClientName, Mode: s.gs.Mode})
 	}
 	f, err := v1.PeersFrame(peers)
 	if err != nil {
 		h.cfg.Log.Warn("attach: peers do not fit a frame", "run", string(run), "err", err)
+		return nil, false
+	}
+	return frameBytes(f), true
+}
+
+// broadcastPeersLocked tells every client of the Run, screen sessions included,
+// who is in it.
+func (h *Hub) broadcastPeersLocked(run domain.ID) {
+	b, ok := h.peersBytesLocked(run)
+	if !ok {
 		return
 	}
-	b := frameBytes(f)
-	for _, s := range room {
+	for _, s := range h.rooms[run] {
 		if !s.client.send(b) {
 			go s.end(v1.AttachCloseSlowClient, domain.CodeInProgress, "this client reads too slowly: the session was cut", endBoth)
 		}
+	}
+}
+
+// tellPeersLocked tells one screen session who is in its Run when it joins. A
+// screen coming or going changes nobody's list, so the others are not told.
+func (h *Hub) tellPeersLocked(s *session) {
+	if b, ok := h.peersBytesLocked(s.gs.Run); ok && !s.client.send(b) {
+		go s.end(v1.AttachCloseSlowClient, domain.CodeInProgress, "this client reads too slowly: the session was cut", endBoth)
 	}
 }

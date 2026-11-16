@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,6 +57,43 @@ func TestLoadClient_Notify(t *testing.T) {
 		write(bad)
 		if _, err := config.LoadClient(p); err == nil {
 			t.Errorf("%s was accepted", bad)
+		}
+	}
+}
+
+func TestClientAttach_DetachKey(t *testing.T) {
+	p := config.Paths{ConfigDir: t.TempDir()}
+	write := func(text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(p.ConfigDir, "client.json"), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Without a file or a key, the default: Ctrl-].
+	c, err := config.LoadClient(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := c.Attach.DetachByte(); err != nil || b != 0x1d {
+		t.Fatalf("default = %#x, %v, want Ctrl-] (0x1d)", b, err)
+	}
+	for key, want := range map[string]byte{"ctrl+]": 0x1d, "ctrl+g": 0x07, "CTRL+G": 0x07, "ctrl+\\": 0x1c, "ctrl+^": 0x1e, "ctrl+_": 0x1f, "ctrl+a": 0x01} {
+		raw, _ := json.Marshal(map[string]any{"attach": map[string]string{"detach_key": key}})
+		write(string(raw))
+		c, err := config.LoadClient(p)
+		if err != nil {
+			t.Fatalf("%q: %v", key, err)
+		}
+		if got, err := c.Attach.DetachByte(); err != nil || got != want {
+			t.Errorf("%q = %#x, %v, want %#x", key, got, err, want)
+		}
+	}
+	// Keys that would break the session, or that are not a key at all.
+	for _, bad := range []string{"ctrl+c", "ctrl+d", "ctrl+z", "ctrl+m", "ctrl+i", "q", "alt+x", "ctrl+", "ctrl+ab", "f5"} {
+		raw, _ := json.Marshal(map[string]any{"attach": map[string]string{"detach_key": bad}})
+		write(string(raw))
+		if _, err := config.LoadClient(p); err == nil {
+			t.Errorf("detach_key %q was accepted", bad)
 		}
 	}
 }

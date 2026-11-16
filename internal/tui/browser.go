@@ -57,6 +57,9 @@ type viewSpec struct {
 	readOnly bool    // there is nothing to do to an item
 	primary  string  // what enter does on an item of a read only view, when the screen around the browser answers it
 	needs    []Route // lists of other views that are followed with this one
+	// live is the Run that the live panel of an item shows, or why there is none
+	// (one line); nil for a view without a panel.
+	live func(s *State, row Row) (run v1.Run, why string)
 	// open builds a screen that is not a list with a detail (Logs, Models); the
 	// shell registers it whether or not there is a Backend.
 	open func(env screenEnv) Screen
@@ -154,28 +157,68 @@ type browser struct {
 	busy    string
 	tl      timeline
 	vs      versions
+	// The live view: whether the panel is on is the TUI's (prefs); the stream
+	// is the one of the selected item. inExec is an attach holding the terminal,
+	// during which nothing is followed. verb names what the last terminal
+	// action was, for what the failure line says.
+	prefs  *livePrefs
+	panel  liveFeed
+	inExec bool
+	verb   string
 }
 
 func (b *browser) screenID() uint64 { return b.id }
 
 func newBrowser(spec viewSpec, backend Backend) *browser {
-	return &browser{id: lastScreenID.Add(1), spec: spec, backend: backend}
+	return &browser{id: lastScreenID.Add(1), spec: spec, backend: backend, prefs: &livePrefs{}}
 }
+
+// Close ends what the screen follows when it leaves the stack.
+func (b *browser) Close() { b.panel.close() }
+
+// Park is the screen being covered by another: the panel stops following, and
+// follows again when this screen is in view.
+func (b *browser) Park() { b.panel.close() }
 
 // Sync refreshes the rows the keys act on and asks for what the detail of the
 // selected item needs.
 func (b *browser) Sync(c RenderContext) tea.Cmd {
 	b.rows, b.state = b.spec.rows(c), c.State
 	row, ok := b.list.selected(b.rows)
+	live := b.syncLive(row, ok)
 	switch {
 	case !ok:
-		return nil
+		return live
 	case b.spec.history:
-		return b.syncHistory(row)
+		return tea.Batch(live, b.syncHistory(row))
 	case b.spec.timeline:
-		return b.syncTimeline(c, row)
+		return tea.Batch(live, b.syncTimeline(c, row))
 	}
-	return nil
+	return live
+}
+
+// syncLive makes the stream of the panel the one of the selected item: it opens
+// it when the panel is on and the item has a live Run, and lets go of it when
+// the selection moves, the panel is hidden or an attach holds the terminal. A
+// stream that ended with a reason is not opened again by this: only another
+// selection or the toggle do.
+func (b *browser) syncLive(row Row, ok bool) tea.Cmd {
+	if b.spec.live == nil {
+		return nil
+	}
+	if !b.prefs.panel || !ok || b.inExec {
+		b.panel.close()
+		return nil
+	}
+	run, why := b.spec.live(b.state, row)
+	if why != "" {
+		b.panel.close()
+		return nil
+	}
+	if b.panel.following(run.ID) {
+		return nil
+	}
+	return b.panel.open(b.backend, from(b.id), run.ID, panelHz)
 }
 
 // syncHistory reads the versions of the selected Workflow again when its head
@@ -226,12 +269,17 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 		} else {
 			b.flash = "✓ " + msg.action.Title + " · " + msg.target.Label
 		}
+	case screenOpenedMsg, screenFrameMsg:
+		cmd, _ := b.panel.handle(from(b.id), msg)
+		return b, cmd, false
 	case attachReadyMsg:
 		b.busy, b.warn = "", ""
 		if msg.failure != nil {
-			b.notice = &Notice{Title: "Attach failed", Failure: msg.failure}
+			b.notice = &Notice{Title: b.verbTitle() + " failed", Failure: msg.failure}
 			return b, nil, false
 		}
+		b.inExec = true
+		b.panel.close()
 		return b, tea.Exec(msg.session.Command(), attachEnded(msg.from, msg.target, msg.session)), false
 	case attachEndedMsg:
 		b.busy = "Checking the attach…"
@@ -239,9 +287,9 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 			return attachExitMsg{from: msg.from, target: msg.target, runErr: msg.runErr, finishErr: msg.session.Finish(msg.runErr)}
 		}, false
 	case attachExitMsg:
-		b.busy, b.warn = "", ""
+		b.busy, b.warn, b.inExec = "", "", false
 		if msg.finishErr != nil {
-			b.notice = &Notice{Title: "Attach ended with an error", Failure: actions.FailureOf(msg.finishErr), Detail: exitDetail(msg.runErr)}
+			b.notice = &Notice{Title: b.verbTitle() + " ended with an error", Failure: actions.FailureOf(msg.finishErr), Detail: exitDetail(msg.runErr)}
 		} else {
 			b.flash = "Back from " + msg.target.Label + " · " + exitDetail(msg.runErr)
 		}
@@ -255,6 +303,14 @@ func (b *browser) Update(msg tea.Msg) (Screen, tea.Cmd, bool) {
 		}
 	}
 	return b, nil, false
+}
+
+// verbTitle is what the last terminal action was called: Attach or Shell.
+func (b *browser) verbTitle() string {
+	if b.verb == "" {
+		return "Attach"
+	}
+	return b.verb
 }
 
 // attachEnded is what the shell hears when the process of an attach ends. It
@@ -320,9 +376,26 @@ func (b *browser) press(k tea.KeyPressMsg) (Screen, tea.Cmd, bool) {
 	if b.list.press(b.rows, k) {
 		return b, nil, true
 	}
+	if b.spec.live != nil {
+		switch key {
+		case keyPanel:
+			b.prefs.panel = !b.prefs.panel
+			b.panel.close() // a retry starts from nothing
+			return b, nil, true
+		case keyGrid:
+			return b, func() tea.Msg { return openGridMsg{} }, true
+		}
+	}
 	row, ok := b.list.selected(b.rows)
 	if !ok {
 		return b, nil, false
+	}
+	if key == "enter" && b.prefs.panel && b.spec.live != nil {
+		if run, why := b.spec.live(b.state, row); why == "" {
+			if d, found := actions.Lookup("run.attach"); found {
+				return b, b.invoke(b.titled(d), Row{ID: run.ID, Label: runName(run)}), true
+			}
+		}
 	}
 	for _, s := range b.spec.shortcuts {
 		if s.Key == key {
@@ -412,6 +485,10 @@ func (b *browser) start(d actions.Descriptor, row Row, values map[string]string)
 		in.Target = ""
 	}
 	if d.Terminal {
+		b.verb = "Attach"
+		if d.ID == "run.shell" {
+			b.verb = "Shell"
+		}
 		return func() tea.Msg {
 			session, failure := backend.Attach(d.ID, in)
 			return attachReadyMsg{from: asker, target: row, session: session, failure: failure}
@@ -456,7 +533,7 @@ func (b *browser) Render(c RenderContext) string {
 	case mid >= 5:
 		listH := min(max(wantList, 3), (mid-1)/2)
 		lines = append(lines, padTo(b.list.render(c, b.spec.columns, rows, listH, b.emptyText(info)), listH)...)
-		lines = append(lines, rule(c, "Detail"))
+		lines = append(lines, rule(c, b.paneTitle(c, rows)))
 		lines = append(lines, clip(b.pane(c, rows, mid-listH-1), mid-listH-1)...)
 	case b.modal():
 		// No room for both: the dialog the person has to answer wins.
@@ -550,17 +627,20 @@ func (b *browser) footer(c RenderContext, compact bool) []string {
 			hints = append([]Hint{{"enter", b.spec.primary}}, hints...)
 		}
 	case compact:
-		hints = []Hint{{"enter", "Actions"}, {"ctrl+p", "Palette"}, {"esc", "Back"}, {"q", "Quit"}}
+		hints = []Hint{{"enter", b.enterLabel()}, {"ctrl+p", "Palette"}, {"esc", "Back"}, {"q", "Quit"}}
 	default:
 		hints = []Hint{{"↑↓", "Move"}, {"/", "Filter"}}
 		switch {
 		case !b.spec.readOnly:
-			hints = append(hints, Hint{"enter", "Actions"})
+			hints = append(hints, Hint{"enter", b.enterLabel()})
 		case b.spec.primary != "":
 			hints = append(hints, Hint{"enter", b.spec.primary})
 		}
 		for _, s := range b.spec.shortcuts {
 			hints = append(hints, Hint{s.Key, s.Label})
+		}
+		if b.spec.live != nil {
+			hints = append(hints, Hint{keyPanel, "Live view"}, Hint{keyGrid, "Grid"})
 		}
 		hints = append(hints, paletteHints...)
 		hints = append(hints, Hint{"esc", "Back"}, Hint{"q", "Quit"})
@@ -572,6 +652,8 @@ func (b *browser) footer(c RenderContext, compact bool) []string {
 func (b *browser) pane(c RenderContext, rows []Row, room int) []string {
 	row, ok := b.list.selected(rows)
 	switch {
+	case b.livePanel() && !b.modal():
+		return b.livePane(c, row, ok, room)
 	case b.notice != nil:
 		return b.notice.render(c)
 	case b.form != nil:

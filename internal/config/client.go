@@ -88,6 +88,45 @@ type ClientAttach struct {
 	// SSHTargets maps the name of a Worker to the ssh target to reach it with
 	// ([user@]host[:port]), instead of the one the Worker announced.
 	SSHTargets map[string]string `json:"ssh_targets,omitempty"`
+	// DetachKey is the key of cf that leaves a live session and returns to where
+	// the person was (the TUI, or the shell): "ctrl+" and a letter, "]", "\\", "^"
+	// or "_". Absent, DefaultDetachKey. tmux's own C-] on the Worker stays as a
+	// fallback whatever this says.
+	DetachKey string `json:"detach_key,omitempty"`
+}
+
+// DefaultDetachKey is the key that leaves a live session when none is set.
+const DefaultDetachKey = "ctrl+]"
+
+// DetachByte is the byte a terminal sends for the detach key.
+func (a ClientAttach) DetachByte() (byte, error) {
+	key := a.DetachKey
+	if key == "" {
+		key = DefaultDetachKey
+	}
+	name, ok := strings.CutPrefix(strings.ToLower(key), "ctrl+")
+	if !ok || len(name) != 1 {
+		return 0, fmt.Errorf("attach.detach_key: %q is not ctrl+ and one key", key)
+	}
+	c := name[0]
+	switch {
+	case c == ']':
+		return 0x1d, nil
+	case c == '\\':
+		return 0x1c, nil
+	case c == '^':
+		return 0x1e, nil
+	case c == '_':
+		return 0x1f, nil
+	case c >= 'a' && c <= 'z':
+		// These are the keys that a terminal needs for itself: interrupt, end of
+		// input, suspend, and the ones that are Backspace, Tab, Enter.
+		if strings.ContainsRune("cdzhijm", rune(c)) {
+			return 0, fmt.Errorf("attach.detach_key: %q is a key that the session needs", key)
+		}
+		return c - 'a' + 1, nil
+	}
+	return 0, fmt.Errorf("attach.detach_key: %q is not a key cf can read", key)
 }
 
 // LoadClient reads client.json; a machine without one trusts the announcements.
@@ -110,6 +149,9 @@ func LoadClient(p Paths) (Client, error) {
 		if !domain.ValidSSHTarget(target) {
 			return Client{}, fmt.Errorf("config: %s: attach.ssh_targets[%q] is not [user@]host[:port]", p.ClientConfigFile(), worker)
 		}
+	}
+	if _, err := c.Attach.DetachByte(); err != nil {
+		return Client{}, fmt.Errorf("config: %s: %w", p.ClientConfigFile(), err)
 	}
 	if err := c.Notify.validate(); err != nil {
 		return Client{}, fmt.Errorf("config: %s: %w", p.ClientConfigFile(), err)

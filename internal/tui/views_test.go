@@ -92,6 +92,7 @@ type fakeBackend struct {
 	session  Attachment    // given instead of the fake ssh, when set
 	gate     chan struct{} // when set, Attach and Timeline wait for it to be closed
 	versions map[string][]v1.WorkflowVersion
+	screens  *fakeScreens // what OpenScreen serves
 }
 
 func (f *fakeBackend) Run(id string, in actions.Input) actions.Result {
@@ -141,7 +142,7 @@ func (f *fakeBackend) History(workflow string) ([]v1.WorkflowVersion, error) {
 }
 
 func newBackend() *fakeBackend {
-	return &fakeBackend{term: &fakeTerminal{}, timeline: map[string][]v1.Event{
+	return &fakeBackend{term: &fakeTerminal{}, screens: newFakeScreens(), timeline: map[string][]v1.Event{
 		"tsk_1": {
 			event(1, "12:29", "auth-refactor", "task created"),
 			event(2, "12:30", "auth-refactor", "run started on linux"),
@@ -218,7 +219,7 @@ func key(s string) tea.KeyPressMsg {
 	if len(r) == 1 {
 		return tea.KeyPressMsg{Code: r[0], Text: s}
 	}
-	codes := map[string]rune{"enter": tea.KeyEnter, "esc": tea.KeyEscape, "down": tea.KeyDown, "up": tea.KeyUp, "backspace": tea.KeyBackspace}
+	codes := map[string]rune{"enter": tea.KeyEnter, "esc": tea.KeyEscape, "down": tea.KeyDown, "up": tea.KeyUp, "backspace": tea.KeyBackspace, "left": tea.KeyLeft, "right": tea.KeyRight}
 	return tea.KeyPressMsg{Code: codes[s]}
 }
 

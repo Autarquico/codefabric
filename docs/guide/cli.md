@@ -17,7 +17,7 @@ Run `cf` with no arguments in a terminal to open [the TUI](../tui/). Otherwise i
 
 ## `cf attach`
 
-Open the live session of a Run in this terminal, through the Controller, with no ssh to the Worker: `cf attach <task|run>`. Everyone attached can type, as in a shared tmux, and each sees the others. Closing it does not end the Run; detach with Ctrl-]. The Run's tmux has no other keys: no prefix, no new windows, no command prompt, so nobody attached can open a shell on the Worker. If the Worker drops, `cf attach` exits with `CF_WORKER_OFFLINE`; attach again when it is back. A Worker that does not offer the relay (`cf worker run --no-attach-relay`, or one that predates it) is refused with an error that says it only supports `--ssh`: ssh is never used unless asked for.
+Open the live session of a Run in this terminal, through the Controller, with no ssh to the Worker: `cf attach <task|run>`. Everyone attached can type, as in a shared tmux, and each sees the others. Closing it does not end the Run; detach with Ctrl-] (or the key you set, see [the detach key](#the-detach-key)). The Run's tmux has no other keys besides a fallback `C-]` that also detaches: no prefix, no new windows, no command prompt, so nobody attached can open a shell on the Worker. If the Worker drops, `cf attach` exits with `CF_WORKER_OFFLINE`; attach again when it is back. A Worker that does not offer the relay (`cf worker run --no-attach-relay`, or one that predates it) is refused with an error that says it only supports `--ssh`: ssh is never used unless asked for.
 
 - `--read-only`: watch without sending what you type.
 - `--ssh`: attach over ssh straight to the Worker instead (needs the ssh target below).
@@ -36,6 +36,16 @@ It is off by default and needs two keys, both on:
 The shell is the login shell of the OS user the Worker runs as (from `/etc/passwd`, else `/bin/sh`), started with `-l` in the worktree of the Run, and it is not a tmux session. Its environment is minimal (`HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `LANG`, `TERM`): it does not inherit the environment of the Worker. It has the authority of that OS user: the worktree does not isolate it, and that includes the Worker's own config and keys under its home. Closing the shell kills the processes that share its terminal, including the jobs it started with `&`; one that deliberately left the terminal (`setsid`, `nohup` with a `disown`) keeps running, as it could for the OS user anyway, and a job started in the last fraction of a second before the shell exits by itself may too. Ctrl-] always ends the session. When the shell exits by itself, `cf shell` exits with the status of the shell and prints nothing; a refusal or a relay failure keeps its `CF_*` code. Every shell is audited: the `attach.opened` and `attach.closed` events carry the user, the Run, the Worker, the mode `shell` and the duration.
 
 - `--project`: narrow a Task name.
+
+### The detach key
+
+Ctrl-] leaves `cf attach` and `cf shell`, and the same key leaves a session you entered from [the TUI](../tui/#attaching). It is the key of `cf`, read on your side, so it works inside tmux. To use another, set `attach.detach_key` in `client.json` (in the config directory of `cf`, next to the credentials):
+
+```json
+{ "attach": { "detach_key": "ctrl+g" } }
+```
+
+The value is `ctrl+` and a letter, or one of `ctrl+]`, `ctrl+\`, `ctrl+^` and `ctrl+_` (in JSON, `"ctrl+\\"`). Keys the session needs are refused: `ctrl+c`, `ctrl+d`, `ctrl+z`, and `ctrl+h`, `ctrl+i`, `ctrl+j`, `ctrl+m` (Backspace, Tab and Enter). An invalid value is an error when you attach, not a silent default. If you run `cf` inside tmux, the key must not be tmux's prefix (`ctrl+b` by default) or another key tmux binds in the root table, or tmux takes it first. The Worker's tmux keeps `C-]` bound to detach as a fallback, whatever you set here.
 
 ## `cf claude`
 

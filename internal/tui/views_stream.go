@@ -229,7 +229,7 @@ func (l *logsScreen) screenID() uint64 { return l.id }
 // logsPicker is the Runs view, read only, with enter to follow.
 func logsPicker() viewSpec {
 	spec := runsDef().spec()
-	spec.route, spec.title, spec.readOnly, spec.shortcuts = RouteLogs, "Logs · pick a Run", true, nil
+	spec.route, spec.title, spec.readOnly, spec.shortcuts, spec.live = RouteLogs, "Logs · pick a Run", true, nil, nil
 	spec.primary = "Follow"
 	return spec
 }

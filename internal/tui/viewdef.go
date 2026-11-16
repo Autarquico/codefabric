@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli/actions"
 	"github.com/Autarquico/codefabric/internal/client"
 )
@@ -39,6 +40,8 @@ type viewDef[T any] struct {
 	suggest func(s *State, id, input string) []string
 	// needs are the lists of other views that the rows draw names from.
 	needs []Route
+	// live is the Run that the panel of an item shows, or why there is none.
+	live func(s *State, row Row) (v1.Run, string)
 
 	list   func(*State) *Feed[T]
 	source func(Feeds) FeedSource[T]
@@ -62,7 +65,7 @@ type feedFailedMsg struct {
 func (d viewDef[T]) spec() viewSpec {
 	return viewSpec{
 		route: d.route, title: d.title, kind: d.kind, columns: d.columns, empty: d.empty,
-		shortcuts: d.shortcuts, skip: d.skip, timeline: d.timeline, history: d.history, needs: d.needs,
+		shortcuts: d.shortcuts, skip: d.skip, live: d.live, timeline: d.timeline, history: d.history, needs: d.needs,
 		forms: d.forms, also: d.also, suggest: d.suggest, retitle: d.retitle, holds: d.holds, cliNote: d.cliNote,
 		feed: func(s *State) feedInfo {
 			f := d.list(s)

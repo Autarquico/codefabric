@@ -46,6 +46,7 @@ type Model struct {
 	send    func(tea.Msg)
 	feeding map[Route]context.CancelFunc
 	pal     paletteHost
+	prefs   *livePrefs // what the live view remembers for the session
 }
 
 // New builds the shell, at home.
@@ -56,14 +57,18 @@ func New(opts Options) *Model {
 	if opts.Location == nil {
 		opts.Location = time.Local
 	}
-	m := &Model{opts: opts, router: NewRouter(Home{}), theme: NewTheme(true), views: specs(), ctx: context.Background(), feeding: map[Route]context.CancelFunc{}}
+	m := &Model{opts: opts, router: NewRouter(Home{}), theme: NewTheme(true), views: specs(), ctx: context.Background(), feeding: map[Route]context.CancelFunc{}, prefs: &livePrefs{}}
 	env := screenEnv{Backend: opts.Backend, Feeds: opts.Feeds, ctx: func() context.Context { return m.ctx }, send: m.tell}
 	for route, spec := range m.views {
 		switch {
 		case spec.open != nil:
 			m.router.Register(route, func() Screen { return spec.open(env) })
 		case opts.Backend != nil:
-			m.router.Register(route, func() Screen { return newBrowser(spec, opts.Backend) })
+			m.router.Register(route, func() Screen {
+				b := newBrowser(spec, opts.Backend)
+				b.prefs = m.prefs
+				return b
+			})
 		}
 	}
 	m.registerPalette()
@@ -96,6 +101,7 @@ func (m *Model) stop() {
 		cancel()
 		delete(m.feeding, route)
 	}
+	m.router.CloseAll() // the screens' streams end with the shell
 }
 
 // Router is the stack of screens, for the milestones that add some.
@@ -119,6 +125,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // view ask for what it needs from the state it now has.
 func (m *Model) settle() tea.Cmd {
 	m.syncFeeds()
+	// A screen under another follows nothing of the live view: it is not seen.
+	for _, s := range m.router.Covered() {
+		if p, ok := s.(interface{ Park() }); ok {
+			p.Park()
+		}
+	}
 	if s, ok := m.router.Top().(interface {
 		Sync(RenderContext) tea.Cmd
 	}); ok {
@@ -151,11 +163,19 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case fatalMsg:
 		m.fatal = msg.err
 		return tea.Quit
+	case openGridMsg:
+		if m.router.Has(RouteGrid) {
+			m.router.Open(RouteGrid)
+		}
+		return nil
 	case answer:
 		// The answer of an asynchronous call goes to the screen that asked,
 		// wherever it is in the stack; if it is gone, nobody wants it. A prepared
 		// attach that nobody runs holds nothing (its process was never started).
 		cmd, found := m.router.Deliver(msg.origin(), msg)
+		if opened, ok := msg.(screenOpenedMsg); ok && !found && opened.stream != nil {
+			_ = opened.stream.Close() // the screen that asked for it is gone
+		}
 		if done, ok := msg.(paletteDoneMsg); ok && !found {
 			m.status = done.summary()
 		}

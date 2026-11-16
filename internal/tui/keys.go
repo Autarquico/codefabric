@@ -22,6 +22,7 @@ const (
 	RouteLogs      Route = "logs"
 	RouteInbox     Route = "inbox"
 	RouteSearch    Route = "search"
+	RouteGrid      Route = "grid"
 )
 
 type binding struct {

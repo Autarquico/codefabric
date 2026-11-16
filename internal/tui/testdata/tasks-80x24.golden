@@ -19,5 +19,6 @@
  12:44   agent analyzing failure
 
  ──────────────────────────────────────────────────────────────────────────────
- [↑↓] Move [/] Filter [enter] Actions [a] Attach [c] Cancel [d] Complete
- [x] Archive [ctrl+p] Actions [:] Command [esc] Back [q] Quit
+ [↑↓] Move [/] Filter [enter] Actions [a] Attach [s] Shell [c] Cancel
+ [d] Complete [x] Archive [v] Live view [V] Grid [ctrl+p] Actions [:] Command
+ [esc] Back [q] Quit

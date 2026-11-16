@@ -1,0 +1,32 @@
+ CODEFABRIC                                                                                                   ● healthy
+ ──────────────── Tasks · 3 ───────────────────────────────────────────────────────────────────────────────────────────
+   ID        STATE      WAITING   CREATED  NAME
+ › t-0001    running              12:29    auth-refactor
+   t-0002    running              12:29    infra
+   t-0003    running              12:29    payments
+
+ ──────────────── Live · r-0001 (try 1) · linux · also inside: mbp, omarch01 ──────────────────────────────────────────
+ compiling auth middleware
+ ✓ 41 tests passed�2J
+ a very long line that goes on and on and on and on and on and on and on and on and on and on and on and on and on and 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ [↑↓] Move [/] Filter [enter] Enter run [a] Attach [s] Shell [c] Cancel [d] Complete [x] Archive [v] Live view [V] Grid
+ [ctrl+p] Actions [:] Command [esc] Back [q] Quit
