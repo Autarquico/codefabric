@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
+	"sync"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 )
@@ -18,6 +20,20 @@ import (
 // internal/support/screen.Sanitize.
 type ScreenStream struct {
 	conn *AttachConn
+
+	last []byte // the newest screen Next returned; only Next touches it
+
+	mu    sync.Mutex
+	peers []v1.AttachPeer
+}
+
+// Peers is who the Controller last said is inside the Run (the writers and the
+// viewers of its session; screen streams are never listed). It is empty until
+// the Controller says, and it may be read from another goroutine than Next's.
+func (s *ScreenStream) Peers() []v1.AttachPeer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]v1.AttachPeer(nil), s.peers...)
 }
 
 // OpenScreen opens the screen stream of the Run of ref (an ID, a short ID or a
@@ -41,7 +57,10 @@ func (c *Client) OpenScreen(ctx context.Context, ref, project string, hz int) (*
 }
 
 // Next waits for the next screen and returns the latest one: if more than one
-// has already arrived, the older ones are dropped. The stream ending is a *domain.Error
+// has already arrived, the older ones are dropped. When the Controller says who
+// is inside the Run changed and no screen follows (the Run is idle), the last
+// screen is returned again, so that a reader that looks at Peers after each
+// Next learns of it. The stream ending is a *domain.Error
 // with the code the Controller or the Worker gave (CF_RUN_NOT_ATTACHABLE when the
 // Run ended, CF_WORKER_OFFLINE...), io.EOF if it simply closed, and a close frame
 // from the Worker is io.EOF too.
@@ -55,15 +74,31 @@ func (s *ScreenStream) Next() ([]byte, error) {
 		switch f.Type {
 		case v1.FrameData:
 			latest = f.Payload
+		case v1.FramePeers:
+			if peers, err := v1.ParsePeers(f.Payload); err == nil && s.setPeers(peers) && latest == nil && s.last != nil {
+				// Someone came or went and the Run is idle, so no screen is coming
+				// to carry the news: the last one is returned again, and Peers is new.
+				return s.last, nil
+			}
 		case v1.FrameError:
 			return nil, StreamError(f)
 		case v1.FrameClose:
 			return nil, io.EOF
 		}
 		if latest != nil && s.conn.r.Buffered() < v1.FrameHeaderBytes {
+			s.last = latest
 			return latest, nil // nothing more waiting, whatever the last frame was: this is the newest
 		}
 	}
+}
+
+// setPeers records who is inside and says whether it changed.
+func (s *ScreenStream) setPeers(peers []v1.AttachPeer) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := !slices.Equal(s.peers, peers)
+	s.peers = peers
+	return changed
 }
 
 // Close ends the stream.

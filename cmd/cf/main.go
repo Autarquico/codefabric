@@ -39,7 +39,7 @@ func options() cli.Options {
 	opts := cli.Options{Terminal: sshTerminal{}, Workflows: workflowAdopter, Sessions: session.New, Native: native}
 	// The actions of the TUI run the same commands, with this same composition.
 	opts.TUI = tuiWithNotifications(native, func(ctx context.Context, c *client.Client) error {
-		return tui.Run(ctx, c, actions.Runner{Options: opts})
+		return tui.Run(ctx, c, actions.Runner{Options: opts}, detachLabelOf())
 	})
 	return opts
 }

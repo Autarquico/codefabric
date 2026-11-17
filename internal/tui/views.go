@@ -19,7 +19,7 @@ import (
 func specs() map[Route]viewSpec {
 	all := []viewSpec{
 		tasksDef().spec(), runsDef().spec(), workersDef().spec(), workflowsDef().spec(), projectsDef().spec(),
-		activityView(), modelsView(), logsView(), inboxSpec(),
+		activityView(), modelsView(), logsView(), inboxSpec(), gridSpec(),
 	}
 	byRoute := make(map[Route]viewSpec, len(all))
 	for _, spec := range all {
@@ -40,10 +40,13 @@ func tasksDef() viewDef[v1.Task] {
 		columns:   []Column{{"ID", 9}, {"State", 10}, {"Waiting", 9}, {"Created", 8}, {"Name", 0}},
 		empty:     "No tasks yet",
 		skip:      skipForms,
-		shortcuts: []shortcut{{"a", "Attach", "run.attach"}, {"c", "Cancel", "task.cancel"}, {"d", "Complete", "task.complete"}, {"x", "Archive", "task.archive"}},
-		list:      func(s *State) *Feed[v1.Task] { return &s.Tasks },
-		source:    func(f Feeds) FeedSource[v1.Task] { return f.Tasks },
-		id:        func(t v1.Task) string { return t.ID },
+		shortcuts: []shortcut{{"a", "Attach", "run.attach"}, {"s", "Shell", "run.shell"}, {"c", "Cancel", "task.cancel"}, {"d", "Complete", "task.complete"}, {"x", "Archive", "task.archive"}},
+		// The panel needs the Runs of the Tasks, and the grid the Workers' names.
+		needs:  []Route{RouteRuns, RouteWorkers},
+		live:   liveOfTask,
+		list:   func(s *State) *Feed[v1.Task] { return &s.Tasks },
+		source: func(f Feeds) FeedSource[v1.Task] { return f.Tasks },
+		id:     func(t v1.Task) string { return t.ID },
 		row: func(t v1.Task, c RenderContext) Row {
 			return Row{
 				ID: t.ID, Label: taskName(t), Stamp: string(t.State) + "/" + string(t.WaitingReason),
@@ -78,8 +81,9 @@ func runsDef() viewDef[v1.Run] {
 		skip:    func(d actions.Descriptor) bool { return d.ID == "run.fork" || d.ID == "run.promote" },
 		// Publish is a capital: "p" is Projects on the home, and a key must not
 		// mean a navigation in one place and an outward action in the next.
-		shortcuts: []shortcut{{"a", "Attach", "run.attach"}, {"P", "Publish", "run.publish"}},
+		shortcuts: []shortcut{{"a", "Attach", "run.attach"}, {"s", "Shell", "run.shell"}, {"P", "Publish", "run.publish"}},
 		needs:     []Route{RouteTasks, RouteWorkers},
+		live:      liveOfRun,
 		list:      func(s *State) *Feed[v1.Run] { return &s.Runs },
 		source:    func(f Feeds) FeedSource[v1.Run] { return f.Runs },
 		id:        func(r v1.Run) string { return r.ID },

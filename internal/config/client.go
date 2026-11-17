@@ -88,10 +88,65 @@ type ClientAttach struct {
 	// SSHTargets maps the name of a Worker to the ssh target to reach it with
 	// ([user@]host[:port]), instead of the one the Worker announced.
 	SSHTargets map[string]string `json:"ssh_targets,omitempty"`
+	// DetachKey is the key of cf that leaves a live session and returns to where
+	// the person was (the TUI, or the shell): "ctrl+" and a letter, "]", "\\", "^"
+	// or "_". Absent, DefaultDetachKey. tmux's own C-] on the Worker stays as a
+	// fallback whatever this says.
+	DetachKey string `json:"detach_key,omitempty"`
+}
+
+// DefaultDetachKey is the key that leaves a live session when none is set.
+const DefaultDetachKey = "ctrl+]"
+
+// DetachByte is the byte a terminal sends for the detach key.
+func (a ClientAttach) DetachByte() (byte, error) {
+	key := a.DetachKey
+	if key == "" {
+		key = DefaultDetachKey
+	}
+	name, ok := strings.CutPrefix(strings.ToLower(key), "ctrl+")
+	if !ok || len(name) != 1 {
+		return 0, fmt.Errorf("attach.detach_key: %q is not ctrl+ and one key", key)
+	}
+	c := name[0]
+	switch {
+	case c == ']':
+		return 0x1d, nil
+	case c == '\\':
+		return 0x1c, nil
+	case c == '^':
+		return 0x1e, nil
+	case c == '_':
+		return 0x1f, nil
+	case c >= 'a' && c <= 'z':
+		// These are the keys that a terminal needs for itself: interrupt, end of
+		// input, suspend, and the ones that are Backspace, Tab, Enter.
+		if strings.ContainsRune("cdzhijm", rune(c)) {
+			return 0, fmt.Errorf("attach.detach_key: %q is a key that the session needs", key)
+		}
+		return c - 'a' + 1, nil
+	}
+	return 0, fmt.Errorf("attach.detach_key: %q is not a key cf can read", key)
+}
+
+// DetachLabel is how the detach key is spelled to a person: "Ctrl-]", "Ctrl-G".
+// It is "" when the key is not valid, so that what shows it shows nothing
+// rather than a key that does not work.
+func (a ClientAttach) DetachLabel() string {
+	if _, err := a.DetachByte(); err != nil {
+		return ""
+	}
+	key := a.DetachKey
+	if key == "" {
+		key = DefaultDetachKey
+	}
+	return "Ctrl-" + strings.ToUpper(key[len("ctrl+"):])
 }
 
 // LoadClient reads client.json; a machine without one trusts the announcements.
 // A target in it that is not a valid ssh target is an error here, not later.
+// The detach key is not checked here: only attaching needs it, so a bad one
+// stops an attach (DetachByte) and nothing else that reads this file.
 func LoadClient(p Paths) (Client, error) {
 	raw, err := os.ReadFile(p.ClientConfigFile())
 	if errors.Is(err, fs.ErrNotExist) {

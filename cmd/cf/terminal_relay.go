@@ -16,13 +16,45 @@ import (
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
 	"github.com/Autarquico/codefabric/internal/cli"
 	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codefabric/internal/config"
 	"github.com/Autarquico/codefabric/internal/domain"
 )
 
-// detachKey is the key of cf (Ctrl-]) that leaves a relay session. tmux's own
-// keys work too for a writer, but a read-only attach has none: nothing it types
-// reaches the Run, and this key is read here.
-const detachKey = 0x1d
+// detachKeyOf is the detach key of this machine, as the byte the terminal sends
+// and as the person reads it ("Ctrl-]"): the one in client.json, or Ctrl-]
+// (tmux's C-] on the Worker stays as a fallback). A config that cannot be read,
+// or a key that is not valid, is an error, not a silent default: a person who
+// set a key would otherwise not know theirs does nothing.
+func detachKeyOf() (byte, string, error) {
+	paths, err := config.ResolveFromEnv()
+	if err != nil {
+		return 0, "", err
+	}
+	cfg, err := config.LoadClient(paths)
+	if err != nil {
+		return 0, "", domain.NewError(domain.CodeInvalidRequest, err.Error(), nil)
+	}
+	key, err := cfg.Attach.DetachByte()
+	if err != nil {
+		return 0, "", domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("config: %s: %v", paths.ClientConfigFile(), err), nil)
+	}
+	return key, cfg.Attach.DetachLabel(), nil
+}
+
+// detachLabelOf is the detach key as a person reads it ("Ctrl-]"), for the TUI
+// to show before it hands over the terminal. A config that cannot be read, or a
+// key that is not valid, gives "": the attach says why when it is tried.
+func detachLabelOf() string {
+	paths, err := config.ResolveFromEnv()
+	if err != nil {
+		return ""
+	}
+	cfg, err := config.LoadClient(paths)
+	if err != nil {
+		return ""
+	}
+	return cfg.Attach.DetachLabel()
+}
 
 // screenReset undoes the modes a tmux client sets on a terminal: it leaves the
 // alternate screen, shows the cursor, turns off mouse reporting and bracketed
@@ -48,6 +80,10 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 		return 0, domain.NewError(domain.CodeInvalidRequest, "cf attach needs a terminal on its standard input", nil)
 	}
 	fd := int(in.Fd()) //nolint:gosec // a descriptor
+	leaveKey, keyName, err := detachKeyOf()
+	if err != nil {
+		return 0, err
+	}
 	mode := v1.AttachModeWrite
 	switch {
 	case s.req.Shell:
@@ -68,9 +104,9 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 			how = "read-only"
 		}
 		if mode == v1.AttachModeShell {
-			_, _ = fmt.Fprintf(stdio.Err, "shell in the worktree of %s; Ctrl-] closes it, the Run goes on\r\n", s.req.RunID)
+			_, _ = fmt.Fprintf(stdio.Err, "shell in the worktree of %s; %s closes it, the Run goes on\r\n", s.req.RunID, keyName)
 		} else {
-			_, _ = fmt.Fprintf(stdio.Err, "attached to %s (%s); Ctrl-] detaches, the Run goes on\r\n", s.req.RunID, how)
+			_, _ = fmt.Fprintf(stdio.Err, "attached to %s (%s); %s detaches, the Run goes on\r\n", s.req.RunID, how, keyName)
 		}
 	}
 	saved, err := term.MakeRaw(fd)
@@ -137,7 +173,7 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 	wg.Add(1)
 	go func() { // the keys of the person
 		defer wg.Done()
-		pumpKeys(fd, cancel, writes, conn, detach)
+		pumpKeys(fd, cancel, writes, conn, leaveKey, detach)
 	}()
 	defer cancel.fire() // before wg.Wait: the reader of keys stops at once
 	// Before wg.Wait too: a write blocked on a Controller that stopped reading
@@ -201,7 +237,7 @@ func (c *cancelPipe) close() { _ = c.w.Close(); _ = c.r.Close() }
 // pumpKeys reads the terminal until cancel fires or the person detaches. A
 // writer's keys go to the Run; a read-only attach reads them only to find the
 // detach key.
-func pumpKeys(fd int, cancel *cancelPipe, write bool, conn *client.AttachConn, detach func()) {
+func pumpKeys(fd int, cancel *cancelPipe, write bool, conn *client.AttachConn, leaveKey byte, detach func()) {
 	buf := make([]byte, 4096)
 	cfd := int(cancel.r.Fd()) //nolint:gosec // a descriptor
 	for {
@@ -231,7 +267,7 @@ func pumpKeys(fd int, cancel *cancelPipe, write bool, conn *client.AttachConn, d
 			detach()
 			return
 		}
-		keys, leave := keysBefore(buf[:n])
+		keys, leave := keysBefore(buf[:n], leaveKey)
 		if write && len(keys) > 0 {
 			if err := conn.WriteData(keys); err != nil {
 				return
@@ -245,9 +281,9 @@ func pumpKeys(fd int, cancel *cancelPipe, write bool, conn *client.AttachConn, d
 }
 
 // keysBefore is what was typed before the detach key, and whether it was typed.
-func keysBefore(p []byte) (keys []byte, leave bool) {
+func keysBefore(p []byte, key byte) (keys []byte, leave bool) {
 	for i, b := range p {
-		if b == detachKey {
+		if b == key {
 			return p[:i], true
 		}
 	}

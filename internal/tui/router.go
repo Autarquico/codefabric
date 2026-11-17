@@ -89,6 +89,18 @@ func (r *Router) drop(n int) {
 	r.stack = r.stack[:n]
 }
 
+// CloseAll tells every screen above home that it is gone; the shell ends.
+func (r *Router) CloseAll() { r.drop(1) }
+
+// Covered are the screens under the one in view, home excluded.
+func (r *Router) Covered() []Screen {
+	var out []Screen
+	for i := 1; i < len(r.stack)-1; i++ {
+		out = append(out, r.stack[i].screen)
+	}
+	return out
+}
+
 // Top is the screen in view.
 func (r *Router) Top() Screen { return r.stack[len(r.stack)-1].screen }
 

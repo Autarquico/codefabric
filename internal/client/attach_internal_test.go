@@ -105,3 +105,42 @@ func (b blockingAfter) Read(p []byte) (int, error) {
 }
 func (blockingAfter) Write(p []byte) (int, error) { return len(p), nil }
 func (blockingAfter) Close() error                { return nil }
+
+// A peers frame that changes the list while the Run is idle wakes Next with the
+// last screen again, so that the panel can show who came or went; one that
+// changes nothing does not.
+func TestScreenStream_APeersChangeWakesNextWithTheLastScreen(t *testing.T) {
+	var wire bytes.Buffer
+	write := func(f v1.Frame) {
+		t.Helper()
+		if err := v1.WriteFrame(&wire, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	one, _ := v1.PeersFrame([]v1.AttachPeer{{ID: "c1", Name: "mbp", Mode: v1.AttachModeWrite}})
+	two, _ := v1.PeersFrame([]v1.AttachPeer{{ID: "c1", Name: "mbp", Mode: v1.AttachModeWrite}, {ID: "c2", Name: "omarch01", Mode: v1.AttachModeView}})
+	write(one) // before any screen: nothing to return yet
+	write(v1.DataFrame([]byte("screen-1")))
+	s := &ScreenStream{conn: newAttachConn(blockingAfter{Reader: &wire})}
+
+	next := func() []byte {
+		t.Helper()
+		got := make(chan []byte, 1)
+		go func() { b, _ := s.Next(); got <- b }()
+		select {
+		case b := <-got:
+			return b
+		case <-time.After(2 * time.Second):
+			t.Fatal("Next did not return")
+			return nil
+		}
+	}
+	if got := next(); string(got) != "screen-1" || len(s.Peers()) != 1 {
+		t.Fatalf("first Next = %q with peers %v", got, s.Peers())
+	}
+	write(one) // the same list: nothing to say
+	write(two)
+	if got := next(); string(got) != "screen-1" || len(s.Peers()) != 2 {
+		t.Fatalf("after the list changed Next = %q with peers %v", got, s.Peers())
+	}
+}

@@ -826,4 +826,25 @@ func TestAttach_AScreenIsNotAPeer(t *testing.T) {
 	// the two of them and not the panel (readPeers waits for exactly this list).
 	_, _, _ = f.join(f.owner, v1.AttachModeView)
 	readPeers(t, writer, ownerID.IdentityID, ownerID.IdentityID)
+
+	// The panel is told who is inside, though it is not one of them: the TUI
+	// shows it in its title. It is told when it joins and whenever the list changes.
+	deadline := time.Now().Add(attachWait)
+	for {
+		must(t, wc.WriteData([]byte("screen")))
+		if _, err := s.Next(); err != nil {
+			t.Fatal(err)
+		}
+		if peers := s.Peers(); len(peers) == 2 {
+			for _, p := range peers {
+				if p.Mode == v1.AttachModeScreen {
+					t.Fatalf("the panel is listed among the peers: %+v", peers)
+				}
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the panel never learned who is inside: %+v", s.Peers())
+		}
+	}
 }

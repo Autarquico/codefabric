@@ -159,7 +159,7 @@ cf attach <task>           # the live session; closing it does not end the Run
 cf task show <task>        # the Task and its Runs
 ```
 
-`cf attach` goes over ssh to the Worker and opens the Run's session. Detach with Ctrl-]; the Run keeps going.
+`cf attach` opens the Run's session through the Controller, with no ssh to the Worker. Detach with Ctrl-] (configurable, see [the CLI reference](../cli/#the-detach-key)); the Run keeps going.
 
 ## When a Task needs you
 
@@ -278,8 +278,6 @@ If the Worker of the Run is down, `cf task pull --defer` cannot get a checkpoint
 
 These are specified and not built yet:
 
-- **Step inside a Run from the TUI.** A live view of each Run, and a key to enter it and leave it that is not the key of tmux, so it works with the TUI inside tmux. The session travels through the Controller, so `cf attach` will no longer need SSH to the Worker. Several people can type at once; the TUI shows who else is in, and `--read-only` stays.
-- **`cf shell <run>`.** A shell in the Run's worktree, on its Worker. Off by default, turned on by policy; every entry is recorded.
 - **Remote Runs in Claude Code.** The Workers and Runs of the pool listed from Claude Code, marked as remote, and entered from there. `cf claude install` will set it up.
 
 ## What is tested, and what is not
