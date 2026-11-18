@@ -420,3 +420,31 @@ func TestReadAnswer_Editing(t *testing.T) {
 		}
 	})
 }
+
+// reads hands out one chunk per Read, as a terminal does with what it has.
+type reads struct{ chunks []string }
+
+func (r *reads) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.chunks[0])
+	r.chunks = r.chunks[1:]
+	return n, nil
+}
+
+func TestReadAnswer_CRLFSplitAcrossReads(t *testing.T) {
+	for name, chunks := range map[string][]string{
+		"a plain paste":     {"HEAD\r", "\nTAIL\r\n"},
+		"a bracketed paste": {"\x1b[200~HEAD\r", "\nTAIL\x1b[201~", "\r"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := &reads{chunks}
+			more := func(time.Duration) bool { return len(in.chunks) > 0 }
+			got, err := readAnswer(bufio.NewReader(in), more)
+			if err != nil || string(got) != "HEAD\nTAIL" {
+				t.Errorf("= %q, %v; want %q", got, err, "HEAD\nTAIL")
+			}
+		})
+	}
+}

@@ -171,10 +171,8 @@ func readAnswer(r *bufio.Reader, more func(wait time.Duration) bool) ([]byte, er
 		case pasting && b != '\r' && b != '\n':
 			answer = append(answer, b)
 		case b == '\r' || b == '\n':
-			if b == '\r' && r.Buffered() > 0 { // CRLF is one line end
-				if next, _ := r.Peek(1); next[0] == '\n' {
-					_, _ = r.Discard(1)
-				}
+			if b == '\r' {
+				followedBy(r, more, "\n") // CRLF is one line end, even split across reads
 			}
 			if !pasting && r.Buffered() == 0 && !more(pasteWindow) {
 				return answer, nil
