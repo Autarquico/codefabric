@@ -6,10 +6,14 @@ status: active
 priority: P1
 size: L
 issue: 201
-prs: []
+prs: [204]
 related_issues: [201]
 depends_on: [live-attach, claude-code-adapter]
-related_specs: [codefabric-spec, live-attach, claude-code-adapter, logs-output-storage]
+related_specs:
+  - codefabric-spec
+  - live-attach
+  - claude-code-adapter
+  - logs-output-storage
 created: 2026-11-18
 updated: 2026-11-18
 ---

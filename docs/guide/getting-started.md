@@ -212,7 +212,9 @@ A Run asks for 2 CPUs and 4 GB by default. A Worker that offers less never takes
 cf project set <project> --cpu 2 --memory-mb 2048
 ```
 
-**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on. It prints more than the token, and `setup-token` is interactive, so it cannot be piped. At the prompt below, paste only the line that starts with `sk-ant-oat` (a terminal prompt reads one line). Or save the whole output to a file and feed that: `cf` keeps the `sk-ant-oat` line and says so.
+**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on. It prints more than the token, and `setup-token` is interactive, so it cannot be piped. The most reliable way is to save the whole output to a file and feed that: `cf` keeps the `sk-ant-oat` line, joins it if the terminal wrapped it, and says so. To keep the token out of your shell's history, never put it on the command line: use a file or the clipboard (`pbpaste | cf worker secrets set claude/oauth-token` on macOS).
+
+At the prompt, paste only the line that starts with `sk-ant-oat`. The prompt does not show what you paste. A paste that goes over several lines is one answer, whether its lines end in LF, CR or CRLF: a line end ends the answer only when nothing follows it within about 50 ms, so a wrapped paste is joined, with or without a final line end. In a terminal with bracketed paste the whole paste is kept whatever its timing and your own Enter ends the answer; in one without it, a paste that includes its final line end already ends the answer, so do not press Enter after it. If the two pastes still differ, `cf` says so and stores nothing: give the token from a file or the clipboard as above.
 
 ```sh
 cf worker secrets set claude/oauth-token
@@ -220,7 +222,11 @@ cf worker secrets set claude/oauth-token
 cf worker secrets set claude/oauth-token < setup-token.txt
 ```
 
-It reads the token from stdin, or asks for it twice without echo on a terminal, and prints `Stored secret claude/oauth-token (...) ...`. A Worker without the secret is not offered the Run (`CF_SECRET_UNAVAILABLE` in `cf run explain`).
+It reads the token from stdin, or asks for it twice without echo on a terminal, and prints `Stored secret claude/oauth-token (...) ...`. A Worker without the secret is not offered the Run (`CF_SECRET_UNAVAILABLE` in `cf run explain`). Only the Claude token is joined from several lines: for any other secret the prompt refuses an answer of several lines and stores nothing, so give a value of several lines, or one the terminal may wrap, on stdin.
+
+If a token was stored badly with an earlier version of `cf` (for example as two lines, or the code from the browser), `cf worker doctor` cannot tell, and a Run fails with `401 Invalid bearer token`: set it again with the command above.
+
+The value must look like a token (`sk-ant-oat…`): anything else, such as the code the browser shows, is refused with `CF_INVALID_REQUEST` and nothing is stored. `--force` stores it anyway and warns on stderr that Runs will likely fail with 401; `cf worker doctor` then warns on `auth:claude-code` until you set it again with the line `claude setup-token` prints.
 
 The Worker service finds `claude` and `codex` in its own `PATH`, not in that of your shell: if `cf worker show <worker>` lacks `harness:claude-code` and the log says `harness not offered harness=claude-code status=not-installed`, link the binary into a directory of the service's `PATH`, such as `~/.local/bin` (a tool manager like mise installs it elsewhere), and restart the Worker.
 

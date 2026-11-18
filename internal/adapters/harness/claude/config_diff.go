@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -57,7 +58,7 @@ func diff(host harness.Host, snap harness.NativeSnapshot) (configDiff, error) {
 		if inSnap[name] || !ok {
 			continue
 		}
-		if _, present, err := readSnapshotFiles(l.root(host), l); err != nil {
+		if _, present, err := readSnapshotFiles(l.root(host), l, &budget{}); err != nil {
 			return configDiff{}, err
 		} else if present {
 			d.changes = append(d.changes, harness.Change{Name: name, Kind: harness.Removed})
@@ -71,7 +72,7 @@ func diff(host harness.Host, snap harness.NativeSnapshot) (configDiff, error) {
 // the servers c has count: the rest is the person's.
 func compare(host harness.Host, c harness.Component) (harness.ChangeKind, error) {
 	l, _ := layoutOf(c.Name)
-	files, present, err := readSnapshotFiles(l.root(host), l)
+	files, present, err := readSnapshotFiles(l.root(host), l, &budget{})
 	if err != nil {
 		return "", err
 	}
@@ -124,13 +125,18 @@ func hasServers(host, want []byte) (bool, error) {
 
 // ValidateConfig checks that ~/.claude and ~/.claude.json are what the Adapter
 // reads: settings.json and .claude.json valid JSON objects, CLAUDE.md a regular
-// file, the directories of regular files.
+// file, the directories of regular files (and the links of skills, commands and
+// agents that readFiles follows).
 func (Adapter) ValidateConfig(_ context.Context, host harness.Host) (harness.Validation, error) {
 	var v harness.Validation
+	var used budget
 	for _, l := range layouts {
-		_, _, err := readSnapshotFiles(l.root(host), l)
+		_, _, err := readSnapshotFiles(l.root(host), l, &used)
 		if err != nil {
 			v.Issues = append(v.Issues, harness.ValidationIssue{Component: l.name, Message: err.Error()})
+			if errors.Is(err, errTooBig) { // the next ones would only be blamed for it
+				break
+			}
 		}
 	}
 	return v, nil

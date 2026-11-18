@@ -2,11 +2,15 @@ package claude_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
@@ -281,5 +285,304 @@ func TestValidateConfigNamesTheComponentsThatAreBroken(t *testing.T) {
 	h, _ = newHost(t, homeFiles())
 	if v, err := (claude.Adapter{}).ValidateConfig(context.Background(), h); err != nil || len(v.Issues) != 0 {
 		t.Errorf("a good home: %+v, %v", v, err)
+	}
+}
+
+// linkedSkill is a ~/.claude/skills/<name> link to dir.
+func linkedSkill(t *testing.T, home, name, dir string) {
+	t.Helper()
+	skills := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(skills, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dir, filepath.Join(skills, name)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// skillDir is a directory outside ~/.claude with one skill in it.
+func skillDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "pkg")
+	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for p, c := range map[string]string{"SKILL.md": "# tdd", "scripts/run.sh": "echo hi"} {
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(c), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func skillsOf(t *testing.T, h harness.Host) []harness.File {
+	t.Helper()
+	snap, err := claude.Adapter{}.SnapshotConfig(t.Context(), h, harness.SnapshotOptions{Components: []string{"skills"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Components) != 1 {
+		t.Fatalf("components = %+v", snap.Components)
+	}
+	return snap.Components[0].Files
+}
+
+func TestSnapshotFollowsAFirstLevelLinkToADirectoryOfTheUser(t *testing.T) {
+	h, home := newHost(t, nil)
+	linkedSkill(t, home, "tdd", skillDir(t))
+	var got []string
+	for _, f := range skillsOf(t, h) {
+		got = append(got, f.Path)
+	}
+	if !slices.Equal(got, []string{"skills/tdd/SKILL.md", "skills/tdd/scripts/run.sh"}) {
+		t.Errorf("files = %v", got)
+	}
+}
+
+func TestSnapshotFollowsALinkToADirectoryOfRoot(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root: a directory of root is a directory of the user")
+	}
+	entries, _ := os.ReadDir("/usr/share")
+	tried := 0
+	for _, e := range entries {
+		p := filepath.Join("/usr/share", e.Name())
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.IsDir() || fi.Sys().(*syscall.Stat_t).Uid != 0 || fi.Mode().Perm()&0o022 != 0 {
+			continue
+		}
+		if tried++; tried > 20 { // a few small ones are enough; the rest may be big
+			break
+		}
+		h, home := newHost(t, nil)
+		linkedSkill(t, home, "sys", p)
+		snap, err := claude.Adapter{}.SnapshotConfig(t.Context(), h, harness.SnapshotOptions{Components: []string{"skills"}})
+		if err != nil || len(snap.Components) == 0 || len(snap.Components[0].Files) == 0 {
+			continue
+		}
+		for _, f := range snap.Components[0].Files {
+			if !strings.HasPrefix(f.Path, "skills/sys/") {
+				t.Errorf("file %q is not recorded under the link", f.Path)
+			}
+		}
+		return
+	}
+	t.Skip("no root-owned directory of plain files among the first under /usr/share to link to")
+}
+
+func TestSnapshotRefusesALinkItDoesNotTrust(t *testing.T) {
+	for name, build := range map[string]func(t *testing.T, home string) string{
+		"to a file": func(t *testing.T, _ string) string {
+			f := filepath.Join(t.TempDir(), "a.md")
+			_ = os.WriteFile(f, []byte("x"), 0o600)
+			return f
+		},
+		"inside the target": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Symlink(filepath.Join(dir, "SKILL.md"), filepath.Join(dir, "scripts", "other"))
+			return dir
+		},
+		"to a group-writable dir": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Chmod(dir, 0o775) //nolint:gosec // the test needs a loose mode
+			return dir
+		},
+		"a subdirectory others can write": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Chmod(filepath.Join(dir, "scripts"), 0o777) //nolint:gosec // the test needs a loose mode
+			return dir
+		},
+		"a file others can write": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Chmod(filepath.Join(dir, "SKILL.md"), 0o666) //nolint:gosec // the test needs a loose mode
+			return dir
+		},
+		"below a directory others can write": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Chmod(filepath.Dir(dir), 0o775) //nolint:gosec // the test needs a loose mode
+			return dir
+		},
+		"a FIFO inside": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o600)
+			return dir
+		},
+		"to a world-writable dir": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Chmod(dir, 0o757) //nolint:gosec // the test needs a loose mode
+			return dir
+		},
+		"to a link": func(t *testing.T, _ string) string {
+			second := filepath.Join(t.TempDir(), "second")
+			_ = os.Symlink(skillDir(t), second)
+			return second
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, home := newHost(t, nil)
+			linkedSkill(t, home, "x", build(t, home))
+			_, err := claude.Adapter{}.SnapshotConfig(t.Context(), h, harness.SnapshotOptions{})
+			if err == nil {
+				t.Fatal("the link was followed")
+			}
+			if strings.Contains(name, "inside") || strings.Contains(name, "file others") || strings.Contains(name, "subdirectory") {
+				if !strings.Contains(err.Error(), "skills/x/") {
+					t.Errorf("the error does not name the path: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestSnapshotRefusesALinkBelowTheFirstLevel(t *testing.T) {
+	h, home := newHost(t, map[string]string{".claude/skills/a/SKILL.md": "x"})
+	if err := os.Symlink(skillDir(t), filepath.Join(home, ".claude", "skills", "a", "deep")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{}); err == nil {
+		t.Error("a link at depth 2 was followed")
+	}
+}
+
+func TestSnapshotHasASizeLimitThatCountsLinkedFiles(t *testing.T) {
+	h, home := newHost(t, nil)
+	dir := skillDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "big.bin"), make([]byte, 17<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkedSkill(t, home, "big", dir)
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{}); err == nil || !strings.Contains(err.Error(), "too big") {
+		t.Errorf("err = %v", err)
+	}
+	// The same bytes in a real file are counted too.
+	h2, _ := newHost(t, map[string]string{".claude/commands/big.md": strings.Repeat("x", 17<<20)})
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h2, harness.SnapshotOptions{}); err == nil {
+		t.Error("a real file over the limit was taken")
+	}
+	// And so are too many files.
+	files := map[string]string{}
+	for i := range 2001 {
+		files[fmt.Sprintf(".claude/agents/a%d.md", i)] = "x"
+	}
+	h3, _ := newHost(t, files)
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h3, harness.SnapshotOptions{}); err == nil {
+		t.Error("too many files were taken")
+	}
+}
+
+func TestSnapshotLimitCoversTheWholeSnapshot(t *testing.T) {
+	half := strings.Repeat("x", 9<<20)
+	h, _ := newHost(t, map[string]string{".claude/commands/a.md": half, ".claude/agents/b.md": half})
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{}); err == nil || !strings.Contains(err.Error(), "too big") {
+		t.Errorf("two components of 9 MiB: %v", err)
+	}
+}
+
+// A link target swapped for a link to a private directory while the snapshot
+// is taken is never followed: the directory opened is the one that was checked.
+func TestSnapshotDoesNotFollowATargetSwappedForALink(t *testing.T) {
+	h, home := newHost(t, nil)
+	parent := t.TempDir()
+	target := filepath.Join(parent, "pkg")
+	good := filepath.Join(parent, "good")
+	if err := os.MkdirAll(good, 0o755); err != nil { //nolint:gosec // a directory of plain files
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(good, "SKILL.md"), []byte("# ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	private := filepath.Join(t.TempDir(), "dotssh")
+	if err := os.MkdirAll(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(private, "id_ed25519"), []byte("PRIVATE KEY"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(good, target); err != nil {
+		t.Fatal(err)
+	}
+	linkedSkill(t, home, "tdd", target)
+	var stop atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		link := filepath.Join(parent, "evil")
+		for !stop.Load() {
+			_ = os.Symlink(private, link)
+			_ = os.Rename(target, good)
+			_ = os.Rename(link, target) // the target is a link to private
+			_ = os.Rename(target, link)
+			_ = os.Rename(good, target) // and a directory again
+			_ = os.Remove(link)
+		}
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := claude.Adapter{}.SnapshotConfig(t.Context(), h, harness.SnapshotOptions{Components: []string{"skills"}})
+		if err != nil || len(snap.Components) == 0 {
+			continue
+		}
+		for _, f := range snap.Components[0].Files {
+			if strings.Contains(string(f.Content), "PRIVATE KEY") {
+				stop.Store(true)
+				<-done
+				t.Fatalf("followed a swapped link: %s", f.Path)
+			}
+		}
+	}
+	stop.Store(true)
+	<-done
+}
+
+func TestApplyConfigWritesRealFilesForALinkedSkill(t *testing.T) {
+	h, home := newHost(t, nil)
+	linkedSkill(t, home, "tdd", skillDir(t))
+	snap, err := claude.Adapter{}.SnapshotConfig(t.Context(), h, harness.SnapshotOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := (claude.Adapter{}).ValidateConfig(t.Context(), h); err != nil || len(v.Issues) > 0 {
+		t.Fatalf("validate: %+v %v", v, err)
+	}
+	dir, _ := applyRun(t, h, snap, false)
+	for _, p := range []string{"skills/tdd/SKILL.md", "skills/tdd/scripts/run.sh"} {
+		fi, err := os.Lstat(filepath.Join(dir, p))
+		if err != nil || !fi.Mode().IsRegular() {
+			t.Errorf("%s: %v %v", p, fi, err)
+		}
+	}
+}
+
+// A real intermediate link of the user, in a directory the user and root own,
+// leads to a directory of the user: followed, as the kernel would.
+func TestSnapshotFollowsAnIntermediateLinkOfTheUser(t *testing.T) {
+	h, home := newHost(t, nil)
+	base := t.TempDir()
+	dir := filepath.Join(base, "releases", "v1", "tdd")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("# tdd"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(base, "releases", "v1"), filepath.Join(base, "current")); err != nil {
+		t.Fatal(err)
+	}
+	linkedSkill(t, home, "tdd", filepath.Join(base, "current", "tdd"))
+	files := skillsOf(t, h)
+	if len(files) != 1 || files[0].Path != "skills/tdd/SKILL.md" {
+		t.Errorf("files = %+v", files)
+	}
+}
+
+// Links that loop are refused, not followed forever.
+func TestSnapshotRefusesALoopOfLinks(t *testing.T) {
+	h, home := newHost(t, nil)
+	base := t.TempDir()
+	_ = os.Symlink(filepath.Join(base, "b"), filepath.Join(base, "a"))
+	_ = os.Symlink(filepath.Join(base, "a"), filepath.Join(base, "b"))
+	linkedSkill(t, home, "x", filepath.Join(base, "a", "x"))
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{}); err == nil {
+		t.Error("a loop of links was followed")
 	}
 }

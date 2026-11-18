@@ -227,6 +227,11 @@ func TestClaudeAuth(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		{name: "stored with a bad format", want: v1.ComponentWarn, action: "vuelve a guardarlo con la línea que imprime `claude setup-token`: cf worker secrets set claude/oauth-token en box", setup: func(t *testing.T, _ *host, s *secretsfile.Store) {
+			if err := s.Set(t.Context(), claude.OAuthTokenRef, []byte(secretValue), nil, secrets.BackendFile, secrets.WithBadFormat()); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{name: "credentials file", want: v1.ComponentOK, setup: func(t *testing.T, h *host, _ *secretsfile.Store) { login(t, h) }},
 		{name: "keychain on macOS", goos: "darwin", want: v1.ComponentOK, setup: func(_ *testing.T, h *host, _ *secretsfile.Store) { h.commands["security"] = 0 }},
 		{name: "no keychain item on macOS", goos: "darwin", want: v1.ComponentFail, setup: func(_ *testing.T, h *host, _ *secretsfile.Store) { h.commands["security"] = 44 }, action: "claude login en box"},

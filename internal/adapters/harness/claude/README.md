@@ -33,7 +33,17 @@ Registered in the binaries: `cmd/cf` and the Worker daemon
    managed. `settings.json` and `mcpServers` are read as JSON and written
    again from what was parsed: keys sorted, two spaces, numbers as written.
    The unit of `mcpServers` is the file `.claude.json` with that one field.
-   A directory with anything but regular files (a symlink) is an error.
+   A directory with anything but regular files (a symlink) is an error, with one
+   exception: a symlink that is a direct child of `skills/`, `commands/` or
+   `agents/` is followed once, and its files are recorded as if they were
+   there. The target must be a directory that is not itself a link; it, and
+   every directory above it up to `/`, must be owned by the current user or
+   root and not writable by group or others (a sticky directory such as `/tmp`
+   is accepted); it is opened and the directory opened must be the one that
+   was checked. Inside it, every directory and file must meet the same owner and
+   write-bit rule, and any symlink is an error; the whole component is refused,
+   naming the path. A snapshot holds at most 2000 files and 16 MiB in all,
+   linked or not.
 
    Secrets, a closed policy: every string value of an `env` object (in
    `settings.json` and in an MCP server) and of a `headers` object (in an MCP

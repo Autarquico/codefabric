@@ -64,6 +64,7 @@ func newSecretsCmd() *cobra.Command {
 func newSecretsSetCmd() *cobra.Command {
 	var projects []string
 	var backend, user string
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "set <ref>",
 		Short: "Store a secret under ref, reading its value from stdin or a prompt",
@@ -74,7 +75,8 @@ func newSecretsSetCmd() *cobra.Command {
 			"in the keyring of this machine (macOS Keychain, Secret Service on Linux) and only a pointer to it\n" +
 			"in the catalog; it has at most " + fmt.Sprint(keyring.MaxValueLen) + " bytes there. --user is the Basic-auth\n" +
 			"username of a git credential (the origin_secret of a Project); without it, " + secrets.DefaultUser + ". It stays on\n" +
-			"this machine.",
+			"this machine. The value of " + claude.OAuthTokenRef + " must be the sk-ant-oat... token that `claude setup-token`\n" +
+			"prints (from its output, or wrapped across lines, the token alone is kept); --force stores another anyway.",
 		Example: "  printf %s \"$TOKEN\" | cf worker secrets set github/token\n  cf worker secrets set npm/token --project project_01J...\n" +
 			"  printf %s \"$TOKEN\" | cf worker secrets set github/token --backend keyring\n" +
 			"  printf %s \"$TOKEN\" | cf worker secrets set gitlab/token --user deploy-bot",
@@ -99,7 +101,7 @@ func newSecretsSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			value, err := readValue(cmd.Context(), cmd.InOrStdin(), cmd.ErrOrStderr(), ref)
+			value, badFormat, err := readValue(cmd.Context(), cmd.InOrStdin(), cmd.ErrOrStderr(), ref, force)
 			if err != nil {
 				return err
 			}
@@ -110,8 +112,16 @@ func newSecretsSetCmd() *cobra.Command {
 			if err := cmd.Context().Err(); err != nil {
 				return cancelled()
 			}
-			if err := store.Set(cmd.Context(), ref, value, projects, backend, secrets.WithUser(user)); err != nil {
+			setOpts := []secrets.SetOption{secrets.WithUser(user)}
+			if badFormat {
+				setOpts = append(setOpts, secrets.WithBadFormat())
+			}
+			if err := store.Set(cmd.Context(), ref, value, projects, backend, setOpts...); err != nil {
 				return secretsError(err)
+			}
+			if badFormat {
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: this does not look like a Claude token: Runs will likely fail with 401, "+
+					"and `cf worker doctor` warns on auth:claude-code until you set it again.")
 			}
 			meta, err := secretMeta(cmd.Context(), store, ref)
 			if err != nil {
@@ -127,6 +137,7 @@ func newSecretsSetCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&backend, "backend", secrets.BackendFile, "where the value is kept: file (the catalog) or keyring (the OS keyring)")
 	f.StringVar(&user, "user", "", "Basic-auth username of a git credential (default: "+secrets.DefaultUser+")")
+	f.BoolVar(&force, "force", false, "store the value of "+claude.OAuthTokenRef+" even if it does not look like a Claude token")
 	f.StringArrayVar(&projects, "project", nil, "only Runs of this Project may use it, by Project ID; repeatable (default: any Project)")
 	f.String(valueFlag, "", "")
 	f.Lookup(valueFlag).NoOptDefVal = " "
@@ -237,11 +248,13 @@ func checkSecretArgs(ref string, projects []string) error {
 }
 
 // readValue is the value of a secret: typed twice at a prompt when in is a
-// terminal, else in up to its end, without one final newline. It ends early,
-// storing nothing, when ctx does.
-func readValue(ctx context.Context, in io.Reader, prompt io.Writer, ref string) ([]byte, error) {
+// terminal, else in up to its end, without one final newline. Either way it
+// is cleaned by normalizeValue. badFormat says that it was kept although it
+// is not what ref expects, because force was given. It ends early, storing
+// nothing, when ctx does.
+func readValue(ctx context.Context, in io.Reader, prompt io.Writer, ref string, force bool) (value []byte, badFormat bool, err error) {
 	if tty, ok := in.(*os.File); ok && isTerminal(tty) {
-		return promptValue(ctx, tty, prompt, ref)
+		return promptValue(ctx, tty, prompt, ref, force)
 	}
 	read := make(chan []byte, 1)
 	failed := make(chan error, 1)
@@ -255,47 +268,94 @@ func readValue(ctx context.Context, in io.Reader, prompt io.Writer, ref string) 
 	}()
 	select {
 	case raw := <-read:
-		value, _ := bytes.CutSuffix(raw, []byte("\n"))
-		if ref == claude.OAuthTokenRef && len(value) <= domain.MaxSecretValueLen { // input cut at the cap may hold a cut token
-			var err error
-			if value, err = oauthTokenLine(value, prompt); err != nil {
-				return nil, err
-			}
-		}
-		return value, checkValue(value)
+		defer clear(raw)
+		return normalizeValue(ref, raw, prompt, force)
 	case err := <-failed:
-		return nil, fmt.Errorf("reading the value from stdin: %w", err)
+		return nil, false, fmt.Errorf("reading the value from stdin: %w", err)
 	case <-ctx.Done():
-		return nil, cancelled()
+		return nil, false, cancelled()
 	}
+}
+
+// normalizeValue is the value of ref in what was given, from stdin or from a
+// prompt: without one final newline; for the Claude token, the token alone of
+// what `claude setup-token` prints, joined if it was wrapped across lines; and
+// checked for size. The Claude token must also look like one, unless force:
+// badFormat is then true when it does not. notice is told what was dropped.
+func normalizeValue(ref string, raw []byte, notice io.Writer, force bool) (value []byte, badFormat bool, err error) {
+	value, _ = bytes.CutSuffix(raw, []byte("\n"))
+	isToken := ref == claude.OAuthTokenRef
+	if isToken && len(value) <= domain.MaxSecretValueLen { // input cut at the cap may hold a cut token
+		if value, err = oauthTokenLine(value, notice); err != nil {
+			return nil, false, err
+		}
+	}
+	if err := checkValue(value); err != nil {
+		return nil, false, err
+	}
+	if isToken && !oauthTokenPattern.Match(value) {
+		if !force {
+			return nil, false, invalid("this does not look like a Claude token: the expected value is the sk-ant-oat... line " +
+				"that `claude setup-token` prints at the end, not the code from the browser. Nothing was stored; --force stores it anyway")
+		}
+		badFormat = true
+	}
+	return bytes.Clone(value), badFormat, nil // its own copy: raw is cleared by the caller
 }
 
 // oauthTokenPattern is the token `claude setup-token` makes.
 var oauthTokenPattern = regexp.MustCompile(`^sk-ant-oat\S+$`)
 
+// tokenTail is what a line holds when it goes on a token wrapped across lines.
+var tokenTail = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
 // oauthTokenLine is the token of what was pasted from `claude setup-token`,
-// which prints more than the token. A value of one line is left as it is.
+// which prints more than the token. A token the terminal wrapped across lines
+// is joined: the lines after the one that starts it, up to the first that is
+// blank or not made of token characters. A value of one line is its trimmed
+// self.
 func oauthTokenLine(value []byte, notice io.Writer) ([]byte, error) {
-	var lines [][]byte
+	var lines [][]byte // blank lines kept: they end a wrapped token
+	var filled int
 	for line := range bytes.SplitSeq(value, []byte("\n")) {
-		if line = bytes.TrimSpace(line); len(line) > 0 {
-			lines = append(lines, line)
+		line = bytes.TrimSpace(line)
+		if len(line) > 0 {
+			filled++
 		}
+		lines = append(lines, line)
 	}
-	if len(lines) <= 1 {
-		return value, nil
+	if filled <= 1 {
+		return bytes.TrimSpace(value), nil
 	}
-	var found [][]byte
-	for _, line := range lines {
-		if oauthTokenPattern.Match(line) {
-			found = append(found, line)
+	start := -1
+	for i, line := range lines {
+		if !oauthTokenPattern.Match(line) {
+			continue
 		}
+		if start >= 0 {
+			start = -2
+			break
+		}
+		start = i
 	}
-	if len(found) != 1 {
+	if start < 0 {
 		return nil, invalid("the input has several lines and not exactly one is a token of the form sk-ant-oat...: paste only the token. Nothing was stored")
 	}
-	_, _ = fmt.Fprintln(notice, "kept the token line from the pasted output")
-	return found[0], nil
+	token := bytes.Clone(lines[start])
+	joined := 1
+	for _, line := range lines[start+1:] {
+		if !tokenTail.Match(line) {
+			break
+		}
+		token = append(token, line...)
+		joined++
+	}
+	if joined > 1 {
+		_, _ = fmt.Fprintf(notice, "joined the token from %d lines of the pasted output\n", joined)
+	} else {
+		_, _ = fmt.Fprintln(notice, "kept the token line from the pasted output")
+	}
+	return token, nil
 }
 
 // checkValue is domain.CheckSecretValue with a message of its own: a value cut

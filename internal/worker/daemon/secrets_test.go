@@ -1,10 +1,13 @@
 package daemon
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -167,6 +170,20 @@ func storedValue(t *testing.T, w *keyringWorker, ref string) string {
 	return string(got.Value)
 }
 
+func TestSecretsSet_OAuthTokenWrappedAcrossLinesSaysItWasJoined(t *testing.T) {
+	w := newKeyringWorker(t)
+	out, err := cf(t, pastedToken[:20]+"\r\n"+pastedToken[20:30]+"\r\n"+pastedToken[30:]+"\r\n", "set", "claude/oauth-token")
+	if err != nil {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	if !strings.Contains(out, "joined the token from 3 lines of the pasted output") || strings.Contains(out, "kept the token line") {
+		t.Errorf("output = %s", out)
+	}
+	if got := storedValue(t, w, "claude/oauth-token"); got != pastedToken {
+		t.Errorf("the stored value is not the whole token (%d bytes)", len(got))
+	}
+}
+
 func TestSecretsSet_OAuthTokenKeepsTheTokenLineOfWhatSetupTokenPrints(t *testing.T) {
 	w := newKeyringWorker(t)
 	pasted := "Your OAuth token (valid for 1 year):\n\n" + pastedToken + "\n\nStore this token securely.\n"
@@ -182,15 +199,128 @@ func TestSecretsSet_OAuthTokenKeepsTheTokenLineOfWhatSetupTokenPrints(t *testing
 	}
 }
 
-func TestSecretsSet_OAuthTokenOfOneLineIsStoredAsGiven(t *testing.T) {
+func TestSecretsSet_OAuthTokenThatIsNotATokenIsRefusedUnlessForced(t *testing.T) {
 	w := newKeyringWorker(t)
 	out, err := cf(t, "not-a-token-at-all-but-one-line\n", "set", "claude/oauth-token")
-	if err != nil || strings.Contains(out, "kept the token line") {
+	if err == nil || !errors.Is(err, domain.NewError(domain.CodeInvalidRequest, "", nil)) || !strings.Contains(err.Error(), "--force") ||
+		!strings.Contains(err.Error(), "claude setup-token") || strings.Contains(out+err.Error(), "not-a-token") {
 		t.Fatalf("set: %v: %s", err, out)
+	}
+	if _, err := w.store.Get(t.Context(), "claude/oauth-token"); err == nil {
+		t.Fatal("something was stored on refusal")
+	}
+	if out, err := cf(t, "not-a-token-at-all-but-one-line\n", "set", "claude/oauth-token", "--force"); err != nil || !strings.Contains(out, "will likely fail with 401") {
+		t.Fatalf("forced set: %v: %s", err, out)
 	}
 	if got := storedValue(t, w, "claude/oauth-token"); got != "not-a-token-at-all-but-one-line" {
 		t.Errorf("stored %q", got)
 	}
+	if m := metaOf(t, w, "claude/oauth-token"); m.Format != secrets.FormatUnexpected {
+		t.Errorf("metadata = %+v, want an unexpected format", m)
+	}
+	// A token set again, even forced, leaves no doubt behind.
+	if out, err := cf(t, pastedToken, "set", "claude/oauth-token", "--force"); err != nil || strings.Contains(out, "401") {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	if m := metaOf(t, w, "claude/oauth-token"); m.Format != "" {
+		t.Errorf("format = %q, want unknown", m.Format)
+	}
+}
+
+func metaOf(t *testing.T, w *keyringWorker, ref string) secrets.Metadata {
+	t.Helper()
+	metas, err := w.store.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range metas {
+		if m.Ref == ref {
+			return m
+		}
+	}
+	t.Fatalf("no secret %s", ref)
+	return secrets.Metadata{}
+}
+
+func TestSecretsSet_OtherRefsAreNotCheckedForATokenForm(t *testing.T) {
+	w := newKeyringWorker(t)
+	if out, err := cf(t, "not-a-token-at-all-but-one-line\n", "set", "other/secret"); err != nil {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	if got := metaOf(t, w, "other/secret").Format; got != "" {
+		t.Errorf("format = %q for another ref, want unknown", got)
+	}
+}
+
+func TestNormalizeValue(t *testing.T) {
+	tail := pastedToken[20:]
+	head := pastedToken[:20]
+	for name, tc := range map[string]struct{ raw, want string }{
+		"one line":          {pastedToken + "\n", pastedToken},
+		"wrapped":           {head + "\n" + tail + "\n", pastedToken},
+		"wrapped in three":  {head + "\n" + tail[:5] + "\n" + tail[5:] + "\n", pastedToken},
+		"setup-token":       {"Your OAuth token (valid for 1 year):\n\n" + pastedToken + "\n\nStore this token securely.\n", pastedToken},
+		"wrapped in output": {"Your OAuth token:\n\n" + head + "\n" + tail + "\n\nStore this token securely.\n", pastedToken},
+		"a word after":      {pastedToken + "\nDone\n", pastedToken + "Done"}, // indistinguishable from a wrapped line
+		"crlf":              {pastedToken + "\r\n", pastedToken},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, bad, err := normalizeValue("claude/oauth-token", []byte(tc.raw), io.Discard, false)
+			if err != nil || bad || string(got) != tc.want {
+				t.Errorf("= %q, %v, %v; want %q", got, bad, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadAnswer(t *testing.T) {
+	never := func(time.Duration) bool { return false }
+	t.Run("a wrapped paste is one answer", func(t *testing.T) {
+		got, err := readAnswer(bufio.NewReader(strings.NewReader("abc\ndef\n")), never)
+		if err != nil || string(got) != "abc\ndef" {
+			t.Errorf("= %q, %v", got, err)
+		}
+	})
+	t.Run("a single line", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader("abc\r\n"))
+		got, err := readAnswer(r, never)
+		if err != nil || string(got) != "abc" {
+			t.Errorf("= %q, %v", got, err)
+		}
+	})
+	t.Run("lines that arrive later within the window", func(t *testing.T) {
+		pending := []string{"def\n"}
+		pr, pw := io.Pipe()
+		go func() {
+			_, _ = pw.Write([]byte("abc\n"))
+		}()
+		r := bufio.NewReader(pr)
+		more := func(time.Duration) bool {
+			if len(pending) == 0 {
+				return false
+			}
+			go func(s string) { _, _ = pw.Write([]byte(s)) }(pending[0])
+			pending = pending[1:]
+			return true
+		}
+		got, err := readAnswer(r, more)
+		if err != nil || string(got) != "abc\ndef" {
+			t.Errorf("= %q, %v", got, err)
+		}
+	})
+	t.Run("two pastes that differ", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r := bufio.NewReader(pr)
+		go func() {
+			_, _ = pw.Write([]byte("abc\ndef\n"))
+			_, _ = pw.Write([]byte("abc\ndeX\n"))
+		}()
+		first, err1 := readAnswer(r, never)
+		second, err2 := readAnswer(r, never)
+		if err1 != nil || err2 != nil || string(first) != "abc\ndef" || string(second) != "abc\ndeX" || bytes.Equal(first, second) {
+			t.Errorf("first = %q second = %q %v %v", first, second, err1, err2)
+		}
+	})
 }
 
 func TestSecretsSet_OAuthTokenOfSeveralLinesWithoutExactlyOneTokenIsRefused(t *testing.T) {
@@ -234,5 +364,87 @@ func TestSecretsSet_OtherRefsKeepAMultilineValue(t *testing.T) {
 	}
 	if got := storedValue(t, w, "ssh/key"); got != value {
 		t.Errorf("stored %q", got)
+	}
+}
+
+func TestReadAnswer_Editing(t *testing.T) {
+	never := func(time.Duration) bool { return false }
+	read := func(in string, more func(time.Duration) bool) (string, error) {
+		got, err := readAnswer(bufio.NewReader(strings.NewReader(in)), more)
+		return string(got), err
+	}
+	for name, tc := range map[string]struct{ in, want string }{
+		"backspace":                {"abd\x7fc\n", "abc"},
+		"backspace at the start":   {"\x7fabc\n", "abc"},
+		"ctrl-u":                   {"junk\x15abc\n", "abc"},
+		"an arrow key is not text": {"ab\x1b[Ac\n", "abc"},
+		"a lone escape":            {"ab\x1bc\n", "abc"},
+		"bracketed paste":          {"\x1b[200~ab\ncd\x1b[201~\n", "ab\ncd"},
+		"bracketed paste with CR":  {"\x1b[200~ab\r\ncd\x1b[201~\n", "ab\ncd"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := read(tc.in, never); err != nil || got != tc.want {
+				t.Errorf("= %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+	t.Run("ctrl-d on an empty answer ends the input", func(t *testing.T) {
+		if _, err := read("\x04", never); !errors.Is(err, io.EOF) {
+			t.Errorf("err = %v", err)
+		}
+	})
+	t.Run("ctrl-d after text is ignored", func(t *testing.T) {
+		if got, err := read("ab\x04c\n", never); err != nil || got != "abc" {
+			t.Errorf("= %q, %v", got, err)
+		}
+	})
+	t.Run("ctrl-c aborts", func(t *testing.T) {
+		if _, err := read("ab\x03", never); !errors.Is(err, errInterrupted) {
+			t.Errorf("err = %v", err)
+		}
+	})
+	t.Run("a last fragment that arrives after the newline joins it", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		go func() {
+			_, _ = pw.Write([]byte("abc\n"))
+			time.Sleep(50 * time.Millisecond)
+			_, _ = pw.Write([]byte("def"))
+			time.Sleep(50 * time.Millisecond)
+			_, _ = pw.Write([]byte("\n"))
+		}()
+		calls := 0
+		more := func(time.Duration) bool { calls++; return calls == 1 } // the fragment is coming; the final Enter is not a paste
+		got, err := readAnswer(bufio.NewReader(pr), more)
+		if err != nil || string(got) != "abc\ndef" {
+			t.Errorf("= %q, %v", got, err)
+		}
+	})
+}
+
+// reads hands out one chunk per Read, as a terminal does with what it has.
+type reads struct{ chunks []string }
+
+func (r *reads) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.chunks[0])
+	r.chunks = r.chunks[1:]
+	return n, nil
+}
+
+func TestReadAnswer_CRLFSplitAcrossReads(t *testing.T) {
+	for name, chunks := range map[string][]string{
+		"a plain paste":     {"HEAD\r", "\nTAIL\r\n"},
+		"a bracketed paste": {"\x1b[200~HEAD\r", "\nTAIL\x1b[201~", "\r"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := &reads{chunks}
+			more := func(time.Duration) bool { return len(in.chunks) > 0 }
+			got, err := readAnswer(bufio.NewReader(in), more)
+			if err != nil || string(got) != "HEAD\nTAIL" {
+				t.Errorf("= %q, %v; want %q", got, err, "HEAD\nTAIL")
+			}
+		})
 	}
 }
