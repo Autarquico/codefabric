@@ -302,11 +302,11 @@ func linkedSkill(t *testing.T, home, name, dir string) {
 func skillDir(t *testing.T) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "pkg")
-	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	for p, c := range map[string]string{"SKILL.md": "# tdd", "scripts/run.sh": "echo hi"} {
-		if err := os.WriteFile(filepath.Join(dir, p), []byte(c), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(c), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -360,7 +360,7 @@ func TestSnapshotFollowsALinkToADirectoryOfRoot(t *testing.T) {
 
 func TestSnapshotRefusesALinkItDoesNotTrust(t *testing.T) {
 	for name, build := range map[string]func(t *testing.T, home string) string{
-		"to a file": func(t *testing.T, home string) string {
+		"to a file": func(t *testing.T, _ string) string {
 			f := filepath.Join(t.TempDir(), "a.md")
 			_ = os.WriteFile(f, []byte("x"), 0o600)
 			return f
@@ -372,12 +372,12 @@ func TestSnapshotRefusesALinkItDoesNotTrust(t *testing.T) {
 		},
 		"to a group-writable dir": func(t *testing.T, _ string) string {
 			dir := skillDir(t)
-			_ = os.Chmod(dir, 0o775)
+			_ = os.Chmod(dir, 0o775) //nolint:gosec // the test needs a loose mode
 			return dir
 		},
 		"to a world-writable dir": func(t *testing.T, _ string) string {
 			dir := skillDir(t)
-			_ = os.Chmod(dir, 0o757)
+			_ = os.Chmod(dir, 0o757) //nolint:gosec // the test needs a loose mode
 			return dir
 		},
 		"to a link": func(t *testing.T, _ string) string {
@@ -409,7 +409,7 @@ func TestSnapshotRefusesALinkBelowTheFirstLevel(t *testing.T) {
 func TestSnapshotHasASizeLimitThatCountsLinkedFiles(t *testing.T) {
 	h, home := newHost(t, nil)
 	dir := skillDir(t)
-	if err := os.WriteFile(filepath.Join(dir, "big.bin"), make([]byte, 17<<20), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "big.bin"), make([]byte, 17<<20), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	linkedSkill(t, home, "big", dir)
