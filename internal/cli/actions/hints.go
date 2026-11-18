@@ -53,11 +53,33 @@ var attachHints = map[string]string{
 const attachHint = "The Run cannot be attached right now: it may have ended; refresh the view."
 
 func hintFor(code domain.Code, details map[string]any) string {
-	if code == domain.CodeRunNotAttachable {
+	switch code {
+	case domain.CodeRunNotAttachable:
 		if reason, _ := details["reason"].(string); attachHints[reason] != "" {
 			return attachHints[reason]
 		}
 		return attachHint
+	case domain.CodePolicyDenied:
+		if hint := policyHint(details); hint != "" {
+			return hint
+		}
 	}
 	return hints[code]
+}
+
+// policyHint says how to lift the policy a denied request names, when it names
+// one that a person can turn on.
+func policyHint(details map[string]any) string {
+	policy, _ := details["policy"].(string)
+	switch policy {
+	case domain.PolicyProjectShell:
+		project, _ := details["project"].(string)
+		if project == "" {
+			project = "<project>"
+		}
+		return "An owner can turn it on: cf project set " + project + " --shell on"
+	case domain.PolicyWorkerAllowShell:
+		return "Turn on allow_shell on that Worker: cf worker config set allow_shell true"
+	}
+	return ""
 }

@@ -253,7 +253,7 @@ func crop(lines []string, width, height int) []string {
 	}
 	out := make([]string, 0, height)
 	for _, line := range lines {
-		out = append(out, margin+ansi.Truncate(line, width, "")+"\x1b[m")
+		out = append(out, margin+truncateCells(line, width)+"\x1b[m")
 	}
 	for len(out) < height {
 		out = append(out, "")

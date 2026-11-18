@@ -51,7 +51,7 @@ func closeIn(ctx context.Context, tx *store.Tx, act mutation.Act, l store.Lease,
 	}
 	ev := act.Event(c.event, c.eventMessage)
 	ev.ProjectID, ev.TaskID, ev.RunID, ev.WorkerID = task.ProjectID, task.ID, run.ID, l.WorkerID
-	ev.Data = map[string]any{"lease_id": string(l.ID), "epoch": l.Epoch, "close_code": c.code}
+	ev.Data = map[string]any{"lease_id": string(l.ID), "epoch": l.Epoch, "close_code": c.code, "task_name": task.Name}
 	if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
 		return l, err
 	}

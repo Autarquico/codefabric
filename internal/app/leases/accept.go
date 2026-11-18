@@ -57,7 +57,7 @@ func (s *Service) Accept(ctx context.Context, by pki.Session, leaseRef string, r
 			}
 			ev := act.Event(domain.EventLeaseAccepted, "lease accepted")
 			ev.ProjectID, ev.TaskID, ev.RunID, ev.WorkerID = task.ProjectID, task.ID, run.ID, l.WorkerID
-			ev.Data = map[string]any{"lease_id": string(l.ID), "epoch": l.Epoch}
+			ev.Data = map[string]any{"lease_id": string(l.ID), "epoch": l.Epoch, "task_name": task.Name}
 			if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
 				return l, err
 			}

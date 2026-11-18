@@ -115,6 +115,14 @@ func TestScenario_LiveAttach_TerminalRestaurada(t *testing.T) {
 	if got := term.modes(); got != "alternate=0 cursor=1 mouse=0" {
 		t.Errorf("after Ctrl-] the terminal is %q", got)
 	}
+	// The banner stays and the shell starts under it, not over it.
+	lines := strings.Split(strings.TrimRight(term.screen(), "\n"), "\n")
+	if !strings.HasPrefix(lines[0], "attached to ") {
+		t.Errorf("the banner is not on the first line of the terminal:\n%s", term.screen())
+	}
+	if row := term.tmux("display-message", "-p", "-t", "0", "#{cursor_y}"); strings.TrimSpace(row) == "0" {
+		t.Errorf("the cursor is on the first row, over the banner")
+	}
 	o.finishChat()
 }
 
@@ -338,4 +346,26 @@ func TestScenario_LiveAttach_SinRelayEnElWorker(t *testing.T) {
 	}
 	o.release(o.run.ID)
 	o.waitPublished(o.run.ID)
+}
+
+// TestScenario_LiveAttach_TeclaDeRespaldoAlEntrar: with a detach key of cf that
+// is not Ctrl-], the Ctrl-] typed the moment the attach opens, before the tmux
+// client on the Worker has drawn, still leaves: the Worker holds the keys until
+// that client is up and then delivers them in order.
+func TestScenario_LiveAttach_TeclaDeRespaldoAlEntrar(t *testing.T) {
+	o := newObserveBox(t, chatScript)
+	use(t, o.client)
+	config := filepath.Join(o.client.ConfigDir, "client.json")
+	if err := os.WriteFile(config, []byte(`{"attach":{"detach_key":"ctrl+g"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	term := o.attach(nil)
+	eventually(t, "the attach to open", func() bool { return strings.Contains(term.screen(), "attached to ") })
+	term.send("C-]")
+	eventually(t, "the client to leave the session", func() bool { return o.clients() == 0 })
+	eventually(t, "cf attach to exit", term.ended)
+	if !o.sessionAlive() || o.reconcileBox.run(o.run.ID).State != domain.RunRunning {
+		t.Fatal("leaving ended the Run")
+	}
+	o.finishChat()
 }

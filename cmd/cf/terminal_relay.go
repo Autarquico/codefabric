@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -58,8 +59,11 @@ func detachLabelOf() string {
 
 // screenReset undoes the modes a tmux client sets on a terminal: it leaves the
 // alternate screen, shows the cursor, turns off mouse reporting and bracketed
-// paste, resets the scroll region and the attributes.
-const screenReset = "\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[r\x1b[m"
+// paste, resets the scroll region and the attributes. The scroll region is reset
+// before leaving the alternate screen: resetting it homes the cursor, and leaving
+// is what puts the cursor back under the banner. It ends with a line break so the
+// shell starts on a fresh line.
+const screenReset = "\x1b[r\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[m\r\n"
 
 // relaySession is an attach through the Controller that has not started. It
 // belongs here and not in internal/cli because it owns the terminal: raw mode,
@@ -281,11 +285,33 @@ func pumpKeys(fd int, cancel *cancelPipe, write bool, conn *client.AttachConn, l
 }
 
 // keysBefore is what was typed before the detach key, and whether it was typed.
+// A terminal that has the Kitty keyboard protocol on sends the key as CSI-u
+// ("\x1b[93;5u" for Ctrl-]); that form leaves too.
 func keysBefore(p []byte, key byte) (keys []byte, leave bool) {
+	csiU := csiUOf(key)
 	for i, b := range p {
-		if b == key {
+		if b == key || (b == 0x1b && csiU != "" && hasCSIU(p[i:], csiU)) {
 			return p[:i], true
 		}
 	}
 	return p, false
+}
+
+// csiUOf is the CSI-u form of a control key, without its final: the code of the
+// character the key is a control of, and the control modifier.
+func csiUOf(key byte) string {
+	switch {
+	case key >= 0x01 && key <= 0x1a:
+		return fmt.Sprintf("\x1b[%d;5", 'a'+key-1)
+	case key >= 0x1c && key <= 0x1f:
+		return fmt.Sprintf("\x1b[%d;5", 0x40+key)
+	}
+	return ""
+}
+
+// hasCSIU says whether p starts with the key in CSI-u form, with or without the
+// event type the Kitty protocol may add (";5:1u" is a press).
+func hasCSIU(p []byte, prefix string) bool {
+	rest, ok := strings.CutPrefix(string(p), prefix)
+	return ok && (strings.HasPrefix(rest, "u") || strings.HasPrefix(rest, ":1u"))
 }

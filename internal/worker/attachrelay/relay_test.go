@@ -143,7 +143,7 @@ func newRig(t *testing.T, tune func(*Options)) *rig {
 			r.opens <- [2]uint16{cols, rows}
 			return r.term, nil
 		},
-		FirstResizeWait: 2 * time.Second, FarewellGrace: 100 * time.Millisecond, BackoffMin: time.Millisecond,
+		FirstResizeWait: 2 * time.Second, InputHold: 50 * time.Millisecond, FarewellGrace: 100 * time.Millisecond, BackoffMin: time.Millisecond,
 	}
 	if tune != nil {
 		tune(&o)
@@ -501,4 +501,54 @@ func TestBackoffDoublesAndStopsAtTheMaximum(t *testing.T) {
 			t.Errorf("backoff(%d) = %s, want %s", i+1, got, w*time.Second)
 		}
 	}
+}
+
+// What a client types as it attaches waits for the tmux client to draw: before
+// that the pty may eat it. Once it has drawn, the input arrives in order, and
+// what is typed after goes straight through.
+func TestRelay_InputBeforeTheTerminalDrawsWaitsAndArrivesInOrder(t *testing.T) {
+	r := newRig(t, func(o *Options) { o.InputHold = time.Minute })
+	r.run()
+	c := r.ask(v1.AttachModeWrite)
+	<-r.rt.readOnly
+	_ = v1.WriteFrame(c, v1.ResizeFrame(80, 24))
+	<-r.opens
+	_ = v1.WriteFrame(c, v1.DataFrame([]byte("a")))
+	_ = v1.WriteFrame(c, v1.DataFrame([]byte("b")))
+	_ = v1.WriteFrame(c, v1.ResizeFrame(100, 30)) // a later frame is handled: the loop is not stuck
+	eventually(t, "the resize", func() bool {
+		r.term.mu.Lock()
+		defer r.term.mu.Unlock()
+		return len(r.term.resizes) == 1
+	})
+	if got := r.term.typed(); got != "" {
+		t.Fatalf("the input reached the terminal before it drew: %q", got)
+	}
+	r.term.out <- []byte("screen")
+	eventually(t, "the held input", func() bool { return r.term.typed() == "ab" })
+	_ = v1.WriteFrame(c, v1.DataFrame([]byte("c")))
+	eventually(t, "the input after", func() bool { return r.term.typed() == "abc" })
+}
+
+// A tmux that never draws does not swallow what is typed: the hold ends by time.
+func TestRelay_HeldInputIsDeliveredWhenTheHoldRunsOut(t *testing.T) {
+	r := newRig(t, func(o *Options) { o.InputHold = 30 * time.Millisecond })
+	r.run()
+	c := r.ask(v1.AttachModeWrite)
+	_ = v1.WriteFrame(c, v1.ResizeFrame(80, 24))
+	<-r.opens
+	_ = v1.WriteFrame(c, v1.DataFrame([]byte("late")))
+	eventually(t, "the input after the hold", func() bool { return r.term.typed() == "late" })
+}
+
+// Nor does it hold more than it is bounded to: past maxHeldInput it is delivered.
+func TestRelay_HeldInputIsBoundedInBytes(t *testing.T) {
+	r := newRig(t, func(o *Options) { o.InputHold = time.Minute })
+	r.run()
+	c := r.ask(v1.AttachModeWrite)
+	_ = v1.WriteFrame(c, v1.ResizeFrame(80, 24))
+	<-r.opens
+	big := make([]byte, maxHeldInput+1)
+	_ = v1.WriteFrame(c, v1.DataFrame(big))
+	eventually(t, "the input past the bound", func() bool { return len(r.term.typed()) == len(big) })
 }

@@ -343,7 +343,7 @@ func (g *gridScreen) cell(c RenderContext, run string, width, height int) []stri
 		body = append(body, "")
 	}
 	for _, line := range body[:height-1] {
-		lines = append(lines, line+strings.Repeat(" ", max(width-ansi.StringWidth(line), 0)))
+		lines = append(lines, line+strings.Repeat(" ", max(width-cellWidth(line), 0)))
 	}
 	return lines
 }
