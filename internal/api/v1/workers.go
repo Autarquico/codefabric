@@ -160,7 +160,7 @@ type HeartbeatResponse struct {
 	Features []string `json:"features,omitempty"`
 }
 
-// FeatureRunAnswer: the Controller takes the answer of an exited report.
+// FeatureRunAnswer says the Controller takes the answer of an exited report.
 const FeatureRunAnswer = "run_answer"
 
 // Worker is §3.5 as the API shows it. Compatible is the verdict of the upgrade

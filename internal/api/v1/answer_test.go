@@ -12,7 +12,7 @@ func TestBoundAnswerKeepsWhatFitsAndDropsWhatCannotBeShown(t *testing.T) {
 	if got := v1.BoundAnswer("line\n\tindented é"); got != "line\n\tindented é" {
 		t.Errorf("answer = %q", got)
 	}
-	if got := v1.BoundAnswer("a\x00b\x1b[31mc‍d\xffe"); !v1.ValidAnswer(got) || strings.ContainsAny(got, "\x00\x1b‍") {
+	if got := v1.BoundAnswer("a\x00b\x1b[31mc\u200dd\xffe"); !v1.ValidAnswer(got) || strings.ContainsAny(got, "\x00\x1b\u200d") {
 		t.Errorf("answer = %q", got)
 	}
 }
