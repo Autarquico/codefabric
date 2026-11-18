@@ -6,7 +6,7 @@ status: active
 priority: P1
 size: L
 issue: 201
-prs: [204]
+prs: [204, 205, 206]
 related_issues: [201]
 depends_on: [live-attach, claude-code-adapter]
 related_specs:
