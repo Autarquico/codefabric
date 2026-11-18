@@ -1,6 +1,7 @@
 package workers_test
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -173,5 +174,14 @@ func TestJournal_AReportThatIsNotWellFormedIsRefused(t *testing.T) {
 	}
 	if got := len(e.events(domain.EventJournalTruncated)); got != 0 {
 		t.Errorf("%d events from refused heartbeats", got)
+	}
+}
+
+func TestHeartbeat_TheControllerAnnouncesTheAnswerOfARun(t *testing.T) {
+	e := newEnv(t, controllerVersion)
+	out, err := e.svc.Heartbeat(t.Context(), e.join("box"), request(newEpoch()))
+	must(t, err)
+	if !slices.Contains(out.Features, v1.FeatureRunAnswer) {
+		t.Errorf("features = %v", out.Features)
 	}
 }

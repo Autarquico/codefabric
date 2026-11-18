@@ -115,6 +115,7 @@ func TestScenario_CodexAdapter_Contrato(t *testing.T) {
 		ResumeFrom: []harness.Checkpoint{{Harness: codex.ID, Format: codex.CheckpointFormat, Data: otherCheckpointData(t)}},
 		ExpectEvents: []harness.Event{
 			{Kind: harness.EventSessionStarted, SessionID: "01a1819d-734d-7a60-88f8-293969dcf0bd"},
+			{Kind: harness.EventAgentMessage, Message: "ok"},
 			{Kind: harness.EventUsage, Usage: &harness.UsageEvent{
 				InputTokens: i64(10326), CacheReadTokens: i64(7168), CacheWriteTokens: i64(0), OutputTokens: i64(5),
 			}},

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -88,6 +89,9 @@ func newRunShowCmd() *cobra.Command {
 				}
 				_, err := fmt.Fprintf(w, "ID           %s (%s)\nTask         %s\nAttempt      %d\nLineage      %s\nState        %s\nRuntime      %s\nCommit       %s\nBranch       %s\nModel        %s\nResult       %s\nPublication  %s\nSpec digest  %s\nEnvironment  %s\nWorkflow     %s\nCfg digest   %s\nEffective    %s\nFailure code %s\nCreated      %s\nSpec         %s\n",
 					r.ID, r.Short, r.TaskID, r.Attempt, lineage, r.State, r.Runtime, r.SourceCommit, dash(r.Branch), dash(r.Model), dash(r.ResultCommit), r.Publication, r.SpecDigest, environment, workflow, dash(r.EffectiveConfigDigest), dash(r.EffectiveDigest), dash(string(r.FailureCode)), local(r.CreatedAt), spec)
+				if err == nil && r.Answer != "" {
+					_, err = fmt.Fprintf(w, "Answer\n%s\n", strings.TrimRight(r.Answer, "\n"))
+				}
 				return err
 			})
 		},

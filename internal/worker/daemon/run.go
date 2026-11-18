@@ -257,6 +257,7 @@ func Run(ctx context.Context, o Options) error {
 		takeApplies(r)
 		// A heartbeat taken is this daemon held as the current one: it may ask for grants.
 		ex.HeartbeatTaken()
+		ex.SetControllerFeatures(r.Features)
 		d.ackJournal(gctx, r.JournalAck)
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
 		if r.ReconcileRequired && ex.Reconciled() {

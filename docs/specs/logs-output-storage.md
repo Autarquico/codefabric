@@ -67,3 +67,5 @@ Cada scenario se implementa como un test `TestScenario_*`.
 ## Referencias
 
 - `docs/codefabric-spec.md` §3.12, §20.3, §20.5, §34
+
+- La respuesta de un Run headless no está en `output.log` (el stdout estructurado va a `events.jsonl`): se guarda aparte en `runs.answer` y `cf logs --run` la añade tras el tail, tras un separador `── answer ──`, solo en modo humano (nunca con `--json`, `--raw` ni `--follow`). `runs.logs` de MCP la devuelve en `answer`.

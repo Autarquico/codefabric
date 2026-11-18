@@ -2,7 +2,10 @@ package v1
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -16,7 +19,9 @@ const (
 	MaxReportMessageLen = 512
 	MaxHandleLen        = 256
 	MaxModelLen         = 128
-	MaxStopFailures     = 16 // services of one stopped that did not stop cleanly
+	// MaxAnswerLen bounds the answer of an exited, in bytes.
+	MaxAnswerLen    = 8 << 10
+	MaxStopFailures = 16 // services of one stopped that did not stop cleanly
 
 	// MaxEffectiveConfigBytes bounds the effective configuration of a
 	// config_resolved, which must fit a report with room to spare.
@@ -27,6 +32,39 @@ const (
 	MaxExcludedPaths = 100
 	MaxExcludedBytes = 8 << 10
 )
+
+// AnswerTruncatedMark ends an answer that BoundAnswer cut.
+const AnswerTruncatedMark = "…[truncated]"
+
+// ValidAnswer is the Controller's rule for the answer of an exit report: within
+// MaxAnswerLen, valid UTF-8, and nothing but printable text and newlines and tabs.
+func ValidAnswer(s string) bool {
+	return len(s) <= MaxAnswerLen && utf8.ValidString(s) && !strings.ContainsFunc(s, unprintable)
+}
+
+// BoundAnswer makes what a harness said fit ValidAnswer: what cannot be shown is
+// dropped, and a text over MaxAnswerLen is cut on a character boundary and ends
+// with AnswerTruncatedMark.
+func BoundAnswer(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unprintable(r) {
+			return -1
+		}
+		return r
+	}, s) // a byte that is not UTF-8 becomes U+FFFD
+	if len(s) <= MaxAnswerLen {
+		return s
+	}
+	cut := MaxAnswerLen - len(AnswerTruncatedMark)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + AnswerTruncatedMark
+}
+
+func unprintable(r rune) bool {
+	return r != '\n' && r != '\t' && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r))
+}
 
 // RunReportKind is what a Worker tells about a Run it executes.
 type RunReportKind string
@@ -117,6 +155,10 @@ type RunReportEntry struct {
 	EndReason domain.EndReason `json:"end_reason,omitempty"`
 	// Model (started, exited) is the model the harness said it ran with, if it did.
 	Model string `json:"model,omitempty"`
+	// Answer (exited) is the last thing the harness said as the result of the
+	// Run, bounded by MaxAnswerLen. Only sent to a Controller that announces
+	// FeatureRunAnswer: an older one refuses a report with a field it does not know.
+	Answer string `json:"answer,omitempty"`
 	// ConfigDigest (started) is the digest of the configuration materialised
 	// from the Workflow of the Run (host.Materialization.Digest); empty for a
 	// Run without one.

@@ -164,6 +164,8 @@ Two different things, never mixed:
 
 Escape sequences and control characters are removed so a Run cannot act on your terminal; `--raw` passes them through.
 
+A headless Run of Claude Code or Codex writes its structured stream apart from its output, so its final answer is not in the log. When the Run is over and has an answer, `cf logs --run` prints it after the tail, below a `── answer ──` line. It does not do so with `--json`, `--raw` or `--follow`; read it there with `cf run show`.
+
 ## `cf mcp`
 
 Use Code Flock from Claude Code or Codex. See [Use cf from Claude Code or Codex](../mcp/).
@@ -187,6 +189,8 @@ List the Runs that are live, with their Workers and whether they can be attached
 ## `cf run`
 
 Inspect and explain Runs. Subcommands: `list`, `show` (a Run and the configuration it froze), `explain` (why a Run waits, Worker by Worker), `publish` (try again to publish the result of a Run whose publication failed) and `fetch`. `fork` and `promote` exist but are not implemented yet.
+
+`cf run show` ends with an `Answer` section, in full, when the harness of a headless Run said something as its last result (Claude Code and Codex do). `Result` is the commit the Run sealed; the answer is what the agent replied. It is kept up to 8 KiB; a longer one is cut and ends with `…[truncated]`. It needs a Controller and a Worker that both have this feature: from a Worker that does not send it, the section is absent.
 
 `cf run fetch <run> [--branch <name>]` brings the result a Run published into the repository of this directory: it fetches the Run's branch from the relay and creates a local branch at the result, `cf/<task>/<run>` unless `--branch` names another. A branch that already exists is never moved (the command refuses if it points elsewhere), and nothing is checked out. It fails with `CF_INVALID_TRANSITION` if the Run has not published a result.
 

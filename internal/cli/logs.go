@@ -322,7 +322,10 @@ func showLogs(cmd *cobra.Command, c *client.Client, run string, lines int, follo
 		fmt.Fprintf(errOut, "note: only the last %d MiB of the output were read; --tail reaches no further\n", maxTailBytes>>20)
 	}
 	if !follow {
-		return nil
+		if asJSON || raw {
+			return nil
+		}
+		return printAnswer(cmd.Context(), c, run, out, errOut)
 	}
 
 	query := client.OutputQuery{Epoch: page.LeaseEpoch}
@@ -348,6 +351,26 @@ func showLogs(cmd *cobra.Command, c *client.Client, run string, lines int, follo
 			return err
 		}
 	}
+}
+
+// answerSeparator sets the answer of a Run apart from its output.
+const answerSeparator = "── answer ──"
+
+// printAnswer ends the human reading of the logs of a finished Run with what its
+// harness answered, which is not in the output of a structured Run. The
+// separator and the answer go to stdout; a Run that is not over, or that said
+// nothing, adds nothing.
+func printAnswer(ctx context.Context, c *client.Client, run string, out, errOut io.Writer) error {
+	r, err := c.Run(ctx, run)
+	if err != nil {
+		fmt.Fprintf(errOut, "note: the answer of the Run could not be read: %v\n", err)
+		return nil
+	}
+	if !r.State.IsTerminal() || r.Answer == "" {
+		return nil
+	}
+	_, err = fmt.Fprintf(out, "%s\n%s\n", answerSeparator, strings.TrimRight(r.Answer, "\n"))
+	return err
 }
 
 // writeChunk delivers a chunk of a follow, saying first that output is missing

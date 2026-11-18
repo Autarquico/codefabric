@@ -242,6 +242,10 @@ type Executor struct {
 	// The Controller grants secrets only to the daemon whose heartbeat it took
 	// last: until it has taken one of this daemon, no grant is asked for.
 	heartbeatTaken atomic.Bool
+	// answerAnnounced: the last heartbeat said that the Controller takes the
+	// answer of a Run (v1.FeatureRunAnswer). Until one does, an exit goes
+	// without it, as an older Controller would refuse the whole report.
+	answerAnnounced atomic.Bool
 
 	wake    chan struct{} // the decider has something new
 	pubWake chan struct{} // the publisher has something new
@@ -385,6 +389,12 @@ func (e *Executor) SetLimits(l Limits) {
 	if changed {
 		e.kickDecider()
 	}
+}
+
+// SetControllerFeatures records what the Controller says it understands, from
+// the answer of a heartbeat.
+func (e *Executor) SetControllerFeatures(features []string) {
+	e.answerAnnounced.Store(slices.Contains(features, v1.FeatureRunAnswer))
 }
 
 func (e *Executor) currentLimits() (Limits, bool) {

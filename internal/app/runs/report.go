@@ -261,7 +261,10 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 			if err := tx.AbortCapture(ctx, run.ID, act.Now); err != nil {
 				return err
 			}
-			return tx.SetRunModel(ctx, run, e.Model)
+			if err := tx.SetRunModel(ctx, run, e.Model); err != nil {
+				return err
+			}
+			return tx.SetRunAnswer(ctx, run, e.Answer)
 		}
 	case e.Kind == v1.ReportPrepareFailed:
 		// `started` means that the session was created. The harness can still fail to
@@ -554,6 +557,10 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		return input.Invalid("effective_config_digest must be sha256:<64 lower-case hex>")
 	case e.Kind != v1.ReportExited && e.Kind != v1.ReportStarted && e.Model != "":
 		return input.Invalid("only started and exited carry a model")
+	case e.Kind != v1.ReportExited && e.Answer != "":
+		return input.Invalid("only exited carries an answer")
+	case !v1.ValidAnswer(e.Answer):
+		return input.Invalid("answer must be valid, printable text of at most %d bytes", v1.MaxAnswerLen)
 	case e.EndReason != "" && (e.EndReason != domain.EndInputRequired || e.Cause == v1.ExitCauseWrapperLost):
 		return input.Invalid("end_reason, when there is one, is input_required and not of a lost wrapper")
 	case len(e.Model) > v1.MaxModelLen || !domain.Printable(e.Model):

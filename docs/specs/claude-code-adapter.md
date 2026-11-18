@@ -61,6 +61,11 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **When** se procesa
 - **Then** stop local, `failed(input_required)` y sellado tras `RunStopped`
 
+### Scenario: Respuesta de un Run headless
+- **Given** un Run headless cuyo `result` trae texto
+- **When** el Worker lee el stream de eventos
+- **Then** el texto (`Summary`) queda como respuesta del Run, acotada a 8 KiB, y llega al Controller en el `exited` si este anuncia `run_answer`
+
 ### Scenario: Live
 - **Given** «create hello.txt» con Claude real
 - **When** se ejecuta

@@ -384,7 +384,10 @@ type Run struct {
 	SourceCommit      string          `json:"source_commit"`
 	Branch            string          `json:"branch,omitempty"`
 	// Model is the model the harness said it ran with, known once it ended.
-	Model        string `json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
+	// Answer is the last thing the harness said as the result of the Run, if it
+	// said any; the result commit is Result, this is what it answered.
+	Answer       string `json:"answer,omitempty"`
 	ResultCommit string `json:"result_commit,omitempty"`
 	// ResultExcluded are the untracked paths the sealing left out (§23.1), as
 	// metadata of the Run: the commit does not name them.

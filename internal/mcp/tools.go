@@ -177,8 +177,8 @@ func (t tools) read(s *sdk.Server) {
 		})
 	add(t, s, wire("runs.get"), "Show a Run.", entity,
 		func(ctx context.Context, in idInput) (any, error) { return t.c.Run(ctx, in.Ref) })
-	add(t, s, wire("runs.logs"), "Read the output of a Run: the last 64 KiB unless tail or offset say otherwise.",
-		objectOf(map[string]string{"run_id": "string", "start": "integer", "end": "integer", "offset": "integer", "text": "string", "truncated": "boolean", "closed": "boolean"}),
+	add(t, s, wire("runs.logs"), "Read the output of a Run: the last 64 KiB unless tail or offset say otherwise. answer is what its harness said last, once it ended.",
+		objectOf(map[string]string{"run_id": "string", "start": "integer", "end": "integer", "offset": "integer", "text": "string", "truncated": "boolean", "closed": "boolean", "answer": "string"}),
 		t.runLogs)
 	add(t, s, wire("workers.list"), "List the Workers. Result: {workers: [Worker]}.",
 		objectOf(map[string]string{"workers": "array"}),
@@ -301,9 +301,16 @@ func (t tools) runLogs(ctx context.Context, in runsLogsInput) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A structured Run writes its output to the stream of events: what the harness
+	// answered is not in the text, and is told apart.
+	run, err := t.c.Run(ctx, in.Ref)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"run_id": out.RunID, "start": out.Start, "end": out.End, "offset": out.Offset,
 		"text": strings.ToValidUTF8(string(out.Data), "�"), "truncated": out.Truncated, "closed": out.Closed,
+		"answer": run.Answer,
 	}, nil
 }
 

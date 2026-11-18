@@ -112,6 +112,7 @@ func (s *Service) Heartbeat(ctx context.Context, by pki.Session, req v1.Heartbea
 				WorkflowApplies: orders,
 				State:           w.State, MaxConcurrentRuns: w.Settings.MaxConcurrentRuns, Allocatable: resources.Allocatable,
 				JournalAck:        journalAck,
+				Features:          []string{v1.FeatureRunAnswer},
 				ReconcileRequired: w.ReconciledEpoch != req.Epoch || w.ReconciledAt == nil || w.ReconciledAt.Before(s.started),
 			}, nil
 		})

@@ -5,6 +5,7 @@ package executor
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,8 +24,9 @@ import (
 )
 
 // lineAdapter is a harness whose stream has one line per event: "model <name>"
-// is session_started, "ask" is input_required and "result" is the end of a
-// turn. It remembers every line it was given.
+// is session_started, "ask" is input_required, "say <text>" is a message of the
+// agent, "answer <text>" is a result with a text and "result" is the end of a
+// turn without one. It remembers every line it was given.
 type lineAdapter struct {
 	fakeharness.Adapter
 	seen *linesSeen
@@ -63,6 +65,10 @@ func (a lineAdapter) Events(_ context.Context, _ harness.Handle, src io.ReadClos
 			out <- harness.Event{Kind: harness.EventSessionStarted, Model: strings.TrimPrefix(line, "model ")}
 		case line == "ask":
 			out <- harness.Event{Kind: harness.EventInputRequired, Message: "which one?"}
+		case strings.HasPrefix(line, "say "):
+			out <- harness.Event{Kind: harness.EventAgentMessage, Message: strings.TrimPrefix(line, "say ")}
+		case strings.HasPrefix(line, "answer "):
+			out <- harness.Event{Kind: harness.EventResult, Result: &harness.Result{Summary: strings.TrimPrefix(line, "answer ")}}
 		case line == "result":
 			out <- harness.Event{Kind: harness.EventResult}
 		}
@@ -401,5 +407,61 @@ func TestAnAskSeenOnlyAtTheEndOfALostWrapperDoesNotMakeTheExitInvalid(t *testing
 	reports := f.reports(k)
 	if x := reports[1]; x.Kind != v1.ReportExited || x.Cause != v1.ExitCauseWrapperLost || x.EndReason != "" || x.Model != "m-4" {
 		t.Errorf("exited = %+v", x)
+	}
+}
+
+func TestTheAnswerOfTheLastResultIsKeptAndReportedWhenTheControllerTakesIt(t *testing.T) {
+	f, _, k, w := eventsFixture(t)
+	f.e.SetControllerFeatures([]string{v1.FeatureRunAnswer})
+	f.appendEvents(k, "answer first\nanswer second\n")
+	reports := endsWithExit0(t, f, k, w)
+	if x := reports[1]; x.Kind != v1.ReportExited || x.Answer != "second" {
+		t.Errorf("exited = %+v", x)
+	}
+}
+
+func TestTheAnswerIsLeftOutOfTheReportOfAControllerThatDoesNotAnnounceIt(t *testing.T) {
+	f, _, k, w := eventsFixture(t)
+	f.e.SetControllerFeatures(nil)
+	f.appendEvents(k, "answer hello\n")
+	f.e.step(t.Context(), k)
+	if c := f.cursor(k); c.Answer != "hello" {
+		t.Errorf("the cursor keeps it for later: %+v", c)
+	}
+	reports := endsWithExit0(t, f, k, w)
+	if x := reports[1]; x.Kind != v1.ReportExited || x.Answer != "" {
+		t.Errorf("exited = %+v", x)
+	}
+	// What goes on the wire has no field an older Controller would refuse.
+	if raw, err := json.Marshal(reports[1]); err != nil || strings.Contains(string(raw), "answer") {
+		t.Errorf("the report is %s (%v)", raw, err)
+	}
+}
+
+func TestTheLastMessageOfAnAgentAnswersAResultThatComesInALaterDrain(t *testing.T) {
+	f, _, k, w := eventsFixture(t)
+	f.e.SetControllerFeatures([]string{v1.FeatureRunAnswer})
+	f.appendEvents(k, "say the final word\n")
+	f.e.step(t.Context(), k)
+	if c := f.cursor(k); c.AgentMessage != "the final word" || c.Answer != "" {
+		t.Fatalf("cursor after the message = %+v", c)
+	}
+	f.appendEvents(k, "result\n")
+	f.e.step(t.Context(), k)
+	if c := f.cursor(k); c.Answer != "the final word" || c.AgentMessage != "" {
+		t.Fatalf("cursor after the result = %+v", c)
+	}
+	reports := endsWithExit0(t, f, k, w)
+	if x := reports[1]; x.Kind != v1.ReportExited || x.Answer != "the final word" {
+		t.Errorf("exited = %+v", x)
+	}
+}
+
+func TestAnAnswerTooLongForTheReportIsCutBeforeItIsKept(t *testing.T) {
+	f, _, k, _ := eventsFixture(t)
+	f.appendEvents(k, "answer "+strings.Repeat("é", v1.MaxAnswerLen)+"\n")
+	f.e.step(t.Context(), k)
+	if got := f.cursor(k).Answer; !v1.ValidAnswer(got) || !strings.HasSuffix(got, v1.AnswerTruncatedMark) {
+		t.Errorf("answer = %d bytes, ends %q", len(got), got[max(0, len(got)-20):])
 	}
 }

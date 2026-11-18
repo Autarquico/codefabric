@@ -28,14 +28,20 @@ type EventCursor struct {
 	// carry the model it says on its init; zero when nothing is held (the report
 	// is not held, or it was released).
 	StartHeldAt time.Time
+	// Answer is the text of the last result the harness wrote, bounded by
+	// v1.MaxAnswerLen; "" until it writes one.
+	Answer string
+	// AgentMessage is the last message of the agent since the last result: the
+	// answer of a harness that says it apart from its result line.
+	AgentMessage string
 }
 
 // EventCursorOf returns the cursor of the assignment, a fresh one if it has none.
 func EventCursorOf(ctx context.Context, q Querier, k Key) (EventCursor, error) {
 	c := EventCursor{Key: k}
 	var held int64
-	err := q.QueryRowContext(ctx, `SELECT consumed, model, input_required, final_failures, skipping, turn_over, start_held_at FROM event_cursors WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch).
-		Scan(&c.Consumed, &c.Model, &c.InputRequired, &c.FinalFailures, &c.Skipping, &c.TurnOver, &held)
+	err := q.QueryRowContext(ctx, `SELECT consumed, model, input_required, final_failures, skipping, turn_over, start_held_at, answer, agent_message FROM event_cursors WHERE run_id = ? AND lease_epoch = ?`, k.RunID, k.LeaseEpoch).
+		Scan(&c.Consumed, &c.Model, &c.InputRequired, &c.FinalFailures, &c.Skipping, &c.TurnOver, &held, &c.Answer, &c.AgentMessage)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return EventCursor{}, fmt.Errorf("state: reading an event cursor: %w", err)
 	}
@@ -52,9 +58,9 @@ func SaveEventCursor(ctx context.Context, tx *Tx, c EventCursor) error {
 		held = c.StartHeldAt.UnixNano()
 	}
 	_, err := tx.exec(ctx,
-		`INSERT INTO event_cursors (run_id, lease_epoch, consumed, model, input_required, final_failures, skipping, turn_over, start_held_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (run_id, lease_epoch) DO UPDATE SET consumed = excluded.consumed, model = excluded.model, input_required = excluded.input_required, final_failures = excluded.final_failures, skipping = excluded.skipping, turn_over = excluded.turn_over, start_held_at = excluded.start_held_at`,
-		c.RunID, c.LeaseEpoch, c.Consumed, c.Model, c.InputRequired, c.FinalFailures, c.Skipping, c.TurnOver, held)
+		`INSERT INTO event_cursors (run_id, lease_epoch, consumed, model, input_required, final_failures, skipping, turn_over, start_held_at, answer, agent_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (run_id, lease_epoch) DO UPDATE SET consumed = excluded.consumed, model = excluded.model, input_required = excluded.input_required, final_failures = excluded.final_failures, skipping = excluded.skipping, turn_over = excluded.turn_over, start_held_at = excluded.start_held_at, answer = excluded.answer, agent_message = excluded.agent_message`,
+		c.RunID, c.LeaseEpoch, c.Consumed, c.Model, c.InputRequired, c.FinalFailures, c.Skipping, c.TurnOver, held, c.Answer, c.AgentMessage)
 	if err != nil {
 		return fmt.Errorf("state: saving an event cursor: %w", err)
 	}
