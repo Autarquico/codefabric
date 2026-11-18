@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
 )
 
 // isTerminal says whether f is a terminal: its descriptor has a line discipline.
@@ -33,8 +35,10 @@ func promptValue(ctx context.Context, tty *os.File, prompt io.Writer, ref string
 	}
 	// Not canonical: a paste is read as it arrives, also its last fragment,
 	// which a line discipline holds back until Enter. ISIG stays, so Ctrl-C
-	// still interrupts.
+	// still interrupts. ICRNL is off so that a CR is a CR and a pasted CRLF
+	// is not two line ends: readAnswer treats CR, LF and CRLF alike.
 	quiet := *saved
+	quiet.Iflag &^= unix.ICRNL
 	quiet.Lflag &^= unix.ECHO | unix.ICANON
 	quiet.Cc[unix.VMIN] = 1
 	quiet.Cc[unix.VTIME] = 0
@@ -46,10 +50,13 @@ func promptValue(ctx context.Context, tty *os.File, prompt io.Writer, ref string
 	if err := unix.IoctlSetTermios(fd, ioctlSetTermios, &quiet); err != nil {
 		return nil, false, fmt.Errorf("turning the terminal's echo off: %w", err)
 	}
-	_, _ = io.WriteString(prompt, bracketedPasteOn)
+	// The mode belongs to the terminal that is read, not to where the prompt goes.
+	_, _ = io.WriteString(tty, bracketedPasteOn)
 	restore := sync.OnceFunc(func() {
-		_, _ = io.WriteString(prompt, bracketedPasteOff)
-		_ = unix.IoctlSetTermios(fd, ioctlSetTermios, saved)
+		_, _ = io.WriteString(tty, bracketedPasteOff)
+		// Discarding what is still unread, so that bytes typed after the
+		// answers do not reach the shell with echo on.
+		_ = unix.IoctlSetTermios(fd, ioctlRestoreTermios, saved)
 	})
 	defer restore()
 
@@ -107,9 +114,13 @@ func promptValue(ctx context.Context, tty *os.File, prompt io.Writer, ref string
 	defer clear(confirmed)
 	if err != nil || !bytes.Equal(value, confirmed) {
 		clear(value)
+		file := "value.txt"
+		if ref == claude.OAuthTokenRef {
+			file = "setup-token.txt" // the name the guide uses
+		}
 		return nil, false, invalid(fmt.Sprintf("the two values differ; nothing was stored. If the terminal may have wrapped the value, "+
 			"give it on stdin from a file or the clipboard, so that it stays out of your shell's history: "+
-			"cf worker secrets set %[1]s < token.txt (or pbpaste | cf worker secrets set %[1]s on macOS)", ref))
+			"cf worker secrets set %[1]s < %[2]s (or pbpaste | cf worker secrets set %[1]s on macOS)", ref, file))
 	}
 	return value, badFormat, nil
 }
@@ -157,17 +168,15 @@ func readAnswer(r *bufio.Reader, more func(wait time.Duration) bool) ([]byte, er
 			case !pasting && followedBy(r, more, "["):
 				skipSequence(r, more)
 			}
-		case pasting:
-			if b != '\r' {
-				answer = append(answer, b)
-			}
+		case pasting && b != '\r' && b != '\n':
+			answer = append(answer, b)
 		case b == '\r' || b == '\n':
-			if b == '\r' && r.Buffered() > 0 {
+			if b == '\r' && r.Buffered() > 0 { // CRLF is one line end
 				if next, _ := r.Peek(1); next[0] == '\n' {
 					_, _ = r.Discard(1)
 				}
 			}
-			if r.Buffered() == 0 && !more(pasteWindow) {
+			if !pasting && r.Buffered() == 0 && !more(pasteWindow) {
 				return answer, nil
 			}
 			answer = append(answer, '\n')

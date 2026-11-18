@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -22,6 +24,8 @@ type typing struct {
 	t      *testing.T
 	master *os.File
 	slave  *os.File
+	mu     sync.Mutex
+	out    bytes.Buffer // what the prompt wrote to the terminal
 }
 
 func newTyping(t *testing.T) *typing {
@@ -31,8 +35,33 @@ func newTyping(t *testing.T) *typing {
 		t.Skipf("no pty can be opened here: %v", err)
 	}
 	t.Cleanup(func() { _ = master.Close(); _ = slave.Close() })
-	go func() { _, _ = io.Copy(io.Discard, master) }()
-	return &typing{t: t, master: master, slave: slave}
+	ty := &typing{t: t, master: master, slave: slave}
+	go func() { _, _ = io.Copy(lockedWriter{ty}, master) }()
+	return ty
+}
+
+type lockedWriter struct{ ty *typing }
+
+func (w lockedWriter) Write(p []byte) (int, error) {
+	w.ty.mu.Lock()
+	defer w.ty.mu.Unlock()
+	return w.ty.out.Write(p)
+}
+
+// written waits for the terminal to have been written want, and says what was written.
+func (ty *typing) written(want string) string {
+	for range 100 {
+		ty.mu.Lock()
+		got := ty.out.String()
+		ty.mu.Unlock()
+		if strings.Contains(got, want) {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	ty.mu.Lock()
+	defer ty.mu.Unlock()
+	return ty.out.String()
 }
 
 // waitForPrompt waits until the terminal has no echo and is not canonical,
@@ -177,12 +206,48 @@ func TestPromptValue_Pty(t *testing.T) {
 			t.Errorf("= %q, %v", p.value, p.err)
 		}
 	})
+	for _, c := range []struct{ name, paste string }{
+		{"CRLF, plain, with its final line end", "HEAD\r\nTAIL\r\n"},
+		{"CRLF, plain, without its final line end", "HEAD\r\nTAIL"},
+		{"CRLF, bracketed, with its final line end", "\x1b[200~HEAD\r\nTAIL\r\n\x1b[201~"},
+		{"CRLF, bracketed, without its final line end", "\x1b[200~HEAD\r\nTAIL\x1b[201~"},
+	} {
+		t.Run("a token wrapped with "+c.name, func(t *testing.T) {
+			ty := newTyping(t)
+			paste := func() {
+				ty.send(strings.NewReplacer("HEAD", head, "TAIL", tail).Replace(c.paste))
+				time.Sleep(settle)
+				if !strings.HasSuffix(c.paste, "\r\n") { // the paste did not end the answer: Enter does
+					ty.send("\r")
+				}
+			}
+			p := ty.prompt("claude/oauth-token", false, func() {
+				paste()
+				time.Sleep(settle)
+				paste()
+			})
+			if p.err != nil || string(p.value) != pastedToken {
+				t.Errorf("= %q, %v", p.value, p.err)
+			}
+		})
+	}
+	t.Run("a lone CR, the Enter key, ends the answer", func(t *testing.T) {
+		ty := newTyping(t)
+		p := ty.prompt("other/secret", false, twice(ty, "hunter2-hunter2\r", "hunter2-hunter2\r"))
+		if p.err != nil || string(p.value) != "hunter2-hunter2" {
+			t.Errorf("= %q, %v", p.value, p.err)
+		}
+	})
 	t.Run("bracketed paste is on while it asks and off after", func(t *testing.T) {
 		ty := newTyping(t)
 		p := ty.prompt("other/secret", false, twice(ty, "hunter2-hunter2\n", "hunter2-hunter2\n"))
-		on, off := bytes.Index([]byte(p.shown), []byte(bracketedPasteOn)), bytes.LastIndex([]byte(p.shown), []byte(bracketedPasteOff))
+		got := ty.written(bracketedPasteOff)
+		on, off := strings.Index(got, bracketedPasteOn), strings.LastIndex(got, bracketedPasteOff)
 		if on < 0 || off < on {
-			t.Errorf("shown = %q", p.shown)
+			t.Errorf("the terminal got %q", got)
+		}
+		if strings.Contains(p.shown, "\x1b[?2004") {
+			t.Errorf("the prompt's writer got the terminal's modes: %q", p.shown)
 		}
 	})
 }

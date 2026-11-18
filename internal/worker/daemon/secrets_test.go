@@ -170,6 +170,20 @@ func storedValue(t *testing.T, w *keyringWorker, ref string) string {
 	return string(got.Value)
 }
 
+func TestSecretsSet_OAuthTokenWrappedAcrossLinesSaysItWasJoined(t *testing.T) {
+	w := newKeyringWorker(t)
+	out, err := cf(t, pastedToken[:20]+"\r\n"+pastedToken[20:30]+"\r\n"+pastedToken[30:]+"\r\n", "set", "claude/oauth-token")
+	if err != nil {
+		t.Fatalf("set: %v: %s", err, out)
+	}
+	if !strings.Contains(out, "joined the token from 3 lines of the pasted output") || strings.Contains(out, "kept the token line") {
+		t.Errorf("output = %s", out)
+	}
+	if got := storedValue(t, w, "claude/oauth-token"); got != pastedToken {
+		t.Errorf("the stored value is not the whole token (%d bytes)", len(got))
+	}
+}
+
 func TestSecretsSet_OAuthTokenKeepsTheTokenLineOfWhatSetupTokenPrints(t *testing.T) {
 	w := newKeyringWorker(t)
 	pasted := "Your OAuth token (valid for 1 year):\n\n" + pastedToken + "\n\nStore this token securely.\n"

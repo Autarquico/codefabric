@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
@@ -169,25 +170,26 @@ type budget struct{ files, bytes int }
 
 var errTooBig = fmt.Errorf("the configuration is too big to adopt: at most %d files and %d MiB in all", maxSnapshotFiles, maxSnapshotBytes>>20)
 
-// file counts one more file.
-func (b *budget) file() error {
+// file counts one more file, shown as name if it is the one that goes over.
+func (b *budget) file(name string) error {
 	b.files++
 	if b.files > maxSnapshotFiles {
-		return errTooBig
+		return fmt.Errorf("%q: %w", name, errTooBig)
 	}
 	return nil
 }
 
 // read is what f holds, read up to what is left of the budget and counted
 // against it: a file that grows while it is read cannot go past the limit.
-func (b *budget) read(f io.Reader) ([]byte, error) {
+// name is what the error calls f if it goes over.
+func (b *budget) read(f io.Reader, name string) ([]byte, error) {
 	left := maxSnapshotBytes - b.bytes
 	content, err := io.ReadAll(io.LimitReader(f, int64(left)+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(content) > left {
-		return nil, errTooBig
+		return nil, fmt.Errorf("%q: %w", name, errTooBig)
 	}
 	b.bytes += len(content)
 	return content, nil
@@ -237,7 +239,7 @@ func readFiles(root string, l layout, used *budget) ([]harness.File, bool, error
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("%q is not a regular file", p)
 		}
-		f, err := readRegular(r, p, used, nil)
+		f, err := readRegular(r, p, p, used, nil)
 		if err != nil {
 			return err
 		}
@@ -253,8 +255,8 @@ func readFiles(root string, l layout, used *budget) ([]harness.File, bool, error
 // readRegular is the file name of r, opened first and judged on what was
 // opened: it must be a regular file (a FIFO put there since the directory was
 // listed is not opened for reading, nor waited on) and, if trusted is not nil,
-// pass it. Its content counts against used.
-func readRegular(r *os.Root, name string, used *budget, trusted func(fs.FileInfo) error) (harness.File, error) {
+// pass it. Its content counts against used, and shown names it in an error.
+func readRegular(r *os.Root, name, shown string, used *budget, trusted func(fs.FileInfo) error) (harness.File, error) {
 	f, err := r.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return harness.File{}, err
@@ -272,10 +274,10 @@ func readRegular(r *os.Root, name string, used *budget, trusted func(fs.FileInfo
 			return harness.File{}, err
 		}
 	}
-	if err := used.file(); err != nil {
+	if err := used.file(shown); err != nil {
 		return harness.File{}, err
 	}
-	content, err := used.read(f)
+	content, err := used.read(f, shown)
 	if err != nil {
 		return harness.File{}, err
 	}
@@ -287,9 +289,11 @@ func readRegular(r *os.Root, name string, used *budget, trusted func(fs.FileInfo
 // user or the system installed and nothing else, so that no one else can have
 // put anything in the snapshot:
 //   - the target is a directory that is not itself a link;
-//   - it, and every directory above it up to /, is owned by this user or root
-//     and cannot be written by group or others (a sticky directory, like /tmp,
-//     only lets its owner remove what is in it, so it counts as safe);
+//   - the path to it is walked one component at a time (see resolver): every
+//     directory and every link crossed, not only the ones of the final path,
+//     is owned by this user or root, and a directory cannot be written by
+//     group or others (a sticky one, like /tmp, only lets its owner remove
+//     what is in it, so it counts as safe);
 //   - it is opened, and the opened directory must be the one that was checked;
 //   - every directory and file inside it is owned by this user or root and
 //     cannot be written by group or others, and none is a link.
@@ -300,21 +304,19 @@ func readLinked(abs, p string, used *budget) ([]harness.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(abs), target)
+	first := target // the first look: a directory, not a link
+	if !filepath.IsAbs(first) {
+		first = filepath.Join(filepath.Dir(abs), first)
 	}
-	fi, err := os.Lstat(target)
+	fi, err := os.Lstat(first)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("%q links to a target that cannot be read", p)
 	case !fi.IsDir():
 		return nil, fmt.Errorf("%q is a link to something that is not a directory (not followed)", p)
 	}
-	resolved, err := filepath.EvalSymlinks(target)
+	resolved, err := osResolver.resolve(p, filepath.Dir(abs), target)
 	if err != nil {
-		return nil, fmt.Errorf("%q links to a target that cannot be read", p)
-	}
-	if err := checkAncestors(p, resolved); err != nil {
 		return nil, err
 	}
 	checked, err := os.Lstat(resolved)
@@ -355,7 +357,7 @@ func readLinked(abs, p string, used *budget) ([]harness.File, error) {
 			}
 			return trustedEntry(inside, info)
 		}
-		f, err := readRegular(tr, rel, used, func(info fs.FileInfo) error { return trustedEntry(inside, info) })
+		f, err := readRegular(tr, rel, inside, used, func(info fs.FileInfo) error { return trustedEntry(inside, info) })
 		if err != nil {
 			return err
 		}
@@ -366,24 +368,106 @@ func readLinked(abs, p string, used *budget) ([]harness.File, error) {
 	return files, err
 }
 
-// checkAncestors refuses a resolved path one of whose directories, up to /, is
-// not owned by this user or root, or can be written by group or others (unless
-// it is sticky): anyone who could would be able to swap what the path leads to
-// after it was checked, as sshd's StrictModes guards against.
-func checkAncestors(p, resolved string) error {
-	for dir := filepath.Dir(resolved); ; dir = filepath.Dir(dir) {
-		fi, err := os.Lstat(dir)
+// maxLinkHops bounds the links followed in one resolution.
+const maxLinkHops = 16
+
+// resolver walks a path the way the kernel does, but judging every step: an
+// intermediate link that someone else planted would otherwise lead a path that
+// looks safe once resolved into the directories of the user. Its file system
+// and uid are fields so that a test can play another user.
+type resolver struct {
+	lstat    func(string) (fs.FileInfo, error)
+	readlink func(string) (string, error)
+	uid      uint32
+}
+
+var osResolver = resolver{lstat: os.Lstat, readlink: os.Readlink, uid: uint32(os.Getuid())} //nolint:gosec // a uid
+
+func (r resolver) owns(fi fs.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && (st.Uid == r.uid || st.Uid == 0)
+}
+
+// resolve is the directory that target, a link's target found in dir (the
+// directory of the link at p in the snapshot), leads to, with no link in it.
+// Walking from / (target absolute) or from dir (relative), it follows at most
+// maxLinkHops links, and refuses:
+//   - a directory not owned by the user or root, or writable by group or
+//     others unless sticky;
+//   - a link not owned by the user or root (its mode says nothing: it is
+//     always 0777 on Linux). The directory that holds it has passed already,
+//     so nobody else can have swapped it;
+//   - a final component that is not a directory.
+func (r resolver) resolve(p, dir, target string) (string, error) {
+	queue := splitPath(target)
+	cur := "/"
+	if !filepath.IsAbs(target) {
+		queue = append(splitPath(dir), queue...)
+	}
+	if err := r.checkDir(p, cur); err != nil {
+		return "", err
+	}
+	hops := 0
+	for len(queue) > 0 {
+		comp := queue[0]
+		queue = queue[1:]
+		switch comp {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur) // cur has no links in it and has passed
+			continue
+		}
+		next := filepath.Join(cur, comp)
+		fi, err := r.lstat(next)
 		if err != nil {
-			return fmt.Errorf("%q: %w", p, err)
+			return "", fmt.Errorf("%q links to a target that cannot be read", p)
 		}
-		if !ownedByUserOrRoot(fi) || (fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0) {
-			return fmt.Errorf("%q links into %q, which another user owns or can write (not followed)", p, dir)
-		}
-		if dir == filepath.Dir(dir) {
-			return nil
+		switch {
+		case fi.Mode()&fs.ModeSymlink != 0:
+			if !r.owns(fi) {
+				return "", fmt.Errorf("%q goes through the link %q, which another user owns (not followed)", p, next)
+			}
+			if hops++; hops > maxLinkHops {
+				return "", fmt.Errorf("%q goes through too many links (not followed)", p)
+			}
+			to, err := r.readlink(next)
+			if err != nil {
+				return "", fmt.Errorf("%q links to a target that cannot be read", p)
+			}
+			if filepath.IsAbs(to) {
+				cur = "/"
+			}
+			queue = append(splitPath(to), queue...)
+		case fi.IsDir():
+			if err := r.checkDir(p, next); err != nil {
+				return "", err
+			}
+			cur = next
+		default:
+			return "", fmt.Errorf("%q is a link to something that is not a directory (not followed)", p)
 		}
 	}
+	return cur, nil
 }
+
+// checkDir refuses dir, a directory a path crosses, unless it is owned by the
+// user or root and cannot be written by group or others (a sticky directory
+// only lets its owner remove entries): anyone who could write it could swap
+// what the path leads to after it was checked, as sshd's StrictModes guards
+// against.
+func (r resolver) checkDir(p, dir string) error {
+	fi, err := r.lstat(dir)
+	if err != nil {
+		return fmt.Errorf("%q: %w", p, err)
+	}
+	if !r.owns(fi) || (fi.Mode().Perm()&0o022 != 0 && fi.Mode()&fs.ModeSticky == 0) {
+		return fmt.Errorf("%q links into %q, which another user owns or can write (not followed)", p, dir)
+	}
+	return nil
+}
+
+func splitPath(p string) []string { return strings.Split(p, "/") }
 
 // trustedEntry is an error naming what unless fi, what was opened or listed
 // there, is owned by this user or root and cannot be written by group or others.

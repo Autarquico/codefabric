@@ -342,13 +342,19 @@ func oauthTokenLine(value []byte, notice io.Writer) ([]byte, error) {
 		return nil, invalid("the input has several lines and not exactly one is a token of the form sk-ant-oat...: paste only the token. Nothing was stored")
 	}
 	token := bytes.Clone(lines[start])
+	joined := 1
 	for _, line := range lines[start+1:] {
 		if !tokenTail.Match(line) {
 			break
 		}
 		token = append(token, line...)
+		joined++
 	}
-	_, _ = fmt.Fprintln(notice, "kept the token line from the pasted output")
+	if joined > 1 {
+		_, _ = fmt.Fprintf(notice, "joined the token from %d lines of the pasted output\n", joined)
+	} else {
+		_, _ = fmt.Fprintln(notice, "kept the token line from the pasted output")
+	}
 	return token, nil
 }
 

@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -133,6 +134,9 @@ func (Adapter) ValidateConfig(_ context.Context, host harness.Host) (harness.Val
 		_, _, err := readSnapshotFiles(l.root(host), l, &used)
 		if err != nil {
 			v.Issues = append(v.Issues, harness.ValidationIssue{Component: l.name, Message: err.Error()})
+			if errors.Is(err, errTooBig) { // the next ones would only be blamed for it
+				break
+			}
 		}
 	}
 	return v, nil

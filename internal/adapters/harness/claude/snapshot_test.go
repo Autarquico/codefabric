@@ -552,3 +552,37 @@ func TestApplyConfigWritesRealFilesForALinkedSkill(t *testing.T) {
 		}
 	}
 }
+
+// A real intermediate link of the user, in a directory the user and root own,
+// leads to a directory of the user: followed, as the kernel would.
+func TestSnapshotFollowsAnIntermediateLinkOfTheUser(t *testing.T) {
+	h, home := newHost(t, nil)
+	base := t.TempDir()
+	dir := filepath.Join(base, "releases", "v1", "tdd")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("# tdd"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(base, "releases", "v1"), filepath.Join(base, "current")); err != nil {
+		t.Fatal(err)
+	}
+	linkedSkill(t, home, "tdd", filepath.Join(base, "current", "tdd"))
+	files := skillsOf(t, h)
+	if len(files) != 1 || files[0].Path != "skills/tdd/SKILL.md" {
+		t.Errorf("files = %+v", files)
+	}
+}
+
+// Links that loop are refused, not followed forever.
+func TestSnapshotRefusesALoopOfLinks(t *testing.T) {
+	h, home := newHost(t, nil)
+	base := t.TempDir()
+	_ = os.Symlink(filepath.Join(base, "b"), filepath.Join(base, "a"))
+	_ = os.Symlink(filepath.Join(base, "a"), filepath.Join(base, "b"))
+	linkedSkill(t, home, "x", filepath.Join(base, "a", "x"))
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{}); err == nil {
+		t.Error("a loop of links was followed")
+	}
+}
