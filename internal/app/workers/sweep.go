@@ -48,7 +48,7 @@ func (s *Service) Sweep(ctx context.Context) error {
 			}
 			ev := act.Event(domain.EventWorkerLost, "worker lost")
 			ev.Level, ev.WorkerID = "warn", w.ID
-			ev.Data = map[string]any{"was": string(was), "last_seen": lastSeen, "offline_ttl": s.ttl.String()}
+			ev.Data = map[string]any{"was": string(was), "last_seen": lastSeen, "offline_ttl": s.ttl.String(), "worker_name": w.Name}
 			if _, _, err := tx.AppendEvent(ctx, ev); err != nil {
 				return err
 			}

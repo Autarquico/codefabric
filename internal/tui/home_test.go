@@ -320,6 +320,35 @@ func TestScenario_TuiShellHome_Activity_SubjectsAndWordsAreHuman(t *testing.T) {
 	}
 }
 
+// The events of the scheduler carry the name of their Task or Worker: Activity
+// names them and does not fall back to shortened IDs.
+func TestScenario_TuiShellHome_Activity_NamesTheTaskAndTheWorkerOfTheScheduler(t *testing.T) {
+	const ulid = "01JC8Q3VZ4N5R6S7T8V9W0X1Y2"
+	at := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	m := shell(t)
+	connect(m)
+	send(m, client.UpdateSnapshot, v1.Overview{
+		Workers: map[domain.WorkerState]int{domain.WorkerOnline: 1},
+		Activity: []v1.Event{
+			{Sequence: 1, ReceivedAt: at, Type: domain.EventRunAssigned, TaskID: "task_" + ulid, RunID: "run_" + ulid, WorkerID: "worker_" + ulid, Data: map[string]any{"task_name": "auth-refactor", "worker": "linux"}},
+			{Sequence: 2, ReceivedAt: at, Type: domain.EventLeaseAccepted, TaskID: "task_" + ulid, RunID: "run_" + ulid, Data: map[string]any{"task_name": "payments"}},
+			{Sequence: 3, ReceivedAt: at, Type: domain.EventLeaseExpired, TaskID: "task_" + ulid, RunID: "run_" + ulid, Data: map[string]any{"task_name": "search-index"}},
+			{Sequence: 4, ReceivedAt: at, Type: domain.EventWorkerLost, WorkerID: "worker_" + ulid, Data: map[string]any{"worker_name": "mbp"}},
+		},
+	})
+
+	got := frame(m)
+	compareGolden(t, "home-activity-names.golden", got)
+	for _, want := range []string{"auth-refactor", "payments", "search-index", "mbp"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the activity lacks the name %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, ulid[len(ulid)-6:]) {
+		t.Errorf("the activity falls back to a shortened ID:\n%s", got)
+	}
+}
+
 func TestPrintable_DropsControlAndFormatCharacters(t *testing.T) {
 	if got := printable("a\x1b[2Jb\u202ec\u200bd"); got != "a[2Jbcd" {
 		t.Errorf("printable = %q", got)

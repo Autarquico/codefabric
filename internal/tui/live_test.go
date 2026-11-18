@@ -566,12 +566,13 @@ func TestScenario_LiveView_Shell_Action(t *testing.T) {
 
 func TestScenario_LiveView_Shell_PolicyDeniedIsTheFailureLine(t *testing.T) {
 	be := newBackend()
-	be.failure = actions.FailureOf(domain.NewError(domain.CodePolicyDenied, "the shell is not allowed: policy "+domain.PolicyProjectShell, nil))
+	be.failure = actions.FailureOf(domain.NewError(domain.CodePolicyDenied, "the shell is not allowed: policy "+domain.PolicyProjectShell,
+		map[string]any{"policy": domain.PolicyProjectShell, "project": "shop"}))
 	m, p := liveShell(t, be, "r", 120, 32, 1)
 	p.key("s")
 	p.until("the failure", p.showing("CF_POLICY_DENIED"))
 	got := frame(m)
-	for _, want := range []string{"! Shell failed", "policy project.shell"} {
+	for _, want := range []string{"! Shell failed", "policy project.shell", "cf project set shop --shell on"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the failure lacks %q:\n%s", want, got)
 		}
@@ -928,4 +929,53 @@ func TestScenario_LiveView_Leave_NamedWhileTheSessionOpens(t *testing.T) {
 		close(be.gate)
 		p.until("the attach", func() bool { return len(attachedBy(be)) == 1 })
 	}
+}
+
+// Cells full of the glyphs of Claude's screen: every row of the grid has the
+// width of the terminal and the divider between cells sits in the same column
+// on every row, so the cells have the same height.
+func TestScenario_LiveView_Grid_FullCellsWithWideGlyphsFit(t *testing.T) {
+	var screen strings.Builder
+	for i := 1; i <= 60; i++ {
+		fmt.Fprintf(&screen, "⏺ ✻ ● ⏵⏵ ⎿ ✳ ✔ ⚠ line %d %s\r\n", i, strings.Repeat("⏺✻●⏵⎿ ", 40))
+	}
+	be := newBackend()
+	for i := 1; i <= 3; i++ {
+		be.screens.screens[fmt.Sprintf("run_%d", i)] = screen.String()
+	}
+	m, p := liveShell(t, be, "r", 160, 45, 3)
+	p.key("V")
+	p.until("every cell", func() bool { return strings.Count(frame(m), "line 60") == 3 })
+	got := frame(m)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 45 {
+		t.Errorf("the grid is %d lines tall, want 45", len(lines))
+	}
+	for _, row := range []int{22, 42} { // the last line of each row of cells: both are as tall
+		if !strings.Contains(lines[row-1], "line 60") {
+			t.Errorf("line %d is not the end of a full cell:\n%s", row, lines[row-1])
+		}
+	}
+	divider := -1
+	for i, line := range lines {
+		if w := ansi.StringWidth(line); w > 160 {
+			t.Errorf("line %d is %d cells wide: it would wrap", i+1, w)
+		}
+		if i < 2 || i >= 22 {
+			continue // only the first row of cells, lines 3 to 22, has two cells and a divider
+		}
+		col := strings.Index(line, "│")
+		if col < 0 {
+			t.Errorf("line %d has no divider:\n%s", i+1, line)
+			continue
+		}
+		col = ansi.StringWidth(line[:col])
+		if divider < 0 {
+			divider = col
+		}
+		if col != divider {
+			t.Errorf("the divider of line %d is in column %d, want %d", i+1, col, divider)
+		}
+	}
+	compareGolden(t, "live-grid-wide-glyphs-160x45.golden", got)
 }

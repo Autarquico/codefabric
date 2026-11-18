@@ -36,7 +36,7 @@ func TestScenario_WorkerRegistryHeartbeat_Offline(t *testing.T) {
 		t.Fatalf("past the TTL: %s", got)
 	}
 	lost := e.events(domain.EventWorkerLost)
-	if len(lost) != 1 || lost[0].WorkerID != w.Principal.ID || lost[0].Level != "warn" || lost[0].Actor.Kind != domain.ActorSystem {
+	if len(lost) != 1 || lost[0].WorkerID != w.Principal.ID || lost[0].Level != "warn" || lost[0].Actor.Kind != domain.ActorSystem || lost[0].Data["worker_name"] != "box" {
 		t.Fatalf("WorkerLost = %+v", lost)
 	}
 

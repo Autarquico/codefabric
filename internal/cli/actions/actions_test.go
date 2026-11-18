@@ -192,6 +192,25 @@ func TestScenario_TuiViewsActions_EveryCodeHasAHint(t *testing.T) {
 	}
 }
 
+func TestScenario_TuiViewsActions_PolicyHintsNameTheWayToTurnItOn(t *testing.T) {
+	denied := func(details map[string]any) string { return actions.HintFor(domain.CodePolicyDenied, details) }
+	for _, tc := range []struct {
+		name    string
+		details map[string]any
+		want    string
+	}{
+		{"project", map[string]any{"policy": domain.PolicyProjectShell, "project": "shop"}, "cf project set shop --shell on"},
+		{"project without a name", map[string]any{"policy": domain.PolicyProjectShell}, "cf project set <project> --shell on"},
+		{"worker", map[string]any{"policy": domain.PolicyWorkerAllowShell}, "cf worker config set allow_shell true"},
+		{"no policy", nil, "ask an owner"},
+		{"another policy", map[string]any{"policy": "budget.x"}, "ask an owner"},
+	} {
+		if got := denied(tc.details); !strings.Contains(got, tc.want) {
+			t.Errorf("%s: hint %q lacks %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestScenario_TuiViewsActions_Errores(t *testing.T) {
 	t.Setenv("CF_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())

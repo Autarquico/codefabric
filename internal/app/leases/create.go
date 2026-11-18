@@ -75,7 +75,7 @@ func (s *Service) CreateIn(ctx context.Context, tx *store.Tx, act mutation.Act, 
 	}
 	ev := act.Event(domain.EventRunAssigned, "run assigned")
 	ev.ProjectID, ev.TaskID, ev.RunID, ev.WorkerID = task.ProjectID, task.ID, run.ID, w.ID
-	ev.Data = map[string]any{"lease_id": string(l.ID), "epoch": l.Epoch, "worker": w.Name, "accept_by": l.AcceptBy}
+	ev.Data = map[string]any{"lease_id": string(l.ID), "epoch": l.Epoch, "worker": w.Name, "accept_by": l.AcceptBy, "task_name": task.Name}
 	if continues != nil {
 		ev.Data["checkpoint"], ev.Data["native_state"] = continues.CheckpointID, continues.NativeState != nil
 		if continues.Seed != nil {

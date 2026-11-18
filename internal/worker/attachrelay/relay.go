@@ -29,10 +29,15 @@ const (
 	DefaultMaxSessions     = 16
 	DefaultOutputBudget    = 1 << 20
 	DefaultFirstResizeWait = 250 * time.Millisecond
+	DefaultInputHold       = time.Second
 	DefaultBackoffFloor    = time.Second
 	DefaultBackoffCeiling  = 30 * time.Second
 	DefaultFarewellGrace   = 2 * time.Second
 	DefaultDialTimeout     = 10 * time.Second
+
+	// maxHeldInput is the most a client may type before the tmux client has drawn
+	// its first output; past it the input is delivered at once.
+	maxHeldInput = 4 << 10
 
 	// readChunk is what is read from the terminal at once; far under a frame.
 	readChunk = 16 << 10
@@ -113,6 +118,7 @@ type Options struct {
 	MaxSessions     int           // attaches at once on this Worker
 	OutputBudget    int           // bytes of terminal output waiting for the Controller, per attach
 	FirstResizeWait time.Duration // how long to wait for the size of the client before starting at the default
+	InputHold       time.Duration // how long the keys of a client wait for the tmux client to draw, at most
 	BackoffMin      time.Duration // the first wait after a failed poll
 	BackoffMax      time.Duration
 	FarewellGrace   time.Duration // how long a last frame has to be written before the stream is closed
@@ -143,6 +149,7 @@ func New(o Options) *Relay {
 	}
 	set(&o.PollWait, DefaultPollWait)
 	set(&o.FirstResizeWait, DefaultFirstResizeWait)
+	set(&o.InputHold, DefaultInputHold)
 	set(&o.BackoffMin, DefaultBackoffFloor)
 	set(&o.BackoffMax, DefaultBackoffCeiling)
 	set(&o.FarewellGrace, DefaultFarewellGrace)
@@ -392,13 +399,19 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 	out := newOutbox(r.o.OutputBudget)
 	flushed := make(chan struct{})
 	connLost := make(chan struct{})
+	drawn := make(chan struct{}) // closed at the first output of the terminal
 	wg.Add(2)
 	go func() { // the terminal's output into the outbox
 		defer wg.Done()
 		defer out.close()
 		buf := make([]byte, readChunk)
+		seen := false
 		for {
 			n, err := term.Read(buf)
+			if n > 0 && !seen {
+				seen = true
+				close(drawn)
+			}
 			if n > 0 && !out.put(buf[:n]) {
 				return // over budget: the main loop cuts the session
 			}
@@ -426,16 +439,46 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 		}
 	}()
 
+	// The keys a client types as it attaches can reach the pty before the tmux
+	// client in it has set the terminal raw, and are then eaten by the line
+	// discipline. They wait for its first output, which it only draws once the
+	// terminal is set up, and are then written in order. The wait is bounded in
+	// bytes and in time: a tmux that stays silent does not swallow what is typed.
+	var held []byte
+	var holdUp <-chan time.Time
+	var firstOutput <-chan struct{} // nil, which never fires, when there is nothing to wait for
+	if write {
+		timer := r.o.Clock.NewTimer(r.o.InputHold)
+		defer timer.Stop()
+		holdUp, firstOutput = timer.C(), drawn
+	}
+	holding := write
+	release := func() (ok bool) {
+		holding, firstOutput, holdUp = false, nil, nil
+		pending := held
+		held = nil
+		if len(pending) == 0 {
+			return true
+		}
+		_, err := term.Write(pending)
+		return err == nil
+	}
+
 	handle := func(fr read) (end bool) {
 		if fr.err != nil {
 			return true // the Controller went away: nobody to answer
 		}
 		switch fr.f.Type {
 		case v1.FrameData:
-			if write { // defence in depth: a view never writes, whatever reaches here
-				if _, err := term.Write(fr.f.Payload); err != nil {
-					return true
-				}
+			if !write { // defence in depth: a view never writes, whatever reaches here
+				break
+			}
+			if holding {
+				held = append(held, fr.f.Payload...)
+				return len(held) > maxHeldInput && !release()
+			}
+			if _, err := term.Write(fr.f.Payload); err != nil {
+				return true
 			}
 		case v1.FrameResize:
 			if c, rw, err := v1.ParseResize(fr.f.Payload); err == nil && write {
@@ -453,6 +496,14 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 		select {
 		case fr := <-frames:
 			if handle(fr) {
+				return
+			}
+		case <-firstOutput:
+			if !release() {
+				return
+			}
+		case <-holdUp:
+			if !release() {
 				return
 			}
 		case <-flushed:

@@ -1,0 +1,15 @@
+ CODEFABRIC                                                   ● healthy
+
+ TASKS                  WORKERS                MODELS
+ 0 running              1/1 online             usage not reported
+ 0 needs you
+
+ ──────────────── Activity ────────────────────────────────────────────
+ 12:00   mbp               worker lost
+ 12:00   search-index      lease expired
+ 12:00   payments          lease accepted
+ 12:00   auth-refactor     run assigned
+ ──────────────────────────────────────────────────────────────────────
+ [t] Tasks [w] Workers [m] Models [r] Runs [f] Workflows
+ [p] Projects [a] Activity [l] Logs [i] Inbox [/] Search
+ [ctrl+p] Actions [:] Command [q] Quit

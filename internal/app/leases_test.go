@@ -37,6 +37,15 @@ func TestScenario_SchedulerLeasesReservations_AcceptIdempotente(t *testing.T) {
 		t.Errorf("Task = %+v (%v), want running", task.State, err)
 	}
 
+	// The events name the Task, so that the Activity view reads names and not IDs.
+	task, err := e.app.Tasks.Get(t.Context(), run.TaskID, "")
+	must(t, err)
+	for _, typ := range []domain.EventType{domain.EventRunAssigned, domain.EventLeaseAccepted} {
+		if ev := e.events(typ); len(ev) != 1 || ev[0].Data["task_name"] != task.Name || task.Name == "" {
+			t.Errorf("%s = %+v, want task_name %q", typ, ev, task.Name)
+		}
+	}
+
 	// The same accept again, later, answers byte for byte the same and writes nothing.
 	events := len(e.events())
 	e.clock.Advance(time.Hour)
@@ -226,7 +235,7 @@ func TestScenario_SchedulerLeasesReservations_Expiracion_Sweep(t *testing.T) {
 	if cmds := e.commands(w); len(cmds) != 0 {
 		t.Errorf("an expired assignment is still delivered: %+v", cmds)
 	}
-	if expired := e.events(domain.EventLeaseExpired); len(expired) != 1 || expired[0].Data["close_code"] != domain.LeaseCloseAcceptTimeout || expired[0].Actor.Kind != domain.ActorSystem {
+	if expired := e.events(domain.EventLeaseExpired); len(expired) != 1 || expired[0].Data["close_code"] != domain.LeaseCloseAcceptTimeout || expired[0].Actor.Kind != domain.ActorSystem || expired[0].Data["task_name"] == "" {
 		t.Errorf("LeaseExpired = %+v", expired)
 	}
 

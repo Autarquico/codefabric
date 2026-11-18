@@ -23,7 +23,7 @@ func requireShell(ctx context.Context, q store.Querier, run store.Run, worker *s
 	}
 	if !project.Shell {
 		return domain.NewError(domain.CodePolicyDenied, "the shell is off in this Project: enable it with `cf project set "+project.Name+" --shell on`",
-			map[string]any{"policy": domain.PolicyProjectShell})
+			map[string]any{"policy": domain.PolicyProjectShell, "project": project.Name})
 	}
 	if worker == nil || !slices.Contains(worker.Report.Capabilities, domain.AttachShellCapability) {
 		return domain.NewError(domain.CodePolicyDenied, "this Worker does not offer a shell (allow_shell is off in its local settings, or it predates the shell)",

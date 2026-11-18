@@ -246,3 +246,35 @@ func TestScenario_LiveAttach_DosEscritoresYPanel(t *testing.T) {
 	term.send("q")
 	o.finishChat()
 }
+
+// TestScenario_LiveAttach_TeclaDeRespaldoAlEntrarDesdeLaTui: the Ctrl-] typed as
+// soon as the client is on the Run, entered from the TUI with a detach key that
+// is not Ctrl-], leaves it and the TUI is back.
+//
+// Not covered: the hold of the relay. This test also passes with the hold
+// disabled (checked by hand), so it does not guard it. Nor a Ctrl-] sent in the
+// same write as Enter: the TUI reads it before it hands over the terminal.
+func TestScenario_LiveAttach_TeclaDeRespaldoAlEntrarDesdeLaTui(t *testing.T) {
+	o := newObserveBox(t, chatScript)
+	use(t, o.client)
+	useDetachKeyCtrlG(t, o)
+	term := o.tui()
+	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODEFABRIC") })
+	term.send("t")
+	eventually(t, "the Task", func() bool { return strings.Contains(term.screen(), "auth-race") })
+	term.send("v")
+	eventually(t, "the panel", func() bool { return strings.Contains(term.screen(), "Ctrl-G leaves") })
+	term.send("Enter")
+	eventually(t, "the attach", func() bool { return o.clients() == 1 })
+	term.send("C-]")
+	eventually(t, "the TUI back with its panel", func() bool {
+		s := term.screen()
+		return strings.Contains(s, "Live ·") && strings.Contains(s, "Back from")
+	})
+	eventually(t, "no client left on the Run", func() bool { return o.clients() == 0 })
+	if r := o.reconcileBox.run(o.run.ID); r.State != domain.RunRunning || !o.sessionAlive() {
+		t.Fatalf("leaving ended the Run: %+v", r)
+	}
+	term.send("q")
+	o.finishChat()
+}

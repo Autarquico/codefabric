@@ -115,6 +115,14 @@ func TestScenario_LiveAttach_TerminalRestaurada(t *testing.T) {
 	if got := term.modes(); got != "alternate=0 cursor=1 mouse=0" {
 		t.Errorf("after Ctrl-] the terminal is %q", got)
 	}
+	// The banner stays and the shell starts under it, not over it.
+	lines := strings.Split(strings.TrimRight(term.screen(), "\n"), "\n")
+	if !strings.HasPrefix(lines[0], "attached to ") {
+		t.Errorf("the banner is not on the first line of the terminal:\n%s", term.screen())
+	}
+	if row := term.tmux("display-message", "-p", "-t", "0", "#{cursor_y}"); strings.TrimSpace(row) == "0" {
+		t.Errorf("the cursor is on the first row, over the banner")
+	}
 	o.finishChat()
 }
 
@@ -338,4 +346,37 @@ func TestScenario_LiveAttach_SinRelayEnElWorker(t *testing.T) {
 	}
 	o.release(o.run.ID)
 	o.waitPublished(o.run.ID)
+}
+
+// useDetachKeyCtrlG sets a detach key for cf that is not Ctrl-], so that the
+// Ctrl-] a person types is the fallback bound in the tmux of the Worker.
+func useDetachKeyCtrlG(t *testing.T, o *observeBox) {
+	t.Helper()
+	config := filepath.Join(o.client.ConfigDir, "client.json")
+	if err := os.WriteFile(config, []byte(`{"attach":{"detach_key":"ctrl+g"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestScenario_LiveAttach_TeclaDeRespaldoAlEntrar: with a detach key of cf that
+// is not Ctrl-], a Ctrl-] already waiting in the terminal when cf starts is read
+// the moment the terminal is raw, goes to the Worker with the attach opening, and
+// still leaves through the fallback bound in the tmux of the Worker.
+//
+// Not covered: the hold of the relay. This test also passes with the hold
+// disabled (checked by hand), so it does not guard it;
+// TestRelay_InputBeforeTheTerminalDrawsWaitsAndArrivesInOrder does.
+func TestScenario_LiveAttach_TeclaDeRespaldoAlEntrar(t *testing.T) {
+	o := newObserveBox(t, chatScript)
+	use(t, o.client)
+	useDetachKeyCtrlG(t, o)
+	exe, _ := os.Executable()
+	term := inTerminal(t, o.attachEnv(), "sh", "-c", fmt.Sprintf("sleep 1; exec %s attach auth-race", exe))
+	term.send("C-]")
+	eventually(t, "cf attach to exit", term.ended)
+	eventually(t, "the client to leave the session", func() bool { return o.clients() == 0 })
+	if !o.sessionAlive() || o.reconcileBox.run(o.run.ID).State != domain.RunRunning {
+		t.Fatal("leaving ended the Run")
+	}
+	o.finishChat()
 }
