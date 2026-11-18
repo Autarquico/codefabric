@@ -99,7 +99,7 @@ func TestARunOfCodexKeepsItsEventsApartFromItsStderr(t *testing.T) {
 	for ev := range ch {
 		kinds = append(kinds, ev.Kind)
 	}
-	if wantKinds := []harness.EventKind{harness.EventSessionStarted, harness.EventUsage, harness.EventResult}; !slices.Equal(kinds, wantKinds) {
+	if wantKinds := []harness.EventKind{harness.EventSessionStarted, harness.EventAgentMessage, harness.EventUsage, harness.EventResult}; !slices.Equal(kinds, wantKinds) {
 		t.Errorf("events = %v, want %v", kinds, wantKinds)
 	}
 	usage, err := codex.Adapter{}.CollectUsage(t.Context(), nil, h)

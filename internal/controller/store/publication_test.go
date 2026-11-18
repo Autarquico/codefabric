@@ -136,3 +136,25 @@ func TestOpen_UpgradesFrom0104WithLiveAndTerminalRuns(t *testing.T) {
 		t.Errorf("a Run from before the migration has %q, %q, %v", run.Branch, run.ResultCommit, run.ResultExcluded)
 	}
 }
+
+func TestRuns_TheAnswerOfAnExitIsKeptAndAnEmptyOneLeavesItAlone(t *testing.T) {
+	f := newLeaseFixture(t)
+	run, _ := f.exitedRun(1)
+	if run.Answer != "" {
+		t.Fatalf("answer before = %q", run.Answer)
+	}
+	set := func(answer string) {
+		t.Helper()
+		if err := f.db.WithTx(t.Context(), func(tx *Tx) error { return tx.SetRunAnswer(t.Context(), run, answer) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set("all green\nsecond line")
+	if got := f.run(run.ID).Answer; got != "all green\nsecond line" {
+		t.Errorf("answer = %q", got)
+	}
+	set("")
+	if got := f.run(run.ID).Answer; got != "all green\nsecond line" {
+		t.Errorf("an empty answer changed it: %q", got)
+	}
+}

@@ -598,3 +598,23 @@ func TestReport_ARunThatIsNoLongerTheWorkersTellsItLittle(t *testing.T) {
 		t.Errorf("Run = %+v: only state, runtime and publication", out.Run)
 	}
 }
+
+func withAnswer(answer string) func(*v1.RunReportEntry) {
+	return func(en *v1.RunReportEntry) { en.Answer = answer }
+}
+
+func TestReport_AnExitedThatComesAfterTheRunEndedStoresItsAnswer(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	r.mustSend(r.entry(v1.ReportStarted))
+	e.cancelTask(r.run.TaskID)
+	if got := e.storedRun(r.run.ID); got.State != domain.RunCancelled {
+		t.Fatalf("Run = %s", got.State)
+	}
+	if got := results(r.mustSend(r.entry(v1.ReportExited, cause(v1.ExitCauseStop), withAnswer("what it said")))); got != "applied" {
+		t.Fatalf("a late exited = %s", got)
+	}
+	if got := e.storedRun(r.run.ID).Answer; got != "what it said" {
+		t.Errorf("answer = %q", got)
+	}
+}

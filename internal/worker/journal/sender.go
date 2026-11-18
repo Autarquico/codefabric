@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
+	"sync/atomic"
 	"time"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
@@ -25,6 +27,29 @@ const (
 	backoffMax     = 30 * time.Second
 )
 
+// ControllerFeatures is what the last heartbeat said the Controller understands.
+// The zero value knows nothing yet.
+type ControllerFeatures struct {
+	answer atomic.Int32 // 0 unknown, 1 takes the answer of an exited, 2 does not
+}
+
+// Set records the features of a heartbeat response; the latest one counts, so a
+// Controller that is rolled back to an older version is noticed.
+func (f *ControllerFeatures) Set(features []string) {
+	if slices.Contains(features, v1.FeatureRunAnswer) {
+		f.answer.Store(1)
+		return
+	}
+	f.answer.Store(2)
+}
+
+// takesAnswer says whether the Controller takes the answer of an exited, and
+// whether that is known at all.
+func (f *ControllerFeatures) takesAnswer() (takes, known bool) {
+	v := f.answer.Load()
+	return v == 1, v != 0
+}
+
 // Sender sends the journal. Rows go in the order of their seq, by Run, up to
 // v1.MaxReportEntries and v1.MaxReportBytes per request, and are deleted only
 // once the Controller has them (applied or duplicate).
@@ -37,6 +62,12 @@ const (
 // time, and only that Run is affected. Any other error of the whole request (no
 // connection, authentication, a server that fails) says nothing of the entries
 // and fences nothing: it is retried with a backoff and loses nothing.
+//
+// The journal always keeps the answer of an exited. Whether it goes is decided
+// at each send from Features, as an older Controller refuses a report with a
+// field it does not know. Until a heartbeat has said what the Controller
+// understands, nothing is sent: a Worker is registered by its heartbeats, so
+// that wait is short, and sending without the answer would lose it for good.
 type Sender struct {
 	DB       *state.DB
 	Reporter Reporter
@@ -44,6 +75,8 @@ type Sender struct {
 	Clock    clock.Clock
 	Log      *slog.Logger
 	Tick     time.Duration // 0 means a second
+	// Features, if set, gates what is sent on what the Controller understands.
+	Features *ControllerFeatures
 	// OnView, if set, is called for each request the Controller applied, with the Run
 	// as the Controller shows it and the seqs of the reports it settled, in the transaction that deletes the confirmed reports.
 	// An error rolls that transaction back and the reports are sent again.
@@ -108,6 +141,13 @@ type group struct {
 // settled (confirmed, or refused for good). An error means the Controller could
 // not be reached or answered something unexpected: what was not settled stays.
 func (s *Sender) Flush(ctx context.Context) (int, error) {
+	withAnswer := true
+	if s.Features != nil {
+		var known bool
+		if withAnswer, known = s.Features.takesAnswer(); !known {
+			return 0, nil
+		}
+	}
 	pending, err := state.PendingJournal(ctx, s.DB.Reader(), pageRows)
 	if err != nil {
 		return 0, err
@@ -128,7 +168,7 @@ func (s *Sender) Flush(ctx context.Context) (int, error) {
 		for len(g.rows) > 0 {
 			batch, rest := split(g.rows)
 			g.rows = rest
-			n, fenced, err := s.send(ctx, g.key, batch)
+			n, fenced, err := s.send(ctx, g.key, batch, withAnswer)
 			settled += n
 			if err != nil {
 				var coded *domain.Error
@@ -168,12 +208,15 @@ func split(rows []state.JournalRow) (batch, rest []state.JournalRow) {
 
 // send makes one request. It returns how many rows are settled and whether the
 // Run was fenced.
-func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow) (settled int, fenced bool, err error) {
+func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow, withAnswer bool) (settled int, fenced bool, err error) {
 	req := v1.RunReportRequest{Entries: make([]v1.RunReportEntry, 0, len(batch))}
 	for _, r := range batch {
 		e, err := entryOf(r)
 		if err != nil {
 			return 0, false, err
+		}
+		if !withAnswer {
+			e.Answer = ""
 		}
 		req.Entries = append(req.Entries, e)
 	}

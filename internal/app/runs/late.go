@@ -73,6 +73,9 @@ func (s *Service) lateEntry(ctx context.Context, tx *store.Tx, act mutation.Act,
 			if err := tx.NoteExit(ctx, run, e.ExitCode); err != nil {
 				return err
 			}
+			if err := tx.SetRunAnswer(ctx, run, e.Answer); err != nil {
+				return err
+			}
 			ran := true
 			run.HarnessRan = &ran
 			if err := MarkExecutedIn(ctx, tx, &run); err != nil {

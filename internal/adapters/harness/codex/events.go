@@ -61,6 +61,7 @@ func (p *parser) parse(raw []byte) []harness.Event {
 	case "item.completed":
 		if l.Item != nil && l.Item.Type == "agent_message" {
 			p.summary = l.Item.Text
+			return []harness.Event{{Kind: harness.EventAgentMessage, Message: l.Item.Text}}
 		}
 		return nil
 	case "turn.completed":

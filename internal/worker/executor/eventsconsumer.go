@@ -158,8 +158,12 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 		case harness.EventInputRequired:
 			needsInput, message = true, ev.Message
 			asked = append(asked, ev)
+		case harness.EventAgentMessage:
+			next.AgentMessage = v1.BoundAnswer(ev.Message)
 		case harness.EventResult:
 			sawResult = true
+			next.Answer = answerOf(ev.Result, next.AgentMessage)
+			next.AgentMessage = ""
 		}
 	}
 	if sessionID != "" && r.SessionID == "" && domain.Printable(sessionID) && len(sessionID) <= 256 {
@@ -220,6 +224,20 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 		return more, err
 	}
 	return more, e.endInputIfIdle(ctx, r.Key)
+}
+
+// answerOf is the answer a result gives: its own text, or else the last message
+// of the agent, which a harness that says it apart from the result (Codex) may
+// have written in an earlier drain. The last result wins. What the harness says
+// is its own word: it is bounded to what the Controller takes.
+func answerOf(r *harness.Result, agentMessage string) string {
+	if r == nil {
+		return agentMessage
+	}
+	if r.Summary == "" && !r.Failed {
+		return agentMessage
+	}
+	return v1.BoundAnswer(r.Summary)
 }
 
 func (e *Executor) saveCursor(ctx context.Context, c state.EventCursor) error {

@@ -251,12 +251,14 @@ func Run(ctx context.Context, o Options) error {
 	g, gctx := errgroup.WithContext(ctx)
 	takeApplies := d.takeApplies(gctx, g, ap)
 	firstBeat := make(chan struct{})
+	features := &journal.ControllerFeatures{}
 	var beatOnce sync.Once
 	d.onResponse = func(r v1.HeartbeatResponse) {
 		beatOnce.Do(func() { close(firstBeat) })
 		takeApplies(r)
 		// A heartbeat taken is this daemon held as the current one: it may ask for grants.
 		ex.HeartbeatTaken()
+		features.Set(r.Features)
 		d.ackJournal(gctx, r.JournalAck)
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
 		if r.ReconcileRequired && ex.Reconciled() {
@@ -278,7 +280,7 @@ func Run(ctx context.Context, o Options) error {
 	})
 	d.journalBacklog = degrader.Backlog
 	sender := &journal.Sender{
-		DB: db, Reporter: c, Journal: jrn, Clock: d.clock, Log: d.log, OnView: ex.ConfirmView,
+		DB: db, Reporter: c, Journal: jrn, Clock: d.clock, Log: d.log, OnView: ex.ConfirmView, Features: features,
 		// A fence is settled by a reconciliation: one is asked for at once, not at the next restart.
 		OnFence: func(state.Key) { ex.RequestReconcile() },
 	}

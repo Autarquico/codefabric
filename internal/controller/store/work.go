@@ -75,7 +75,9 @@ type Run struct {
 	// the paths the sealing left out, cut at ResultExcludedTruncated.
 	Branch string
 	// Model is what the harness said it ran with; "" until the Run ends, or if it did not say.
-	Model                   string
+	Model string
+	// Answer is what the harness answered; "" if it said nothing or an older Worker reported the exit.
+	Answer                  string
 	ResultCommit            string
 	ResultExcluded          []string
 	ResultExcludedTruncated bool
@@ -446,7 +448,7 @@ const runColumns = `id, short_n, task_id, attempt, lineage_kind, spec, spec_dige
     exit_code, COALESCE(runtime_handle, ''), COALESCE(branch, ''), COALESCE(result_commit, ''), COALESCE(result_excluded, ''),
     COALESCE(lineage_parent_id, ''), harness_ran, COALESCE(workflow_id, ''), COALESCE(workflow_version, 0), COALESCE(workflow_digest, ''),
     COALESCE(environment_id, ''), COALESCE(environment_version, 0), COALESCE(environment_digest, ''),
-    COALESCE(effective_config, ''), COALESCE(effective_digest, ''), COALESCE(failure_code, ''), COALESCE(model, ''), COALESCE(effective_config_digest, ''),
+    COALESCE(effective_config, ''), COALESCE(effective_digest, ''), COALESCE(failure_code, ''), COALESCE(model, ''), COALESCE(effective_config_digest, ''), COALESCE(answer, ''),
     COALESCE(lineage_checkpoint_id, ''), COALESCE(pinned_worker, '')`
 
 func scanRun(row rowScanner) (Run, error) {
@@ -470,7 +472,7 @@ func scanRun(row rowScanner) (Run, error) {
 		&r.Branch, &r.ResultCommit, &excluded, &parent, &harnessRan,
 		&workflow, &r.Workflow.Version, &r.Workflow.Digest,
 		&r.Environment.ID, &r.Environment.Version, &r.Environment.Digest,
-		&r.EffectiveConfig, &r.EffectiveDigest, &r.FailureCode, &r.Model, &r.EffectiveConfigDigest,
+		&r.EffectiveConfig, &r.EffectiveDigest, &r.FailureCode, &r.Model, &r.EffectiveConfigDigest, &r.Answer,
 		&checkpoint, &r.PinnedWorker); err != nil {
 		return Run{}, scanErr(err, "run")
 	}

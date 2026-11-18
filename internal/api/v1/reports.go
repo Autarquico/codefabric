@@ -2,7 +2,10 @@ package v1
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Autarquico/codefabric/internal/domain"
 )
@@ -16,7 +19,9 @@ const (
 	MaxReportMessageLen = 512
 	MaxHandleLen        = 256
 	MaxModelLen         = 128
-	MaxStopFailures     = 16 // services of one stopped that did not stop cleanly
+	// MaxAnswerLen bounds the answer of an exited, in bytes.
+	MaxAnswerLen    = 8 << 10
+	MaxStopFailures = 16 // services of one stopped that did not stop cleanly
 
 	// MaxEffectiveConfigBytes bounds the effective configuration of a
 	// config_resolved, which must fit a report with room to spare.
@@ -27,6 +32,59 @@ const (
 	MaxExcludedPaths = 100
 	MaxExcludedBytes = 8 << 10
 )
+
+// AnswerTruncatedMark ends an answer that BoundAnswer cut.
+const AnswerTruncatedMark = "…[truncated]"
+
+// ValidAnswer is the Controller's rule for the answer of an exit report: within
+// MaxAnswerLen, valid UTF-8, and nothing but printable text and newlines and tabs.
+func ValidAnswer(s string) bool {
+	return len(s) <= MaxAnswerLen && utf8.ValidString(s) && !strings.ContainsFunc(s, unprintable)
+}
+
+// MaxAnswerEncodedLen bounds the answer of an exited as it is written in JSON,
+// which is what the Controller measures a report by (< and U+2028 take six bytes).
+// An exited with an answer of this size always fits MaxReportBytes.
+const MaxAnswerEncodedLen = 16 << 10
+
+// BoundAnswer makes what a harness said fit ValidAnswer and MaxAnswerEncodedLen:
+// what cannot be shown is dropped, and a text over either bound is cut on a
+// character boundary and ends with AnswerTruncatedMark.
+func BoundAnswer(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unprintable(r) {
+			return -1
+		}
+		return r
+	}, s) // a byte that is not UTF-8 becomes U+FFFD
+	// cut is where the head that leaves room for the mark ends.
+	raw, encoded, cut := 0, 0, 0
+	for i, r := range s {
+		raw, encoded = raw+utf8.RuneLen(r), encoded+encodedRuneLen(r)
+		if raw+len(AnswerTruncatedMark) <= MaxAnswerLen && encoded+len(AnswerTruncatedMark) <= MaxAnswerEncodedLen {
+			cut = i + utf8.RuneLen(r)
+		}
+	}
+	if raw <= MaxAnswerLen && encoded <= MaxAnswerEncodedLen {
+		return s
+	}
+	return s[:cut] + AnswerTruncatedMark
+}
+
+// encodedRuneLen is the bytes a printable rune takes in a JSON string.
+func encodedRuneLen(r rune) int {
+	switch r {
+	case '<', '>', '&', '\u2028', '\u2029':
+		return 6
+	case '"', '\\', '\n', '\t':
+		return 2
+	}
+	return utf8.RuneLen(r)
+}
+
+func unprintable(r rune) bool {
+	return r != '\n' && r != '\t' && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r))
+}
 
 // RunReportKind is what a Worker tells about a Run it executes.
 type RunReportKind string
@@ -117,6 +175,10 @@ type RunReportEntry struct {
 	EndReason domain.EndReason `json:"end_reason,omitempty"`
 	// Model (started, exited) is the model the harness said it ran with, if it did.
 	Model string `json:"model,omitempty"`
+	// Answer (exited) is the last thing the harness said as the result of the
+	// Run, bounded by MaxAnswerLen. Only sent to a Controller that announces
+	// FeatureRunAnswer: an older one refuses a report with a field it does not know.
+	Answer string `json:"answer,omitempty"`
 	// ConfigDigest (started) is the digest of the configuration materialised
 	// from the Workflow of the Run (host.Materialization.Digest); empty for a
 	// Run without one.

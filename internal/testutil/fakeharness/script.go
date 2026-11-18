@@ -233,7 +233,7 @@ func (l Line) check() error {
 		if l.Result == nil {
 			return errors.New("emit: result line without result")
 		}
-	case harness.EventSessionStarted, harness.EventInputRequired, harness.EventError:
+	case harness.EventSessionStarted, harness.EventInputRequired, harness.EventError, harness.EventAgentMessage:
 	default:
 		return fmt.Errorf("emit: unknown type %q", l.Type)
 	}
@@ -266,7 +266,7 @@ func event(b []byte) (harness.Event, bool) {
 		}
 	case harness.EventResult:
 		ev.Result = &harness.Result{Failed: l.Result.Failed, Summary: l.Result.Summary}
-	case harness.EventError, harness.EventInputRequired:
+	case harness.EventError, harness.EventInputRequired, harness.EventAgentMessage:
 		ev.Message, ev.ID, ev.Options = l.Message, l.ID, l.Options
 	}
 	return ev, true

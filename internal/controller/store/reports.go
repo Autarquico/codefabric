@@ -101,6 +101,16 @@ func (t *Tx) SetRunModel(ctx context.Context, run Run, model string) error {
 	return changedOne(res, err, "setting the model of a run")
 }
 
+// SetRunAnswer records what the harness answered; "" leaves the Run as it is.
+func (t *Tx) SetRunAnswer(ctx context.Context, run Run, answer string) error {
+	if answer == "" {
+		return nil
+	}
+	res, err := t.Exec(ctx, `UPDATE runs SET answer = ? WHERE id = ? AND lease_id = ? AND lease_epoch = ?`,
+		answer, string(run.ID), string(run.LeaseID), run.LeaseEpoch)
+	return changedOne(res, err, "setting the answer of a run")
+}
+
 // StopRuntime records that no process of the Run is left. It is a
 // compare-and-set on the runtime the Run had, which must not be stopped
 // already.

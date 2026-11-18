@@ -15,7 +15,7 @@ type Event struct {
 	Usage *UsageEvent
 	// Result is set on EventResult.
 	Result *Result
-	// Message is set on EventError and EventInputRequired.
+	// Message is set on EventError, EventInputRequired and EventAgentMessage.
 	Message string
 	// ID names what the harness asks on EventInputRequired when it has a name
 	// for it (the tool use of a question): the same ask read twice has the same
@@ -33,7 +33,12 @@ const (
 	EventUsage          EventKind = "usage"
 	EventInputRequired  EventKind = "input_required"
 	EventResult         EventKind = "result"
-	EventError          EventKind = "error"
+	// EventAgentMessage is a message of the agent that may turn out to be the
+	// answer of the turn: a harness whose result line carries no text (Codex)
+	// says it here, so that a reader that is given the stream in pieces can
+	// pair it with a result that arrives in a later piece.
+	EventAgentMessage EventKind = "agent_message"
+	EventError        EventKind = "error"
 )
 
 // UsageEvent is the usage of one model request (§14.4). A nil field is

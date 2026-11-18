@@ -38,9 +38,13 @@ func TestScenario_Usage(t *testing.T) {
 	for ev := range ch {
 		evs = append(evs, ev)
 	}
-	if len(evs) != 3 {
+	if len(evs) != 4 {
 		t.Fatalf("events = %+v", evs)
 	}
+	if evs[1].Kind != harness.EventAgentMessage || evs[1].Message != "ok" {
+		t.Errorf("agent message = %+v", evs[1])
+	}
+	evs = append(evs[:1], evs[2:]...)
 	if evs[0].Kind != harness.EventSessionStarted || evs[0].SessionID != "01a1819d-734d-7a60-88f8-293969dcf0bd" {
 		t.Errorf("session = %+v", evs[0])
 	}
@@ -69,8 +73,10 @@ func TestEventsSkipsWhatItDoesNotUnderstand(t *testing.T) {
 		`{"type":"turn.completed"}` + "\n" +
 		`{"type":"turn.compl`
 	evs := collect(t, in)
-	if len(evs) != 2 || evs[0].Kind != harness.EventSessionStarted || evs[1].Kind != harness.EventResult ||
-		evs[1].Result.Summary != "last" {
+	if len(evs) != 4 || evs[0].Kind != harness.EventSessionStarted ||
+		evs[1].Kind != harness.EventAgentMessage || evs[1].Message != "first" ||
+		evs[2].Kind != harness.EventAgentMessage || evs[2].Message != "last" ||
+		evs[3].Kind != harness.EventResult || evs[3].Result.Summary != "last" {
 		t.Errorf("events = %+v", evs)
 	}
 }

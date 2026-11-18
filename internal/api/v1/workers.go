@@ -154,7 +154,14 @@ type HeartbeatResponse struct {
 	// JournalAck is the highest JournalTruncation.ID the Controller has: the
 	// Worker forgets those up to it.
 	JournalAck uint64 `json:"journal_ack,omitempty"`
+	// Features are what this Controller understands beyond the baseline of its
+	// protocol: a Worker sends what a Controller that lacks a feature would
+	// refuse only after the heartbeat said it has it.
+	Features []string `json:"features,omitempty"`
 }
+
+// FeatureRunAnswer says the Controller takes the answer of an exited report.
+const FeatureRunAnswer = "run_answer"
 
 // Worker is §3.5 as the API shows it. Compatible is the verdict of the upgrade
 // policy (§41) on DaemonVersion; only an online Worker is eligible for Runs.

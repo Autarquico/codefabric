@@ -38,6 +38,9 @@ type facts struct {
 	inputRequired bool
 	// model is what the harness said it ran with, "" if it did not say.
 	model string
+	// answer is what the harness answered, "" if it did not. Whether the
+	// Controller takes it is decided when the report is sent.
+	answer string
 	// code is why the preparation failed, if it is one the Controller keeps
 	// (v1.PrepareFailureCodes).
 	code domain.Code
@@ -294,6 +297,7 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 		return false
 	}
 	f.model = cur.Model
+	f.answer = cur.Answer
 	inputRequired := cur.InputRequired
 	if !inputRequired && f.started != nil {
 		// A Run answered through its input stream is input_required only for what
@@ -392,7 +396,7 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 // fillExit describes how the harness ended. A wrapper that was lost while a stop
 // was ordered is a stop that ended the Run, not a loss.
 func fillExit(en *v1.RunReportEntry, f facts) {
-	en.Model = f.model
+	en.Model, en.Answer = f.model, f.answer
 	switch {
 	case f.lost && f.ordered:
 		en.Cause, en.Message = v1.ExitCauseStop, f.message

@@ -43,7 +43,7 @@ func TestValidateEntry_StopFailures(t *testing.T) {
 	}
 }
 
-func TestValidateEntry_EndReasonAndModel(t *testing.T) {
+func TestValidateEntry_EndReasonModelAndAnswer(t *testing.T) {
 	exited := func(mutate func(*v1.RunReportEntry)) v1.RunReportEntry {
 		e := v1.RunReportEntry{Kind: v1.ReportExited, LeaseEpoch: 1, At: time.Now(), Cause: v1.ExitCauseStop}
 		mutate(&e)
@@ -61,6 +61,13 @@ func TestValidateEntry_EndReasonAndModel(t *testing.T) {
 		{"a model on a started", v1.RunReportEntry{Kind: v1.ReportStarted, LeaseEpoch: 1, At: time.Now(), Model: "m", Handle: &v1.RuntimeHandle{Runtime: "tmux", Ref: "r"}}, true},
 		{"a model too long on a started", v1.RunReportEntry{Kind: v1.ReportStarted, LeaseEpoch: 1, At: time.Now(), Model: strings.Repeat("m", v1.MaxModelLen+1), Handle: &v1.RuntimeHandle{Runtime: "tmux", Ref: "r"}}, false},
 		{"a model on a stopped", v1.RunReportEntry{Kind: v1.ReportStopped, LeaseEpoch: 1, At: time.Now(), Model: "m"}, false},
+		{"an answer on an exited", exited(func(e *v1.RunReportEntry) { e.Answer = "done:\n\tall green" }), true},
+		{"an answer at the limit", exited(func(e *v1.RunReportEntry) { e.Answer = strings.Repeat("a", v1.MaxAnswerLen) }), true},
+		{"an answer too long", exited(func(e *v1.RunReportEntry) { e.Answer = strings.Repeat("a", v1.MaxAnswerLen+1) }), false},
+		{"an answer that is not UTF-8", exited(func(e *v1.RunReportEntry) { e.Answer = "a\xffb" }), false},
+		{"an answer that does not print", exited(func(e *v1.RunReportEntry) { e.Answer = "a\x1b[31mb" }), false},
+		{"an answer on a started", v1.RunReportEntry{Kind: v1.ReportStarted, LeaseEpoch: 1, At: time.Now(), Answer: "a", Handle: &v1.RuntimeHandle{Runtime: "tmux", Ref: "r"}}, false},
+		{"an answer on a stopped", v1.RunReportEntry{Kind: v1.ReportStopped, LeaseEpoch: 1, At: time.Now(), Answer: "a"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -97,5 +104,20 @@ func TestValidateEntry_ConfigDigest(t *testing.T) {
 				t.Fatalf("validateEntry = %v, want valid=%v", err, c.valid)
 			}
 		})
+	}
+}
+
+func TestValidateReport_AnExitedWithTheLargestAnswerTheWorkerSendsFits(t *testing.T) {
+	for _, unit := range []string{"<", " ", "&", "\"", "\n"} {
+		e := v1.RunReportEntry{
+			Kind: v1.ReportExited, LeaseEpoch: 1, At: time.Now(), Cause: v1.ExitCauseExit,
+			WorkerEpoch: "01J00000000000000000000000", WorkerSeq: 1,
+			Model:   strings.Repeat("<", v1.MaxModelLen),
+			Message: strings.Repeat("<", v1.MaxReportMessageLen),
+			Answer:  v1.BoundAnswer(strings.Repeat(unit, 20000)),
+		}
+		if err := validateReport(v1.RunReportRequest{Entries: []v1.RunReportEntry{e}}, time.Now()); err != nil {
+			t.Errorf("%q: %v", unit, err)
+		}
 	}
 }
