@@ -222,7 +222,7 @@ cf worker secrets set claude/oauth-token
 cf worker secrets set claude/oauth-token < setup-token.txt
 ```
 
-It reads the token from stdin, or asks for it twice without echo on a terminal, and prints `Stored secret claude/oauth-token (...) ...`. A Worker without the secret is not offered the Run (`CF_SECRET_UNAVAILABLE` in `cf run explain`).
+It reads the token from stdin, or asks for it twice without echo on a terminal, and prints `Stored secret claude/oauth-token (...) ...`. A Worker without the secret is not offered the Run (`CF_SECRET_UNAVAILABLE` in `cf run explain`). Only the Claude token is joined from several lines: for any other secret the prompt refuses an answer of several lines and stores nothing, so give a value of several lines, or one the terminal may wrap, on stdin.
 
 If a token was stored badly with an earlier version of `cf` (for example as two lines, or the code from the browser), `cf worker doctor` cannot tell, and a Run fails with `401 Invalid bearer token`: set it again with the command above.
 

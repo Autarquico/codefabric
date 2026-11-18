@@ -104,6 +104,12 @@ func promptValue(ctx context.Context, tty *os.File, prompt io.Writer, ref string
 	if err != nil {
 		return nil, false, err
 	}
+	if bytes.ContainsAny(value, "\r\n") { // only the Claude token is joined; a wrapped value would be stored broken
+		clear(value)
+		return nil, false, invalid(fmt.Sprintf("the value has several lines; nothing was stored. A value of several lines, "+
+			"or one the terminal wrapped, goes in on stdin: cf worker secrets set %[1]s < value.txt "+
+			"(or pbpaste | cf worker secrets set %[1]s on macOS)", ref))
+	}
 	again, err := ask("Again, to confirm: ")
 	defer clear(again)
 	if err != nil {

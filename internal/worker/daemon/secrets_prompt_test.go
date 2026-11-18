@@ -150,6 +150,14 @@ func TestPromptValue_Pty(t *testing.T) {
 			t.Errorf("= %q, %v", p.value, p.err)
 		}
 	})
+	t.Run("a wrapped value of another ref is refused, not stored broken", func(t *testing.T) {
+		ty := newTyping(t)
+		paste := "\x1b[200~ghp_abc\r\ndef\x1b[201~\r"
+		p := ty.prompt("github/token", false, twice(ty, paste, paste))
+		if !errors.Is(p.err, domain.NewError(domain.CodeInvalidRequest, "", nil)) || p.value != nil {
+			t.Errorf("= %q, %v", p.value, p.err)
+		}
+	})
 	t.Run("Ctrl-C ends it and gives the terminal back", func(t *testing.T) {
 		ty := newTyping(t)
 		p := ty.prompt("other/secret", false, func() {
