@@ -111,10 +111,18 @@ type Metadata struct {
 	// User is the Basic-auth username the value is sent with, for a secret
 	// that is a credential of git; empty means DefaultUser, which the consumer
 	// applies. It stays on this machine: the heartbeat does not carry it.
-	User      string
+	User string
+	// Format is FormatUnexpected when the value was stored although it did not
+	// have the form its ref expects (`set --force`); empty is unknown, the case
+	// of every secret stored without being checked. It stays on this machine.
+	// (A string and not a bool: a bool breaks the %q of a Secret in vet.)
+	Format    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// FormatUnexpected is the Format of a secret forced in with a bad form.
+const FormatUnexpected = "unexpected"
 
 // DefaultUser is the username of a credential that has none: the one GitHub
 // and GitLab take for a token.
@@ -143,6 +151,8 @@ func CheckUser(user string) error {
 // SetOptions are the optional properties of a secret that Set stores.
 type SetOptions struct {
 	User string
+	// FormatBad records that the value does not have the form its ref expects.
+	FormatBad bool
 }
 
 // SetOption sets one of SetOptions.
@@ -150,6 +160,10 @@ type SetOption func(*SetOptions)
 
 // WithUser sets the Basic-auth username of the secret (see Metadata.User).
 func WithUser(user string) SetOption { return func(o *SetOptions) { o.User = user } }
+
+// WithBadFormat records, in the metadata, that the value is stored although it
+// does not have the form its ref expects: Metadata.Format is then FormatUnexpected.
+func WithBadFormat() SetOption { return func(o *SetOptions) { o.FormatBad = true } }
 
 // ApplySetOptions is the SetOptions that opts make.
 func ApplySetOptions(opts []SetOption) SetOptions {

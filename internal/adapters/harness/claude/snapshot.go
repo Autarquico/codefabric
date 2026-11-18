@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"syscall"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 )
@@ -154,8 +155,36 @@ func readSnapshotFiles(root string, l layout) ([]harness.File, bool, error) {
 	return files, true, nil
 }
 
+// The most a component may hold, files linked or not: a snapshot travels whole
+// to the Controller, and a linked directory can be any size.
+const (
+	maxSnapshotFiles = 2000
+	maxSnapshotBytes = 16 << 20
+)
+
+// budget counts what a component has read against the limits.
+type budget struct{ files, bytes int }
+
+func (b *budget) add(l layout, size int64) error {
+	b.files++
+	b.bytes += int(min(size, maxSnapshotBytes+1))
+	if b.files > maxSnapshotFiles || b.bytes > maxSnapshotBytes {
+		return fmt.Errorf("%s is too big to adopt: at most %d files and %d MiB", l.path, maxSnapshotFiles, maxSnapshotBytes>>20)
+	}
+	return nil
+}
+
+// followsLinks says whether the entries of l that are links to a directory
+// are followed: the skills, commands and agents a user installs from elsewhere
+// (a package manager, a distribution) are linked into ~/.claude.
+func (l layout) followsLinks() bool {
+	return l.name == SkillsComponent || l.name == CommandsComponent || l.name == AgentsComponent
+}
+
 // readFiles are the files of l under root, as they are, and whether l is
-// there at all. Anything but regular files and directories is an error.
+// there at all. Anything but regular files and directories is an error, with
+// one exception: a symlink that is a direct child of skills/, commands/ or
+// agents/ is followed once; see readLinked.
 func readFiles(root string, l layout) ([]harness.File, bool, error) {
 	r, err := os.OpenRoot(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -177,8 +206,14 @@ func readFiles(root string, l layout) ([]harness.File, bool, error) {
 		return nil, false, fmt.Errorf("claude-code: %s is not a regular file", l.path)
 	}
 	var files []harness.File
+	var used budget
 	err = fs.WalkDir(r.FS(), l.path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
+			return err
+		}
+		if d.Type()&fs.ModeSymlink != 0 && l.followsLinks() && path.Dir(p) == l.path {
+			linked, err := readLinked(filepath.Join(root, filepath.FromSlash(p)), p, l, &used)
+			files = append(files, linked...)
 			return err
 		}
 		if !d.Type().IsRegular() {
@@ -186,6 +221,9 @@ func readFiles(root string, l layout) ([]harness.File, bool, error) {
 		}
 		info, err := d.Info()
 		if err != nil {
+			return err
+		}
+		if err := used.add(l, info.Size()); err != nil {
 			return err
 		}
 		content, err := r.ReadFile(p)
@@ -199,6 +237,70 @@ func readFiles(root string, l layout) ([]harness.File, bool, error) {
 		return nil, false, fmt.Errorf("claude-code: reading %s: %w", l.path, err)
 	}
 	return files, true, nil
+}
+
+// readLinked reads the directory the link at abs (p in the snapshot) points
+// to, and records its files as p/..., as if they were there. It trusts what a
+// user or the system installed and nothing else: the target is a directory
+// that is not itself a link, owned by this user or root, that no one else can
+// write; inside it only regular files and directories are allowed, no link.
+func readLinked(abs, p string, l layout, used *budget) ([]harness.File, error) {
+	target, err := os.Readlink(abs)
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(abs), target)
+	}
+	fi, err := os.Lstat(target)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("%q links to a target that cannot be read", p)
+	case !fi.IsDir():
+		return nil, fmt.Errorf("%q is a link to something that is not a directory (not followed)", p)
+	case fi.Mode().Perm()&0o022 != 0:
+		return nil, fmt.Errorf("%q links to a directory that others can write (not followed)", p)
+	case !ownedByUserOrRoot(fi):
+		return nil, fmt.Errorf("%q links to a directory owned by another user (not followed)", p)
+	}
+	tr, err := os.OpenRoot(target)
+	if err != nil {
+		return nil, fmt.Errorf("%q: %w", p, err)
+	}
+	defer func() { _ = tr.Close() }()
+	var files []harness.File
+	err = fs.WalkDir(tr.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if !d.Type().IsRegular() {
+			return fmt.Errorf("%q has %q, which is not a regular file (links inside a linked directory are not followed)", p, rel)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if err := used.add(l, info.Size()); err != nil {
+			return err
+		}
+		content, err := tr.ReadFile(rel)
+		if err != nil {
+			return err
+		}
+		files = append(files, harness.File{Path: p + "/" + rel, Mode: info.Mode().Perm(), Content: content, SecretRefs: harness.SecretRefs(content)})
+		return nil
+	})
+	return files, err
+}
+
+// ownedByUserOrRoot says whether fi belongs to the current user or to root.
+func ownedByUserOrRoot(fi fs.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	uid := uint32(os.Getuid()) //nolint:gosec // a uid
+	return st.Uid == uid || st.Uid == 0
 }
 
 // checkSnapshot is an error when snap is not a snapshot of this Adapter:

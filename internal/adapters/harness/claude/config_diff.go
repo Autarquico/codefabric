@@ -124,7 +124,8 @@ func hasServers(host, want []byte) (bool, error) {
 
 // ValidateConfig checks that ~/.claude and ~/.claude.json are what the Adapter
 // reads: settings.json and .claude.json valid JSON objects, CLAUDE.md a regular
-// file, the directories of regular files.
+// file, the directories of regular files (and the links of skills, commands and
+// agents that readFiles follows).
 func (Adapter) ValidateConfig(_ context.Context, host harness.Host) (harness.Validation, error) {
 	var v harness.Validation
 	for _, l := range layouts {

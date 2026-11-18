@@ -2,10 +2,12 @@ package claude_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
@@ -281,5 +283,170 @@ func TestValidateConfigNamesTheComponentsThatAreBroken(t *testing.T) {
 	h, _ = newHost(t, homeFiles())
 	if v, err := (claude.Adapter{}).ValidateConfig(context.Background(), h); err != nil || len(v.Issues) != 0 {
 		t.Errorf("a good home: %+v, %v", v, err)
+	}
+}
+
+// linkedSkill is a ~/.claude/skills/<name> link to dir.
+func linkedSkill(t *testing.T, home, name, dir string) {
+	t.Helper()
+	skills := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(skills, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dir, filepath.Join(skills, name)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// skillDir is a directory outside ~/.claude with one skill in it.
+func skillDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "pkg")
+	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for p, c := range map[string]string{"SKILL.md": "# tdd", "scripts/run.sh": "echo hi"} {
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func skillsOf(t *testing.T, h harness.Host) []harness.File {
+	t.Helper()
+	snap, err := claude.Adapter{}.SnapshotConfig(t.Context(), h, harness.SnapshotOptions{Components: []string{"skills"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Components) != 1 {
+		t.Fatalf("components = %+v", snap.Components)
+	}
+	return snap.Components[0].Files
+}
+
+func TestSnapshotFollowsAFirstLevelLinkToADirectoryOfTheUser(t *testing.T) {
+	h, home := newHost(t, nil)
+	linkedSkill(t, home, "tdd", skillDir(t))
+	var got []string
+	for _, f := range skillsOf(t, h) {
+		got = append(got, f.Path)
+	}
+	if !slices.Equal(got, []string{"skills/tdd/SKILL.md", "skills/tdd/scripts/run.sh"}) {
+		t.Errorf("files = %v", got)
+	}
+}
+
+func TestSnapshotFollowsALinkToADirectoryOfRoot(t *testing.T) {
+	var dir string
+	entries, _ := os.ReadDir("/usr/share")
+	for _, e := range entries {
+		p := filepath.Join("/usr/share", e.Name())
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.IsDir() || fi.Sys().(*syscall.Stat_t).Uid != 0 || fi.Mode().Perm()&0o022 != 0 || os.Getuid() == 0 {
+			continue
+		}
+		h, home := newHost(t, nil)
+		linkedSkill(t, home, "sys", p)
+		if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{Components: []string{"skills"}}); err == nil {
+			dir = p
+			break
+		}
+	}
+	if dir == "" {
+		t.Skip("no root-owned directory of plain files under /usr/share to link to (or running as root)")
+	}
+}
+
+func TestSnapshotRefusesALinkItDoesNotTrust(t *testing.T) {
+	for name, build := range map[string]func(t *testing.T, home string) string{
+		"to a file": func(t *testing.T, home string) string {
+			f := filepath.Join(t.TempDir(), "a.md")
+			_ = os.WriteFile(f, []byte("x"), 0o600)
+			return f
+		},
+		"inside the target": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Symlink(filepath.Join(dir, "SKILL.md"), filepath.Join(dir, "scripts", "other"))
+			return dir
+		},
+		"to a group-writable dir": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Chmod(dir, 0o775)
+			return dir
+		},
+		"to a world-writable dir": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Chmod(dir, 0o757)
+			return dir
+		},
+		"to a link": func(t *testing.T, _ string) string {
+			second := filepath.Join(t.TempDir(), "second")
+			_ = os.Symlink(skillDir(t), second)
+			return second
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, home := newHost(t, nil)
+			linkedSkill(t, home, "x", build(t, home))
+			if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{}); err == nil {
+				t.Error("the link was followed")
+			}
+		})
+	}
+}
+
+func TestSnapshotRefusesALinkBelowTheFirstLevel(t *testing.T) {
+	h, home := newHost(t, map[string]string{".claude/skills/a/SKILL.md": "x"})
+	if err := os.Symlink(skillDir(t), filepath.Join(home, ".claude", "skills", "a", "deep")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{}); err == nil {
+		t.Error("a link at depth 2 was followed")
+	}
+}
+
+func TestSnapshotHasASizeLimitThatCountsLinkedFiles(t *testing.T) {
+	h, home := newHost(t, nil)
+	dir := skillDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "big.bin"), make([]byte, 17<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkedSkill(t, home, "big", dir)
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{}); err == nil || !strings.Contains(err.Error(), "too big") {
+		t.Errorf("err = %v", err)
+	}
+	// The same bytes in a real file are counted too.
+	h2, _ := newHost(t, map[string]string{".claude/commands/big.md": strings.Repeat("x", 17<<20)})
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h2, harness.SnapshotOptions{}); err == nil {
+		t.Error("a real file over the limit was taken")
+	}
+	// And so are too many files.
+	files := map[string]string{}
+	for i := range 2001 {
+		files[fmt.Sprintf(".claude/agents/a%d.md", i)] = "x"
+	}
+	h3, _ := newHost(t, files)
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h3, harness.SnapshotOptions{}); err == nil {
+		t.Error("too many files were taken")
+	}
+}
+
+func TestApplyConfigWritesRealFilesForALinkedSkill(t *testing.T) {
+	h, home := newHost(t, nil)
+	linkedSkill(t, home, "tdd", skillDir(t))
+	snap, err := claude.Adapter{}.SnapshotConfig(t.Context(), h, harness.SnapshotOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := (claude.Adapter{}).ValidateConfig(t.Context(), h); err != nil || len(v.Issues) > 0 {
+		t.Fatalf("validate: %+v %v", v, err)
+	}
+	dir, _ := applyRun(t, h, snap, false)
+	for _, p := range []string{"skills/tdd/SKILL.md", "skills/tdd/scripts/run.sh"} {
+		fi, err := os.Lstat(filepath.Join(dir, p))
+		if err != nil || !fi.Mode().IsRegular() {
+			t.Errorf("%s: %v %v", p, fi, err)
+		}
 	}
 }

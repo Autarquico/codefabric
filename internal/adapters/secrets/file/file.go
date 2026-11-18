@@ -119,6 +119,7 @@ type entry struct {
 	Item      string    `json:"item,omitempty"`
 	Projects  []string  `json:"projects,omitempty"`
 	User      string    `json:"user,omitempty"`
+	Format    string    `json:"format,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -213,7 +214,7 @@ func account(namespace, ref, item string) string { return namespace + "/" + ref 
 
 func (e entry) metadata(ref string) secrets.Metadata {
 	return secrets.Metadata{
-		Ref: ref, Backend: e.Backend, Projects: slices.Clone(e.Projects), User: e.User,
+		Ref: ref, Backend: e.Backend, Projects: slices.Clone(e.Projects), User: e.User, Format: e.Format,
 		CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt,
 	}
 }
@@ -223,7 +224,12 @@ func (s *Store) Set(ctx context.Context, ref string, v []byte, projects []string
 	if err := domain.CheckSecretRefs([]string{ref}, 1); err != nil {
 		return err
 	}
-	user := secrets.ApplySetOptions(opts).User
+	setOpts := secrets.ApplySetOptions(opts)
+	user := setOpts.User
+	var format string
+	if setOpts.FormatBad {
+		format = secrets.FormatUnexpected
+	}
 	if err := secrets.CheckUser(user); err != nil {
 		return fmt.Errorf("secret %q: %w", ref, err)
 	}
@@ -249,7 +255,7 @@ func (s *Store) Set(ctx context.Context, ref string, v []byte, projects []string
 				}
 			}
 			c.Secrets[ref] = entry{
-				Backend: secrets.BackendFile, Value: bytes.Clone(v), Projects: projects, User: user,
+				Backend: secrets.BackendFile, Value: bytes.Clone(v), Projects: projects, User: user, Format: format,
 				CreatedAt: created, UpdatedAt: now,
 			}
 			return nil
@@ -260,7 +266,7 @@ func (s *Store) Set(ctx context.Context, ref string, v []byte, projects []string
 		s.sweep(ctx)
 		return nil
 	case backend == secrets.BackendKeyring && s.vault != nil:
-		return s.setKeyring(ctx, ref, v, projects, user)
+		return s.setKeyring(ctx, ref, v, projects, user, format)
 	}
 	return fmt.Errorf("%w: this Store cannot keep a secret in %q", secrets.ErrUnsupportedBackend, backend)
 }
@@ -307,7 +313,7 @@ func (s *Store) relieve(ctx context.Context) {
 // notes the item first (and so persists its namespace before the first vault
 // write): a crash in between leaves a pending record to sweep, never a pointer
 // without a value.
-func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects []string, user string) error {
+func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects []string, user string, format string) error {
 	item := ulid.MustNew(ulid.Timestamp(s.clock.Now()), rand.Reader).String()
 	var namespace string
 	err := s.update(ctx, func(c *catalog, now time.Time) error {
@@ -360,7 +366,7 @@ func (s *Store) setKeyring(ctx context.Context, ref string, v []byte, projects [
 			}
 		}
 		c.Secrets[ref] = entry{
-			Backend: secrets.BackendKeyring, Item: item, Projects: projects, User: user,
+			Backend: secrets.BackendKeyring, Item: item, Projects: projects, User: user, Format: format,
 			CreatedAt: created, UpdatedAt: now,
 		}
 		return nil

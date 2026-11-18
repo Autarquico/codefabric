@@ -318,8 +318,15 @@ func (d *Doctor) auth(ctx context.Context, a harness.Adapter) v1.ComponentHealth
 	name := "auth:" + a.ID()
 	var note string
 	if a.ID() == claude.ID {
-		var held bool
-		held, note = d.secretState(ctx, claude.OAuthTokenRef)
+		var held, badFormat bool
+		held, badFormat, note = d.secretState(ctx, claude.OAuthTokenRef)
+		if held && badFormat {
+			return v1.ComponentHealth{
+				Name: name, Status: v1.ComponentWarn,
+				Message: "el " + claude.OAuthTokenRef + " guardado no parece un token" + note,
+				Action:  "vuelve a guardarlo con la línea que imprime `claude setup-token`: cf worker secrets set " + claude.OAuthTokenRef + " en " + d.o.Worker,
+			}
+		}
 		if held || d.hasKeychainLogin(ctx) {
 			return ok(name, "login de Claude Code presente"+note)
 		}
@@ -344,32 +351,35 @@ func (d *Doctor) auth(ctx context.Context, a harness.Adapter) v1.ComponentHealth
 // entry (its value gone from the keyring) is not a login; a locked keyring is
 // one that cannot be read now, not one that is gone. Only the entries of the
 // keyring cost a Check (or the state a daemon already has); no value leaves it.
-func (d *Doctor) secretState(ctx context.Context, ref string) (held bool, note string) {
+func (d *Doctor) secretState(ctx context.Context, ref string) (held, badFormat bool, note string) {
 	if d.o.Secrets == nil {
-		return false, ""
+		return false, false, ""
 	}
 	list, err := d.o.Secrets.List(ctx) // metadata only: no value is read
 	if err != nil {
-		return false, ""
+		return false, false, ""
 	}
 	i := slices.IndexFunc(list, func(m secrets.Metadata) bool { return m.Ref == ref })
 	if i < 0 {
-		return false, ""
+		return false, false, ""
 	}
+	// Only a secret stored with --force can say its format is wrong; absent is
+	// unknown.
+	bad := list[i].Format == secrets.FormatUnexpected
 	if list[i].Backend != secrets.BackendKeyring {
-		return true, ""
+		return true, bad, ""
 	}
 	state, known := d.keyringState(ctx, list[i])
 	if !known {
-		return true, ""
+		return true, bad, ""
 	}
 	switch state {
 	case secrets.StateBroken:
-		return false, fmt.Sprintf(" (el secret %q está roto: su valor ya no está en el llavero; vuelve a guardarlo con `cf worker secrets set`)", ref)
+		return false, false, fmt.Sprintf(" (el secret %q está roto: su valor ya no está en el llavero; vuelve a guardarlo con `cf worker secrets set`)", ref)
 	case secrets.StateUnavailable:
-		return true, fmt.Sprintf(" (el llavero no responde ahora: el secret %q puede estar bloqueado)", ref)
+		return true, bad, fmt.Sprintf(" (el llavero no responde ahora: el secret %q puede estar bloqueado)", ref)
 	}
-	return true, ""
+	return true, bad, ""
 }
 
 // keyringState is how the keyring entry m stands, or false if it is not known.

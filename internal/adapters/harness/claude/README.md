@@ -33,7 +33,13 @@ Registered in the binaries: `cmd/cf` and the Worker daemon
    managed. `settings.json` and `mcpServers` are read as JSON and written
    again from what was parsed: keys sorted, two spaces, numbers as written.
    The unit of `mcpServers` is the file `.claude.json` with that one field.
-   A directory with anything but regular files (a symlink) is an error.
+   A directory with anything but regular files (a symlink) is an error, with one
+   exception: a symlink that is a direct child of `skills/`, `commands/` or
+   `agents/` is followed once, and its files are recorded as if they were
+   there, if it points to a directory that is not itself a link, owned by the
+   current user or root, with no group or other write bit. Inside it, any
+   symlink is an error. A component holds at most 2000 files and 16 MiB, linked
+   or not.
 
    Secrets, a closed policy: every string value of an `env` object (in
    `settings.json` and in an MCP server) and of a `headers` object (in an MCP
