@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -276,6 +278,19 @@ func TestRunReportOverHTTP(t *testing.T) {
 	must(t, err)
 	if got.Outcomes[0].Result != v1.ReportDuplicate {
 		t.Errorf("replay = %+v", got.Outcomes)
+	}
+
+	// A Worker that sends no answer (it talks to a Controller that did not announce the feature, or
+	// the Run said nothing) is accepted by the real decoder, which refuses fields it does not know.
+	exited := entry(2, v1.ReportExited)
+	exited.Cause = v1.ExitCauseExit
+	raw, err := json.Marshal(v1.RunReportRequest{Entries: []v1.RunReportEntry{exited}})
+	must(t, err)
+	if bytes.Contains(raw, []byte("answer")) {
+		t.Fatalf("an exited without answer carries the field: %s", raw)
+	}
+	if code, body, _ := f.call(f.httpClientFor(f.alphaD), http.MethodPost, "/v1/worker/runs/"+f.run.ID+"/report", string(raw)); code != http.StatusOK {
+		t.Errorf("an exited without answer: %d %s", code, body.Code)
 	}
 
 	// A Worker that was not offered the Run, and a client, have no access.

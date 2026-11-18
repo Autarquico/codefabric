@@ -85,3 +85,10 @@ func TestScenario_HeadlessAnswer_LogsOfARunThatIsNotOverAddNothing(t *testing.T)
 		t.Errorf("stdout = %q", out)
 	}
 }
+
+func TestScenario_HeadlessAnswer_TheSeparatorStartsOnItsOwnLine(t *testing.T) {
+	answerController(t, finishedRun("done"), "a last line without newline")
+	if _, out, _ := run(t, "logs", "--run", "run_1"); out != "a last line without newline\n── answer ──\ndone\n" {
+		t.Errorf("stdout = %q", out)
+	}
+}

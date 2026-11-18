@@ -302,15 +302,16 @@ func (t tools) runLogs(ctx context.Context, in runsLogsInput) (any, error) {
 		return nil, err
 	}
 	// A structured Run writes its output to the stream of events: what the harness
-	// answered is not in the text, and is told apart.
-	run, err := t.c.Run(ctx, in.Ref)
-	if err != nil {
-		return nil, err
+	// answered is not in the text, and is told apart. The text was read: a failure
+	// to look the Run up leaves the answer out and does not fail the call.
+	answer := ""
+	if run, err := t.c.Run(ctx, in.Ref); err == nil {
+		answer = run.Answer
 	}
 	return map[string]any{
 		"run_id": out.RunID, "start": out.Start, "end": out.End, "offset": out.Offset,
 		"text": strings.ToValidUTF8(string(out.Data), "�"), "truncated": out.Truncated, "closed": out.Closed,
-		"answer": run.Answer,
+		"answer": answer,
 	}, nil
 }
 

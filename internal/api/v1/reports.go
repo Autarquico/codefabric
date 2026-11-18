@@ -42,9 +42,14 @@ func ValidAnswer(s string) bool {
 	return len(s) <= MaxAnswerLen && utf8.ValidString(s) && !strings.ContainsFunc(s, unprintable)
 }
 
-// BoundAnswer makes what a harness said fit ValidAnswer: what cannot be shown is
-// dropped, and a text over MaxAnswerLen is cut on a character boundary and ends
-// with AnswerTruncatedMark.
+// MaxAnswerEncodedLen bounds the answer of an exited as it is written in JSON,
+// which is what the Controller measures a report by (< and U+2028 take six bytes).
+// An exited with an answer of this size always fits MaxReportBytes.
+const MaxAnswerEncodedLen = 16 << 10
+
+// BoundAnswer makes what a harness said fit ValidAnswer and MaxAnswerEncodedLen:
+// what cannot be shown is dropped, and a text over either bound is cut on a
+// character boundary and ends with AnswerTruncatedMark.
 func BoundAnswer(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if unprintable(r) {
@@ -52,14 +57,29 @@ func BoundAnswer(s string) string {
 		}
 		return r
 	}, s) // a byte that is not UTF-8 becomes U+FFFD
-	if len(s) <= MaxAnswerLen {
+	// cut is where the head that leaves room for the mark ends.
+	raw, encoded, cut := 0, 0, 0
+	for i, r := range s {
+		raw, encoded = raw+utf8.RuneLen(r), encoded+encodedRuneLen(r)
+		if raw+len(AnswerTruncatedMark) <= MaxAnswerLen && encoded+len(AnswerTruncatedMark) <= MaxAnswerEncodedLen {
+			cut = i + utf8.RuneLen(r)
+		}
+	}
+	if raw <= MaxAnswerLen && encoded <= MaxAnswerEncodedLen {
 		return s
 	}
-	cut := MaxAnswerLen - len(AnswerTruncatedMark)
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
 	return s[:cut] + AnswerTruncatedMark
+}
+
+// encodedRuneLen is the bytes a printable rune takes in a JSON string.
+func encodedRuneLen(r rune) int {
+	switch r {
+	case '<', '>', '&', '\u2028', '\u2029':
+		return 6
+	case '"', '\\', '\n', '\t':
+		return 2
+	}
+	return utf8.RuneLen(r)
 }
 
 func unprintable(r rune) bool {

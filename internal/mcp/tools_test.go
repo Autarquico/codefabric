@@ -62,7 +62,10 @@ func (w *world) Runs(_ context.Context, q client.RunQuery) ([]v1.Run, error) {
 
 func (w *world) Run(_ context.Context, ref string) (v1.Run, error) {
 	w.saw("run", ref)
-	return v1.Run{ID: "r1", TaskID: "t1"}, nil
+	if ref == "gone" {
+		return v1.Run{}, errors.New("the Run cannot be read")
+	}
+	return v1.Run{ID: "r1", TaskID: "t1", Answer: "it is done"}, nil
 }
 
 func (w *world) RunOutput(_ context.Context, ref string, _ client.OutputQuery) (v1.RunOutput, error) {
@@ -466,5 +469,18 @@ func TestWorkflowsDiffRequiresRequestID(t *testing.T) {
 	res, err := s.CallTool(t.Context(), &sdk.CallToolParams{Name: "workflows_diff", Arguments: map[string]any{"worker": "box", "harness": "codex", "workflow": "base"}})
 	if err == nil && !res.IsError {
 		t.Fatal("workflows_diff without request_id succeeded")
+	}
+}
+
+// runs.logs carries the answer of the Run, and still returns the text it read
+// when the Run itself cannot be looked up.
+func TestRunsLogsCarriesTheAnswerAndSurvivesALookupThatFails(t *testing.T) {
+	s := connect(t, mcp.Modify, &world{}, clock.NewFake(time.Unix(0, 0)))
+	if got := structured(t, call(t, s, "runs_logs", map[string]any{"ref": "r1"})); got["answer"] != "it is done" {
+		t.Errorf("answer = %v", got["answer"])
+	}
+	res := call(t, s, "runs_logs", map[string]any{"ref": "gone"})
+	if got := structured(t, res); res.IsError || got["text"] != "hello" || got["answer"] != "" {
+		t.Errorf("error=%v, result %v", res.IsError, got)
 	}
 }

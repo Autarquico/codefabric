@@ -106,3 +106,18 @@ func TestValidateEntry_ConfigDigest(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateReport_AnExitedWithTheLargestAnswerTheWorkerSendsFits(t *testing.T) {
+	for _, unit := range []string{"<", " ", "&", "\"", "\n"} {
+		e := v1.RunReportEntry{
+			Kind: v1.ReportExited, LeaseEpoch: 1, At: time.Now(), Cause: v1.ExitCauseExit,
+			WorkerEpoch: "01J00000000000000000000000", WorkerSeq: 1,
+			Model:   strings.Repeat("<", v1.MaxModelLen),
+			Message: strings.Repeat("<", v1.MaxReportMessageLen),
+			Answer:  v1.BoundAnswer(strings.Repeat(unit, 20000)),
+		}
+		if err := validateReport(v1.RunReportRequest{Entries: []v1.RunReportEntry{e}}, time.Now()); err != nil {
+			t.Errorf("%q: %v", unit, err)
+		}
+	}
+}

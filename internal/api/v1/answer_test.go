@@ -1,6 +1,7 @@
 package v1_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -39,5 +40,15 @@ func TestValidAnswerRefusesWhatTheControllerWouldNotShow(t *testing.T) {
 	}
 	if !v1.ValidAnswer("") || !v1.ValidAnswer("ok\n\tfine") {
 		t.Error("a plain answer was refused")
+	}
+}
+
+func TestBoundAnswerFitsTheEncodedBoundOfWhatJSONEscapes(t *testing.T) {
+	for _, unit := range []string{"<", "&", " ", " ", "\"", "\n", "é"} {
+		got := v1.BoundAnswer(strings.Repeat(unit, 20000))
+		raw, err := json.Marshal(got)
+		if err != nil || len(raw)-2 > v1.MaxAnswerEncodedLen || !v1.ValidAnswer(got) || !strings.HasSuffix(got, v1.AnswerTruncatedMark) {
+			t.Errorf("%q: encoded %d bytes (%v), valid=%v", unit, len(raw), err, v1.ValidAnswer(got))
+		}
 	}
 }

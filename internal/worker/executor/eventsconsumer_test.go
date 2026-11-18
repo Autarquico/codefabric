@@ -5,7 +5,6 @@ package executor
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -410,9 +409,8 @@ func TestAnAskSeenOnlyAtTheEndOfALostWrapperDoesNotMakeTheExitInvalid(t *testing
 	}
 }
 
-func TestTheAnswerOfTheLastResultIsKeptAndReportedWhenTheControllerTakesIt(t *testing.T) {
+func TestTheAnswerOfTheLastResultIsKeptAndAlwaysJournaled(t *testing.T) {
 	f, _, k, w := eventsFixture(t)
-	f.e.SetControllerFeatures([]string{v1.FeatureRunAnswer})
 	f.appendEvents(k, "answer first\nanswer second\n")
 	reports := endsWithExit0(t, f, k, w)
 	if x := reports[1]; x.Kind != v1.ReportExited || x.Answer != "second" {
@@ -420,27 +418,8 @@ func TestTheAnswerOfTheLastResultIsKeptAndReportedWhenTheControllerTakesIt(t *te
 	}
 }
 
-func TestTheAnswerIsLeftOutOfTheReportOfAControllerThatDoesNotAnnounceIt(t *testing.T) {
-	f, _, k, w := eventsFixture(t)
-	f.e.SetControllerFeatures(nil)
-	f.appendEvents(k, "answer hello\n")
-	f.e.step(t.Context(), k)
-	if c := f.cursor(k); c.Answer != "hello" {
-		t.Errorf("the cursor keeps it for later: %+v", c)
-	}
-	reports := endsWithExit0(t, f, k, w)
-	if x := reports[1]; x.Kind != v1.ReportExited || x.Answer != "" {
-		t.Errorf("exited = %+v", x)
-	}
-	// What goes on the wire has no field an older Controller would refuse.
-	if raw, err := json.Marshal(reports[1]); err != nil || strings.Contains(string(raw), "answer") {
-		t.Errorf("the report is %s (%v)", raw, err)
-	}
-}
-
 func TestTheLastMessageOfAnAgentAnswersAResultThatComesInALaterDrain(t *testing.T) {
 	f, _, k, w := eventsFixture(t)
-	f.e.SetControllerFeatures([]string{v1.FeatureRunAnswer})
 	f.appendEvents(k, "say the final word\n")
 	f.e.step(t.Context(), k)
 	if c := f.cursor(k); c.AgentMessage != "the final word" || c.Answer != "" {

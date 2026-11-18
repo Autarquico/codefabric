@@ -38,8 +38,8 @@ type facts struct {
 	inputRequired bool
 	// model is what the harness said it ran with, "" if it did not say.
 	model string
-	// answer is what the harness answered, "" if it did not or if the Controller
-	// does not take it.
+	// answer is what the harness answered, "" if it did not. Whether the
+	// Controller takes it is decided when the report is sent.
 	answer string
 	// code is why the preparation failed, if it is one the Controller keeps
 	// (v1.PrepareFailureCodes).
@@ -297,9 +297,7 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 		return false
 	}
 	f.model = cur.Model
-	if e.answerAnnounced.Load() {
-		f.answer = cur.Answer
-	}
+	f.answer = cur.Answer
 	inputRequired := cur.InputRequired
 	if !inputRequired && f.started != nil {
 		// A Run answered through its input stream is input_required only for what
