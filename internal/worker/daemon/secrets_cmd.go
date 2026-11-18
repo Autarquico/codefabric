@@ -119,6 +119,10 @@ func newSecretsSetCmd() *cobra.Command {
 			if err := store.Set(cmd.Context(), ref, value, projects, backend, setOpts...); err != nil {
 				return secretsError(err)
 			}
+			if badFormat {
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: this does not look like a Claude token: Runs will likely fail with 401, "+
+					"and `cf worker doctor` warns on auth:claude-code until you set it again.")
+			}
 			meta, err := secretMeta(cmd.Context(), store, ref)
 			if err != nil {
 				return err
@@ -264,6 +268,7 @@ func readValue(ctx context.Context, in io.Reader, prompt io.Writer, ref string, 
 	}()
 	select {
 	case raw := <-read:
+		defer clear(raw)
 		return normalizeValue(ref, raw, prompt, force)
 	case err := <-failed:
 		return nil, false, fmt.Errorf("reading the value from stdin: %w", err)
@@ -295,7 +300,7 @@ func normalizeValue(ref string, raw []byte, notice io.Writer, force bool) (value
 		}
 		badFormat = true
 	}
-	return value, badFormat, nil
+	return bytes.Clone(value), badFormat, nil // its own copy: raw is cleared by the caller
 }
 
 // oauthTokenPattern is the token `claude setup-token` makes.

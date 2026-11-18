@@ -195,7 +195,7 @@ func TestSecretsSet_OAuthTokenThatIsNotATokenIsRefusedUnlessForced(t *testing.T)
 	if _, err := w.store.Get(t.Context(), "claude/oauth-token"); err == nil {
 		t.Fatal("something was stored on refusal")
 	}
-	if out, err := cf(t, "not-a-token-at-all-but-one-line\n", "set", "claude/oauth-token", "--force"); err != nil {
+	if out, err := cf(t, "not-a-token-at-all-but-one-line\n", "set", "claude/oauth-token", "--force"); err != nil || !strings.Contains(out, "will likely fail with 401") {
 		t.Fatalf("forced set: %v: %s", err, out)
 	}
 	if got := storedValue(t, w, "claude/oauth-token"); got != "not-a-token-at-all-but-one-line" {
@@ -205,7 +205,7 @@ func TestSecretsSet_OAuthTokenThatIsNotATokenIsRefusedUnlessForced(t *testing.T)
 		t.Errorf("metadata = %+v, want an unexpected format", m)
 	}
 	// A token set again, even forced, leaves no doubt behind.
-	if out, err := cf(t, pastedToken, "set", "claude/oauth-token", "--force"); err != nil {
+	if out, err := cf(t, pastedToken, "set", "claude/oauth-token", "--force"); err != nil || strings.Contains(out, "401") {
 		t.Fatalf("set: %v: %s", err, out)
 	}
 	if m := metaOf(t, w, "claude/oauth-token"); m.Format != "" {
@@ -233,8 +233,8 @@ func TestSecretsSet_OtherRefsAreNotCheckedForATokenForm(t *testing.T) {
 	if out, err := cf(t, "not-a-token-at-all-but-one-line\n", "set", "other/secret"); err != nil {
 		t.Fatalf("set: %v: %s", err, out)
 	}
-	if metaOf(t, w, "other/secret").Format != "" {
-		t.Error("format_ok set for another ref")
+	if got := metaOf(t, w, "other/secret").Format; got != "" {
+		t.Errorf("format = %q for another ref, want unknown", got)
 	}
 }
 
@@ -351,4 +351,58 @@ func TestSecretsSet_OtherRefsKeepAMultilineValue(t *testing.T) {
 	if got := storedValue(t, w, "ssh/key"); got != value {
 		t.Errorf("stored %q", got)
 	}
+}
+
+func TestReadAnswer_Editing(t *testing.T) {
+	never := func(time.Duration) bool { return false }
+	read := func(in string, more func(time.Duration) bool) (string, error) {
+		got, err := readAnswer(bufio.NewReader(strings.NewReader(in)), more)
+		return string(got), err
+	}
+	for name, tc := range map[string]struct{ in, want string }{
+		"backspace":                {"abd\x7fc\n", "abc"},
+		"backspace at the start":   {"\x7fabc\n", "abc"},
+		"ctrl-u":                   {"junk\x15abc\n", "abc"},
+		"an arrow key is not text": {"ab\x1b[Ac\n", "abc"},
+		"a lone escape":            {"ab\x1bc\n", "abc"},
+		"bracketed paste":          {"\x1b[200~ab\ncd\x1b[201~\n", "ab\ncd"},
+		"bracketed paste with CR":  {"\x1b[200~ab\r\ncd\x1b[201~\n", "ab\ncd"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := read(tc.in, never); err != nil || got != tc.want {
+				t.Errorf("= %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+	t.Run("ctrl-d on an empty answer ends the input", func(t *testing.T) {
+		if _, err := read("\x04", never); !errors.Is(err, io.EOF) {
+			t.Errorf("err = %v", err)
+		}
+	})
+	t.Run("ctrl-d after text is ignored", func(t *testing.T) {
+		if got, err := read("ab\x04c\n", never); err != nil || got != "abc" {
+			t.Errorf("= %q, %v", got, err)
+		}
+	})
+	t.Run("ctrl-c aborts", func(t *testing.T) {
+		if _, err := read("ab\x03", never); !errors.Is(err, errInterrupted) {
+			t.Errorf("err = %v", err)
+		}
+	})
+	t.Run("a last fragment that arrives after the newline joins it", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		go func() {
+			_, _ = pw.Write([]byte("abc\n"))
+			time.Sleep(50 * time.Millisecond)
+			_, _ = pw.Write([]byte("def"))
+			time.Sleep(50 * time.Millisecond)
+			_, _ = pw.Write([]byte("\n"))
+		}()
+		calls := 0
+		more := func(time.Duration) bool { calls++; return calls == 1 } // the fragment is coming; the final Enter is not a paste
+		got, err := readAnswer(bufio.NewReader(pr), more)
+		if err != nil || string(got) != "abc\ndef" {
+			t.Errorf("= %q, %v", got, err)
+		}
+	})
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -103,11 +104,12 @@ func (Adapter) SnapshotConfig(_ context.Context, host harness.Host, opts harness
 		}
 	}
 	snap := harness.NativeSnapshot{Harness: ID, SchemaVersion: SchemaVersion}
+	var used budget
 	for _, l := range layouts {
 		if len(opts.Components) > 0 && !slices.Contains(opts.Components, l.name) {
 			continue
 		}
-		files, present, err := readSnapshotFiles(l.root(host), l)
+		files, present, err := readSnapshotFiles(l.root(host), l, &used)
 		if err != nil {
 			return harness.NativeSnapshot{}, err
 		}
@@ -127,8 +129,8 @@ func (Adapter) SnapshotConfig(_ context.Context, host harness.Host, opts harness
 
 // readSnapshotFiles are the files of l under root as a snapshot has them, and
 // whether l is there at all.
-func readSnapshotFiles(root string, l layout) ([]harness.File, bool, error) {
-	files, present, err := readFiles(root, l)
+func readSnapshotFiles(root string, l layout, used *budget) ([]harness.File, bool, error) {
+	files, present, err := readFiles(root, l, used)
 	if err != nil || !present {
 		return files, present, err
 	}
@@ -155,23 +157,40 @@ func readSnapshotFiles(root string, l layout) ([]harness.File, bool, error) {
 	return files, true, nil
 }
 
-// The most a component may hold, files linked or not: a snapshot travels whole
-// to the Controller, and a linked directory can be any size.
+// The most a snapshot may hold, files linked or not: it travels whole to the
+// Controller, and a linked directory can be any size.
 const (
 	maxSnapshotFiles = 2000
 	maxSnapshotBytes = 16 << 20
 )
 
-// budget counts what a component has read against the limits.
+// budget counts what a snapshot has read against the limits.
 type budget struct{ files, bytes int }
 
-func (b *budget) add(l layout, size int64) error {
+var errTooBig = fmt.Errorf("the configuration is too big to adopt: at most %d files and %d MiB in all", maxSnapshotFiles, maxSnapshotBytes>>20)
+
+// file counts one more file.
+func (b *budget) file() error {
 	b.files++
-	b.bytes += int(min(size, maxSnapshotBytes+1))
-	if b.files > maxSnapshotFiles || b.bytes > maxSnapshotBytes {
-		return fmt.Errorf("%s is too big to adopt: at most %d files and %d MiB", l.path, maxSnapshotFiles, maxSnapshotBytes>>20)
+	if b.files > maxSnapshotFiles {
+		return errTooBig
 	}
 	return nil
+}
+
+// read is what f holds, read up to what is left of the budget and counted
+// against it: a file that grows while it is read cannot go past the limit.
+func (b *budget) read(f io.Reader) ([]byte, error) {
+	left := maxSnapshotBytes - b.bytes
+	content, err := io.ReadAll(io.LimitReader(f, int64(left)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > left {
+		return nil, errTooBig
+	}
+	b.bytes += len(content)
+	return content, nil
 }
 
 // followsLinks says whether the entries of l that are links to a directory
@@ -184,8 +203,8 @@ func (l layout) followsLinks() bool {
 // readFiles are the files of l under root, as they are, and whether l is
 // there at all. Anything but regular files and directories is an error, with
 // one exception: a symlink that is a direct child of skills/, commands/ or
-// agents/ is followed once; see readLinked.
-func readFiles(root string, l layout) ([]harness.File, bool, error) {
+// agents/ is followed once; see readLinked. What is read counts against used.
+func readFiles(root string, l layout, used *budget) ([]harness.File, bool, error) {
 	r, err := os.OpenRoot(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
@@ -206,31 +225,23 @@ func readFiles(root string, l layout) ([]harness.File, bool, error) {
 		return nil, false, fmt.Errorf("claude-code: %s is not a regular file", l.path)
 	}
 	var files []harness.File
-	var used budget
 	err = fs.WalkDir(r.FS(), l.path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
 		if d.Type()&fs.ModeSymlink != 0 && l.followsLinks() && path.Dir(p) == l.path {
-			linked, err := readLinked(filepath.Join(root, filepath.FromSlash(p)), p, l, &used)
+			linked, err := readLinked(filepath.Join(root, filepath.FromSlash(p)), p, used)
 			files = append(files, linked...)
 			return err
 		}
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("%q is not a regular file", p)
 		}
-		info, err := d.Info()
+		f, err := readRegular(r, p, used, nil)
 		if err != nil {
 			return err
 		}
-		if err := used.add(l, info.Size()); err != nil {
-			return err
-		}
-		content, err := r.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		files = append(files, harness.File{Path: p, Mode: info.Mode().Perm(), Content: content, SecretRefs: harness.SecretRefs(content)})
+		files = append(files, f)
 		return nil
 	})
 	if err != nil {
@@ -239,12 +250,52 @@ func readFiles(root string, l layout) ([]harness.File, bool, error) {
 	return files, true, nil
 }
 
+// readRegular is the file name of r, opened first and judged on what was
+// opened: it must be a regular file (a FIFO put there since the directory was
+// listed is not opened for reading, nor waited on) and, if trusted is not nil,
+// pass it. Its content counts against used.
+func readRegular(r *os.Root, name string, used *budget, trusted func(fs.FileInfo) error) (harness.File, error) {
+	f, err := r.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return harness.File{}, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	switch {
+	case err != nil:
+		return harness.File{}, err
+	case !info.Mode().IsRegular():
+		return harness.File{}, fmt.Errorf("%q is not a regular file", name)
+	}
+	if trusted != nil {
+		if err := trusted(info); err != nil {
+			return harness.File{}, err
+		}
+	}
+	if err := used.file(); err != nil {
+		return harness.File{}, err
+	}
+	content, err := used.read(f)
+	if err != nil {
+		return harness.File{}, err
+	}
+	return harness.File{Path: name, Mode: info.Mode().Perm(), Content: content, SecretRefs: harness.SecretRefs(content)}, nil
+}
+
 // readLinked reads the directory the link at abs (p in the snapshot) points
 // to, and records its files as p/..., as if they were there. It trusts what a
-// user or the system installed and nothing else: the target is a directory
-// that is not itself a link, owned by this user or root, that no one else can
-// write; inside it only regular files and directories are allowed, no link.
-func readLinked(abs, p string, l layout, used *budget) ([]harness.File, error) {
+// user or the system installed and nothing else, so that no one else can have
+// put anything in the snapshot:
+//   - the target is a directory that is not itself a link;
+//   - it, and every directory above it up to /, is owned by this user or root
+//     and cannot be written by group or others (a sticky directory, like /tmp,
+//     only lets its owner remove what is in it, so it counts as safe);
+//   - it is opened, and the opened directory must be the one that was checked;
+//   - every directory and file inside it is owned by this user or root and
+//     cannot be written by group or others, and none is a link.
+//
+// Any breach refuses the whole component, naming the path.
+func readLinked(abs, p string, used *budget) ([]harness.File, error) {
 	target, err := os.Readlink(abs)
 	if err != nil {
 		return nil, err
@@ -258,39 +309,92 @@ func readLinked(abs, p string, l layout, used *budget) ([]harness.File, error) {
 		return nil, fmt.Errorf("%q links to a target that cannot be read", p)
 	case !fi.IsDir():
 		return nil, fmt.Errorf("%q is a link to something that is not a directory (not followed)", p)
-	case fi.Mode().Perm()&0o022 != 0:
-		return nil, fmt.Errorf("%q links to a directory that others can write (not followed)", p)
-	case !ownedByUserOrRoot(fi):
-		return nil, fmt.Errorf("%q links to a directory owned by another user (not followed)", p)
 	}
-	tr, err := os.OpenRoot(target)
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return nil, fmt.Errorf("%q links to a target that cannot be read", p)
+	}
+	if err := checkAncestors(p, resolved); err != nil {
+		return nil, err
+	}
+	checked, err := os.Lstat(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("%q links to a target that cannot be read", p)
+	}
+	if !os.SameFile(fi, checked) { // a link put there since the first look
+		return nil, fmt.Errorf("%q: the linked directory changed while it was read (not followed)", p)
+	}
+	tr, err := os.OpenRoot(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("%q: %w", p, err)
 	}
 	defer func() { _ = tr.Close() }()
+	opened, err := tr.Stat(".")
+	if err != nil {
+		return nil, fmt.Errorf("%q: %w", p, err)
+	}
+	if !os.SameFile(checked, opened) {
+		return nil, fmt.Errorf("%q: the linked directory changed while it was read (not followed)", p)
+	}
+	if err := trustedEntry(p, opened); err != nil {
+		return nil, err
+	}
 	var files []harness.File
 	err = fs.WalkDir(tr.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil || rel == "." {
 			return err
 		}
-		if !d.Type().IsRegular() {
-			return fmt.Errorf("%q has %q, which is not a regular file (links inside a linked directory are not followed)", p, rel)
+		inside := p + "/" + rel
+		if d.Type()&fs.ModeSymlink != 0 || (!d.IsDir() && !d.Type().IsRegular()) {
+			return fmt.Errorf("%q is not a regular file or a directory (links inside a linked directory are not followed)", inside)
 		}
-		info, err := d.Info()
+		if d.IsDir() {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			return trustedEntry(inside, info)
+		}
+		f, err := readRegular(tr, rel, used, func(info fs.FileInfo) error { return trustedEntry(inside, info) })
 		if err != nil {
 			return err
 		}
-		if err := used.add(l, info.Size()); err != nil {
-			return err
-		}
-		content, err := tr.ReadFile(rel)
-		if err != nil {
-			return err
-		}
-		files = append(files, harness.File{Path: p + "/" + rel, Mode: info.Mode().Perm(), Content: content, SecretRefs: harness.SecretRefs(content)})
+		f.Path = p + "/" + rel
+		files = append(files, f)
 		return nil
 	})
 	return files, err
+}
+
+// checkAncestors refuses a resolved path one of whose directories, up to /, is
+// not owned by this user or root, or can be written by group or others (unless
+// it is sticky): anyone who could would be able to swap what the path leads to
+// after it was checked, as sshd's StrictModes guards against.
+func checkAncestors(p, resolved string) error {
+	for dir := filepath.Dir(resolved); ; dir = filepath.Dir(dir) {
+		fi, err := os.Lstat(dir)
+		if err != nil {
+			return fmt.Errorf("%q: %w", p, err)
+		}
+		if !ownedByUserOrRoot(fi) || (fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0) {
+			return fmt.Errorf("%q links into %q, which another user owns or can write (not followed)", p, dir)
+		}
+		if dir == filepath.Dir(dir) {
+			return nil
+		}
+	}
+}
+
+// trustedEntry is an error naming what unless fi, what was opened or listed
+// there, is owned by this user or root and cannot be written by group or others.
+func trustedEntry(what string, fi fs.FileInfo) error {
+	switch {
+	case !ownedByUserOrRoot(fi):
+		return fmt.Errorf("%q is owned by another user (a linked directory is not followed)", what)
+	case fi.Mode().Perm()&0o022 != 0:
+		return fmt.Errorf("%q can be written by others (a linked directory is not followed)", what)
+	}
+	return nil
 }
 
 // ownedByUserOrRoot says whether fi belongs to the current user or to root.

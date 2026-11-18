@@ -31,9 +31,13 @@ func promptValue(ctx context.Context, tty *os.File, prompt io.Writer, ref string
 	if err != nil {
 		return nil, false, fmt.Errorf("reading the terminal's settings: %w", err)
 	}
+	// Not canonical: a paste is read as it arrives, also its last fragment,
+	// which a line discipline holds back until Enter. ISIG stays, so Ctrl-C
+	// still interrupts.
 	quiet := *saved
-	quiet.Lflag &^= unix.ECHO
-	quiet.Lflag |= unix.ICANON
+	quiet.Lflag &^= unix.ECHO | unix.ICANON
+	quiet.Cc[unix.VMIN] = 1
+	quiet.Cc[unix.VTIME] = 0
 	// Caught before the echo goes off, so that no signal finds it off with
 	// nobody to turn it back on.
 	interrupted := make(chan os.Signal, 1)
@@ -42,7 +46,11 @@ func promptValue(ctx context.Context, tty *os.File, prompt io.Writer, ref string
 	if err := unix.IoctlSetTermios(fd, ioctlSetTermios, &quiet); err != nil {
 		return nil, false, fmt.Errorf("turning the terminal's echo off: %w", err)
 	}
-	restore := sync.OnceFunc(func() { _ = unix.IoctlSetTermios(fd, ioctlSetTermios, saved) })
+	_, _ = io.WriteString(prompt, bracketedPasteOn)
+	restore := sync.OnceFunc(func() {
+		_, _ = io.WriteString(prompt, bracketedPasteOff)
+		_ = unix.IoctlSetTermios(fd, ioctlSetTermios, saved)
+	})
 	defer restore()
 
 	// One reader for both lines. When the prompt is cancelled it stays blocked
@@ -68,7 +76,7 @@ func promptValue(ctx context.Context, tty *os.File, prompt io.Writer, ref string
 			return line, nil
 		case err := <-failed:
 			_, _ = io.WriteString(prompt, "\n")
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) || errors.Is(err, errInterrupted) {
 				return nil, cancelled()
 			}
 			return nil, fmt.Errorf("reading the value from the terminal: %w", err)
@@ -99,41 +107,117 @@ func promptValue(ctx context.Context, tty *os.File, prompt io.Writer, ref string
 	defer clear(confirmed)
 	if err != nil || !bytes.Equal(value, confirmed) {
 		clear(value)
-		return nil, false, invalid("the two values differ; nothing was stored. If the value has several lines, or the terminal " +
-			"may wrap it, give it on stdin instead: printf %s '<value>' | cf worker secrets set <ref>")
+		return nil, false, invalid(fmt.Sprintf("the two values differ; nothing was stored. If the terminal may have wrapped the value, "+
+			"give it on stdin from a file or the clipboard, so that it stays out of your shell's history: "+
+			"cf worker secrets set %[1]s < token.txt (or pbpaste | cf worker secrets set %[1]s on macOS)", ref))
 	}
 	return value, badFormat, nil
 }
 
-// pasteWindow is how long after a line the terminal is waited on for another
-// one that belongs to the same paste.
+// pasteWindow is how long after a newline the terminal is waited on for more
+// input that belongs to the same paste: the bytes of a paste arrive in one
+// burst, the Enter of a user does not follow a byte.
 const pasteWindow = 50 * time.Millisecond
 
-// readAnswer is one answer at a prompt: the first line, and every further
-// complete line that is already there or arrives within pasteWindow, joined
-// with a newline. A value pasted over two lines is one answer, not two. more
-// says, waiting at most wait, whether input is coming; r.Buffered is asked
-// first, since what a read already took in is not on the descriptor any more.
+const (
+	bracketedPasteOn  = "\x1b[?2004h"
+	bracketedPasteOff = "\x1b[?2004l"
+	pasteStart        = "\x1b[200~"
+	pasteEnd          = "\x1b[201~"
+)
+
+// errInterrupted is a Ctrl-C that arrived as a byte and not as a signal.
+var errInterrupted = errors.New("interrupted")
+
+// readAnswer is one answer at a prompt, read byte by byte from a terminal
+// without line editing or echo: a paste, even wrapped over several lines, is
+// one answer. A newline ends it unless more input is there or arrives within
+// pasteWindow (more says, waiting at most wait, whether it does; r.Buffered is
+// asked first, since what a read took in is not on the descriptor any more).
+// What a terminal with bracketed paste sends between pasteStart and pasteEnd
+// is pasted text, newlines included, whatever their timing. Backspace erases
+// the last byte, Ctrl-U the answer; Ctrl-D on an empty answer ends the input
+// (io.EOF) and Ctrl-C is errInterrupted.
 func readAnswer(r *bufio.Reader, more func(wait time.Duration) bool) ([]byte, error) {
-	line, err := r.ReadBytes('\n')
-	if err != nil {
-		return nil, err
-	}
-	answer := bytes.TrimRight(line, "\r\n")
-	for r.Buffered() > 0 || more(pasteWindow) {
-		line, err := r.ReadBytes('\n')
+	answer := []byte{}
+	pasting := false
+	for {
+		b, err := r.ReadByte()
 		if err != nil {
-			break // a last line without its newline is cut: the answer is what was whole
+			clear(answer)
+			return nil, err
 		}
-		answer = append(answer, '\n')
-		answer = append(answer, bytes.TrimRight(line, "\r\n")...)
+		switch {
+		case b == 0x1b:
+			switch {
+			case followedBy(r, more, pasteStart[1:]):
+				pasting = true
+			case followedBy(r, more, pasteEnd[1:]):
+				pasting = false
+			case !pasting && followedBy(r, more, "["):
+				skipSequence(r, more)
+			}
+		case pasting:
+			if b != '\r' {
+				answer = append(answer, b)
+			}
+		case b == '\r' || b == '\n':
+			if b == '\r' && r.Buffered() > 0 {
+				if next, _ := r.Peek(1); next[0] == '\n' {
+					_, _ = r.Discard(1)
+				}
+			}
+			if r.Buffered() == 0 && !more(pasteWindow) {
+				return answer, nil
+			}
+			answer = append(answer, '\n')
+		case b == 0x7f || b == 0x08:
+			if len(answer) > 0 {
+				answer = answer[:len(answer)-1]
+			}
+		case b == 0x15:
+			clear(answer)
+			answer = answer[:0]
+		case b == 0x04 && len(answer) == 0:
+			return nil, io.EOF
+		case b == 0x03:
+			clear(answer)
+			return nil, errInterrupted
+		case b >= 0x20 || b == '\t':
+			answer = append(answer, b)
+		}
 	}
-	return answer, nil
+}
+
+// skipSequence drops the rest of a control sequence, such as an arrow key,
+// up to its final byte.
+func skipSequence(r *bufio.Reader, more func(time.Duration) bool) {
+	for r.Buffered() > 0 || more(pasteWindow) {
+		if b, err := r.ReadByte(); err != nil || (b >= 0x40 && b <= 0x7e) {
+			return
+		}
+	}
+}
+
+// followedBy says whether what comes next in r is rest, and consumes it if so.
+// It does not wait for bytes that are not coming: a lone Escape is not it.
+func followedBy(r *bufio.Reader, more func(time.Duration) bool, rest string) bool {
+	for i := 1; i <= len(rest); i++ {
+		if r.Buffered() < i && !more(pasteWindow) {
+			return false
+		}
+		got, err := r.Peek(i)
+		if err != nil || got[i-1] != rest[i-1] {
+			return false
+		}
+	}
+	_, _ = r.Discard(len(rest))
+	return true
 }
 
 // readableWithin says whether fd has something to read within wait. It polls
-// and does not ask how much there is (FIONREAD), which a terminal in canonical
-// mode answers differently on Linux and macOS.
+// and does not ask how much there is (FIONREAD), which differs between Linux
+// and macOS.
 func readableWithin(fd int, wait time.Duration) bool {
 	fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}} //nolint:gosec // a descriptor
 	n, err := unix.Poll(fds, int(wait.Milliseconds()))

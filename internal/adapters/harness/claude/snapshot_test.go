@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Autarquico/codefabric/internal/adapters/harness"
 	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
@@ -338,24 +340,34 @@ func TestSnapshotFollowsAFirstLevelLinkToADirectoryOfTheUser(t *testing.T) {
 }
 
 func TestSnapshotFollowsALinkToADirectoryOfRoot(t *testing.T) {
-	var dir string
+	if os.Getuid() == 0 {
+		t.Skip("running as root: a directory of root is a directory of the user")
+	}
 	entries, _ := os.ReadDir("/usr/share")
+	tried := 0
 	for _, e := range entries {
 		p := filepath.Join("/usr/share", e.Name())
 		fi, err := os.Lstat(p)
-		if err != nil || !fi.IsDir() || fi.Sys().(*syscall.Stat_t).Uid != 0 || fi.Mode().Perm()&0o022 != 0 || os.Getuid() == 0 {
+		if err != nil || !fi.IsDir() || fi.Sys().(*syscall.Stat_t).Uid != 0 || fi.Mode().Perm()&0o022 != 0 {
 			continue
+		}
+		if tried++; tried > 20 { // a few small ones are enough; the rest may be big
+			break
 		}
 		h, home := newHost(t, nil)
 		linkedSkill(t, home, "sys", p)
-		if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{Components: []string{"skills"}}); err == nil {
-			dir = p
-			break
+		snap, err := claude.Adapter{}.SnapshotConfig(t.Context(), h, harness.SnapshotOptions{Components: []string{"skills"}})
+		if err != nil || len(snap.Components) == 0 || len(snap.Components[0].Files) == 0 {
+			continue
 		}
+		for _, f := range snap.Components[0].Files {
+			if !strings.HasPrefix(f.Path, "skills/sys/") {
+				t.Errorf("file %q is not recorded under the link", f.Path)
+			}
+		}
+		return
 	}
-	if dir == "" {
-		t.Skip("no root-owned directory of plain files under /usr/share to link to (or running as root)")
-	}
+	t.Skip("no root-owned directory of plain files among the first under /usr/share to link to")
 }
 
 func TestSnapshotRefusesALinkItDoesNotTrust(t *testing.T) {
@@ -375,6 +387,26 @@ func TestSnapshotRefusesALinkItDoesNotTrust(t *testing.T) {
 			_ = os.Chmod(dir, 0o775) //nolint:gosec // the test needs a loose mode
 			return dir
 		},
+		"a subdirectory others can write": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Chmod(filepath.Join(dir, "scripts"), 0o777) //nolint:gosec // the test needs a loose mode
+			return dir
+		},
+		"a file others can write": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Chmod(filepath.Join(dir, "SKILL.md"), 0o666) //nolint:gosec // the test needs a loose mode
+			return dir
+		},
+		"below a directory others can write": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = os.Chmod(filepath.Dir(dir), 0o775) //nolint:gosec // the test needs a loose mode
+			return dir
+		},
+		"a FIFO inside": func(t *testing.T, _ string) string {
+			dir := skillDir(t)
+			_ = syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o600)
+			return dir
+		},
 		"to a world-writable dir": func(t *testing.T, _ string) string {
 			dir := skillDir(t)
 			_ = os.Chmod(dir, 0o757) //nolint:gosec // the test needs a loose mode
@@ -389,8 +421,14 @@ func TestSnapshotRefusesALinkItDoesNotTrust(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h, home := newHost(t, nil)
 			linkedSkill(t, home, "x", build(t, home))
-			if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{}); err == nil {
-				t.Error("the link was followed")
+			_, err := claude.Adapter{}.SnapshotConfig(t.Context(), h, harness.SnapshotOptions{})
+			if err == nil {
+				t.Fatal("the link was followed")
+			}
+			if strings.Contains(name, "inside") || strings.Contains(name, "file others") || strings.Contains(name, "subdirectory") {
+				if !strings.Contains(err.Error(), "skills/x/") {
+					t.Errorf("the error does not name the path: %v", err)
+				}
 			}
 		})
 	}
@@ -430,6 +468,70 @@ func TestSnapshotHasASizeLimitThatCountsLinkedFiles(t *testing.T) {
 	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h3, harness.SnapshotOptions{}); err == nil {
 		t.Error("too many files were taken")
 	}
+}
+
+func TestSnapshotLimitCoversTheWholeSnapshot(t *testing.T) {
+	half := strings.Repeat("x", 9<<20)
+	h, _ := newHost(t, map[string]string{".claude/commands/a.md": half, ".claude/agents/b.md": half})
+	if _, err := (claude.Adapter{}).SnapshotConfig(t.Context(), h, harness.SnapshotOptions{}); err == nil || !strings.Contains(err.Error(), "too big") {
+		t.Errorf("two components of 9 MiB: %v", err)
+	}
+}
+
+// A link target swapped for a link to a private directory while the snapshot
+// is taken is never followed: the directory opened is the one that was checked.
+func TestSnapshotDoesNotFollowATargetSwappedForALink(t *testing.T) {
+	h, home := newHost(t, nil)
+	parent := t.TempDir()
+	target := filepath.Join(parent, "pkg")
+	good := filepath.Join(parent, "good")
+	if err := os.MkdirAll(good, 0o755); err != nil { //nolint:gosec // a directory of plain files
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(good, "SKILL.md"), []byte("# ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	private := filepath.Join(t.TempDir(), "dotssh")
+	if err := os.MkdirAll(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(private, "id_ed25519"), []byte("PRIVATE KEY"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(good, target); err != nil {
+		t.Fatal(err)
+	}
+	linkedSkill(t, home, "tdd", target)
+	var stop atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		link := filepath.Join(parent, "evil")
+		for !stop.Load() {
+			_ = os.Symlink(private, link)
+			_ = os.Rename(target, good)
+			_ = os.Rename(link, target) // the target is a link to private
+			_ = os.Rename(target, link)
+			_ = os.Rename(good, target) // and a directory again
+			_ = os.Remove(link)
+		}
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := claude.Adapter{}.SnapshotConfig(t.Context(), h, harness.SnapshotOptions{Components: []string{"skills"}})
+		if err != nil || len(snap.Components) == 0 {
+			continue
+		}
+		for _, f := range snap.Components[0].Files {
+			if strings.Contains(string(f.Content), "PRIVATE KEY") {
+				stop.Store(true)
+				<-done
+				t.Fatalf("followed a swapped link: %s", f.Path)
+			}
+		}
+	}
+	stop.Store(true)
+	<-done
 }
 
 func TestApplyConfigWritesRealFilesForALinkedSkill(t *testing.T) {

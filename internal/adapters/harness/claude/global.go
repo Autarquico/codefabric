@@ -74,8 +74,9 @@ func (Adapter) GlobalFingerprint(_ context.Context, host harness.Host, component
 		return nil, err
 	}
 	out := map[string]string{}
+	var used budget
 	for _, l := range ls {
-		files, present, err := readFiles(l.root(host), l)
+		files, present, err := readFiles(l.root(host), l, &used)
 		if err != nil {
 			return nil, err
 		}
