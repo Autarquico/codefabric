@@ -931,9 +931,9 @@ func TestScenario_LiveView_Leave_NamedWhileTheSessionOpens(t *testing.T) {
 	}
 }
 
-// Cells full of the glyphs of Claude's screen, some of which terminals draw
-// wider than the Unicode table says: no row of the grid may be wider than the
-// terminal, or it wraps and pushes the cells below it off the screen.
+// Cells full of the glyphs of Claude's screen: every row of the grid has the
+// width of the terminal and the divider between cells sits in the same column
+// on every row, so the cells have the same height.
 func TestScenario_LiveView_Grid_FullCellsWithWideGlyphsFit(t *testing.T) {
 	var screen strings.Builder
 	for i := 1; i <= 60; i++ {
@@ -951,9 +951,30 @@ func TestScenario_LiveView_Grid_FullCellsWithWideGlyphsFit(t *testing.T) {
 	if len(lines) != 45 {
 		t.Errorf("the grid is %d lines tall, want 45", len(lines))
 	}
+	for _, row := range []int{22, 42} { // the last line of each row of cells: both are as tall
+		if !strings.Contains(lines[row-1], "line 60") {
+			t.Errorf("line %d is not the end of a full cell:\n%s", row, lines[row-1])
+		}
+	}
+	divider := -1
 	for i, line := range lines {
-		if w := cellWidth(line); w > 160 {
+		if w := ansi.StringWidth(line); w > 160 {
 			t.Errorf("line %d is %d cells wide: it would wrap", i+1, w)
+		}
+		if i < 2 || i >= 22 {
+			continue // only the first row of cells, lines 3 to 22, has two cells and a divider
+		}
+		col := strings.Index(line, "│")
+		if col < 0 {
+			t.Errorf("line %d has no divider:\n%s", i+1, line)
+			continue
+		}
+		col = ansi.StringWidth(line[:col])
+		if divider < 0 {
+			divider = col
+		}
+		if col != divider {
+			t.Errorf("the divider of line %d is in column %d, want %d", i+1, col, divider)
 		}
 	}
 	compareGolden(t, "live-grid-wide-glyphs-160x45.golden", got)

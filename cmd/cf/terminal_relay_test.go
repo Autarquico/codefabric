@@ -25,6 +25,9 @@ func TestKeysBefore_TheDetachKeyIsTheOneGiven(t *testing.T) {
 		{"Ctrl-G in CSI-u", "\x1b[103;5u", 0x07, "", true},
 		{"a press in CSI-u", "a\x1b[93;5:1uz", 0x1d, "a", true},
 		{"a release is not a press", "\x1b[93;5:3u", 0x1d, "\x1b[93;5:3u", false},
+		{"Ctrl-] in CSI-u with Caps Lock", "a\x1b[93;69u", 0x1d, "a", true},
+		{"Ctrl-] in CSI-u with Num Lock", "a\x1b[93;133u", 0x1d, "a", true},
+		{"Ctrl-Shift-] is another key", "\x1b[93;6u", 0x1d, "\x1b[93;6u", false},
 		{"another key in CSI-u", "\x1b[103;5u", 0x1d, "\x1b[103;5u", false},
 	} {
 		keys, leave := keysBefore([]byte(tc.typed), tc.key)

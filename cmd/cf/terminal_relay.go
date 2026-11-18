@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,11 +61,12 @@ func detachLabelOf() string {
 
 // screenReset undoes the modes a tmux client sets on a terminal: it leaves the
 // alternate screen, shows the cursor, turns off mouse reporting and bracketed
-// paste, resets the scroll region and the attributes. The scroll region is reset
-// before leaving the alternate screen: resetting it homes the cursor, and leaving
-// is what puts the cursor back under the banner. It ends with a line break so the
-// shell starts on a fresh line.
-const screenReset = "\x1b[r\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[m\r\n"
+// paste, resets the scroll region and the attributes. Resetting the scroll
+// region homes the cursor, so the cursor is saved before it and restored after:
+// that does not depend on the terminal restoring it when it leaves the alternate
+// screen. It ends with a line break so the shell starts on a fresh line under
+// the banner.
+const screenReset = "\x1b[?1049l\x1b7\x1b[r\x1b8\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[m\r\n"
 
 // relaySession is an attach through the Controller that has not started. It
 // belongs here and not in internal/cli because it owns the terminal: raw mode,
@@ -288,30 +291,43 @@ func pumpKeys(fd int, cancel *cancelPipe, write bool, conn *client.AttachConn, l
 // A terminal that has the Kitty keyboard protocol on sends the key as CSI-u
 // ("\x1b[93;5u" for Ctrl-]); that form leaves too.
 func keysBefore(p []byte, key byte) (keys []byte, leave bool) {
-	csiU := csiUOf(key)
+	code := csiUCodeOf(key)
 	for i, b := range p {
-		if b == key || (b == 0x1b && csiU != "" && hasCSIU(p[i:], csiU)) {
+		if b == key || (b == 0x1b && code != 0 && isCSIUPress(p[i:], code)) {
 			return p[:i], true
 		}
 	}
 	return p, false
 }
 
-// csiUOf is the CSI-u form of a control key, without its final: the code of the
-// character the key is a control of, and the control modifier.
-func csiUOf(key byte) string {
+// csiUCodeOf is the code of the character a control key is a control of, as
+// CSI-u names it; 0 when the key has no such form.
+func csiUCodeOf(key byte) int {
 	switch {
 	case key >= 0x01 && key <= 0x1a:
-		return fmt.Sprintf("\x1b[%d;5", 'a'+key-1)
+		return int('a' + key - 1)
 	case key >= 0x1c && key <= 0x1f:
-		return fmt.Sprintf("\x1b[%d;5", 0x40+key)
+		return 0x40 + int(key)
 	}
-	return ""
+	return 0
 }
 
-// hasCSIU says whether p starts with the key in CSI-u form, with or without the
-// event type the Kitty protocol may add (";5:1u" is a press).
-func hasCSIU(p []byte, prefix string) bool {
-	rest, ok := strings.CutPrefix(string(p), prefix)
-	return ok && (strings.HasPrefix(rest, "u") || strings.HasPrefix(rest, ":1u"))
+// Kitty adds these to the modifier of a key while Caps Lock or Num Lock is on.
+const csiULockBits = 64 | 128
+
+// isCSIUPress says whether p starts with "ESC [ code ; modifier u" where the
+// modifier is Ctrl alone, lock keys aside, with or without the event type the
+// Kitty protocol may add (";5:1u" is a press).
+func isCSIUPress(p []byte, code int) bool {
+	rest, ok := bytes.CutPrefix(p, []byte("\x1b["+strconv.Itoa(code)+";"))
+	if !ok {
+		return false
+	}
+	end := bytes.IndexByte(rest, 'u')
+	if end < 0 {
+		return false
+	}
+	modifier, event, _ := strings.Cut(string(rest[:end]), ":")
+	m, err := strconv.Atoi(modifier)
+	return err == nil && (m-1)&^csiULockBits == 4 && (event == "" || event == "1")
 }

@@ -348,22 +348,33 @@ func TestScenario_LiveAttach_SinRelayEnElWorker(t *testing.T) {
 	o.waitPublished(o.run.ID)
 }
 
-// TestScenario_LiveAttach_TeclaDeRespaldoAlEntrar: with a detach key of cf that
-// is not Ctrl-], the Ctrl-] typed the moment the attach opens, before the tmux
-// client on the Worker has drawn, still leaves: the Worker holds the keys until
-// that client is up and then delivers them in order.
-func TestScenario_LiveAttach_TeclaDeRespaldoAlEntrar(t *testing.T) {
-	o := newObserveBox(t, chatScript)
-	use(t, o.client)
+// useDetachKeyCtrlG sets a detach key for cf that is not Ctrl-], so that the
+// Ctrl-] a person types is the fallback bound in the tmux of the Worker.
+func useDetachKeyCtrlG(t *testing.T, o *observeBox) {
+	t.Helper()
 	config := filepath.Join(o.client.ConfigDir, "client.json")
 	if err := os.WriteFile(config, []byte(`{"attach":{"detach_key":"ctrl+g"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	term := o.attach(nil)
-	eventually(t, "the attach to open", func() bool { return strings.Contains(term.screen(), "attached to ") })
+}
+
+// TestScenario_LiveAttach_TeclaDeRespaldoAlEntrar: with a detach key of cf that
+// is not Ctrl-], a Ctrl-] already waiting in the terminal when cf starts is read
+// the moment the terminal is raw, goes to the Worker with the attach opening, and
+// still leaves through the fallback bound in the tmux of the Worker.
+//
+// Not covered: the hold of the relay. This test also passes with the hold
+// disabled (checked by hand), so it does not guard it;
+// TestRelay_InputBeforeTheTerminalDrawsWaitsAndArrivesInOrder does.
+func TestScenario_LiveAttach_TeclaDeRespaldoAlEntrar(t *testing.T) {
+	o := newObserveBox(t, chatScript)
+	use(t, o.client)
+	useDetachKeyCtrlG(t, o)
+	exe, _ := os.Executable()
+	term := inTerminal(t, o.attachEnv(), "sh", "-c", fmt.Sprintf("sleep 1; exec %s attach auth-race", exe))
 	term.send("C-]")
-	eventually(t, "the client to leave the session", func() bool { return o.clients() == 0 })
 	eventually(t, "cf attach to exit", term.ended)
+	eventually(t, "the client to leave the session", func() bool { return o.clients() == 0 })
 	if !o.sessionAlive() || o.reconcileBox.run(o.run.ID).State != domain.RunRunning {
 		t.Fatal("leaving ended the Run")
 	}

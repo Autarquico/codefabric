@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"io"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -316,30 +315,7 @@ type sdkAttachment struct {
 	session *cli.AttachSession
 }
 
-func (a sdkAttachment) Command() tea.ExecCommand { return &plainKeyboard{ExecCommand: a.session} }
-
-// plainKeyboardReset turns off the Kitty keyboard protocol and modifyOtherKeys,
-// which the TUI may leave on: with either, a terminal sends Ctrl-] as a longer
-// sequence and not as the single byte the attach looks for.
-const plainKeyboardReset = "\x1b[<u\x1b[>4;0m"
-
-// plainKeyboard is a command that starts with the keyboard in its plain mode.
-type plainKeyboard struct {
-	tea.ExecCommand
-	out io.Writer
-}
-
-func (k *plainKeyboard) SetStdout(w io.Writer) {
-	k.out = w
-	k.ExecCommand.SetStdout(w)
-}
-
-func (k *plainKeyboard) Run() error {
-	if k.out != nil {
-		_, _ = io.WriteString(k.out, plainKeyboardReset)
-	}
-	return k.ExecCommand.Run()
-}
+func (a sdkAttachment) Command() tea.ExecCommand { return a.session }
 
 func (a sdkAttachment) Finish(runErr error) error { return a.session.Finish(a.ctx, runErr) }
 

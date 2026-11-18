@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strconv"
-	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -101,8 +99,8 @@ func TestSDKBackend_Attach_ARefusalIsAFailureAndNoSession(t *testing.T) {
 func TestSDKAttachment_ExposesTheSessionAndMapsItsExit(t *testing.T) {
 	session := &cli.AttachSession{}
 	a := sdkAttachment{ctx: context.Background(), session: session}
-	if cmd, ok := a.Command().(*plainKeyboard); !ok || cmd.ExecCommand != tea.ExecCommand(session) {
-		t.Error("Command is not the session, started with the plain keyboard")
+	if a.Command() != tea.ExecCommand(session) {
+		t.Error("Command is not the session")
 	}
 	if err := a.Finish(nil); err != nil {
 		t.Errorf("exit 0 answered %v", err)
@@ -110,31 +108,5 @@ func TestSDKAttachment_ExposesTheSessionAndMapsItsExit(t *testing.T) {
 	failure := actions.FailureOf(a.Finish(cli.ExitStatus(255)))
 	if failure.Code != domain.CodeRunNotAttachable {
 		t.Errorf("exit 255 answered %v", fmt.Sprint(failure.Code))
-	}
-}
-
-type recordedCommand struct {
-	out io.Writer
-	log *strings.Builder
-}
-
-func (c *recordedCommand) Run() error          { c.log.WriteString("|run"); return nil }
-func (c *recordedCommand) SetStdin(io.Reader)  {}
-func (c *recordedCommand) SetStderr(io.Writer) {}
-func (c *recordedCommand) SetStdout(w io.Writer) {
-	c.out = w
-}
-
-// An attach starts with the keyboard in its plain mode, before anything runs.
-func TestPlainKeyboard_ResetsTheKeyboardModesBeforeTheAttachRuns(t *testing.T) {
-	var out strings.Builder
-	inner := &recordedCommand{log: &out}
-	cmd := &plainKeyboard{ExecCommand: inner}
-	cmd.SetStdout(&out)
-	if err := cmd.Run(); err != nil {
-		t.Fatal(err)
-	}
-	if want := "\x1b[<u\x1b[>4;0m|run"; out.String() != want {
-		t.Errorf("wrote %q, want %q", out.String(), want)
 	}
 }
