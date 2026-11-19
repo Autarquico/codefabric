@@ -152,6 +152,9 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigs)
+	// The first size goes before the reader of signals starts: a SIGWINCH that
+	// comes meanwhile waits in sigs, so the last size sent is the latest.
+	sendSize(conn, fd)
 	done := make(chan struct{})
 	defer close(done)
 	wg.Add(1)
@@ -163,9 +166,7 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 				return
 			case sig := <-sigs:
 				if sig == syscall.SIGWINCH {
-					if writes {
-						sendSize(conn, fd)
-					}
+					sendSize(conn, fd)
 					continue
 				}
 				detach()
@@ -173,9 +174,6 @@ func (s relaySession) Run(stdio cli.TerminalIO) (int, error) {
 			}
 		}
 	}()
-	if writes {
-		sendSize(conn, fd)
-	}
 
 	wg.Add(1)
 	go func() { // the keys of the person

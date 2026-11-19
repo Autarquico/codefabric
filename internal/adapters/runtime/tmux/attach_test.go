@@ -162,3 +162,25 @@ func TestSnapshot_RefusesAHandleOfAnotherRuntime(t *testing.T) {
 		t.Fatal("a handle of another runtime was captured")
 	}
 }
+
+func TestViewIgnoresSize_IsKnownFromTheVersionCheckFound(t *testing.T) {
+	for version, want := range map[string]bool{"3.0": false, "3.1c": false, "3.2": true, "3.6a": true, "4.0": true} {
+		bin := filepath.Join(t.TempDir(), "tmux")
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\necho tmux "+version+"\n"), 0o755); err != nil { //nolint:gosec // a script of the test
+			t.Fatal(err)
+		}
+		r, err := New(Options{Socket: "cf-0123456789ab", Binary: bin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.ViewIgnoresSize() {
+			t.Errorf("tmux %s: a view ignores the size before Check", version)
+		}
+		if err := r.Check(t.Context()); err != nil {
+			t.Fatalf("tmux %s: %v", version, err)
+		}
+		if got := r.ViewIgnoresSize(); got != want {
+			t.Errorf("tmux %s: ViewIgnoresSize = %v, want %v", version, got, want)
+		}
+	}
+}
