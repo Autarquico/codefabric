@@ -321,8 +321,8 @@ transition_cf_in_dir() {
 	log "$done_message"
 }
 
-# The cf that a shell would run, when it is not the one handled in $DIR: said, never run or touched. Only an absolute
-# path counts: an empty or relative PATH entry would resolve to a file in the current directory.
+# The cf that a shell would run, when it is not the one handled in $DIR: said, never run or touched. A relative
+# result (an empty or relative PATH entry) is not reported.
 report_cf_on_path() {
 	found=$(command -v cf 2>/dev/null) || return 0
 	case $found in /*) ;; *) return 0 ;; esac
