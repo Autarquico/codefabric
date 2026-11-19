@@ -290,16 +290,30 @@ replace_cf() {
 	TMP_BIN=
 }
 
-# closed_to_others PATH: PATH belongs to the user running the installer or to root, others cannot write it, and
-# its group cannot either, unless that group is the installing user's own (a user-private group, umask 002) and the
-# installer is not root. Read from `ls -ldn` (the same on macOS and Linux): mode, owner id and group id in fields 1, 3, 4.
+# closed_to_others PATH: PATH belongs to the user running the installer or to root, and neither its group nor
+# others can write it, nor an ACL grant anyone (`+` after the mode). A sticky directory such as /tmp counts as
+# closed: others can add to it but not rename what is ours. Read from `ls -ldn` (the same on macOS and Linux): mode
+# in field 1, owner id in field 3. No metadata means not closed.
 closed_to_others() {
 	# shellcheck disable=SC2012 # the mode and owner of one path; find has no portable equivalent
-	ls -ldn "$1" 2>/dev/null | awk -v me="$(id -u)" -v mygroup="$(id -g)" '{
-		group_ok = substr($1, 6, 1) != "w" || (me != 0 && $4 == mygroup)
-		ok = ($3 == me || $3 == 0) && group_ok && substr($1, 9, 1) != "w"
-		exit !ok
-	}'
+	ls -ldn "$1" 2>/dev/null | awk -v me="$(id -u)" '{
+		seen = 1
+		m = $1
+		sticky = substr(m, 1, 1) == "d" && substr(m, 10, 1) == "t"
+		writable = substr(m, 6, 1) == "w" || substr(m, 9, 1) == "w"
+		ok = ($3 == me || $3 == 0) && (!writable || sticky) && substr(m, 11, 1) != "+"
+	} END { exit !(seen && ok) }'
+}
+
+# closed_path PATH: PATH and every directory above it are closed to others, so nobody else can swap what PATH
+# names between the check and its use.
+closed_path() {
+	p=$1
+	while :; do
+		closed_to_others "$p" || return 1
+		[ "$p" = / ] && return 0
+		p=$(dirname "$p")
+	done
 }
 
 # $DIR/cf exists and is not a directory.
@@ -324,8 +338,8 @@ transition_cf_in_dir() {
 		log "left $shown alone: it is not a regular file"
 		return 0
 	fi
-	if ! closed_to_others "$real" || ! closed_to_others "$(dirname "$real")"; then
-		log "left $shown alone: it, or its directory, is not owned by you or root, or can be written by others. Use cflk for Code Flock"
+	if ! closed_path "$real"; then
+		log "left $shown alone: it, or a directory above it, is not owned by you or root, or can be written by others. Use cflk for Code Flock"
 		return 0
 	fi
 	if cmp -s "$real" "$WORK/unpacked/cf"; then

@@ -45,6 +45,7 @@ for name in $expected; do
 	[ "$sum" = "$(sha256_of "$dist/$name")" ] || fail "$name does not match its checksum"
 	# the rule of install.sh: exactly one entry per binary, and a regular file
 	tar -tzf "$dist/$name" >"$scratch/members" || fail "$name is not readable"
+	if grep -Eq '(^/|(^|/)\.\.(/|$))' "$scratch/members"; then fail "$name has an unsafe member path"; fi
 	for bin in cflk cf; do
 		count=$(grep -cx "$bin" "$scratch/members" || true)
 		[ "$count" -ge 1 ] || fail "$name does not contain $bin"

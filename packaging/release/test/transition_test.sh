@@ -392,6 +392,15 @@ TestScenario_ReleaseSet_checkRejectsATarballWithoutTheTransitionCf() {
 	assert_out_contains "cflk_${BARE_VERSION}_darwin_arm64.tar.gz does not contain cf"
 }
 
+TestScenario_ReleaseSet_checkRejectsATarballWithAnUnsafeMemberPath() {
+	make_dist "$T/dist"
+	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cflk_${BARE_VERSION}_linux_amd64.tar.gz" dotdot "$BARE_VERSION"
+	finalize_dist "$T/dist" "$KEY_A"
+	run_cmd sh "$RELEASE_DIR/check.sh" "$T/dist" "$KEY_A/install.sh"
+	assert_rc 1
+	assert_out_contains "cflk_${BARE_VERSION}_linux_amd64.tar.gz has an unsafe member path"
+}
+
 TestScenario_ReleaseSet_fourTarballsWithBothBinariesPassCheck() {
 	good_release "$KEY_A"
 	run_cmd sh "$RELEASE_DIR/check.sh" "$T/dist" "$KEY_A/install.sh"
@@ -411,16 +420,6 @@ seed_probing_cf() { # PATH
 	chmod 755 "$1"
 }
 
-# umask 002 with a user-private group: the group is the installing user's own, so the cf is still run
-TestScenario_CfNoFiable_writableByTheUsersOwnGroupIsRun() {
-	installed_release
-	seed_probing_cf "$T/bin/cf"
-	chmod 775 "$T/bin/cf"
-	run_install "$KEY_A/install.sh"
-	assert_rc 0
-	[ -e "$T/ran" ] || fail "a cf writable only by the user's own group was not run"
-}
-
 TestScenario_CfNoFiable_writableByAnotherGroupIsNotRun() {
 	other_group=$(id -G | tr ' ' '\n' | grep -vx "$(id -g)" | head -n 1)
 	[ -n "$other_group" ] || { echo "SKIP: the user belongs to no second group"; return 0; }
@@ -431,7 +430,7 @@ TestScenario_CfNoFiable_writableByAnotherGroupIsNotRun() {
 	run_install "$KEY_A/install.sh"
 	assert_rc 0
 	[ ! -e "$T/ran" ] || fail "a cf that others can write was run"
-	assert_out_contains "left $T/bin/cf alone: it, or its directory, is not owned by you or root, or can be written by others"
+	assert_out_contains "left $T/bin/cf alone: it, or a directory above it, is not owned by you or root, or can be written by others"
 	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk was not installed"
 }
 
@@ -446,7 +445,7 @@ TestScenario_CfNoFiable_inADirectoryOthersCanWriteIsNotRun() {
 	assert_rc 0
 	[ ! -e "$T/ran" ] || fail "a cf in a directory others can write was run"
 	[ -L "$T/bin/cf" ] || fail "the link changed"
-	assert_out_contains "left .*/other/cf alone: it, or its directory, is not owned by you or root"
+	assert_out_contains "left .*/other/cf alone: it, or a directory above it, is not owned by you or root"
 }
 
 # A FIFO would block cmp and the probe's open: it is not a regular file, so it is left alone, and quickly.
