@@ -31,13 +31,13 @@ func TestHandtoSkill_FrontmatterIsExact(t *testing.T) {
 		"disable-model-invocation: true\n" +
 		"argument-hint: <worker>\n" +
 		"arguments: [worker]\n" +
-		"allowed-tools: Bash(cf handoff *) Bash(cf worker list*)\n" +
+		"allowed-tools: Bash(cflk handoff *) Bash(cflk worker list*)\n" +
 		"---\n" +
-		"<!-- cf-version: v1.2.3 -->\n"
+		"<!-- cflk-version: v1.2.3 -->\n"
 	if !strings.HasPrefix(string(out), want) {
 		t.Errorf("frontmatter differs:\n%s", out)
 	}
-	for _, line := range []string{"!`cf worker list --state online,degraded`", "cf handoff --session ${CLAUDE_SESSION_ID} --to $worker", "/exit", "cf attach <task>", "CF_*"} {
+	for _, line := range []string{"!`cflk worker list --state online,degraded`", "cflk handoff --session ${CLAUDE_SESSION_ID} --to $worker", "/exit", "cflk attach <task>", "CF_*"} {
 		if !strings.Contains(string(out), line) {
 			t.Errorf("the body lacks %q", line)
 		}
@@ -53,13 +53,13 @@ func TestWorkersSkill_ListsWorkersAndRemoteRuns(t *testing.T) {
 		"name: workers\n" +
 		"description: List the CodeFabric Workers and the interactive Runs that are live on them, and say how to enter one. Use only when the user types /workers.\n" +
 		"disable-model-invocation: true\n" +
-		"allowed-tools: Bash(cf worker list --timeout 10s) Bash(cf ps --timeout 10s)\n" +
+		"allowed-tools: Bash(cflk worker list --timeout 10s) Bash(cflk ps --timeout 10s)\n" +
 		"---\n" +
-		"<!-- cf-version: v1.2.3 -->\n"
+		"<!-- cflk-version: v1.2.3 -->\n"
 	if !strings.HasPrefix(string(out), want) {
 		t.Errorf("frontmatter differs:\n%s", out)
 	}
-	if !strings.Contains(string(out), "!`cf worker list --timeout 10s`") {
+	if !strings.Contains(string(out), "!`cflk worker list --timeout 10s`") {
 		t.Errorf("the body does not list the Workers:\n%s", out)
 	}
 }
@@ -156,7 +156,7 @@ func TestHandtoStatus_EditedIsNotAnotherVersion(t *testing.T) {
 	if strings.Contains(out.String(), "another version") || !strings.Contains(out.String(), "edited") {
 		t.Errorf("message: %s", out.String())
 	}
-	if d := doctorSkill(claudeHandto, &s); d.Warning == "" || strings.Contains(d.Warning, "otra versión") || d.Action != "cf claude install" {
+	if d := doctorSkill(claudeHandto, &s); d.Warning == "" || strings.Contains(d.Warning, "otra versión") || d.Action != "cflk claude install" {
 		t.Errorf("doctor: %+v", d)
 	}
 	if s, err := installSkill(claudeHandto, "user", home, "v1", false, false); err != nil || s.Action != "restored" {
@@ -166,7 +166,7 @@ func TestHandtoStatus_EditedIsNotAnotherVersion(t *testing.T) {
 
 func TestHandtoStatus_MarkerOnlyCountsRightAfterTheFrontmatter(t *testing.T) {
 	home := t.TempDir()
-	body := "---\nname: handto\n---\nquoting:\n<!-- cf-version: v1 -->\n"
+	body := "---\nname: handto\n---\nquoting:\n<!-- cflk-version: v1 -->\n"
 	_ = os.MkdirAll(filepath.Dir(skillPath(claudeHandto, home)), 0o700)
 	_ = os.WriteFile(skillPath(claudeHandto, home), []byte(body), 0o600)
 	if s, _ := skillStatus(claudeHandto, "user", home, "v1"); s.State != skillForeign {
@@ -180,7 +180,7 @@ func TestHandtoStatus_MarkerOnlyCountsRightAfterTheFrontmatter(t *testing.T) {
 func TestHandtoSkill_NeverLetsTheModelOverrideAGuard(t *testing.T) {
 	out, _ := renderSkill(claudeHandto, "v1")
 	for _, want := range []string{
-		"Never add flags to `cf handoff`",
+		"Never add flags to `cflk handoff`",
 		"run it themselves in their own terminal",
 		"do not run it yourself",
 		"do not retry",
@@ -289,7 +289,7 @@ func TestClaudeCmd_InstallStatusUninstallOverHome(t *testing.T) {
 
 func TestDoctorSkill_NamesTheSkillItWarnsAbout(t *testing.T) {
 	d := doctorSkill(claudeWorkers, &SkillStatus{State: skillMissing})
-	if !strings.Contains(d.Warning, "la skill workers de Claude Code") || d.Action != "cf claude install" {
+	if !strings.Contains(d.Warning, "la skill workers de Claude Code") || d.Action != "cflk claude install" {
 		t.Errorf("doctor: %+v", d)
 	}
 }
@@ -304,7 +304,7 @@ func TestDoctorSkill_WarnsWhenMissingOrStaleWithTheAction(t *testing.T) {
 		{SkillStatus{State: skillCurrent}, false},
 	} {
 		d := doctorSkill(claudeHandto, &tc.skill)
-		if (d.Warning != "") != tc.warns || (tc.warns && d.Action != "cf claude install") {
+		if (d.Warning != "") != tc.warns || (tc.warns && d.Action != "cflk claude install") {
 			t.Errorf("%s: %+v", tc.skill.State, d)
 		}
 	}
@@ -359,4 +359,72 @@ func TestSkillNames(t *testing.T) {
 	if got := skillNames(claudeSkills); got != "handto and workers" {
 		t.Errorf("got %q", got)
 	}
+}
+
+func TestSkills_AllowedToolsNameTheCflkCommandsExactly(t *testing.T) {
+	for _, c := range []struct {
+		k    skillKind
+		want string
+	}{
+		{claudeHandto, "allowed-tools: Bash(cflk handoff *) Bash(cflk worker list*)\n"},
+		{claudeWorkers, "allowed-tools: Bash(cflk worker list --timeout 10s) Bash(cflk ps --timeout 10s)\n"},
+	} {
+		out, err := renderSkill(c.k, "v1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(out), c.want) || !strings.Contains(string(out), "<!-- cflk-version: v1 -->\n") {
+			t.Errorf("%s skill:\n%s", c.k.name, out)
+		}
+	}
+}
+
+func TestSkills_ASkillOfTheBetaWithTheCfMarkerIsOutdatedAndUpdatesWithoutForce(t *testing.T) {
+	for _, k := range append(append([]skillKind{}, claudeSkills...), codexSkills...) {
+		t.Run(k.command+"/"+k.name, func(t *testing.T) {
+			home := t.TempDir()
+			current, err := renderSkill(k, "v1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// the beta.6 wrote the same version under the old marker and the old commands
+			legacy := bytes.Replace(current, []byte("<!-- cflk-version: v1 -->"), []byte("<!-- cf-version: v1 -->"), 1)
+			legacy = bytes.ReplaceAll(legacy, []byte("cflk "), []byte("cf "))
+			path := skillPath(k, home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // a test directory
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, legacy, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if s, _ := skillStatus(k, "user", home, "v1"); s.State != skillOutdated || s.Version != "v1" {
+				t.Fatalf("status = %+v", s)
+			}
+			if d := doctorSkill(k, &SkillStatus{State: skillOutdated, Version: "v1"}); d.Action != k.installCommand() {
+				t.Errorf("doctor: %+v", d)
+			}
+			if s, err := installSkill(k, "user", home, "v1", false, false); err != nil || s.Action != "updated" {
+				t.Fatalf("install: %+v, %v", s, err)
+			}
+			requireEqual(t, string(mustRead(t, path)), string(current))
+		})
+	}
+}
+
+func TestSkills_InstallLeavesTheFilesTheUserAddedAlone(t *testing.T) {
+	home := t.TempDir()
+	if _, err := installSkill(claudeHandto, "user", home, "v1", false, false); err != nil {
+		t.Fatal(err)
+	}
+	mine := filepath.Join(filepath.Dir(skillPath(claudeHandto, home)), "notes.md")
+	if err := os.WriteFile(mine, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installSkill(claudeHandto, "user", home, "v2", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := uninstallSkill(claudeHandto, "user", home); err != nil || s.Action != "removed" {
+		t.Fatalf("uninstall: %+v, %v", s, err)
+	}
+	requireEqual(t, string(mustRead(t, mine)), "mine")
 }

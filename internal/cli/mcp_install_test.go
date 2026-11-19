@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,34 +10,67 @@ import (
 )
 
 // A fake claude: logs its arguments and the directory it ran in (to
-// $FAKE_LOG.pwd); `remove` of a server that is not there
-// fails the way the real one does.
+// $FAKE_LOG.pwd), and keeps its servers where the real one does:
+// ~/.claude.json for the user scope, .mcp.json of the cwd for the project
+// scope. `remove` of a server that is not there fails the way the real one
+// does. FAKE_FAIL_ADD makes `add` fail and FAKE_NOOP_ADD makes it succeed
+// without writing anything.
 const fakeClaude = `#!/bin/sh
 echo "claude $*" >> "$FAKE_LOG"
 pwd -P >> "$FAKE_LOG.pwd"
-case "$2" in
-add) /usr/bin/touch "$FAKE_STATE/claude-registered" ;;
+op="$2"; scope="$4"; name="$5"
+if [ "$scope" = project ]; then out="$(pwd -P)/.mcp.json"; else out="$HOME/.claude.json"; fi
+dir="$FAKE_STATE/$scope"
+/bin/mkdir -p "$dir"
+rebuild() {
+	{
+		printf '{"mcpServers":{'
+		sep=""
+		for f in "$dir"/*.json; do
+			[ -e "$f" ] || continue
+			printf '%s' "$sep"
+			/bin/cat "$f"
+			sep=","
+		done
+		printf '}}\n'
+	} > "$out"
+}
+case "$op" in
+add)
+	if [ -n "$FAKE_FAIL_ADD" ]; then echo "interrupted" >&2; exit 1; fi
+	[ -n "$FAKE_NOOP_ADD" ] && exit 0
+	shift 6
+	cmd="$1"
+	shift
+	args=""
+	for a in "$@"; do args="$args${args:+,}\"$a\""; done
+	printf '"%s":{"type":"stdio","command":"%s","args":[%s],"env":{}}' "$name" "$cmd" "$args" > "$dir/$name.json"
+	rebuild ;;
 remove)
-	if [ -e "$FAKE_STATE/claude-registered" ]; then /bin/rm "$FAKE_STATE/claude-registered"
-	else echo 'No MCP server "cf" in user scope'; exit 1; fi ;;
+	if [ -e "$dir/$name.json" ]; then /bin/rm "$dir/$name.json"; rebuild
+	else echo "No MCP server found with name: $name"; exit 1; fi ;;
 esac
 `
 
-// A fake codex 0.160.1: `add` rewrites the [mcp_servers.cf] table of
+// A fake codex 0.160.1: `add` rewrites the [mcp_servers.<name>] table of
 // $CODEX_HOME/config.toml with command and args, and so drops any
 // tool_timeout_sec; `remove` deletes the table. The table goes before the
 // first [projects.*] table, in the middle of the file, as in a config that
-// has trusted projects. Other tables stay.
+// has trusted projects. Other tables stay. FAKE_FAIL_ADD and FAKE_NOOP_ADD
+// are as in the fake claude.
 const fakeCodex = `#!/bin/sh
 echo "codex $*" >> "$FAKE_LOG"
 cfg="$CODEX_HOME/config.toml"
+name="$3"
 drop() {
 	[ -e "$cfg" ] || return 0
-	/usr/bin/awk '/^\[/ { skip = ($0 == "[mcp_servers.cf]") } !skip' "$cfg" > "$cfg.new" && /bin/mv "$cfg.new" "$cfg"
+	/usr/bin/awk -v t="[mcp_servers.$name]" '/^\[/ { skip = ($0 == t) } !skip' "$cfg" > "$cfg.new" && /bin/mv "$cfg.new" "$cfg"
 }
 case "$2" in
 remove) drop ;;
 add)
+	if [ -n "$FAKE_FAIL_ADD" ]; then echo "interrupted" >&2; exit 1; fi
+	[ -n "$FAKE_NOOP_ADD" ] && exit 0
 	drop
 	shift 4
 	cmd="$1"
@@ -44,7 +78,7 @@ add)
 	args=""
 	for a in "$@"; do args="$args${args:+, }\"$a\""; done
 	[ -e "$cfg" ] || : > "$cfg"
-	printf '[mcp_servers.cf]\ncommand = "%s"\nargs = [%s]\n' "$cmd" "$args" > "$cfg.tbl"
+	printf '[mcp_servers.%s]\ncommand = "%s"\nargs = [%s]\n' "$name" "$cmd" "$args" > "$cfg.tbl"
 	/usr/bin/awk -v f="$cfg.tbl" 'function emit(  l) { while ((getline l < f) > 0) print l; print "" }
 		/^\[projects\./ && !done { emit(); done = 1 }
 		{ print }
@@ -54,7 +88,7 @@ esac
 `
 
 type mcpMachine struct {
-	home, codexHome, log string
+	home, codexHome, log, bin string
 }
 
 // newMCPMachine isolates HOME, CODEX_HOME and PATH, with a fake claude and codex in PATH.
@@ -62,6 +96,7 @@ func newMCPMachine(t *testing.T) mcpMachine {
 	t.Helper()
 	m := mcpMachine{home: t.TempDir(), codexHome: filepath.Join(t.TempDir(), "codex"), log: filepath.Join(t.TempDir(), "calls.log")}
 	bin, state := t.TempDir(), t.TempDir()
+	m.bin = bin
 	for name, script := range map[string]string{"claude": fakeClaude, "codex": fakeCodex} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil { //nolint:gosec // a test double that must run
 			t.Fatal(err)
@@ -78,6 +113,40 @@ func newMCPMachine(t *testing.T) mcpMachine {
 	return m
 }
 
+// seed registers a server the way the tool would, and forgets the call.
+func (m mcpMachine) seed(t *testing.T, tool, scope, name, command string, args ...string) {
+	t.Helper()
+	argv := []string{"mcp", "add"}
+	if tool == "claude" {
+		argv = append(argv, "--scope", scope)
+	}
+	argv = append(argv, name, "--", command)
+	out, err := exec.CommandContext(t.Context(), filepath.Join(m.bin, tool), append(argv, args...)...).CombinedOutput() //nolint:gosec // a test double
+	if err != nil {
+		t.Fatalf("seeding %s: %v: %s", name, err, out)
+	}
+	_ = os.Remove(m.log)
+	_ = os.Remove(m.log + ".pwd")
+}
+
+// registered is the servers the tool has under the user scope, by name.
+func (m mcpMachine) registered(t *testing.T, tool string) map[string]mcpRegistration {
+	t.Helper()
+	var (
+		regs map[string]mcpRegistration
+		err  error
+	)
+	if tool == "claude" {
+		regs, err = readClaudeRegistrations(filepath.Join(m.home, ".claude.json"))
+	} else {
+		regs, err = readCodexRegistrations()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return regs
+}
+
 func (m mcpMachine) calls(t *testing.T) []string {
 	t.Helper()
 	data, err := os.ReadFile(m.log)
@@ -91,7 +160,7 @@ func (m mcpMachine) calls(t *testing.T) []string {
 }
 
 func (m mcpMachine) skill(tool string) string {
-	return filepath.Join(m.home, map[string]string{"claude": ".claude", "codex": ".agents"}[tool], "skills", "codefabric", "SKILL.md")
+	return filepath.Join(m.home, map[string]string{"claude": ".claude", "codex": ".agents"}[tool], "skills", "codeflock", "SKILL.md")
 }
 
 func (m mcpMachine) codexConfig() string { return filepath.Join(m.codexHome, "config.toml") }
@@ -137,10 +206,10 @@ func TestMCPInstall_ClaudeRunsRemoveThenAddWithScopeAndWritesTheSkill(t *testing
 		t.Fatalf("exit %d: %s%s", code, stdout, stderr)
 	}
 	requireEqual(t, m.calls(t), []string{
-		"claude mcp remove --scope user cf",
-		"claude mcp add --scope user cf -- " + selfBinary(t) + " mcp serve --profile execute",
+		"claude mcp remove --scope user cflk",
+		"claude mcp add --scope user cflk -- " + selfBinary(t) + " mcp serve --profile execute",
 	})
-	requireEqual(t, readFile(t, m.skill("claude")), string(codefabricSkill))
+	requireEqual(t, readFile(t, m.skill("claude")), string(codeflockSkill))
 	info, err := os.Stat(m.skill("claude"))
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +253,7 @@ func TestMCPInstall_TwiceLeavesTheSameStateAndDoesNotRewriteTheSkill(t *testing.
 			}
 			if tool == "codex" {
 				requireEqual(t, readFile(t, m.codexConfig()), cfg)
-				requireEqual(t, strings.Count(cfg, "[mcp_servers.cf]"), 1)
+				requireEqual(t, strings.Count(cfg, "[mcp_servers.cflk]"), 1)
 				requireEqual(t, strings.Count(cfg, "tool_timeout_sec"), 1)
 			}
 		})
@@ -202,25 +271,25 @@ func TestMCPInstall_CodexAddsTheToolTimeoutAndLeavesOtherTablesAlone(t *testing.
 		t.Fatalf("exit %d: %s%s", code, out, errOut)
 	}
 	requireEqual(t, m.calls(t), []string{
-		"codex mcp remove cf",
-		"codex mcp add cf -- " + selfBinary(t) + " mcp serve --profile read",
+		"codex mcp remove cflk",
+		"codex mcp add cflk -- " + selfBinary(t) + " mcp serve --profile read",
 	})
 	cfg := readFile(t, m.codexConfig())
 	if !strings.HasPrefix(cfg, head) || !strings.HasSuffix(cfg, "\n"+projects) {
 		t.Errorf("the other tables changed:\n%s", cfg)
 	}
-	table := cfg[strings.Index(cfg, "[mcp_servers.cf]"):strings.Index(cfg, "[projects.")]
+	table := cfg[strings.Index(cfg, "[mcp_servers.cflk]"):strings.Index(cfg, "[projects.")]
 	if !strings.Contains(table, "tool_timeout_sec = 660\n") {
-		t.Errorf("no timeout in the cf table:\n%s", cfg)
+		t.Errorf("no timeout in the cflk table:\n%s", cfg)
 	}
 	requireEqual(t, strings.Count(cfg, "tool_timeout_sec"), 2)
-	requireEqual(t, readFile(t, m.skill("codex")), string(codefabricSkill))
+	requireEqual(t, readFile(t, m.skill("codex")), string(codeflockSkill))
 }
 
 func TestSetCodexToolTimeout_KeepsTheModeAndRefusesASymlink(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(path, []byte("[mcp_servers.cf]\ncommand = \"cf\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("[mcp_servers.cflk]\ncommand = \"cf\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if changed, err := setCodexToolTimeout(path, 660); err != nil || !changed {
@@ -264,7 +333,7 @@ func TestMCPInstall_CodexProjectScopePutsTheSkillInTheRepoAndKeepsTheServerGloba
 	if !strings.Contains(stdout, "no project scope") {
 		t.Errorf("the output does not say the server stays global: %s", stdout)
 	}
-	readFile(t, filepath.Join(repoReal, ".agents", "skills", "codefabric", "SKILL.md"))
+	readFile(t, filepath.Join(repoReal, ".agents", "skills", "codeflock", "SKILL.md"))
 	if _, err := os.Stat(m.skill("codex")); !os.IsNotExist(err) {
 		t.Errorf("the skill also went to the home: %v", err)
 	}
@@ -371,7 +440,7 @@ func TestMCPInstall_CodexFailsClearlyWhenAddDidNotWriteTheTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _, stderr := run(t, "mcp", "install", "--codex")
-	if code == 0 || !strings.Contains(stderr, "[mcp_servers.cf]") {
+	if code == 0 || !strings.Contains(stderr, "[mcp_servers.cflk]") {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
 	}
 }
@@ -406,12 +475,12 @@ func TestMCPUninstall_LeavesTheMachineAsItWas(t *testing.T) {
 			if tool == "claude" {
 				want += " --scope user"
 			}
-			requireEqual(t, calls[len(calls)-1], want+" cf")
+			requireEqual(t, calls[len(calls)-1], want+" cflk")
 			if _, err := os.Stat(filepath.Dir(m.skill(tool))); !os.IsNotExist(err) {
 				t.Errorf("the skill directory is still there: %v", err)
 			}
 			if tool == "codex" {
-				requireEqual(t, strings.Contains(readFile(t, m.codexConfig()), "mcp_servers.cf"), false)
+				requireEqual(t, strings.Contains(readFile(t, m.codexConfig()), "mcp_servers.cflk"), false)
 			}
 			if code, _, _ := run(t, "mcp", "uninstall", "--"+tool); code != 0 {
 				t.Errorf("a second uninstall failed with exit %d", code)
@@ -438,73 +507,73 @@ func TestMCPUninstall_KeepsADirectoryThatHoldsOtherFiles(t *testing.T) {
 	}
 }
 
-func TestWithToolTimeout_EditsOnlyTheCfTable(t *testing.T) {
+func TestWithToolTimeout_EditsOnlyTheCflkTable(t *testing.T) {
 	cases := []struct{ name, in, want string }{
 		{
 			"inserts after the last key, before the next table",
-			"[mcp_servers.cf]\ncommand = \"cf\"\n\n[mcp_servers.cf.env]\nA = \"1\"\n",
-			"[mcp_servers.cf]\ncommand = \"cf\"\ntool_timeout_sec = 660\n\n[mcp_servers.cf.env]\nA = \"1\"\n",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\n\n[mcp_servers.cflk.env]\nA = \"1\"\n",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\ntool_timeout_sec = 660\n\n[mcp_servers.cflk.env]\nA = \"1\"\n",
 		},
 		{
 			"replaces another value",
-			"[mcp_servers.cf]\ntool_timeout_sec = 60\ncommand = \"cf\"\n[other]\ntool_timeout_sec = 60\n",
-			"[mcp_servers.cf]\ntool_timeout_sec = 660\ncommand = \"cf\"\n[other]\ntool_timeout_sec = 60\n",
+			"[mcp_servers.cflk]\ntool_timeout_sec = 60\ncommand = \"cf\"\n[other]\ntool_timeout_sec = 60\n",
+			"[mcp_servers.cflk]\ntool_timeout_sec = 660\ncommand = \"cf\"\n[other]\ntool_timeout_sec = 60\n",
 		},
 		{
 			"table at the end without a newline",
-			"[mcp_servers.cf]\ncommand = \"cf\"",
-			"[mcp_servers.cf]\ncommand = \"cf\"\ntool_timeout_sec = 660",
+			"[mcp_servers.cflk]\ncommand = \"cf\"",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\ntool_timeout_sec = 660",
 		},
-		{"already set", "[mcp_servers.cf]\ntool_timeout_sec = 660\n", "[mcp_servers.cf]\ntool_timeout_sec = 660\n"},
+		{"already set", "[mcp_servers.cflk]\ntool_timeout_sec = 660\n", "[mcp_servers.cflk]\ntool_timeout_sec = 660\n"},
 		{
 			"before a table whose name has a path with spaces",
-			"[mcp_servers.cf]\ncommand = \"cf\"\n\n[projects.\"/Users/a b/c\"]\ntrust_level = \"trusted\"\n",
-			"[mcp_servers.cf]\ncommand = \"cf\"\ntool_timeout_sec = 660\n\n[projects.\"/Users/a b/c\"]\ntrust_level = \"trusted\"\n",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\n\n[projects.\"/Users/a b/c\"]\ntrust_level = \"trusted\"\n",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\ntool_timeout_sec = 660\n\n[projects.\"/Users/a b/c\"]\ntrust_level = \"trusted\"\n",
 		},
 		{
 			"before tables with ':', '@', '~' and non-ASCII names, quoted keys and an array table",
-			"[mcp_servers.cf]\ncommand = \"cf\"\n[a:b]\nx = 1\n[\"é@~\"]\n[[tools.ç]]\n",
-			"[mcp_servers.cf]\ncommand = \"cf\"\ntool_timeout_sec = 660\n[a:b]\nx = 1\n[\"é@~\"]\n[[tools.ç]]\n",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\n[a:b]\nx = 1\n[\"é@~\"]\n[[tools.ç]]\n",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\ntool_timeout_sec = 660\n[a:b]\nx = 1\n[\"é@~\"]\n[[tools.ç]]\n",
 		},
 		{
 			"a header followed by a comment",
-			"[mcp_servers.cf]  # mine\ncommand = \"cf\"\n[projects.\"/p\"] # trusted\nk = 1\n",
-			"[mcp_servers.cf]  # mine\ncommand = \"cf\"\ntool_timeout_sec = 660\n[projects.\"/p\"] # trusted\nk = 1\n",
+			"[mcp_servers.cflk]  # mine\ncommand = \"cf\"\n[projects.\"/p\"] # trusted\nk = 1\n",
+			"[mcp_servers.cflk]  # mine\ncommand = \"cf\"\ntool_timeout_sec = 660\n[projects.\"/p\"] # trusted\nk = 1\n",
 		},
 		{
-			"subtables end the cf table",
-			"[mcp_servers.cf]\ncommand = \"cf\"\n[mcp_servers.cf.env]\nA = \"1\"\n[projects.\"/p\"]\n",
-			"[mcp_servers.cf]\ncommand = \"cf\"\ntool_timeout_sec = 660\n[mcp_servers.cf.env]\nA = \"1\"\n[projects.\"/p\"]\n",
+			"subtables end the cflk table",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\n[mcp_servers.cflk.env]\nA = \"1\"\n[projects.\"/p\"]\n",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\ntool_timeout_sec = 660\n[mcp_servers.cflk.env]\nA = \"1\"\n[projects.\"/p\"]\n",
 		},
 		{
 			"the comment that introduces the next table stays with it",
-			"[mcp_servers.cf]\ncommand = \"cf\"\n\n# notes for other\n[other]\n",
-			"[mcp_servers.cf]\ncommand = \"cf\"\ntool_timeout_sec = 660\n\n# notes for other\n[other]\n",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\n\n# notes for other\n[other]\n",
+			"[mcp_servers.cflk]\ncommand = \"cf\"\ntool_timeout_sec = 660\n\n# notes for other\n[other]\n",
 		},
 		{
-			"a multi-line array whose lines look like headers is part of the cf table",
-			"[mcp_servers.cf]\nargs = [\n  [\"a\"],\n  [\"b\"], # c\n]\n[projects.\"/p\"]\n",
-			"[mcp_servers.cf]\nargs = [\n  [\"a\"],\n  [\"b\"], # c\n]\ntool_timeout_sec = 660\n[projects.\"/p\"]\n",
+			"a multi-line array whose lines look like headers is part of the cflk table",
+			"[mcp_servers.cflk]\nargs = [\n  [\"a\"],\n  [\"b\"], # c\n]\n[projects.\"/p\"]\n",
+			"[mcp_servers.cflk]\nargs = [\n  [\"a\"],\n  [\"b\"], # c\n]\ntool_timeout_sec = 660\n[projects.\"/p\"]\n",
 		},
 		{
-			"a multi-line string whose lines look like headers is part of the cf table",
-			"[mcp_servers.cf]\nnote = \"\"\"\n[not a table]\n\"\"\"\n[projects.\"/p\"]\n",
-			"[mcp_servers.cf]\nnote = \"\"\"\n[not a table]\n\"\"\"\ntool_timeout_sec = 660\n[projects.\"/p\"]\n",
+			"a multi-line string whose lines look like headers is part of the cflk table",
+			"[mcp_servers.cflk]\nnote = \"\"\"\n[not a table]\n\"\"\"\n[projects.\"/p\"]\n",
+			"[mcp_servers.cflk]\nnote = \"\"\"\n[not a table]\n\"\"\"\ntool_timeout_sec = 660\n[projects.\"/p\"]\n",
 		},
 		{
-			"a [mcp_servers.cf] line inside a multi-line string is not the table",
-			"note = \"\"\"\n[mcp_servers.cf]\n\"\"\"\n[mcp_servers.cf]\ncommand = \"cf\"\n",
-			"note = \"\"\"\n[mcp_servers.cf]\n\"\"\"\n[mcp_servers.cf]\ncommand = \"cf\"\ntool_timeout_sec = 660\n",
+			"a [mcp_servers.cflk] line inside a multi-line string is not the table",
+			"note = \"\"\"\n[mcp_servers.cflk]\n\"\"\"\n[mcp_servers.cflk]\ncommand = \"cf\"\n",
+			"note = \"\"\"\n[mcp_servers.cflk]\n\"\"\"\n[mcp_servers.cflk]\ncommand = \"cf\"\ntool_timeout_sec = 660\n",
 		},
 		{
 			"CRLF keeps its line ending",
-			"[mcp_servers.cf]\r\ncommand = \"cf\"\r\n\r\n[projects.\"/p\"]\r\n",
-			"[mcp_servers.cf]\r\ncommand = \"cf\"\r\ntool_timeout_sec = 660\r\n\r\n[projects.\"/p\"]\r\n",
+			"[mcp_servers.cflk]\r\ncommand = \"cf\"\r\n\r\n[projects.\"/p\"]\r\n",
+			"[mcp_servers.cflk]\r\ncommand = \"cf\"\r\ntool_timeout_sec = 660\r\n\r\n[projects.\"/p\"]\r\n",
 		},
 		{
 			"CRLF replacing a value",
-			"[mcp_servers.cf]\r\ntool_timeout_sec = 60\r\n",
-			"[mcp_servers.cf]\r\ntool_timeout_sec = 660\r\n",
+			"[mcp_servers.cflk]\r\ntool_timeout_sec = 60\r\n",
+			"[mcp_servers.cflk]\r\ntool_timeout_sec = 660\r\n",
 		},
 	}
 	for _, c := range cases {
@@ -517,30 +586,30 @@ func TestWithToolTimeout_EditsOnlyTheCfTable(t *testing.T) {
 		})
 	}
 	if _, err := withToolTimeout("[mcp_servers.other]\ncommand = \"x\"\n", 660); err == nil {
-		t.Error("a config without the cf table was accepted")
+		t.Error("a config without the cflk table was accepted")
 	}
 }
 
-func TestCfBinary_PrefersThePATHEntryOnlyWhenItIsTheRunningBinary(t *testing.T) {
+func TestCflkBinary_PrefersThePATHEntryOnlyWhenItIsTheRunningBinary(t *testing.T) {
 	self := selfBinary(t)
 	bin := t.TempDir()
-	link := filepath.Join(bin, "cf")
+	link := filepath.Join(bin, "cflk")
 	if err := os.Symlink(self, link); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)
-	got, err := cfBinary()
+	got, err := cflkBinary()
 	if err != nil {
 		t.Fatal(err)
 	}
 	requireEqual(t, got, link)
 
 	other := t.TempDir()
-	if err := os.WriteFile(filepath.Join(other, "cf"), []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // a test double
+	if err := os.WriteFile(filepath.Join(other, "cflk"), []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // a test double
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", other)
-	if got, err = cfBinary(); err != nil {
+	if got, err = cflkBinary(); err != nil {
 		t.Fatal(err)
 	}
 	requireEqual(t, got, self)
@@ -563,14 +632,18 @@ func TestMCPInstall_ClaudeProjectScopeRunsTheCLIInTheRepoRootFromASubdirectory(t
 			if err != nil {
 				t.Fatal(err)
 			}
+			want := []string{root, root}
+			if verb == "uninstall" {
+				// the registration has to be there for there to be something to remove
+				if code, out, errOut := run(t, "mcp", "install", "--claude", "--scope", "project"); code != 0 {
+					t.Fatalf("install: exit %d: %s%s", code, out, errOut)
+				}
+				want = append(want, root)
+			}
 			if code, out, errOut := run(t, "mcp", verb, "--claude", "--scope", "project"); code != 0 {
 				t.Fatalf("exit %d: %s%s", code, out, errOut)
 			}
 			dirs := strings.Split(strings.TrimSpace(readFile(t, m.log+".pwd")), "\n")
-			want := []string{root, root}
-			if verb == "uninstall" {
-				want = want[:1]
-			}
 			requireEqual(t, dirs, want)
 		})
 	}
@@ -595,9 +668,192 @@ func TestMCPUninstall_CodexProjectScopeLeavesTheUserServerAndSaysSo(t *testing.T
 		t.Fatalf("uninstall: exit %d: %s%s", code, stdout, errOut)
 	}
 	requireEqual(t, len(m.calls(t)), before)
-	requireEqual(t, strings.Contains(readFile(t, m.codexConfig()), "[mcp_servers.cf]"), true)
+	requireEqual(t, strings.Contains(readFile(t, m.codexConfig()), "[mcp_servers.cflk]"), true)
 	requireEqual(t, strings.Contains(stdout, "left alone"), true)
-	if _, err := os.Stat(filepath.Join(repo, ".agents", "skills", "codefabric")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(repo, ".agents", "skills", "codeflock")); !os.IsNotExist(err) {
 		t.Errorf("the project skill is still there: %v", err)
 	}
+}
+
+// --- the rename: cf to cflk ---
+
+func TestMCPInstall_ReplacesTheCfOfTheBetaOnceCflkIsRegistered(t *testing.T) {
+	for _, tool := range []string{"claude", "codex"} {
+		t.Run(tool, func(t *testing.T) {
+			m := newMCPMachine(t)
+			m.seed(t, tool, "user", "cf", "/opt/cf", "mcp", "serve", "--profile", "read")
+			if code, out, errOut := run(t, "mcp", "install", "--"+tool); code != 0 {
+				t.Fatalf("exit %d: %s%s", code, out, errOut)
+			}
+			scope := ""
+			if tool == "claude" {
+				scope = " --scope user"
+			}
+			requireEqual(t, m.calls(t), []string{
+				tool + " mcp remove" + scope + " cflk",
+				tool + " mcp add" + scope + " cflk -- " + selfBinary(t) + " mcp serve --profile execute",
+				tool + " mcp remove" + scope + " cf",
+			})
+			got := m.registered(t, tool)
+			if _, ok := got["cf"]; ok {
+				t.Error("the cf of Code Flock is still registered")
+			}
+			requireEqual(t, got["cflk"].Command, selfBinary(t))
+		})
+	}
+}
+
+func TestMCPInstall_ACfThatIsNotCodeFlockIsLeftAlone(t *testing.T) {
+	foreign := map[string][]string{
+		"another executable": {"/usr/bin/cf", "target", "list"},
+		"another arguments":  {"/opt/cf", "mcp", "serve", "--port", "80"},
+		"another name":       {"/opt/other", "mcp", "serve", "--profile", "read"},
+	}
+	for _, tool := range []string{"claude", "codex"} {
+		for name, argv := range foreign {
+			t.Run(tool+"/"+name, func(t *testing.T) {
+				m := newMCPMachine(t)
+				m.seed(t, tool, "user", "cf", argv[0], argv[1:]...)
+				if code, out, errOut := run(t, "mcp", "install", "--"+tool); code != 0 {
+					t.Fatalf("exit %d: %s%s", code, out, errOut)
+				}
+				got := m.registered(t, tool)
+				requireEqual(t, got["cf"].Command, argv[0])
+				requireEqual(t, got["cf"].Args, argv[1:])
+				requireEqual(t, got["cflk"].Command, selfBinary(t))
+				for _, c := range m.calls(t) {
+					if strings.HasSuffix(c, " cf") {
+						t.Errorf("a call touched the cf that is not Code Flock's: %s", c)
+					}
+				}
+				if code, _, _ := run(t, "mcp", "uninstall", "--"+tool); code != 0 {
+					t.Fatalf("uninstall exit %d", code)
+				}
+				requireEqual(t, m.registered(t, tool)["cf"].Command, argv[0])
+			})
+		}
+	}
+}
+
+func TestMCPInstall_ACflkThatIsNotCodeFlockIsAnErrorWithoutChanges(t *testing.T) {
+	for _, tool := range []string{"claude", "codex"} {
+		t.Run(tool, func(t *testing.T) {
+			m := newMCPMachine(t)
+			m.seed(t, tool, "user", "cf", "/opt/cf", "mcp", "serve", "--profile", "read")
+			m.seed(t, tool, "user", "cflk", "/usr/bin/other", "--flag")
+			code, stdout, _ := run(t, "mcp", "install", "--"+tool, "--json")
+			if code == 0 {
+				t.Fatal("install over a cflk that is not Code Flock succeeded")
+			}
+			requireEqual(t, errorOf(t, stdout)["code"], "CF_INVALID_REQUEST")
+			requireEqual(t, len(m.calls(t)), 0)
+			got := m.registered(t, tool)
+			requireEqual(t, got["cflk"].Command, "/usr/bin/other")
+			requireEqual(t, got["cf"].Command, "/opt/cf")
+			if _, err := os.Stat(m.skill(tool)); !os.IsNotExist(err) {
+				t.Errorf("the skill was written: %v", err)
+			}
+			if code, _, _ := run(t, "mcp", "uninstall", "--"+tool); code != 0 {
+				t.Fatalf("uninstall exit %d", code)
+			}
+			requireEqual(t, m.registered(t, tool)["cflk"].Command, "/usr/bin/other")
+		})
+	}
+}
+
+func TestMCPInstall_AnInterruptedAddLeavesTheCfAndTheNextRunFinishesTheMove(t *testing.T) {
+	for _, tool := range []string{"claude", "codex"} {
+		for _, fault := range []string{"FAKE_FAIL_ADD", "FAKE_NOOP_ADD"} {
+			t.Run(tool+"/"+fault, func(t *testing.T) {
+				m := newMCPMachine(t)
+				m.seed(t, tool, "user", "cf", "/opt/cf", "mcp", "serve", "--profile", "execute")
+				t.Setenv(fault, "1")
+				if code, _, _ := run(t, "mcp", "install", "--"+tool); code == 0 {
+					t.Fatal("install succeeded although cflk was not registered")
+				}
+				got := m.registered(t, tool)
+				requireEqual(t, got["cf"].Command, "/opt/cf")
+				if _, ok := got["cflk"]; ok {
+					t.Error("cflk is registered after a failed add")
+				}
+				for _, c := range m.calls(t) {
+					if strings.HasSuffix(c, " cf") {
+						t.Errorf("the cf was removed before cflk was in place: %s", c)
+					}
+				}
+				t.Setenv(fault, "")
+				if code, out, errOut := run(t, "mcp", "install", "--"+tool); code != 0 {
+					t.Fatalf("second install: exit %d: %s%s", code, out, errOut)
+				}
+				got = m.registered(t, tool)
+				if _, ok := got["cf"]; ok {
+					t.Error("the cf is still registered after the second install")
+				}
+				requireEqual(t, got["cflk"].Command, selfBinary(t))
+			})
+		}
+	}
+}
+
+func TestMCPInstall_ProjectScopeReadsTheMCPJSONOfTheRepo(t *testing.T) {
+	m := newMCPMachine(t)
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil { //nolint:gosec // a test directory
+		t.Fatal(err)
+	}
+	t.Chdir(repo)
+	m.seed(t, "claude", "project", "cf", "/opt/cf", "mcp", "serve", "--profile", "modify")
+	if code, out, errOut := run(t, "mcp", "install", "--claude", "--scope", "project"); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out, errOut)
+	}
+	got, err := readClaudeRegistrations(filepath.Join(repo, ".mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEqual(t, len(got), 1)
+	requireEqual(t, got["cflk"].Command, selfBinary(t))
+}
+
+func TestMCPRegistration_IsCodeFlockOnlyWhenTheExecutableAndTheArgumentsMatch(t *testing.T) {
+	cases := []struct {
+		r    mcpRegistration
+		want bool
+	}{
+		{mcpRegistration{"/usr/local/bin/cflk", mcpServeArgs("execute")}, true},
+		{mcpRegistration{"/opt/homebrew/bin/cf", mcpServeArgs("read")}, true},
+		{mcpRegistration{"cf", []string{"target", "list"}}, false},
+		{mcpRegistration{"cf", mcpServeArgs("root")}, false},
+		{mcpRegistration{"cf", append(mcpServeArgs("read"), "--extra")}, false},
+		{mcpRegistration{"/bin/node", mcpServeArgs("read")}, false},
+		{mcpRegistration{"/opt/mine/cflk-dev", mcpServeArgs("read")}, true},
+		{mcpRegistration{}, false},
+	}
+	for _, c := range cases {
+		requireEqual(t, c.r.isCodeFlock("/opt/mine/cflk-dev"), c.want)
+	}
+}
+
+func TestMCPInstall_TheSkillDirectoryKeepsTheFilesOfTheUser(t *testing.T) {
+	m := newMCPMachine(t)
+	if code, _, _ := run(t, "mcp", "install", "--claude"); code != 0 {
+		t.Fatal("install failed")
+	}
+	mine := filepath.Join(filepath.Dir(m.skill("claude")), "extra.md")
+	if err := os.WriteFile(mine, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := run(t, "mcp", "install", "--claude"); code != 0 {
+		t.Fatal("second install failed")
+	}
+	requireEqual(t, readFile(t, mine), "mine")
+}
+
+func TestParseCodexRegistrations_ReadsCommandAndArgsOfEachServer(t *testing.T) {
+	got := parseCodexRegistrations("model = \"x\"\n\n[mcp_servers.cf]\ncommand = \"/opt/a b/cf\"\nargs = [\n  \"mcp\", \"serve\",\n  '--profile', \"read\"\n]\n\n" +
+		"[mcp_servers.\"cflk\"] # mine\ncommand = '/x/cflk'\nargs = [\"mcp\"]\ntool_timeout_sec = 660\n[mcp_servers.cf.env]\nA = \"1\"\n[projects.\"/p\"]\ncommand = \"no\"\n")
+	requireEqual(t, len(got), 2)
+	requireEqual(t, got["cf"].Command, "/opt/a b/cf")
+	requireEqual(t, got["cf"].Args, []string{"mcp", "serve", "--profile", "read"})
+	requireEqual(t, got["cflk"].Command, "/x/cflk")
+	requireEqual(t, got["cflk"].Args, []string{"mcp"})
 }

@@ -1,11 +1,11 @@
 ---
-name: codefabric
-description: Use CodeFabric (cf) to run coding Tasks on a pool of machines from this session. Create a Task, wait for its events without polling, read the Inbox and answer a Run that needs input. Use when the user asks to delegate work to cf or CodeFabric, to run something on another machine, or to follow or answer a Task already running there.
+name: codeflock
+description: Use CodeFabric (cflk) to run coding Tasks on a pool of machines from this session. Create a Task, wait for its events without polling, read the Inbox and answer a Run that needs input. Use when the user asks to delegate work to cf or CodeFabric, to run something on another machine, or to follow or answer a Task already running there.
 ---
 
 # CodeFabric from the model
 
-CodeFabric (`cf`) runs coding agents on Workers. You drive it through the MCP server `cf`. It has no shell and cannot read secrets: you only create, follow and answer Tasks.
+CodeFabric (`cflk`) runs coding agents on Workers. You drive it through the MCP server `cflk`. It has no shell and cannot read secrets: you only create, follow and answer Tasks.
 
 ## When to use it
 
@@ -17,10 +17,10 @@ Do not use it to run commands on this machine. For that, use your own tools.
 ## The flow
 
 1. `events_query` with `tail: 1`. Keep the `cursor` it returns: it marks the present, before the Task exists.
-2. `tasks_create` with the prompt, the project, the `harness` (required to start a Run) and a `request_id`; `model`, `permissions` and `completion` are optional, as in `cf task new`. It returns the Task.
+2. `tasks_create` with the prompt, the project, the `harness` (required to start a Run) and a `request_id`; `model`, `permissions` and `completion` are optional, as in `cflk task new`. It returns the Task.
 3. `events_wait` with `types` (`RunCompleted`, `RunFailed`, `TaskNeedsInput`), `filter` (`task`) and `after_cursor` set to the cursor of step 1. Without `after_cursor` the wait starts from now, and an event emitted before that call would be lost.
 4. Each answer carries a `cursor`. Pass it as `after_cursor` in the next `events_wait`, so no event is lost between calls.
-5. On `RunCompleted` or `RunFailed`, read the result with `runs_get`: its `answer` is what the agent said last. The output is in `runs_logs`. Without MCP, `cf run show <run>` prints the same answer.
+5. On `RunCompleted` or `RunFailed`, read the result with `runs_get`: its `answer` is what the agent said last. The output is in `runs_logs`. Without MCP, `cflk run show <run>` prints the same answer.
 6. On `TaskNeedsInput`, read `inbox_list` to see what is asked, then call `tasks_respond` with the answer and a `request_id`. Then call `events_wait` again with the same filters and `after_cursor` set to the latest cursor you received (not the one from step 1), until `RunCompleted` or `RunFailed`.
 
 Never poll. Do not call `tasks_get` or `runs_get` in a loop to see if something changed: `events_wait` blocks until there is an event or the timeout (5 min by default, 10 min at most). If it returns no events, read `tasks_get` once, in case the Task already finished, and then call `events_wait` again with the cursor it gave you.
@@ -39,12 +39,12 @@ The server runs with one profile, chosen at install time. Tools outside it are n
 - `execute` (default): read, plus `tasks_create` and `tasks_respond`. You can answer the needs-input of your own Tasks, including a permission request. Allow only what the user asked for.
 - `modify`: execute, plus `tasks_cancel`, `workers_drain` and `workers_undrain`.
 
-If you need a tool the profile lacks, tell the user which profile it needs (`cf mcp install --profile ...`) instead of working around it.
+If you need a tool the profile lacks, tell the user which profile it needs (`cflk mcp install --profile ...`) instead of working around it.
 
 ## Waiting in your client
 
 - Claude Code: a wait of more than 2 minutes becomes a background task. That is expected: you are notified when it ends.
-- Codex: the tool timeout is `tool_timeout_sec`. `cf mcp install` sets it above the 10 min maximum of `events_wait`; if the server was registered by hand, the user must set it or long waits will fail.
+- Codex: the tool timeout is `tool_timeout_sec`. `cflk mcp install` sets it above the 10 min maximum of `events_wait`; if the server was registered by hand, the user must set it or long waits will fail.
 
 ## Limits
 

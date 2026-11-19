@@ -33,7 +33,7 @@ func (f *fakeDoctor) Workers(context.Context, bool) ([]v1.Worker, error) {
 	return f.workers, nil
 }
 
-// runDoctor runs `cf doctor` with an empty home, so that it never reads the
+// runDoctor runs `cflk doctor` with an empty home, so that it never reads the
 // skills of the developer.
 func runDoctor(t *testing.T, f *fakeDoctor, probe sshProbe, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
@@ -194,7 +194,7 @@ func TestDoctor_WarnsWhenTheHandtoSkillIsMissingAndNotOnceInstalled(t *testing.T
 	f := &fakeDoctor{status: healthyController()}
 	probe := func(context.Context, domain.SSHTarget) error { return nil }
 	code, out, errOut := runDoctorHere(t, f, probe)
-	if code != 0 || !strings.Contains(out, "aviso:") || !strings.Contains(out, "(acción: cf claude install)") {
+	if code != 0 || !strings.Contains(out, "aviso:") || !strings.Contains(out, "(acción: cflk claude install)") {
 		t.Fatalf("missing: %d %q %q", code, out, errOut)
 	}
 	_, out, _ = runDoctorHere(t, f, probe, "--json")

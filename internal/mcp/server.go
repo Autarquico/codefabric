@@ -26,7 +26,7 @@ import (
 // Profile is what a model may do (§16.3). Each includes the one before it.
 type Profile string
 
-// The profiles of `cf mcp serve`.
+// The profiles of `cflk mcp serve`.
 const (
 	Read    Profile = "read"
 	Execute Profile = "execute"
@@ -97,7 +97,7 @@ const (
 // decides the Project of a Task the model creates without naming one; diag
 // receives the text of the errors the model is not shown.
 func NewServer(profile Profile, c Client, clk clock.Clock, dir string, diag io.Writer) *sdk.Server {
-	s := sdk.NewServer(&sdk.Implementation{Name: "codefabric", Version: buildinfo.Get().Version}, nil)
+	s := sdk.NewServer(&sdk.Implementation{Name: "codeflock", Version: buildinfo.Get().Version}, nil)
 	t := tools{c: c, clk: clk, dir: dir, diag: diag}
 	if profile.rank() >= Read.rank() {
 		t.read(s)
@@ -137,8 +137,8 @@ func add[In any](t tools, s *sdk.Server, name, description string, out *jsonsche
 				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 					return nil, nil, ctx.Err()
 				}
-				fmt.Fprintf(t.diag, "cf mcp: %s: %v\n", name, err)
-				return toolError(domain.NewError(domain.CodeInternal, "unexpected error; see the stderr of cf mcp serve", nil)), nil, nil
+				fmt.Fprintf(t.diag, "cflk mcp: %s: %v\n", name, err)
+				return toolError(domain.NewError(domain.CodeInternal, "unexpected error; see the stderr of cflk mcp serve", nil)), nil, nil
 			}
 			return nil, res, nil
 		})

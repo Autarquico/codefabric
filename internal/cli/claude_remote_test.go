@@ -84,7 +84,7 @@ func TestScenario_ClaudeRemoteRuns_VerLosRemotos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"!`cf worker list --timeout 10s`", "!`cf ps --timeout 10s`", "MODE `interactive`", "remote", "offline"} {
+	for _, want := range []string{"!`cflk worker list --timeout 10s`", "!`cflk ps --timeout 10s`", "MODE `interactive`", "remote", "offline"} {
 		if !strings.Contains(string(skill), want) {
 			t.Errorf("the skill lacks %q", want)
 		}
@@ -98,12 +98,12 @@ func TestScenario_ClaudeRemoteRuns_EntrarEnUnRemoto(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(skill)
-		if !strings.Contains(text, "`cf attach <task>`") || !strings.Contains(text, "Never run `cf attach` yourself") {
+		if !strings.Contains(text, "`cflk attach <task>`") || !strings.Contains(text, "Never run `cflk attach` yourself") {
 			t.Errorf("the %s skill does not give the command and forbid running it:\n%s", k.label, text)
 		}
 		frontmatter, _, _ := strings.Cut(text, "\n---\n")
-		if strings.Contains(frontmatter, "cf attach") || strings.Contains(frontmatter, "Bash(cf *") {
-			t.Errorf("the %s skill may run cf attach:\n%s", k.label, frontmatter)
+		if strings.Contains(frontmatter, "cflk attach") || strings.Contains(frontmatter, "Bash(cflk *") {
+			t.Errorf("the %s skill may run cflk attach:\n%s", k.label, frontmatter)
 		}
 	}
 }
@@ -118,10 +118,10 @@ func TestScenario_ClaudeRemoteRuns_SinController(t *testing.T) {
 	for _, args := range [][]string{{"worker", "list", "--timeout", "10s"}, {"ps", "--timeout", "10s"}} {
 		code, out, errOut := run(t, append([]string{"--json"}, args...)...)
 		if code == 0 {
-			t.Errorf("cf %s succeeded without a Controller", strings.Join(args, " "))
+			t.Errorf("cflk %s succeeded without a Controller", strings.Join(args, " "))
 		}
 		if got, _ := errorOf(t, out)["code"].(string); got != string(domain.CodeControllerUnreachable) {
-			t.Errorf("cf %s: code %q, stdout %q, stderr %q", strings.Join(args, " "), got, out, errOut)
+			t.Errorf("cflk %s: code %q, stdout %q, stderr %q", strings.Join(args, " "), got, out, errOut)
 		}
 	}
 	if code, out, _ := run(t, "claude", "statusline"); code != 0 || out != "" {
@@ -165,13 +165,13 @@ func TestScenario_ClaudeRemoteRuns_SinController_QueNoContesta(t *testing.T) {
 		start := time.Now()
 		code, out, _ := run(t, append([]string{"--json"}, args...)...)
 		if code == 0 || errorOf(t, out)["code"] != string(domain.CodeControllerUnreachable) {
-			t.Errorf("cf %s: %d %q", name, code, out)
+			t.Errorf("cflk %s: %d %q", name, code, out)
 		}
 		if took := time.Since(start); took > 2*time.Second {
-			t.Errorf("cf %s took %s with --timeout 1s", name, took)
+			t.Errorf("cflk %s took %s with --timeout 1s", name, took)
 		}
 		if code, _, errOut := run(t, args...); code == 0 || !strings.Contains(errOut, string(domain.CodeControllerUnreachable)) {
-			t.Errorf("cf %s in human form: %d %q", name, code, errOut)
+			t.Errorf("cflk %s in human form: %d %q", name, code, errOut)
 		}
 	}
 }

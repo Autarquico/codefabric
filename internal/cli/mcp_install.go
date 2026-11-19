@@ -20,12 +20,14 @@ import (
 	"github.com/Autarquico/codeflock/internal/domain"
 )
 
-//go:embed skills/codefabric/SKILL.md
-var codefabricSkill []byte
+//go:embed skills/codeflock/SKILL.md
+var codeflockSkill []byte
 
 const (
-	mcpServerName = "cf"
-	skillName     = "codefabric"
+	mcpServerName = "cflk"
+	// legacyMCPServerName is how the beta.6 registered the server.
+	legacyMCPServerName = "cf"
+	skillName           = "codeflock"
 	// codexToolTimeoutSec is above the 10 min maximum of events_wait; Codex
 	// cuts a tool call at 60 s unless its table says otherwise.
 	codexToolTimeoutSec = 660
@@ -130,9 +132,9 @@ func newMCPInstallCmd() *cobra.Command {
 	var f mcpFlags
 	cmd := &cobra.Command{
 		Use:   "install --claude|--codex [--scope user|project] [--profile read|execute|modify] [--dry-run]",
-		Short: "Register `cf mcp serve` in Claude Code or Codex and install the codefabric skill",
-		Long: "Registers `cf mcp serve` with the CLI of the tool (claude mcp add, codex mcp add) and writes the\n" +
-			"codefabric skill where the tool reads skills. It is idempotent: it replaces the registration and\n" +
+		Short: "Register `cflk mcp serve` in Claude Code or Codex and install the codeflock skill",
+		Long: "Registers `cflk mcp serve` with the CLI of the tool (claude mcp add, codex mcp add) and writes the\n" +
+			"codeflock skill where the tool reads skills. It is idempotent: it replaces the registration and\n" +
 			"leaves the skill alone when it is already current. For Codex it also sets tool_timeout_sec so that\n" +
 			"a long events_wait is not cut at 60 s.",
 		Args: cobra.NoArgs,
@@ -159,7 +161,7 @@ func newMCPUninstallCmd() *cobra.Command {
 	var f mcpFlags
 	cmd := &cobra.Command{
 		Use:   "uninstall --claude|--codex [--scope user|project]",
-		Short: "Remove the registration of `cf mcp serve` and the codefabric skill",
+		Short: "Remove the registration of `cflk mcp serve` and the codeflock skill",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			tool, err := f.tool()
@@ -182,7 +184,7 @@ func newMCPUninstallCmd() *cobra.Command {
 
 func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult, error) {
 	res := mcpInstallResult{Tool: tool.name, Scope: f.scope, Profile: f.profile, DryRun: f.dryRun}
-	bin, err := cfBinary()
+	bin, err := cflkBinary()
 	if err != nil {
 		return res, err
 	}
@@ -197,9 +199,21 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 	if err != nil {
 		return res, err
 	}
-	res.Commands = [][]string{
-		removeArgs(tool, f.scope),
-		addArgs(tool, f.scope, bin, f.profile),
+	registered, err := readRegistrations(tool, f.scope, base)
+	if err != nil {
+		return res, err
+	}
+	if current, ok := registered[mcpServerName]; ok && !current.isCodeFlock(bin) {
+		return res, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf(
+			"the %s server %q is registered by something that is not Code Flock (%s): nothing was changed; remove it with `%s` and run this again",
+			tool.name, mcpServerName, current.Command, strings.Join(removeArgs(tool, f.scope, mcpServerName), " ")), nil)
+	}
+	legacy, replacesLegacy := registered[legacyMCPServerName]
+	replacesLegacy = replacesLegacy && legacy.isCodeFlock(bin)
+	remove, add := removeArgs(tool, f.scope, mcpServerName), addArgs(tool, f.scope, bin, f.profile)
+	res.Commands = [][]string{remove, add}
+	if replacesLegacy {
+		res.Commands = append(res.Commands, removeArgs(tool, f.scope, legacyMCPServerName))
 	}
 	if tool.userServer && f.scope == "project" {
 		res.Notes = append(res.Notes, "Codex has no project scope for MCP servers: the server is registered for the user, only the skill goes to the repository")
@@ -216,10 +230,10 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 		return res, nil
 	}
 	dir := cliDir(tool, f.scope, base)
-	if err := runRemove(ctx, cliPath, dir, res.Commands[0]); err != nil {
+	if err := runRemove(ctx, cliPath, dir, remove); err != nil {
 		return res, err
 	}
-	if err := runCLI(ctx, cliPath, dir, res.Commands[1]); err != nil {
+	if err := runCLI(ctx, cliPath, dir, add); err != nil {
 		return res, err
 	}
 	if tool.configTimeout {
@@ -229,8 +243,30 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 		}
 		res.Timeout.State = changedState(changed, "set", "unchanged")
 	}
-	res.Skill.State, err = writeSkill(skillPath, codefabricSkill)
+	if err := verifyRegistration(tool, f, base, bin); err != nil {
+		return res, err
+	}
+	if replacesLegacy {
+		if err := runRemove(ctx, cliPath, dir, res.Commands[2]); err != nil {
+			return res, err
+		}
+	}
+	res.Skill.State, err = writeSkill(skillPath, codeflockSkill)
 	return res, err
+}
+
+// verifyRegistration reads the registration back: the old one is not removed
+// until the new one is seen to launch this binary with the profile asked for.
+func verifyRegistration(tool mcpTool, f mcpFlags, base, bin string) error {
+	registered, err := readRegistrations(tool, f.scope, base)
+	if err != nil {
+		return err
+	}
+	got, ok := registered[mcpServerName]
+	if !ok || got.Command != bin || !slices.Equal(got.Args, mcpServeArgs(f.profile)) {
+		return fmt.Errorf("%s did not register the server %q as asked: the %q registration, if there was one, was left alone", tool.name, mcpServerName, legacyMCPServerName)
+	}
+	return nil
 }
 
 func uninstallMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult, error) {
@@ -241,15 +277,33 @@ func uninstallMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResu
 	}
 	skillPath := skillFilePath(tool, base)
 	res.Skill.Path = skillPath
+	bin, err := cflkBinary()
+	if err != nil {
+		return res, err
+	}
 	switch cliPath, lookErr := exec.LookPath(tool.name); {
 	case tool.userServer && f.scope == "project":
-		res.Notes = append(res.Notes, "the "+tool.name+" server is registered for the user, not for this repository, so it was left alone; to remove it for every repository run `cf mcp uninstall --"+tool.name+"`")
+		res.Notes = append(res.Notes, "the "+tool.name+" server is registered for the user, not for this repository, so it was left alone; to remove it for every repository run `cflk mcp uninstall --"+tool.name+"`")
 	case lookErr != nil:
 		res.Notes = append(res.Notes, tool.name+" is not in PATH: the registration was not touched")
 	default:
-		res.Commands = [][]string{removeArgs(tool, f.scope)}
-		if err := runRemove(ctx, cliPath, cliDir(tool, f.scope, base), res.Commands[0]); err != nil {
+		registered, err := readRegistrations(tool, f.scope, base)
+		if err != nil {
 			return res, err
+		}
+		for _, name := range []string{mcpServerName, legacyMCPServerName} {
+			switch got, ok := registered[name]; {
+			case !ok:
+			case !got.isCodeFlock(bin):
+				res.Notes = append(res.Notes, fmt.Sprintf("the %s server %q is not Code Flock's, so it was left alone", tool.name, name))
+			default:
+				res.Commands = append(res.Commands, removeArgs(tool, f.scope, name))
+			}
+		}
+		for _, argv := range res.Commands {
+			if err := runRemove(ctx, cliPath, cliDir(tool, f.scope, base), argv); err != nil {
+				return res, err
+			}
 		}
 	}
 	res.Skill.State, err = removeSkill(skillPath)
@@ -265,12 +319,12 @@ func changedState(changed bool, yes, no string) string {
 
 // removeArgs and addArgs are the arguments after the CLI name. Claude always
 // gets --scope: without it the server would go to the local scope.
-func removeArgs(tool mcpTool, scope string) []string {
+func removeArgs(tool mcpTool, scope, server string) []string {
 	args := []string{tool.name, "mcp", "remove"}
 	if tool.scoped {
 		args = append(args, "--scope", scope)
 	}
-	return append(args, mcpServerName)
+	return append(args, server)
 }
 
 func addArgs(tool mcpTool, scope, bin, profile string) []string {
@@ -278,7 +332,7 @@ func addArgs(tool mcpTool, scope, bin, profile string) []string {
 	if tool.scoped {
 		args = append(args, "--scope", scope)
 	}
-	return append(args, mcpServerName, "--", bin, "mcp", "serve", "--profile", profile)
+	return append(append(args, mcpServerName, "--", bin), mcpServeArgs(profile)...)
 }
 
 // lookTool finds the CLI of the tool. A dry run does not need it to exist.
@@ -293,15 +347,15 @@ func lookTool(tool mcpTool, dryRun bool) (string, error) {
 	return path, nil
 }
 
-// cfBinary is the path the tool will launch. The cf found in PATH wins when
+// cflkBinary is the path the tool will launch. The cflk found in PATH wins when
 // it is this very binary (a stable path such as a Homebrew link survives
 // upgrades); else the running executable. Symlinks are never resolved.
-func cfBinary() (string, error) {
+func cflkBinary() (string, error) {
 	self, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("finding the cf binary: %w", err)
+		return "", fmt.Errorf("finding the cflk binary: %w", err)
 	}
-	if found, err := exec.LookPath("cf"); err == nil {
+	if found, err := exec.LookPath("cflk"); err == nil {
 		if abs, err := filepath.Abs(found); err == nil && sameFile(abs, self) {
 			return abs, nil
 		}
@@ -553,7 +607,7 @@ func codexConfigPath() (string, error) {
 	return filepath.Join(home, ".codex", "config.toml"), nil
 }
 
-// setCodexToolTimeout sets tool_timeout_sec in the [mcp_servers.cf] table of
+// setCodexToolTimeout sets tool_timeout_sec in the [mcp_servers.cflk] table of
 // the Codex config and reports whether the file changed. `codex mcp add`
 // rewrites that table and drops the key, so it goes in after it.
 func setCodexToolTimeout(path string, seconds int) (bool, error) {
@@ -562,7 +616,7 @@ func setCodexToolTimeout(path string, seconds int) (bool, error) {
 		return false, fmt.Errorf("reading the Codex config: %w", err)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 {
-		return false, fmt.Errorf("%s is a symlink: add `tool_timeout_sec = %d` to its [mcp_servers.cf] table by hand", path, seconds)
+		return false, fmt.Errorf("%s is a symlink: add `tool_timeout_sec = %d` to its [mcp_servers.cflk] table by hand", path, seconds)
 	}
 	data, err := os.ReadFile(path) //nolint:gosec // the Codex config of this user
 	if err != nil {
@@ -579,8 +633,8 @@ func setCodexToolTimeout(path string, seconds int) (bool, error) {
 }
 
 var (
-	tomlCfTable = regexp.MustCompile(`^\s*\[\s*mcp_servers\s*\.\s*(cf|"cf"|'cf')\s*\]\s*(#.*)?$`)
-	tomlTimeout = regexp.MustCompile(`^\s*tool_timeout_sec\s*=`)
+	tomlServerTable = regexp.MustCompile(`^\s*\[\s*mcp_servers\s*\.\s*(cflk|"cflk"|'cflk')\s*\]\s*(#.*)?$`)
+	tomlTimeout     = regexp.MustCompile(`^\s*tool_timeout_sec\s*=`)
 )
 
 // tomlLine says what a line of a TOML file is, as far as this file needs.
@@ -657,7 +711,7 @@ func endOfTOMLString(line string, i int) int {
 	return len(line)
 }
 
-// withToolTimeout edits only the lines of the [mcp_servers.cf] table. The key
+// withToolTimeout edits only the lines of the [mcp_servers.cflk] table. The key
 // goes after the last key of the table, so the comments that introduce the next
 // table stay with it.
 func withToolTimeout(content string, seconds int) (string, error) {
@@ -665,13 +719,13 @@ func withToolTimeout(content string, seconds int) (string, error) {
 	kinds := classifyTOML(lines)
 	start := -1
 	for i, l := range lines {
-		if kinds[i].header && tomlCfTable.MatchString(l) {
+		if kinds[i].header && tomlServerTable.MatchString(l) {
 			start = i
 			break
 		}
 	}
 	if start < 0 {
-		return "", errors.New("no [mcp_servers.cf] table: `codex mcp add` did not write it")
+		return "", errors.New("no [mcp_servers.cflk] table: `codex mcp add` did not write it")
 	}
 	end := len(lines)
 	for i := start + 1; i < len(lines); i++ {

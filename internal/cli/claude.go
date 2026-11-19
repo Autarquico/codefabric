@@ -34,7 +34,7 @@ var workersCodexTemplate []byte
 type skillKind struct {
 	// name is the skill and its directory (handto, workers).
 	name string
-	// command is the `cf` command that installs it (claude, codex); label how a person
+	// command is the `cflk` command that installs it (claude, codex); label how a person
 	// calls the harness.
 	command, label string
 	template       []byte
@@ -55,22 +55,23 @@ var (
 	codexSkills  = []skillKind{codexHandto, codexWorkers}
 )
 
-func (k skillKind) installCommand() string { return "cf " + k.command + " install" }
+func (k skillKind) installCommand() string { return "cflk " + k.command + " install" }
 
-const skillVersionVar = "{{cf-version}}"
+const skillVersionVar = "{{cflk-version}}"
 
 var (
 	skillVersionRE = regexp.MustCompile(`^[A-Za-z0-9._+-]+$`)
-	skillMarkerRE  = regexp.MustCompile(`^<!-- cf-version: (\S+) -->\r?(\n|$)`)
+	// skillMarkerRE reads the marker of this cflk and the one the beta.6 `cf` wrote.
+	skillMarkerRE = regexp.MustCompile(`^<!-- (cflk|cf)-version: (\S+) -->\r?(\n|$)`)
 )
 
-// Skill states, as `cf claude status` and `cf doctor` report them.
+// Skill states, as `cflk claude status` and `cflk doctor` report them.
 const (
 	skillMissing  = "missing"
-	skillCurrent  = "current"  // written by this cf, byte for byte
-	skillOutdated = "outdated" // written by cf, of another version
-	skillModified = "modified" // written by this cf and edited since
-	skillForeign  = "foreign"  // a skill of that name that cf did not write
+	skillCurrent  = "current"  // written by this cflk, byte for byte
+	skillOutdated = "outdated" // written by cf or cflk, of another version
+	skillModified = "modified" // written by this cflk and edited since
+	skillForeign  = "foreign"  // a skill of that name that cflk did not write
 )
 
 // SkillStatus is a skill under a scope, as `cf claude` reports it.
@@ -85,24 +86,30 @@ type SkillStatus struct {
 	Reason  string `json:"reason,omitempty"` // why it was skipped
 }
 
-// skillMarkerVersion is the cf version in the marker, which sits on the line
-// after the frontmatter. "" when the file does not have it there.
-func skillMarkerVersion(file []byte) string {
+// skillMarker is the version in the marker, which sits on the line after the
+// frontmatter, and whether it is the `cf-version` marker of the beta.6 `cf`.
+// version is "" when the file does not have a marker there.
+func skillMarker(file []byte) (version string, legacy bool) {
 	rest, ok := bytes.CutPrefix(file, []byte("---\n"))
 	if !ok {
-		return ""
+		return "", false
 	}
 	_, afterFrontmatter, ok := bytes.Cut(rest, []byte("\n---\n"))
 	if !ok {
-		return ""
+		return "", false
 	}
 	if m := skillMarkerRE.FindSubmatch(afterFrontmatter); m != nil {
-		return string(m[1])
+		return string(m[2]), string(m[1]) == "cf"
 	}
-	return ""
+	return "", false
 }
 
-// renderSkill is the SKILL.md that the cf of this version writes.
+func skillMarkerVersion(file []byte) string {
+	version, _ := skillMarker(file)
+	return version
+}
+
+// renderSkill is the SKILL.md that the cflk of this version writes.
 func renderSkill(k skillKind, version string) ([]byte, error) {
 	if !skillVersionRE.MatchString(version) {
 		return nil, fmt.Errorf("version %q cannot be written into the skill", version)
@@ -134,11 +141,12 @@ func classifySkill(k skillKind, scope, base, version string, want []byte) (Skill
 	case bytes.Equal(have, want):
 		s.State, s.Version = skillCurrent, version
 	default:
-		s.Version = skillMarkerVersion(have)
-		switch s.Version {
-		case "":
+		var legacy bool
+		s.Version, legacy = skillMarker(have)
+		switch {
+		case s.Version == "":
 			s.State = skillForeign
-		case version:
+		case s.Version == version && !legacy:
 			s.State = skillModified
 		default:
 			s.State = skillOutdated
@@ -148,7 +156,7 @@ func classifySkill(k skillKind, scope, base, version string, want []byte) (Skill
 }
 
 // installSkill writes the skill. It does nothing when it is current, updates
-// one written by another cf and refuses one that cf did not write unless force:
+// one written by another cf and refuses one that cflk did not write unless force:
 // then the status comes back as skipped together with the error.
 func installSkill(k skillKind, scope, base, version string, force, dryRun bool) (SkillStatus, error) {
 	want, err := renderSkill(k, version)
@@ -167,7 +175,7 @@ func installSkill(k skillKind, scope, base, version string, force, dryRun bool) 
 	case skillForeign:
 		if !force {
 			s.Action = "skipped"
-			s.Reason = fmt.Sprintf("%s is a skill named %s that cf did not write; use --force to replace it", s.Path, k.name)
+			s.Reason = fmt.Sprintf("%s is a skill named %s that cflk did not write; use --force to replace it", s.Path, k.name)
 			return s, domain.NewError(domain.CodeConfirmationRequired, s.Reason, nil)
 		}
 		s.Action = "replaced"
@@ -188,7 +196,7 @@ func installSkill(k skillKind, scope, base, version string, force, dryRun bool) 
 	return s, nil
 }
 
-// uninstallSkill removes the skill that cf wrote. One that cf did not write stays.
+// uninstallSkill removes the skill that cf wrote. One that cflk did not write stays.
 func uninstallSkill(k skillKind, scope, base string) (SkillStatus, error) {
 	s := SkillStatus{Name: k.name, Scope: scope, Path: skillPath(k, base)}
 	have, err := readRegular(s.Path)
@@ -209,7 +217,7 @@ func uninstallSkill(k skillKind, scope, base string) (SkillStatus, error) {
 }
 
 // InstallUserSkills is what `cf setup` offers a client: the skills of Claude Code under
-// the home of the user. A skill that cf did not write is left alone. Every skill is tried;
+// the home of the user. A skill that cflk did not write is left alone. Every skill is tried;
 // the statuses say what happened to each and the error is the first one that occurred.
 func InstallUserSkills() ([]SkillStatus, error) {
 	base, err := scopeBase("user")
@@ -354,7 +362,7 @@ func newSkillInstallCmd(skills []skillKind, withStatusLine bool) *cobra.Command 
 		Short: "Write the " + skillNames(skills) + " skills into " + filepath.ToSlash(filepath.Join("~", h.skillsDir)) + " (or the same directory of the repository)",
 		Long: "Write the handto skill, which hands a " + h.label + " session over to a Worker by " + h.invocation() + ", and the workers skill, which lists the Workers that can take it.\n" +
 			"They carry the version of this cf: the same version changes nothing and another one updates them.\n" +
-			"A skill of those names that cf did not write is not overwritten without --force.",
+			"A skill of those names that cflk did not write is not overwritten without --force.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			err := forEachSkill(cmd, skills, scope, func(skills []skillKind, base string) ([]SkillStatus, error) {
@@ -367,7 +375,7 @@ func newSkillInstallCmd(skills []skillKind, withStatusLine bool) *cobra.Command 
 		},
 	}
 	bindScope(cmd, &scope)
-	cmd.Flags().BoolVar(&force, "force", false, "replace a skill that cf did not write")
+	cmd.Flags().BoolVar(&force, "force", false, "replace a skill that cflk did not write")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "say what would be written without writing it")
 	if withStatusLine {
 		cmd.Flags().BoolVar(&statusLine, "statusline", false, "also set the status line of Claude Code to show the Runs on Workers, when it has none")
@@ -380,7 +388,7 @@ func newSkillUninstallCmd(skills []skillKind) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "uninstall [--scope user|project]",
 		Short: "Remove the skills that cf wrote",
-		Long:  "Remove the " + skillNames(skills) + " skills. One that cf did not write stays where it is.",
+		Long:  "Remove the " + skillNames(skills) + " skills. One that cflk did not write stays where it is.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return forEachSkill(cmd, skills, scope, eachSkill(func(k skillKind, base string) (SkillStatus, error) {

@@ -33,7 +33,7 @@ func TestCodexHandtoSkill_AsksForNoFlagsAndNoSessionArgument(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(out)
-	for _, want := range []string{"name: handto\n", "<!-- cf-version: v1 -->", "`cf handoff --to <worker>`", "CODEX_SESSION_ID", "Never add flags", "never pass `--session`", "CF_*"} {
+	for _, want := range []string{"name: handto\n", "<!-- cflk-version: v1 -->", "`cflk handoff --to <worker>`", "CODEX_SESSION_ID", "Never add flags", "never pass `--session`", "CF_*"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the Codex skill lacks %q", want)
 		}
@@ -56,7 +56,7 @@ func TestScenario_InstallCodexReusesTheAgentsSkillsDirectory(t *testing.T) {
 		t.Fatalf("install: %d %q %q", code, out, errOut)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
-		t.Error("cf codex install wrote under .claude")
+		t.Error("cflk codex install wrote under .claude")
 	}
 	if code, out, _ := runCodex(t, "install"); code != 0 || !strings.Contains(out, "unchanged") {
 		t.Errorf("second install: %d %q", code, out)
@@ -65,8 +65,8 @@ func TestScenario_InstallCodexReusesTheAgentsSkillsDirectory(t *testing.T) {
 		t.Errorf("status: %d %q", code, out)
 	}
 
-	// Another version updates it; one that cf did not write is not overwritten.
-	old := bytes.Replace(mustRead(t, want), []byte("cf-version: "), []byte("cf-version: old-"), 1)
+	// Another version updates it; one that cflk did not write is not overwritten.
+	old := bytes.Replace(mustRead(t, want), []byte("cflk-version: "), []byte("cflk-version: old-"), 1)
 	if err := os.WriteFile(want, old, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestScenario_InstallCodexReusesTheAgentsSkillsDirectory(t *testing.T) {
 		t.Errorf("a foreign skill: %d %q", code, errOut)
 	}
 	if code, _, _ := runCodex(t, "uninstall"); code != 0 || !strings.Contains(string(mustRead(t, want)), "mine") {
-		t.Error("uninstall removed a skill that cf did not write")
+		t.Error("uninstall removed a skill that cflk did not write")
 	}
 	if code, _, _ := runCodex(t, "install", "--force"); code != 0 {
 		t.Error("--force did not replace it")
@@ -124,7 +124,7 @@ func TestDoctor_WarnsAboutTheCodexSkillOnlyWhenCodexIsInstalled(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, out, _ := runDoctorHere(t, f, probe)
-	if !strings.Contains(out, "aviso: la skill handto de Codex no está instalada") || !strings.Contains(out, "(acción: cf codex install)") {
+	if !strings.Contains(out, "aviso: la skill handto de Codex no está instalada") || !strings.Contains(out, "(acción: cflk codex install)") {
 		t.Fatalf("codex installed, skill missing: %q", out)
 	}
 	if code, _, errOut := runCodex(t, "install"); code != 0 {
@@ -141,7 +141,7 @@ func TestCodexWorkersSkill_RunsTheListsAndCarriesNothingOfClaude(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(out)
-	for _, want := range []string{"name: workers\n", "<!-- cf-version: v1 -->", "`cf worker list --timeout 10s`", "`cf ps --timeout 10s`", "`cf attach <task>`", "CF_*"} {
+	for _, want := range []string{"name: workers\n", "<!-- cflk-version: v1 -->", "`cflk worker list --timeout 10s`", "`cflk ps --timeout 10s`", "`cflk attach <task>`", "CF_*"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the Codex workers skill lacks %q", want)
 		}
