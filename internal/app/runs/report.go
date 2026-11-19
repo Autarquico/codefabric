@@ -239,6 +239,11 @@ func (s *Service) reportEntry(ctx context.Context, tx *store.Tx, act mutation.Ac
 			// code, the Run did not finish its work.
 			event, reason = domain.RunEventExitNonZero, domain.EndInputRequired
 		}
+		if e.EndReason == domain.EndIdleAfterResult {
+			// The Worker stopped a harness that had given its result and stayed idle:
+			// the work was done, whatever its exit code or signal.
+			event, reason = domain.RunEventExitZero, domain.EndIdleAfterResult
+		}
 		status, err := store.RunStatusOf(ctx, tx, run)
 		if err != nil {
 			return outcome(""), err
@@ -561,8 +566,8 @@ func validateEntry(e v1.RunReportEntry, now time.Time) error {
 		return input.Invalid("only exited carries an answer")
 	case !v1.ValidAnswer(e.Answer):
 		return input.Invalid("answer must be valid, printable text of at most %d bytes", v1.MaxAnswerLen)
-	case e.EndReason != "" && (e.EndReason != domain.EndInputRequired || e.Cause == v1.ExitCauseWrapperLost):
-		return input.Invalid("end_reason, when there is one, is input_required and not of a lost wrapper")
+	case e.EndReason != "" && ((e.EndReason != domain.EndInputRequired && e.EndReason != domain.EndIdleAfterResult) || e.Cause == v1.ExitCauseWrapperLost):
+		return input.Invalid("end_reason, when there is one, is input_required or idle_after_result and not of a lost wrapper")
 	case len(e.Model) > v1.MaxModelLen || !domain.Printable(e.Model):
 		return input.Invalid("model must print and be at most %d characters", v1.MaxModelLen)
 	case e.Kind != v1.ReportStopped && e.NeverStarted:

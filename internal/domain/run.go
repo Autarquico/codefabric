@@ -67,6 +67,9 @@ const (
 	EndCheckpoint     EndReason = "checkpoint"
 	EndEnvironment    EndReason = "environment"
 	EndInputRequired  EndReason = "input_required"
+	// EndIdleAfterResult: the harness gave its result and stayed alive, idle,
+	// until the Worker stopped it; the Run is complete.
+	EndIdleAfterResult EndReason = "idle_after_result"
 	// EndWrapperLost: the wrapper died without leaving an exit code, so the
 	// exit of the harness is unknown. It is an observed cause, not an exit.
 	EndWrapperLost EndReason = "wrapper_lost"
@@ -74,7 +77,7 @@ const (
 
 var endReasons = []EndReason{
 	EndExitCode, EndDeferred, EndMoved, EndDrained, EndBudget, EndLeaseLost,
-	EndAssignmentLost, EndWorktreeLost, EndCheckpoint, EndEnvironment, EndInputRequired, EndWrapperLost,
+	EndAssignmentLost, EndWorktreeLost, EndCheckpoint, EndEnvironment, EndInputRequired, EndIdleAfterResult, EndWrapperLost,
 }
 
 // IsValid reports whether r is one of the end reasons named in the spec.

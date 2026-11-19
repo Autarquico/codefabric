@@ -405,6 +405,7 @@ func (e *Executor) poll(ctx context.Context, r state.Run) (done bool) {
 	}
 	if m.exit == nil && m.started != nil {
 		e.consumeEvents(ctx, r)
+		e.stopIfIdleAfterResult(ctx, r)
 		// A stop ordered by what the harness said is the phase from here on.
 		if fresh, err := state.RunBy(ctx, e.o.DB.Reader(), r.Key); err == nil {
 			r = fresh

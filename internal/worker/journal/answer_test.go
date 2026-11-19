@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	"github.com/Autarquico/codefabric/internal/domain"
 	"github.com/Autarquico/codefabric/internal/worker/journal"
 	"github.com/Autarquico/codefabric/internal/worker/state"
 )
@@ -159,5 +160,115 @@ func TestAControllerBetaSixDecodesAReportWithoutAnswer(t *testing.T) {
 	var req v1.RunReportRequest
 	if err := strictDecode(raw, &req); err != nil {
 		t.Errorf("decoding: %v", err)
+	}
+}
+
+func TestAControllerWithoutIdleAfterResultGetsTheExitWithoutTheEndReasonAndOneWithItGetsIt(t *testing.T) {
+	for _, announced := range []bool{false, true} {
+		f := newFixture(t)
+		j := journal.New("01J0000000000000000000000E1", f.clock)
+		k := state.Key{RunID: "run_a", LeaseEpoch: 1}
+		err := f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+			if _, err := state.InsertAssigned(t.Context(), tx, state.Run{Key: k, LeaseID: "lease_a", Spec: []byte("{}"), CreatedAt: t0, AcceptBy: t0}); err != nil {
+				return err
+			}
+			_, err := j.AppendTx(t.Context(), tx, k, v1.RunReportEntry{Kind: v1.ReportExited, At: t0, EndReason: domain.EndIdleAfterResult})
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []domain.EndReason
+		features := &journal.ControllerFeatures{}
+		features.Set([]string{v1.FeatureRunAnswer})
+		if announced {
+			features.Set([]string{v1.FeatureRunAnswer, v1.FeatureIdleAfterResult})
+		}
+		s := f.sender(reasonsWire{&got}, j)
+		s.Features = features
+		if _, err := s.Flush(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		want := domain.EndReason("")
+		if announced {
+			want = domain.EndIdleAfterResult
+		}
+		if len(got) != 1 || got[0] != want || f.pending() != 0 {
+			t.Errorf("announced=%v: end reasons sent = %q, %d pending", announced, got, f.pending())
+		}
+	}
+}
+
+type reasonsWire struct{ got *[]domain.EndReason }
+
+func (w reasonsWire) ReportRun(_ context.Context, _ string, req v1.RunReportRequest) (v1.RunReportResponse, error) {
+	var resp v1.RunReportResponse
+	for _, e := range req.Entries {
+		*w.got = append(*w.got, e.EndReason)
+		resp.Outcomes = append(resp.Outcomes, v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: v1.ReportApplied})
+	}
+	return resp, nil
+}
+
+type reporterFunc func(v1.RunReportRequest) (v1.RunReportResponse, error)
+
+func (r reporterFunc) ReportRun(_ context.Context, _ string, req v1.RunReportRequest) (v1.RunReportResponse, error) {
+	return r(req)
+}
+
+// The features of a heartbeat are one value: a Flush that races with Set sees
+// the set of one heartbeat or the other, never a mix.
+func TestControllerFeaturesAreNeverSeenHalfUpdated(t *testing.T) {
+	f := newFixture(t)
+	j := journal.New("01J0000000000000000000000E1", f.clock)
+	features := &journal.ControllerFeatures{}
+	both := []string{v1.FeatureRunAnswer, v1.FeatureIdleAfterResult}
+	features.Set(both)
+	var mu sync.Mutex
+	mixed := false
+	c := reporterFunc(func(req v1.RunReportRequest) (v1.RunReportResponse, error) {
+		var resp v1.RunReportResponse
+		for _, e := range req.Entries {
+			if (e.Answer != "") != (e.EndReason != "") {
+				mu.Lock()
+				mixed = true
+				mu.Unlock()
+			}
+			resp.Outcomes = append(resp.Outcomes, v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: v1.ReportApplied})
+		}
+		return resp, nil
+	})
+	s := f.sender(c, j)
+	s.Features = features
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 500 {
+			if i%2 == 0 {
+				features.Set(nil)
+			} else {
+				features.Set(both)
+			}
+		}
+	}()
+	for i := range 100 {
+		k := state.Key{RunID: "run_" + strings.Repeat("a", 1+i), LeaseEpoch: 1}
+		err := f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+			if _, err := state.InsertAssigned(t.Context(), tx, state.Run{Key: k, LeaseID: "lease", Spec: []byte("{}"), CreatedAt: t0, AcceptBy: t0}); err != nil {
+				return err
+			}
+			_, err := j.AppendTx(t.Context(), tx, k, v1.RunReportEntry{Kind: v1.ReportExited, At: t0, Answer: "a", EndReason: domain.EndIdleAfterResult})
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Flush(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
+	if mixed {
+		t.Error("a report went with the answer or the end reason but not both")
 	}
 }

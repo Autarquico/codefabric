@@ -39,6 +39,11 @@ const (
 	// pair it with a result that arrives in a later piece.
 	EventAgentMessage EventKind = "agent_message"
 	EventError        EventKind = "error"
+	// EventTurnActivity says that the agent is working on a turn (a message, a
+	// tool use or its result, a partial message). It carries nothing: whoever
+	// watches for the end of a turn learns from it that a result before it is
+	// not the last word.
+	EventTurnActivity EventKind = "turn_activity"
 )
 
 // UsageEvent is the usage of one model request (§14.4). A nil field is

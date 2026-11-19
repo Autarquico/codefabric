@@ -55,6 +55,8 @@ func TestValidateEntry_EndReasonModelAndAnswer(t *testing.T) {
 		valid bool
 	}{
 		{"input_required with a model", exited(func(e *v1.RunReportEntry) { e.EndReason, e.Model = domain.EndInputRequired, "m" }), true},
+		{"idle_after_result", exited(func(e *v1.RunReportEntry) { e.EndReason = domain.EndIdleAfterResult }), true},
+		{"idle_after_result of a lost wrapper", exited(func(e *v1.RunReportEntry) { e.EndReason, e.Cause = domain.EndIdleAfterResult, v1.ExitCauseWrapperLost }), false},
 		{"another end reason", exited(func(e *v1.RunReportEntry) { e.EndReason = domain.EndBudget }), false},
 		{"input_required of a lost wrapper", exited(func(e *v1.RunReportEntry) { e.EndReason, e.Cause = domain.EndInputRequired, v1.ExitCauseWrapperLost }), false},
 		{"a model too long", exited(func(e *v1.RunReportEntry) { e.Model = strings.Repeat("m", v1.MaxModelLen+1) }), false},

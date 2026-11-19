@@ -163,6 +163,10 @@ type HeartbeatResponse struct {
 // FeatureRunAnswer says the Controller takes the answer of an exited report.
 const FeatureRunAnswer = "run_answer"
 
+// FeatureIdleAfterResult says the Controller takes an exited report whose
+// end_reason is idle_after_result, and completes the Run with it.
+const FeatureIdleAfterResult = "idle_after_result"
+
 // Worker is §3.5 as the API shows it. Compatible is the verdict of the upgrade
 // policy (§41) on DaemonVersion; only an online Worker is eligible for Runs.
 // Resources and Health are those of the last heartbeat, empty before the first.

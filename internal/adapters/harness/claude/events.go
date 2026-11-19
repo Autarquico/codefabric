@@ -96,11 +96,18 @@ func parse(raw []byte) []harness.Event {
 			ev.ID, ev.Options = q.id, q.options
 			return []harness.Event{ev}
 		}
+		return turnActivity
+	case l.Type == "user" || l.Type == "stream_event":
+		return turnActivity
 	case l.Type == "result":
 		return result(l)
 	}
 	return nil
 }
+
+// turnActivity is what the lines of a turn in progress say: the hooks and other
+// system lines printed around its end do not.
+var turnActivity = []harness.Event{{Kind: harness.EventTurnActivity}}
 
 func inputRequired(question string) []harness.Event {
 	if question == "" {

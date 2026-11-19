@@ -25,7 +25,7 @@ import (
 // lineAdapter is a harness whose stream has one line per event: "model <name>"
 // is session_started, "ask" is input_required, "say <text>" is a message of the
 // agent, "answer <text>" is a result with a text and "result" is the end of a
-// turn without one. It remembers every line it was given.
+// turn without one, "activity" is the agent at work on a turn (any other line says nothing, as a hook does). It remembers every line it was given.
 type lineAdapter struct {
 	fakeharness.Adapter
 	seen *linesSeen
@@ -68,6 +68,10 @@ func (a lineAdapter) Events(_ context.Context, _ harness.Handle, src io.ReadClos
 			out <- harness.Event{Kind: harness.EventAgentMessage, Message: strings.TrimPrefix(line, "say ")}
 		case strings.HasPrefix(line, "answer "):
 			out <- harness.Event{Kind: harness.EventResult, Result: &harness.Result{Summary: strings.TrimPrefix(line, "answer ")}}
+		case line == "activity":
+			out <- harness.Event{Kind: harness.EventTurnActivity}
+		case line == "failed":
+			out <- harness.Event{Kind: harness.EventResult, Result: &harness.Result{Failed: true, Summary: "it failed"}}
 		case line == "result":
 			out <- harness.Event{Kind: harness.EventResult}
 		}

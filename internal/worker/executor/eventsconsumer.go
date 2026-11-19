@@ -141,6 +141,9 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 	sessionID := ""
 	var asked []harness.Event
 	for _, ev := range events {
+		if ev.Kind != harness.EventResult {
+			next.ResultOK = false // anything after a result says the harness is not done
+		}
 		switch ev.Kind {
 		case harness.EventSessionStarted:
 			sawInit = true
@@ -162,6 +165,7 @@ func (e *Executor) drainEvents(ctx context.Context, r state.Run, final bool) (mo
 			next.AgentMessage = v1.BoundAnswer(ev.Message)
 		case harness.EventResult:
 			sawResult = true
+			next.ResultOK = ev.Result == nil || !ev.Result.Failed
 			next.Answer = answerOf(ev.Result, next.AgentMessage)
 			next.AgentMessage = ""
 		}

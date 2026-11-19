@@ -146,6 +146,9 @@ func contractFixture(t *testing.T) harnesstest.Fixture {
 		ResumeFrom: []harness.Checkpoint{checkpointOfAnotherSession(t)},
 		ExpectEvents: []harness.Event{
 			{Kind: harness.EventSessionStarted, SessionID: "5b0e1c1e-2f64-4d0e-9a33-6f1a7d0c9a11", Model: "claude-opus-5-5"},
+			{Kind: harness.EventTurnActivity},
+			{Kind: harness.EventTurnActivity},
+			{Kind: harness.EventTurnActivity},
 			{Kind: harness.EventUsage, Usage: &harness.UsageEvent{Model: "claude-haiku-5", InputTokens: i64(0), OutputTokens: i64(2), CacheReadTokens: i64(300)}},
 			{Kind: harness.EventUsage, Usage: &harness.UsageEvent{Model: "claude-opus-5-5", InputTokens: i64(5), OutputTokens: i64(40), CacheReadTokens: i64(7168), CacheWriteTokens: i64(0)}},
 			{Kind: harness.EventResult, Result: &harness.Result{Summary: "Created hello.txt"}},
