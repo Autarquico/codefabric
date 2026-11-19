@@ -31,8 +31,14 @@ func streamedFixture(t *testing.T) (*fixture, state.Key) {
 
 func streamedFixtureOf(t *testing.T, a harness.Adapter) (*fixture, state.Key) {
 	t.Helper()
+	f, k, _ := streamedFixtureWithWrapper(t, a)
+	return f, k
+}
+
+func streamedFixtureWithWrapper(t *testing.T, a harness.Adapter, mutate ...func(*Options)) (*fixture, state.Key, *helper) {
+	t.Helper()
 	sockets := socketDir(t)
-	f, k, _ := eventsFixtureOf(t, a, func(o *Options) { o.SocketDir = sockets })
+	f, k, w := eventsFixtureOf(t, a, append([]func(*Options){func(o *Options) { o.SocketDir = sockets }}, mutate...)...)
 	dir := f.runDir(k)
 	var l execwrap.Launch
 	if ok, err := execwrap.Read(dir, execwrap.LaunchFile, &l); err != nil || !ok {
@@ -42,7 +48,7 @@ func streamedFixtureOf(t *testing.T, a harness.Adapter) (*fixture, state.Key) {
 	if err := execwrap.Write(dir, execwrap.LaunchFile, l); err != nil {
 		t.Fatal(err)
 	}
-	return f, k
+	return f, k, w
 }
 
 // bridgeOf has the socket of the Run up, as serveInput does for a Run that asks

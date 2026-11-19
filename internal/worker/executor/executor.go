@@ -118,6 +118,11 @@ type Options struct {
 	// StopGrace is stop.grace (Appendix A): how long a harness has to end after
 	// it is asked to, before it is killed. It defaults to that of Appendix A.
 	StopGrace time.Duration
+	// IdleAfterResult is how long a headless Run of a harness with the
+	// capability IdleAfterResult may stay alive, with its input closed and
+	// nothing written, after a result that is not an error, before the Worker
+	// stops it. Zero is DefaultIdleAfterResult.
+	IdleAfterResult time.Duration
 	// CheckpointGrace is checkpoint.grace (Appendix A): how long a harness has
 	// to end when it is quiesced for a capture, before the group is killed. It
 	// defaults to that of Appendix A.
@@ -218,6 +223,7 @@ type Executor struct {
 	redactPipe   []string
 	envArgv      []string
 	grace        time.Duration
+	idleAfter    time.Duration
 	// checkpointGrace is the grace of quiescing a harness for a capture.
 	checkpointGrace time.Duration
 	// jit delivers the secrets of a Run to its directory and takes them back.
@@ -332,6 +338,9 @@ func New(o Options) (*Executor, error) {
 	}
 	if e.grace <= 0 {
 		e.grace = domain.Defaults().StopGrace
+	}
+	if e.idleAfter = o.IdleAfterResult; e.idleAfter <= 0 {
+		e.idleAfter = DefaultIdleAfterResult
 	}
 	if e.checkpointGrace = o.CheckpointGrace; e.checkpointGrace <= 0 {
 		e.checkpointGrace = domain.Defaults().CheckpointGrace

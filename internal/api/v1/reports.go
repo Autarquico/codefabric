@@ -171,7 +171,9 @@ type RunReportEntry struct {
 	Signal      string         `json:"signal,omitempty"`    // exited
 	Cause       string         `json:"cause,omitempty"`     // exited: ExitCause*
 	// EndReason (exited) is why the Worker ended the Run when it was not the
-	// exit alone: only domain.EndInputRequired, the harness waited for input.
+	// exit alone: domain.EndInputRequired (the harness waited for input) or
+	// domain.EndIdleAfterResult (it gave its result and stayed idle; only sent to a
+	// Controller that announces FeatureIdleAfterResult).
 	EndReason domain.EndReason `json:"end_reason,omitempty"`
 	// Model (started, exited) is the model the harness said it ran with, if it did.
 	Model string `json:"model,omitempty"`

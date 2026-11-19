@@ -35,6 +35,10 @@ type Capabilities struct {
 	// GracefulStop is Stop: a courteous stop the harness honours. Without
 	// it the signal to the process group is the only stop.
 	GracefulStop bool
+	// IdleAfterResult: a headless Run of it can stay alive and idle after its
+	// last result, with its input closed; the Worker stops it after a while and
+	// the Run is complete. Only for a harness fed through a stream.
+	IdleAfterResult bool
 }
 
 // Supports tells whether m is one of Modes.

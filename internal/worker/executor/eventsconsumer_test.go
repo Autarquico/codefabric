@@ -68,6 +68,8 @@ func (a lineAdapter) Events(_ context.Context, _ harness.Handle, src io.ReadClos
 			out <- harness.Event{Kind: harness.EventAgentMessage, Message: strings.TrimPrefix(line, "say ")}
 		case strings.HasPrefix(line, "answer "):
 			out <- harness.Event{Kind: harness.EventResult, Result: &harness.Result{Summary: strings.TrimPrefix(line, "answer ")}}
+		case line == "failed":
+			out <- harness.Event{Kind: harness.EventResult, Result: &harness.Result{Failed: true, Summary: "it failed"}}
 		case line == "result":
 			out <- harness.Event{Kind: harness.EventResult}
 		}

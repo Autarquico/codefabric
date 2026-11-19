@@ -72,6 +72,12 @@ type Options struct {
 	PermissionServerArgv []string
 	// StopGrace replaces stop.grace (Appendix A), for tests.
 	StopGrace time.Duration
+	// IdleAfterResult replaces how long a headless harness may stay idle after
+	// its result (executor.DefaultIdleAfterResult), for tests.
+	IdleAfterResult time.Duration
+	// HideControllerFeatures are features of the Controller this daemon acts as
+	// if it did not announce, to stand in front of an older Controller, for tests.
+	HideControllerFeatures []string
 	// GitPath replaces the git found on the PATH, for tests.
 	GitPath string
 	// SSHTarget is how clients reach this machine to attach to a session
@@ -195,7 +201,7 @@ func Run(ctx context.Context, o Options) error {
 	rt, adapters := d.runtimeAndHarnesses(ctx, o)
 	eo := executor.Options{
 		DB: db, Controller: c, Workflows: c, Runtime: rt, Journal: jrn, Paths: o.Paths, Clock: d.clock, Log: d.log,
-		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, Secrets: d.secrets,
+		WrapperArgv: o.WrapperArgv, RedactPipeArgv: o.RedactPipeArgv, StopGrace: o.StopGrace, IdleAfterResult: o.IdleAfterResult, Secrets: d.secrets,
 		PermissionServerArgv: o.PermissionServerArgv,
 		LogSecrets:           logSecrets,
 		WorktreeRetention:    time.Duration(d.settings.Retention.Worktrees),
@@ -258,7 +264,7 @@ func Run(ctx context.Context, o Options) error {
 		takeApplies(r)
 		// A heartbeat taken is this daemon held as the current one: it may ask for grants.
 		ex.HeartbeatTaken()
-		features.Set(r.Features)
+		features.Set(slices.DeleteFunc(slices.Clone(r.Features), func(f string) bool { return slices.Contains(o.HideControllerFeatures, f) }))
 		d.ackJournal(gctx, r.JournalAck)
 		ex.SetLimits(executor.Limits{MaxConcurrentRuns: r.MaxConcurrentRuns, CPU: r.Allocatable.CPU, MemoryMB: r.Allocatable.MemoryMB})
 		if r.ReconcileRequired && ex.Reconciled() {

@@ -36,6 +36,9 @@ type facts struct {
 	warning string
 	// inputRequired: the Worker stopped the harness because it waited for input.
 	inputRequired bool
+	// idleAfterResult: the Worker stopped the harness because it gave its
+	// result and stayed idle, and the harness had not ended before.
+	idleAfterResult bool
 	// model is what the harness said it ran with, "" if it did not say.
 	model string
 	// answer is what the harness answered, "" if it did not. Whether the
@@ -314,6 +317,7 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 		}
 	}
 	f.inputRequired = inputRequired && (errors.Is(orderErr, state.ErrNotFound) || order.Reason == ReasonInputRequired && order.Source == SourceWorker)
+	f.idleAfterResult = orderErr == nil && order.Reason == ReasonIdleAfterResult && order.Source == SourceWorker && !order.ExitFirst
 	spawned := f.started != nil
 	reportedStart := r.StartedAt != nil || spawned
 	// A Run whose harness ran is to be sealed (§22.6). The intent, which is all that sealing depends
@@ -415,6 +419,9 @@ func fillExit(en *v1.RunReportEntry, f facts) {
 	// The Controller refuses an input_required of a lost wrapper.
 	if f.inputRequired && en.Cause != v1.ExitCauseWrapperLost {
 		en.EndReason = domain.EndInputRequired
+	}
+	if f.idleAfterResult && !f.inputRequired && en.Cause != v1.ExitCauseWrapperLost {
+		en.EndReason = domain.EndIdleAfterResult
 	}
 	if f.warning != "" {
 		en.Message = strings.Join(nonEmpty(en.Message, f.warning), "; ")

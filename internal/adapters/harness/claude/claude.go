@@ -64,6 +64,7 @@ func (Adapter) Capabilities() harness.Capabilities {
 		ConfigIsolation:        true,
 		PreapprovedPermissions: true,
 		Install:                true,
+		IdleAfterResult:        true,
 	}
 }
 

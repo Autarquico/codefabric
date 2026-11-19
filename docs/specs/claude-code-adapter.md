@@ -66,6 +66,12 @@ Cada scenario se implementa como un test `TestScenario_*`.
 - **When** el Worker lee el stream de eventos
 - **Then** el texto (`Summary`) queda como respuesta del Run, acotada a 8 KiB, y llega al Controller en el `exited` si este anuncia `run_answer`
 
+### Scenario: Run headless que no sale tras acabar
+- **Given** un Run headless de Claude Code cuyo último evento es un `result` sin error, con el input ya cerrado (`input.eof`), sin prompts abiertos, y cuyo proceso sigue vivo
+- **When** ni `events.jsonl` ni el stderr capturado crecen durante `IdleAfterResult` (120 s por defecto)
+- **Then** el Worker lo detiene con el stop normal (SIGTERM al grupo, SIGKILL tras la gracia) y reporta `exited` con `end_reason: idle_after_result` y el exit real; el Controller completa el Run con su respuesta, o, si no anuncia `idle_after_result`, el Worker no envía el motivo y el Run se resuelve por su exit
+- Cualquier crecimiento, un prompt o un evento que no sea `result` reinicia la cuenta; un `result` con `is_error` nunca se detiene por inactividad; una salida natural o un stop previo (usuario) mantienen su resolución. La cuenta se persiste en el cursor de eventos del Worker y sobrevive a un reinicio del daemon. Sólo aplica a adapters con la capacidad `IdleAfterResult` (Claude Code headless).
+
 ### Scenario: Live
 - **Given** «create hello.txt» con Claude real
 - **When** se ejecuta

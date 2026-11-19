@@ -31,16 +31,28 @@ const (
 // The zero value knows nothing yet.
 type ControllerFeatures struct {
 	answer atomic.Int32 // 0 unknown, 1 takes the answer of an exited, 2 does not
+	idle   atomic.Int32 // 0 unknown, 1 takes end_reason idle_after_result, 2 does not
 }
 
 // Set records the features of a heartbeat response; the latest one counts, so a
 // Controller that is rolled back to an older version is noticed.
 func (f *ControllerFeatures) Set(features []string) {
-	if slices.Contains(features, v1.FeatureRunAnswer) {
-		f.answer.Store(1)
-		return
+	f.answer.Store(featureValue(features, v1.FeatureRunAnswer))
+	f.idle.Store(featureValue(features, v1.FeatureIdleAfterResult))
+}
+
+func featureValue(features []string, name string) int32 {
+	if slices.Contains(features, name) {
+		return 1
 	}
-	f.answer.Store(2)
+	return 2
+}
+
+// takesIdleAfterResult says whether the Controller takes an exited with the end
+// reason idle_after_result. Unknown counts as no: the sender does not send
+// anything before the features are known at all (see takesAnswer).
+func (f *ControllerFeatures) takesIdleAfterResult() bool {
+	return f.idle.Load() == 1
 }
 
 // takesAnswer says whether the Controller takes the answer of an exited, and
@@ -141,12 +153,13 @@ type group struct {
 // settled (confirmed, or refused for good). An error means the Controller could
 // not be reached or answered something unexpected: what was not settled stays.
 func (s *Sender) Flush(ctx context.Context) (int, error) {
-	withAnswer := true
+	withAnswer, withIdle := true, true
 	if s.Features != nil {
 		var known bool
 		if withAnswer, known = s.Features.takesAnswer(); !known {
 			return 0, nil
 		}
+		withIdle = s.Features.takesIdleAfterResult()
 	}
 	pending, err := state.PendingJournal(ctx, s.DB.Reader(), pageRows)
 	if err != nil {
@@ -168,7 +181,7 @@ func (s *Sender) Flush(ctx context.Context) (int, error) {
 		for len(g.rows) > 0 {
 			batch, rest := split(g.rows)
 			g.rows = rest
-			n, fenced, err := s.send(ctx, g.key, batch, withAnswer)
+			n, fenced, err := s.send(ctx, g.key, batch, withAnswer, withIdle)
 			settled += n
 			if err != nil {
 				var coded *domain.Error
@@ -208,7 +221,7 @@ func split(rows []state.JournalRow) (batch, rest []state.JournalRow) {
 
 // send makes one request. It returns how many rows are settled and whether the
 // Run was fenced.
-func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow, withAnswer bool) (settled int, fenced bool, err error) {
+func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow, withAnswer, withIdle bool) (settled int, fenced bool, err error) {
 	req := v1.RunReportRequest{Entries: make([]v1.RunReportEntry, 0, len(batch))}
 	for _, r := range batch {
 		e, err := entryOf(r)
@@ -217,6 +230,13 @@ func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow
 		}
 		if !withAnswer {
 			e.Answer = ""
+		}
+		if !withIdle && e.EndReason == domain.EndIdleAfterResult {
+			// An older Controller refuses the end reason: it settles the exit as it is,
+			// and the Worker log says why the harness was stopped.
+			s.Log.InfoContext(ctx, "the Controller does not take idle_after_result: the exit is reported without it",
+				"run", k.RunID, "lease_epoch", k.LeaseEpoch)
+			e.EndReason = ""
 		}
 		req.Entries = append(req.Entries, e)
 	}
