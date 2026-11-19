@@ -57,11 +57,12 @@ func (e ClientEnv) withDefaults() ClientEnv {
 // so that no other command moves it from under it.
 func Client(e ClientEnv, out io.Writer) (release func(), err error) {
 	e = e.withDefaults()
-	if asksForHelp(e.Args) {
-		return func() {}, nil
-	}
-	if err := moveClient(e, out); err != nil {
-		return func() {}, err
+	// A flag that may ask for help never moves anything; it may still start the
+	// daemon (--help=false), so the data it uses is held all the same.
+	if !asksForHelp(e.Args) {
+		if err := moveClient(e, out); err != nil {
+			return func() {}, err
+		}
 	}
 	if runKind(e.Args) == "" {
 		return func() {}, nil
