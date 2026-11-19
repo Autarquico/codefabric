@@ -15,14 +15,16 @@ The installer puts `cflk` in `~/.local/bin`. Two variables change that:
 
 | Variable | Meaning |
 | --- | --- |
-| `CFLK_VERSION` | The version to install, such as `v0.2.0`. Default: the latest release. |
+| `CFLK_VERSION` | The version to install, such as `v0.4.0-beta.7`. Default: the latest release. |
 | `CFLK_INSTALL_DIR` | Where to put `cflk`. Default: `~/.local/bin`. |
 
 ```sh
-curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | CFLK_VERSION=v0.2.0 CFLK_INSTALL_DIR=/usr/local/bin sh
+curl -fsSL https://github.com/Autarquico/codeflock/releases/download/v0.4.0-beta.7/install.sh | CFLK_VERSION=v0.4.0-beta.7 CFLK_INSTALL_DIR=/usr/local/bin sh
 ```
 
-The old `CF_VERSION`, `CF_INSTALL_DIR` and `CF_RELEASE_BASE_URL` are still read, with a warning, until 0.5; `CFLK_*` wins when both are set. The installer also puts a `cf` next to `cflk` that runs `cflk`, so existing scripts keep working until 0.5.
+The installer of a release is the only one that knows that release's files, so a pinned version takes `install.sh` from its own tag. Releases before 0.4.0-beta.7 need the installer of their own release.
+
+The old `CF_VERSION`, `CF_INSTALL_DIR` and `CF_RELEASE_BASE_URL` are still read, with a warning, until 0.5; `CFLK_*` wins when both are set. If the install directory already has the `cf` of an earlier Code Flock beta, the installer replaces it with a `cf` that runs `cflk`, so existing scripts keep working until 0.5. Any other `cf`, such as the Cloud Foundry CLI, is left alone, and a fresh install has only `cflk`.
 
 Upgrading from 0.4.0-beta.6 or earlier? Read [Upgrade to 0.4.0-beta.7](../upgrade-beta7/) first: the installer of the beta.6 cannot install it.
 

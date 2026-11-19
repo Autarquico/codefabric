@@ -14,6 +14,7 @@ const t = landing[lang];
 const version = siteVersion();
 const commands = installCommands(version);
 const docs = routeFor('getting-started');
+const upgrade = routeFor('upgrade-beta7');
 const fakeHarness = `${REPO_URL}/tree/${repoRef()}/internal/testutil/fakeharness`;
 ---
 
@@ -153,6 +154,7 @@ const fakeHarness = `${REPO_URL}/tree/${repoRef()}/internal/testutil/fakeharness
 				<h3>{t.pinned}</h3>
 				<div class="scroll" role="region" aria-label={t.pinnedLabel} tabindex="0"><pre><code>{commands.pinned}</code></pre></div>
 				<p class="intro"><a href={docs} hreflang="en">{t.gettingStarted}</a></p>
+				<p class="intro">{t.upgrade[0]} <code>cf</code>{t.upgrade[1]} <a href={upgrade} hreflang="en">{t.upgrade[2]}</a>.</p>
 			</section>
 		</main>
 

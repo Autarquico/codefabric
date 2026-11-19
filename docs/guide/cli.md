@@ -89,7 +89,7 @@ Run and administer the Controller.
 - `init`: create the database, CA, certificates and owner credentials. Flags: `--advertise host:port`, `--listen`, `--name`.
 - `run`: serve the API until interrupted.
 - `token create (--client | --worker)`: create a single-use invitation; `--ttl` sets how long it lasts (default 1h, at most 168h).
-- `install-service` and `uninstall-service`: run the Controller as the systemd user service `codeflock-controller` (Linux). An older `cf-controller` unit is migrated; see [Upgrade to 0.4.0-beta.7](../upgrade-beta7/).
+- `install-service` and `uninstall-service`: run the Controller as the systemd user service `codeflock-controller` (Linux). An older `cf-controller` unit is migrated. A Controller under launchd (macOS) is not installed or moved by `cflk`: `install-service` prints the commands to move it by hand; see [Upgrade to 0.4.0-beta.7](../upgrade-beta7/).
 
 ## `cflk do`
 

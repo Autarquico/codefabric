@@ -1746,7 +1746,7 @@ El TUI usa el mismo Client SDK/API que CLI y MCP. Nada de lógica de negocio exc
 ### 19.3 Home / Activity
 
 ```text
- CODEFABRIC                                      ● healthy
+ CODE FLOCK                                      ● healthy
 
  TASKS          WORKERS          MODELS
  3 running      3/3 online       Anthropic 72%

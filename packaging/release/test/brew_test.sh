@@ -30,8 +30,7 @@ TestScenario_FormulaDerivada_valid() {
 	done
 	grep -q '^class Codeflock < Formula' "$T/out" || fail "not the codeflock formula"
 	grep -q '^    bin.install "cflk"$' "$T/out" || fail "does not install cflk"
-	[ "$(grep -c 'bin.install' "$T/out")" = 1 ] || fail "installs more than cflk"
-	grep -q 'bin.install "cf"$' "$T/out" && fail "installs the transition cf, which clashes with cf-cli"
+	[ "$(grep -c 'bin.install' "$T/out")" = 1 ] || fail "installs more than cflk (the transition cf clashes with cf-cli)"
 	grep -qF 'homepage "https://github.com/Autarquico/codeflock"' "$T/out" || fail "wrong homepage"
 	grep -q '@[A-Z_0-9]*@' "$T/out" && fail "unrendered placeholder"
 	if command -v ruby >/dev/null 2>&1; then
