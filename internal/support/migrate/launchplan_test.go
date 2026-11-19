@@ -3,9 +3,13 @@ package migrate
 import (
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Autarquico/codeflock/internal/support/svcunit/svcunittest"
 )
 
 const daemonPlist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -36,60 +40,123 @@ const daemonPlist = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
-func TestLaunchPlanForADaemonPrintsEveryCommandWithSudoAndTheWayBack(t *testing.T) {
+// forward and way back of a plan: the way back is the part after its heading.
+func parts(t *testing.T, cmds []string) (forward, back string) {
+	t.Helper()
+	text := strings.Join(cmds, "\n")
+	forward, back, ok := strings.Cut(text, "# To go back, if a step failed")
+	if !ok {
+		t.Fatalf("no way back in:\n%s", text)
+	}
+	return forward, back
+}
+
+func TestLaunchPlanForADaemonIsOneBlockForRootWithTheWayBackCommentedOut(t *testing.T) {
 	cmds, err := LaunchPlan{Plist: "/Library/LaunchDaemons/com.codefabric.worker.plist", Content: []byte(daemonPlist), System: true, Binary: "/usr/local/bin/cflk"}.Commands()
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := strings.Join(cmds, "\n")
+	forward, back := parts(t, cmds)
 	for _, want := range []string{
-		"sudo launchctl bootout system/com.codefabric.worker",
+		"sudo sh -eu <<'CFLK_PLAN'",
+		"launchctl bootout system/'com.codefabric.worker'",
 		"sudo -u 'ana' mv -n '/Users/ana/.config/codefabric' '/Users/ana/.config/codeflock'",
 		"sudo -u 'ana' mv -n '/Users/ana/Library/Logs/codefabric' '/Users/ana/Library/Logs/codeflock'",
-		"sudo tee '/Library/LaunchDaemons/com.codeflock.worker.plist'",
-		"sudo chown root:wheel '/Library/LaunchDaemons/com.codeflock.worker.plist'",
-		"sudo launchctl bootstrap system '/Library/LaunchDaemons/com.codeflock.worker.plist'",
+		"chown root:wheel \"$tmp\"",
+		"launchctl bootstrap system '/Library/LaunchDaemons/com.codeflock.worker.plist'",
 		"<string>com.codeflock.worker</string>", "<key>CFLK_DATA_DIR</key>", "<string>/usr/local/bin/cflk</string>",
 		"/Users/ana/Library/Logs/codeflock/com.codeflock.worker.log", "<string>/Users/ana/.config/codeflock</string>",
-		"sudo launchctl bootout system/com.codeflock.worker",
-		"sudo -u 'ana' mv -n '/Users/ana/.config/codeflock' '/Users/ana/.config/codefabric'",
-		"[ ! -e '/Users/ana/.config/codeflock' ]", // it never goes into a destination that is there
-		"sudo launchctl bootstrap system '/Library/LaunchDaemons/com.codefabric.worker.plist'",
-		"sudo rm '/Library/LaunchDaemons/com.codefabric.worker.plist'",
+		"[ ! -e", // never into a destination that is there, in the new plist too
+		"rm '/Library/LaunchDaemons/com.codefabric.worker.plist'",
 	} {
-		if !strings.Contains(script, want) {
-			t.Errorf("missing %q in:\n%s", want, script)
+		if want == "[ ! -e" {
+			continue
+		}
+		if !strings.Contains(forward, want) {
+			t.Errorf("missing %q in:\n%s", want, forward)
 		}
 	}
-	// The directory the owner chose is theirs: it is not moved, and the plist keeps its path.
-	if strings.Contains(script, "mv -n '/Users/ana/mine'") || !strings.Contains(script, "<string>/Users/ana/mine</string>") {
-		t.Errorf("a chosen directory moved:\n%s", script)
+	if strings.Contains(forward, "tee ") || !strings.Contains(forward, "mv -n \"$tmp\" '/Library/LaunchDaemons/com.codeflock.worker.plist'") ||
+		!strings.Contains(forward, "if [ -e '/Library/LaunchDaemons/com.codeflock.worker.plist' ] || [ -L '/Library/LaunchDaemons/com.codeflock.worker.plist' ]") {
+		t.Errorf("the new plist is not written to a temporary and moved without replacing:\n%s", forward)
 	}
-	// The way back puts the logs back last-moved-first.
-	if strings.Index(script, "mv -n '/Users/ana/Library/Logs/codeflock'") > strings.Index(script, "mv -n '/Users/ana/.config/codeflock'") {
-		t.Errorf("rollback is not in reverse order:\n%s", script)
+	// The directory the owner chose is theirs: it is not moved, and the plist keeps its path.
+	if strings.Contains(forward, "mv -n '/Users/ana/mine'") || !strings.Contains(forward, "<string>/Users/ana/mine</string>") {
+		t.Errorf("a chosen directory moved:\n%s", forward)
+	}
+	for _, want := range []string{
+		"sudo -u 'ana' mv -n '/Users/ana/.config/codeflock' '/Users/ana/.config/codefabric'",
+		"launchctl bootout system/'com.codeflock.worker' || true",
+		"launchctl bootstrap system '/Library/LaunchDaemons/com.codefabric.worker.plist'",
+	} {
+		if !strings.Contains(back, want) {
+			t.Errorf("missing %q in the way back:\n%s", want, back)
+		}
+	}
+	if strings.Index(back, "mv -n '/Users/ana/Library/Logs/codeflock'") > strings.Index(back, "mv -n '/Users/ana/.config/codeflock'") {
+		t.Errorf("the way back is not in reverse order:\n%s", back)
 	}
 }
 
-// A plan that is pasted whole must stop at a move that was refused: it must not
-// go on to write and load the new property list.
-func TestLaunchPlanStopsAtAMoveThatWasRefused(t *testing.T) {
-	cmds, err := LaunchPlan{Plist: "/Library/LaunchDaemons/com.codefabric.worker.plist", Content: []byte(daemonPlist), System: true}.Commands()
+// Pasting the whole output must run the way there and nothing of the way back.
+func TestLaunchPlanWayBackIsEntirelyCommented(t *testing.T) {
+	for _, system := range []bool{true, false} {
+		cmds, err := LaunchPlan{Plist: "/Library/LaunchDaemons/com.codefabric.worker.plist", Content: []byte(daemonPlist), System: system, Binary: "/usr/local/bin/cflk"}.Commands()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, back := parts(t, cmds)
+		lines := strings.Split(strings.TrimSpace(back), "\n")
+		if len(lines) < 5 {
+			t.Fatalf("a way back with %d lines:\n%s", len(lines), back)
+		}
+		for _, line := range lines[1:] { // the first is the rest of the heading line
+			if !strings.HasPrefix(line, "# ") {
+				t.Errorf("a line of the way back that runs: %q", line)
+			}
+		}
+	}
+}
+
+// Both blocks, as printed and with the way back uncommented, are valid shell.
+func TestLaunchPlanBlocksParseAsShell(t *testing.T) {
+	for _, system := range []bool{true, false} {
+		cmds, err := LaunchPlan{Plist: "/Users/ana/Library/LaunchAgents/com.codefabric.controller.plist", Content: []byte(daemonPlist), System: system, Binary: "/opt/cflk"}.Commands()
+		if err != nil {
+			t.Fatal(err)
+		}
+		forward, back := parts(t, cmds)
+		var uncommented []string
+		for _, line := range strings.Split(back, "\n")[1:] {
+			uncommented = append(uncommented, strings.TrimPrefix(line, "# "))
+		}
+		for name, script := range map[string]string{"printed": strings.Join(cmds, "\n"), "forward": forward, "back": strings.Join(uncommented, "\n")} {
+			cmd := exec.CommandContext(t.Context(), "sh", "-n")
+			cmd.Stdin = strings.NewReader(script)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Errorf("system=%v %s does not parse: %v\n%s\n%s", system, name, err, out, script)
+			}
+		}
+	}
+}
+
+func TestLaunchPlanLogsDirectoryIsOptionalBothWays(t *testing.T) {
+	cmds, err := LaunchPlan{Plist: "/Library/LaunchDaemons/com.codefabric.worker.plist", Content: []byte(daemonPlist), System: true, Binary: "/opt/cflk"}.Commands()
 	if err != nil {
 		t.Fatal(err)
 	}
-	moves := 0
-	for _, line := range cmds {
-		if !strings.Contains(line, "mv -n ") {
-			continue
-		}
-		moves++
-		if !strings.Contains(line, "|| { echo ") || !strings.HasSuffix(line, "; exit 1; }") {
-			t.Errorf("a refused move does not stop the script: %s", line)
-		}
+	forward, back := parts(t, cmds)
+	if !strings.Contains(forward, "if [ -e '/Users/ana/Library/Logs/codefabric' ]; then") || !strings.Contains(back, "if [ -e '/Users/ana/Library/Logs/codeflock' ]; then") {
+		t.Errorf("the logs are required:\n%s", strings.Join(cmds, "\n"))
 	}
-	if moves == 0 {
-		t.Fatal("no moves in the plan")
+}
+
+func TestLaunchPlanRefusesALabelThatIsNotPlain(t *testing.T) {
+	for _, plist := range []string{"/Library/LaunchDaemons/com.codefabric.worker$(touch pwned).plist", "/Library/LaunchDaemons/com.codefabric.worker;x.plist", "/Library/LaunchDaemons/com.codefabric.wor ker.plist"} {
+		cmds, err := LaunchPlan{Plist: plist, Content: []byte(daemonPlist), System: true, Binary: "/opt/cflk"}.Commands()
+		if err == nil || len(cmds) > 0 {
+			t.Errorf("%s: %v %v", plist, cmds, err)
+		}
 	}
 }
 
@@ -99,10 +166,10 @@ func TestLaunchPlanForAnAgentNeedsNoSudo(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := strings.Join(cmds, "\n")
-	if strings.Contains(script, "sudo") {
-		t.Errorf("sudo in a user's agent:\n%s", script)
+	if strings.Contains(script, "sudo") || !strings.Contains(script, "<<'CFLK_PLAN'") || !strings.Contains(script, "\nsh -eu <<'CFLK_PLAN'") {
+		t.Errorf("sudo in a user's agent, or not one block:\n%s", script)
 	}
-	if !strings.Contains(script, "launchctl bootout gui/$(id -u)/com.codefabric.controller") {
+	if !strings.Contains(script, "launchctl bootout gui/$(id -u)/'com.codefabric.controller'") {
 		t.Errorf("%s", script)
 	}
 }
@@ -175,10 +242,11 @@ func TestLaunchPlanOfADaemonNeverUsesTheHomeOfWhoAsks(t *testing.T) {
 	})
 }
 
-func TestLaunchPlanQuotesTheUserAndPicksADelimiterThePlistDoesNotHave(t *testing.T) {
+func TestLaunchPlanQuotesTheUserAndPicksDelimitersThePlistDoesNotHave(t *testing.T) {
 	content := fmt.Sprintf(bareDaemonPlist, `<key>UserName</key><string>x; touch /tmp/pwned</string>`,
 		`<key>HOME</key><string>/Users/x</string><key>Note</key><string>
 CFLK_PLIST
+CFLK_PLAN
 echo pwned
 </string>`)
 	cmds, err := LaunchPlan{Plist: "/Library/LaunchDaemons/com.codefabric.worker.plist", System: true, Binary: "/opt/cflk", Content: []byte(content)}.Commands()
@@ -189,13 +257,38 @@ echo pwned
 	if !strings.Contains(script, "sudo -u 'x; touch /tmp/pwned' ") {
 		t.Errorf("the user is not quoted:\n%s", script)
 	}
-	var open string
+	var outer, inner string
 	for _, line := range cmds {
-		if rest, ok := strings.CutPrefix(line, "sudo tee "); ok {
-			open = rest[strings.Index(rest, "<<'")+3 : len(rest)-1]
+		if rest, ok := strings.CutPrefix(line, "sudo sh -eu <<'"); ok {
+			outer = strings.TrimSuffix(rest, "'")
+		}
+		if i := strings.Index(line, `cat >"$tmp" <<'`); i == 0 {
+			inner = strings.TrimSuffix(strings.TrimPrefix(line, `cat >"$tmp" <<'`), "'")
 		}
 	}
-	if open == "" || open == "CFLK_PLIST" || !slices.Contains(cmds, open) {
-		t.Errorf("delimiter %q is in the plist or never closes:\n%s", open, script)
+	if outer == "" || inner == "" || outer == inner || outer == "CFLK_PLAN" || inner == "CFLK_PLIST" || !slices.Contains(cmds, outer) || !slices.Contains(cmds, inner) {
+		t.Errorf("delimiters %q, %q are in the plist or never close:\n%s", outer, inner, script)
+	}
+	cmd := exec.CommandContext(t.Context(), "sh", "-n")
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("does not parse: %v\n%s", err, out)
+	}
+}
+
+func TestPlanBinaryOfADaemonIsAProgramOnlyRootCanReplace(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root owns what it creates")
+	}
+	mine := svcunittest.Program(t) // owned by this user, in a directory of this user
+	_, err := PlanBinary(mine, true)
+	if err == nil || !strings.Contains(err.Error(), "/usr/local/bin") || !strings.Contains(err.Error(), "--binary") {
+		t.Fatalf("a program of the user for a daemon of root: %v", err)
+	}
+	if _, err := PlanBinary(mine, false); err != nil {
+		t.Errorf("an agent runs as the user: %v", err)
+	}
+	if _, err := PlanBinary("/bin/sh", true); err != nil {
+		t.Errorf("a program of root in directories of root: %v", err)
 	}
 }

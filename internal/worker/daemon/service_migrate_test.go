@@ -283,7 +283,8 @@ func TestScenario_RenameCLI_LaunchDaemon_ImprimeLosComandosYNoCambiaNada(t *test
 	fake := svcunittest.NewLaunchd(filepath.Join(home, "Library", "LaunchAgents", "com.codeflock.worker.plist"), "com.codeflock.worker", 501)
 	o := daemon.ServiceOptions{
 		Paths: config.Paths{ConfigDir: filepath.Join(home, "c"), DataDir: filepath.Join(home, "d")}, Binary: svcunittest.Program(t),
-		Manager: svcunit.Env{Runner: fake, Home: home, UID: 501, GOOS: "darwin"}, LaunchDaemons: daemons,
+		PlanBinary: func(binary string, _ bool) (string, error) { return binary, nil }, // a program of the test, not of root
+		Manager:    svcunit.Env{Runner: fake, Home: home, UID: 501, GOOS: "darwin"}, LaunchDaemons: daemons,
 	}
 
 	_, err := daemon.InstallService(t.Context(), o)
@@ -292,11 +293,12 @@ func TestScenario_RenameCLI_LaunchDaemon_ImprimeLosComandosYNoCambiaNada(t *test
 		t.Fatal("a LaunchDaemon was handled without root")
 	}
 	for _, want := range []string{
-		"sudo launchctl bootout system/com.codefabric.worker",
+		"sudo sh -eu <<'CFLK_PLAN'",
+		"launchctl bootout system/'com.codefabric.worker'",
 		"sudo -u 'ana' mv -n '/Users/ana/.local/share/codefabric' '/Users/ana/.local/share/codeflock'",
-		"sudo tee '" + filepath.Join(daemons, "com.codeflock.worker.plist") + "'",
-		"sudo launchctl bootstrap system",
-		"sudo launchctl bootstrap system '" + path + "'", // the way back
+		"mv -n \"$tmp\" '" + filepath.Join(daemons, "com.codeflock.worker.plist") + "'",
+		"launchctl bootstrap system",
+		"# launchctl bootstrap system '" + path + "'", // the way back, commented out
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("missing %q in:\n%s", want, err)
@@ -407,12 +409,41 @@ func TestInstallService_ALaunchDaemonPlanRunsThisCflkNotTheTransitionCf(t *testi
 	}
 	fake := svcunittest.NewLaunchd(filepath.Join(home, "Library", "LaunchAgents", "com.codeflock.worker.plist"), "com.codeflock.worker", 501)
 	o := daemon.ServiceOptions{
-		Paths:   config.Paths{ConfigDir: filepath.Join(home, "c"), DataDir: filepath.Join(home, "d")},
-		Manager: svcunit.Env{Runner: fake, Home: home, UID: 501, GOOS: "darwin"}, LaunchDaemons: daemons,
+		Paths:      config.Paths{ConfigDir: filepath.Join(home, "c"), DataDir: filepath.Join(home, "d")},
+		PlanBinary: func(binary string, _ bool) (string, error) { return binary, nil }, // the test binary is not root's
+		Manager:    svcunit.Env{Runner: fake, Home: home, UID: 501, GOOS: "darwin"}, LaunchDaemons: daemons,
 	}
+	o.Binary, _ = os.Executable()
 	_, err := daemon.InstallService(t.Context(), o)
 	exe, _ := os.Executable()
 	if err == nil || !strings.Contains(err.Error(), "<string>"+exe+"</string>") || strings.Contains(err.Error(), "/usr/local/bin/cf<") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A LaunchDaemon runs as root: a cflk that its caller owns is refused, and the
+// message says where to put it.
+func TestInstallService_ALaunchDaemonPlanRefusesACflkThatNotOnlyRootCanReplace(t *testing.T) {
+	daemons, home := t.TempDir(), t.TempDir()
+	plist := `<plist><dict><key>Label</key><string>com.codefabric.worker</string>
+<key>ProgramArguments</key><array><string>/usr/local/bin/cf</string><string>worker</string><string>run</string></array>
+<key>EnvironmentVariables</key><dict><key>CF_CONFIG_DIR</key><string>/srv/c/codefabric</string><key>CF_DATA_DIR</key><string>/srv/d/codefabric</string></dict></dict></plist>`
+	if err := os.WriteFile(filepath.Join(daemons, "com.codefabric.worker.plist"), []byte(plist), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := svcunittest.NewLaunchd(filepath.Join(home, "Library", "LaunchAgents", "com.codeflock.worker.plist"), "com.codeflock.worker", 501)
+	o := daemon.ServiceOptions{
+		Paths: config.Paths{ConfigDir: filepath.Join(home, "c"), DataDir: filepath.Join(home, "d")}, Binary: svcunittest.Program(t),
+		Manager: svcunit.Env{Runner: fake, Home: home, UID: 501, GOOS: "darwin"}, LaunchDaemons: daemons,
+	}
+	_, err := daemon.InstallService(t.Context(), o)
+	if os.Getuid() == 0 {
+		t.Skip("root owns what it creates")
+	}
+	if err == nil || !strings.Contains(err.Error(), "/usr/local/bin") || !strings.Contains(err.Error(), "--binary") || strings.Contains(err.Error(), "<<'CFLK_PLAN'") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("launchctl was run: %v", fake.Calls())
 	}
 }

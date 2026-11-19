@@ -114,10 +114,11 @@ func TestScenario_RenameCLI_ControllerEnLaunchd_ImprimeLosComandos(t *testing.T)
 		t.Fatal("moved a launchd Controller")
 	}
 	for _, want := range []string{
-		"launchctl bootout gui/$(id -u)/com.codefabric.controller",
+		"sh -eu <<'CFLK_PLAN'",
+		"launchctl bootout gui/$(id -u)/'com.codefabric.controller'",
 		"mv -n '" + home + "/.local/share/codefabric' '" + home + "/.local/share/codeflock'",
-		"tee '" + filepath.Join(dir, "com.codeflock.controller.plist") + "'",
-		"launchctl bootstrap gui/$(id -u) '" + path + "'", // the way back
+		"mv -n \"$tmp\" '" + filepath.Join(dir, "com.codeflock.controller.plist") + "'",
+		"# launchctl bootstrap gui/$(id -u) '" + path + "'", // the way back, commented out
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("missing %q in:\n%s", want, err)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/Autarquico/codeflock/internal/config"
 )
@@ -17,6 +18,8 @@ type ClientEnv struct {
 	Getenv func(string) string
 	Home   func() (string, error)
 	GOOS   string
+	// Args are the arguments of the command that runs, without the program.
+	Args []string
 	// Mover is where tests inject failures.
 	Mover Mover
 }
@@ -64,6 +67,15 @@ func Client(e ClientEnv, out io.Writer) error {
 	if len(config.OldUnits(home, e.GOOS)) > 0 {
 		return nil
 	}
+	if held := daemonsOn(config.Paths{DataDir: dataPair(pairs, loc)}); len(held) > 0 {
+		if running := runKind(e.Args); len(held) > 1 || held[0] != running {
+			for _, kind := range held {
+				_, _ = fmt.Fprintf(out, "cflk: a %s uses %s; it moves when it starts as `cflk %s run`, or with `cflk %s install-service`\n",
+					strings.ToUpper(kind[:1])+kind[1:], dataPair(pairs, loc), kind, kind)
+			}
+			return nil
+		}
+	}
 	res, err := e.Mover.Move(pairs)
 	var clash *ClashError
 	switch {
@@ -77,6 +89,54 @@ func Client(e ClientEnv, out io.Writer) error {
 		_, _ = fmt.Fprintf(out, "cflk: moved %s to %s\n", p.Old, p.New)
 	}
 	return nil
+}
+
+// dataPair is the old data directory among pairs: the one a daemon of the old
+// name keeps its state in.
+func dataPair(pairs []Pair, loc config.Located) string {
+	for _, p := range pairs {
+		if p.New == loc.DataDir {
+			return p.Old
+		}
+	}
+	return ""
+}
+
+// daemonsOn are the daemons whose state is in the old data directory: the
+// Worker has its own subdirectory, the Controller its database. A daemon may
+// be running under a supervisor of its own that cflk cannot see, so what moves
+// the directory is that daemon starting under the new name.
+func daemonsOn(old config.Paths) []string {
+	if old.DataDir == "" {
+		return nil
+	}
+	var kinds []string
+	if _, err := os.Lstat(old.WorkerDataDir()); err == nil {
+		kinds = append(kinds, "worker")
+	}
+	if _, err := os.Lstat(old.DatabaseFile()); err == nil {
+		kinds = append(kinds, "controller")
+	}
+	return kinds
+}
+
+// runKind is "worker" or "controller" if args are `<kind> run`, whatever the
+// global flags before it: --controller takes a value, the others do not.
+func runKind(args []string) string {
+	var words []string
+	for i := 0; i < len(args) && len(words) < 2; i++ {
+		switch a := args[i]; {
+		case a == "--controller":
+			i++
+		case strings.HasPrefix(a, "-"):
+		default:
+			words = append(words, a)
+		}
+	}
+	if len(words) == 2 && words[1] == "run" && (words[0] == "worker" || words[0] == "controller") {
+		return words[0]
+	}
+	return ""
 }
 
 // clientPairs are the default directories of the client, and, on macOS, the

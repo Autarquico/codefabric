@@ -28,7 +28,7 @@ func (o ServiceOptions) migrateOldService(ctx context.Context, env svcunit.Env) 
 	}
 	var warnings []string
 	r, err := migrate.Service{
-		Env: env, Old: old, Mover: o.Mover, Settle: o.Settle, Binary: o.Binary, LiveRuns: NoLiveRuns(o.Sessions),
+		Env: env, Old: old, Mover: o.Mover, Settle: o.Settle, Binary: o.Binary, LiveRuns: NoLiveRuns(o.Sessions), Data: o.Paths.DataDir,
 		New: func(was migrate.Snapshot, dirs migrate.Dirs) (svcunit.Spec, error) {
 			spec, w, err := workerSpec(o.carryingOver(was, dirs), env.GOOS)
 			warnings = w
@@ -54,17 +54,11 @@ func (o ServiceOptions) carryingOver(was migrate.Snapshot, dirs migrate.Dirs) Se
 	if o.PATH == "" {
 		o.PATH = was.Env["PATH"]
 	}
-	var extra []string
-	for key := range was.Env {
-		if !slices.Contains([]string{"CF_CONFIG_DIR", "CF_DATA_DIR", "PATH", "TMUX_TMPDIR"}, key) {
-			extra = append(extra, key)
-		}
-	}
-	slices.Sort(extra)
-	var carried []svcunit.KV
-	for _, key := range extra {
-		carried = append(carried, svcunit.KV{Key: key, Value: was.Env[key]})
-	}
+	carried := migrate.CarriedEnv(was.Env, "PATH", "TMUX_TMPDIR")
+	// What the caller gives wins over what the old unit had: no key twice.
+	carried = slices.DeleteFunc(carried, func(kv svcunit.KV) bool {
+		return slices.ContainsFunc(o.ExtraEnv, func(e svcunit.KV) bool { return e.Key == kv.Key })
+	})
 	o.ExtraEnv = append(carried, o.ExtraEnv...)
 	args := was.Argv
 	if len(args) >= 3 && args[1] == "worker" && args[2] == "run" {
@@ -112,7 +106,11 @@ func (o ServiceOptions) launchDaemonPlan(old svcunit.Spec) error {
 	if err != nil {
 		return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("%s cannot be read, so the Worker was not moved: %v", path, err), nil)
 	}
-	binary, _, err := svcunit.Program(o.Binary)
+	plan := o.PlanBinary
+	if plan == nil {
+		plan = migrate.PlanBinary
+	}
+	binary, err := plan(o.Binary, true)
 	if err != nil {
 		return serviceError(err)
 	}

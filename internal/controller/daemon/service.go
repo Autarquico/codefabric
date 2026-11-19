@@ -82,7 +82,7 @@ func InstallService(ctx context.Context, o ServiceOptions) (svcunit.Result, erro
 func (o ServiceOptions) migrateOldService(ctx context.Context, env svcunit.Env) (res svcunit.Result, migrated bool, err error) {
 	var warnings []string
 	res, err = migrate.Service{
-		Env: env, Old: oldServiceSpec(), Mover: o.Mover, Settle: o.Settle, Binary: o.Binary, LiveRuns: o.LiveRuns,
+		Env: env, Old: oldServiceSpec(), Mover: o.Mover, Settle: o.Settle, Binary: o.Binary, LiveRuns: o.LiveRuns, Data: o.Paths.DataDir,
 		New: func(_ migrate.Snapshot, dirs migrate.Dirs) (svcunit.Spec, error) {
 			n := o
 			n.Paths = config.Paths{ConfigDir: dirs.NewConfig, DataDir: dirs.NewData}
@@ -120,7 +120,7 @@ func (o ServiceOptions) launchdPlan() error {
 		if err != nil {
 			return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("%s cannot be read, so the Controller was not moved: %v", u.Path, err), nil)
 		}
-		binary, _, err := svcunit.Program(o.Binary)
+		binary, err := migrate.PlanBinary(o.Binary, u.System)
 		if err != nil {
 			return inputError(err)
 		}

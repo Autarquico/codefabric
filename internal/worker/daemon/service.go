@@ -35,6 +35,8 @@ type ServiceOptions struct {
 	// migration from the old names (migrate.Service).
 	Mover  migrate.Mover
 	Settle func(ctx context.Context) error
+	// PlanBinary is how the program of a launchd plan is chosen and checked (migrate.PlanBinary); nil is that. Tests give one that accepts what they build.
+	PlanBinary func(binary string, system bool) (string, error)
 	// LaunchDaemons is where the property lists of the system are; empty is /Library/LaunchDaemons.
 	LaunchDaemons string
 

@@ -312,3 +312,16 @@ func TestLaunchd_ARefusedInstallEnablesNothing(t *testing.T) {
 		t.Error("the refused install enabled the agent")
 	}
 }
+
+func TestLaunchd_ProbeIsUpOnlyWithAProcessAndTellsItByItsPid(t *testing.T) {
+	e, fake := newLaunchd(t)
+	install(t, e, workerSpec())
+	p, err := svcunit.ProbeOf(t.Context(), e, workerSpec())
+	if err != nil || !p.Up || p.Generation == "" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	fake.Load(fake.GUIDomain(), false) // loaded, with no process
+	if p, err = svcunit.ProbeOf(t.Context(), e, workerSpec()); err != nil || p.Up {
+		t.Errorf("%+v %v", p, err)
+	}
+}

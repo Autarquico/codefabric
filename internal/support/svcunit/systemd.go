@@ -26,6 +26,14 @@ func (m systemd) active(o *op, s Spec) (bool, error) {
 	return err == nil && u.running(), err
 }
 
+func (m systemd) probe(o *op, s Spec) (Probe, error) {
+	u, err := m.show(o, s.Name+".service")
+	if err != nil {
+		return Probe{}, err
+	}
+	return Probe{Up: u["ActiveState"] == "active" && u["SubState"] == "running", Generation: u["NRestarts"]}, nil
+}
+
 // stop stops the unit and leaves it, and its file, as they are.
 func (m systemd) stop(o *op, s Spec) error {
 	o.res.Manager, o.res.Unit = "systemd", s.Name+".service"
@@ -63,7 +71,7 @@ func (u unitState) enabled() bool {
 func (m systemd) show(o *op, unit string) (unitState, error) {
 	out, err := o.query("systemctl", "--user", "show",
 		"-p", "LoadState", "-p", "UnitFileState", "-p", "ActiveState", "-p", "NeedDaemonReload",
-		"-p", "FragmentPath", "-p", "KillMode", "-p", "DropInPaths", unit)
+		"-p", "FragmentPath", "-p", "KillMode", "-p", "DropInPaths", "-p", "SubState", "-p", "NRestarts", unit)
 	if err != nil {
 		return nil, fmt.Errorf("svcunit: asking systemd about %s: %w", unit, err)
 	}

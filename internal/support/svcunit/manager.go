@@ -49,6 +49,7 @@ type manager interface {
 	installedEnv(file []byte) (map[string]string, error)
 	installedArgv(file []byte) ([]string, error)
 	active(*op, Spec) (bool, error)
+	probe(*op, Spec) (Probe, error)
 	stop(*op, Spec) error
 	start(*op, Spec) error
 	install(*op, Spec) error
@@ -160,6 +161,26 @@ func Inspect(ctx context.Context, env Env, s Spec) (Installed, error) {
 	o := &op{ctx: ctx, runner: env.Runner}
 	in.Active, err = m.active(o, s)
 	return in, err
+}
+
+// Probe is one reading of whether a service is up, for telling a service that
+// stays up from one that is starting, or that fails and is restarted.
+type Probe struct {
+	// Up is a service in its steady running state, not one starting, stopping
+	// or waiting to restart.
+	Up bool
+	// Generation changes when the service restarts: the restart counter of
+	// systemd, the process id under launchd.
+	Generation string
+}
+
+// ProbeOf reads Probe from the manager. Nothing changes.
+func ProbeOf(ctx context.Context, env Env, s Spec) (Probe, error) {
+	m, err := managerFor(env)
+	if err != nil {
+		return Probe{}, err
+	}
+	return m.probe(&op{ctx: ctx, runner: env.Runner}, s)
 }
 
 // Stop stops the service of s, if it runs, and leaves it installed. With

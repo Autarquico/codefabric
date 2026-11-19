@@ -200,7 +200,7 @@ func TestServiceResumesFromTheProgressFileAfterACut(t *testing.T) {
 	if _, err := Move([]Pair{{r.cfg, filepath.Join(r.home, ".config", "codeflock")}, {r.data, newData}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := (progressFile{dirs: Dirs{OldData: r.data, NewData: newData}}).write([]member{{old: oldWorker, snap: snap}}); err != nil {
+	if err := (progressFile{dirs: Dirs{OldData: r.data, NewData: newData}}).write(journal{Members: map[string]Snapshot{oldWorker.Name: snap}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.service().Migrate(t.Context()); err != nil {
@@ -327,7 +327,6 @@ func TestServiceMovedWithAnotherChecksTheRunsOfTheWorkerThatIsNotItself(t *testi
 	r.installOld(t, oldController, true)
 	s := r.service()
 	s.Old = oldController
-	s.New = func(Snapshot, Dirs) (svcunit.Spec, error) { return svcunit.Spec{}, errors.New("not reached") }
 	var asked [2]string
 	s.LiveRuns = func(_ context.Context, tmuxTmpDir, dataDir string) error {
 		asked = [2]string{tmuxTmpDir, dataDir}
@@ -415,10 +414,10 @@ func TestServiceThatCannotRemoveASiblingKeepsTheMoveAndSaysHowToFinish(t *testin
 	if !has(t, filepath.Join(r.home, ".local", "share", "codeflock", "f")) || has(t, filepath.Join(r.data, "f")) {
 		t.Errorf("the data did not stay in codeflock")
 	}
-	if has(t, r.unit("cf-worker")) || has(t, filepath.Join(r.home, ".local", "share", "codeflock", progressName)) {
-		t.Errorf("the Worker was not removed, or the progress is left")
+	if has(t, r.unit("cf-worker")) || !has(t, filepath.Join(r.home, ".local", "share", "codeflock", progressName)) {
+		t.Errorf("the Worker was not removed, or the progress went before the tidying ended")
 	}
-	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "cf-controller") || !strings.Contains(res.Warnings[0], "systemctl --user disable --now cf-controller.service && rm ") {
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "cf-controller") || !strings.Contains(res.Warnings[0], "systemctl --user disable --now 'cf-controller.service' && rm ") {
 		t.Errorf("warnings: %q", res.Warnings)
 	}
 }
@@ -444,7 +443,7 @@ func TestServiceRefusesAControllerUnderLaunchdOnTheSameRoot(t *testing.T) {
 	if err == nil {
 		t.Fatal("a Controller under launchd was taken as a sibling to move")
 	}
-	for _, want := range []string{"launchctl bootout gui/$(id -u)/com.codefabric.controller", "mv -n", "nothing was changed"} {
+	for _, want := range []string{"launchctl bootout gui/$(id -u)/'com.codefabric.controller'", "mv -n", "nothing was changed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("missing %q in:\n%s", want, err)
 		}
@@ -485,7 +484,7 @@ func TestServiceMigrationOnAnotherRootIsLeftAlone(t *testing.T) {
 func TestServiceResumedWithTheOldServiceRunningAgainAsksAboutRunsAgain(t *testing.T) {
 	r := newRig(t)
 	snap := Snapshot{Active: true, Env: map[string]string{"CF_CONFIG_DIR": r.cfg, "CF_DATA_DIR": r.data, "TMUX_TMPDIR": "/run/tmux"}, Argv: []string{"/opt/cf/bin/cf", "worker", "run"}}
-	if err := (progressFile{dirs: Dirs{OldData: r.data}}).write([]member{{old: oldWorker, snap: snap}}); err != nil {
+	if err := (progressFile{dirs: Dirs{OldData: r.data}}).write(journal{Members: map[string]Snapshot{oldWorker.Name: snap}}); err != nil {
 		t.Fatal(err)
 	}
 	s := r.service()
@@ -504,7 +503,7 @@ func TestServiceResumedWithTheOldServiceRunningAgainAsksAboutRunsAgain(t *testin
 func TestServiceIgnoresTheProgressOfAMigrationThatIsNotItsOwn(t *testing.T) {
 	r := newRig(t)
 	snap := Snapshot{Active: false, Env: map[string]string{"CF_DATA_DIR": r.data}, Argv: []string{"/x/cf", "controller", "run"}}
-	if err := (progressFile{dirs: Dirs{OldData: r.data}}).write([]member{{old: oldController, snap: snap}}); err != nil {
+	if err := (progressFile{dirs: Dirs{OldData: r.data}}).write(journal{Members: map[string]Snapshot{oldController.Name: snap}}); err != nil {
 		t.Fatal(err)
 	}
 	s := r.service()

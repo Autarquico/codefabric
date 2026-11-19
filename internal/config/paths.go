@@ -164,6 +164,20 @@ func warnOldUnits(home func() (string, error)) {
 	}
 }
 
+// Override is the variable that gives a directory and its value: the CFLK_*
+// one if it is set, else the CF_* one it had before the rename, else the first
+// with an empty value. It is the one rule of precedence, for the environment of
+// the process (Locate) and for that of a service unit alike.
+func Override(getenv func(string) string, override, legacyOverride string) (name, value string) {
+	if v := getenv(override); v != "" {
+		return override, v
+	}
+	if v := getenv(legacyOverride); v != "" {
+		return legacyOverride, v
+	}
+	return override, ""
+}
+
 // Locate applies, per directory: the CFLK_* override, then the CF_* one (read
 // with a warning until 0.5), then the XDG variable, then the XDG default under
 // the home directory. It uses the XDG layout on every OS so a CLI user finds
@@ -171,11 +185,9 @@ func warnOldUnits(home func() (string, error)) {
 // the XDG specification requires.
 func Locate(getenv func(string) string, home func() (string, error)) (Located, error) {
 	dir := func(override, legacyOverride, xdgVar, homeRel string) (path string, isDefault bool, err error) {
-		name, v := override, getenv(override)
-		if v == "" {
-			if name, v = legacyOverride, getenv(legacyOverride); v != "" {
-				warnLegacyVar(legacyOverride, override)
-			}
+		name, v := Override(getenv, override, legacyOverride)
+		if name == legacyOverride {
+			warnLegacyVar(legacyOverride, override)
 		}
 		if v != "" {
 			if !filepath.IsAbs(v) {

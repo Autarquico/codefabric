@@ -134,6 +134,9 @@ func TestSystemd_DropInKillModeIsRefused(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	for _, c := range fake.Calls()[n:] {
+		if strings.Contains(c, " show ") {
+			continue // reads, whose property names have "start" in them
+		}
 		if strings.Contains(c, "restart") || strings.Contains(c, "start") || strings.Contains(c, "stop") {
 			t.Errorf("ran %q", c)
 		}

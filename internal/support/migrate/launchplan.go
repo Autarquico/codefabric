@@ -7,6 +7,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/Autarquico/codeflock/internal/support/svcunit"
@@ -32,7 +33,28 @@ type LaunchPlan struct {
 
 var programPath = regexp.MustCompile(`(<key>ProgramArguments</key>\s*<array>\s*<string>)[^<]*(</string>)`)
 
-// Commands are the commands, as lines of a shell script.
+// PlanBinary is the cflk a plan makes the service run. A LaunchDaemon runs as
+// root, so its program must be one only root can replace (svcunit.SystemProgram);
+// an agent runs as the user, who may own it.
+func PlanBinary(binary string, system bool) (string, error) {
+	program := svcunit.Program
+	if system {
+		program = svcunit.SystemProgram
+	}
+	path, _, err := program(binary)
+	return path, err
+}
+
+// plannedPair is a directory that moves, and whether a plist that has none of
+// it is fine: the logs of launchd, which a hand-written plist may not have.
+type plannedPair struct {
+	Pair
+	optional bool
+}
+
+// Commands are the commands, as lines of a shell script. What moves is one
+// block for the shell, `sh -eu`, so that a failure stops it where it is; the way
+// back is another, commented out, so that pasting it all runs only the first.
 func (p LaunchPlan) Commands() ([]string, error) {
 	info, err := svcunit.ReadPlist(p.Content)
 	if err != nil {
@@ -42,66 +64,127 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	pairs, err := p.pairs(info, home)
+	planned, err := p.pairs(info, home)
 	if err != nil {
 		return nil, err
 	}
 	oldLabel := strings.TrimSuffix(filepath.Base(p.Plist), ".plist")
 	newLabel := strings.Replace(oldLabel, "com.codefabric.", "com.codeflock.", 1)
+	for _, label := range []string{oldLabel, newLabel} {
+		if err := checkName(label); err != nil {
+			return nil, err
+		}
+	}
 	newPlist := filepath.Join(filepath.Dir(p.Plist), newLabel+".plist")
-	domain, sudo, as := "gui/$(id -u)", "", ""
+	domain, shell, as := "gui/$(id -u)", "sh -eu", ""
 	if p.System {
-		domain, sudo = "system", "sudo "
+		domain, shell = "system", "sudo sh -eu"
+		// The block runs as root; the directories are the user's.
 		if info.UserName != "" {
 			as = "sudo -u " + shellQuote(info.UserName) + " "
 		}
 	}
-	// The directories are the user's, whoever runs the commands.
-	if as == "" {
-		as = sudo
+	target := func(label string) string { return domain + "/" + shellQuote(label) }
+	pairs := make([]Pair, len(planned))
+	for i, pr := range planned {
+		pairs[i] = pr.Pair
+	}
+	plist := strings.TrimRight(string(p.rewritten(pairs)), "\n")
+	inner := distinct("CFLK_PLIST", plist)
+	tmpl := shellQuote(filepath.Join(filepath.Dir(newPlist), "."+newLabel+".XXXXXX"))
+
+	var forward []string
+	say := func(format string, a ...any) { forward = append(forward, fmt.Sprintf(format, a...)) }
+	say("# 1. Stop the old service; its file stays.")
+	say("launchctl bootout %s", target(oldLabel))
+	say("# 2. Move the directories it uses.")
+	for _, pr := range planned {
+		forward = append(forward, move(as, pr.Old, pr.New, pr.optional)...)
+	}
+	say("# 3. Write the new property list; an existing file is never overwritten.")
+	say("if [ -e %[1]s ] || [ -L %[1]s ]; then echo %[2]s >&2; exit 1; fi", shellQuote(newPlist), shellQuote(newPlist+" exists: stop here"))
+	say("tmp=$(mktemp %s)", tmpl)
+	say(`trap 'rm -f "$tmp"' EXIT`)
+	say(`cat >"$tmp" <<'%s'`, inner)
+	forward = append(forward, plist, inner)
+	if p.System {
+		say(`chown root:wheel "$tmp"`)
+	}
+	say(`chmod 644 "$tmp"`)
+	say(`mv -n "$tmp" %s`, shellQuote(newPlist))
+	say(`if [ -e "$tmp" ]; then echo %s >&2; exit 1; fi`, shellQuote(newPlist+" appeared meanwhile: stop here"))
+	say("# 4. Load it.")
+	say("launchctl bootstrap %s %s", domain, shellQuote(newPlist))
+	say("# 5. Once it runs, remove the old property list.")
+	say("rm %s", shellQuote(p.Plist))
+
+	var back []string
+	undo := func(format string, a ...any) { back = append(back, fmt.Sprintf(format, a...)) }
+	undo("# Stop the new service, if it is loaded.")
+	undo("launchctl bootout %s || true", target(newLabel))
+	undo("rm -f %s", shellQuote(newPlist))
+	for i := len(planned) - 1; i >= 0; i-- {
+		back = append(back, move(as, planned[i].New, planned[i].Old, true)...)
+	}
+	undo("launchctl bootstrap %s %s", domain, shellQuote(p.Plist))
+
+	text := plist + strings.Join(forward, "\n") + strings.Join(back, "\n")
+	outer, undoDelim := distinct("CFLK_PLAN", text, inner), distinct("CFLK_BACK", text, inner)
+	for undoDelim == outer {
+		undoDelim += "_"
 	}
 
-	var out []string
-	say := func(format string, a ...any) { out = append(out, fmt.Sprintf(format, a...)) }
-	say("# Make sure no Run is live on this Worker first (`cflk worker drain <worker>`): the Runs do not follow the move.")
-	say("# 1. Stop the old service; its file stays.")
-	say("%slaunchctl bootout %s/%s", sudo, domain, oldLabel)
-	say("# 2. Move the directories it uses.")
-	for _, pair := range pairs {
-		say("%s", move(as, pair.Old, pair.New))
+	out := []string{
+		"# Make sure no Run is live on this Worker first (`cflk worker drain <worker>`): the Runs do not follow the move.",
+		"# Run this as one block: it stops at the first command that fails.",
+		fmt.Sprintf("%s <<'%s'", shell, outer),
 	}
-	say("# 3. Write the new property list.")
-	plist := strings.TrimRight(string(p.rewritten(pairs)), "\n")
-	delimiter := "CFLK_PLIST"
-	for strings.Contains(plist, delimiter) {
-		delimiter += "_"
+	out = append(out, forward...)
+	out = append(out, outer, "",
+		"# To go back, if a step failed: take the `# ` off the start of every line below, and run them as one block.",
+		"# Pasting all of this does not run them.")
+	out = append(out, commented(fmt.Sprintf("%s <<'%s'", shell, undoDelim)))
+	for _, line := range back {
+		out = append(out, commented(line))
 	}
-	say("%stee %s >/dev/null <<'%s'", sudo, shellQuote(newPlist), delimiter)
-	out = append(out, plist, delimiter)
-	if p.System {
-		say("sudo chown root:wheel %s", shellQuote(newPlist))
-		say("sudo chmod 644 %s", shellQuote(newPlist))
-	}
-	say("# 4. Load it.")
-	say("%slaunchctl bootstrap %s %s", sudo, domain, shellQuote(newPlist))
-	say("# 5. Once it runs, remove the old property list.")
-	say("%srm %s", sudo, shellQuote(p.Plist))
-	say("")
-	say("# To go back, if a step failed:")
-	say("%slaunchctl bootout %s/%s", sudo, domain, newLabel)
-	say("%srm -f %s", sudo, shellQuote(newPlist))
-	for i := len(pairs) - 1; i >= 0; i-- {
-		say("%s", move(as, pairs[i].New, pairs[i].Old))
-	}
-	say("%slaunchctl bootstrap %s %s", sudo, domain, shellQuote(p.Plist))
+	out = append(out, commented(undoDelim))
 	return out, nil
 }
 
+// distinct is name, made longer until none of avoid has it: a heredoc ends at
+// the first line that is its delimiter.
+func distinct(name string, avoid ...string) string {
+	for slices.ContainsFunc(avoid, func(a string) bool { return strings.Contains(a, name) }) {
+		name += "_"
+	}
+	return name
+}
+
+// commented is every line of text behind `# `.
+func commented(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		lines[i] = "# " + l
+	}
+	return strings.Join(lines, "\n")
+}
+
 // move is a move that never goes into a destination that exists: `mv` would put
-// the directory inside it, and follow it if it is a link.
-func move(as, from, to string) string {
-	return fmt.Sprintf("[ ! -e %[2]s ] && [ ! -L %[2]s ] && %[1]smv -n %[3]s %[2]s || { echo %[4]s >&2; exit 1; }",
-		as, shellQuote(to), shellQuote(from), shellQuote(to+" exists, or the move failed: stop here"))
+// the directory inside it, and follow it if it is a link. The block stops there.
+// An optional directory that is not there is not moved.
+func move(as, from, to string, optional bool) []string {
+	lines := []string{
+		fmt.Sprintf("if [ -e %[1]s ] || [ -L %[1]s ]; then echo %[2]s >&2; exit 1; fi", shellQuote(to), shellQuote(to+" exists: stop here")),
+		fmt.Sprintf("%smv -n %s %s", as, shellQuote(from), shellQuote(to)),
+	}
+	if !optional {
+		return lines
+	}
+	out := []string{fmt.Sprintf("if [ -e %s ]; then", shellQuote(from))}
+	for _, l := range lines {
+		out = append(out, "\t"+l)
+	}
+	return append(out, "fi")
 }
 
 // homeOf is where the user of the service keeps their files. For a
@@ -138,8 +221,8 @@ func (p LaunchPlan) homeOf(info svcunit.PlistInfo) (string, error) {
 
 // pairs are the directories the service uses that the old name put where they
 // are, and the logs of launchd, which sit under the home of the user.
-func (p LaunchPlan) pairs(info svcunit.PlistInfo, home string) ([]Pair, error) {
-	cfg, data := info.Env["CF_CONFIG_DIR"], info.Env["CF_DATA_DIR"]
+func (p LaunchPlan) pairs(info svcunit.PlistInfo, home string) ([]plannedPair, error) {
+	cfg, data := envDir(info.Env, "CONFIG_DIR", ""), envDir(info.Env, "DATA_DIR", "")
 	if home == "" && (cfg == "" || data == "") {
 		return nil, errors.New("the property list says neither the directories of the service nor HOME, so there is no telling what to move")
 	}
@@ -149,15 +232,15 @@ func (p LaunchPlan) pairs(info svcunit.PlistInfo, home string) ([]Pair, error) {
 	if data == "" {
 		data = filepath.Join(home, ".local", "share", "codefabric")
 	}
-	var pairs []Pair
+	var pairs []plannedPair
 	for _, dir := range []string{cfg, data} {
 		if renamed := Renamed(dir); renamed != dir {
-			pairs = append(pairs, Pair{Old: dir, New: renamed})
+			pairs = append(pairs, plannedPair{Pair: Pair{Old: dir, New: renamed}})
 		}
 	}
 	if home != "" {
 		logs := filepath.Join(home, "Library", "Logs")
-		pairs = append(pairs, Pair{Old: filepath.Join(logs, "codefabric"), New: filepath.Join(logs, "codeflock")})
+		pairs = append(pairs, plannedPair{Pair: Pair{Old: filepath.Join(logs, "codefabric"), New: filepath.Join(logs, "codeflock")}, optional: true})
 	}
 	return pairs, nil
 }
@@ -165,11 +248,15 @@ func (p LaunchPlan) pairs(info svcunit.PlistInfo, home string) ([]Pair, error) {
 // rewritten is the new property list: the names, the variables and the places
 // of the old one, in its own words.
 func (p LaunchPlan) rewritten(pairs []Pair) []byte {
-	text := strings.NewReplacer(
-		"com.codefabric.", "com.codeflock.",
-		"<key>CF_CONFIG_DIR</key>", "<key>CFLK_CONFIG_DIR</key>",
-		"<key>CF_DATA_DIR</key>", "<key>CFLK_DATA_DIR</key>",
-	).Replace(string(p.Content))
+	renames := []string{"com.codefabric.", "com.codeflock."}
+	info, _ := svcunit.ReadPlist(p.Content)
+	for _, name := range []string{"CONFIG_DIR", "DATA_DIR"} {
+		// One that has its CFLK_* already keeps it, and its CF_* is the one left behind: no key twice.
+		if _, has := info.Env["CFLK_"+name]; !has {
+			renames = append(renames, "<key>CF_"+name+"</key>", "<key>CFLK_"+name+"</key>")
+		}
+	}
+	text := strings.NewReplacer(renames...).Replace(string(p.Content))
 	for _, pr := range escaped(pairs) {
 		text = strings.ReplaceAll(text, ">"+pr.Old+"<", ">"+pr.New+"<")
 		text = strings.ReplaceAll(text, pr.Old+"/", pr.New+"/")

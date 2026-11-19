@@ -194,3 +194,46 @@ func TestClientMoveFailureIsAnErrorNamingThePair(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestClientWithADaemonStateMovesOnlyForTheRunOfThatDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state string // what the old data directory holds
+		args  []string
+		moved bool
+	}{
+		{"version with a Worker", "worker", []string{"version"}, false},
+		{"no arguments with a Worker", "worker", nil, false},
+		{"worker run", "worker", []string{"worker", "run"}, true},
+		{"worker run behind global flags", "worker", []string{"--json", "--controller", "x:1", "worker", "run", "--ssh-target", "a"}, true},
+		{"controller run with a Worker", "worker", []string{"controller", "run"}, false},
+		{"controller run", "controller.db", []string{"controller", "run"}, true},
+		{"status with a Controller", "controller.db", []string{"status"}, false},
+		{"a pure client", "", []string{"version"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			_, oldData := oldClient(t, home)
+			switch tc.state {
+			case "worker":
+				tree(t, oldData, "worker", "w")
+			case "controller.db":
+				if err := os.WriteFile(filepath.Join(oldData, "controller.db"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e := clientEnv(home, nil)
+			e.Args = tc.args
+			var out bytes.Buffer
+			if err := Client(e, &out); err != nil {
+				t.Fatal(err)
+			}
+			if got := has(t, filepath.Join(home, ".local", "share", "codeflock")); got != tc.moved {
+				t.Errorf("moved = %v, want %v (%q)", got, tc.moved, out.String())
+			}
+			if !tc.moved && tc.state != "" && !strings.Contains(out.String(), "install-service") {
+				t.Errorf("not said: %q", out.String())
+			}
+		})
+	}
+}

@@ -37,6 +37,16 @@ func (m launchd) active(o *op, s Spec) (bool, error) {
 	return len(loaded) == 1 && loaded[0].running(), err
 }
 
+func (m launchd) probe(o *op, s Spec) (Probe, error) {
+	loaded, err := m.find(o, s)
+	if err != nil || len(loaded) != 1 {
+		return Probe{}, err
+	}
+	state, _ := loaded[0].field("state")
+	pid, _ := loaded[0].field("pid")
+	return Probe{Up: state == "running" && pid != "", Generation: pid}, nil
+}
+
 // stop unloads the agent and leaves its file as it is.
 func (m launchd) stop(o *op, s Spec) error {
 	o.res.Manager, o.res.Unit = "launchd", s.Label

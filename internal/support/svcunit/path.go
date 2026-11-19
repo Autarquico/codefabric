@@ -40,6 +40,32 @@ func Program(binary string) (program, warning string, err error) {
 	return program, ExecutableWarning(program), nil
 }
 
+const (
+	userAdvice   = "install it where only you and root can write"
+	systemAdvice = "a LaunchDaemon runs as root: install cflk in a directory of root, such as /usr/local/bin, and pass --binary"
+)
+
+// SystemProgram is Program for a service of the system, which runs as root:
+// the program and every directory above it must belong to root and be closed
+// to everyone else, group included (the rule of closed_path in install.sh,
+// except for ACL entries, which are not read), or whoever could replace it
+// would run as root. Nothing but root is trusted.
+func SystemProgram(binary string) (program, warning string, err error) {
+	program = binary
+	if program == "" {
+		if program, err = os.Executable(); err != nil {
+			return "", "", fmt.Errorf("svcunit: locating this executable: %w", err)
+		}
+	}
+	if !filepath.IsAbs(program) {
+		return "", "", &InputError{Flag: "--binary", Reason: "must be an absolute path"}
+	}
+	if err := replaceableAdvising(program, 0, func(int) bool { return false }, systemAdvice); err != nil {
+		return "", "", err
+	}
+	return program, ExecutableWarning(program), nil
+}
+
 // ResolvePATH is the PATH of a service that runs program: given, if it is
 // valid, or else one with the directories of program and of the tools found on
 // this PATH first.
@@ -75,6 +101,11 @@ const (
 // trustedGroup) can write: a directory with the sticky bit, like /tmp, only
 // lets them replace their own entries, and what a link says is fixed.
 func replaceable(program string, uid int, trusted func(gid int) bool) error {
+	return replaceableAdvising(program, uid, trusted, userAdvice)
+}
+
+// replaceableAdvising is replaceable that ends its refusal with advice.
+func replaceableAdvising(program string, uid int, trusted func(gid int) bool, advice string) error {
 	refuse := func(format string, a ...any) error {
 		return &InputError{Flag: "--binary", Reason: fmt.Sprintf(format, a...)}
 	}
@@ -97,8 +128,8 @@ func replaceable(program string, uid int, trusted func(gid int) bool) error {
 				return "", refuse("%s cannot be run: %v", program, err)
 			}
 			if reason := unsafeTo(info, entry, uid, trusted); reason != "" {
-				return "", refuse("%s runs from %s, which %s: another user could replace what the service runs; "+
-					"install it where only you and root can write", program, entry, reason)
+				return "", refuse("%s runs from %s, which %s: another user could replace what the service runs; %s",
+					program, entry, reason, advice)
 			}
 			if info.Mode()&fs.ModeSymlink == 0 {
 				dir = entry

@@ -106,6 +106,13 @@ func (m Mover) Move(pairs []Pair) (Result, error) {
 	return Result{}, errors.New("migrate: the directories keep changing under another process")
 }
 
+// Todo are the pairs Move would move now: the old directory is there and the
+// new one is not. It is what a migration records before it moves.
+func (m Mover) Todo(pairs []Pair) ([]Pair, error) {
+	p, err := m.withDefaults().plan(pairs)
+	return p.todo, err
+}
+
 func (m Mover) withDefaults() Mover {
 	if m.Rename == nil {
 		m.Rename = renameNoReplace
