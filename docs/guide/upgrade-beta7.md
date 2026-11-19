@@ -41,7 +41,8 @@ The installer puts `cflk` first and checks it runs. Only then does it replace a 
      cflk controller install-service
      ```
 
-   - On macOS, or under any other supervisor of your own, `install-service` does not move the Controller: it is only for systemd. Under launchd it changes nothing and prints the commands, in order, to stop the old one, move the directories, write the new property list and load it. Read them, then run them.
+   - On macOS, `install-service` does not move the Controller: it is only for systemd. Under launchd it changes nothing and prints the commands, in order, to stop the old one, move the directories, write the new property list and load it. Read them, then run them. Keep a copy of the old property list: the last of those commands removes it, and going back needs it.
+   - Under a supervisor of your own, stop the Controller, change its command to `cflk controller run` and start it again. With no service of the old name installed, the first `cflk` that runs moves the directories.
 
    Clients and Workers keep connecting without enrolling again: the database, the certificates and the relay move with the directories.
 
@@ -78,7 +79,7 @@ When it finds `cf-worker` (or `cf-controller`, or the launchd label of the old n
 
 If a step fails, it puts the old unit back. A directory you chose by hand with `CF_CONFIG_DIR` or `CF_DATA_DIR` is not moved.
 
-A **LaunchDaemon** of the system, in `/Library/LaunchDaemons`, is not managed by `install-service`: it changes nothing and prints the commands, with `sudo`, to stop the old one, move the directories, write the new property list and load it, and the ones that put things back. Read them, then run them.
+A **LaunchDaemon** of the system, in `/Library/LaunchDaemons`, is not managed by `install-service`: it changes nothing and prints the commands, with `sudo`, to stop the old one, move the directories, write the new property list and load it, and the ones that put things back. Read them, keep a copy of the old property list (the commands remove it, and going back needs it), then run them.
 
 If a LaunchDaemon of the beta.6 restarts after the installer has replaced `cf` and before you run those commands, nothing breaks: its `cf` is now the one that runs `cflk`, and `cflk` keeps the old `codefabric` directories while the old property list exists, saying so on stderr. The Worker runs the beta.7 on its old directories until you run the commands.
 
@@ -91,7 +92,7 @@ You cannot go back to the beta.6 without undoing the renames: it looks for `code
 Do it in this order across a pool, the reverse of the upgrade: the clients, then the Workers, then the Controller. On each machine:
 
 1. **Before anything else, while still on the beta.7.** A client has no unit and nothing to drain: it only removes what the beta.7 registered.
-   - On a Worker: drain it with `cflk worker drain <worker>`, and wait until `cflk ps` lists no Run on it. Move the directories back only while no Run is live.
+   - On a Worker: drain it from a client with `cf worker drain <worker>` (the clients are already back on the beta.6), and wait until `cf ps` lists no Run on it. Move the directories back only while no Run is live.
    - Stop **every** new unit that uses the root: the Worker and the Controller, if they share the machine.
    - Remove what the beta.7 registered:
 
@@ -119,15 +120,17 @@ Do it in this order across a pool, the reverse of the upgrade: the clients, then
    rm ~/Library/LaunchAgents/com.codeflock.worker.plist
    ```
 
-   For a LaunchDaemon, run the same `launchctl bootout` with `sudo` against `system/com.codeflock.worker`, remove `/Library/LaunchDaemons/com.codeflock.worker.plist`, and put your old property list back. A launchd Controller that you moved by hand goes back with the same commands, reversed.
+   For a LaunchDaemon, run the same `launchctl bootout` with `sudo` against `system/com.codeflock.worker`, remove `/Library/LaunchDaemons/com.codeflock.worker.plist`, and put back the copy of your old property list you kept when you upgraded. A launchd Controller that you moved by hand goes back with the same commands, reversed.
 
 2. **Remove `cflk`, before moving anything:**
 
    ```sh
-   rm "$(command -v cflk)"
+   while command -v cflk >/dev/null; do rm "$(command -v cflk)"; done
    ```
 
-   A client that never had a service stops here and goes on to step 3: with `cflk` gone nothing moves the directories again.
+   This removes every `cflk` on your `PATH`: the transition `cf` runs the first one it finds.
+
+   On a client that never had a service, go on to step 3: with `cflk` gone nothing moves the directories again.
 
 3. **Move the directories back.** On Linux:
 
@@ -146,5 +149,7 @@ Do it in this order across a pool, the reverse of the upgrade: the clients, then
    cf claude install --force
    cf mcp install --claude        # and --codex
    ```
+
+   On a Worker, from a client, let it take Runs again with `cf worker undrain <worker>`.
 
    `--force` is there because the beta.6 treats a skill without its own marker as foreign. The `cf` the beta.7 installer left, if any, is replaced by the beta.6 binary.
