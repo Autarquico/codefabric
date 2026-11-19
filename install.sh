@@ -9,7 +9,7 @@
 #
 # It verifies the signed checksum list, then the tarball, and only then installs cflk and validates it.
 # Only after that does it look at an existing cf: the cf of a Code Flock beta (or an older transition cf) is replaced
-# by the transition cf (which runs cflk); any other cf is left alone. A cf elsewhere on the PATH is only reported.
+# by the transition cf (which runs cflk); any other cf is left alone. A cf elsewhere on the PATH is only reported, never run.
 # The trust root is the allowed_signers block below. While it holds the PLACEHOLDER no signature verifies,
 # so the installer fails closed. Review-first users verify this file with install.sh.sig.
 set -eu
@@ -317,25 +317,21 @@ transition_cf_in_dir() {
 		beta) done_message="replaced the cf of Code Flock $CF_BETA at $shown with the transition cf: it runs cflk and goes away in 0.5. Use cflk from now on" ;;
 	esac
 	replace_cf "$real" ||
-		die 4 "cflk $VERSION is installed at $DIR/cflk, but $real could not be replaced (no write access to $(dirname "$real")?). Replace it by hand with the cf from the release tarball, or delete it and use cflk"
+		die 4 "cflk $VERSION is installed at $DIR/cflk, but $real could not be replaced (no write access to $(dirname "$real")?). cflk is installed; remove or replace $real by hand (with sudo if its directory belongs to the system), or just use cflk"
 	log "$done_message"
 }
 
-# The cf that a shell would run, when it is not in $DIR: said, never touched.
+# The cf that a shell would run, when it is not the one handled in $DIR: said, never run or touched. Only an absolute
+# path counts: an empty or relative PATH entry would resolve to a file in the current directory.
 report_cf_on_path() {
 	found=$(command -v cf 2>/dev/null) || return 0
+	case $found in /*) ;; *) return 0 ;; esac
 	[ -f "$found" ] || return 0
 	[ "$(cd -P "$(dirname "$found")" && pwd -P)" != "$(cd -P "$DIR" && pwd -P)" ] || return 0
-	if ! real=$(resolve_link "$found"); then
-		log "left $found alone: it is a symlink that does not resolve to a file. Code Flock is cflk"
+	if handled=$(resolve_link "$DIR/cf") && real=$(resolve_link "$found") && [ "$real" = "$handled" ]; then
 		return 0
 	fi
-	classify_cf "$real"
-	case $CF_KIND in
-		foreign) log "$found is a cf of another tool, and was not touched. Code Flock is cflk" ;;
-		transition) log "$found is a transition cf of another Code Flock install: it runs the cflk next to it, not the one just installed" ;;
-		beta) log "$found is the cf of Code Flock $CF_BETA, and was not replaced because it is not in $DIR. To replace it, run this installer again with CFLK_INSTALL_DIR=$(dirname "$found"), or delete it. Use cflk for Code Flock" ;;
-	esac
+	log "another cf is first on PATH at $found; it was left alone. The Code Flock command is cflk; if that cf is an older Code Flock, remove it."
 }
 
 # After cflk is in place, the cf of Code Flock gets replaced by the transition cf. Anything else stays.

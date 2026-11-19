@@ -137,15 +137,34 @@ cf_in_another_dir() { # JSON
 	[ "$(ls -A "$T/bin")" = "cflk" ] || fail "unexpected files in the install dir: $(ls -A "$T/bin")"
 }
 
-TestScenario_CfEnOtroDirectorio_ajenoSeDiceYNoSeToca() {
-	cf_in_another_dir 'cf version 8.7.0'
-	assert_out_contains "$T/other/cf is a cf of another tool, and was not touched. Code Flock is cflk"
+# It is said as a fact, and never run: whatever the cf is, it says nothing of which cflk runs or of what the cf is.
+TestScenario_CfEnOtroDirectorio_seDiceYNoSeToca() {
+	cf_in_another_dir "$(beta_json)"
+	assert_out_contains "another cf is first on PATH at $T/other/cf; it was left alone. The Code Flock command is cflk"
+	! grep -q "CFLK_INSTALL_DIR=" "$T/out" || { dump; fail "recommended another install dir"; }
 }
 
-TestScenario_CfEnOtroDirectorio_betaSeDiceConElComando() {
-	cf_in_another_dir "$(beta_json)"
-	assert_out_contains "$T/other/cf is the cf of Code Flock 0.4.0-beta.6, and was not replaced because it is not in $T/bin"
-	assert_out_contains "CFLK_INSTALL_DIR=$T/other"
+TestScenario_CfEnOtroDirectorio_noSeEjecuta() {
+	installed_release
+	mkdir -p "$T/other"
+	printf '#!/bin/sh\n: >"%s/ran"\n' "$T" >"$T/other/cf"
+	chmod 755 "$T/other/cf"
+	INST_PATH="$T/other:$SHIM:$PATH" run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ ! -e "$T/ran" ] || fail "the installer ran the cf of the PATH"
+}
+
+# SEC-1: a trailing ':' in PATH is the current directory; a cf there is not run, and cflk is installed all the same.
+TestScenario_CfEnOtroDirectorio_pathConEntradaVaciaNoEjecutaElCfDelDirectorioActual() {
+	installed_release
+	mkdir -p "$T/repo"
+	printf '#!/bin/sh\n: >"%s/pwned"\n' "$T" >"$T/repo/cf"
+	chmod 755 "$T/repo/cf"
+	cd "$T/repo" || exit 1
+	INST_PATH="$SHIM:$PATH:" run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ ! -e "$T/pwned" ] || fail "the cf of the current directory was run"
+	[ -x "$T/bin/cflk" ] || fail "cflk was not installed"
 }
 
 TestScenario_CfEnOtroDirectorio_noDiceNadaSiEsElDelDirectorioDeInstalacion() {
@@ -153,7 +172,19 @@ TestScenario_CfEnOtroDirectorio_noDiceNadaSiEsElDelDirectorioDeInstalacion() {
 	seed_cf "$T/bin/cf" "$(beta_json)"
 	run_install "$KEY_A/install.sh"
 	assert_rc 0
-	! grep -q "not replaced because\|another tool" "$T/out" || { dump; fail "reported a cf that was replaced"; }
+	! grep -q "another cf is first" "$T/out" || { dump; fail "reported a cf that was replaced"; }
+}
+
+# CODE-7: the cf that was just replaced, reached through a link whose directory is first on the PATH, is not "another cf".
+TestScenario_SymlinkedCf_theOneJustReplacedIsNotReportedAsAnother() {
+	installed_release
+	seed_cf "$T/real/cf" "$(beta_json)"
+	mkdir -p "$T/bin"
+	ln -s "$T/real/cf" "$T/bin/cf"
+	INST_PATH="$T/real:$SHIM:$PATH" run_install "$KEY_A/install.sh"
+	assert_rc 0
+	assert_out_contains "replaced the cf of Code Flock 0.4.0-beta.6 at .*/real/cf"
+	! grep -q "another cf is first" "$T/out" || { dump; fail "reported the replaced cf as another one"; }
 }
 
 # --- Symlinks -----------------------------------------------------------------------
@@ -212,7 +243,7 @@ TestScenario_SymlinkedCf_unwritableTargetSaysCflkIsInstalled() {
 	assert_rc 4
 	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk was not installed"
 	assert_out_contains "cflk $VERSION is installed at $T/bin/cflk, but .*/ro/cf could not be replaced"
-	assert_out_contains "delete it and use cflk"
+	assert_out_contains "cflk is installed; remove or replace .*/ro/cf by hand (with sudo"
 	cmp -s "$T/ro/cf" "$T/old-cf" || fail "the cf was modified"
 }
 

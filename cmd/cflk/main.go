@@ -61,7 +61,7 @@ func tuiWithNotifications(native notify.Native, run func(context.Context, *clien
 
 // workflowAdopter composes the adopt of `cflk workflow`: the harness adapters of
 // this binary over the configuration of this machine. A machine without a home
-// directory fails when the adopter is used, not when cf starts.
+// directory fails when the adopter is used, not when cflk starts.
 func workflowAdopter(store workflowadopt.Store, confirmer workflowadopt.Confirmer) cli.WorkflowAdopter {
 	registry, err := harness.NewRegistry(codex.Adapter{}, claude.Adapter{})
 	if err != nil {
