@@ -290,19 +290,38 @@ replace_cf() {
 	TMP_BIN=
 }
 
-# closed_to_others PATH: PATH belongs to the user running the installer or to root, and neither its group nor
-# others can write it, nor an ACL grant anyone (`+` after the mode). A sticky directory such as /tmp counts as
-# closed: others can add to it but not rename what is ours. Read from `ls -ldn` (the same on macOS and Linux): mode
-# in field 1, owner id in field 3. No metadata means not closed.
+# closed_to_others PATH: PATH belongs to the user running the installer or to root, and neither its group, nor
+# others, nor an ACL entry can write it. A sticky directory such as /tmp counts as closed: others can add to it but
+# not rename what is ours. Read from `ls -ldn` (the same on macOS and Linux): mode in field 1, owner id in field 3;
+# only its first line counts, and a name with a newline is never closed. No metadata means not closed.
 closed_to_others() {
+	case $1 in *'
+'*) return 1 ;; esac
 	# shellcheck disable=SC2012 # the mode and owner of one path; find has no portable equivalent
-	ls -ldn "$1" 2>/dev/null | awk -v me="$(id -u)" '{
+	ls -ldn "$1" 2>/dev/null | awk -v me="$(id -u)" 'NR == 1 {
 		seen = 1
 		m = $1
 		sticky = substr(m, 1, 1) == "d" && substr(m, 10, 1) == "t"
 		writable = substr(m, 6, 1) == "w" || substr(m, 9, 1) == "w"
-		ok = ($3 == me || $3 == 0) && (!writable || sticky) && substr(m, 11, 1) != "+"
-	} END { exit !(seen && ok) }'
+		ok = ($3 == me || $3 == 0) && (!writable || sticky)
+	} END { exit !(seen && ok) }' || return 1
+	acl_closed "$1"
+}
+
+# acl_closed PATH: no ACL entry lets anyone else write PATH. macOS lists its entries with `ls -lde` (an `allow` with
+# a write-class right opens it; the `deny delete` of every home does not); elsewhere a `+` after the mode is a POSIX
+# ACL, which counts as open.
+acl_closed() {
+	if [ "$(uname -s)" = Darwin ]; then
+		# shellcheck disable=SC2012 # the ACL of one path; nothing else prints it on macOS
+		if ls -lden "$1" 2>/dev/null | awk 'NR > 1' |
+			grep -Eq ' allow .*(write|append|add_file|add_subdirectory|delete_child|chown)'; then
+			return 1
+		fi
+	else
+		# shellcheck disable=SC2012 # see closed_to_others
+		ls -ldn "$1" 2>/dev/null | awk 'NR == 1 { exit substr($1, 11, 1) == "+" }'
+	fi
 }
 
 # closed_path PATH: PATH and every directory above it are closed to others, so nobody else can swap what PATH

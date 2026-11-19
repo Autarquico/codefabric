@@ -448,6 +448,63 @@ TestScenario_CfNoFiable_inADirectoryOthersCanWriteIsNotRun() {
 	assert_out_contains "left .*/other/cf alone: it, or a directory above it, is not owned by you or root"
 }
 
+# A directory above the cf that others can write lets them swap the cf between the check and the run.
+TestScenario_CfNoFiable_underAGrandparentOthersCanWriteIsNotRun() {
+	installed_release
+	seed_probing_cf "$T/open/d/cf"
+	chmod 777 "$T/open"
+	mkdir -p "$T/bin"
+	ln -s "$T/open/d/cf" "$T/bin/cf"
+	run_install "$KEY_A/install.sh"
+	chmod 755 "$T/open"
+	assert_rc 0
+	[ ! -e "$T/ran" ] || fail "a cf under a directory others can write was run"
+	assert_out_contains "left .*/open/d/cf alone: it, or a directory above it, is not owned by you or root"
+}
+
+# A sticky directory such as /tmp: others can add to it, not rename what is ours.
+TestScenario_CfNoFiable_underAStickyGrandparentIsRun() {
+	installed_release
+	seed_probing_cf "$T/sticky/d/cf"
+	chmod 1777 "$T/sticky"
+	mkdir -p "$T/bin"
+	ln -s "$T/sticky/d/cf" "$T/bin/cf"
+	run_install "$KEY_A/install.sh"
+	chmod 755 "$T/sticky"
+	assert_rc 0
+	[ -e "$T/ran" ] || fail "a cf under a sticky directory was not probed"
+}
+
+# No metadata (the path vanished between the checks) is not closed.
+TestScenario_CfNoFiable_aMissingPathIsNotClosed() {
+	sed '/^main "\$@"$/d' "$RELEASE_DIR/../../install.sh" >"$T/install-lib.sh"
+	# shellcheck source=/dev/null
+	if (. "$T/install-lib.sh" && closed_to_others "$T/missing"); then fail "a missing path counted as closed"; fi
+}
+
+# A name with a newline could forge a second `ls` line; it is never closed.
+TestScenario_CfNoFiable_aNameWithANewlineIsNotClosed() {
+	sed '/^main "\$@"$/d' "$RELEASE_DIR/../../install.sh" >"$T/install-lib.sh"
+	forged="$T/x
+drwxr-xr-x 1 0 0 0 Jan 1 00:00 y"
+	mkdir -p "$forged"
+	# shellcheck source=/dev/null
+	if (. "$T/install-lib.sh" && closed_to_others "$forged"); then fail "a name with a newline counted as closed"; fi
+}
+
+# macOS: the `deny delete` ACL of every home keeps it closed; an `allow write` entry opens it.
+TestScenario_CfNoFiable_macOSACLs() {
+	[ "$(uname -s)" = Darwin ] || { echo "SKIP: macOS ACLs"; return 0; }
+	sed '/^main "\$@"$/d' "$RELEASE_DIR/../../install.sh" >"$T/install-lib.sh"
+	mkdir -p "$T/acl"
+	chmod +a "everyone deny delete" "$T/acl"
+	# shellcheck source=/dev/null
+	(. "$T/install-lib.sh" && closed_to_others "$T/acl") || fail "a deny-delete ACL counted as open"
+	chmod +a "everyone allow write" "$T/acl"
+	# shellcheck source=/dev/null
+	if (. "$T/install-lib.sh" && closed_to_others "$T/acl"); then fail "an allow-write ACL counted as closed"; fi
+}
+
 # A FIFO would block cmp and the probe's open: it is not a regular file, so it is left alone, and quickly.
 TestScenario_CfNoFiable_aFifoIsLeftAloneWithoutWaiting() {
 	installed_release
