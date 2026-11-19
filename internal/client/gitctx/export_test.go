@@ -1,6 +1,6 @@
 package gitctx
 
-import "github.com/Autarquico/codefabric/internal/support/redact"
+import "github.com/Autarquico/codeflock/internal/support/redact"
 
 // ResolveRefWithin is ResolveRef with the deadline of ls-remote given.
 var ResolveRefWithin = resolveRef

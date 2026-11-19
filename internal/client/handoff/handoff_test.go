@@ -13,11 +13,11 @@ import (
 	"strings"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/client/gitctx"
-	"github.com/Autarquico/codefabric/internal/client/session"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/client/gitctx"
+	"github.com/Autarquico/codeflock/internal/client/session"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 const (

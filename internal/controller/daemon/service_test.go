@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/controller/daemon"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/svcunit"
-	"github.com/Autarquico/codefabric/internal/support/svcunit/svcunittest"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/controller/daemon"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
+	"github.com/Autarquico/codeflock/internal/support/svcunit/svcunittest"
 )
 
 func serviceOptions(t *testing.T) (daemon.ServiceOptions, *svcunittest.Systemd) {

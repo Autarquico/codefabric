@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // Invariant: once a Put of a blob has returned, the blob exists, whatever a

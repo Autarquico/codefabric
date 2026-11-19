@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // RelaySource is where the source of a Run that continues a checkpoint, or

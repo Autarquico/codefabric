@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func TestScenario_DirtySnapshots_TheTaskRecordsTheDigestAndTheBranch(t *testing.T) {

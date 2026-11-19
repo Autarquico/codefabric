@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Retention (§20.5). Every purge here comes as a pair: a count under the exact

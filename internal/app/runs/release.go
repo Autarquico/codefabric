@@ -1,8 +1,8 @@
 package runs
 
 import (
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // releaseRunStopped is the reason a reservation is released when the Worker

@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 type fakeProjectUpdater struct{ got []v1.UpdateProjectRequest }

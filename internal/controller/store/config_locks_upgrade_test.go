@@ -11,7 +11,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // A Controller upgraded from 0207 with Runs in flight: their open reservations

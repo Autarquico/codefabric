@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 var t0 = time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)

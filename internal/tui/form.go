@@ -6,7 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/Autarquico/codefabric/internal/cli/actions"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
 )
 
 // A Form asks, one line at a time, for the inputs that an action cannot run

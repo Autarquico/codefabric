@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/atomicfile"
+	"github.com/Autarquico/codeflock/internal/support/atomicfile"
 )
 
 // Controller is the Controller's settings file. JSON keeps the module free of

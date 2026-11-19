@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/mutation"
-	"github.com/Autarquico/codefabric/internal/controller/store"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/mutation"
+	"github.com/Autarquico/codeflock/internal/controller/store"
 )
 
 // FailStuckApplies fails, in tx, the real orders alive that have not moved since

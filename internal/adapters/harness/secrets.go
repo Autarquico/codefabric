@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // SecretEnv is an environment variable whose value is a secret: Launch

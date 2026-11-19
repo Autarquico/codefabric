@@ -28,7 +28,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // Action is what an apply does to a component.

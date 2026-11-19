@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // Problems of the catalog the heartbeat reports, as the health of the daemon.

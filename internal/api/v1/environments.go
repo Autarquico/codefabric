@@ -3,7 +3,7 @@ package v1
 import (
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Environments (§25.3) are global, versioned definitions of how a worktree is

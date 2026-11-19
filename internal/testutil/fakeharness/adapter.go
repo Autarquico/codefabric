@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // DefaultID is the ID of an Adapter with no Name.

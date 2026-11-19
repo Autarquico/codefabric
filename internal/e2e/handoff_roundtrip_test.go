@@ -12,12 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	clienthandoff "github.com/Autarquico/codefabric/internal/client/handoff"
-	"github.com/Autarquico/codefabric/internal/client/session"
-	"github.com/Autarquico/codefabric/internal/client/taskpull"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/gittest"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	clienthandoff "github.com/Autarquico/codeflock/internal/client/handoff"
+	"github.com/Autarquico/codeflock/internal/client/session"
+	"github.com/Autarquico/codeflock/internal/client/taskpull"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/gittest"
 )
 
 const (

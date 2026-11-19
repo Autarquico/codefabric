@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 func fakeClock() *clock.Fake { return clock.NewFake(time.Unix(1_700_000_000, 0)) }

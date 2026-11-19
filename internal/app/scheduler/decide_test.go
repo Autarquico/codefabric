@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/app/scheduler"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/app/scheduler"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 var now = time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)

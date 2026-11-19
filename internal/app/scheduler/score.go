@@ -3,7 +3,7 @@ package scheduler
 import (
 	"slices"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Weights of the score (§10.1). They are integers, never floats, so the same

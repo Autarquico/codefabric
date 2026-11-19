@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/events"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/events"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // registerEventRoutes adds the reads of the event store. Only clients read

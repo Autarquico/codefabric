@@ -8,7 +8,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // MoveStage is how far a move has got (§11.5). The stages only advance.

@@ -3,7 +3,7 @@ package app_test
 import (
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // A checkpoint says how it was taken: live for the triggers that leave the harness

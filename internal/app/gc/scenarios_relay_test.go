@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/app/gc"
-	"github.com/Autarquico/codefabric/internal/controller/relay"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/gittest"
+	"github.com/Autarquico/codeflock/internal/app/gc"
+	"github.com/Autarquico/codeflock/internal/controller/relay"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/gittest"
 )
 
 // realRelay is the Controller's relay on a temp dir, with a repository for a

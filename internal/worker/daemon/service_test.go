@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/svcunit"
-	"github.com/Autarquico/codefabric/internal/support/svcunit/svcunittest"
-	"github.com/Autarquico/codefabric/internal/worker/daemon"
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
+	"github.com/Autarquico/codeflock/internal/support/svcunit/svcunittest"
+	"github.com/Autarquico/codeflock/internal/worker/daemon"
 )
 
 // fakeManager is the service manager of goos, in memory, for a user whose home is a fresh directory.

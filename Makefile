@@ -1,4 +1,4 @@
-MODULE   := github.com/Autarquico/codefabric
+MODULE   := github.com/Autarquico/codeflock
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT   ?= $(shell git rev-parse HEAD 2>/dev/null)
 DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // OverviewCounts are the tallies of the home screen, as the snapshot q sees them.

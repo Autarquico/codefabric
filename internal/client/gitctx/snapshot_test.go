@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/client/gitctx"
+	"github.com/Autarquico/codeflock/internal/client/gitctx"
 )
 
 func (r *repo) write(name, content string) {

@@ -15,9 +15,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/support/atomicfile"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/support/atomicfile"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // DefaultInterval is how often the Broker looks, when Options.Interval is zero.

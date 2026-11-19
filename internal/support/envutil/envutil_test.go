@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/support/envutil"
+	"github.com/Autarquico/codeflock/internal/support/envutil"
 )
 
 func TestWithoutTmuxDropsOnlyTheTmuxVariables(t *testing.T) {

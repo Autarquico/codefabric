@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client/gitctx"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client/gitctx"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // NewTask creates a Task from the working directory dir, the way every

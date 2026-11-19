@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 // grantSecrets is POST /v1/worker/runs/{run}/secrets/grant: a Worker asks,

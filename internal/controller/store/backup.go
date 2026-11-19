@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // VacuumInto writes a consistent copy of the database at src to dst, which

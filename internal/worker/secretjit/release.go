@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Release removes the secrets of the run directory runDir: any staging or

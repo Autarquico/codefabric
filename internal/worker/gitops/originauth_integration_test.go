@@ -19,13 +19,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/support/gittest"
-	"github.com/Autarquico/codefabric/internal/support/redact"
-	"github.com/Autarquico/codefabric/internal/testutil/gitorigin"
-	"github.com/Autarquico/codefabric/internal/worker/daemon"
-	"github.com/Autarquico/codefabric/internal/worker/gitops"
-	"github.com/Autarquico/codefabric/internal/worker/secretjit"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/support/gittest"
+	"github.com/Autarquico/codeflock/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/testutil/gitorigin"
+	"github.com/Autarquico/codeflock/internal/worker/daemon"
+	"github.com/Autarquico/codeflock/internal/worker/gitops"
+	"github.com/Autarquico/codeflock/internal/worker/secretjit"
 )
 
 const (

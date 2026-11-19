@@ -3,7 +3,7 @@ package harness_test
 import (
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 func TestSetJSONStrings(t *testing.T) {

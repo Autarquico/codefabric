@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/controller/blob"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/controller/blob"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 func put(t *testing.T, s *blob.Store, content string) blob.Digest {

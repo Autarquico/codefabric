@@ -5,13 +5,13 @@ import (
 	"errors"
 	"os/exec"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	"github.com/Autarquico/codefabric/internal/adapters/runtime/remote"
-	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
-	"github.com/Autarquico/codefabric/internal/adapters/transport/ssh"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/domain"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/remote"
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
+	"github.com/Autarquico/codeflock/internal/adapters/transport/ssh"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/cli"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // sshTerminal is the Terminal of the binary (§5.4, §6.3): the command that

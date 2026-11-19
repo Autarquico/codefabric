@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/logs"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/logs"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // registerLogRoutes adds the structured logs (§34): the Workers ship theirs,

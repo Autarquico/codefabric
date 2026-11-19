@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 // GrantSecrets asks the Controller, before a single value is read, to resolve

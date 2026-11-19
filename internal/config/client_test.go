@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/config"
+	"github.com/Autarquico/codeflock/internal/config"
 )
 
 func TestLoadClient(t *testing.T) {

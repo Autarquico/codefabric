@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 func TestScenario_RetentionGc_StorageStatsTextShowsEveryCategoryAndWhatIsReclaimable(t *testing.T) {

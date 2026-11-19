@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strconv"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 var statusByCode = map[domain.Code]int{

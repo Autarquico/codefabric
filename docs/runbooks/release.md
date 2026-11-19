@@ -3,7 +3,7 @@
 Spec: [release-installer-site](../specs/release-installer-site.md). Todo lo que sigue es manual salvo lo que
 hacen `release.yml` y `pages.yml` una vez empujado el tag. Los pasos 1 a 4 bloquean el tag `v0.2.0`, no los PRs.
 
-Convenciones fijas: principal `release@codefabric`, namespace `codefabric-release`, repo `Autarquico/codefabric`.
+Convenciones fijas: principal `release@codefabric`, namespace `codefabric-release`, repo `Autarquico/codeflock`.
 
 ## 1. Generar la clave y custodiarla
 
@@ -120,7 +120,7 @@ una carpeta `Formula/`).
 ```sh
 repo=/ruta/al/checkout-en-el-commit-del-tag   # raíz de confianza: nunca el install.sh descargado
 f=$(mktemp -d)
-gh release download vX.Y.Z -R Autarquico/codefabric -p 'checksums.txt*' --dir "$f"
+gh release download vX.Y.Z -R Autarquico/codeflock -p 'checksums.txt*' --dir "$f"
 "$repo/packaging/release/brew-formula.sh" "$f/checksums.txt" "$repo/install.sh" vX.Y.Z > "$f/codefabric.rb"
 echo "$f/codefabric.rb"
 ```

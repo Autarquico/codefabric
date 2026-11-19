@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/harnesstest"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/command"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/harnesstest"
 )
 
 // The credential of the fixture: command reads no configuration, so no

@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/atomicfile"
+	"github.com/Autarquico/codeflock/internal/support/atomicfile"
 )
 
 // State is what this machine remembers of the sessions it handed over: for each

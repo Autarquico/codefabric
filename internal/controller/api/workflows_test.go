@@ -13,14 +13,14 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app"
-	"github.com/Autarquico/codefabric/internal/app/workers"
-	"github.com/Autarquico/codefabric/internal/controller/api"
-	"github.com/Autarquico/codefabric/internal/controller/blob"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/treedigest"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app"
+	"github.com/Autarquico/codeflock/internal/app/workers"
+	"github.com/Autarquico/codeflock/internal/controller/api"
+	"github.com/Autarquico/codeflock/internal/controller/blob"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/treedigest"
 )
 
 const testBlobLimit = 1024

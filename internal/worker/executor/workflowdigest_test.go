@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // holdWorkflowFixture is holdFixture for a Run that froze a Workflow: its

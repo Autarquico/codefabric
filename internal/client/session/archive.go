@@ -10,7 +10,7 @@ import (
 	"io"
 	"regexp"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // maxManifestBytes bounds the manifest an archive starts with.

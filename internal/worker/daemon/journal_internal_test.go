@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/worker/journal"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/worker/journal"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 func journaled(t *testing.T, backlog journal.Backlog) (*daemon, *state.DB) {

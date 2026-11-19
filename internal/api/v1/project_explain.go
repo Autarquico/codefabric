@@ -1,6 +1,6 @@
 package v1
 
-import "github.com/Autarquico/codefabric/internal/domain"
+import "github.com/Autarquico/codeflock/internal/domain"
 
 // ExplainProjectRequest is POST /v1/projects/{ref}/explain (§3.1). The client
 // reads the repo, because the Controller never touches the origin (ADR 0002

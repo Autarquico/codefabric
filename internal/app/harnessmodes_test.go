@@ -3,9 +3,9 @@ package app_test
 import (
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/scheduler"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/scheduler"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func withHarness(harness string, mode domain.Mode) func(*v1.CreateTaskRequest) {

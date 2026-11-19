@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/gittest"
+	"github.com/Autarquico/codeflock/internal/support/gittest"
 )
 
 // The knobs of a run of the suite, all read once by TestMain.
@@ -79,7 +79,7 @@ func build(dir string, withRace bool) (string, error) {
 		args = append(args, "-race")
 		env = append(env, "CGO_ENABLED=1")
 	}
-	args = append(args, "github.com/Autarquico/codefabric/cmd/cf")
+	args = append(args, "github.com/Autarquico/codeflock/cmd/cf")
 	cmd := exec.CommandContext(ctx, "go", args...) //nolint:gosec // go build of this module
 	cmd.Env = env
 	if msg, err := cmd.CombinedOutput(); err != nil {

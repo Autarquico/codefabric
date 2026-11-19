@@ -15,13 +15,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/worker/state"
-	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	secretsfile "github.com/Autarquico/codeflock/internal/adapters/secrets/file"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/worker/sysinfo"
 )
 
 // beating is a daemon that measures a fixed machine and holds the catalog at path.

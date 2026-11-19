@@ -13,14 +13,14 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
-	"github.com/Autarquico/codefabric/internal/worker/host"
-	"github.com/Autarquico/codefabric/internal/worker/state"
-	"github.com/Autarquico/codefabric/internal/worker/workflowfetch"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/command"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/testutil/fakeharness"
+	"github.com/Autarquico/codeflock/internal/worker/host"
+	"github.com/Autarquico/codeflock/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/worker/workflowfetch"
 )
 
 // fakeWorkflows serves one version, as the Controller does for the Run that

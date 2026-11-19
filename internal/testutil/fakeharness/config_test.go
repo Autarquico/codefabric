@@ -10,9 +10,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/support/treedigest"
-	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/support/treedigest"
+	"github.com/Autarquico/codeflock/internal/testutil/fakeharness"
 )
 
 func writeHost(t *testing.T, host testHost, files map[string]string) {

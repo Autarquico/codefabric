@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 // SearchQuery is a search (GET /v1/search). Kind, Project and Limit are optional.

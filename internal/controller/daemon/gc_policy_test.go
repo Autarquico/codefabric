@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/controller/daemon"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/controller/daemon"
 )
 
 func TestGCPolicy_TakesTheRetentionOfControllerJSON(t *testing.T) {

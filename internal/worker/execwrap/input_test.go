@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
 )
 
 // writeToFIFO is what a daemon does to hand a message to a harness: it opens

@@ -1,6 +1,6 @@
 package v1
 
-import "github.com/Autarquico/codefabric/internal/domain"
+import "github.com/Autarquico/codeflock/internal/domain"
 
 // PullPlan is GET /v1/tasks/{ref}/pull: what `cf task pull` would bring to the
 // checkout of the caller. While the last Run of the Task is live (Live) there is no

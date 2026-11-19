@@ -8,7 +8,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/Autarquico/codefabric/internal/worker/gitops"
+	"github.com/Autarquico/codeflock/internal/worker/gitops"
 )
 
 // pushCall is a push the fake saw.

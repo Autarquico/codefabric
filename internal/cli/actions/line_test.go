@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/cli/actions"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
 )
 
 func TestParseLine_SplitsLikeAShellAndFindsTheAction(t *testing.T) {

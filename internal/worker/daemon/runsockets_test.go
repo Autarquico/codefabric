@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/worker/runsocket"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/worker/runsocket"
 )
 
 type fakeRunController struct{ asked []string }

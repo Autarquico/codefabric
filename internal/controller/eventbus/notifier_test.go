@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/controller/eventbus"
+	"github.com/Autarquico/codeflock/internal/controller/eventbus"
 )
 
 func TestNotifier_NotifyIsMonotonic(t *testing.T) {

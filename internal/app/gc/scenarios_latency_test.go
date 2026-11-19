@@ -3,7 +3,7 @@ package gc_test
 import (
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/app/gc"
+	"github.com/Autarquico/codeflock/internal/app/gc"
 )
 
 // Each batch is its own transaction: when AfterBatch runs, exactly the rows the

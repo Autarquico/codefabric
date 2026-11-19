@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
-	"github.com/Autarquico/codefabric/internal/worker/authsync"
-	"github.com/Autarquico/codefabric/internal/worker/secretjit"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/codex"
+	"github.com/Autarquico/codeflock/internal/worker/authsync"
+	"github.com/Autarquico/codeflock/internal/worker/secretjit"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // materialised leaves in runDir a materialisation with an auth copy, as the

@@ -11,7 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codeflock/internal/client"
 )
 
 type stubScreen string

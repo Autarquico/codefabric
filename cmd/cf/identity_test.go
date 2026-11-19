@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/controller/daemon"
-	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
+	"github.com/Autarquico/codeflock/internal/cli"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/controller/daemon"
+	workerdaemon "github.com/Autarquico/codeflock/internal/worker/daemon"
 )
 
 // cf runs the real command tree, composed exactly as main does.

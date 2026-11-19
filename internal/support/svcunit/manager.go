@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/Autarquico/codefabric/internal/support/atomicfile"
+	"github.com/Autarquico/codeflock/internal/support/atomicfile"
 )
 
 // Env is the service manager of a user: its tools, the home directory its

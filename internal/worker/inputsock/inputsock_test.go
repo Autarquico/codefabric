@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/worker/inputsock"
+	"github.com/Autarquico/codeflock/internal/worker/inputsock"
 )
 
 // shortDir is a directory whose sockets fit: t.TempDir() is too long on macOS.

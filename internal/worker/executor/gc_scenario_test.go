@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // A worktree whose publication is pending (sealing, sealed, pushed) or failed

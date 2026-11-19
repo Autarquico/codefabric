@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
 )
 
 // newRuntime is a Runtime with a tmux server of its own, killed with the test.

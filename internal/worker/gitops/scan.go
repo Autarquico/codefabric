@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // LinesWithSecrets reads r line by line and returns the numbers (from 1) of the

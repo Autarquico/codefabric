@@ -3,7 +3,7 @@ package daemon
 import (
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/worker/executor"
+	"github.com/Autarquico/codeflock/internal/worker/executor"
 )
 
 // WatchExecutorOptions has Run hand seen the options it builds the executor

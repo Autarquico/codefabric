@@ -4,10 +4,10 @@ import (
 	"errors"
 	"testing"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	"github.com/Autarquico/codefabric/internal/adapters/runtime/remote"
-	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
-	"github.com/Autarquico/codefabric/internal/domain"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/remote"
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 const run = "run_01J8ZQ4M5N6P7R8S9T0V1W2X3Y"

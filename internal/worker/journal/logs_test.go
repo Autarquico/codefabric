@@ -13,13 +13,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/support/slogtee"
-	"github.com/Autarquico/codefabric/internal/worker/journal"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/slogtee"
+	"github.com/Autarquico/codeflock/internal/worker/journal"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // logController is a LogShipper that remembers the batches it was sent.

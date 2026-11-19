@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/app/scheduler"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/app/scheduler"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // The property of the secrets filter of #23 (P0 of §7): with Workers, an

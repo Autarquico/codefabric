@@ -8,7 +8,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // line is the part of a `codex exec --json` line the adapter reads. The shape

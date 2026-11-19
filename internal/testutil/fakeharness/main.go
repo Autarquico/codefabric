@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/atomicfile"
-	"github.com/Autarquico/codefabric/internal/support/treedigest"
-	"github.com/Autarquico/codefabric/internal/worker/inputsock"
+	"github.com/Autarquico/codeflock/internal/support/atomicfile"
+	"github.com/Autarquico/codeflock/internal/support/treedigest"
+	"github.com/Autarquico/codeflock/internal/worker/inputsock"
 )
 
 // The exit codes of the program besides 0 and those of exit steps.

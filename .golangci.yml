@@ -28,22 +28,22 @@ linters:
           files: ["**/internal/domain/**"]
           allow:
             - $gostd
-            - github.com/Autarquico/codefabric/internal/domain
+            - github.com/Autarquico/codeflock/internal/domain
             - github.com/oklog/ulid
         # app: use cases depend on ports, never on implementations or UIs.
         app:
           list-mode: lax
           files: ["**/internal/app/**"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/adapters/
+            - pkg: github.com/Autarquico/codeflock/internal/adapters/
               desc: app must depend on ports, not adapter implementations
-            - pkg: github.com/Autarquico/codefabric/internal/controller/api
+            - pkg: github.com/Autarquico/codeflock/internal/controller/api
               desc: app must not know about the HTTP layer
-            - pkg: github.com/Autarquico/codefabric/internal/cli
+            - pkg: github.com/Autarquico/codeflock/internal/cli
               desc: app must not depend on UIs
-            - pkg: github.com/Autarquico/codefabric/internal/tui
+            - pkg: github.com/Autarquico/codeflock/internal/tui
               desc: app must not depend on UIs
-            - pkg: github.com/Autarquico/codefabric/internal/mcp
+            - pkg: github.com/Autarquico/codeflock/internal/mcp
               desc: app must not depend on UIs
         # CLI, TUI and MCP are clients of the same SDK (invariant 7).
         interfaces:
@@ -53,13 +53,13 @@ linters:
             - "**/internal/tui/**"
             - "**/internal/mcp/**"
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/app
+            - pkg: github.com/Autarquico/codeflock/internal/app
               desc: interfaces must go through internal/client (invariant 7)
-            - pkg: github.com/Autarquico/codefabric/internal/controller
+            - pkg: github.com/Autarquico/codeflock/internal/controller
               desc: interfaces must go through internal/client (invariant 7)
-            - pkg: github.com/Autarquico/codefabric/internal/worker
+            - pkg: github.com/Autarquico/codeflock/internal/worker
               desc: interfaces must go through internal/client (invariant 7)
-            - pkg: github.com/Autarquico/codefabric/internal/adapters
+            - pkg: github.com/Autarquico/codeflock/internal/adapters
               desc: interfaces must go through internal/client (invariant 7)
         # The CLI is a client of the SDK and of the wire types: nothing else of
         # the module. What it cannot reach (the terminal of `cf attach`) is
@@ -71,12 +71,12 @@ linters:
             - $gostd
             - github.com/spf13/cobra
             - golang.org/x/sys/unix
-            - github.com/Autarquico/codefabric/internal/cli
-            - github.com/Autarquico/codefabric/internal/client
-            - github.com/Autarquico/codefabric/internal/api/v1
-            - github.com/Autarquico/codefabric/internal/domain
-            - github.com/Autarquico/codefabric/internal/config
-            - github.com/Autarquico/codefabric/internal/buildinfo
+            - github.com/Autarquico/codeflock/internal/cli
+            - github.com/Autarquico/codeflock/internal/client
+            - github.com/Autarquico/codeflock/internal/api/v1
+            - github.com/Autarquico/codeflock/internal/domain
+            - github.com/Autarquico/codeflock/internal/config
+            - github.com/Autarquico/codeflock/internal/buildinfo
             - go.yaml.in/yaml/v3
         # repoconfig parses the untrusted file of a repo and merges it: pure, so
         # that Controller and Worker share it without knowing each other.
@@ -85,8 +85,8 @@ linters:
           files: ["**/internal/repoconfig/**", "!$test"]
           allow:
             - $gostd
-            - github.com/Autarquico/codefabric/internal/repoconfig
-            - github.com/Autarquico/codefabric/internal/domain
+            - github.com/Autarquico/codeflock/internal/repoconfig
+            - github.com/Autarquico/codeflock/internal/domain
             - go.yaml.in/yaml/v3
         # YAML is read only where the input is untrusted or a user's file.
         yamlscope:
@@ -101,20 +101,20 @@ linters:
           list-mode: lax
           files: ["**/internal/worker/**", "!$test"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/controller
+            - pkg: github.com/Autarquico/codeflock/internal/controller
               desc: the Worker talks to the Controller through internal/client
-            - pkg: github.com/Autarquico/codefabric/internal/app
+            - pkg: github.com/Autarquico/codeflock/internal/app
               desc: the use cases of the Controller are not the Worker's
         # Adapters implement ports: they know nothing of who calls them.
         adapters:
           list-mode: lax
           files: ["**/internal/adapters/**", "!$test"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/controller
+            - pkg: github.com/Autarquico/codeflock/internal/controller
               desc: an adapter does not know the Controller
-            - pkg: github.com/Autarquico/codefabric/internal/app
+            - pkg: github.com/Autarquico/codeflock/internal/app
               desc: an adapter does not know the use cases
-            - pkg: github.com/Autarquico/codefabric/internal/worker
+            - pkg: github.com/Autarquico/codeflock/internal/worker
               desc: an adapter does not know the Worker that uses it
         # pty runs a command under a pseudo-terminal: the standard library and
         # creack/pty are all it needs, and the only package that links the latter.
@@ -129,38 +129,38 @@ linters:
           list-mode: lax
           files: ["**/internal/controller/relay/**", "!$test"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/app
+            - pkg: github.com/Autarquico/codeflock/internal/app
               desc: the relay does not know the use cases that authorise it
-            - pkg: github.com/Autarquico/codefabric/internal/controller/api
+            - pkg: github.com/Autarquico/codeflock/internal/controller/api
               desc: the relay does not know the HTTP layer that serves it
-            - pkg: github.com/Autarquico/codefabric/internal/controller/store
+            - pkg: github.com/Autarquico/codeflock/internal/controller/store
               desc: the relay does not know the database
         # gitops runs git for the Worker; the executor that calls it is not its business.
         gitops:
           list-mode: lax
           files: ["**/internal/worker/gitops/**", "!$test"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/worker/executor
+            - pkg: github.com/Autarquico/codeflock/internal/worker/executor
               desc: gitops does not know the executor
-            - pkg: github.com/Autarquico/codefabric/internal/worker/state
+            - pkg: github.com/Autarquico/codeflock/internal/worker/state
               desc: gitops does not know the Worker's state
-            - pkg: github.com/Autarquico/codefabric/internal/client
+            - pkg: github.com/Autarquico/codeflock/internal/client
               desc: gitops does not know the SDK
         # outputship sends output.log to the Controller; the executor that owns the Runs is not its business.
         outputship:
           list-mode: lax
           files: ["**/internal/worker/outputship/**", "!$test"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/worker/executor
+            - pkg: github.com/Autarquico/codeflock/internal/worker/executor
               desc: outputship does not know the executor
         # Test support is for tests: production code never links it.
         testsupport:
           list-mode: lax
           files: ["$all", "!$test", "!**/internal/testutil/**"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/testutil
+            - pkg: github.com/Autarquico/codeflock/internal/testutil
               desc: test doubles are for tests only
-            - pkg: github.com/Autarquico/codefabric/internal/adapters/harness/harnesstest
+            - pkg: github.com/Autarquico/codeflock/internal/adapters/harness/harnesstest
               desc: the harness contract suite is for tests only
         # The contract suite checks an adapter on its own: no Worker, no
         # Controller, no fakes of its own.
@@ -168,24 +168,24 @@ linters:
           list-mode: lax
           files: ["**/internal/adapters/harness/harnesstest/**", "!$test"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/worker
+            - pkg: github.com/Autarquico/codeflock/internal/worker
               desc: the contract suite does not know the Worker
-            - pkg: github.com/Autarquico/codefabric/internal/app
+            - pkg: github.com/Autarquico/codeflock/internal/app
               desc: the contract suite does not know the use cases
-            - pkg: github.com/Autarquico/codefabric/internal/controller
+            - pkg: github.com/Autarquico/codeflock/internal/controller
               desc: the contract suite does not know the Controller
-            - pkg: github.com/Autarquico/codefabric/internal/testutil
+            - pkg: github.com/Autarquico/codeflock/internal/testutil
               desc: the contract suite takes its adapter from the test that runs it
         # The harness port does not know its implementations.
         harnessport:
           list-mode: lax
           files: ["**/internal/adapters/harness/*.go", "!$test"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/adapters/harness/localhost
+            - pkg: github.com/Autarquico/codeflock/internal/adapters/harness/localhost
               desc: the port does not know its implementations
-            - pkg: github.com/Autarquico/codefabric/internal/adapters/harness/command
+            - pkg: github.com/Autarquico/codeflock/internal/adapters/harness/command
               desc: the port does not know its implementations
-            - pkg: github.com/Autarquico/codefabric/internal/adapters/harness/harnesstest
+            - pkg: github.com/Autarquico/codeflock/internal/adapters/harness/harnesstest
               desc: the port does not know its contract suite
         # worker/host materialises and announces harnesses; the executor that
         # runs them, the Worker's state and the SDK are not its business.
@@ -193,11 +193,11 @@ linters:
           list-mode: lax
           files: ["**/internal/worker/host/**", "!$test"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/worker/executor
+            - pkg: github.com/Autarquico/codeflock/internal/worker/executor
               desc: worker/host does not know the executor
-            - pkg: github.com/Autarquico/codefabric/internal/worker/state
+            - pkg: github.com/Autarquico/codeflock/internal/worker/state
               desc: worker/host does not know the Worker's state
-            - pkg: github.com/Autarquico/codefabric/internal/client
+            - pkg: github.com/Autarquico/codeflock/internal/client
               desc: worker/host does not know the SDK
         # treedigest/v1 is a format: the standard library is all it needs.
         treedigest:
@@ -212,20 +212,20 @@ linters:
           list-mode: lax
           files: ["**/internal/worker/secretjit/**", "!$test"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/worker/executor
+            - pkg: github.com/Autarquico/codeflock/internal/worker/executor
               desc: secretjit does not know the executor
-            - pkg: github.com/Autarquico/codefabric/internal/worker/state
+            - pkg: github.com/Autarquico/codeflock/internal/worker/state
               desc: secretjit does not know the Worker's state
-            - pkg: github.com/Autarquico/codefabric/internal/client
+            - pkg: github.com/Autarquico/codeflock/internal/client
               desc: secretjit does not know the SDK
-            - pkg: github.com/Autarquico/codefabric/internal/worker/execwrap
+            - pkg: github.com/Autarquico/codeflock/internal/worker/execwrap
               desc: secretjit does not know the wrapper that resolves its refs
         # The secrets port does not know its implementations.
         secretsport:
           list-mode: lax
           files: ["**/internal/adapters/secrets/*.go", "!$test"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/adapters/secrets/file
+            - pkg: github.com/Autarquico/codeflock/internal/adapters/secrets/file
               desc: the port does not know its implementations
         # Values of secrets live on the Worker only: no package of the
         # Controller, tests included, can read or deliver one.
@@ -233,9 +233,9 @@ linters:
           list-mode: lax
           files: ["**/internal/controller/**", "**/internal/app/**"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/adapters/secrets
+            - pkg: github.com/Autarquico/codeflock/internal/adapters/secrets
               desc: the Controller holds metadata of secrets, never their values
-            - pkg: github.com/Autarquico/codefabric/internal/worker/secretjit
+            - pkg: github.com/Autarquico/codeflock/internal/worker/secretjit
               desc: the Controller holds metadata of secrets, never their values
         # redact matches bytes: the standard library is all it needs.
         redact:
@@ -249,13 +249,13 @@ linters:
           files: ["**/internal/support/svcunit/**", "!$test"]
           allow:
             - $gostd
-            - github.com/Autarquico/codefabric/internal/support/svcunit
-            - github.com/Autarquico/codefabric/internal/support/atomicfile
+            - github.com/Autarquico/codeflock/internal/support/svcunit
+            - github.com/Autarquico/codeflock/internal/support/atomicfile
         store:
           list-mode: lax
           files: ["**/internal/controller/store/**"]
           deny:
-            - pkg: github.com/Autarquico/codefabric/internal/controller/api
+            - pkg: github.com/Autarquico/codeflock/internal/controller/api
               desc: storage must not depend on the HTTP layer
   exclusions:
     presets: [std-error-handling]
@@ -266,4 +266,4 @@ formatters:
     - goimports
   settings:
     goimports:
-      local-prefixes: [github.com/Autarquico/codefabric]
+      local-prefixes: [github.com/Autarquico/codeflock]

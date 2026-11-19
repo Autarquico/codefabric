@@ -3,7 +3,7 @@ package tui
 import (
 	"github.com/charmbracelet/x/ansi"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 // The keys of the live view. "g" is the list's (go to the top), so the grid is

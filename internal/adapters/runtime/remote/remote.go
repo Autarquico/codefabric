@@ -6,8 +6,8 @@ package remote
 import (
 	"fmt"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
 )
 
 // AttachArgv is the command, as an argv for the machine of the session, that

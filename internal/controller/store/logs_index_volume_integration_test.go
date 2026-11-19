@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 // TestScenario_LogsOutputStorage_Volumen: 100 MB of output is stored and paged

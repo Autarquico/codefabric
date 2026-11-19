@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // Output is the output.log side of the journal: what the Controller has not

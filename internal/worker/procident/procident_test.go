@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/worker/procident"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
 )
 
 func TestVerifyTellsTheSameProcessFromAReusedPid(t *testing.T) {

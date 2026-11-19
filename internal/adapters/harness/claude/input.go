@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // MinStructuredInputVersion is the first Claude Code whose MCP permission

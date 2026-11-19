@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/client/taskpull"
+	"github.com/Autarquico/codeflock/internal/client/taskpull"
 )
 
 // The same protection holds when the branch is the one checked out and advances with a

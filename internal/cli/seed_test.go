@@ -18,10 +18,10 @@ import (
 	"sync"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	csession "github.com/Autarquico/codefabric/internal/client/session"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	csession "github.com/Autarquico/codeflock/internal/client/session"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 const seedSessionID = "11111111-2222-4333-8444-555555555555"

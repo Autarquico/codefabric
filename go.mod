@@ -1,4 +1,4 @@
-module github.com/Autarquico/codefabric
+module github.com/Autarquico/codeflock
 
 go 1.26.0
 

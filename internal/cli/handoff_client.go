@@ -11,10 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/client/handoff"
-	csession "github.com/Autarquico/codefabric/internal/client/session"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/client/handoff"
+	csession "github.com/Autarquico/codeflock/internal/client/session"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // codexSessionEnv is how Codex tells a command it runs the id of its session.

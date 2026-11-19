@@ -12,7 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/Autarquico/codefabric/internal/cli/actions"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
 )
 
 // screenEnv is what a screen that is not a list over a Backend gets from the

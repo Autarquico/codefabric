@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/app/gc"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/app/gc"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // seed records a session seed uploaded age ago and returns its blob, uploaded then too.

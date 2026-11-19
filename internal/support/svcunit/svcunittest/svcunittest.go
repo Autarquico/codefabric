@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/support/svcunit"
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
 )
 
 // Program is an executable file only this user can write, for a service to

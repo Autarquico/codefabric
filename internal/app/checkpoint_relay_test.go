@@ -3,8 +3,8 @@ package app_test
 import (
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func (r *reporter) recordCheckpoint(id domain.ID) {

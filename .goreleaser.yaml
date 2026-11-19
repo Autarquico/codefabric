@@ -13,9 +13,9 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/Autarquico/codefabric/internal/buildinfo.version={{.Version}}
-      - -X github.com/Autarquico/codefabric/internal/buildinfo.commit={{.Commit}}
-      - -X github.com/Autarquico/codefabric/internal/buildinfo.date={{.Date}}
+      - -X github.com/Autarquico/codeflock/internal/buildinfo.version={{.Version}}
+      - -X github.com/Autarquico/codeflock/internal/buildinfo.commit={{.Commit}}
+      - -X github.com/Autarquico/codeflock/internal/buildinfo.date={{.Date}}
     goos: [linux, darwin]
     goarch: [amd64, arm64]
 

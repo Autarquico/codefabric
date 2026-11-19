@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/client/taskpull"
+	"github.com/Autarquico/codeflock/internal/client/taskpull"
 )
 
 // An ignored file that the checkpoint does not version by the same name but whose path

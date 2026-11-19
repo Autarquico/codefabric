@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/procgroup"
+	"github.com/Autarquico/codeflock/internal/support/procgroup"
 )
 
 // maxOutput bounds what is kept of the output of a command.

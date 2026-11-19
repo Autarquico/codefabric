@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/flock"
+	"github.com/Autarquico/codeflock/internal/support/flock"
 )
 
 func TestLock_ExcludesASecondHolderUntilReleased(t *testing.T) {

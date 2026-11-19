@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/support/atomicfile"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/support/atomicfile"
 )
 
 // appliedFile is what a TargetGlobal apply wrote, in ~/.codex: how it tells a

@@ -3,7 +3,7 @@ package codex
 import (
 	"fmt"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // SecretEscape says how a secret is written in config.toml, the only file of a

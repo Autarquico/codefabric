@@ -1,6 +1,6 @@
 package v1
 
-import "github.com/Autarquico/codefabric/internal/domain"
+import "github.com/Autarquico/codeflock/internal/domain"
 
 // Reasons a Run cannot be attached (details.reason of CF_RUN_NOT_ATTACHABLE).
 const (

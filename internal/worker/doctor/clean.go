@@ -5,7 +5,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 // MaxText is the longest Name, Message or Action, in bytes, that the Controller

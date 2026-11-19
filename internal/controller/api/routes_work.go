@@ -8,13 +8,13 @@ import (
 	"net/http"
 	"slices"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/events"
-	"github.com/Autarquico/codefabric/internal/app/runs"
-	"github.com/Autarquico/codefabric/internal/app/search"
-	"github.com/Autarquico/codefabric/internal/app/tasks"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/events"
+	"github.com/Autarquico/codeflock/internal/app/runs"
+	"github.com/Autarquico/codeflock/internal/app/search"
+	"github.com/Autarquico/codeflock/internal/app/tasks"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // registerWorkRoutes adds the Projects, Tasks and Runs endpoints. Only clients

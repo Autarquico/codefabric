@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/worker/gitops"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/worker/gitops"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // DefaultWorktreeRetention is how long a worktree is kept after the Controller

@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/support/prompt"
+	"github.com/Autarquico/codeflock/internal/support/prompt"
 )
 
 func TestSetup_OffersTheSkillToAClientOnlyOnATerminal(t *testing.T) {

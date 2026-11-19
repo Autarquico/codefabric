@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // LogRecord is a structured log line (§3.12, §34): diagnostics, stored apart

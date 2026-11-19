@@ -3,7 +3,7 @@ package executor
 import (
 	"encoding/json"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // specView is the part of the frozen spec the Worker acts on. It reads the

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // MaxEffectiveBytes bounds the effective configuration once marshaled; it is

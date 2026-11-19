@@ -7,7 +7,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // KeepaliveEvery is how long a stream may go without a byte before it sends a

@@ -3,8 +3,8 @@ package mutation
 import (
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func TestActorOf(t *testing.T) {

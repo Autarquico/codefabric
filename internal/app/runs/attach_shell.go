@@ -4,8 +4,8 @@ import (
 	"context"
 	"slices"
 
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // requireShell decides the policy of a shell on run, which is held by worker. It

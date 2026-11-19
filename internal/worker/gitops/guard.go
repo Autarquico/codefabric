@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/procgroup"
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/procgroup"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // guardTimeout bounds the reading of everything a publication would carry.

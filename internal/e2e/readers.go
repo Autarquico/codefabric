@@ -11,7 +11,7 @@ import (
 
 	_ "modernc.org/sqlite" // the driver, to read the databases of the cluster
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // The databases of the cluster are read, never written: each read opens the

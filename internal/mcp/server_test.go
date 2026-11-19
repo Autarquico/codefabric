@@ -14,11 +14,11 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/mcp"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/mcp"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // fake is the Client of the tests: the methods a test sets answer, any other panics.

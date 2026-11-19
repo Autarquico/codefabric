@@ -3,7 +3,7 @@ package execwrap
 import (
 	"syscall"
 
-	"github.com/Autarquico/codefabric/internal/worker/procident"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
 )
 
 // GroupOthers is the number of live processes of the group pgid but self. It

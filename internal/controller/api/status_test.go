@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/controller/api"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/controller/api"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // storeStub is the real store with a Health the test controls.

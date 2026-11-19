@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
 )
 
 // isTerminal says whether f is a terminal: its descriptor has a line discipline.

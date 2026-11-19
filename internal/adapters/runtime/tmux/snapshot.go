@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	"github.com/Autarquico/codefabric/internal/domain"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // snapshotArgs is the tmux command that prints the screen of a session: -p to

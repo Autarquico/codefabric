@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
-	"github.com/Autarquico/codefabric/internal/worker/procident"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
 )
 
 // What an invocation of the suite leaves in its root, and how the root is named.

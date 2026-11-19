@@ -3,7 +3,7 @@ package state_test
 import (
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // Closing the capture of one checkpoint leaves the other the Run has open as it is.

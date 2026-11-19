@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/support/svcunit"
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
 )
 
 func TestServicePATH_ProgramsFirstThenTheUsualOnesOnce(t *testing.T) {

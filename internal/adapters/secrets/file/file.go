@@ -36,10 +36,10 @@ import (
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/sys/unix"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/atomicfile"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/atomicfile"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 const (

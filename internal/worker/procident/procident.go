@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Autarquico/codefabric/internal/support/procgroup"
+	"github.com/Autarquico/codeflock/internal/support/procgroup"
 )
 
 // Verdict is what comparing a recorded identity with the process that has the

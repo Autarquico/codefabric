@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/support/gittest"
-	"github.com/Autarquico/codefabric/internal/worker/procident"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/support/gittest"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
 )
 
 // Role is what a process is to the cluster. A harness is torn down role by role.
