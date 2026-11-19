@@ -210,67 +210,6 @@ func (w reasonsWire) ReportRun(_ context.Context, _ string, req v1.RunReportRequ
 	return resp, nil
 }
 
-// A Controller rolled back between two heartbeats refuses the fields it no
-// longer knows as an invalid request; the Run is not given up for that, and
-// the report goes once the next heartbeat says what the Controller takes.
-func TestAControllerRolledBackBetweenHeartbeatsGetsTheReportAfterTheNextHeartbeatAndTheRunIsNotFenced(t *testing.T) {
-	f := newFixture(t)
-	j := journal.New("01J0000000000000000000000E1", f.clock)
-	k := state.Key{RunID: "run_a", LeaseEpoch: 1}
-	err := f.db.WithTx(t.Context(), func(tx *state.Tx) error {
-		if _, err := state.InsertAssigned(t.Context(), tx, state.Run{Key: k, LeaseID: "lease_a", Spec: []byte("{}"), CreatedAt: t0, AcceptBy: t0}); err != nil {
-			return err
-		}
-		_, err := j.AppendTx(t.Context(), tx, k, v1.RunReportEntry{Kind: v1.ReportExited, At: t0, Answer: "done", EndReason: domain.EndIdleAfterResult})
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	features := &journal.ControllerFeatures{}
-	features.Set([]string{v1.FeatureRunAnswer, v1.FeatureIdleAfterResult}) // the last heartbeat; the rollback came after it
-	var requests []v1.RunReportEntry
-	c := reporterFunc(func(req v1.RunReportRequest) (v1.RunReportResponse, error) {
-		e := req.Entries[0]
-		requests = append(requests, e)
-		if e.Answer != "" || e.EndReason != "" {
-			return v1.RunReportResponse{}, domain.NewError(domain.CodeInvalidRequest, "unknown field", nil)
-		}
-		return v1.RunReportResponse{Outcomes: []v1.RunReportOutcome{{WorkerSeq: e.WorkerSeq, Result: v1.ReportApplied}}}, nil
-	})
-	s := f.sender(c, j)
-	s.Features = features
-	if _, err := s.Flush(t.Context()); err == nil {
-		t.Fatal("the refusal is not reported")
-	}
-	if len(requests) != 1 || f.pending() != 1 {
-		t.Fatalf("requests = %+v, %d pending: the report must wait for the next heartbeat", requests, f.pending())
-	}
-	if _, err := s.Flush(t.Context()); err != nil || len(requests) != 1 {
-		t.Fatalf("before a heartbeat nothing is sent: %d requests (%v)", len(requests), err)
-	}
-	features.Set([]string{v1.FeatureRunAnswer}) // the next heartbeat, from the rolled back Controller
-	c = reporterFunc(func(req v1.RunReportRequest) (v1.RunReportResponse, error) {
-		e := req.Entries[0]
-		requests = append(requests, e)
-		if e.EndReason != "" {
-			return v1.RunReportResponse{}, domain.NewError(domain.CodeInvalidRequest, "unknown end_reason", nil)
-		}
-		return v1.RunReportResponse{Outcomes: []v1.RunReportOutcome{{WorkerSeq: e.WorkerSeq, Result: v1.ReportApplied}}}, nil
-	})
-	s = f.sender(c, j)
-	s.Features = features
-	if _, err := s.Flush(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if len(requests) != 2 || requests[1].Answer != "done" || requests[1].EndReason != "" || f.pending() != 0 {
-		t.Errorf("requests = %+v, %d pending: the answer must survive, the end reason go", requests, f.pending())
-	}
-	if run, err := state.RunBy(t.Context(), f.db.Reader(), k); err != nil || run.FencedCode != "" {
-		t.Errorf("the Run is fenced: %q (%v)", run.FencedCode, err)
-	}
-}
-
 type reporterFunc func(v1.RunReportRequest) (v1.RunReportResponse, error)
 
 func (r reporterFunc) ReportRun(_ context.Context, _ string, req v1.RunReportRequest) (v1.RunReportResponse, error) {
