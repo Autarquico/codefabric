@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Install cf, start a Controller, join a Worker and run your first Task.
+description: Install cflk, start a Controller, join a Worker and run your first Task.
 ---
 
 This page takes you from nothing to a Task running on a Worker. It assumes a Git repository you can push to, and one machine to start with: the Controller, a Worker and the client can all be the same machine.
@@ -11,16 +11,20 @@ This page takes you from nothing to a Task running on a Worker. It assumes a Git
 curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | sh
 ```
 
-The installer puts `cf` in `~/.local/bin`. Two variables change that:
+The installer puts `cflk` in `~/.local/bin`. Two variables change that:
 
 | Variable | Meaning |
 | --- | --- |
-| `CF_VERSION` | The version to install, such as `v0.2.0`. Default: the latest release. |
-| `CF_INSTALL_DIR` | Where to put `cf`. Default: `~/.local/bin`. |
+| `CFLK_VERSION` | The version to install, such as `v0.2.0`. Default: the latest release. |
+| `CFLK_INSTALL_DIR` | Where to put `cflk`. Default: `~/.local/bin`. |
 
 ```sh
-curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | CF_VERSION=v0.2.0 CF_INSTALL_DIR=/usr/local/bin sh
+curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | CFLK_VERSION=v0.2.0 CFLK_INSTALL_DIR=/usr/local/bin sh
 ```
+
+The old `CF_VERSION`, `CF_INSTALL_DIR` and `CF_RELEASE_BASE_URL` are still read, with a warning, until 0.5; `CFLK_*` wins when both are set. The installer also puts a `cf` next to `cflk` that runs `cflk`, so existing scripts keep working until 0.5.
+
+Upgrading from 0.4.0-beta.6 or earlier? Read [Upgrade to 0.4.0-beta.7](../upgrade-beta7/) first: the installer of the beta.6 cannot install it.
 
 Supported platforms: Linux (amd64, arm64) and macOS (amd64, arm64). Anything else is refused before downloading.
 
@@ -33,75 +37,75 @@ The installer and its signing chain are tested in CI against a throwaway key. It
 Check it works:
 
 ```sh
-cf version
+cflk version
 ```
 
 ## The network between machines
 
-Every Worker and client dials the Controller at its advertised address (port 7443 by default), and a client reaches a Worker over ssh for `cf attach`. The recommended network is a [Tailscale](https://tailscale.com) tailnet: the machines reach each other by name wherever they are. Decide it before you start the Controller: these flags go on its first `cf controller init`. Advertise the Controller's tailnet name, since its host goes into the Controller's certificate, and bind it to the tailnet address so the API is not reachable from anywhere else:
+Every Worker and client dials the Controller at its advertised address (port 7443 by default), and a client reaches a Worker over ssh for `cflk attach`. The recommended network is a [Tailscale](https://tailscale.com) tailnet: the machines reach each other by name wherever they are. Decide it before you start the Controller: these flags go on its first `cflk controller init`. Advertise the Controller's tailnet name, since its host goes into the Controller's certificate, and bind it to the tailnet address so the API is not reachable from anywhere else:
 
 ```sh
-cf controller init --advertise <controller>.<tailnet>.ts.net:7443 --listen <tailnet-ip>:7443
+cflk controller init --advertise <controller>.<tailnet>.ts.net:7443 --listen <tailnet-ip>:7443
 ```
 
 Without `--listen` the Controller listens on every interface, on the advertised port (`0.0.0.0:7443` by default); on a machine with a public address, keep that port closed with a firewall.
 
-A Worker tells clients to reach it over ssh as `<user>@<hostname>`, which is often not its tailnet name (on a Mac, `Name-MacBook-Pro.local`). Give it its tailnet name when you install or run it, with the same flag on `cf worker run`:
+A Worker tells clients to reach it over ssh as `<user>@<hostname>`, which is often not its tailnet name (on a Mac, `Name-MacBook-Pro.local`). Give it its tailnet name when you install or run it, with the same flag on `cflk worker run`:
 
 ```sh
-cf worker install-service --ssh-target <user>@<worker>.<tailnet>.ts.net
+cflk worker install-service --ssh-target <user>@<worker>.<tailnet>.ts.net
 ```
 
-Tailscale only carries the traffic. The Controller's API still authenticates every Worker and client with its own certificates (mutual TLS), inside the tailnet too. `cf attach` uses the OpenSSH client: plain ssh authenticates with your keys, Tailscale SSH with your tailnet identity and its policy.
+Tailscale only carries the traffic. The Controller's API still authenticates every Worker and client with its own certificates (mutual TLS), inside the tailnet too. `cflk attach` uses the OpenSSH client: plain ssh authenticates with your keys, Tailscale SSH with your tailnet identity and its policy.
 
-If you use Tailscale SSH in `check` mode, it asks for a login in the browser from time to time. Until you do, the ssh check of `cf doctor` warns that it cannot reach that Worker, and `cf attach` waits for that login.
+If you use Tailscale SSH in `check` mode, it asks for a login in the browser from time to time. Until you do, the ssh check of `cflk doctor` warns that it cannot reach that Worker, and `cflk attach` waits for that login.
 
 ## Start a Controller
 
 The Controller is the one process that holds the state. Create it once, then run it:
 
 ```sh
-cf controller init
-cf controller run
+cflk controller init
+cflk controller run
 ```
 
-`init` creates the database, a certificate authority, certificates and the credentials of the machine you are on. By default clients dial `<hostname>:7443`; use `--advertise host:port` if other machines reach this one by another name. `run` serves the API until you stop it. To keep it running, `cf controller install-service` sets it up as a systemd user service on Linux.
+`init` creates the database, a certificate authority, certificates and the credentials of the machine you are on. By default clients dial `<hostname>:7443`; use `--advertise host:port` if other machines reach this one by another name. `run` serves the API until you stop it. To keep it running, `cflk controller install-service` sets it up as a systemd user service on Linux.
 
-`cf controller init` also creates the owner credentials and a name for the owner's machine (`--name`). Once the Controller is running, `cf status` shows its version, uptime and database health.
+`cflk controller init` also creates the owner credentials and a name for the owner's machine (`--name`). Once the Controller is running, `cflk status` shows its version, uptime and database health.
 
 ## Add a Worker
 
 A Worker is a machine that runs Tasks. On the Controller's machine, create a single-use invitation:
 
 ```sh
-cf controller token create --worker
+cflk controller token create --worker
 ```
 
 The invitation is valid for one hour unless you pass `--ttl` (at most 168 hours). On the machine that will be the Worker:
 
 ```sh
-cf worker join <invitation>
+cflk worker join <invitation>
 ```
 
 In a terminal this is a wizard: it asks what the flags did not give, offers to install missing harnesses and runs the Worker doctor. Until the doctor is green the Worker takes no Runs. Pass `-` instead of the invitation to read it from stdin and keep it out of your shell history. Then keep the daemon running:
 
 ```sh
-cf worker run
+cflk worker run
 ```
 
-or install it as a service with `cf worker install-service` (systemd user service or launchd).
+or install it as a service with `cflk worker install-service` (systemd user service `codeflock-worker`, or launchd `com.codeflock.worker`).
 
-On macOS `install-service` installs a launchd agent of your user. With nobody logged in it goes into the `user/<uid>` domain, with a warning: it runs, but after a restart launchd does not load it again until you log in. Over SSH, while someone is logged in at the screen, launchd refuses `gui/<uid>` with `exit status 125`: `install-service` then falls back to `user/<uid>` with the same warning. For a Worker that starts at boot without a login, run it as a LaunchDaemon in `/Library/LaunchDaemons/com.codefabric.worker.plist` (owned by `root:wheel`, mode 644). Keep `AbandonProcessGroup`: without it, restarting the daemon kills the tmux sessions of its Runs.
+On macOS `install-service` installs a launchd agent of your user. With nobody logged in it goes into the `user/<uid>` domain, with a warning: it runs, but after a restart launchd does not load it again until you log in. Over SSH, while someone is logged in at the screen, launchd refuses `gui/<uid>` with `exit status 125`: `install-service` then falls back to `user/<uid>` with the same warning. For a Worker that starts at boot without a login, run it as a LaunchDaemon in `/Library/LaunchDaemons/com.codeflock.worker.plist` (owned by `root:wheel`, mode 644). Keep `AbandonProcessGroup`: without it, restarting the daemon kills the tmux sessions of its Runs.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.codefabric.worker</string>
+  <key>Label</key><string>com.codeflock.worker</string>
   <key>UserName</key><string>YOUR_USER</string>
   <key>ProgramArguments</key>
-  <array><string>/Users/YOUR_USER/.local/bin/cf</string><string>worker</string><string>run</string></array>
+  <array><string>/Users/YOUR_USER/.local/bin/cflk</string><string>worker</string><string>run</string></array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key><string>/Users/YOUR_USER</string>
@@ -112,75 +116,75 @@ On macOS `install-service` installs a launchd agent of your user. With nobody lo
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>AbandonProcessGroup</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>/Users/YOUR_USER/Library/Logs/codefabric/com.codefabric.worker.log</string>
-  <key>StandardErrorPath</key><string>/Users/YOUR_USER/Library/Logs/codefabric/com.codefabric.worker.log</string>
+  <key>StandardOutPath</key><string>/Users/YOUR_USER/Library/Logs/codeflock/com.codeflock.worker.log</string>
+  <key>StandardErrorPath</key><string>/Users/YOUR_USER/Library/Logs/codeflock/com.codeflock.worker.log</string>
 </dict>
 </plist>
 ```
 
-Load it with `sudo launchctl bootstrap system /Library/LaunchDaemons/com.codefabric.worker.plist` and restart it with `sudo launchctl kickstart -k system/com.codefabric.worker`. `cf` ends cleanly on a signal, so launchd does not start it again after one: restart it with `kickstart`.
+Load it with `sudo launchctl bootstrap system /Library/LaunchDaemons/com.codeflock.worker.plist` and restart it with `sudo launchctl kickstart -k system/com.codeflock.worker`. `cflk` ends cleanly on a signal, so launchd does not start it again after one: restart it with `kickstart`.
 
 ## Connect another machine as a client
 
 To use Code Flock from a machine that is not the Controller:
 
 ```sh
-cf controller token create --client      # on the Controller
-cf connect <invitation>                  # on the new machine
+cflk controller token create --client      # on the Controller
+cflk connect <invitation>                  # on the new machine
 ```
 
-`cf setup` asks what a machine is for (client, Worker or both) and chains these commands for you. It does not set up the Controller; that is always `cf controller init`.
+`cflk setup` asks what a machine is for (client, Worker or both) and chains these commands for you. It does not set up the Controller; that is always `cflk controller init`.
 
 ## Check everything
 
 ```sh
-cf doctor
+cflk doctor
 ```
 
-It checks that the Controller answers, lists every Worker with the verdict of its own doctor, and tries a non-interactive ssh to each Worker, which `cf attach` needs. An unreachable Controller fails the command; a failing component or an ssh that does not work is shown as a warning. On a Worker, `cf worker doctor` gives the detail of its local checks (tmux, git, disk, harnesses and their logins).
+It checks that the Controller answers, lists every Worker with the verdict of its own doctor, and tries a non-interactive ssh to each Worker, which `cflk attach` needs. An unreachable Controller fails the command; a failing component or an ssh that does not work is shown as a warning. On a Worker, `cflk worker doctor` gives the detail of its local checks (tmux, git, disk, harnesses and their logins).
 
 ## Your first Task
 
 From inside a clone of a repository:
 
 ```sh
-cf project create          # once per repository; defaults to this directory's origin
-cf do "Fix the flaky test in internal/queue" --harness claude-code
+cflk project create          # once per repository; defaults to this directory's origin
+cflk do "Fix the flaky test in internal/queue" --harness claude-code
 ```
 
-`cf do` creates a Task from this directory's repository and starts its first Run on a suitable Worker. The harness is one of `claude-code`, `codex` or `command`; the Worker must have it installed and logged in. See [Concepts](../concepts/) for what each one is.
+`cflk do` creates a Task from this directory's repository and starts its first Run on a suitable Worker. The harness is one of `claude-code`, `codex` or `command`; the Worker must have it installed and logged in. See [Concepts](../concepts/) for what each one is.
 
 Follow what happens:
 
 ```sh
-cf ps                      # Runs that are live, and whether they can be attached
-cf logs --run <run> -f     # what the harness prints, following
-cf attach <task>           # the live session; closing it does not end the Run
-cf task show <task>        # the Task and its Runs
+cflk ps                      # Runs that are live, and whether they can be attached
+cflk logs --run <run> -f     # what the harness prints, following
+cflk attach <task>           # the live session; closing it does not end the Run
+cflk task show <task>        # the Task and its Runs
 ```
 
-`cf attach` opens the Run's session through the Controller, with no ssh to the Worker. Detach with Ctrl-] (configurable, see [the CLI reference](../cli/#the-detach-key)); the Run keeps going.
+`cflk attach` opens the Run's session through the Controller, with no ssh to the Worker. Detach with Ctrl-] (configurable, see [the CLI reference](../cli/#the-detach-key)); the Run keeps going.
 
 ## When a Task needs you
 
 A Run can stop to ask for a permission or an answer. That Task is waiting for input.
 
 ```sh
-cf inbox
-cf task respond <task> --allow
-cf task respond <task> --text "use the eu-west region"
+cflk inbox
+cflk task respond <task> --allow
+cflk task respond <task> --text "use the eu-west region"
 ```
 
-`cf inbox` lists what needs you: Tasks waiting for input and failures to decide on. `cf task respond` answers: `--allow` or `--deny` for a permission, `--text` for a question. If more than one prompt or Run is waiting, `--prompt` and `--run` pick one.
+`cflk inbox` lists what needs you: Tasks waiting for input and failures to decide on. `cflk task respond` answers: `--allow` or `--deny` for a permission, `--text` for a question. If more than one prompt or Run is waiting, `--prompt` and `--run` pick one.
 
 By default the harness skips its own permission prompts. Create the Task with `--permissions ask` if you want it to ask, so the questions arrive in the inbox.
 
 ## The terminal UI
 
-Run `cf` with no arguments in a terminal:
+Run `cflk` with no arguments in a terminal:
 
 ```sh
-cf
+cflk
 ```
 
 It opens the TUI: home with live counts and activity, then views for Tasks, Workers, Runs, logs and the inbox. See [The TUI](../tui/) for the keys.
@@ -192,8 +196,8 @@ This is the whole journey of a Claude Code session: from your Mac to a Worker, b
 **1. Once per Project: keep the session in checkpoints, and let its Runs use the token.**
 
 ```sh
-cf project set <project> --native-state on
-cf project secrets allow <project> claude/oauth-token
+cflk project set <project> --native-state on
+cflk project secrets allow <project> claude/oauth-token
 ```
 
 The first prints the Project; `Native state` reads `on`. Without it the Project does not accept sessions as seeds. The second prints `Project <id> allows claude/oauth-token.`; without it the handoff is refused with `CF_POLICY_DENIED: harness claude-code needs the secrets claude/oauth-token`.
@@ -201,34 +205,34 @@ The first prints the Project; `Native state` reads `on`. Without it the Project 
 A working copy belongs to the Project only if its `origin` is exactly one of the Project's URLs. If you clone with SSH and the Project has the HTTPS URL (or the other way round), add the other spelling:
 
 ```sh
-cf project set <project> --add-repo git@github.com:<owner>/<repo>.git
+cflk project set <project> --add-repo git@github.com:<owner>/<repo>.git
 ```
 
 Otherwise `/handto` says `no Project has the origin of this working directory as a repo URL`.
 
-A Run asks for 2 CPUs and 4 GB by default. A Worker that offers less never takes it, and the Run waits in `queued` (`cf run explain` says `memory_mb 4096 > ...`). Lower the default of the Project; the two flags go together:
+A Run asks for 2 CPUs and 4 GB by default. A Worker that offers less never takes it, and the Run waits in `queued` (`cflk run explain` says `memory_mb 4096 > ...`). Lower the default of the Project; the two flags go together:
 
 ```sh
-cf project set <project> --cpu 2 --memory-mb 2048
+cflk project set <project> --cpu 2 --memory-mb 2048
 ```
 
-**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on. It prints more than the token, and `setup-token` is interactive, so it cannot be piped. The most reliable way is to save the whole output to a file and feed that: `cf` keeps the `sk-ant-oat` line, joins it if the terminal wrapped it, and says so. To keep the token out of your shell's history, never put it on the command line: use a file or the clipboard (`pbpaste | cf worker secrets set claude/oauth-token` on macOS).
+**2. Once per Worker that may run Claude: give it a token.** Run `claude setup-token` on any machine you are logged in on. It prints more than the token, and `setup-token` is interactive, so it cannot be piped. The most reliable way is to save the whole output to a file and feed that: `cflk` keeps the `sk-ant-oat` line, joins it if the terminal wrapped it, and says so. To keep the token out of your shell's history, never put it on the command line: use a file or the clipboard (`pbpaste | cflk worker secrets set claude/oauth-token` on macOS).
 
-At the prompt, paste only the line that starts with `sk-ant-oat`. The prompt does not show what you paste. A paste that goes over several lines is one answer, whether its lines end in LF, CR or CRLF: a line end ends the answer only when nothing follows it within about 50 ms, so a wrapped paste is joined, with or without a final line end. In a terminal with bracketed paste the whole paste is kept whatever its timing and your own Enter ends the answer; in one without it, a paste that includes its final line end already ends the answer, so do not press Enter after it. If the two pastes still differ, `cf` says so and stores nothing: give the token from a file or the clipboard as above.
+At the prompt, paste only the line that starts with `sk-ant-oat`. The prompt does not show what you paste. A paste that goes over several lines is one answer, whether its lines end in LF, CR or CRLF: a line end ends the answer only when nothing follows it within about 50 ms, so a wrapped paste is joined, with or without a final line end. In a terminal with bracketed paste the whole paste is kept whatever its timing and your own Enter ends the answer; in one without it, a paste that includes its final line end already ends the answer, so do not press Enter after it. If the two pastes still differ, `cflk` says so and stores nothing: give the token from a file or the clipboard as above.
 
 ```sh
-cf worker secrets set claude/oauth-token
+cflk worker secrets set claude/oauth-token
 # or, from a file with the output of setup-token:
-cf worker secrets set claude/oauth-token < setup-token.txt
+cflk worker secrets set claude/oauth-token < setup-token.txt
 ```
 
-It reads the token from stdin, or asks for it twice without echo on a terminal, and prints `Stored secret claude/oauth-token (...) ...`. A Worker without the secret is not offered the Run (`CF_SECRET_UNAVAILABLE` in `cf run explain`). Only the Claude token is joined from several lines: for any other secret the prompt refuses an answer of several lines and stores nothing, so give a value of several lines, or one the terminal may wrap, on stdin.
+It reads the token from stdin, or asks for it twice without echo on a terminal, and prints `Stored secret claude/oauth-token (...) ...`. A Worker without the secret is not offered the Run (`CF_SECRET_UNAVAILABLE` in `cflk run explain`). Only the Claude token is joined from several lines: for any other secret the prompt refuses an answer of several lines and stores nothing, so give a value of several lines, or one the terminal may wrap, on stdin.
 
-If a token was stored badly with an earlier version of `cf` (for example as two lines, or the code from the browser), `cf worker doctor` cannot tell, and a Run fails with `401 Invalid bearer token`: set it again with the command above.
+If a token was stored badly with an earlier version of `cflk` (for example as two lines, or the code from the browser), `cflk worker doctor` cannot tell, and a Run fails with `401 Invalid bearer token`: set it again with the command above.
 
-The value must look like a token (`sk-ant-oat…`): anything else, such as the code the browser shows, is refused with `CF_INVALID_REQUEST` and nothing is stored. `--force` stores it anyway and warns on stderr that Runs will likely fail with 401; `cf worker doctor` then warns on `auth:claude-code` until you set it again with the line `claude setup-token` prints.
+The value must look like a token (`sk-ant-oat…`): anything else, such as the code the browser shows, is refused with `CF_INVALID_REQUEST` and nothing is stored. `--force` stores it anyway and warns on stderr that Runs will likely fail with 401; `cflk worker doctor` then warns on `auth:claude-code` until you set it again with the line `claude setup-token` prints.
 
-The Worker service finds `claude` and `codex` in its own `PATH`, not in that of your shell: if `cf worker show <worker>` lacks `harness:claude-code` and the log says `harness not offered harness=claude-code status=not-installed`, link the binary into a directory of the service's `PATH`, such as `~/.local/bin` (a tool manager like mise installs it elsewhere), and restart the Worker.
+The Worker service finds `claude` and `codex` in its own `PATH`, not in that of your shell: if `cflk worker show <worker>` lacks `harness:claude-code` and the log says `harness not offered harness=claude-code status=not-installed`, link the binary into a directory of the service's `PATH`, such as `~/.local/bin` (a tool manager like mise installs it elsewhere), and restart the Worker.
 
 The agent commits as the git user of the Worker. Give each Worker one, or its commits fail with `Author identity unknown`:
 
@@ -240,10 +244,10 @@ git config --global user.email "<your email>"
 **3. Once on your Mac: install the skill.**
 
 ```sh
-cf claude install
+cflk claude install
 ```
 
-It prints `handto skill: created  ~/.claude/skills/handto/SKILL.md` (`unchanged` if it was already there, `updated` if it was of another version of `cf`). For Codex, `cf codex install` does the same and you ask for it by name (`$handto <worker>`).
+It prints `handto skill: created  ~/.claude/skills/handto/SKILL.md` (`unchanged` if it was already there, `updated` if it was of another version of `cflk`). For Codex, `cflk codex install` does the same and you ask for it by name (`$handto <worker>`).
 
 **4. Hand the session over.** In Claude Code, in a clone of the Project:
 
@@ -251,10 +255,10 @@ It prints `handto skill: created  ~/.claude/skills/handto/SKILL.md` (`unchanged`
 /handto <worker>
 ```
 
-Claude runs `cf handoff` and the answer is three lines: `Task: <task> (started)`, `Worker: <worker>` and `Continue with: cf attach <task>`. Uncommitted and untracked files travel with it, and your working tree is not touched. The session on your Mac is now marked as handed off: do not keep writing in it. Then close it with `/exit` and follow the work:
+Claude runs `cflk handoff` and the answer is three lines: `Task: <task> (started)`, `Worker: <worker>` and `Continue with: cflk attach <task>`. Uncommitted and untracked files travel with it, and your working tree is not touched. The session on your Mac is now marked as handed off: do not keep writing in it. Then close it with `/exit` and follow the work:
 
 ```sh
-cf attach <task>
+cflk attach <task>
 ```
 
 **5. Move it to another Worker.** From inside the Run, in its session:
@@ -263,20 +267,20 @@ cf attach <task>
 /handto <other-worker>
 ```
 
-It prints `Task <task> is moving to <other-worker> (...)` and the Run of this session ends when the checkpoint is taken; reconnect with `cf attach <task>`. From your Mac, without being in the session, `cf task move <task> <other-worker>` does the same and prints `<task>: move <id> done: the Run on <other-worker> started.` (or the stage it is at).
+It prints `Task <task> is moving to <other-worker> (...)` and the Run of this session ends when the checkpoint is taken; reconnect with `cflk attach <task>`. From your Mac, without being in the session, `cflk task move <task> <other-worker>` does the same and prints `<task>: move <id> done: the Run on <other-worker> started.` (or the stage it is at).
 
 **6. Bring it back to your Mac.** Suspend the Run and wait for its checkpoint, then pull it, in a clone of the Project:
 
 ```sh
-cf task defer <task>
-cf task pull <task> --open
+cflk task defer <task>
+cflk task pull <task> --open
 ```
 
-`cf task defer` prints `<task>: capturing a checkpoint; it waits (deferred) once the Worker has published it.` `cf task pull` prints `<task>: branch <branch> (...) is checked out in <dir>.` and `Session <id> installed.` (or `updated`), followed by `Resume it: claude --resume=<id>`; `--open` runs that command for you. `cf task pull <task> --defer` does the defer and the pull in one go.
+`cflk task defer` prints `<task>: capturing a checkpoint; it waits (deferred) once the Worker has published it.` `cflk task pull` prints `<task>: branch <branch> (...) is checked out in <dir>.` and `Session <id> installed.` (or `updated`), followed by `Resume it: claude --resume=<id>`; `--open` runs that command for you. `cflk task pull <task> --defer` does the defer and the pull in one go.
 
-The branch is the one the Task started from if the checkpoint contains it, and `cf/<task>` otherwise. If your tree has uncommitted changes nothing is touched: the branch is made but not checked out, and the output says `NOT checked out` and offers `cf task pull <task> --worktree <path>`, which makes a worktree for it and installs the session there. The session returns under its own id and the handed-off mark is cleared, so you can hand it over again.
+The branch is the one the Task started from if the checkpoint contains it, and `cf/<task>` otherwise. If your tree has uncommitted changes nothing is touched: the branch is made but not checked out, and the output says `NOT checked out` and offers `cflk task pull <task> --worktree <path>`, which makes a worktree for it and installs the session there. The session returns under its own id and the handed-off mark is cleared, so you can hand it over again.
 
-If the Worker of the Run is down, `cf task pull --defer` cannot get a checkpoint: it says so, and that the Run becomes lost when its lease expires, after which `cf task pull <task>` brings the last checkpoint it published.
+If the Worker of the Run is down, `cflk task pull --defer` cannot get a checkpoint: it says so, and that the Run becomes lost when its lease expires, after which `cflk task pull <task>` brings the last checkpoint it published.
 
 [The CLI reference](../cli/) has every flag of these commands.
 
@@ -284,10 +288,10 @@ If the Worker of the Run is down, `cf task pull --defer` cannot get a checkpoint
 
 These are specified and not built yet:
 
-- **Remote Runs in Claude Code.** The Workers and Runs of the pool listed from Claude Code, marked as remote, and entered from there. `cf claude install` will set it up.
+- **Remote Runs in Claude Code.** The Workers and Runs of the pool listed from Claude Code, marked as remote, and entered from there. `cflk claude install` will set it up.
 
 ## What is tested, and what is not
 
-The core flow above is covered by automated tests. The default tests use the `command` harness, a scripted fake harness and recorded Claude Code and Codex output. No automated test runs a session with the real Claude Code or Codex CLI; an opt-in check (`CF_REQUIRE_CLAUDE=1`) only confirms the flags the Claude Code adapter relies on. Expect rough edges there, and run `cf worker doctor` first when something does not start.
+The core flow above is covered by automated tests. The default tests use the `command` harness, a scripted fake harness and recorded Claude Code and Codex output. No automated test runs a session with the real Claude Code or Codex CLI; an opt-in check (`CF_REQUIRE_CLAUDE=1`) only confirms the flags the Claude Code adapter relies on. Expect rough edges there, and run `cflk worker doctor` first when something does not start.
 
-Of the commands that are present but say so in their help, only `cf run fork` and `promote` are not implemented yet. `cf task defer`, `move` and `resume` work; see below.
+Of the commands that are present but say so in their help, only `cflk run fork` and `promote` are not implemented yet. `cflk task defer`, `move` and `resume` work; see below.

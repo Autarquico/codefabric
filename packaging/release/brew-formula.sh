@@ -5,7 +5,7 @@
 # at the tag commit, never the install.sh downloaded from the release (that would be circular). Suffixed versions are refused.
 # The formula is rendered to a temporary file and printed only when complete: a failure never
 # leaves partial output on stdout.
-# Usage: brew-formula.sh CHECKSUMS TRUST [VERSION]    Env: CF_RELEASE_BASE_URL (tests and mirrors)
+# Usage: brew-formula.sh CHECKSUMS TRUST [VERSION]    Env: CFLK_RELEASE_BASE_URL (tests and mirrors)
 set -eu
 LC_ALL=C
 export LC_ALL
@@ -14,12 +14,12 @@ if [ $# -lt 2 ] || [ $# -gt 3 ]; then echo "usage: brew-formula.sh CHECKSUMS TRU
 checksums=$1
 trust=$2
 here=$(cd "$(dirname "$0")" && pwd)
-template="$here/../homebrew/codefabric.rb.tmpl"
-base_url=${CF_RELEASE_BASE_URL:-https://github.com/Autarquico/codefabric/releases/download}
+template="$here/../homebrew/codeflock.rb.tmpl"
+base_url=${CFLK_RELEASE_BASE_URL:-https://github.com/Autarquico/codeflock/releases/download}
 
 fail() { echo "brew-formula: $*" >&2; exit 1; }
 
-printf '%s\n' "$base_url" | grep -Eq '^https://[A-Za-z0-9./_-]+$' || fail "CF_RELEASE_BASE_URL must be an https URL"
+printf '%s\n' "$base_url" | grep -Eq '^https://[A-Za-z0-9./_-]+$' || fail "CFLK_RELEASE_BASE_URL must be an https URL"
 [ -f "$checksums" ] || fail "$checksums is missing"
 # Verify and read one private copy, so the bytes read are the bytes verified.
 work=$(mktemp -d)
@@ -40,7 +40,7 @@ fi
 version=${tag#v}
 
 digest_of() {
-	name="cf_${version}_$1.tar.gz"
+	name="cflk_${version}_$1.tar.gz"
 	digest=$(awk -v n="$name" 'NR > 1 && $2 == n { print $1; c++ } END { exit c != 1 }' "$checksums") ||
 		fail "$name is not listed exactly once"
 	printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' || fail "$name has no sha256 digest"

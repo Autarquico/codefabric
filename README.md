@@ -1,6 +1,6 @@
 # Code Flock
 
-Code Flock (`cf`) is a local-first control plane for running, moving, observing and comparing coding agents (Claude Code, Codex CLI, …) across a dynamic pool of machines.
+Code Flock (`cflk`) is a local-first control plane for running, moving, observing and comparing coding agents (Claude Code, Codex CLI, …) across a dynamic pool of machines.
 
 > *Tasks belong to Code Flock; Runs happen on Workers.*
 
@@ -23,7 +23,7 @@ Next: attaching to a live Run from your terminal ([#179](https://github.com/Auta
 curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | sh
 ```
 
-Then follow the [getting started guide](docs/guide/getting-started.md).
+Then follow the [getting started guide](docs/guide/getting-started.md). Coming from the beta.6 or earlier (the command was `cf`)? Read [Upgrade to 0.4.0-beta.7](docs/guide/upgrade-beta7.md): its installer is `https://github.com/Autarquico/codeflock/releases/download/v0.4.0-beta.7/install.sh`.
 
 ## Documentation
 
@@ -37,14 +37,14 @@ Then follow the [getting started guide](docs/guide/getting-started.md).
 Requires Go (see `go.mod`) and, for integration tests, `git` and `tmux`.
 
 ```bash
-make build          # bin/cf, static, no cgo
+make build          # bin/cflk, static, no cgo
 make test           # unit tests
 make lint           # golangci-lint v2, including layering rules
 make cross          # linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
 ```
 
 ```bash
-./bin/cf version
+./bin/cflk version
 ```
 
 ## License

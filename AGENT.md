@@ -1,4 +1,4 @@
-# AGENT.md — CodeFabric
+# AGENT.md — Code Flock
 
 Convenciones del agente PM (Claude) para este repo.
 
@@ -12,7 +12,7 @@ Trabajamos en **es**. Issues, comentarios, informes y commits del PM en es.
 
 ## El proyecto
 
-- **Codename**: `codefabric`
+- **Codename**: `codeflock` (antes `codefabric`; el binario es `cflk`)
 - **Repo**: `Autarquico/codeflock` (módulo Go `github.com/Autarquico/codeflock`)
 - **Project board**: `Autarquico/projects/5`
 - **MCP**: `github`

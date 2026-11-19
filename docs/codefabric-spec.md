@@ -1,26 +1,27 @@
-# CodeFabric (`cf`) — Especificación técnica y de producto
+# Code Flock (`cflk`) — Especificación técnica y de producto
 
 **Estado:** Especificación de implementación — rev. 4.1 (2026-10-10; cambios en Apéndice B, decisiones en Apéndice C)  
-**Objetivo:** Definir CodeFabric de principio a fin con suficiente precisión para implementar el sistema completo de forma incremental.  
-**Interfaz principal:** `cf` (CLI + TUI)  
+**Objetivo:** Definir Code Flock de principio a fin con suficiente precisión para implementar el sistema completo de forma incremental.  
+**Interfaz principal:** `cflk` (CLI + TUI)  
 **Lenguaje recomendado:** Go  
-**Principio rector:** *Las Tasks pertenecen a CodeFabric; los Runs ocurren en Workers.*
+**Nombre:** desde la 0.4.0-beta.7 el producto es Code Flock y el binario `cflk`; el resto del documento usa los nombres de hoy. La decisión, el alcance y los contratos que no cambian (`CF_*`, `cf://`, `.codefabric/project.yaml`, keyring) están en `docs/specs/rename-cli.md`. Los apéndices B y C son registro histórico y conservan los nombres de su época (`cf`, CodeFabric).  
+**Principio rector:** *Las Tasks pertenecen a Code Flock; los Runs ocurren en Workers.*
 
 ---
 
 ## 1. Visión
 
-CodeFabric es un control plane local-first para ejecutar, mover, observar, comparar y coordinar coding agents sobre un pool dinámico de máquinas.
+Code Flock es un control plane local-first para ejecutar, mover, observar, comparar y coordinar coding agents sobre un pool dinámico de máquinas.
 
-El usuario puede tener un MacBook, portátiles Linux, servidores Proxmox, VMs/LXC, VPS y workers efímeros. Cualquier máquina puede incorporarse o salir del pool. CodeFabric abstrae dónde se ejecuta el trabajo y permite tratar todo el compute disponible como un único fabric.
+El usuario puede tener un MacBook, portátiles Linux, servidores Proxmox, VMs/LXC, VPS y workers efímeros. Cualquier máquina puede incorporarse o salir del pool. Code Flock abstrae dónde se ejecuta el trabajo y permite tratar todo el compute disponible como un único fabric.
 
-CodeFabric no reemplaza Claude Code, Codex CLI, OpenCode, Pi u otros harnesses. Los instala, configura, ejecuta y observa mediante adapters, conservando sus configuraciones nativas.
+Code Flock no reemplaza Claude Code, Codex CLI, OpenCode, Pi u otros harnesses. Los instala, configura, ejecuta y observa mediante adapters, conservando sus configuraciones nativas.
 
-CodeFabric tampoco reemplaza a los proveedores de modelos. Anthropic, OpenAI, Google, OpenRouter u otros se modelan separadamente de los harnesses. CodeFabric monitoriza estado, cuota y consumo oficial cuando el proveedor lo permite, y atribuye internamente el uso observado a Projects, Tasks, Runs, Workers, Workflows y harnesses.
+Code Flock tampoco reemplaza a los proveedores de modelos. Anthropic, OpenAI, Google, OpenRouter u otros se modelan separadamente de los harnesses. Code Flock monitoriza estado, cuota y consumo oficial cuando el proveedor lo permite, y atribuye internamente el uso observado a Projects, Tasks, Runs, Workers, Workflows y harnesses.
 
 ### 1.1 Objetivos de producto
 
-1. Abrir `cf` desde cualquier máquina y ver el estado global del trabajo agentic.
+1. Abrir `cflk` desde cualquier máquina y ver el estado global del trabajo agentic.
 2. Delegar una Task sin preocuparse inicialmente por el Worker.
 3. Continuar una Task desde otra máquina mediante handoff/checkpoint, sin depender de la máquina donde comenzó.
 4. Incorporar y retirar compute dinámicamente.
@@ -60,7 +61,7 @@ Objetivos de escala (dimensionan SQLite single-writer y el diseño de streaming)
 
 Objetivos de calidad:
 
-- `cf status` / `cf ps`: < 300 ms p95 sobre la tailnet.
+- `cflk status` / `cflk ps`: < 300 ms p95 sobre la tailnet.
 - Un evento emitido en un Worker aparece en el TUI en < 2 s p95 con Controller accesible.
 - El journal del Worker sobrevive a un reinicio del daemon (fsync por lote, default cada 1 s o 64 entradas).
 - El journal está acotado y degrada por etapas, sin prometer conservación ilimitada:
@@ -79,7 +80,7 @@ Estas reglas deben condicionar toda la implementación:
 2. Un Worker puede desaparecer sin perder el estado global de la Task.
 3. Un reinicio del Controller no debe matar Runs ya iniciados.
 4. Todo Run debe registrar Project, Task, Worker, Workflow efectivo, harness y modelo cuando sean conocidos.
-5. La configuración nativa permanece nativa; CodeFabric no impone un esquema universal que pierda semántica.
+5. La configuración nativa permanece nativa; Code Flock no impone un esquema universal que pierda semántica.
 6. Configuración y secretos son dominios separados.
 7. CLI, TUI y MCP llaman a las mismas operaciones del Core/API; no contienen lógica de negocio divergente.
 8. Toda operación destructiva o sensible debe ser auditable.
@@ -141,7 +142,7 @@ Fuente de la configuración del Project:
   - sobrescribe campo a campo la configuración del Controller, pero las **policies del Controller son restricciones que el repo no puede ampliar**: secret refs, policies, límites de recursos y capabilities sólo vienen del Controller;
   - los scripts que declare se ejecutan con el mismo aislamiento y los mismos secrets que el propio Run, nunca con más;
   - la configuración efectiva resultante se registra en el Run (digest) antes de ejecutar ningún script.
-- `cf project explain <project> [--ref <ref>]` muestra la configuración efectiva y el origen de cada campo.
+- `cflk project explain <project> [--ref <ref>]` muestra la configuración efectiva y el origen de cada campo.
 
 ### 3.2 Plan
 
@@ -223,7 +224,7 @@ Una Task puede tener múltiples Runs, secuenciales o paralelos.
 
 Para reproducir o comparar Runs cuenta `spec_digest`; `effective_config_digest` explica diferencias entre Workers.
 
-La `completion` se congela en la Task cuando se crea su primer Run; cambiarla después es una operación explícita (`cf task set <task> --completion …`).
+La `completion` se congela en la Task cuando se crea su primer Run; cambiarla después es una operación explícita (`cflk task set <task> --completion …`).
 
 ### 3.4 Run
 
@@ -305,7 +306,7 @@ capabilities:
 availability_policy: always|idle|manual
 ```
 
-Un Worker ejecuta `cf worker run` como daemon.
+Un Worker ejecuta `cflk worker run` como daemon.
 
 ### 3.6 Workflow
 
@@ -351,7 +352,7 @@ Punto recuperable de un Run. Debe contener suficiente estado portable para recon
 
 ### 3.12 Event, Log y Output
 
-- **Event:** hecho estructurado entendido por CodeFabric (`RunStarted`, `WorkerLost`, etc.).
+- **Event:** hecho estructurado entendido por Code Flock (`RunStarted`, `WorkerLost`, etc.).
 - **Log:** mensaje estructurado de diagnóstico.
 - **Output:** stdout/stderr/PTY bruto de procesos.
 
@@ -381,15 +382,15 @@ Si hay más de un candidato: `CF_AMBIGUOUS_REF` con la lista. Nunca se elige uno
                               │
                  ┌────────────┼────────────┐
                  │            │            │
-               cf CLI       cf TUI      CF MCP
+               cflk CLI       cflk TUI      CF MCP
                  └────────────┼────────────┘
                               │
                          Client SDK
                               │
-                       CodeFabric API
+                       Code Flock API
                               │
                  ┌────────────▼────────────┐
-                 │ CodeFabric Controller   │
+                 │ Code Flock Controller   │
                  │                         │
                  │ API / auth              │
                  │ Scheduler               │
@@ -405,7 +406,7 @@ Si hay más de un candidato: `CF_AMBIGUOUS_REF` con la lista. Nunca se elige uno
                               │ private network
               ┌───────────────┼────────────────┐
               ▼               ▼                ▼
-          cf worker       cf worker        cf worker
+          cflk worker       cflk worker        cflk worker
            MacBook          Linux           Proxmox
               │               │                │
          Runtime adapter Runtime adapter Runtime adapter
@@ -455,18 +456,18 @@ Responsabilidades:
 - reconciliar al reconectar;
 - reportar capacidad libre.
 
-### 4.3 Cliente `cf`
+### 4.3 Cliente `cflk`
 
 Un único binario Go es preferible en v0.x.
 
 Roles:
 
 ```bash
-cf                         # TUI
-cf <resource> <command>    # CLI
-cf controller run          # daemon controller
-cf worker run              # daemon worker
-cf mcp serve               # si MCP no se sirve directamente desde controller
+cflk                         # TUI
+cflk <resource> <command>    # CLI
+cflk controller run          # daemon controller
+cflk worker run              # daemon worker
+cflk mcp serve               # si MCP no se sirve directamente desde controller
 ```
 
 La distribución puede crear servicios systemd/launchd que invoquen el mismo binario.
@@ -492,7 +493,7 @@ type Transport interface {
 }
 ```
 
-Implementación inicial `SSHTransport`; posteriormente RPC directo de `cf worker`.
+Implementación inicial `SSHTransport`; posteriormente RPC directo de `cflk worker`.
 
 ### 5.3 Heartbeats
 
@@ -512,8 +513,8 @@ Controller marca Worker `offline` tras TTL configurable (defaults en Apéndice A
 
 - **Workers y clientes inician siempre la conexión hacia el Controller.** Funciona tras NAT, con portátiles que duermen y sin abrir puertos en Workers.
 - Las asignaciones llegan por long-poll/stream sobre `/v1/worker/assignments`; el Controller nunca necesita SSH a un Worker para operar.
-- `Transport` (SSH) se usa sólo para bootstrap (`cf worker join` remoto), diagnóstico y `cf attach` en v0.x.
-- `cf attach` v0.x: cliente → SSH → Worker → `Runtime.Attach`. Requiere que el cliente tenga acceso SSH al Worker; `cf doctor` lo verifica. Posterior: relay de PTY por el daemon del Worker a través del Controller, eliminando el requisito de SSH cliente→Worker.
+- `Transport` (SSH) se usa sólo para bootstrap (`cflk worker join` remoto), diagnóstico y `cflk attach` en v0.x.
+- `cflk attach` v0.x: cliente → SSH → Worker → `Runtime.Attach`. Requiere que el cliente tenga acceso SSH al Worker; `cflk doctor` lo verifica. Posterior: relay de PTY por el daemon del Worker a través del Controller, eliminando el requisito de SSH cliente→Worker.
 
 ---
 
@@ -547,7 +548,7 @@ Runtimes futuros posibles:
 
 ### 6.3 Attach
 
-`cf attach <task|run>`:
+`cflk attach <task|run>`:
 
 1. resuelve Run activo;
 2. resuelve Worker;
@@ -565,14 +566,14 @@ Para que un Run sobreviva al reinicio del daemon (§9.6, invariante 3), el Worke
 
 - **Estado local durable** (`<data_dir>/state.db`, SQLite; la ruta real es `<data_dir>/worker/state.db`, ver B5): por Run guarda lease + epoch, fase local, handle del Runtime, `result_commit` y cola de reportes pendientes de ACK.
 - **Intención antes de efecto:** el Worker persiste `starting(run, epoch)` antes de llamar a `Runtime.Start`, y el handle después. `Runtime.Start` es idempotente por `(run_id, epoch)`: si ya existe una sesión con ese nombre derivado, la adopta en lugar de crear otra.
-- **Wrapper de proceso:** el harness corre bajo `cf worker exec` dentro del Runtime. El wrapper escribe exit code, timestamps y el output capturado en `runs/<run-id>/` aunque el daemon no esté vivo.
+- **Wrapper de proceso:** el harness corre bajo `cflk worker exec` dentro del Runtime. El wrapper escribe exit code, timestamps y el output capturado en `runs/<run-id>/` aunque el daemon no esté vivo.
 - **Arranque del daemon:** antes de aceptar trabajo, recorre `state.db`, consulta cada handle al Runtime, recoge exit codes del wrapper y reconcilia con el Controller (§27.3). No acepta leases nuevas hasta terminar.
 
 ## 7. Harness adapters
 
 ### 7.1 Principio
 
-**CodeFabric entiende Workers, Tasks y Runs. Los adapters entienden harnesses.**
+**Code Flock entiende Workers, Tasks y Runs. Los adapters entienden harnesses.**
 
 ### 7.2 Interfaz conceptual
 
@@ -614,7 +615,7 @@ type HarnessCapabilities struct {
 
 Las capacidades reales pueden variar; los adapters deben declarar soporte y devolver `unsupported`, nunca inventar datos.
 
-`Host` es el contexto de ejecución **local** (paths, env, exec) del proceso que invoca al adapter: el daemon del Worker para Runs y apply, el cliente `cf` para adopt. El Controller nunca ejecuta adapters sobre hosts remotos.
+`Host` es el contexto de ejecución **local** (paths, env, exec) del proceso que invoca al adapter: el daemon del Worker para Runs y apply, el cliente `cflk` para adopt. El Controller nunca ejecuta adapters sobre hosts remotos.
 
 ### 7.3 Harnesses iniciales
 
@@ -641,7 +642,7 @@ Cada adapter debe documentar:
 - `interactive`: el harness corre en un PTY gestionado por el Runtime; es attachable. El prompt inicial se entrega por el mecanismo nativo del harness (argumento o primer input).
 - `headless`: ejecución no interactiva con salida estructurada (p. ej. stream JSON). No attachable; permite needs-input, usage y fin de Run fiables.
 
-El adapter declara qué modos soporta. Default: `project.defaults.mode`; si no está definido, `headless`. El origen de la Task (CLI, TUI, MCP) nunca cambia el modo: la misma Task se comporta igual se cree desde donde se cree. `cf task new --interactive` / `cf do -i` lo fijan explícitamente. Pedir un modo no soportado → `CF_HARNESS_UNAVAILABLE` en elegibilidad, no en runtime.
+El adapter declara qué modos soporta. Default: `project.defaults.mode`; si no está definido, `headless`. El origen de la Task (CLI, TUI, MCP) nunca cambia el modo: la misma Task se comporta igual se cree desde donde se cree. `cflk task new --interactive` / `cflk do -i` lo fijan explícitamente. Pedir un modo no soportado → `CF_HARNESS_UNAVAILABLE` en elegibilidad, no en runtime.
 
 Fin de un Run `interactive`: termina cuando termina el proceso del harness (exit code → `completed`/`failed`). Cerrar el attach nunca termina el Run.
 
@@ -649,7 +650,7 @@ Fin de un Run `interactive`: termina cuando termina el proceso del harness (exit
 
 ## 8. Workflows y adopción de configuración nativa
 
-### 8.1 `cf workflow adopt`
+### 8.1 `cflk workflow adopt`
 
 Debe detectar el entorno local y ofrecer adopción selectiva.
 
@@ -696,10 +697,10 @@ El contenido puede guardarse internamente en content-addressed storage aunque se
 
 Estados:
 
-- `managed`: CodeFabric aplica/sincroniza.
+- `managed`: Code Flock aplica/sincroniza.
 - `local`: detectado pero nunca sobrescrito.
 - `merged`: combina base gestionada y extensiones locales cuando el adapter puede hacerlo de forma segura.
-- `ignored`: fuera del dominio de CodeFabric.
+- `ignored`: fuera del dominio de Code Flock.
 
 ### 8.4 Effective configuration
 
@@ -729,17 +730,17 @@ overlay:
 ### 8.6 Operaciones
 
 ```bash
-cf workflow list
-cf workflow show personal
-cf workflow adopt
-cf workflow status
-cf workflow diff [--worker X]
-cf workflow commit
-cf workflow apply personal@18 --worker proxmox
-cf workflow sync
-cf workflow rollback personal@17
-cf workflow history personal
-cf workflow explain claude-code --worker linux
+cflk workflow list
+cflk workflow show personal
+cflk workflow adopt
+cflk workflow status
+cflk workflow diff [--worker X]
+cflk workflow commit
+cflk workflow apply personal@18 --worker proxmox
+cflk workflow sync
+cflk workflow rollback personal@17
+cflk workflow history personal
+cflk workflow explain claude-code --worker linux
 ```
 
 ### 8.7 Sync selectivo
@@ -754,7 +755,7 @@ Debe permitir:
 
 ### 8.8 Drift
 
-`cf workflow status` compara digest/materialización actual contra la versión deseada.
+`cflk workflow status` compara digest/materialización actual contra la versión deseada.
 
 Los cambios locales nunca deben importarse automáticamente a la fuente de verdad. El usuario debe adoptar/commit explícitamente.
 
@@ -788,8 +789,8 @@ La policy determina en qué Workers está disponible la referencia. Backend y en
 
 - Referencias: `personal@17` (versión), `personal@latest`, `personal@sha256:…` (digest).
 - El número de versión lo asigna el Controller, monotónico por Workflow.
-- `cf workflow adopt` y `commit` se ejecutan en el **cliente**: snapshot local → upload de blobs al Controller → commit con `parent`.
-- Commit con concurrencia optimista: si `parent` ≠ head actual → `CF_WORKFLOW_CONFLICT`. El usuario resuelve con `cf workflow diff personal@head` y `cf workflow commit --rebase`. Nunca hay merge automático.
+- `cflk workflow adopt` y `commit` se ejecutan en el **cliente**: snapshot local → upload de blobs al Controller → commit con `parent`.
+- Commit con concurrencia optimista: si `parent` ≠ head actual → `CF_WORKFLOW_CONFLICT`. El usuario resuelve con `cflk workflow diff personal@head` y `cflk workflow commit --rebase`. Nunca hay merge automático.
 - Un Run resuelve `@latest` al crearse (punto único de congelación, §3.3) y registra versión + digest; cambios posteriores del Workflow no afectan a Runs en cola ni en curso.
 
 ---
@@ -812,7 +813,7 @@ Un Worker ejecuta varios Runs a la vez (§10.5); un `apply` o un Workflow distin
 Flujo recomendado:
 
 ```bash
-cf worker join <controller>
+cflk worker join <controller>
 ```
 
 Wizard:
@@ -845,7 +846,7 @@ availability: idle
 ### 9.3 Drain
 
 ```bash
-cf worker drain macbook
+cflk worker drain macbook
 ```
 
 Estados:
@@ -858,16 +859,16 @@ Estados:
 Opciones:
 
 ```bash
-cf worker drain macbook --wait     # default: espera a que terminen
-cf worker drain macbook --move     # checkpoint + move de cada Run (§11.5)
-cf worker drain macbook --force    # cancela Runs (requiere confirmación)
-cf worker undrain macbook          # vuelve a online
-cf worker remove macbook           # revoca credencial, estado removed (sólo sin Runs activos)
+cflk worker drain macbook --wait     # default: espera a que terminen
+cflk worker drain macbook --move     # checkpoint + move de cada Run (§11.5)
+cflk worker drain macbook --force    # cancela Runs (requiere confirmación)
+cflk worker undrain macbook          # vuelve a online
+cflk worker remove macbook           # revoca credencial, estado removed (sólo sin Runs activos)
 ```
 
 ### 9.4 Doctor
 
-`cf worker doctor` verifica:
+`cflk worker doctor` verifica:
 
 - conectividad Controller;
 - transporte;
@@ -879,7 +880,7 @@ cf worker remove macbook           # revoca credencial, estado removed (sólo si
 - auth necesaria (sin revelar secrets);
 - environments/capabilities.
 
-Regla UX: **si `cf doctor` está verde, cualquier Task compatible puede ejecutarse en esa máquina.**
+Regla UX: **si `cflk doctor` está verde, cualquier Task compatible puede ejecutarse en esa máquina.**
 
 ### 9.5 Máquina de estados del Worker
 
@@ -896,7 +897,7 @@ cualquiera ──remove──▶ removed (terminal)
 
 v0.x: instalación/actualización manual del binario. El Worker reporta su versión en cada heartbeat; si queda fuera de la policy de compatibilidad (§41), pasa a `degraded` y no recibe Runs. Reiniciar el daemon para actualizarlo no afecta a Runs en curso (§6.4).
 
-Posterior (Fase 10): el Controller sirve binarios por os/arch y `cf worker upgrade [<worker>|--all]` los distribuye.
+Posterior (Fase 10): el Controller sirve binarios por os/arch y `cflk worker upgrade [<worker>|--all]` los distribuye.
 
 ---
 
@@ -986,7 +987,7 @@ Semántica:
 
 - Empates de score se rompen por nombre de Worker; la misma entrada produce la misma decisión.
 - Un Run sin Worker elegible permanece `queued` con `queued_reason: CF_NO_ELIGIBLE_WORKER`.
-- `cf run explain <run>` muestra, por Worker, qué filtro de §10.1 falla o el score obtenido. Es la contrapartida de `cf doctor` desde el lado de la Task.
+- `cflk run explain <run>` muestra, por Worker, qué filtro de §10.1 falla o el score obtenido. Es la contrapartida de `cflk doctor` desde el lado de la Task.
 
 
 ### 10.7 Stop de un Run
@@ -1015,12 +1016,12 @@ Se usa para `cancel`, para huérfanos (§10.4 punto 5), para `drain --force` y p
 ### 11.1 Crear
 
 ```bash
-cf task new "fix flaky auth tests" --project backend            # Task + primer Run
-cf task new "fix flaky auth tests" --project backend --no-start # sólo Task
-cf do "fix flaky auth tests"                                    # atajo de task new
+cflk task new "fix flaky auth tests" --project backend            # Task + primer Run
+cflk task new "fix flaky auth tests" --project backend --no-start # sólo Task
+cflk do "fix flaky auth tests"                                    # atajo de task new
 ```
 
-`cf run` es el namespace del recurso Run (`cf run list|fork|compare|promote|…`) y no acepta un prompt como argumento: evita la ambigüedad entre `cf run "fork the parser"` y `cf run fork run-42`. Ver Apéndice C.
+`cflk run` es el namespace del recurso Run (`cflk run list|fork|compare|promote|…`) y no acepta un prompt como argumento: evita la ambigüedad entre `cflk run "fork the parser"` y `cflk run fork run-42`. Ver Apéndice C.
 
 Si se omite `--project`, se infiere del repo del cwd (match por remote URL); si no hay match → error, nunca un default silencioso.
 
@@ -1088,7 +1089,7 @@ requested
 Reglas:
 
 - El Run destino **sólo se crea cuando el Run origen es terminal**. Como los reportes sobre un Run terminal se rechazan (§10.4 punto 5), el origen queda cercado aunque su Worker vuelva más tarde, sin depender del epoch del Run nuevo.
-- Si la preparación del destino falla, el checkpoint se conserva, la Task queda `waiting(decision)` y `cf task move` o `cf task resume` pueden reintentar desde la misma etapa.
+- Si la preparación del destino falla, el checkpoint se conserva, la Task queda `waiting(decision)` y `cflk task move` o `cflk task resume` pueden reintentar desde la misma etapa.
 - Lineage: `run-10 --continued-by--> run-11`.
 
 Casos límite:
@@ -1101,10 +1102,10 @@ Casos límite:
 Harness adapter detecta o declara necesidad de input. Run → `waiting_input`; Controller genera `TaskNeedsInput`. TUI inbox permite responder sin attach cuando el harness lo soporte.
 
 ```bash
-cf task respond auth-race "use the existing mutex, don't add a new one"
+cflk task respond auth-race "use the existing mutex, don't add a new one"
 ```
 
-Si el adapter no tiene `StructuredInput` → `CF_RUN_NOT_RESPONDABLE`, con la sugerencia de `cf attach`. La respuesta se registra como evento `InputProvided` con su actor.
+Si el adapter no tiene `StructuredInput` → `CF_RUN_NOT_RESPONDABLE`, con la sugerencia de `cflk attach`. La respuesta se registra como evento `InputProvided` con su actor.
 
 ### 11.7 Máquinas de estado
 
@@ -1153,7 +1154,7 @@ no terminal ──Worker no reconciliable tras run_lost_timeout──▶ lost
 
 - `first_success` (default): el primer Run `completed` con `publication: published` y `evaluation: passed` (o sin evaluators required).
 - `promote`: cuando un Run se promueve.
-- `manual`: `cf task complete <task>`, que fija `completed_manually_at`.
+- `manual`: `cflk task complete <task>`, que fija `completed_manually_at`.
 
 La policy se congela con el primer Run (§3.3). Un fork posterior **no** cambia la policy: si la Task ya está `completed`, el fork se crea igualmente pero la Task sigue `completed`; para comparar y elegir, hay que crear la Task con `completion: promote` o cambiarla explícitamente antes del fork.
 
@@ -1168,7 +1169,7 @@ Un Run que terminó el Controller (cancel, lost, `assignment_lost`, `worktree_lo
 ### 12.1 Fork
 
 ```bash
-cf run fork run-42 --workflow experimental@4 --model ... --worker auto
+cflk run fork run-42 --workflow experimental@4 --model ... --worker auto
 ```
 
 Crea otro Run de la misma Task (`lineage.kind: forked_from`). Punto de partida:
@@ -1206,7 +1207,7 @@ Cada Run registra:
 ### 12.4 Compare
 
 ```bash
-cf run compare run-41 run-43
+cflk run compare run-41 run-43
 ```
 
 Métricas:
@@ -1225,7 +1226,7 @@ Métricas:
 ### 12.5 Promote
 
 ```bash
-cf run promote run-43
+cflk run promote run-43
 ```
 
 Política configurable:
@@ -1275,7 +1276,7 @@ Evaluators deben ejecutarse independientemente del harness para evitar que el ag
 Ejecución:
 
 - En el mismo Worker y Environment del Run, sobre un worktree limpio en `result_commit` (no sobre el worktree vivo del agente).
-- Momentos: `after_run` (default), `before_promote`, o manual con `cf run evaluate <run>`.
+- Momentos: `after_run` (default), `before_promote`, o manual con `cflk run evaluate <run>`.
 - Campos por step: `timeout` (default 15m), `required` (default `true`), `parse: none|junit|go-test-json|tap` para extraer `metrics`.
 - Un timeout produce `status: error`, distinto de `failed`. Sólo `passed` cuenta para la completion policy.
 
@@ -1363,11 +1364,11 @@ provider → model → project → worker → workflow → harness → task → 
 Ejemplos:
 
 ```bash
-cf models
-cf models usage --project backend
-cf models usage --worker proxmox
-cf models usage --workflow personal@27
-cf models usage --since 7d
+cflk models
+cflk models usage --project backend
+cflk models usage --worker proxmox
+cflk models usage --workflow personal@27
+cflk models usage --since 7d
 ```
 
 ### 14.6 Coste
@@ -1487,7 +1488,7 @@ Perfiles:
 **Flujo de confirmación:**
 
 1. La llamada devuelve `CF_CONFIRMATION_REQUIRED` con `confirmation_id`. La confirmación queda **vinculada de forma inmutable** a: operación, hash del payload, recursos afectados con su versión, actor solicitante y `request_id`.
-2. Aparece en el Inbox (§19.5) mostrando exactamente esa operación; un humano responde con `cf approve <id>` / `cf deny <id>`.
+2. Aparece en el Inbox (§19.5) mostrando exactamente esa operación; un humano responde con `cflk approve <id>` / `cflk deny <id>`.
 3. **Aprobar ejecuta**: el Controller ejecuta la operación vinculada una sola vez, revalidando en ese momento permisos, policies, budgets y que las versiones de los recursos no hayan cambiado (si cambiaron → `CF_CONFIRMATION_STALE`, sin ejecutar).
 4. El resultado se publica en `ConfirmationResolved` (approved + resultado / denied / expired / stale). El modelo puede esperarlo con `events.wait` o consultarlo con `confirmations.get`.
 5. Repetir la llamada original con el mismo `request_id` devuelve el estado actual de la confirmación, no un `CF_CONFIRMATION_REQUIRED` cacheado. Las confirmaciones expiran (default 24 h).
@@ -1512,12 +1513,12 @@ Registrar:
 
 v0.x asume un único propietario humano: todas las identidades humanas son el principal `owner`. No hay RBAC; sí hay identidades distintas por máquina y por sesión MCP, para auditar y revocar.
 
-- **Controller:** `cf controller init` genera una CA propia (ECDSA P-256) y su clave **es** la identidad del Controller: no hay un keypair aparte, porque nada lo usaría. Toda la API va sobre TLS con esa CA, también dentro de la tailnet (Tailscale es red, no autenticación). CA y certificados hoja usan P-256 por compatibilidad con git/libcurl (ADR 0002, D2).
-- **Primera credencial del owner:** `cf controller init` escribe en el host del Controller un credential bundle del owner (`0600`) y emite una invitación de cliente para la primera máquina. No hay otro camino de bootstrap: quien tiene shell en el host del Controller es el owner.
-- **Invitaciones:** `cf controller token create --worker|--client --ttl 1h` emite un token de un solo uso con formato `cf://<host>:<port>/join?token=<t>#sha256:<fingerprint-CA>`. El cliente/Worker **verifica la CA contra el fingerprint de la invitación** antes de enviar nada (TOFU anclado al token, no a la red) y la fija para siempre.
+- **Controller:** `cflk controller init` genera una CA propia (ECDSA P-256) y su clave **es** la identidad del Controller: no hay un keypair aparte, porque nada lo usaría. Toda la API va sobre TLS con esa CA, también dentro de la tailnet (Tailscale es red, no autenticación). CA y certificados hoja usan P-256 por compatibilidad con git/libcurl (ADR 0002, D2).
+- **Primera credencial del owner:** `cflk controller init` escribe en el host del Controller un credential bundle del owner (`0600`) y emite una invitación de cliente para la primera máquina. No hay otro camino de bootstrap: quien tiene shell en el host del Controller es el owner.
+- **Invitaciones:** `cflk controller token create --worker|--client --ttl 1h` emite un token de un solo uso con formato `cf://<host>:<port>/join?token=<t>#sha256:<fingerprint-CA>`. El cliente/Worker **verifica la CA contra el fingerprint de la invitación** antes de enviar nada (TOFU anclado al token, no a la red) y la fija para siempre.
 - **Canje:** el Worker/cliente genera su clave y canjea el token por un certificado cliente (mTLS). El consumo del token es atómico (una transacción marca el token usado y crea la identidad); un segundo canje → `CF_UNAUTHENTICATED`.
-- **Clientes adicionales:** también por aprobación desde un cliente ya conectado (`cf approve`). La credencial se guarda en el keychain del OS o en un fichero `0600`.
-- **Revocación:** `cf worker remove` / `cf client remove` revocan la identidad; el Controller rechaza su certificado desde ese momento.
+- **Clientes adicionales:** también por aprobación desde un cliente ya conectado (`cflk approve`). La credencial se guarda en el keychain del OS o en un fichero `0600`.
+- **Revocación:** `cflk worker remove` / `cflk client remove` revocan la identidad; el Controller rechaza su certificado desde ese momento.
 - **Sesiones MCP:** heredan la identidad del cliente que sirve MCP más un perfil de permisos (§16.3). Cada sesión tiene ID propio en audit.
 - **Rotación:** certificados con caducidad (default 90 d). La renovación exige un certificado actual válido y no revocado; uno caducado requiere una invitación nueva.
 
@@ -1535,7 +1536,7 @@ type SecretStore interface {
 - fichero `<config_dir>/secrets.yaml` con permisos `0600`, o
 - keychain del OS (macOS Keychain, libsecret).
 
-`cf worker secrets set <ref>` / `list` operan localmente en el Worker y sincronizan sólo la metadata. Un Run que referencia un secret no disponible en un Worker hace que ese Worker no sea elegible (`CF_SECRET_UNAVAILABLE` en `cf run explain`).
+`cflk worker secrets set <ref>` / `list` operan localmente en el Worker y sincronizan sólo la metadata. Un Run que referencia un secret no disponible en un Worker hace que ese Worker no sea elegible (`CF_SECRET_UNAVAILABLE` en `cflk run explain`).
 
 Reglas:
 
@@ -1544,7 +1545,7 @@ Reglas:
 - Entrega just-in-time: por env var o fichero `0600` en el directorio del Run; se borra al terminar el Run.
 - Redacción best-effort de valores conocidos en logs y output capturado antes de persistirlos.
 - La auth de los harnesses (logins OAuth de suscripción) permanece local en cada Worker y no es un secret gestionado salvo que se adopte explícitamente.
-- **Credencial de origin (`origin_secret`):** el Run congela la ref y la URL https de su origin, y el Worker rechaza una asignación cuyo repo no sea esa URL. El fetch usa `GIT_ASKPASS` con un script de ruta absoluta (`<worker data>/bin/git-askpass`) que llama a `cf worker git-askpass`; el valor sale solo por stdout hacia git y solo para esquema + host:puerto + ruta del repo exactos (`credential.useHttpPath=true`), con config de git aislada, sin helpers ni redirecciones. El usuario es metadata del secret (`cf worker secrets set <ref> --user`, por defecto `x-access-token`). El Worker anuncia `origin-askpass:v1`; sin ella no es elegible para un Run con origin autenticado. Askpass pierde el acceso en cuanto termina el último fetch (por intento de prepare, también ante errores y en la espera de `config_resolved`); las agujas se conservan hasta el release para redacción y guard, y la redacción de la salida se activa también en un Run solo con origin. **Límite aceptado:** el harness corre con el mismo usuario del SO, así que la revocación es de acceso vía `cf`, no aislamiento del SO: las agujas retenidas en el directorio del Run son legibles por ese usuario. Un broker queda como followup.
+- **Credencial de origin (`origin_secret`):** el Run congela la ref y la URL https de su origin, y el Worker rechaza una asignación cuyo repo no sea esa URL. El fetch usa `GIT_ASKPASS` con un script de ruta absoluta (`<worker data>/bin/git-askpass`) que llama a `cflk worker git-askpass`; el valor sale solo por stdout hacia git y solo para esquema + host:puerto + ruta del repo exactos (`credential.useHttpPath=true`), con config de git aislada, sin helpers ni redirecciones. El usuario es metadata del secret (`cflk worker secrets set <ref> --user`, por defecto `x-access-token`). El Worker anuncia `origin-askpass:v1`; sin ella no es elegible para un Run con origin autenticado. Askpass pierde el acceso en cuanto termina el último fetch (por intento de prepare, también ante errores y en la espera de `config_resolved`); las agujas se conservan hasta el release para redacción y guard, y la redacción de la salida se activa también en un Run solo con origin. **Límite aceptado:** el harness corre con el mismo usuario del SO, así que la revocación es de acceso vía `cflk`, no aislamiento del SO: las agujas retenidas en el directorio del Run son legibles por ese usuario. Un broker queda como followup.
 
 Posterior: un backend central cifrado en el Controller (o 1Password/Vault/sops) como otra implementación de `SecretStore`, una vez definidas gestión de clave, recuperación y distribución.
 
@@ -1572,11 +1573,11 @@ Posterior: un backend central cifrado en el Controller (o 1Password/Vault/sops) 
 
 ---
 
-## 17. MCP de CodeFabric
+## 17. MCP de Code Flock
 
 ### 17.1 Objetivo
 
-Permitir que un master model controle CodeFabric desde una sesión compatible con MCP sin shell arbitraria.
+Permitir que un master model controle Code Flock desde una sesión compatible con MCP sin shell arbitraria.
 
 ### 17.2 Herramientas semánticas
 
@@ -1650,7 +1651,7 @@ Primitiva: `events.wait {types, filter, after_cursor, timeout}` bloquea hasta qu
 
 ### 17.4 Plan orchestration
 
-MCP puede crear Plan + DAG de Tasks. CodeFabric sigue siendo responsable de scheduling, budgets, policies y ejecución determinista.
+MCP puede crear Plan + DAG de Tasks. Code Flock sigue siendo responsable de scheduling, budgets, policies y ejecución determinista.
 
 ---
 
@@ -1668,63 +1669,63 @@ MCP puede crear Plan + DAG de Tasks. CodeFabric sigue siendo responsable de sche
 ### 18.2 Esqueleto
 
 ```text
-cf
-cf status
-cf ps
-cf doctor
-cf do "<prompt>"          # atajo de cf task new
-cf attach <task|run>
-cf inbox
-cf approve|deny <confirmation>
-cf search <query>
-cf setup | cf connect <controller>
-cf gc | cf storage stats
-cf restore <backup>
-cf version | cf completion
+cflk
+cflk status
+cflk ps
+cflk doctor
+cflk do "<prompt>"          # atajo de cflk task new
+cflk attach <task|run>
+cflk inbox
+cflk approve|deny <confirmation>
+cflk search <query>
+cflk setup | cflk connect <controller>
+cflk gc | cflk storage stats
+cflk restore <backup>
+cflk version | cflk completion
 
-cf project ...
-cf plan ...
-cf task ...
-cf run ...
-cf worker ...
-cf workflow ...
-cf models ...           # alias: cf model
-cf logs ...
-cf events ...
-cf artifact ...
-cf config ...
-cf backup ...
-cf controller ...
-cf mcp ...
+cflk project ...
+cflk plan ...
+cflk task ...
+cflk run ...
+cflk worker ...
+cflk workflow ...
+cflk models ...           # alias: cflk model
+cflk logs ...
+cflk events ...
+cflk artifact ...
+cflk config ...
+cflk backup ...
+cflk controller ...
+cflk mcp ...
 ```
 
 ### 18.3 Ejemplos
 
 ```bash
-cf do "fix auth race" --project backend
-cf ps
-cf attach auth-race
-cf task defer auth-race
-cf task resume auth-race
-cf task move auth-race proxmox
+cflk do "fix auth race" --project backend
+cflk ps
+cflk attach auth-race
+cflk task defer auth-race
+cflk task resume auth-race
+cflk task move auth-race proxmox
 
-cf run fork run-42 --workflow experimental@4
-cf run compare run-42 run-43
-cf run promote run-43
+cflk run fork run-42 --workflow experimental@4
+cflk run compare run-42 run-43
+cflk run promote run-43
 
-cf worker list
-cf worker drain macbook
-cf worker doctor linux
+cflk worker list
+cflk worker drain macbook
+cflk worker doctor linux
 
-cf workflow adopt
-cf workflow diff --worker linux
-cf workflow sync
+cflk workflow adopt
+cflk workflow diff --worker linux
+cflk workflow sync
 
-cf models
-cf models usage --project backend --since 7d
+cflk models
+cflk models usage --project backend --since 7d
 
-cf logs --run run-184 --follow
-cf logs --worker proxmox --level error --since 24h
+cflk logs --run run-184 --follow
+cflk logs --worker proxmox --level error --since 24h
 ```
 
 ---
@@ -1864,7 +1865,7 @@ Debe permitir responder a un harness sin attach cuando el adapter soporte input 
 
 `Ctrl+P` o equivalente: busca todas las acciones.
 
-Modo `:` puede aceptar sintaxis CLI sin el prefijo `cf`, reutilizando parser/command descriptors cuando sea viable.
+Modo `:` puede aceptar sintaxis CLI sin el prefijo `cflk`, reutilizando parser/command descriptors cuando sea viable.
 
 ---
 
@@ -1963,14 +1964,14 @@ type Event struct {
 ### 20.3 Logs CLI
 
 ```bash
-cf logs
-cf logs --follow
-cf logs --worker proxmox
-cf logs --project backend
-cf logs --task auth-refactor
-cf logs --run run-184
-cf logs --level error
-cf logs --since 2h
+cflk logs
+cflk logs --follow
+cflk logs --worker proxmox
+cflk logs --project backend
+cflk logs --task auth-refactor
+cflk logs --run run-184
+cflk logs --level error
+cflk logs --since 2h
 ```
 
 Filtros combinables.
@@ -2131,7 +2132,7 @@ El exit del harness y la disponibilidad de su resultado son pasos distintos:
 4. **Confirmación:** el Controller verifica que el ref existe en el relay y apunta a `result_commit` → `publication: published`, `RunPublished`.
 5. **Evaluación** (§13): corre en el Worker sobre `result_commit`; puede ir en paralelo con la publicación.
 
-**Fallo del sellado** (disco lleno, error de git, worktree corrupto): `publication: failed` con `RunPublicationFailed` y la causa; el worktree se conserva intacto y no entra en GC. `cf run publish <run>` reintenta sellado + push desde el principio. La Task queda `waiting(review)` (§11.7 fila 10).
+**Fallo del sellado** (disco lleno, error de git, worktree corrupto): `publication: failed` con `RunPublicationFailed` y la causa; el worktree se conserva intacto y no entra en GC. `cflk run publish <run>` reintenta sellado + push desde el principio. La Task queda `waiting(review)` (§11.7 fila 10).
 
 Los reportes de los pasos 2–5 llegan después de que el Run sea terminal; §10.4 punto 5 y §16.8 los autorizan explícitamente.
 
@@ -2182,7 +2183,7 @@ created_at: ...
 ```
 
 - `native_state` sólo es restaurable por el mismo adapter con versión compatible (mismo major). Si no lo es, se usa sólo `source_ref` + `summary`.
-- **Checkpoint mínimo** (harness sin soporte nativo): `source_ref` + resumen mecánico generado por CodeFabric a partir de commits, comandos y eventos del Run. Es posible siempre que el harness pueda detenerse, aunque pierda contexto del agente.
+- **Checkpoint mínimo** (harness sin soporte nativo): `source_ref` + resumen mecánico generado por Code Flock a partir de commits, comandos y eventos del Run. Es posible siempre que el harness pueda detenerse, aunque pierda contexto del agente.
 
 ### 23.2 Automáticos
 
@@ -2197,8 +2198,8 @@ Crear antes de:
 ### 23.3 Restore/fork
 
 ```bash
-cf run checkpoint list run-42
-cf run fork run-42 --from checkpoint:cp-3
+cflk run checkpoint list run-42
+cflk run fork run-42 --from checkpoint:cp-3
 ```
 
 ---
@@ -2221,8 +2222,8 @@ retention: ...
 CLI:
 
 ```bash
-cf artifact list --run run-42
-cf artifact get artifact_...
+cflk artifact list --run run-42
+cflk artifact get artifact_...
 ```
 
 Artifacts pueden ser inputs de Runs posteriores.
@@ -2292,7 +2293,7 @@ Eventos notificables:
 
 Canales iniciales:
 
-- notificación nativa del cliente `cf` cuando está activo;
+- notificación nativa del cliente `cflk` cuando está activo;
 - hooks configurables.
 
 Posteriormente providers: ntfy, Telegram, Slack, email, etc.
@@ -2364,7 +2365,7 @@ Toda transición de estado, reserva, lease y su evento correspondiente se escrib
 
 ## 28. Backups, restore y portabilidad
 
-### 28.1 `cf backup`
+### 28.1 `cflk backup`
 
 Debe producir backup consistente de:
 
@@ -2375,7 +2376,7 @@ Debe producir backup consistente de:
 - artifacts según policy;
 - secrets **no incluidos por defecto**.
 
-### 28.2 `cf restore`
+### 28.2 `cflk restore`
 
 Restaurar en otro Controller y conservar IDs/digests.
 
@@ -2407,9 +2408,9 @@ sin re-adoptar Workers/Workflows manualmente salvo reautenticación necesaria.
 ### 29.2 CLI
 
 ```bash
-cf gc --dry-run
-cf gc
-cf storage stats
+cflk gc --dry-run
+cflk gc
+cflk storage stats
 ```
 
 GC debe respetar referencias y retention policies. Nunca borrar artifact/checkpoint referenciado por Run no archivado sin policy explícita.
@@ -2435,7 +2436,7 @@ Flujo:
 ```text
 queue pressure
 → provision temporary worker
-→ bootstrap cf worker
+→ bootstrap cflk worker
 → apply workflow
 → execute
 → drain
@@ -2501,7 +2502,7 @@ TUI necesita subscriptions a:
 Estructura sugerida:
 
 ```text
-cmd/cf/
+cmd/cflk/
 
 internal/domain/
   project.go
@@ -2600,10 +2601,10 @@ type WorkflowService interface {
 
 ## 34. Observabilidad interna
 
-CodeFabric debe exponer su propia salud:
+Code Flock debe exponer su propia salud:
 
 ```bash
-cf status
+cflk status
 ```
 
 Incluye:
@@ -2622,7 +2623,7 @@ Logs del sistema en formato estructurado JSON internamente; presentación humana
 
 ---
 
-## 35. Configuración de CodeFabric
+## 35. Configuración de Code Flock
 
 Separar:
 
@@ -2633,9 +2634,9 @@ Separar:
 5. Workflow metadata.
 6. Policies.
 
-Paths deben seguir convenciones OS/XDG. `cf config paths` muestra ubicaciones efectivas.
+Paths deben seguir convenciones OS/XDG. `cflk config paths` muestra ubicaciones efectivas.
 
-Configuración debe soportar env vars para deployment, pero secretos no deben aparecer en `cf config show` sin redacción.
+Configuración debe soportar env vars para deployment, pero secretos no deben aparecer en `cflk config show` sin redacción.
 
 ---
 
@@ -2644,8 +2645,8 @@ Configuración debe soportar env vars para deployment, pero secretos no deben ap
 ### 36.1 Primer Controller
 
 ```bash
-cf controller init
-cf controller install-service
+cflk controller init
+cflk controller install-service
 ```
 
 Crea DB, identity y config; ofrece Tailscale binding y backup settings.
@@ -2653,15 +2654,15 @@ Crea DB, identity y config; ofrece Tailscale binding y backup settings.
 ### 36.2 Primer workstation
 
 ```bash
-cf connect <controller>
-cf workflow adopt
-cf worker join
+cflk connect <controller>
+cflk workflow adopt
+cflk worker join
 ```
 
 También puede existir wizard:
 
 ```bash
-cf setup
+cflk setup
 ```
 
 que detecta si la máquina será sólo client, worker, controller o combinación.
@@ -2671,7 +2672,7 @@ que detecta si la máquina será sólo client, worker, controller o combinación
 Objetivo UX:
 
 ```text
-install cf
+install cflk
 → authenticate/connect
 → choose worker resources
 → choose workflow
@@ -2685,7 +2686,7 @@ install cf
 
 ## 37. Search
 
-TUI `/` y CLI `cf search` deben buscar:
+TUI `/` y CLI `cflk search` deben buscar:
 
 - Projects;
 - Plans;
@@ -2870,7 +2871,7 @@ Escenarios obligatorios:
 - event model;
 - identidad del Controller, TLS y tokens de cliente (§16.6).
 
-**Done:** `cf status` habla con Controller persistente sobre TLS autenticado.
+**Done:** `cflk status` habla con Controller persistente sobre TLS autenticado.
 
 ### Fase 1 — Workers + ejecución básica
 
@@ -2890,7 +2891,7 @@ Escenarios obligatorios:
 - Git worktree;
 - Run: `queued|preparing|running|completed|failed|cancelled|lost`; Task: filas de §11.7 que no dependen de checkpoint, evaluators ni promote. Las operaciones de fases posteriores (defer, move, fork, promote) se rechazan explícitamente con `CF_NOT_IMPLEMENTED`;
 - scheduler simple;
-- `cf do`, `cf ps`, `cf attach`, `cf worker list`.
+- `cflk do`, `cflk ps`, `cflk attach`, `cflk worker list`.
 
 **Done:** lanzar un comando/harness en cualquiera de dos Workers y observarlo desde otro cliente; reiniciar Controller o daemon del Worker durante el Run no pierde ni duplica el Run ni su resultado.
 
@@ -2905,7 +2906,7 @@ Escenarios obligatorios:
 - secret refs con backend local al Worker y autorización mínima (§16.7);
 - validación de `.codefabric/project.yaml` (§3.1);
 - `doctor`;
-- needs-input **no soportado** en Fases 1–2: los adapters configuran el harness para no bloquear nunca en input (permisos pre-concedidos). Si aun así un adapter detecta que el harness espera input, el Worker lo detiene con el stop de §10.7, el Run termina `failed` con `end_reason: input_required` y, tras `RunStopped`, se sella y publica como cualquier otro. La Task sigue la retry policy configurada sin excepciones (con el default `on_failed: none` queda `failed`; con `ask`, `waiting(decision)`). En modo `interactive` el usuario puede responder por `cf attach` antes de que eso ocurra, porque el adapter sólo lo declara en `headless`.
+- needs-input **no soportado** en Fases 1–2: los adapters configuran el harness para no bloquear nunca en input (permisos pre-concedidos). Si aun así un adapter detecta que el harness espera input, el Worker lo detiene con el stop de §10.7, el Run termina `failed` con `end_reason: input_required` y, tras `RunStopped`, se sella y publica como cualquier otro. La Task sigue la retry policy configurada sin excepciones (con el default `on_failed: none` queda `failed`; con `ask`, `waiting(decision)`). En modo `interactive` el usuario puede responder por `cflk attach` antes de que eso ocurra, porque el adapter sólo lo declara en `headless`.
 
 Se posponen a Fase 9: worker overlays, ownership `merged`, `workflow sync` a Workers offline.
 
@@ -2922,7 +2923,7 @@ Se posponen a Fase 9: worker overlays, ownership `merged`, `workflow sync` a Wor
 - logs;
 - command palette;
 - actions equivalentes al CLI;
-- `waiting_input`, Inbox y `cf task respond` (§11.6, §19.5).
+- `waiting_input`, Inbox y `cflk task respond` (§11.6, §19.5).
 
 **Done:** operación cotidiana posible sin salir del TUI.
 
@@ -2994,7 +2995,7 @@ Se posponen a Fase 9: worker overlays, ownership `merged`, `workflow sync` a Wor
 ### Fase 10 — Elastic workers e integrations
 
 - WorkerProvisioner;
-- distribución de binarios y `cf worker upgrade` (§9.6);
+- distribución de binarios y `cflk worker upgrade` (§9.6);
 - backend central de secrets (§16.7);
 - Environment providers distintos de `host` (v0.x sólo `host` + scripts);
 - cloud providers/plugins;
@@ -3019,7 +3020,7 @@ Fase 4 puede adelantarse a Fase 3 si los Runs largos sobre portátiles resultan 
 
 ## 44. Criterios de aceptación del producto completo
 
-CodeFabric se considera funcionalmente completo respecto a esta especificación cuando:
+Code Flock se considera funcionalmente completo respecto a esta especificación cuando:
 
 1. Un Controller permanente coordina múltiples Workers heterogéneos.
 2. Workers pueden unirse, drenar, desconectarse y volver sin corrupción de estado.
@@ -3027,7 +3028,7 @@ CodeFabric se considera funcionalmente completo respecto a esta especificación 
 4. Runs son reproducibles/auditables y conservan lineage.
 5. Claude/Codex configs existentes pueden adoptarse y sincronizarse total/parcialmente.
 6. Secrets permanecen separados y sujetos a policy.
-7. `cf` CLI cubre todas las operaciones públicas.
+7. `cflk` CLI cubre todas las operaciones públicas.
 8. El TUI cubre las mismas operaciones y ofrece Activity/Inbox/Logs/Models.
 9. MCP expone operaciones semánticas con permisos y budgets.
 10. Logs/eventos/output sobreviven desconexiones según retention.
@@ -3037,7 +3038,7 @@ CodeFabric se considera funcionalmente completo respecto a esta especificación 
 14. Controller puede respaldarse/restaurarse en otro host.
 15. GC controla crecimiento de worktrees/logs/checkpoints/artifacts.
 16. Un reinicio del Controller no mata Runs activos.
-17. `cf doctor` identifica de forma accionable por qué un Worker no puede ejecutar una Task.
+17. `cflk doctor` identifica de forma accionable por qué un Worker no puede ejecutar una Task.
 18. El sistema sigue siendo usable sin UI web, Kubernetes ni servicios externos aparte de los requeridos por los modelos/harnesses.
 
 ---
@@ -3070,7 +3071,7 @@ Definir interfaces estables y empezar con la implementación más simple. Las in
 7. **Explicit over surprising.** Importar drift, promover resultados, distribuir secrets y destruir compute requieren intención clara.
 8. **Graceful degradation.** Si una API no expone usage o un harness no soporta checkpoint, mostrarlo como capability ausente.
 9. **Boring infrastructure.** Go + SQLite + Git + Tailscale + tmux deben ser suficientes para el MVP.
-10. **Do not build a mini-Kubernetes.** Añadir complejidad sólo cuando resuelva una necesidad demostrada de CodeFabric.
+10. **Do not build a mini-Kubernetes.** Añadir complejidad sólo cuando resuelva una necesidad demostrada de Code Flock.
 
 ---
 
@@ -3078,53 +3079,53 @@ Definir interfaces estables y empezar con la implementación más simple. Las in
 
 ```bash
 # Instalar Controller permanente
-cf controller init
-cf controller install-service
+cflk controller init
+cflk controller install-service
 
 # Adoptar entorno existente
-cf workflow adopt
-cf workflow commit
+cflk workflow adopt
+cflk workflow commit
 
 # Añadir workers
-cf worker join
+cflk worker join
 
 # Abrir consola
-cf
+cflk
 
 # Delegar trabajo
-cf do "implement rate limiting" --project backend
+cflk do "implement rate limiting" --project backend
 
 # Ver todo
-cf ps
+cflk ps
 
 # Cambiar de máquina
-cf attach <task>
+cflk attach <task>
 
 # Mover trabajo
-cf task move <task> proxmox
+cflk task move <task> proxmox
 
 # Experimentar
-cf run fork <run> --workflow experimental@2
-cf run compare <run-a> <run-b>
-cf run promote <winner>
+cflk run fork <run> --workflow experimental@2
+cflk run compare <run-a> <run-b>
+cflk run promote <winner>
 
 # Entender consumo
-cf models usage --project backend
+cflk models usage --project backend
 
 # Diagnóstico
-cf logs --run <run> --follow
-cf worker doctor <worker>
+cflk logs --run <run> --follow
+cflk worker doctor <worker>
 
 # Sincronizar entorno agentic
-cf workflow diff --worker linux
-cf workflow sync
+cflk workflow diff --worker linux
+cflk workflow sync
 
 # Mantener sistema
-cf backup
-cf gc --dry-run
+cflk backup
+cflk gc --dry-run
 ```
 
-La experiencia final debe sentirse como un único ordenador lógico para coding agents: el usuario piensa en **Projects → Tasks → Results**; CodeFabric se ocupa de **Workers → Workflows → Harnesses → Models → Logs → Scheduling**.
+La experiencia final debe sentirse como un único ordenador lógico para coding agents: el usuario piensa en **Projects → Tasks → Results**; Code Flock se ocupa de **Workers → Workflows → Harnesses → Models → Logs → Scheduling**.
 
 ---
 

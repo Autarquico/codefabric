@@ -92,7 +92,7 @@ Después `pages.yml` construye y despliega el sitio con la versión del tag.
 Con la release ya publicada:
 
 ```sh
-curl -fsSL https://github.com/Autarquico/codefabric/releases/download/vX.Y.Z/install.sh | CF_VERSION=vX.Y.Z sh
+curl -fsSL https://github.com/Autarquico/codeflock/releases/download/vX.Y.Z/install.sh | CFLK_VERSION=vX.Y.Z sh
 ```
 
 Para revisar antes de ejecutar y comprobar las firmas sin instalar:
@@ -101,7 +101,7 @@ Para revisar antes de ejecutar y comprobar las firmas sin instalar:
 repo=/ruta/al/checkout-en-el-commit-del-tag   # raíz de confianza: nunca el install.sh descargado
 d=$(mktemp -d) && cd "$d"
 for f in install.sh install.sh.sig checksums.txt checksums.txt.sig; do
-  curl -fsSLO "https://github.com/Autarquico/codefabric/releases/download/vX.Y.Z/$f"
+  curl -fsSLO "https://github.com/Autarquico/codeflock/releases/download/vX.Y.Z/$f"
 done
 "$repo/packaging/release/verify-asset.sh" checksums.txt "$repo/install.sh"
 "$repo/packaging/release/verify-asset.sh" install.sh "$repo/install.sh"
@@ -121,8 +121,8 @@ una carpeta `Formula/`).
 repo=/ruta/al/checkout-en-el-commit-del-tag   # raíz de confianza: nunca el install.sh descargado
 f=$(mktemp -d)
 gh release download vX.Y.Z -R Autarquico/codeflock -p 'checksums.txt*' --dir "$f"
-"$repo/packaging/release/brew-formula.sh" "$f/checksums.txt" "$repo/install.sh" vX.Y.Z > "$f/codefabric.rb"
-echo "$f/codefabric.rb"
+"$repo/packaging/release/brew-formula.sh" "$f/checksums.txt" "$repo/install.sh" vX.Y.Z > "$f/codeflock.rb"
+echo "$f/codeflock.rb"
 ```
 
 `checksums.txt` y `checksums.txt.sig` deben estar juntos; `$repo/install.sh` es el del repo en el commit del tag
@@ -134,14 +134,18 @@ Después, en el tap. `brew audit` e `install` resuelven la fórmula desde el tap
 dentro de ese checkout para probar el fichero recién copiado:
 
 ```sh
-rb=/ruta/absoluta/al/codefabric.rb   # la que imprimió el bloque anterior
+rb=/ruta/absoluta/al/codeflock.rb   # la que imprimió el bloque anterior
 brew tap autarquico/tap
 cd "$(brew --repository autarquico/tap)"
-cp "$rb" Formula/codefabric.rb
-brew audit --strict --online autarquico/tap/codefabric
-brew install autarquico/tap/codefabric && brew test autarquico/tap/codefabric
-git add Formula/codefabric.rb && git commit -m "codefabric X.Y.Z" && git push
+cp "$rb" Formula/codeflock.rb
+brew audit --strict --online autarquico/tap/codeflock
+brew install autarquico/tap/codeflock && brew test autarquico/tap/codeflock
+git add Formula/codeflock.rb && git commit -m "codeflock X.Y.Z" && git push
 ```
+
+La primera vez tras el rename (la primera versión estable), en el mismo commit: se borra `Formula/codefabric.rb` y
+se copia `packaging/homebrew/formula_renames.json` a la raíz del tap, para que `brew upgrade` de quien tenga
+`codefabric` instale `codeflock` (ver `packaging/homebrew/README.md`).
 
 ## 8. Rotación y revocación de la clave
 
@@ -156,7 +160,7 @@ git add Formula/codefabric.rb && git commit -m "codefabric X.Y.Z" && git push
   publicada en `autarquico/homebrew-tap`: vuelve a derivarla con `brew-formula.sh` usando el `install.sh` de `main`
   como TRUST; si falla, republícala desde la release nueva.
 - `latest` no está firmado (la redirección de `releases/latest`): quien pueda alterarla puede servir una
-  release anterior, firmada y válida. Se acepta hasta que haya canales firmados; fijar `CF_VERSION` lo evita.
+  release anterior, firmada y válida. Se acepta hasta que haya canales firmados; fijar `CFLK_VERSION` lo evita.
 
 ## Trazabilidad: scenario a test o job
 

@@ -9,7 +9,7 @@ export const SITE = 'https://autarquico.github.io';
 export const BASE = '/codeflock/';
 export const REPO_URL = 'https://github.com/Autarquico/codeflock';
 export const GUIDE_DIR = 'docs/guide';
-export const GUIDE_PAGES = ['getting-started.md', 'concepts.md', 'cli.md', 'mcp.md', 'tui.md'];
+export const GUIDE_PAGES = ['getting-started.md', 'concepts.md', 'cli.md', 'mcp.md', 'tui.md', 'upgrade-beta7.md'];
 // Images of the guide travel with its pages, so they stay relative and Astro optimises them.
 export const GUIDE_IMAGES = 'img';
 const NOT_PUBLIC = [/^docs\/codefabric-spec\.md$/, /^docs\/specs(\/|$)/, /^docs\/adr(\/|$)/, /^docs\/runbooks(\/|$)/];

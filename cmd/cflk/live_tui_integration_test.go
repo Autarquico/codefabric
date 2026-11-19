@@ -53,7 +53,7 @@ func TestScenario_LiveAttach_VistaEnDirecto(t *testing.T) {
 	o := newObserveBox(t, chatScript)
 	use(t, o.client)
 	term := o.tui()
-	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODEFABRIC") })
+	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODE FLOCK") })
 	term.send("t")
 	eventually(t, "the Task", func() bool { return strings.Contains(term.screen(), "auth-race") })
 	term.send("v")
@@ -92,7 +92,7 @@ func TestScenario_LiveAttach_VariosALaVez(t *testing.T) {
 		runs = append(runs, *created.Run)
 	}
 	term := o.tui()
-	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODEFABRIC") })
+	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODE FLOCK") })
 	term.send("t")
 	eventually(t, "the three Tasks", func() bool {
 		s := term.screen()
@@ -162,7 +162,7 @@ func TestScenario_LiveAttach_EntrarYSalir(t *testing.T) {
 		t.Fatal(err)
 	}
 	term := o.tui()
-	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODEFABRIC") })
+	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODE FLOCK") })
 	term.send("t")
 	eventually(t, "the Task", func() bool { return strings.Contains(term.screen(), "auth-race") })
 	term.send("v")
@@ -221,7 +221,7 @@ func TestScenario_LiveAttach_DosEscritoresYPanel(t *testing.T) {
 	eventually(t, "both writers", func() bool { return o.clients() == 2 })
 
 	term := o.tui()
-	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODEFABRIC") })
+	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODE FLOCK") })
 	term.send("t")
 	eventually(t, "the Task", func() bool { return strings.Contains(term.screen(), "auth-race") })
 	term.send("v")
@@ -259,7 +259,7 @@ func TestScenario_LiveAttach_TeclaDeRespaldoAlEntrarDesdeLaTui(t *testing.T) {
 	use(t, o.client)
 	useDetachKeyCtrlG(t, o)
 	term := o.tui()
-	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODEFABRIC") })
+	eventually(t, "the home", func() bool { return strings.Contains(term.screen(), "CODE FLOCK") })
 	term.send("t")
 	eventually(t, "the Task", func() bool { return strings.Contains(term.screen(), "auth-race") })
 	term.send("v")
