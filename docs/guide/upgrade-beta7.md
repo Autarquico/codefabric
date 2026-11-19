@@ -42,7 +42,7 @@ The installer puts `cflk` first and checks it runs. Only then does it replace a 
      ```
 
    - On macOS, `install-service` does not move the Controller: it is only for systemd. Under launchd it changes nothing and prints the commands, in order, to stop the old one, move the directories, write the new property list and load it. Read them, then run them. Keep a copy of the old property list: the last of those commands removes it, and going back needs it.
-   - Under a supervisor of your own, stop the Controller, change its command to `cflk controller run` and start it again. With no service of the old name installed, the first `cflk` that runs moves the directories.
+   - Under a supervisor of your own (a system unit, nohup, tmux), the installer and any other `cflk` command leave its directories alone while it runs. Stop the Controller, change its command to `cflk controller run` and start it again: that first run moves the directories. A Worker under a supervisor of your own goes the same way, with `cflk worker run`, once drained.
 
    Clients and Workers keep connecting without enrolling again: the database, the certificates and the relay move with the directories.
 
@@ -120,15 +120,17 @@ Do it in this order across a pool, the reverse of the upgrade: the clients, then
    rm ~/Library/LaunchAgents/com.codeflock.worker.plist
    ```
 
-   For a LaunchDaemon, run the same `launchctl bootout` with `sudo` against `system/com.codeflock.worker`, remove `/Library/LaunchDaemons/com.codeflock.worker.plist`, and put back the copy of your old property list you kept when you upgraded. A launchd Controller that you moved by hand goes back with the same commands, reversed.
+   For a LaunchDaemon, run the same `launchctl bootout` with `sudo` against `system/com.codeflock.worker`, remove `/Library/LaunchDaemons/com.codeflock.worker.plist`, and put back the copy of your old property list you kept when you upgraded. Do not load it yet: it loads in step 4, once the directories are back. A launchd Controller that you moved by hand goes back with the same commands, reversed.
 
 2. **Remove `cflk`, before moving anything:**
 
    ```sh
-   while command -v cflk >/dev/null; do rm "$(command -v cflk)"; done
+   hash -r
+   while p=$(command -v cflk); do rm "$p" || break; hash -r; done
+   command -v cflk || echo "no cflk left"
    ```
 
-   This removes every `cflk` on your `PATH`: the transition `cf` runs the first one it finds.
+   This removes every `cflk` on your `PATH`: the transition `cf` runs the first one it finds. If it stops on a copy it cannot remove, remove that one with `sudo rm` (or `brew uninstall codeflock`) and run it again, until it says `no cflk left`.
 
    On a client that never had a service, go on to step 3: with `cflk` gone nothing moves the directories again.
 
@@ -139,7 +141,7 @@ Do it in this order across a pool, the reverse of the upgrade: the clients, then
    mv ~/.local/share/codeflock ~/.local/share/codefabric
    ```
 
-   On macOS, also `mv ~/Library/Logs/codeflock ~/Library/Logs/codefabric`.
+   On macOS, also `mv ~/Library/Logs/codeflock ~/Library/Logs/codefabric`. For a LaunchDaemon, or any service whose directories are not in your home, move the directories its property list names instead (its `CFLK_CONFIG_DIR` and `CFLK_DATA_DIR`, or the `codeflock` directories under its `HOME`), with `sudo`, as the account it runs as.
 
 4. **Install the beta.6 and put its pieces back:**
 
@@ -149,6 +151,8 @@ Do it in this order across a pool, the reverse of the upgrade: the clients, then
    cf claude install --force
    cf mcp install --claude        # and --codex
    ```
+
+   For a LaunchDaemon, skip `cf worker install-service` (it installs a LaunchAgent of yours) and load the old property list instead: `sudo launchctl bootstrap system /Library/LaunchDaemons/com.codefabric.worker.plist`.
 
    On a Worker, from a client, let it take Runs again with `cf worker undrain <worker>`.
 
