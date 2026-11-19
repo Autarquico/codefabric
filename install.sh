@@ -315,7 +315,7 @@ acl_closed() {
 	if [ "$(uname -s)" = Darwin ]; then
 		# shellcheck disable=SC2012 # the ACL of one path; nothing else prints it on macOS
 		if ls -lden "$1" 2>/dev/null | awk 'NR > 1' |
-			grep -Eq ' allow .*(write|append|add_file|add_subdirectory|delete_child|chown)'; then
+			grep -Eq ' allow .*(write|append|add_file|add_subdirectory|delete|chown)'; then
 			return 1
 		fi
 	else

@@ -500,9 +500,13 @@ TestScenario_CfNoFiable_macOSACLs() {
 	chmod +a "everyone deny delete" "$T/acl"
 	# shellcheck source=/dev/null
 	(. "$T/install-lib.sh" && closed_to_others "$T/acl") || fail "a deny-delete ACL counted as open"
-	chmod +a "everyone allow write" "$T/acl"
-	# shellcheck source=/dev/null
-	if (. "$T/install-lib.sh" && closed_to_others "$T/acl"); then fail "an allow-write ACL counted as closed"; fi
+	for right in write delete; do
+		chmod -N "$T/acl"
+		chmod +a "everyone allow $right" "$T/acl"
+		# shellcheck source=/dev/null
+		if (. "$T/install-lib.sh" && closed_to_others "$T/acl"); then fail "an allow-$right ACL counted as closed"; fi
+	done
+	chmod -N "$T/acl"
 }
 
 # A FIFO would block cmp and the probe's open: it is not a regular file, so it is left alone, and quickly.
