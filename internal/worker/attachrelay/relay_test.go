@@ -3,6 +3,7 @@ package attachrelay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -269,6 +270,40 @@ func TestRelay_ViewModeNeverWritesToTheTerminal(t *testing.T) {
 			return false
 		}
 	})
+}
+
+func TestRelay_ViewTakesItsSizeOnlyWhenTheRuntimeKeepsItFromTheWindow(t *testing.T) {
+	for _, supported := range []bool{false, true} {
+		t.Run(fmt.Sprintf("supported=%v", supported), func(t *testing.T) {
+			r := newRig(t, func(o *Options) { o.ViewSized = supported; o.FirstResizeWait = 20 * time.Millisecond })
+			r.run()
+			c := r.ask(v1.AttachModeView)
+			<-r.rt.readOnly
+			if supported {
+				_ = v1.WriteFrame(c, v1.ResizeFrame(160, 45))
+			}
+			want := [2]uint16{}
+			if supported {
+				want = [2]uint16{160, 45}
+			}
+			if got := <-r.opens; got != want {
+				t.Fatalf("the view started at %v, want %v", got, want)
+			}
+			_ = v1.WriteFrame(c, v1.ResizeFrame(100, 30))
+			_ = v1.WriteFrame(c, v1.DataFrame([]byte("typed")))
+			r.term.out <- []byte("screen")
+			frame(t, c)
+			r.term.mu.Lock()
+			resizes := len(r.term.resizes)
+			r.term.mu.Unlock()
+			if (resizes == 1) != supported || resizes > 1 {
+				t.Errorf("a view resized the terminal %d times, supported=%v", resizes, supported)
+			}
+			if got := r.term.typed(); got != "" {
+				t.Errorf("a view typed %q", got)
+			}
+		})
+	}
 }
 
 func TestRelay_WriteModeSplicesBothWaysAndSizesFromTheFirstResize(t *testing.T) {

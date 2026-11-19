@@ -111,8 +111,12 @@ type Options struct {
 	Live  func(ctx context.Context, runID string, leaseEpoch uint64) (bool, error)
 	Shell ShellOptions  // what a shell request needs; its zero value refuses every one
 	Start StartTerminal // defaults to StartPty
-	Clock clock.Clock
-	Log   *slog.Logger
+	// ViewSized makes a view take the size of its client: it is set when the
+	// Runtime keeps that size from the window of the others. Unset, a view starts
+	// at the default size and ignores the sizes it is sent.
+	ViewSized bool
+	Clock     clock.Clock
+	Log       *slog.Logger
 
 	PollWait        time.Duration // how long the Controller may hold a poll
 	MaxSessions     int           // attaches at once on this Worker
@@ -330,6 +334,7 @@ type read struct {
 // splice moves frames between the stream and the terminal until either ends.
 func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, cmd cfruntime.Command) {
 	write := req.Mode == v1.AttachModeWrite || req.Mode == v1.AttachModeShell
+	sized := write || r.o.ViewSized
 	stop := make(chan struct{})
 	frames := make(chan read)
 	var wg sync.WaitGroup
@@ -361,11 +366,11 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 		wg.Wait()
 	}()
 
-	// A client in write mode says its size before anything else: the terminal
+	// A client that is sized says its size before anything else: the terminal
 	// starts at it, so tmux draws once at the right size.
 	var cols, rows uint16
 	var first *read
-	if write {
+	if sized {
 		t := r.o.Clock.NewTimer(r.o.FirstResizeWait)
 		select {
 		case fr := <-frames:
@@ -481,7 +486,7 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 				return true
 			}
 		case v1.FrameResize:
-			if c, rw, err := v1.ParseResize(fr.f.Payload); err == nil && write {
+			if c, rw, err := v1.ParseResize(fr.f.Payload); err == nil && sized {
 				_ = term.Resize(c, rw)
 			}
 		case v1.FrameClose, v1.FrameError:
