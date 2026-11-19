@@ -11,7 +11,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/domain"
 )
 
-// RequestCheckpoint asks for a manual checkpoint of a live Run (`cf run
+// RequestCheckpoint asks for a manual checkpoint of a live Run (`cflk run
 // checkpoint create`). A non-empty requestID makes repeating the call change
 // nothing twice.
 func (c *Client) RequestCheckpoint(ctx context.Context, run, requestID string) (v1.CheckpointRequested, error) {

@@ -30,7 +30,7 @@ var (
 	// ErrAlreadyInitialized is returned when init finds any trace of a Controller.
 	ErrAlreadyInitialized = errors.New("a Controller already exists here")
 	// ErrInitInProgress is returned when another init holds the lock, or died holding it.
-	ErrInitInProgress = errors.New("another `cf controller init` is running here")
+	ErrInitInProgress = errors.New("another `cflk controller init` is running here")
 	// ErrUnsafeDirectory is returned when the data or config directory is open to others.
 	ErrUnsafeDirectory = errors.New("unsafe directory")
 )
@@ -40,7 +40,7 @@ type InitOptions struct {
 	Paths     config.Paths
 	Clock     clock.Clock // defaults to clock.Real
 	Advertise string      // host:port written into invitations and the server certificate
-	Listen    string      // address `cf controller run` binds
+	Listen    string      // address `cflk controller run` binds
 	OwnerName string      // name recorded for the owner's machine
 }
 

@@ -62,7 +62,7 @@ func newConnectCmd() *cobra.Command {
 	return cmd
 }
 
-// runRebind is `cf connect --rebind`: it takes no invitation and replaces nothing but the address.
+// runRebind is `cflk connect --rebind`: it takes no invitation and replaces nothing but the address.
 func runRebind(cmd *cobra.Command, args []string, address string, force bool, name string) error {
 	if len(args) > 0 || force || name != "" {
 		return domain.NewError(domain.CodeInvalidRequest, "--rebind takes no invitation, --name or --force: it only changes the address", nil)
@@ -98,7 +98,7 @@ func refuseToReplaceCredentials(dir string) error {
 		return err
 	}
 	if exists {
-		return fmt.Errorf("this machine already has credentials in %s; `cf connect --force` replaces them "+
+		return fmt.Errorf("this machine already has credentials in %s; `cflk connect --force` replaces them "+
 			"(the old identity stays registered at its Controller until a client revokes it)", dir)
 	}
 	return nil

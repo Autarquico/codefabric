@@ -25,7 +25,7 @@ const asWrapper = "CF_TEST_AS_CF"
 func TestMain(m *testing.M) {
 	fakeharness.RunIfRequested()
 	if os.Getenv(asWrapper) == "1" && len(os.Args) == 4 && os.Args[1] == "worker" && os.Args[2] == "git-askpass" && AskpassMain != nil {
-		// `cf worker git-askpass <prompt>`, as the script of the Worker execs it.
+		// `cflk worker git-askpass <prompt>`, as the script of the Worker execs it.
 		os.Exit(AskpassMain(os.Args[3:]))
 	}
 	if os.Getenv(asWrapper) == "1" && len(os.Args) == 6 && os.Args[1] == "worker" && os.Args[2] == "exec" && os.Args[3] == "env" && os.Args[4] == "--run-dir" {

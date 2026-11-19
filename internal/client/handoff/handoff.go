@@ -1,4 +1,4 @@
-// Package handoff is what `cf handoff` does from the machine of the user: it takes
+// Package handoff is what `cflk handoff` does from the machine of the user: it takes
 // the session that calls it, with the working tree of its repository, and makes a
 // Worker continue it, as a new interactive Task or, if the session already has a Task,
 // as a resume of that one. What reaches the Controller is the seed of the session (cut
@@ -104,7 +104,7 @@ func Do(ctx context.Context, c Controller, sessions *session.Local, req Request)
 	if err := sessions.State.MarkHandedOff(ref.ID, task.ID, sent, tree, time.Now()); err != nil {
 		return Result{}, err
 	}
-	res.Task, res.Worker, res.Attach = task.Name, req.Worker, "cf attach "+task.Name
+	res.Task, res.Worker, res.Attach = task.Name, req.Worker, "cflk attach "+task.Name
 	return res, nil
 }
 
@@ -275,7 +275,7 @@ func requireResumable(t v1.Task) error {
 		return nil
 	}
 	return domain.NewError(domain.CodeInvalidTransition,
-		fmt.Sprintf("task %s is %s: only a deferred Task can be resumed; to move it to another Worker while it runs use `cf task move %s <worker>`", t.Name, t.State, t.Name),
+		fmt.Sprintf("task %s is %s: only a deferred Task can be resumed; to move it to another Worker while it runs use `cflk task move %s <worker>`", t.Name, t.State, t.Name),
 		map[string]any{"state": string(t.State)})
 }
 

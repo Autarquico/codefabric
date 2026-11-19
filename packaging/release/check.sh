@@ -30,7 +30,7 @@ printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$
 
 expected=""
 for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
-	expected="$expected cf_${version#v}_$target.tar.gz"
+	expected="$expected cflk_${version#v}_$target.tar.gz"
 done
 listed=$(sed 1d "$dist/checksums.txt" | awk '{ print $2 }' | LC_ALL=C sort | tr '\n' ' ')
 want="${expected# } "
@@ -41,7 +41,9 @@ for name in $expected; do
 	[ -f "$dist/$name" ] || fail "$name is missing"
 	sum=$(awk -v n="$name" '$2 == n { print $1 }' "$dist/checksums.txt")
 	[ "$sum" = "$(sha256_of "$dist/$name")" ] || fail "$name does not match its checksum"
-	tar -tzf "$dist/$name" | grep -qx 'cf' || fail "$name does not contain cf"
+	for bin in cflk cf; do
+		tar -tzf "$dist/$name" | grep -qx "$bin" || fail "$name does not contain $bin"
+	done
 done
-[ "$(find "$dist" -maxdepth 1 -name 'cf_*.tar.gz' | wc -l | tr -d ' ')" -eq 4 ] || fail "dist holds tarballs beyond the four listed"
+[ "$(find "$dist" -maxdepth 1 -name 'cflk_*.tar.gz' | wc -l | tr -d ' ')" -eq 4 ] || fail "dist holds tarballs beyond the four listed"
 echo "release-check: $dist ok ($version)"

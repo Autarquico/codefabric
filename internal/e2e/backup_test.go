@@ -59,7 +59,7 @@ func (c *Cluster) writePassphraseFile() string {
 	return file
 }
 
-// Backup is `cf backup` on the Controller's machine, to a file of the harness directory.
+// Backup is `cflk backup` on the Controller's machine, to a file of the harness directory.
 func (c *Cluster) Backup(name string, flags ...string) (file string, res Result) {
 	c.t.Helper()
 	file = filepath.Join(c.H.Dir(), name+".tar")
@@ -70,7 +70,7 @@ func (c *Cluster) Backup(name string, flags ...string) (file string, res Result)
 	return file, res
 }
 
-// Restore is `cf restore` of backup in a new box, advertising a new address.
+// Restore is `cflk restore` of backup in a new box, advertising a new address.
 // The Controller is not started.
 func (c *Cluster) Restore(box, backup string, flags ...string) (*restoredHost, Result) {
 	c.t.Helper()
@@ -486,8 +486,8 @@ func TestScenario_Restore_WithoutPassphraseTheBackupHasNoCAAndRestoreSaysToJoinA
 		t.Errorf("worker list = %q, want the old record of %s", listed, w.Name)
 	}
 	taken := c.CF(w.Box, "worker", "join", "--force", invite("worker"), "--name", w.Name, "--disk-min-free", "1MiB")
-	if taken.Code == 0 || !strings.Contains(taken.String(), "--name") || !strings.Contains(taken.String(), "cf worker remove") {
-		t.Errorf("join under a name taken: %s, want a refusal that names --name and cf worker remove", taken)
+	if taken.Code == 0 || !strings.Contains(taken.String(), "--name") || !strings.Contains(taken.String(), "cflk worker remove") {
+		t.Errorf("join under a name taken: %s, want a refusal that names --name and cflk worker remove", taken)
 	}
 	c.mustCF(host.Box, "worker", "remove", w.Name)
 	c.mustCF(w.Box, "worker", "join", "--force", invite("worker"), "--name", w.Name, "--disk-min-free", "1MiB")
@@ -610,7 +610,7 @@ func TestScenario_Restore_RunsOfAnOlderBackupAreNotKnownByTheRestoredController(
 		t.Errorf("the new Run: %s, want it completed on %s", RunStage(next), w.ID)
 	}
 	if got := runIDs(c.Ps(c.Observer)); slices.Contains(got, live) {
-		t.Errorf("cf ps lists Run %s, which the restored Controller never knew: %v", live, got)
+		t.Errorf("cflk ps lists Run %s, which the restored Controller never knew: %v", live, got)
 	}
 }
 
@@ -638,7 +638,7 @@ func TestScenario_Restore_TheSameBackupTwiceInARow(t *testing.T) {
 	}
 }
 
-// TestScenario_Restore_IntoTheEmptyDirectoriesOfANewMachine: `cf restore` is to
+// TestScenario_Restore_IntoTheEmptyDirectoriesOfANewMachine: `cflk restore` is to
 // accept a data and a config directory that exist and are empty (its help says
 // "absent or empty"), as the directories of a machine set up with `mkdir`.
 func TestScenario_Restore_IntoTheEmptyDirectoriesOfANewMachine(t *testing.T) {

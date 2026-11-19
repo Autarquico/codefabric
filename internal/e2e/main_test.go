@@ -120,7 +120,7 @@ func copyLogs(root, dest string) error {
 }
 
 // invites are the arguments that follow join or connect in the argv of the
-// manifest of root: what `cf controller token create` printed.
+// manifest of root: what `cflk controller token create` printed.
 func invites(root string) []string {
 	f, err := os.Open(filepath.Join(root, manifestFile)) //nolint:gosec // a root of this suite
 	if err != nil {

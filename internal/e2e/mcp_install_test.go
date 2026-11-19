@@ -124,7 +124,7 @@ func (b *mcpBox) cfAs(exe string, args ...string) mcpRun {
 	case errors.As(err, &exit):
 		res.code = exit.ExitCode()
 	case err != nil:
-		b.t.Fatalf("cf %s: %v", strings.Join(args, " "), err)
+		b.t.Fatalf("cflk %s: %v", strings.Join(args, " "), err)
 	}
 	res.stdout, res.stderr = out.String(), errb.String()
 	return res
@@ -134,7 +134,7 @@ func (b *mcpBox) mustCF(args ...string) mcpRun {
 	b.t.Helper()
 	res := b.cf(args...)
 	if res.code != 0 {
-		b.t.Fatalf("cf %s: exit %d\nstdout: %s\nstderr: %s", strings.Join(args, " "), res.code, res.stdout, res.stderr)
+		b.t.Fatalf("cflk %s: exit %d\nstdout: %s\nstderr: %s", strings.Join(args, " "), res.code, res.stdout, res.stderr)
 	}
 	return res
 }

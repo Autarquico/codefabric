@@ -241,7 +241,7 @@ func TestScenario_ClaudeRemoteRuns_StatusLine(t *testing.T) {
 		}
 		got := settingsOf(t, h)
 		line, _ := got["statusLine"].(map[string]any)
-		if line["type"] != "command" || line["command"] != "cf claude statusline" || line["refreshInterval"] != float64(10) {
+		if line["type"] != "command" || line["command"] != "cflk claude statusline" || line["refreshInterval"] != float64(10) {
 			t.Errorf("statusLine = %v", got["statusLine"])
 		}
 		if got["model"] != "opus" || got["permissions"] == nil {
@@ -293,7 +293,7 @@ func TestScenario_ClaudeRemoteRuns_StatusLine(t *testing.T) {
 			t.Fatal(errOut)
 		}
 		raw, err := os.ReadFile(filepath.Join(repo, ".claude", "settings.json")) //nolint:gosec // a path of the test
-		if err != nil || !strings.Contains(string(raw), "cf claude statusline") {
+		if err != nil || !strings.Contains(string(raw), "cflk claude statusline") {
 			t.Errorf("the repository settings: %v %s", err, raw)
 		}
 		for _, elsewhere := range []string{filepath.Join(h, ".claude", "settings.json"), filepath.Join(repo, ".claude", ".claude")} {

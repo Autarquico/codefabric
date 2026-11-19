@@ -25,7 +25,7 @@ const (
 	cwd       = "/work/repo"
 )
 
-// transcript is a session whose last tool call is the `cf handoff` of /handto, still
+// transcript is a session whose last tool call is the `cflk handoff` of /handto, still
 // running, followed by what Claude Code writes meanwhile, which must not travel.
 func transcript(extra ...string) string {
 	lines := []string{
@@ -36,7 +36,7 @@ func transcript(extra ...string) string {
 	}
 	lines = append(lines, extra...)
 	lines = append(lines,
-		`{"type":"assistant","sessionId":"`+sessionID+`","cwd":"`+cwd+`","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cf handoff --session `+sessionID+` --to w"}}]}}`,
+		`{"type":"assistant","sessionId":"`+sessionID+`","cwd":"`+cwd+`","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cflk handoff --session `+sessionID+` --to w"}}]}}`,
 		`{"type":"progress","sessionId":"`+sessionID+`","cwd":"`+cwd+`","toolUseID":"t1","data":{"output":"AFTER_THE_CUT"}}`,
 	)
 	return strings.Join(lines, "\n") + "\n"
@@ -242,7 +242,7 @@ func TestScenario_Handto(t *testing.T) {
 	if !strings.Contains(text, "tool_use") || strings.Contains(text, "AFTER_THE_CUT") {
 		t.Errorf("the export is not cut at the last tool_use")
 	}
-	if res.Worker != "w" || res.Resumed || res.Attach != "cf attach "+req.Name {
+	if res.Worker != "w" || res.Resumed || res.Attach != "cflk attach "+req.Name {
 		t.Errorf("result %+v", res)
 	}
 	rec, err := local.State.Get(sessionID)
@@ -251,7 +251,7 @@ func TestScenario_Handto(t *testing.T) {
 	}
 }
 
-// Claude Code had not written the call of cf handoff when it ran (2.1.319, seen
+// Claude Code had not written the call of cflk handoff when it ran (2.1.319, seen
 // in the lab): the session has no call, or only earlier ones with their
 // results, and goes whole.
 func TestScenario_HandtoBeforeTheCallIsOnDisk(t *testing.T) {
@@ -646,7 +646,7 @@ func TestHandto_ARunningTaskIsRefusedBeforeAnythingGoesUp(t *testing.T) {
 	forced.Force = true
 	_, err := Do(t.Context(), c, local, forced)
 	var de *domain.Error
-	if !errors.As(err, &de) || de.Code != domain.CodeInvalidTransition || !strings.Contains(de.Message, "cf task move") {
+	if !errors.As(err, &de) || de.Code != domain.CodeInvalidTransition || !strings.Contains(de.Message, "cflk task move") {
 		t.Fatalf("got %v", err)
 	}
 	if c.uploads != uploads || len(c.pushed) != pushed || len(c.resumed) != 0 {

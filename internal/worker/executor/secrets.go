@@ -345,7 +345,7 @@ func readFailure(ctx context.Context, ref string, err error) error {
 	case ctx.Err() != nil:
 		return fmt.Errorf("reading the secret %q: %w", ref, err)
 	case errors.Is(err, secrets.ErrNotFound):
-		return &codedFailure{domain.CodeSecretUnavailable, fmt.Sprintf("this Worker no longer holds the secret %q: its entry is missing; set it again with `cf worker secrets set`", ref)}
+		return &codedFailure{domain.CodeSecretUnavailable, fmt.Sprintf("this Worker no longer holds the secret %q: its entry is missing; set it again with `cflk worker secrets set`", ref)}
 	case errors.Is(err, secrets.ErrUnavailable):
 		return &codedFailure{domain.CodeSecretUnavailable, fmt.Sprintf("the secret %q is in the keyring of this machine, which cannot be reached "+
 			"(locked, not running or access denied); unlock it on the Worker and run again", ref)}

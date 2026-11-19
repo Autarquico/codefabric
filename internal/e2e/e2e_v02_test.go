@@ -113,7 +113,7 @@ func newPhase2(t *testing.T, o Opts) *phase2 {
 	return p
 }
 
-// adopt is `cf workflow adopt` of both harnesses at A, the secrets replaced by markers.
+// adopt is `cflk workflow adopt` of both harnesses at A, the secrets replaced by markers.
 func (p *phase2) adopt() v1.WorkflowVersion {
 	p.t.Helper()
 	return JSON[v1.WorkflowVersion](p.Cluster, p.a.Box, "workflow", "adopt", workflowName,
@@ -127,7 +127,7 @@ func (p *phase2) commitAgents(text string) v1.WorkflowVersion {
 	return JSON[v1.WorkflowVersion](p.Cluster, p.a.Box, "workflow", "commit", workflowName, "--replace-secrets", "--yes")
 }
 
-// applyToB is `cf workflow apply team@latest` of harness to B, by the owner.
+// applyToB is `cflk workflow apply team@latest` of harness to B, by the owner.
 func (p *phase2) applyToB(harnessID string, flags ...string) v1.ApplyWorkflowResponse {
 	p.t.Helper()
 	args := append([]string{"workflow", "apply", workflowName + "@latest", "--worker", p.b.Name, "--harness", harnessID}, flags...)
@@ -393,7 +393,7 @@ func TestScenario_E2eV02_DigestEfectivo(t *testing.T) {
 	}
 	shown := p.Run(p.Observer, run.ID)
 	if shown.Workflow == nil || shown.Workflow.Version != v2.Version || shown.Workflow.Digest != v2.Digest {
-		t.Errorf("cf run show: workflow %+v, want v%d %s", shown.Workflow, v2.Version, v2.Digest)
+		t.Errorf("cflk run show: workflow %+v, want v%d %s", shown.Workflow, v2.Version, v2.Digest)
 	}
 	switch got := shown.EffectiveConfigDigest; got {
 	case want:

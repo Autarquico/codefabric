@@ -23,7 +23,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/support/flock"
 )
 
-// The backup is one tar file. What `cf restore` finds in it, and where:
+// The backup is one tar file. What `cflk restore` finds in it, and where:
 //
 //	manifest.json              first entry; BackupManifest
 //	data/controller.db         the database, a VACUUM INTO copy; extracted to <data>/controller.db

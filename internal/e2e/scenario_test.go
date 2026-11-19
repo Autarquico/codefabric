@@ -21,7 +21,7 @@ import (
 // Done of Fase 1). Each waits for facts the cluster shows, never for a while,
 // and ends with Check: every invariant holds once the cluster is quiet.
 
-// TestScenario_E2eV01_DoneDeFase1 (#1, #2): two `cf do` on two Workers run one
+// TestScenario_E2eV01_DoneDeFase1 (#1, #2): two `cflk do` on two Workers run one
 // on each, and a third client sees them, their output and their events; once
 // every process of that client is killed, the Runs finish and publish.
 func TestScenario_E2eV01_DoneDeFase1(t *testing.T) {
@@ -55,7 +55,7 @@ func TestScenario_E2eV01_DoneDeFase1(t *testing.T) {
 		if !slices.ContainsFunc(ps, func(e v1.PsEntry) bool {
 			return e.ID == in.Run && e.State == domain.RunRunning && e.Worker != nil && e.Worker.Name == w.Name
 		}) {
-			t.Fatalf("cf ps does not show %v running: %+v", in.Execution, ps)
+			t.Fatalf("cflk ps does not show %v running: %+v", in.Execution, ps)
 		}
 	}
 	logs := c.FollowLogs(c.Observer, run)

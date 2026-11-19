@@ -9,8 +9,8 @@ import (
 // contract; the hint is only advice, and an unknown code has none.
 var hints = map[domain.Code]string{
 	domain.CodeControllerUnreachable:    "Check that the Controller is running and reachable, then try again.",
-	domain.CodeUnauthenticated:          "This machine is not enrolled or its credentials expired: run `cf connect` with a new invitation.",
-	domain.CodeVersionIncompatible:      "Update cf or the Controller so their versions match.",
+	domain.CodeUnauthenticated:          "This machine is not enrolled or its credentials expired: run `cflk connect` with a new invitation.",
+	domain.CodeVersionIncompatible:      "Update cflk or the Controller so their versions match.",
 	domain.CodeNotFound:                 "It no longer exists or the name is wrong: refresh the view and pick it again.",
 	domain.CodeAmbiguousRef:             "More than one matches: use its ID or narrow it with a Project.",
 	domain.CodeInvalidTransition:        "Its state changed in the meantime: refresh the view and check what it allows now.",
@@ -23,7 +23,7 @@ var hints = map[domain.Code]string{
 	domain.CodeWorkerCapacity:           "The Worker has no capacity left: choose another or free some.",
 	domain.CodeWorkflowConflict:         "The Workflow changed under you: re-read it and apply again, rebasing if it asks.",
 	domain.CodeRepoConfigInvalid:        "Fix .codefabric/project.yaml in the repository, or deny repo config for the Project.",
-	domain.CodeSecretUnavailable:        "A secret it needs is not available on the Worker: check `cf project secrets`.",
+	domain.CodeSecretUnavailable:        "A secret it needs is not available on the Worker: check `cflk project secrets`.",
 	domain.CodePolicyDenied:             "This identity may not do that: ask an owner.",
 	domain.CodeConfirmationRequired:     "Confirm the action to go on.",
 	domain.CodeConfirmationStale:        "What you confirmed has changed: review it and confirm again.",
@@ -77,9 +77,9 @@ func policyHint(details map[string]any) string {
 		if project == "" {
 			project = "<project>"
 		}
-		return "An owner can turn it on: cf project set " + project + " --shell on"
+		return "An owner can turn it on: cflk project set " + project + " --shell on"
 	case domain.PolicyWorkerAllowShell:
-		return "Turn on allow_shell on that Worker: cf worker config set allow_shell true"
+		return "Turn on allow_shell on that Worker: cflk worker config set allow_shell true"
 	}
 	return ""
 }

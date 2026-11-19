@@ -227,7 +227,7 @@ func TestClaudeAuth(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{name: "stored with a bad format", want: v1.ComponentWarn, action: "vuelve a guardarlo con la línea que imprime `claude setup-token`: cf worker secrets set claude/oauth-token en box", setup: func(t *testing.T, _ *host, s *secretsfile.Store) {
+		{name: "stored with a bad format", want: v1.ComponentWarn, action: "vuelve a guardarlo con la línea que imprime `claude setup-token`: cflk worker secrets set claude/oauth-token en box", setup: func(t *testing.T, _ *host, s *secretsfile.Store) {
 			if err := s.Set(t.Context(), claude.OAuthTokenRef, []byte(secretValue), nil, secrets.BackendFile, secrets.WithBadFormat()); err != nil {
 				t.Fatal(err)
 			}
@@ -346,7 +346,7 @@ func TestWorkflowComponent(t *testing.T) {
 			if c.Status != tc.want {
 				t.Errorf("workflow = %+v, want %s", c, tc.want)
 			}
-			if tc.want == v1.ComponentWarn && tc.err == nil && c.Action != "cf workflow status --worker box" {
+			if tc.want == v1.ComponentWarn && tc.err == nil && c.Action != "cflk workflow status --worker box" {
 				t.Errorf("action = %q", c.Action)
 			}
 		})

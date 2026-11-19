@@ -18,12 +18,12 @@ import (
 )
 
 // SessionsFactory builds the sessions of this machine over the directory where cf
-// remembers what it handed over. It is composed in by cmd/cf, as the adopter of the
+// remembers what it handed over. It is composed in by cmd/cflk, as the adopter of the
 // workflows is, because the harnesses that know where their sessions live are
 // adapters; without one, --session answers CF_NOT_IMPLEMENTED.
 type SessionsFactory func(stateDir string) *csession.Local
 
-// seedFlags are the flags with which `cf do` and `cf task resume` carry a session of
+// seedFlags are the flags with which `cflk do` and `cflk task resume` carry a session of
 // this machine to the Run they start (lineage.native_seed).
 type seedFlags struct {
 	session        string

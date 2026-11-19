@@ -67,7 +67,7 @@ func FetchRun(ctx context.Context, f Fetcher, ref, dir, branch string) (Fetched,
 		}
 		return out, nil
 	}
-	if _, err := r.run(ctx, "update-ref", "-m", "cf run fetch", "refs/heads/"+branch, commit, ""); err != nil {
+	if _, err := r.run(ctx, "update-ref", "-m", "cflk run fetch", "refs/heads/"+branch, commit, ""); err != nil {
 		return Fetched{}, err
 	}
 	out.Outcome = Created

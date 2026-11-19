@@ -26,22 +26,22 @@ import (
 )
 
 // The scenarios of the server of the spec mcp-server: a model-side client of
-// the go-sdk talks to `cf mcp serve` of the owner's machine, a real process,
+// the go-sdk talks to `cflk mcp serve` of the owner's machine, a real process,
 // over stdio, and what the tools did is checked in the Controller with the CLI.
 
-// mcpSession is a `cf mcp serve` and the go-sdk client connected to it.
+// mcpSession is a `cflk mcp serve` and the go-sdk client connected to it.
 type mcpSession struct {
 	c *Cluster
-	// ID is the session `cf mcp serve` announced on its stderr: the one the
+	// ID is the session `cflk mcp serve` announced on its stderr: the one the
 	// Controller must write on the events it causes.
 	ID      string
 	profile string
 	cs      *sdk.ClientSession
 }
 
-var servingLine = regexp.MustCompile(`cf mcp: serving profile (\S+), session ([0-9a-f]+)`)
+var servingLine = regexp.MustCompile(`cflk mcp: serving profile (\S+), session ([0-9a-f]+)`)
 
-// ServeMCP starts `cf mcp serve --profile profile` (no --profile if it is "",
+// ServeMCP starts `cflk mcp serve --profile profile` (no --profile if it is "",
 // which must serve execute) as the owner, in the owner's
 // clone (where `tasks_create` finds its Project), and connects a client to it.
 // The process is in the manifest of the invocation like every other, and ends
@@ -80,7 +80,7 @@ func (c *Cluster) ServeMCP(profile string) *mcpSession {
 	}
 	if err != nil {
 		_ = stderr.Close()
-		c.t.Fatalf("e2e: connecting to cf mcp serve --profile %s: %v\nstderr: %s", profile, err, readFile(stderrPath))
+		c.t.Fatalf("e2e: connecting to cflk mcp serve --profile %s: %v\nstderr: %s", profile, err, readFile(stderrPath))
 	}
 	s := &mcpSession{c: c, profile: profile, cs: cs}
 	c.t.Cleanup(func() {
@@ -90,7 +90,7 @@ func (c *Cluster) ServeMCP(profile string) *mcpSession {
 	})
 	m := servingLine.FindStringSubmatch(readFile(stderrPath))
 	if m == nil || m[1] != profile {
-		c.t.Fatalf("e2e: cf mcp serve --profile %s did not announce its session on stderr: %q", profile, readFile(stderrPath))
+		c.t.Fatalf("e2e: cflk mcp serve --profile %s did not announce its session on stderr: %q", profile, readFile(stderrPath))
 	}
 	s.ID = m[2]
 	return s
@@ -347,7 +347,7 @@ func claudeCluster(t *testing.T, script string) *Cluster {
 	return c
 }
 
-// Given a cluster with a Worker and an MCP client connected to `cf mcp serve`,
+// Given a cluster with a Worker and an MCP client connected to `cflk mcp serve`,
 // When the model creates a Task with tasks_create, waits for its end with events_wait,
 // Then it receives RunCompleted, and runs_get and runs_logs give the result and the output.
 func TestScenario_MCP_Master(t *testing.T) {
@@ -542,7 +542,7 @@ func TestScenario_MCP_TimeoutDeEspera(t *testing.T) {
 	}
 }
 
-// Given cf mcp serve --profile read, When the model lists the tools and calls tasks_create,
+// Given cflk mcp serve --profile read, When the model lists the tools and calls tasks_create,
 // Then no tool changes anything and the call fails; with execute tasks_create and tasks_respond
 // appear but not tasks_cancel, and with modify the three do.
 func TestScenario_MCP_Perfiles(t *testing.T) {
@@ -582,7 +582,7 @@ func TestScenario_MCP_Perfiles(t *testing.T) {
 
 	// The default profile is execute.
 	if got := c.ServeMCP("").toolNames(); !slices.Equal(got, sorted(mcpExecuteTools)) {
-		t.Errorf("cf mcp serve without --profile lists %v, want the tools of execute", got)
+		t.Errorf("cflk mcp serve without --profile lists %v, want the tools of execute", got)
 	}
 }
 

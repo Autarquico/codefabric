@@ -1,4 +1,4 @@
-// Package envwrap is the supervisor of the Environment of a Run (`cf worker
+// Package envwrap is the supervisor of the Environment of a Run (`cflk worker
 // exec env`, §25): it prepares the worktree, runs the services the Run needs
 // while it lives and stops them. It is modelled on the wrapper of the harness
 // (package execwrap) and outlives the daemon the same way: it leads its process

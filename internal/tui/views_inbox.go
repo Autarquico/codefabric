@@ -113,7 +113,7 @@ func inboxDetail(it v1.InboxItem, c RenderContext) []Field {
 	)
 	switch {
 	case !it.Run.Respondable:
-		return append(fields, Field{"Attach", "cf attach " + printable(it.Run.Short), ToneWarning})
+		return append(fields, Field{"Attach", "cflk attach " + printable(it.Run.Short), ToneWarning})
 	case p.Kind == domain.PromptPermission:
 		return append(fields, Field{"Answer", "y allows · n denies", ToneFaint})
 	}
@@ -248,7 +248,7 @@ func (s *inboxScreen) answer(key string) tea.Cmd {
 	case it.Prompt == nil:
 		s.warn = "A failure is decided from Tasks, not answered here"
 	case !it.Run.Respondable:
-		s.warn = "This Run cannot be answered from here: cf attach " + printable(it.Run.Short)
+		s.warn = "This Run cannot be answered from here: cflk attach " + printable(it.Run.Short)
 	case key == "enter" && it.Prompt.Kind == domain.PromptPermission:
 		s.warn = "Press y to allow or n to deny"
 	case key != "enter" && it.Prompt.Kind != domain.PromptPermission:

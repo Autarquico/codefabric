@@ -147,6 +147,6 @@ func (s *tuiSession) Colon(line string) {
 	s.Type(line)
 	s.WaitFor("the line typed", line[:min(len(line), 20)])
 	s.Keys("Enter")
-	s.WaitFor("the line to run", "✓ cf ")
+	s.WaitFor("the line to run", "✓ cflk ")
 	s.Back("Command line")
 }

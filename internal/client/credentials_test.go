@@ -95,7 +95,7 @@ func TestCredentials_MissingBundleIsUnauthenticatedWithTheWayOut(t *testing.T) {
 	if !asDomain(err, &de) || de.Code != domain.CodeUnauthenticated || domain.ExitCode(de.Code) != 6 {
 		t.Fatalf("err = %v", err)
 	}
-	if want := "cf connect"; !strings.Contains(de.Message, want) {
+	if want := "cflk connect"; !strings.Contains(de.Message, want) {
 		t.Errorf("message %q does not mention %q", de.Message, want)
 	}
 }

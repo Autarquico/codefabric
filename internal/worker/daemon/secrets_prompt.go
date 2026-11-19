@@ -107,8 +107,8 @@ func promptValue(ctx context.Context, tty *os.File, prompt io.Writer, ref string
 	if bytes.ContainsAny(value, "\r\n") { // only the Claude token is joined; a wrapped value would be stored broken
 		clear(value)
 		return nil, false, invalid(fmt.Sprintf("the value has several lines; nothing was stored. A value of several lines, "+
-			"or one the terminal wrapped, goes in on stdin: cf worker secrets set %[1]s < value.txt "+
-			"(or pbpaste | cf worker secrets set %[1]s on macOS)", ref))
+			"or one the terminal wrapped, goes in on stdin: cflk worker secrets set %[1]s < value.txt "+
+			"(or pbpaste | cflk worker secrets set %[1]s on macOS)", ref))
 	}
 	again, err := ask("Again, to confirm: ")
 	defer clear(again)
@@ -126,7 +126,7 @@ func promptValue(ctx context.Context, tty *os.File, prompt io.Writer, ref string
 		}
 		return nil, false, invalid(fmt.Sprintf("the two values differ; nothing was stored. If the terminal may have wrapped the value, "+
 			"give it on stdin from a file or the clipboard, so that it stays out of your shell's history: "+
-			"cf worker secrets set %[1]s < %[2]s (or pbpaste | cf worker secrets set %[1]s on macOS)", ref, file))
+			"cflk worker secrets set %[1]s < %[2]s (or pbpaste | cflk worker secrets set %[1]s on macOS)", ref, file))
 	}
 	return value, badFormat, nil
 }

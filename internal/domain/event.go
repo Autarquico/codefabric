@@ -27,7 +27,7 @@ const (
 	EventTaskStateChanged EventType = "TaskStateChanged"
 	EventTaskNeedsInput   EventType = "TaskNeedsInput"
 	// EventTaskPulled records that a client brought the Task to its own checkout
-	// (`cf task pull`): from then on the work is there, and a resume needs a seed of that
+	// (`cflk task pull`): from then on the work is there, and a resume needs a seed of that
 	// client or --force. EventTaskResumeForced audits the --force that overrode it.
 	EventTaskPulled       EventType = "TaskPulled"
 	EventTaskResumeForced EventType = "TaskResumeForced"
@@ -62,7 +62,7 @@ const (
 	EventRunSealed               EventType = "RunSealed" // the Worker sealed the result into a commit (§22.6)
 	EventRunPublished            EventType = "RunPublished"
 	EventRunPublicationFailed    EventType = "RunPublicationFailed"
-	EventRunPublicationRequested EventType = "RunPublicationRequested" // `cf run publish` asked for another try
+	EventRunPublicationRequested EventType = "RunPublicationRequested" // `cflk run publish` asked for another try
 	EventJournalTruncated        EventType = "JournalTruncated"
 	// EventEnvironmentStopFailed warns that a service of the Environment of a Run did
 	// not stop cleanly (§25: stopping is best effort, the reservation is released all the same).

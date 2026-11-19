@@ -526,7 +526,7 @@ func loseRenewalResponse(t *testing.T, tc *testController, dir string) {
 func wantRecoveryHint(t *testing.T, err error) {
 	t.Helper()
 	wantCode(t, err, domain.CodeUnauthenticated)
-	if !strings.Contains(err.Error(), "cf connect --force") {
+	if !strings.Contains(err.Error(), "cflk connect --force") {
 		t.Errorf("no recovery hint in %q", err)
 	}
 }

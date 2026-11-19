@@ -165,7 +165,7 @@ func (e *Executor) launchOf(ctx context.Context, adapter harness.Adapter, r stat
 }
 
 // seededPrompt is what a Run resumed on the session of a client is told: the prompt of
-// its Task when the Task began with that session (`cf do --session <id> "..."`), and
+// its Task when the Task began with that session (`cflk do --session <id> "..."`), and
 // the generic one for a resume or a move, whose prompt is the one the parent already ran.
 func seededPrompt(c *v1.Continuation, prompt string) string {
 	if c.ParentRunID == "" && strings.TrimSpace(prompt) != "" {

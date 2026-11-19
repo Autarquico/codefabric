@@ -584,7 +584,7 @@ func (w *wrapper) count() int { return GroupOthers(w.pgid, w.self) }
 // even when the exit cannot be written: the daemon then settles a lost wrapper.
 func (w *wrapper) endByKillingGroup(log *os.File, copied <-chan struct{}, exit Exit) error {
 	if err := Write(w.o.RunDir, ExitFile, w.sealed(log, copied, exit)); err != nil {
-		fmt.Fprintf(os.Stderr, "cf worker exec: writing the exit: %v; killing the group all the same\n", err)
+		fmt.Fprintf(os.Stderr, "cflk worker exec: writing the exit: %v; killing the group all the same\n", err)
 	}
 	w.killGroup()
 	return nil

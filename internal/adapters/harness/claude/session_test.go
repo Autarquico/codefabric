@@ -120,7 +120,7 @@ func TestSession_ExportIsDeterministicAndLeavesOutLocalState(t *testing.T) {
 	}
 }
 
-// The call of cf handoff is not on disk yet: every call has its result, and
+// The call of cflk handoff is not on disk yet: every call has its result, and
 // the caller's session goes whole.
 func TestSession_ExportForTheCallerKeepsAnAnsweredSessionWhole(t *testing.T) {
 	archive, m := exportSession(t, harness.ExportOptions{CutAtToolUse: true})
@@ -133,8 +133,8 @@ func TestSession_ExportForTheCallerKeepsAnAnsweredSessionWhole(t *testing.T) {
 	}
 }
 
-// inFlight is the call of cf handoff once Claude Code has written it: no result follows.
-const inFlight = `{"type":"assistant","sessionId":"11111111-2222-4333-8444-555555555555","cwd":"/Users/x/repo","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_9","name":"Bash","input":{"command":"cf handoff"}}]}}` + "\n"
+// inFlight is the call of cflk handoff once Claude Code has written it: no result follows.
+const inFlight = `{"type":"assistant","sessionId":"11111111-2222-4333-8444-555555555555","cwd":"/Users/x/repo","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_9","name":"Bash","input":{"command":"cflk handoff"}}]}}` + "\n"
 
 func TestSession_ScanCutsAtTheCallStillRunning(t *testing.T) {
 	whole := sessionTranscript(t)

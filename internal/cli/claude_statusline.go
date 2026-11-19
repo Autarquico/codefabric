@@ -21,7 +21,7 @@ import (
 
 const (
 	statusLineKey     = "statusLine"
-	statusLineCommand = "cf claude statusline"
+	statusLineCommand = "cflk claude statusline"
 	// statusLineRefreshSeconds keeps the line fresh at rest: Claude Code runs the
 	// command again that often even when nothing happens in the session.
 	statusLineRefreshSeconds = 10
@@ -32,7 +32,7 @@ const (
 	statusLineNames = 2
 )
 
-// StatusLineResult is what `cf claude install --statusline` did to the settings file.
+// StatusLineResult is what `cflk claude install --statusline` did to the settings file.
 type StatusLineResult struct {
 	Path   string
 	DryRun bool
@@ -147,7 +147,7 @@ func newClaudeStatusLineCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "statusline",
 		Short: "Print one short line with the Runs that are live on Workers, for the status line of Claude Code",
-		Long:  "Print one short line with the interactive Runs that are live on Workers. It prints nothing when there are none or when the Controller does not answer within a few seconds.\nInstall it with `cf claude install --statusline`.",
+		Long:  "Print one short line with the interactive Runs that are live on Workers. It prints nothing when there are none or when the Controller does not answer within a few seconds.\nInstall it with `cflk claude install --statusline`.",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, _ []string) {
 			// Claude Code sends the session as JSON on stdin; the line does not need it.

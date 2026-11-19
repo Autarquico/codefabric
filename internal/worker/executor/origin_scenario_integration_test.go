@@ -29,7 +29,7 @@ import (
 )
 
 // These scenarios run the executor of a Worker over the real gitops, the real
-// git, the real script of the Worker and the real `cf worker git-askpass`
+// git, the real script of the Worker and the real `cflk worker git-askpass`
 // (the test binary stands for cf, see TestMain), against a smart-HTTP origin
 // over TLS that wants Basic credentials. Only the Controller, the Runtime
 // and the secrets catalog are fakes. The run, state and data directories have
@@ -67,7 +67,7 @@ func newOriginRigAs(t *testing.T, user string, wrapGit func(realGit string, r *o
 	// Every directory of the test is under a path with spaces and a comma.
 	// t.TempDir keeps one base per test, made on the first call: TMPDIR has to
 	// be set before it.
-	spaced, err := os.MkdirTemp("", "cf run dir, here ")
+	spaced, err := os.MkdirTemp("", "cflk run dir, here ")
 	if err != nil {
 		t.Fatal(err)
 	}

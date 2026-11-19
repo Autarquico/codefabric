@@ -70,7 +70,7 @@ type WorkerReport struct {
 	OS            string
 	Arch          string
 	Capabilities  []string
-	// SSHTarget and AttachBinaries are what it announces for `cf attach`; "" and
+	// SSHTarget and AttachBinaries are what it announces for `cflk attach`; "" and
 	// nil if nothing. They are validated by whoever records them.
 	SSHTarget      string
 	AttachBinaries map[string]string

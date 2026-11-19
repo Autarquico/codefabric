@@ -12,7 +12,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/domain"
 )
 
-// newTaskDeferCmd is `cf task defer <task>` (§11.4).
+// newTaskDeferCmd is `cflk task defer <task>` (§11.4).
 func newTaskDeferCmd() *cobra.Command {
 	var requestID string
 	cmd := &cobra.Command{
@@ -20,7 +20,7 @@ func newTaskDeferCmd() *cobra.Command {
 		Short: "Suspend a Task's Run with a checkpoint, to continue it later",
 		Long: "Asks the Worker of the Task's running Run to capture a checkpoint (the work in the relay, and the\n" +
 			"harness's session if the Project keeps it) and stops the Run. The Task waits (deferred) once the\n" +
-			"checkpoint is published; `cf task resume` continues it. Deferring a deferred Task changes nothing.",
+			"checkpoint is published; `cflk task resume` continues it. Deferring a deferred Task changes nothing.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := openClient(cmd)
@@ -42,7 +42,7 @@ func newTaskDeferCmd() *cobra.Command {
 	return cmd
 }
 
-// newTaskResumeCmd is `cf task resume <task> [--worker w]` (§11.4).
+// newTaskResumeCmd is `cflk task resume <task> [--worker w]` (§11.4).
 func newTaskResumeCmd(sessions SessionsFactory) *cobra.Command {
 	var (
 		requestID, worker string
@@ -57,7 +57,7 @@ func newTaskResumeCmd(sessions SessionsFactory) *cobra.Command {
 			"relay. If the harness's session cannot be restored there (another adapter or major version) the Run\n" +
 			"continues from the source and the summary, and the event of the assignment says so.\n" +
 			"With --session the Run continues a session of this machine instead of the one of the checkpoint. After\n" +
-			"`cf task pull` a resume is refused until a session of the same client seeds it, or with --force.",
+			"`cflk task pull` a resume is refused until a session of the same client seeds it, or with --force.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := seedFrom.check(); err != nil {

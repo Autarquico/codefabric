@@ -12,12 +12,12 @@ import (
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print the cf version",
+		Short: "Print the cflk version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			info := buildinfo.Get()
 			return emit(cmd, info, func(w io.Writer) error {
-				_, err := fmt.Fprintf(w, "cf %s (commit %s, built %s)\n", info.Version, orUnknown(info.Commit), orUnknown(info.Date))
+				_, err := fmt.Fprintf(w, "cflk %s (commit %s, built %s)\n", info.Version, orUnknown(info.Commit), orUnknown(info.Date))
 				return err
 			})
 		},

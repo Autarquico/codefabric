@@ -20,8 +20,8 @@ import (
 // codexSessionEnv is how Codex tells a command it runs the id of its session.
 const codexSessionEnv = "CODEX_SESSION_ID"
 
-// handoffOverrides are the flags that lift a guard of `cf handoff`. Claude Code runs
-// Bash without a terminal and the skill pre-approves `cf handoff *`, so a model steered
+// handoffOverrides are the flags that lift a guard of `cflk handoff`. Claude Code runs
+// Bash without a terminal and the skill pre-approves `cflk handoff *`, so a model steered
 // by what it read could pass them: they are only accepted from a terminal, where a
 // person is typing.
 type handoffOverrides struct{ force, allowSensitive bool }
@@ -37,9 +37,9 @@ func (o handoffOverrides) requireTerminal(stdin io.Reader, session, to string) e
 			"Run this yourself in your own terminal: "+o.command(session, to), nil)
 }
 
-// command is `cf handoff` with the overrides, as the user would type it.
+// command is `cflk handoff` with the overrides, as the user would type it.
 func (o handoffOverrides) command(session, to string) string {
-	cmd := "cf handoff"
+	cmd := "cflk handoff"
 	if session != "" {
 		cmd += " --session " + shellQuote(session)
 	}

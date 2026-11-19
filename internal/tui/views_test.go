@@ -332,7 +332,7 @@ func TestScenario_TuiViewsActions_Confirm_DestructiveActionsAskFirst(t *testing.
 
 	press(t, m, "x") // archive
 	got := frame(m)
-	for _, want := range []string{"Archive task?", "auth-refactor (t-4k2m)", "cf task archive tsk_1", "[y] Archive task"} {
+	for _, want := range []string{"Archive task?", "auth-refactor (t-4k2m)", "cflk task archive tsk_1", "[y] Archive task"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the dialog lacks %q:\n%s", want, got)
 		}
@@ -425,7 +425,7 @@ func TestScenario_TuiViewsActions_Menu_RunsTheChosenActionAndHonoursDestructive(
 	be := newBackend()
 	m := openTasks(t, be)
 	press(t, m, "enter")
-	if !strings.Contains(frame(m), "cf task cancel") {
+	if !strings.Contains(frame(m), "cflk task cancel") {
 		t.Errorf("the menu does not show the command of the action:\n%s", frame(m))
 	}
 	press(t, m, "down")
@@ -775,7 +775,7 @@ func TestViews_ConfirmWrapsALongTarget(t *testing.T) {
 	press(t, m, "x")
 	got := frame(m)
 	assertFits(t, got, 80, 24)
-	if !strings.Contains(got, "cf task archive tsk_1") || !strings.Contains(got, "t-4k2m)") {
+	if !strings.Contains(got, "cflk task archive tsk_1") || !strings.Contains(got, "t-4k2m)") {
 		t.Errorf("the dialog lost the end of the target or the command:\n%s", got)
 	}
 }

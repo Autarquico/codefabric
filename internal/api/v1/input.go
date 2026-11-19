@@ -88,7 +88,7 @@ type InboxRun struct {
 	Short   string          `json:"short_id"`
 	State   domain.RunState `json:"state"`
 	Harness string          `json:"harness,omitempty"`
-	// Respondable is whether `cf task respond` can answer it now, that is,
+	// Respondable is whether `cflk task respond` can answer it now, that is,
 	// whether its Worker announces structured input for its harness; if not,
 	// attach to the Run.
 	Respondable bool `json:"respondable"`

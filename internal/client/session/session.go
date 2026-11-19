@@ -3,7 +3,7 @@
 // finds a session by id, says whether it is open, exports it for a seed (cut at the last
 // tool call when it is the session that calls, and blocked when it holds what looks like a
 // secret), remembers what was handed over, and imports a session that comes back
-// (`cf task pull`). The files are read and written by the adapters of the harnesses; what
+// (`cflk task pull`). The files are read and written by the adapters of the harnesses; what
 // is here is what only a client knows.
 package session
 

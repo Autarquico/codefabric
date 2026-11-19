@@ -12,7 +12,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/domain"
 )
 
-// newHandoffCmd is `cf handoff --to <worker>`: hand the session that calls it over
+// newHandoffCmd is `cflk handoff --to <worker>`: hand the session that calls it over
 // to a Worker. There are two ways in, by where it runs:
 //
 //   - inside a Run of a Worker (CF_RUN_SOCKET is set): it asks the Worker, over the
@@ -31,7 +31,7 @@ func newHandoffCmd(opts Options) *cobra.Command {
 		Long: "Hands the Claude Code session that runs this command over to the Worker named by --to.\n" +
 			"Inside a Run on a Worker the Task is moved to that Worker through the socket the Worker lends to the Run\n" +
 			"(CF_RUN_SOCKET): the Run is checkpointed and ended there, and the Task continues on the other Worker;\n" +
-			"continue it with `cf attach <task>`. --list prints the Workers a Run may move to.",
+			"continue it with `cflk attach <task>`. --list prints the Workers a Run may move to.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := overrides.requireTerminal(cmd.InOrStdin(), session, to); err != nil {
@@ -45,7 +45,7 @@ func newHandoffCmd(opts Options) *cobra.Command {
 				return handoffFromRun(cmd, socket, to)
 			}
 			if list {
-				return domain.NewError(domain.CodeInvalidRequest, "--list is for inside a Run; use `cf worker list`", nil)
+				return domain.NewError(domain.CodeInvalidRequest, "--list is for inside a Run; use `cflk worker list`", nil)
 			}
 			return handoffFromClient(cmd, opts, session, to, overrides)
 		},
@@ -68,7 +68,7 @@ func handoffFromRun(cmd *cobra.Command, socket, to string) error {
 	}
 	out := *resp.Move
 	return emit(cmd, out, func(w io.Writer) error {
-		_, err := fmt.Fprintf(w, "Task %s is moving to %s (%s).\nThe Run of this session ends when the checkpoint is taken; continue with: cf attach %s\n",
+		_, err := fmt.Fprintf(w, "Task %s is moving to %s (%s).\nThe Run of this session ends when the checkpoint is taken; continue with: cflk attach %s\n",
 			out.Task.Name, targetOf(out.Move), out.Move.Stage, out.Task.Name)
 		return err
 	})

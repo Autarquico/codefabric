@@ -75,8 +75,8 @@ func workflowsDef() viewDef[WorkflowRow] {
 func workflowCLINote(row Row) string {
 	name := row.ID
 	target := " " + name + " --worker=<worker> --harness=<harness>"
-	return "cf workflow adopt <new-name> · cf workflow commit " + name +
-		" · cf workflow diff" + target + " · cf workflow explain" + target
+	return "cflk workflow adopt <new-name> · cflk workflow commit " + name +
+		" · cflk workflow diff" + target + " · cflk workflow explain" + target
 }
 
 // rollbackHolds says what the Worker and harness of a rollback hold now.

@@ -186,11 +186,11 @@ func humanBytes(n uint64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
-// recentDiscard is how long a discard keeps its Worker in `cf status`, drained or not.
+// recentDiscard is how long a discard keeps its Worker in `cflk status`, drained or not.
 const recentDiscard = 24 * time.Hour
 
 // WithJournalBacklog lists the Workers whose journal holds bytes the Controller
-// has not confirmed, or discarded logs or output lately, for `cf status` (§1.3).
+// has not confirmed, or discarded logs or output lately, for `cflk status` (§1.3).
 func (s *Service) WithJournalBacklog(ctx context.Context) ([]v1.StatusWorker, error) {
 	var out []v1.StatusWorker
 	err := s.db.Read(ctx, func(q store.Querier) error {

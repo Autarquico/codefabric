@@ -208,7 +208,7 @@ func TestWithComponents_ReportsSetupFailingWhileTheJoinIsPending(t *testing.T) {
 			setup = &got.Components[i]
 		}
 	}
-	if got.Status != v1.HealthDegraded || setup == nil || setup.Status != v1.ComponentFail || setup.Action != "cf worker join --resume" {
+	if got.Status != v1.HealthDegraded || setup == nil || setup.Status != v1.ComponentFail || setup.Action != "cflk worker join --resume" {
 		t.Fatalf("health = %+v", got)
 	}
 	pending = false

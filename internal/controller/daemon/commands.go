@@ -18,7 +18,7 @@ import (
 
 const defaultPort = "7443"
 
-// Command is `cf controller`: init, run, token create and its service.
+// Command is `cflk controller`: init, run, token create and its service.
 func Command() *cobra.Command {
 	cmd := &cobra.Command{Use: "controller", Short: "Run and administer the Controller"}
 	cmd.AddCommand(newInitCmd(), newRunCmd(), newTokenCmd(), newInstallServiceCmd(), newUninstallServiceCmd())
@@ -59,7 +59,7 @@ func newInitCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Controller initialized.\n  config:  %s\n  data:    %s\n  owner:   %s (credentials in %s, mode 0600)\n\n",
 				res.Paths.ConfigDir, res.Paths.DataDir, res.OwnerID, res.Paths.CredentialsDir())
-			fmt.Fprintf(out, "Invitation for your next machine (single use, until %s):\n  %s\n\nStart the Controller with: cf controller run\n",
+			fmt.Fprintf(out, "Invitation for your next machine (single use, until %s):\n  %s\n\nStart the Controller with: cflk controller run\n",
 				res.InviteUntil.Local().Format(time.RFC3339), res.Invite)
 			return nil
 		},
@@ -147,7 +147,7 @@ func newInstallServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "install-service",
 		Short: "Run the Controller as a systemd --user service of this user (Linux)",
-		Long: "Run `cf controller run` as a systemd --user unit of this user, on Linux. Installing what\n" +
+		Long: "Run `cflk controller run` as a systemd --user unit of this user, on Linux. Installing what\n" +
 			"is installed and running changes nothing. Its PATH is calculated now (--path replaces it).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -171,8 +171,8 @@ func newInstallServiceCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&o.Binary, "binary", "", "the cf the service runs, as an absolute path (default: this one)")
-	f.StringVar(&o.PATH, "path", "", "the PATH of the service, of absolute directories (default: those of cf and git, then the usual ones)")
+	f.StringVar(&o.Binary, "binary", "", "the cflk the service runs, as an absolute path (default: this one)")
+	f.StringVar(&o.PATH, "path", "", "the PATH of the service, of absolute directories (default: those of cflk and git, then the usual ones)")
 	f.BoolVar(&dryRun, "dry-run", false, "show the file and where it would go, and change nothing")
 	return cmd
 }

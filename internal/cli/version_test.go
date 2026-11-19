@@ -28,7 +28,7 @@ func TestVersionHumanOutput(t *testing.T) {
 	if code := Run([]string{"version"}, strings.NewReader(""), &out, &errOut); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errOut.String())
 	}
-	if !strings.HasPrefix(out.String(), "cf ") {
+	if !strings.HasPrefix(out.String(), "cflk ") {
 		t.Errorf("unexpected output %q", out.String())
 	}
 }

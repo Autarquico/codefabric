@@ -168,10 +168,10 @@ func announcedHarnesses(capabilities []string) []string {
 	return out
 }
 
-// Logs: pick a Run, then follow its output (the API `cf logs --follow` uses).
+// Logs: pick a Run, then follow its output (the API `cflk logs --follow` uses).
 // What is kept is bounded: the newest maxLogLines complete lines, and at most
 // maxPartialLine bytes of a line that has not ended. Output is shown the way
-// `cf logs` shows it by default: what could act on the terminal is removed.
+// `cflk logs` shows it by default: what could act on the terminal is removed.
 // There is no raw mode, because raw bytes would write over the screen of the TUI.
 const (
 	maxLogLines    = 2000

@@ -187,7 +187,7 @@ func (c *Client) TaskMove(ctx context.Context, ref, project string) (v1.Move, er
 	return out, err
 }
 
-// PullPlan is what `cf task pull` would bring for the Task: its last checkpoint and the
+// PullPlan is what `cflk task pull` would bring for the Task: its last checkpoint and the
 // commit of it in the relay, or that its Run is live.
 func (c *Client) PullPlan(ctx context.Context, ref, project string) (v1.PullPlan, error) {
 	var out v1.PullPlan

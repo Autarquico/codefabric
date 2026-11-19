@@ -28,7 +28,7 @@ type worktreeRemover interface {
 //
 //	no row in publications        keep (nothing says its result is safe)
 //	sealing, sealed, pushed       keep (the Controller's `pending`)
-//	failed                        keep (until `cf run publish` makes it published)
+//	failed                        keep (until `cflk run publish` makes it published)
 //	published, within retention   keep
 //	published, retention passed   delete
 //

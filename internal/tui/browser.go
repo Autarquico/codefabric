@@ -111,7 +111,7 @@ type (
 		from
 		target    Row
 		runErr    error // how the process ended
-		finishErr error // what `cf attach` would answer to that
+		finishErr error // what `cflk attach` would answer to that
 	}
 	timelineMsg struct {
 		from

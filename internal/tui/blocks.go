@@ -353,9 +353,9 @@ func (m *Menu) render(c RenderContext, label string) []string {
 // commandOf is the cf command that the action runs, for the person to learn.
 func commandOf(d actions.Descriptor) string {
 	if d.Terminal {
-		return "cf attach"
+		return "cflk attach"
 	}
-	return "cf " + strings.Join(d.Path, " ")
+	return "cflk " + strings.Join(d.Path, " ")
 }
 
 // Confirm asks before a destructive action. It shows what will run and on what,

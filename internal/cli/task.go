@@ -31,7 +31,7 @@ func newTaskCmd(sessions SessionsFactory) *cobra.Command {
 	return cmd
 }
 
-// newCreateTaskCmd is `cf task new` and, under another name, `cf do` (§11.1).
+// newCreateTaskCmd is `cflk task new` and, under another name, `cflk do` (§11.1).
 func newCreateTaskCmd(use, short string, sessions SessionsFactory) *cobra.Command {
 	var (
 		req         v1.CreateTaskRequest
@@ -106,8 +106,8 @@ func newCreateTaskCmd(use, short string, sessions SessionsFactory) *cobra.Comman
 	f.StringVar(&completion, "completion", "", "completion policy: first_success, promote or manual")
 	f.StringVar(&req.Requirements.Harness, "harness", "", "harness to run it with: claude-code, codex or command (the prompt as a POSIX shell script); a Worker offers the ones it has installed, and a Run with no harness is rejected by every Worker")
 	f.StringVar(&req.Requirements.Model, "model", "", "model to run it with")
-	f.StringVar(&req.Requirements.Permissions, "permissions", "", "`ask` to have the harness ask what it is not allowed to do, answered with cf task respond (default: it skips its permission prompts)")
-	f.StringArrayVar(&secretEnv, "secret-env", nil, "NAME=ref: the harness gets the secret ref, held by the Worker, in variable NAME; repeatable (see cf project secrets)")
+	f.StringVar(&req.Requirements.Permissions, "permissions", "", "`ask` to have the harness ask what it is not allowed to do, answered with cflk task respond (default: it skips its permission prompts)")
+	f.StringArrayVar(&secretEnv, "secret-env", nil, "NAME=ref: the harness gets the secret ref, held by the Worker, in variable NAME; repeatable (see cflk project secrets)")
 	f.StringVar(&req.RequestID, flagRequestID, "", "idempotency key: repeating the command with it creates nothing twice")
 	seedFrom.add(cmd, "send a session that was handed off already (a second writer on the same work)")
 	return cmd

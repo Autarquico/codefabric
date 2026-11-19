@@ -15,8 +15,8 @@ import (
 	"github.com/Autarquico/codeflock/internal/domain"
 )
 
-// BackupCommand is `cf backup`: a local command, run on the Controller's host
-// beside the running daemon. It is not part of `cf controller` because it is
+// BackupCommand is `cflk backup`: a local command, run on the Controller's host
+// beside the running daemon. It is not part of `cflk controller` because it is
 // the operator's, not the daemon's.
 func BackupCommand() *cobra.Command {
 	var out, passphraseFile string
@@ -49,7 +49,7 @@ func BackupCommand() *cobra.Command {
 				return err
 			}
 			if !res.CAIncluded {
-				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: the CA is not in this backup, so a Controller restored from it is a new one to every client and Worker: all of them will have to join again. To keep them connected, run `cf backup` again with --passphrase or --passphrase-file.")
+				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: the CA is not in this backup, so a Controller restored from it is a new one to every client and Worker: all of them will have to join again. To keep them connected, run `cflk backup` again with --passphrase or --passphrase-file.")
 			}
 			if jsonOutput(cmd) {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(res)

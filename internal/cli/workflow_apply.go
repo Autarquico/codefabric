@@ -152,7 +152,7 @@ func newWorkflowApplyVerbCmd(deps workflowDeps) *cobra.Command {
 	}
 	f.bindTarget(cmd, true)
 	f.bindDryRun(cmd)
-	cmd.Flags().StringVar(&f.preview, flagPreview, "", "plan digest printed by `cf workflow diff`: fail instead of applying if the plan has changed since")
+	cmd.Flags().StringVar(&f.preview, flagPreview, "", "plan digest printed by `cflk workflow diff`: fail instead of applying if the plan has changed since")
 	f.bindNoWait(cmd)
 	f.bindWait(cmd)
 	f.bindValues(cmd)
@@ -388,7 +388,7 @@ func (d workflowDeps) await(ctx context.Context, st workflowApplyStore, a v1.Wor
 
 func stillRunning(a v1.WorkflowApply, timeout time.Duration) error {
 	return domain.NewError(domain.CodeInProgress,
-		fmt.Sprintf("the Worker has not finished %s after %s; it keeps going: see `cf workflow status`", a.ID, timeout),
+		fmt.Sprintf("the Worker has not finished %s after %s; it keeps going: see `cflk workflow status`", a.ID, timeout),
 		map[string]any{"apply": a.ID, "state": a.State})
 }
 
@@ -434,7 +434,7 @@ func writeResponse(out io.Writer, r v1.ApplyWorkflowResponse, v applyView) error
 	fmt.Fprintf(out, "%s %s v%d (%s) on %s/%s: %s\n", mode, printable(a.Workflow), a.Version, shortDigest(a.Digest),
 		printable(a.Worker), printable(a.Harness), a.State)
 	if !closedOrder(a.State) {
-		fmt.Fprintf(out, "Order %s; follow it with `cf workflow status --worker %s`.\n", a.ID, printable(a.Worker))
+		fmt.Fprintf(out, "Order %s; follow it with `cflk workflow status --worker %s`.\n", a.ID, printable(a.Worker))
 		return nil
 	}
 	plan, ok := planOf(a)

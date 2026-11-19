@@ -62,7 +62,7 @@ func refuseWhileMoving(ctx context.Context, tx *store.Tx, ref, project string) e
 		return err
 	}
 	return domain.NewError(domain.CodeInvalidTransition,
-		"the Task is being moved: wait for the move to end (cf task move shows it), then resume it if it failed",
+		"the Task is being moved: wait for the move to end (cflk task move shows it), then resume it if it failed",
 		map[string]any{"move": string(m.ID), "stage": string(m.Stage)})
 }
 

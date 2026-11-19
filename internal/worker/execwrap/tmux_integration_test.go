@@ -42,7 +42,7 @@ func newTmux(t *testing.T) *tmux.Runtime {
 }
 
 // asSelf is the argv that runs this test binary in a role, as the executor
-// runs `cf worker exec` and `cf worker redact-pipe`.
+// runs `cflk worker exec` and `cflk worker redact-pipe`.
 func asSelf(role, dir, delivery string) []string {
 	return []string{"/usr/bin/env", role + "=" + dir, withDelivery + "=" + delivery, os.Args[0]}
 }

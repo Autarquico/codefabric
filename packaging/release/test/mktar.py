@@ -1,10 +1,15 @@
-"""Build a fake release tarball: mktar.py OUT MODE VERSION. MODE: ok | dotdot | dotdot_cf | notcf | symlink."""
+"""Build a fake release tarball: mktar.py OUT MODE VERSION.
+
+MODE: ok | dotdot | dotdot_cflk | notcflk | symlink | nocf | cfsymlink. The fake cflk prints the bare version for any
+arguments; the fake transition cf prints "transition-cf".
+"""
 import io
 import sys
 import tarfile
 
 out, mode, version = sys.argv[1:4]
 script = ("#!/bin/sh\necho %s\n" % version).encode()
+transition = b"#!/bin/sh\necho transition-cf\n"
 
 
 def add(archive, name, body=script):
@@ -14,21 +19,35 @@ def add(archive, name, body=script):
     archive.addfile(info, io.BytesIO(body))
 
 
+def link(archive, name):
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.SYMTYPE
+    info.linkname = "/bin/sh"
+    archive.addfile(info)
+
+
 with tarfile.open(out, "w:gz") as archive:
     if mode == "ok":
-        add(archive, "cf")
+        add(archive, "cflk")
+        add(archive, "cf", transition)
         add(archive, "README.md", b"readme\n")
     elif mode == "dotdot":
-        add(archive, "cf")
+        add(archive, "cflk")
+        add(archive, "cf", transition)
         add(archive, "../evil")
-    elif mode == "dotdot_cf":
-        add(archive, "../cf")
-    elif mode == "notcf":
-        add(archive, "bin/cf")
+    elif mode == "dotdot_cflk":
+        add(archive, "../cflk")
+        add(archive, "cf", transition)
+    elif mode == "notcflk":
+        add(archive, "bin/cflk")
+        add(archive, "cf", transition)
     elif mode == "symlink":
-        info = tarfile.TarInfo("cf")
-        info.type = tarfile.SYMTYPE
-        info.linkname = "/bin/sh"
-        archive.addfile(info)
+        link(archive, "cflk")
+        add(archive, "cf", transition)
+    elif mode == "nocf":
+        add(archive, "cflk")
+    elif mode == "cfsymlink":
+        add(archive, "cflk")
+        link(archive, "cf")
     else:
         sys.exit("unknown mode " + mode)

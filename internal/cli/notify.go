@@ -14,7 +14,7 @@ import (
 
 // NewNotifier builds the Notifier of this machine: the preferences of the
 // client config over the adapters the binary composed in. The TUI starts it in
-// process (cmd/cf wires it); `cf notify watch` runs it in the foreground.
+// process (cmd/cflk wires it); `cflk notify watch` runs it in the foreground.
 func NewNotifier(native notify.Native, log *slog.Logger) (*notify.Notifier, error) {
 	paths, err := config.ResolveFromEnv()
 	if err != nil {
@@ -32,7 +32,7 @@ func newNotifyCmd(native notify.Native) *cobra.Command {
 		Use:   "notify",
 		Short: "Desktop notifications and hooks for the events that need you",
 		Long: "Notifications are made by this process, on this machine, from the event stream; the Controller\n" +
-			"does not send them. The TUI notifies on its own while it is open. What notifies is set under \"notify\" in client.json (see `cf config paths`):\n\n" +
+			"does not send them. The TUI notifies on its own while it is open. What notifies is set under \"notify\" in client.json (see `cflk config paths`):\n\n" +
 			"  {\"notify\": {\n" +
 			"    \"events\": [\"RunFailed\", \"TaskNeedsInput\", \"WorkerLost\"],   default; any event type, [] for none\n" +
 			"    \"min_level\": \"warn\",                                       least severe level: debug, info, warn, error\n" +

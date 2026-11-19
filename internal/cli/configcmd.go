@@ -46,8 +46,8 @@ func newConfigPathsCmd() *cobra.Command {
 	}
 }
 
-// configShown is `cf config show`: the Controller section exists only on a
-// machine that ran `cf controller init`.
+// configShown is `cflk config show`: the Controller section exists only on a
+// machine that ran `cflk controller init`.
 type configShown struct {
 	Controller *config.Controller `json:"controller,omitempty"`
 	Client     clientShown        `json:"client"`

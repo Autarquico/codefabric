@@ -12,8 +12,8 @@ import (
 	"github.com/Autarquico/codeflock/internal/client"
 )
 
-// newProjectSecretsCmd is `cf project secrets`: the allowlist of the secrets
-// the Runs of a Project may use. Values are on the Workers (`cf worker
+// newProjectSecretsCmd is `cflk project secrets`: the allowlist of the secrets
+// the Runs of a Project may use. Values are on the Workers (`cflk worker
 // secrets`); the allowlist names refs.
 func newProjectSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -77,7 +77,7 @@ func newProjectSecretsListCmd() *cobra.Command {
 			}
 			return emit(cmd, s, func(out io.Writer) error {
 				if len(s.Allowed) == 0 {
-					_, err := fmt.Fprintf(out, "Project %s allows no secrets. Allow one with: cf project secrets allow <project> <ref>\n", s.ProjectID)
+					_, err := fmt.Fprintf(out, "Project %s allows no secrets. Allow one with: cflk project secrets allow <project> <ref>\n", s.ProjectID)
 					return err
 				}
 				w := newTable(out, "REF\tWORKERS")

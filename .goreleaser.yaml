@@ -1,11 +1,11 @@
 version: 2
 
-project_name: cf
+project_name: cflk
 
 builds:
-  - id: cf
-    main: ./cmd/cf
-    binary: cf
+  - id: cflk
+    main: ./cmd/cflk
+    binary: cflk
     env:
       - CGO_ENABLED=0
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -19,9 +19,23 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
 
+  # The `cf` of the 0.4 transition: it execs cflk. It goes away in 0.5.
+  - id: cf-transition
+    main: ./cmd/cf-transition
+    binary: cf
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
 archives:
   - formats: [tar.gz]
-    name_template: "cf_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "cflk_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README.md

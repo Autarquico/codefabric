@@ -1,6 +1,6 @@
 // Package notify tells a person, on their own machine, about the events of the
 // Controller that need them (spec §26). It is a client of the event stream: it
-// runs inside the `cf` of the user (the TUI, or `cf notify watch`), and the
+// runs inside the `cf` of the user (the TUI, or `cflk notify watch`), and the
 // desktop and the hook are adapters injected by the binary.
 package notify
 

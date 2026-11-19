@@ -29,7 +29,7 @@ import (
 // Needs-input on the Worker (structured-input:v1).
 //
 // A harness of a Run that asks for input reaches the Worker in two ways. A
-// permission is a call to the MCP tool of the permission bridge (`cf worker
+// permission is a call to the MCP tool of the permission bridge (`cflk worker
 // mcp-bridge`), which asks the daemon over the socket of the Run; a question
 // (AskUserQuestion) is a line of the structured stream the executor already
 // reads. Either becomes a prompt: a row of state.db written in the transaction

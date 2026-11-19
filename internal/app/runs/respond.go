@@ -221,7 +221,7 @@ func notRespondable(message, reason string, run *store.Run) error {
 	details := map[string]any{"reason": reason}
 	if run != nil {
 		details["run"] = shortID(run.Short)
-		details["attach"] = "cf attach " + shortID(run.Short)
+		details["attach"] = "cflk attach " + shortID(run.Short)
 	}
 	return domain.NewError(domain.CodeRunNotRespondable, message, details)
 }

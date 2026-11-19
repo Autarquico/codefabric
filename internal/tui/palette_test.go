@@ -68,7 +68,7 @@ func TestScenario_PaletteSearchNotify_Paleta(t *testing.T) {
 	typePalette(t, m, "drain")
 
 	got := frame(m)
-	if !strings.Contains(got, "cf worker drain") {
+	if !strings.Contains(got, "cflk worker drain") {
 		t.Fatalf("searching drain does not list worker drain:\n%s", got)
 	}
 	compareGolden(t, "palette-drain-80x24.golden", got)
@@ -124,7 +124,7 @@ func TestPalette_ActsOnTheSelectedItemAndConfirmsDestructive(t *testing.T) {
 	typePalette(t, m, "cancel task")
 	press(t, m, "enter")
 
-	if got := frame(m); !strings.Contains(got, "Cancel task?") || !strings.Contains(got, "cf task cancel tsk_1") {
+	if got := frame(m); !strings.Contains(got, "Cancel task?") || !strings.Contains(got, "cflk task cancel tsk_1") {
 		t.Fatalf("a destructive action does not ask first:\n%s", got)
 	}
 	if len(be.ran) != 0 {
@@ -309,10 +309,10 @@ func TestPalette_RunsCommandLinesAndKeepsABoundedHistory(t *testing.T) {
 	press(t, m, ":")
 	typePalette(t, m, "task cancel x")
 	press(t, m, "enter")
-	if len(be.lines) != 1 || be.lines[0] != "cf task cancel x" {
+	if len(be.lines) != 1 || be.lines[0] != "cflk task cancel x" {
 		t.Fatalf("lines = %v", be.lines)
 	}
-	if out := frame(m); !strings.Contains(out, "✓ cf task cancel x") {
+	if out := frame(m); !strings.Contains(out, "✓ cflk task cancel x") {
 		t.Errorf("no result:\n%s", out)
 	}
 	press(t, m, "esc") // close
@@ -374,7 +374,7 @@ func TestPalette_AttachGoesThroughTheTerminalSeam(t *testing.T) {
 	press(t, m, ":")
 	typePalette(t, m, "attach run_1 --read-only")
 	execs := press(t, m, "enter")
-	if execs != 1 || len(be.attached) != 1 || be.attached[0] != "cf attach run_1 --read-only" {
+	if execs != 1 || len(be.attached) != 1 || be.attached[0] != "cflk attach run_1 --read-only" {
 		t.Errorf("execs = %d, attached = %v", execs, be.attached)
 	}
 	if len(be.lines) != 0 {
@@ -425,7 +425,7 @@ func TestPalette_EditsAreTypedInTheCommandLine(t *testing.T) {
 	}
 	typePalette(t, m, "--name=renamed")
 	press(t, m, "enter")
-	if len(be.lines) != 1 || be.lines[0] != "cf task set tsk_1 --name=renamed" {
+	if len(be.lines) != 1 || be.lines[0] != "cflk task set tsk_1 --name=renamed" {
 		t.Errorf("lines = %v, want the flag to reach the backend", be.lines)
 	}
 }
@@ -463,7 +463,7 @@ func TestPalette_EscClosesWhileAnActionRunsAndItsResultStillArrives(t *testing.T
 		t.Fatalf("esc did not close the palette while busy:\n%s", frame(m))
 	}
 	drive(t, m, inFlight) // the action finishes after the palette is gone
-	if out := frame(m); !strings.Contains(out, "cf task cancel x finished") {
+	if out := frame(m); !strings.Contains(out, "cflk task cancel x finished") {
 		t.Errorf("the result is lost:\n%s", out)
 	}
 }

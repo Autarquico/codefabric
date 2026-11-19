@@ -1,8 +1,8 @@
  CODEFABRIC                                                           ● healthy
  ──────────────── Command palette ─────────────────────────────────────────────
  › drain▌
- › Drain worker                    cf worker drain
-   Undrain worker                  cf worker undrain
+ › Drain worker                    cflk worker drain
+   Undrain worker                  cflk worker undrain
 
 
 

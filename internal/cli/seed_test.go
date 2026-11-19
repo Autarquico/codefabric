@@ -26,7 +26,7 @@ import (
 
 const seedSessionID = "11111111-2222-4333-8444-555555555555"
 
-// seedWorld is a Controller that answers what `cf do` and `cf task resume` ask of it, with
+// seedWorld is a Controller that answers what `cflk do` and `cflk task resume` ask of it, with
 // a git relay behind it (the git of the machine, through its http-backend), a working
 // directory that has a repository and a Claude Code session of this machine.
 type seedWorld struct {

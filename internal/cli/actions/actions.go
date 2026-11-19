@@ -229,7 +229,7 @@ type Failure struct {
 func (f *Failure) Error() string { return string(f.Code) + ": " + f.Message }
 
 // Runner runs actions with the composition of the binary (the Terminal and the
-// adopters only cmd/cf can build).
+// adopters only cmd/cflk can build).
 type Runner struct{ Options cli.Options }
 
 // Run executes the command of the action in a fresh command tree. An action that

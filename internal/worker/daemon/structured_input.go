@@ -11,7 +11,7 @@ import (
 )
 
 // withStructuredInput keeps the announcement of structured-input:v1 only if the
-// permission bridge, which this binary is (`cf worker mcp-bridge`) or argv
+// permission bridge, which this binary is (`cflk worker mcp-bridge`) or argv
 // says, can be started: a Run that asks permissions cannot be answered
 // without it. It returns the capabilities and the harnesses that remain
 // announced, for the executor.

@@ -159,7 +159,7 @@ func TestWorkerDoctor_APendingSetupFailsTheSetupComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out, _ := cf(t, "worker", "doctor", "--disk-min-free", "1%")
-	if code == 0 || !strings.Contains(out, "setup") || !strings.Contains(out, "cf worker join --resume") {
+	if code == 0 || !strings.Contains(out, "setup") || !strings.Contains(out, "cflk worker join --resume") {
 		t.Errorf("exit %d with the setup pending:\n%s", code, out)
 	}
 	if err := setup.MarkDone(paths); err != nil {

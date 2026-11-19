@@ -64,7 +64,7 @@ func seedRef(data []byte) *v1.NativeStateRef {
 }
 
 // seededRun accepts the assignment of a Run that has a seed and no checkpoint, which is
-// what `cf do --session` makes, and steps it through its prepare.
+// what `cflk do --session` makes, and steps it through its prepare.
 func seededRun(r *resumeRig, c v1.Continuation) state.Key {
 	r.t.Helper()
 	k := r.assign(fakeSpec("fix the build", ""), func(a *v1.AssignCommand) {

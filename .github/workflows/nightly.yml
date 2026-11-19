@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   # Random seeds of the property test after the corpus, and the whole suite
-  # with every cf of the cluster built with -race.
+  # with every cflk of the cluster built with -race.
   e2e:
     strategy:
       fail-fast: false

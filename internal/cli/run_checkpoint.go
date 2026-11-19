@@ -35,7 +35,7 @@ func newRunCheckpointCreateCmd() *cobra.Command {
 				return err
 			}
 			return emit(cmd, out, func(w io.Writer) error {
-				_, err := fmt.Fprintf(w, "Checkpoint %s requested: the Run is %s while its Worker captures it. See it with `cf run checkpoint list %s`.\n",
+				_, err := fmt.Fprintf(w, "Checkpoint %s requested: the Run is %s while its Worker captures it. See it with `cflk run checkpoint list %s`.\n",
 					out.CheckpointID, out.RunState, args[0])
 				return err
 			})

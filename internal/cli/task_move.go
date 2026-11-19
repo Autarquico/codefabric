@@ -9,7 +9,7 @@ import (
 	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
-// newTaskMoveCmd is `cf task move <task> [--worker w] [--force]` (§11.5).
+// newTaskMoveCmd is `cflk task move <task> [--worker w] [--force]` (§11.5).
 func newTaskMoveCmd() *cobra.Command {
 	var (
 		requestID, worker string
@@ -21,7 +21,7 @@ func newTaskMoveCmd() *cobra.Command {
 		Long: "Checkpoints the Task's Run, stops it and continues the Task with a new Run on another Worker. The new\n" +
 			"Run is only created once the old one has ended, and the work travels through the relay. With --worker\n" +
 			"the Run goes to that Worker only (`--worker w`, or as a second argument); without it the scheduler chooses. The move goes on by itself:\n" +
-			"`cf task show` says where it is. If the Worker of the Run is offline the Run must be lost first:\n" +
+			"`cflk task show` says where it is. If the Worker of the Run is offline the Run must be lost first:\n" +
 			"the command says what would be lost since its last checkpoint, and --force marks it lost (audited)\n" +
 			"and moves it. A move that failed is retried from its stage by repeating the command.",
 		Args: cobra.RangeArgs(1, 2),
@@ -61,7 +61,7 @@ func newTaskMoveCmd() *cobra.Command {
 func moveLine(m v1.Move) string {
 	switch {
 	case m.Failure != "" && m.Stage != "failed":
-		return fmt.Sprintf("move %s stopped at %s: %s. The Task waits for a decision; repeat `cf task move` to retry from there.", m.ID, m.Stage, m.Failure)
+		return fmt.Sprintf("move %s stopped at %s: %s. The Task waits for a decision; repeat `cflk task move` to retry from there.", m.ID, m.Stage, m.Failure)
 	case m.Stage == "failed":
 		return fmt.Sprintf("move %s failed: %s.", m.ID, m.Failure)
 	case m.Stage == "done":

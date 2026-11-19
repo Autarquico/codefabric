@@ -1,5 +1,5 @@
 // Package runsocket is how a Run asks its Worker to move its Task to another
-// Worker (`/handto` inside a Run, `cf handoff --to w`), over a unix socket of the
+// Worker (`/handto` inside a Run, `cflk handoff --to w`), over a unix socket of the
 // Run. The Run holds no credentials of any client: the socket is its only way
 // to the Controller, and it only carries two requests.
 //

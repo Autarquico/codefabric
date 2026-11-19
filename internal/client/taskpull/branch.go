@@ -109,9 +109,9 @@ func (p *puller) move(ctx context.Context, pl placement, commit string) error {
 		_, err := p.repo.run(ctx, "merge", "--ff-only", "--quiet", commit)
 		return err
 	case pl.outcome == Created:
-		_, err := p.repo.run(ctx, "update-ref", "-m", "cf task pull", "refs/heads/"+pl.branch, commit, "")
+		_, err := p.repo.run(ctx, "update-ref", "-m", "cflk task pull", "refs/heads/"+pl.branch, commit, "")
 		return err
 	}
-	_, err := p.repo.run(ctx, "update-ref", "-m", "cf task pull", "refs/heads/"+pl.branch, commit, pl.old)
+	_, err := p.repo.run(ctx, "update-ref", "-m", "cflk task pull", "refs/heads/"+pl.branch, commit, pl.old)
 	return err
 }

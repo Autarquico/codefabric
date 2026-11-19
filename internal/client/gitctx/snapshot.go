@@ -73,7 +73,7 @@ func TakeSnapshot(ctx context.Context, dir string, exclude ...string) (Snapshot,
 	if err != nil {
 		return Snapshot{}, err
 	}
-	args := []string{"commit-tree", tree, "-m", "cf snapshot"}
+	args := []string{"commit-tree", tree, "-m", "cflk snapshot"}
 	if hasHead {
 		args = append(args, "-p", head)
 	}

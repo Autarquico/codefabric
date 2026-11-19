@@ -68,18 +68,18 @@ func resolveBinary(dir string) (path string, withRace bool, err error) {
 	return path, withRace, err
 }
 
-// build compiles cmd/cf of this module into dir.
+// build compiles cmd/cflk of this module into dir.
 func build(dir string, withRace bool) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
-	out := filepath.Join(dir, "cf")
+	out := filepath.Join(dir, "cflk")
 	args := []string{"build", "-o", out}
 	env := os.Environ()
 	if withRace {
 		args = append(args, "-race")
 		env = append(env, "CGO_ENABLED=1")
 	}
-	args = append(args, "github.com/Autarquico/codeflock/cmd/cf")
+	args = append(args, "github.com/Autarquico/codeflock/cmd/cflk")
 	cmd := exec.CommandContext(ctx, "go", args...) //nolint:gosec // go build of this module
 	cmd.Env = env
 	if msg, err := cmd.CombinedOutput(); err != nil {

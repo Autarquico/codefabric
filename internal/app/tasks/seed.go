@@ -23,7 +23,7 @@ func seedOf(ctx context.Context, q store.Querier, project store.Project, ref *v1
 	}
 	if !project.NativeState {
 		return nil, domain.NewError(domain.CodePolicyDenied,
-			fmt.Sprintf("project %s does not keep native state: enable it with `cf project set %s --native-state on` to seed a Run with a session", project.Name, project.Name), nil)
+			fmt.Sprintf("project %s does not keep native state: enable it with `cflk project set %s --native-state on` to seed a Run with a session", project.Name, project.Name), nil)
 	}
 	if ref.Adapter == "" {
 		return nil, input.Invalid("a session seed names the adapter that wrote it")
@@ -43,7 +43,7 @@ func seedOf(ctx context.Context, q store.Querier, project store.Project, ref *v1
 
 // Pulled marks the Task as brought to the checkout of the caller (TaskPulled): the work
 // is there now, so a resume that would start another writer is refused until the same
-// client seeds it or the user forces it (§11.7). It is what `cf task pull` calls.
+// client seeds it or the user forces it (§11.7). It is what `cflk task pull` calls.
 func (s *Service) Pulled(ctx context.Context, by pki.Session, ref, project string, req v1.PulledTaskRequest) (v1.PulledTaskResponse, error) {
 	return mutation.Do(ctx, s.db, s.clock, by, "task.pulled", req.RequestID,
 		struct{ Ref, Project string }{ref, project},

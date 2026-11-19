@@ -35,7 +35,7 @@ func (c *Client) OrphanToken(ctx context.Context, run string, leaseEpoch uint64,
 }
 
 // PublishRun asks for another try at publishing the result of a Run whose
-// publication failed (`cf run publish`).
+// publication failed (`cflk run publish`).
 func (c *Client) PublishRun(ctx context.Context, ref string) (v1.Run, error) {
 	var out v1.Run
 	err := c.do(ctx, http.MethodPost, refPath("runs", ref, "publish"), v1.ActionRequest{}, &out)

@@ -46,7 +46,7 @@ var (
 	// copied from somewhere else: the copy shares its keyring items with the
 	// original, so it may read them but never write or delete them.
 	ErrCopied = errors.New("secrets: this catalog is a copy and shares its keyring items with the original; " +
-		"delete its keyring secrets with `cf worker secrets rm` and set them again with `cf worker secrets set`")
+		"delete its keyring secrets with `cflk worker secrets rm` and set them again with `cflk worker secrets set`")
 	// ErrUnavailable is a backend that cannot be reached right now: a locked
 	// keyring, no keyring service, access denied or a timeout. The secret may
 	// well exist; it is not ErrNotFound.

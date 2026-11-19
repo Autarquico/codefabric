@@ -92,7 +92,7 @@ func (s *Service) Commit(ctx context.Context, by pki.Session, req CommitRequest)
 	}
 	if out.Conflict && req.Parent == 0 {
 		return Version{}, domain.NewError(domain.CodeWorkflowConflict,
-			fmt.Sprintf("workflow %q already exists at version %d: use `cf workflow commit`", req.Name, out.Head),
+			fmt.Sprintf("workflow %q already exists at version %d: use `cflk workflow commit`", req.Name, out.Head),
 			map[string]any{"head": out.Head, "parent": req.Parent})
 	}
 	if out.Conflict {

@@ -233,7 +233,7 @@ func (s *Server) resumeTask(w http.ResponseWriter, r *http.Request, c caller) er
 	return nil
 }
 
-// pullPlan is what `cf task pull` would bring; it changes nothing.
+// pullPlan is what `cflk task pull` would bring; it changes nothing.
 func (s *Server) pullPlan(w http.ResponseWriter, r *http.Request, _ caller) error {
 	out, err := s.work.Tasks.PullPlan(r.Context(), r.PathValue("ref"), r.URL.Query().Get("project"))
 	if err != nil {

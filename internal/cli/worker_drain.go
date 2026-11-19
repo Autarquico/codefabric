@@ -10,17 +10,17 @@ import (
 	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
-// newWorkerDrainCmd is `cf worker drain <worker> [--move | --force]` (§9.3).
+// newWorkerDrainCmd is `cflk worker drain <worker> [--move | --force]` (§9.3).
 func newWorkerDrainCmd() *cobra.Command {
 	var move, force, yes bool
 	cmd := &cobra.Command{
 		Use:   "drain <worker>",
 		Short: "Stop a Worker from taking new Runs",
 		Long: "Stops the Worker from taking new Runs; the ones it has end on their own. With --move each Task that\n" +
-			"runs on it is checkpointed and continued on another Worker the scheduler chooses (`cf task move`).\n" +
+			"runs on it is checkpointed and continued on another Worker the scheduler chooses (`cflk task move`).\n" +
 			"With --force the Controller asks each of its Runs a checkpoint and waits for it\n" +
 			"(checkpoint.pre_destructive_timeout): a Run checkpointed is suspended, to go on elsewhere with\n" +
-			"`cf task resume --worker`; one whose checkpoint fails or is late is cancelled.",
+			"`cflk task resume --worker`; one whose checkpoint fails or is late is cancelled.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if move && force {
@@ -93,7 +93,7 @@ func printDrainForce(w io.Writer, out v1.DrainForceResponse) error {
 		return err
 	}
 	for _, r := range out.Runs {
-		line := "suspended after a checkpoint: resume it with cf task resume --worker"
+		line := "suspended after a checkpoint: resume it with cflk task resume --worker"
 		if !r.Captured {
 			line = "cancelled, no checkpoint: " + printable(r.Reason)
 		}

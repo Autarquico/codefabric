@@ -67,7 +67,7 @@ func notAnAction(words []string) string {
 	if cmd == nil || cmd.Parent() == nil || cmd.HasSubCommands() {
 		return "there is no command " + strings.Join(path, " ")
 	}
-	return strings.TrimPrefix(cmd.CommandPath(), "cf ") + " is not run from the TUI: it has a view, or it belongs in a shell"
+	return strings.TrimPrefix(cmd.CommandPath(), "cflk ") + " is not run from the TUI: it has a view, or it belongs in a shell"
 }
 
 func hasPrefix(words, prefix []string) bool {
@@ -91,7 +91,7 @@ func (l Line) checkController() error {
 
 // String is the line as the CLI would run it.
 func (l Line) String() string {
-	return "cf " + strings.Join(append(slices.Clone(l.Action.Path), l.Args...), " ")
+	return "cflk " + strings.Join(append(slices.Clone(l.Action.Path), l.Args...), " ")
 }
 
 // argv is the command line to execute: the path, the JSON output the TUI

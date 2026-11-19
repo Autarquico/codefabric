@@ -133,13 +133,13 @@ func (d *Doctor) Check(ctx context.Context) []v1.ComponentHealth {
 	case d.o.SetupPending != nil && d.o.SetupPending():
 		out = append(out, v1.ComponentHealth{
 			Name: SetupComponent, Status: v1.ComponentFail, Message: "join sin terminar",
-			Action: "cf worker join --resume",
+			Action: "cflk worker join --resume",
 		})
 	case d.o.RestartNeeded != nil && d.o.RestartNeeded():
 		out = append(out, v1.ComponentHealth{
 			Name: SetupComponent, Status: v1.ComponentFail,
 			Message: "join terminado: el daemon anuncia la configuración con la que arrancó",
-			Action:  "reinicia el daemon del Worker (cf worker run o su servicio)",
+			Action:  "reinicia el daemon del Worker (cflk worker run o su servicio)",
 		})
 	}
 	for i := range out {
@@ -324,7 +324,7 @@ func (d *Doctor) auth(ctx context.Context, a harness.Adapter) v1.ComponentHealth
 			return v1.ComponentHealth{
 				Name: name, Status: v1.ComponentWarn,
 				Message: "el " + claude.OAuthTokenRef + " guardado no parece un token" + note,
-				Action:  "vuelve a guardarlo con la línea que imprime `claude setup-token`: cf worker secrets set " + claude.OAuthTokenRef + " en " + d.o.Worker,
+				Action:  "vuelve a guardarlo con la línea que imprime `claude setup-token`: cflk worker secrets set " + claude.OAuthTokenRef + " en " + d.o.Worker,
 			}
 		}
 		if held || d.hasKeychainLogin(ctx) {
@@ -375,7 +375,7 @@ func (d *Doctor) secretState(ctx context.Context, ref string) (held, badFormat b
 	}
 	switch state {
 	case secrets.StateBroken:
-		return false, false, fmt.Sprintf(" (el secret %q está roto: su valor ya no está en el llavero; vuelve a guardarlo con `cf worker secrets set`)", ref)
+		return false, false, fmt.Sprintf(" (el secret %q está roto: su valor ya no está en el llavero; vuelve a guardarlo con `cflk worker secrets set`)", ref)
 	case secrets.StateUnavailable:
 		return true, bad, fmt.Sprintf(" (el llavero no responde ahora: el secret %q puede estar bloqueado)", ref)
 	}
@@ -434,7 +434,7 @@ func (d *Doctor) workflow(ctx context.Context, a harness.Adapter) v1.ComponentHe
 		return v1.ComponentHealth{
 			Name: name, Status: v1.ComponentWarn,
 			Message: describeDrift(drifted, missing),
-			Action:  "cf workflow status --worker " + d.o.Worker,
+			Action:  "cflk workflow status --worker " + d.o.Worker,
 		}
 	}
 	if managed == 0 {

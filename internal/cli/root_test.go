@@ -105,7 +105,7 @@ func TestApiSdkCliStatus_JSONCommandsWriteExactlyOneValueToStdout(t *testing.T) 
 	} {
 		code, stdout, stderr := run(t, args...)
 		if code != 0 || stderr != "" {
-			t.Fatalf("cf %v: exit %d, stderr %q", args, code, stderr)
+			t.Fatalf("cflk %v: exit %d, stderr %q", args, code, stderr)
 		}
 		oneJSONValue(t, stdout)
 	}
@@ -130,7 +130,7 @@ func TestApiSdkCliStatus_AFailureWithJSONIsTheEnvelopeOnStdout(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &env); err != nil {
 		t.Fatal(err)
 	}
-	if env.Error.Code != domain.CodeUnauthenticated || !strings.Contains(env.Error.Message, "cf connect") {
+	if env.Error.Code != domain.CodeUnauthenticated || !strings.Contains(env.Error.Message, "cflk connect") {
 		t.Errorf("envelope %+v", env)
 	}
 }
@@ -158,7 +158,7 @@ func TestApiSdkCliStatus_HelpAndCompletionMisuseIsAUsageError(t *testing.T) {
 	for _, args := range [][]string{{"completion", "nope"}, {"completion", "bash", "extra"}, {"help", "--bogus"}} {
 		code, stdout, _ := run(t, append(args, "--json")...)
 		if env := errorOf(t, stdout); code != 2 || env["code"] != string(domain.CodeInvalidRequest) {
-			t.Errorf("cf %v: exit %d, envelope %v", args, code, env)
+			t.Errorf("cflk %v: exit %d, envelope %v", args, code, env)
 		}
 	}
 	if code, stdout, _ := run(t, "help"); code != 0 || stdout == "" {
@@ -171,13 +171,13 @@ func TestApiSdkCliStatus_AGroupingCommandWithJSONNeedsASubcommand(t *testing.T) 
 	for _, args := range [][]string{{"--json"}, {"client", "--json"}, {"--json=true", "config"}, {"config", "--json=1"}} {
 		code, stdout, stderr := run(t, args...)
 		if env := errorOf(t, stdout); code != 2 || env["code"] != string(domain.CodeInvalidRequest) || stderr != "" {
-			t.Errorf("cf %v: exit %d, envelope %v, stderr %q", args, code, env, stderr)
+			t.Errorf("cflk %v: exit %d, envelope %v, stderr %q", args, code, env, stderr)
 		}
 	}
 	for _, args := range [][]string{{}, {"client"}, {"client", "--json=false"}} {
 		code, stdout, _ := run(t, args...)
 		if code != 0 || !strings.Contains(stdout, "Usage:") {
-			t.Errorf("cf %v: exit %d, stdout %q", args, code, stdout)
+			t.Errorf("cflk %v: exit %d, stdout %q", args, code, stdout)
 		}
 	}
 }

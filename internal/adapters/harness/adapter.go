@@ -103,7 +103,7 @@ type RunSpec struct {
 	// PermissionServer. It needs StructuredInput.
 	AskPermissions bool
 	// PermissionServer is the argv of the MCP stdio server that answers the
-	// permission prompts of the process (`cf worker mcp-bridge`), already
+	// permission prompts of the process (`cflk worker mcp-bridge`), already
 	// bound to the socket of the Run.
 	PermissionServer []string
 }

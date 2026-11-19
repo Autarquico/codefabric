@@ -173,7 +173,7 @@ func (h *handoff) create() (v1.CreateTaskResponse, *Worker, handoffStart) {
 	h.t.Helper()
 	created := JSON[v1.CreateTaskResponse](h.Cluster, h.Ctl, "do", "continue the feature", "--harness", "claude-code")
 	if created.Run == nil {
-		h.t.Fatalf("e2e: cf do created no Run: %+v", created.Task)
+		h.t.Fatalf("e2e: cflk do created no Run: %+v", created.Task)
 	}
 	run := h.WaitRun(created.Run.ID, "running on a Worker", func(r v1.Run) bool { return r.WorkerID != "" && r.State == domain.RunRunning })
 	w := h.workerOf(run.WorkerID)
@@ -322,7 +322,7 @@ func eventTypes(events []v1.Event) []domain.EventType {
 }
 
 // Given a Task running on A,
-// When it is moved to B with `cf task move --worker`, then back to A, and then
+// When it is moved to B with `cflk task move --worker`, then back to A, and then
 // A is drained with --move,
 // Then each time the new Run continues the previous one from its checkpoint on
 // the Worker asked for (the one the scheduler leaves, when draining), with the
@@ -428,7 +428,7 @@ func TestScenario_HandoffWorker_NativeStateOff(t *testing.T) {
 }
 
 // Given a Run on Worker A that is going,
-// When a checkpoint is asked of it with `cf run checkpoint create` (a live capture),
+// When a checkpoint is asked of it with `cflk run checkpoint create` (a live capture),
 // Then the harness is not stopped or restarted, the checkpoint is published as
 // live with its session, the Run is running again, and it goes on to complete.
 func TestScenario_HandoffWorker_LiveCapture(t *testing.T) {

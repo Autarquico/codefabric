@@ -16,7 +16,7 @@ import (
 
 // OriginAuth makes the fetches of a source authenticated: git asks the
 // askpass script for the credential of the origin, and answers only with what
-// the delivery in RunDir allows (cf worker git-askpass). It carries no
+// the delivery in RunDir allows (cflk worker git-askpass). It carries no
 // credential: the script and the directory are paths, and the needles are only
 // what git's output is redacted of.
 type OriginAuth struct {

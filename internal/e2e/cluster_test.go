@@ -27,7 +27,7 @@ func TestHarness_ClusterUp(t *testing.T) {
 	r := c.WaitRun(run, "completed and published", func(r v1.Run) bool {
 		return r.State == domain.RunCompleted && r.Publication == domain.PublicationPublished
 	})
-	t.Logf("cf do to published took %v", time.Since(began).Round(time.Millisecond))
+	t.Logf("cflk do to published took %v", time.Since(began).Round(time.Millisecond))
 
 	// The result is in the published commit.
 	{

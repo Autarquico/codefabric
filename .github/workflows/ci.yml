@@ -94,7 +94,7 @@ jobs:
           done
           echo "the user's systemd did not answer" >&2
           exit 1
-      - run: CGO_ENABLED=1 go test -race -tags integration -count=1 -v -run 'TestScenario_ServiceUnits|TestServiceUnits' ./cmd/cf/
+      - run: CGO_ENABLED=1 go test -race -tags integration -count=1 -v -run 'TestScenario_ServiceUnits|TestServiceUnits' ./cmd/cflk/
         env:
           CF_REQUIRE_TMUX: "1"
           CF_REQUIRE_GIT: "1"
@@ -143,7 +143,7 @@ jobs:
           security default-keychain -d user -s "${HOME}/Library/Keychains/login.keychain-db"
           security delete-keychain "${RUNNER_TEMP}/cf-test.keychain-db" || true
 
-  # The end-to-end suite against the real cf: the fixed seed corpus on ubuntu,
+  # The end-to-end suite against the real cflk: the fixed seed corpus on ubuntu,
   # its first seed with slower timings on macOS.
   e2e:
     strategy:
@@ -218,6 +218,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The update of a real beta.6 (transition_test.sh) builds it from its tag.
+      - name: Fetch the beta.6 tag
+        run: git fetch --no-tags --depth=1 origin +refs/tags/v0.4.0-beta.6:refs/tags/v0.4.0-beta.6
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.x"

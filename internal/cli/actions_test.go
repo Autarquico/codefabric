@@ -124,8 +124,8 @@ func TestScenario_BackupRestore_RebindCommandsRefuseADestinationWithAnotherCA(t 
 		args []string
 		dir  func(config.Paths) string
 	}{
-		"cf connect --rebind":      {[]string{"connect", "--rebind"}, config.Paths.CredentialsDir},
-		"cf worker set-controller": {[]string{"worker", "set-controller"}, config.Paths.WorkerCredentialsDir},
+		"cflk connect --rebind":      {[]string{"connect", "--rebind"}, config.Paths.CredentialsDir},
+		"cflk worker set-controller": {[]string{"worker", "set-controller"}, config.Paths.WorkerCredentialsDir},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -159,8 +159,8 @@ func TestScenario_BackupRestore_RebindCommandsChangeOnlyTheAddress(t *testing.T)
 		args []string
 		dir  func(config.Paths) string
 	}{
-		"cf connect --rebind":      {[]string{"connect", "--rebind"}, config.Paths.CredentialsDir},
-		"cf worker set-controller": {[]string{"worker", "set-controller"}, config.Paths.WorkerCredentialsDir},
+		"cflk connect --rebind":      {[]string{"connect", "--rebind"}, config.Paths.CredentialsDir},
+		"cflk worker set-controller": {[]string{"worker", "set-controller"}, config.Paths.WorkerCredentialsDir},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

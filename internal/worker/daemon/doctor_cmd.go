@@ -25,7 +25,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/worker/doctor"
 )
 
-// DoctorResult is what `cf worker doctor --json` prints.
+// DoctorResult is what `cflk worker doctor --json` prints.
 type DoctorResult struct {
 	Components []v1.ComponentHealth `json:"components"`
 }
@@ -112,7 +112,7 @@ func controllerComponent(ctx context.Context, clk clock.Clock, o DoctorOptions, 
 		case !exists:
 			return v1.ComponentHealth{
 				Name: "controller", Status: v1.ComponentWarn, Message: "este equipo no se ha unido a un Controller",
-				Action: "cf worker join <invitación> en " + worker,
+				Action: "cflk worker join <invitación> en " + worker,
 			}
 		}
 		opts := []client.Option{client.WithRecoveryHint(client.WorkerRecoveryHint)}
@@ -123,7 +123,7 @@ func controllerComponent(ctx context.Context, clk clock.Clock, o DoctorOptions, 
 		if err != nil {
 			return doctor.CleanComponent(v1.ComponentHealth{
 				Name: "controller", Status: v1.ComponentFail, Message: "no se pueden abrir las credenciales: " + err.Error(),
-				Action: "cf worker join --force <invitación> en " + worker,
+				Action: "cflk worker join --force <invitación> en " + worker,
 			})
 		}
 		probe = func(ctx context.Context) error { _, err := c.Assignments(ctx, 0, 0, 1); return err }

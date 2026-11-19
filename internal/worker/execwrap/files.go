@@ -1,5 +1,5 @@
 // Package execwrap is the process that runs a harness inside the Runtime
-// (`cf worker exec`, §6.4) and the files it leaves in runs/<run-id>/ so that
+// (`cflk worker exec`, §6.4) and the files it leaves in runs/<run-id>/ so that
 // the daemon can tell what happened without being alive when it did.
 //
 // Four files, each written atomically, in the order the wrapper lives:

@@ -15,7 +15,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/domain"
 )
 
-// Terminal opens the session of a Run in the terminal of the person. cmd/cf
+// Terminal opens the session of a Run in the terminal of the person. cmd/cflk
 // composes it from the adapters (ssh and the runtime's attach command, and the
 // relay through the Controller): the CLI is a client of the Controller and
 // knows none of them.
@@ -33,13 +33,13 @@ type Session interface {
 	Run(stdio TerminalIO) (int, error)
 }
 
-// Transports `cf attach` can choose between: the values of AttachTarget.Transports.
+// Transports `cflk attach` can choose between: the values of AttachTarget.Transports.
 const (
 	TransportSSH   = v1.AttachTransportSSH
 	TransportRelay = v1.AttachTransportRelay
 )
 
-// DefaultAttachTransport is the transport `cf attach` and the TUI use when the
+// DefaultAttachTransport is the transport `cflk attach` and the TUI use when the
 // person does not choose one: the Controller's relay, which needs no ssh to the
 // Worker. A Worker that does not offer it is refused, not given ssh in its
 // place. It is the only place that says so.
@@ -58,7 +58,7 @@ type AttachRequest struct {
 	Binary     string
 	Target     domain.SSHTarget
 	ReadOnly   bool
-	// Shell opens a shell in the worktree of the Run instead of its session (cf shell).
+	// Shell opens a shell in the worktree of the Run instead of its session (cflk shell).
 	Shell bool
 }
 
@@ -101,7 +101,7 @@ func newAttachCmd(term Terminal) *cobra.Command {
 			}
 			req.ReadOnly = readOnly
 			if !isTerminal(cmd.InOrStdin()) {
-				return domain.NewError(domain.CodeInvalidRequest, "cf attach needs a terminal on its standard input", nil)
+				return domain.NewError(domain.CodeInvalidRequest, "cflk attach needs a terminal on its standard input", nil)
 			}
 			if term == nil {
 				return errNoTerminal()
@@ -124,7 +124,7 @@ func newAttachCmd(term Terminal) *cobra.Command {
 	return cmd
 }
 
-// AttachParams is what a caller that is not the `cf attach` command gives to
+// AttachParams is what a caller that is not the `cflk attach` command gives to
 // PrepareAttach.
 type AttachParams struct {
 	// Ref is a Run or a Task; Project narrows a Task name (empty: the Project of
@@ -136,7 +136,7 @@ type AttachParams struct {
 	// Transport is the one to attach through (TransportSSH, TransportRelay);
 	// empty is DefaultAttachTransport.
 	Transport string
-	// Shell opens a shell in the worktree of the Run (cf shell), always through the relay.
+	// Shell opens a shell in the worktree of the Run (cflk shell), always through the relay.
 	Shell bool
 	// Controller is the --controller of this call; empty is the stored one.
 	Controller string
@@ -194,7 +194,7 @@ func transportOf(viaSSH bool) string {
 	return DefaultAttachTransport()
 }
 
-// PrepareAttach does what `cf attach` does before it runs anything: resolves the
+// PrepareAttach does what `cflk attach` does before it runs anything: resolves the
 // target at the Controller, verifies it against the Run, chooses the transport,
 // applies the ssh target override, and has the Terminal open the session. The
 // TUI runs it with tea.Exec and hands the outcome to Finish, so both clients
@@ -228,7 +228,7 @@ func PrepareAttach(ctx context.Context, term Terminal, p AttachParams) (*AttachS
 }
 
 // Finish turns how Run ended (nil when the person detached) into the answer
-// `cf attach` would give.
+// `cflk attach` would give.
 func (s *AttachSession) Finish(ctx context.Context, runErr error) error {
 	if s.shell {
 		// The TUI shows the status of the shell itself; only a failure of the relay is an error.
@@ -249,7 +249,7 @@ func (s *AttachSession) Finish(ctx context.Context, runErr error) error {
 }
 
 func errNoTerminal() error {
-	return domain.NewError(domain.CodeNotImplemented, "this build of cf cannot open a terminal on a Worker", nil)
+	return domain.NewError(domain.CodeNotImplemented, "this build of cflk cannot open a terminal on a Worker", nil)
 }
 
 // attachExit turns the status of the attach into the answer of the command.

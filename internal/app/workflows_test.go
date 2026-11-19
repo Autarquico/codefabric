@@ -188,7 +188,7 @@ func TestWorkflows_ParentRules(t *testing.T) {
 	e.mustCommit("review", 0, m1)
 	_, err = e.commit("review", 0, m2)
 	wantCode(t, err, domain.CodeWorkflowConflict) // adopting a name in use
-	if !strings.Contains(err.Error(), "already exists") || !strings.Contains(err.Error(), "cf workflow commit") {
+	if !strings.Contains(err.Error(), "already exists") || !strings.Contains(err.Error(), "cflk workflow commit") {
 		t.Errorf("adopting a name in use says %q", err)
 	}
 	_, err = e.commit("review", 2, m2)

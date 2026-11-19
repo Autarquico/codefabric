@@ -394,7 +394,7 @@ func requireAllowed(harness string, allowlist []string) error {
 		return nil
 	}
 	return domain.NewError(domain.CodePolicyDenied,
-		fmt.Sprintf("harness %s needs the secrets %s and the Project does not allow them: run `cf project secrets allow <project> %s`",
+		fmt.Sprintf("harness %s needs the secrets %s and the Project does not allow them: run `cflk project secrets allow <project> %s`",
 			harness, strings.Join(missing, ", "), strings.Join(missing, " ")),
 		map[string]any{"not_allowed": missing})
 }

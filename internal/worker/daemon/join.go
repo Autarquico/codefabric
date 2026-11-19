@@ -1,5 +1,5 @@
-// Package daemon is the Worker's own process: `cf worker join` enrols the
-// machine with a Controller and `cf worker run` keeps it registered, with a
+// Package daemon is the Worker's own process: `cflk worker join` enrols the
+// machine with a Controller and `cflk worker run` keeps it registered, with a
 // heartbeat every few seconds.
 package daemon
 
@@ -34,7 +34,7 @@ func Join(ctx context.Context, o JoinOptions) (client.Connected, error) {
 			return client.Connected{}, err
 		}
 		if exists {
-			return client.Connected{}, fmt.Errorf("this machine already has Worker credentials in %s; `cf worker join --force` replaces them "+
+			return client.Connected{}, fmt.Errorf("this machine already has Worker credentials in %s; `cflk worker join --force` replaces them "+
 				"(the old Worker stays registered at its Controller until a client removes it)", dir)
 		}
 	}
