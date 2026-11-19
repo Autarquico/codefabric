@@ -14,7 +14,7 @@ import (
 func requireTmux32(t *testing.T) {
 	t.Helper()
 	requireTmux(t)
-	out, err := exec.Command("tmux", "-V").Output()
+	out, err := exec.CommandContext(t.Context(), "tmux", "-V").Output()
 	if err != nil {
 		t.Fatalf("tmux -V: %v", err)
 	}
