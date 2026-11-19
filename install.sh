@@ -315,13 +315,14 @@ acl_closed() {
 	if [ "$(uname -s)" = Darwin ]; then
 		# shellcheck disable=SC2012 # the ACL of one path; nothing else prints it on macOS
 		acl=$(ls -lden "$1" 2>/dev/null) && [ -n "$acl" ] || return 1
-		if printf '%s\n' "$acl" | awk 'NR > 1' | grep -Eq ' allow .*(write|append|add_file|add_subdirectory|delete|chown)'; then
-			return 1
-		fi
+		printf '%s\n' "$acl" | awk 'NR > 1 && / allow .*(write|append|add_file|add_subdirectory|delete|chown)/ { open = 1 }
+			END { exit !(NR >= 1 && !open) }'
 	else
 		# shellcheck disable=SC2012 # see closed_to_others
 		acl=$(ls -ldn "$1" 2>/dev/null) && [ -n "$acl" ] || return 1
-		printf '%s\n' "$acl" | awk 'NR == 1 { exit substr($1, 11, 1) == "+" }'
+		# no marker, `.` (an SELinux context only) or `@` (extended attributes, macOS): anything else, `+` or the `?` of
+		# an unknown status, is open
+		printf '%s\n' "$acl" | awk 'NR == 1 { m = substr($1, 11, 1); exit !(m == "" || m == "." || m == "@") }'
 	fi
 }
 

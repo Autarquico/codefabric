@@ -424,6 +424,7 @@ seed_probing_cf() { # PATH
 TestScenario_CfNoFiable_writableByThePrimaryGroupIsNotRun() {
 	installed_release
 	seed_probing_cf "$T/bin/cf"
+	chgrp "$(id -g)" "$T/bin/cf"
 	chmod 775 "$T/bin/cf"
 	run_install "$KEY_A/install.sh"
 	assert_rc 0
