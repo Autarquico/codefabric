@@ -566,7 +566,7 @@ func TestAttach_ClientDetachTellsTheWorker(t *testing.T) {
 	}
 }
 
-func TestAttach_AViewSeesTheRunAndSendsNothingToIt(t *testing.T) {
+func TestAttach_AViewSeesTheRunAndSendsOnlyItsSize(t *testing.T) {
 	f := newAttachFixture(t)
 	ownerC, ownerW, _ := f.join(f.owner, v1.AttachModeWrite)
 	laptopC, laptopW, _ := f.join(f.laptop, v1.AttachModeView)
@@ -593,20 +593,30 @@ func TestAttach_AViewSeesTheRunAndSendsNothingToIt(t *testing.T) {
 		t.Errorf("laptop saw %q", got)
 	}
 
-	// What the view sends never reaches the Worker; what the writer sends does.
+	// A view's data never reaches the Worker, nor a resize that is malformed; its
+	// size does, and what the writer sends does too.
 	must(t, laptopC.WriteData([]byte("from the view")))
+	must(t, laptopC.WriteFrame(v1.Frame{Type: v1.FrameResize, Payload: []byte("not a size")}))
 	must(t, laptopC.Resize(10, 10))
 	must(t, ownerC.WriteData([]byte("from the writer")))
 	if got := readData(t, ownerW, len("from the writer")); string(got) != "from the writer" {
 		t.Errorf("the writer's Worker end got %q", got)
 	}
 	must(t, laptopC.Detach())
+	var sizes int
 	for {
 		fr := readFrame(t, laptopW)
 		if fr.Type == v1.FrameClose {
 			break
 		}
-		t.Fatalf("the view's Worker end got %+v before the close", fr)
+		c, r, err := v1.ParseResize(fr.Payload)
+		if fr.Type != v1.FrameResize || err != nil || c != 10 || r != 10 {
+			t.Fatalf("the view's Worker end got %+v before the close", fr)
+		}
+		sizes++
+	}
+	if sizes != 1 {
+		t.Errorf("the view's Worker end got %d sizes, want 1", sizes)
 	}
 	// The one left is told it is alone.
 	readPeers(t, ownerC, ownerID.IdentityID)

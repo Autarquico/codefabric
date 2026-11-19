@@ -23,6 +23,8 @@ import (
 
 const (
 	minMajor = 3
+	// A client attached with -r ignores its size from tmux 3.2 on.
+	ignoreSizeMinor = 2
 	// waitDelay bounds how long a tmux command waits for its output after it
 	// exits: the server it may have started must not hold it.
 	waitDelay = 5 * time.Second
@@ -54,6 +56,9 @@ type Runtime struct {
 
 	attachMu sync.Mutex
 	attach   string // the absolute path of binary, once Check resolved it
+	// viewIgnoresSize is whether a read-only client leaves the size of the window
+	// alone (tmux 3.2 or later), as Check found it.
+	viewIgnoresSize bool
 }
 
 var (
@@ -87,8 +92,19 @@ func (r *Runtime) Check(ctx context.Context) error {
 	if major < minMajor {
 		return fmt.Errorf("tmux: version %d.%d is too old: 3.0 or later is needed", major, minor)
 	}
+	r.attachMu.Lock()
+	r.viewIgnoresSize = major > minMajor || (major == minMajor && minor >= ignoreSizeMinor)
+	r.attachMu.Unlock()
 	r.resolveBinary()
 	return nil
+}
+
+// ViewIgnoresSize says whether a read-only client, whatever its size, leaves the
+// size of the window to the clients that write. False until Check found it so.
+func (r *Runtime) ViewIgnoresSize() bool {
+	r.attachMu.Lock()
+	defer r.attachMu.Unlock()
+	return r.viewIgnoresSize
 }
 
 // resolveBinary finds the absolute path a client attaches with. Anything that

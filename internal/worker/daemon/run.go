@@ -326,7 +326,9 @@ func (d *daemon) attachRelay(ctx context.Context, rt cfruntime.Runtime, c *clien
 	d.capabilities = slices.Sorted(slices.Values(append(slices.Clone(d.capabilities), domain.AttachRelayCapability)))
 	d.relayRuns = true
 	d.log.InfoContext(ctx, "attach relay offered")
+	viewer, _ := rt.(interface{ ViewIgnoresSize() bool })
 	return attachrelay.New(attachrelay.Options{
+		ViewSized:  viewer != nil && viewer.ViewIgnoresSize(),
 		Shell:      d.shellOptions(),
 		Controller: attachrelay.FromClient(c), Runtime: art, Clock: d.clock, Log: d.log,
 		Live: func(ctx context.Context, runID string, epoch uint64) (bool, error) {

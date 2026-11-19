@@ -1,6 +1,6 @@
 ---
 codename: codefabric
-title: El CLI pasa a llamarse cof
+title: El CLI pasa a llamarse cflk
 type: task
 status: active
 priority: P1
@@ -12,10 +12,10 @@ depends_on: []
 supersedes: []
 related_specs: []
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-19
 ---
 
-# El CLI pasa a llamarse cof
+# El CLI pasa a llamarse cflk
 
 ## Contexto / problema
 
@@ -23,47 +23,53 @@ El producto ya se llama Code Flock (repo `Autarquico/codeflock`), pero el binari
 CLI de Cloud Foundry: instalar Code Flock en una máquina que lo tenga rompe uno de los dos. Por dentro sigue además
 el nombre anterior, `codefabric`, en servicios, directorios, la fórmula de Homebrew y el registro MCP.
 
-Decidido (2026-11-15): el binario pasa a ser `cof`. Lo que el usuario ve y teclea cambia. Lo que está guardado
+Decidido (2026-11-15): cambia el binario. El nombre se cerró el 2026-11-19 como `cflk`: `cfl` es el CLI de
+Confluence de Open CLI Collective y `cof` no convenció. Lo que el usuario ve y teclea cambia. Lo que está guardado
 como contrato (códigos de error, keyring, config de repo, formato de backup) se queda, para no perder estado.
 
 ## Scope
 
 **Entra:**
-- **Binario y salida.** El binario se llama `cof`, y con él la ayuda, los mensajes y las sugerencias (`cof attach …`).
-  `cof completion <shell>` genera la completion para `cof`, y la guía dice que hay que regenerarla.
+- **Binario y salida.** El binario se llama `cflk`, y con él la ayuda, los mensajes y las sugerencias (`cflk attach …`).
+  `cflk completion <shell>` genera la completion para `cflk`, y la guía dice que hay que regenerarla.
 - **Variables.**
-  - Binario: `CF_CONFIG_DIR` y `CF_DATA_DIR` pasan a `COF_CONFIG_DIR` y `COF_DATA_DIR`.
-  - `install.sh`: `CF_VERSION`, `CF_INSTALL_DIR` y `CF_RELEASE_BASE_URL` pasan a `COF_*`.
-  - El nombre `CF_*` se sigue leyendo, con un aviso, hasta la 0.5. Si están los dos, gana `COF_*`.
-  - Los nombres de secreto que empiezan por `COF_` se rechazan como ya se rechazan los `CF_`.
+  - Binario: `CF_CONFIG_DIR` y `CF_DATA_DIR` pasan a `CFLK_CONFIG_DIR` y `CFLK_DATA_DIR`.
+  - `install.sh`: `CF_VERSION`, `CF_INSTALL_DIR` y `CF_RELEASE_BASE_URL` pasan a `CFLK_*`.
+  - El nombre `CF_*` se sigue leyendo, con un aviso, hasta la 0.5. Si están los dos, gana `CFLK_*`.
+  - Los nombres de secreto que empiezan por `CFLK_` se rechazan como ya se rechazan los `CF_`.
 - **Directorios.** Config, datos y logs pasan de `codefabric` a `codeflock`. La migración es un `rename`, sin
   copia, y se rechaza si los dos directorios están en sistemas de ficheros distintos, diciendo qué mover a mano.
 - **Servicios del Worker y del Controller.**
   - systemd: `cf-worker` y `cf-controller` pasan a `codeflock-worker` y `codeflock-controller`.
   - launchd: `com.codefabric.worker` y `com.codefabric.controller` pasan a `com.codeflock.worker` y `com.codeflock.controller`.
-  - `cof worker install-service` y `cof controller install-service` son los únicos que migran los directorios en
-    una máquina con servicio. Lo hacen en este orden: paran y quitan la unidad antigua, mueven los directorios,
-    escriben la unidad nueva con las rutas `COF_*` y el mismo `TMUX_TMPDIR`, y arrancan.
+  - `cflk worker install-service` y `cflk controller install-service` son los únicos que migran los directorios en
+    una máquina con servicio. Lo hacen en este orden: paran la unidad antigua sin quitarla, mueven los directorios,
+    escriben la unidad nueva con las rutas `CFLK_*`, los mismos argumentos y el mismo `TMUX_TMPDIR`, la arrancan,
+    y solo cuando responde quitan la antigua. Si falla un paso, deshacen lo hecho y la antigua vuelve a arrancar
+    si estaba activa.
   - El nombre del socket de tmux se deriva del directorio de datos (`tmux.SocketName`), así que cambia con la
     migración y los Runs vivos no se podrían adoptar. Por eso la migración de un Worker exige que no tenga Runs
-    vivos: si los tiene, no cambia nada y pide `cof worker drain` y esperar a que terminen.
+    vivos: si los tiene, no cambia nada y pide `cflk worker drain` y esperar a que terminen.
 - **Paquetes.**
-  - El tarball lleva `cof` y un `cf` de transición.
+  - El tarball lleva `cflk` y un `cf` de transición.
   - `install.sh` sustituye por el de transición un `cf` que sea de Code Flock, es decir, uno cuya salida de
     `cf version --json` sea la de Code Flock.
     Otro `cf` no lo toca, y lo dice.
-  - La fórmula de Homebrew pasa a llamarse `codeflock` e instala solo `cof`, sin el de transición porque choca con
+  - La fórmula de Homebrew pasa a llamarse `codeflock` e instala solo `cflk`, sin el de transición porque choca con
     `cf-cli`. `codefabric` queda como alias o como fórmula obsoleta que apunta a `codeflock`.
-- **El `cf` de transición.** Ejecuta `cof` con los mismos argumentos, stdin y stdout, y devuelve el mismo código de
+    El renderer de la fórmula solo publica versiones estables, así que este paso se valida en la primera estable.
+- **El `cf` de transición.** Ejecuta `cflk` con los mismos argumentos, stdin y stdout, y devuelve el mismo código de
   salida. Avisa con una sola línea en stderr, y solo si stderr es una terminal: así `cf mcp serve` y los scripts
   quedan limpios. Desaparece en la 0.5.
-- **Skills.** `cof claude install` y `cof codex install` escriben `Bash(cof …)` en `allowed-tools`, y el marcador
-  pasa a `cof-version`. Una skill con el marcador antiguo `cf-version` cuenta como desactualizada y se actualiza
+- **Skills.** `cflk claude install` y `cflk codex install` escriben `Bash(cflk …)` en `allowed-tools`, y el marcador
+  pasa a `cflk-version`. Una skill con el marcador antiguo `cf-version` cuenta como desactualizada y se actualiza
   sin `--force`.
 - **MCP.**
-  - `cof mcp install` registra el servidor como `cof` (`cof mcp serve`) y quita el registro `cf` si es de Code Flock.
+  - `cflk mcp install` registra el servidor como `cflk` (`cflk mcp serve`) y quita el registro `cf` si es de Code Flock.
   - La skill del MCP pasa de `codefabric` a `codeflock`.
   - `Implementation.Name` pasa a `codeflock`.
+- **Módulo Go.** Pasa de `github.com/Autarquico/codefabric` a `github.com/Autarquico/codeflock` (decidido el
+  2026-11-19). Es mecánico y no cambia nada que vea el usuario.
 - **Documentación.** Docs, guía (incluido el LaunchDaemon de ejemplo), README y site.
 
 **No entra (contratos guardados que se quedan):**
@@ -72,66 +78,65 @@ como contrato (códigos de error, keyring, config de repo, formato de backup) se
 - `.codefabric/project.yaml` en los repos de los usuarios.
 - El formato de backup `codefabric-backup/1`.
 - Las variables de test `CF_TEST_*` y `CF_REQUIRE_*`.
-- El módulo Go `github.com/Autarquico/codefabric`: es un cambio mecánico aparte, sin efecto para el usuario.
 
 ## Criterios de aceptación
 
 ### Scenario: Instalar junto al cf de Cloud Foundry
 - **Given** una máquina con el `cf` de Cloud Foundry en el PATH
 - **When** se instala Code Flock con `install.sh` o con Homebrew
-- **Then** queda `cof` instalado, el `cf` existente no se toca, y la instalación lo dice.
+- **Then** queda `cflk` instalado, el `cf` existente no se toca, y la instalación lo dice.
 
 ### Scenario: Actualizar el cf de Code Flock
 - **Given** un `cf` de Code Flock 0.4.0-beta instalado con `install.sh`
 - **When** se ejecuta el `install.sh` nuevo
-- **Then** se instala `cof`, el `cf` antiguo se sustituye por el de transición, y la salida lo dice.
+- **Then** se instala `cflk`, el `cf` antiguo se sustituye por el de transición, y la salida lo dice.
 
 ### Scenario: Homebrew
 - **Given** la fórmula `codefabric` instalada
 - **When** se ejecuta `brew upgrade`
-- **Then** se instala `codeflock` con `cof`, y el `cf` antiguo de la fórmula desaparece.
+- **Then** se instala `codeflock` con `cflk`, y el `cf` antiguo de la fórmula desaparece.
 
 ### Scenario: Actualizar un Worker con servicio de usuario
 - **Given** un Worker con `cf-worker` (systemd) o `com.codefabric.worker` en LaunchAgents, sus directorios `codefabric` y sin Runs vivos
-- **When** se instala la versión nueva y se ejecuta `cof worker install-service`
-- **Then** el servicio antiguo se para y se quita, y los directorios se mueven
+- **When** se instala la versión nueva y se ejecuta `cflk worker install-service`
+- **Then** el servicio antiguo se para, los directorios se mueven, y el antiguo se quita cuando el nuevo responde
 - **And** el nuevo arranca con el mismo enrolamiento, historial de Runs, journal y secretos
-- **And** `cof worker list` lo ve online con la versión nueva.
+- **And** `cflk worker list` lo ve online con la versión nueva.
 
 ### Scenario: Migrar un Worker con Runs vivos
 - **Given** un Worker con el servicio antiguo y Runs vivos
-- **When** se ejecuta `cof worker install-service`
+- **When** se ejecuta `cflk worker install-service`
 - **Then** no cambia nada, ni el servicio ni los directorios
-- **And** dice cuántos Runs vivos hay y pide `cof worker drain` y esperar a que terminen
+- **And** dice cuántos Runs vivos hay y pide `cflk worker drain` y esperar a que terminen
 - **And** sale con error.
 
 ### Scenario: Actualizar un Controller
 - **Given** un Controller con `cf-controller` o `com.codefabric.controller`
-- **When** se ejecuta `cof controller install-service`
+- **When** se ejecuta `cflk controller install-service`
 - **Then** el servicio se migra igual, con la misma base de datos, PKI y relay
 - **And** los clientes y los Workers siguen conectando sin volver a enrolarse.
 
 ### Scenario: Worker con un LaunchDaemon del sistema
 - **Given** `/Library/LaunchDaemons/com.codefabric.worker.plist` instalado
-- **When** se ejecuta `cof worker install-service`, como el usuario o como root, porque `install-service` no gestiona LaunchDaemons
+- **When** se ejecuta `cflk worker install-service`, como el usuario o como root, porque `install-service` no gestiona LaunchDaemons
 - **Then** no cambia nada, ni el servicio ni los directorios
 - **And** imprime los comandos exactos con sudo (bootout del antiguo, mover los directorios, bootstrap del plist nuevo)
 - **And** sale con error.
 
 ### Scenario: Cliente con la config antigua
 - **Given** `~/.config/codefabric` con el enrolamiento del cliente, sin servicio en la máquina
-- **When** se ejecuta por primera vez cualquier comando de `cof`
+- **When** se ejecuta por primera vez cualquier comando de `cflk`
 - **Then** la config se mueve a `~/.config/codeflock` y lo dice una vez
 - **And** el comando funciona sin volver a enrolarse.
 
 ### Scenario: Servicio en marcha con los directorios antiguos
 - **Given** una unidad instalada que apunta a los directorios `codefabric`
-- **When** se ejecuta cualquier comando de `cof` que no sea `install-service`
+- **When** se ejecuta cualquier comando de `cflk` que no sea `install-service`
 - **Then** no se migra nada, y se avisa nombrando la unidad y el `install-service` que la migra.
 
 ### Scenario: Migración a medias
 - **Given** uno de los dos directorios nuevos existe y el otro no
-- **When** se ejecuta `cof`
+- **When** se ejecuta `cflk`
 - **Then** se migra solo el que falta, y lo dice.
 - **Given** existen el antiguo y el nuevo del mismo tipo
 - **Then** no se migra ninguno, y se avisa nombrando las dos rutas.
@@ -145,31 +150,31 @@ como contrato (códigos de error, keyring, config de repo, formato de backup) se
   vuelve atrás sin deshacer el `rename`.
 
 ### Scenario: Variable antigua
-- **Given** `CF_CONFIG_DIR` definido y `COF_CONFIG_DIR` no
-- **When** se ejecuta `cof`
-- **Then** usa `CF_CONFIG_DIR` y avisa una vez en stderr de que pasa a `COF_CONFIG_DIR`. Si están las dos, gana `COF_CONFIG_DIR`.
+- **Given** `CF_CONFIG_DIR` definido y `CFLK_CONFIG_DIR` no
+- **When** se ejecuta `cflk`
+- **Then** usa `CF_CONFIG_DIR` y avisa una vez en stderr de que pasa a `CFLK_CONFIG_DIR`. Si están las dos, gana `CFLK_CONFIG_DIR`.
 
 ### Scenario: El cf de transición
 - **Given** la 0.4 instalada con el `cf` de transición
 - **When** se ejecuta `cf ps` en una terminal, y `cf mcp serve` con stderr redirigido
-- **Then** `cf ps` avisa con una línea en stderr de que el comando es `cof`, y ejecuta `cof ps` con el mismo código de salida
+- **Then** `cf ps` avisa con una línea en stderr de que el comando es `cflk`, y ejecuta `cflk ps` con el mismo código de salida
 - **And** `cf mcp serve` no escribe nada en stderr antes del protocolo.
 
 ### Scenario: Skills
 - **Given** las skills instaladas por `cf claude install`, con el marcador `cf-version`
-- **When** se ejecuta `cof claude install`
-- **Then** se actualizan sin `--force`, con el marcador `cof-version` y `allowed-tools` limitadas a los comandos `cof` exactos
+- **When** se ejecuta `cflk claude install`
+- **Then** se actualizan sin `--force`, con el marcador `cflk-version` y `allowed-tools` limitadas a los comandos `cflk` exactos
 - **And** `doctor` no informa de nada ajeno.
 
 ### Scenario: MCP registrado con cf
 - **Given** el servidor MCP `cf` registrado por Code Flock en Claude Code o Codex
-- **When** se ejecuta `cof mcp install`
-- **Then** queda registrado `cof` y el registro `cf` desaparece
+- **When** se ejecuta `cflk mcp install`
+- **Then** queda registrado `cflk` y el registro `cf` desaparece
 - **And** un servidor `cf` que no es de Code Flock no se toca.
 
 ### Scenario: Contratos estables
 - **Given** un cliente de la API o del MCP que compara `CF_NOT_FOUND`, secretos guardados en el keyring y un repo con `.codefabric/project.yaml`
-- **When** se actualiza a la versión con `cof`
+- **When** se actualiza a la versión con `cflk`
 - **Then** recibe los mismos códigos, conserva los secretos y la config del repo se sigue leyendo.
 
 ## Notas técnicas / riesgos
@@ -189,18 +194,18 @@ como contrato (códigos de error, keyring, config de repo, formato de backup) se
   en el tarball.
 - **Workers reales:** omarch01 usa la unidad systemd de usuario `cf-worker`. mac-mini usa un LaunchDaemon del
   sistema con `UserName` y necesita sudo.
-- **Compatibilidad:** es un cambio incompatible para los scripts del usuario. La 0.4.0 estable sale ya con `cof`,
+- **Compatibilidad:** es un cambio incompatible para los scripts del usuario. La 0.4.0 estable sale ya con `cflk`,
   y el `cf` de transición y la lectura de `CF_*` desaparecen en la 0.5.
 
 ## Tasks (no autoritativo — el board manda)
 
 - [ ] T1: binario, ayuda, completion, mensajes, `cf` de transición, tarball, `install.sh` y release.
-- [ ] T2: variables `COF_*` y directorios con migración. Incluye los casos de servicio en marcha y migración a
-  medias, y la reserva del prefijo `COF_`.
+- [ ] T2: variables `CFLK_*` y directorios con migración. Incluye los casos de servicio en marcha y migración a
+  medias, y la reserva del prefijo `CFLK_`.
 - [ ] T3: servicios del Worker y del Controller en `install-service`, incluido el caso del LaunchDaemon.
 - [ ] T4: skills, MCP y doctor.
 - [ ] T5: Homebrew, docs, guía, README y site.
-- [ ] Aparte: el módulo Go pasa a `github.com/Autarquico/codeflock`.
+- [ ] T0: el módulo Go pasa a `github.com/Autarquico/codeflock`, antes de T1.
 
 ## Referencias
 

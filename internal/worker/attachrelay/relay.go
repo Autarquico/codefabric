@@ -30,6 +30,7 @@ const (
 	DefaultOutputBudget    = 1 << 20
 	DefaultFirstResizeWait = 250 * time.Millisecond
 	DefaultInputHold       = time.Second
+	DefaultResizeCoalesce  = 50 * time.Millisecond
 	DefaultBackoffFloor    = time.Second
 	DefaultBackoffCeiling  = 30 * time.Second
 	DefaultFarewellGrace   = 2 * time.Second
@@ -38,6 +39,10 @@ const (
 	// maxHeldInput is the most a client may type before the tmux client has drawn
 	// its first output; past it the input is delivered at once.
 	maxHeldInput = 4 << 10
+
+	// maxViewSize bounds each side of the size a view sets: real terminals are far
+	// below it, and the size comes from a principal with the lowest grant.
+	maxViewSize = 1000
 
 	// readChunk is what is read from the terminal at once; far under a frame.
 	readChunk = 16 << 10
@@ -111,13 +116,18 @@ type Options struct {
 	Live  func(ctx context.Context, runID string, leaseEpoch uint64) (bool, error)
 	Shell ShellOptions  // what a shell request needs; its zero value refuses every one
 	Start StartTerminal // defaults to StartPty
-	Clock clock.Clock
-	Log   *slog.Logger
+	// ViewSized makes a view take the size of its client: it is set when the
+	// Runtime keeps that size from the window of the others. Unset, a view starts
+	// at the default size and ignores the sizes it is sent.
+	ViewSized bool
+	Clock     clock.Clock
+	Log       *slog.Logger
 
 	PollWait        time.Duration // how long the Controller may hold a poll
 	MaxSessions     int           // attaches at once on this Worker
 	OutputBudget    int           // bytes of terminal output waiting for the Controller, per attach
 	FirstResizeWait time.Duration // how long to wait for the size of the client before starting at the default
+	ResizeCoalesce  time.Duration // a view's resizes reach the terminal at most once in this long
 	InputHold       time.Duration // how long the keys of a client wait for the tmux client to draw, at most
 	BackoffMin      time.Duration // the first wait after a failed poll
 	BackoffMax      time.Duration
@@ -150,6 +160,7 @@ func New(o Options) *Relay {
 	set(&o.PollWait, DefaultPollWait)
 	set(&o.FirstResizeWait, DefaultFirstResizeWait)
 	set(&o.InputHold, DefaultInputHold)
+	set(&o.ResizeCoalesce, DefaultResizeCoalesce)
 	set(&o.BackoffMin, DefaultBackoffFloor)
 	set(&o.BackoffMax, DefaultBackoffCeiling)
 	set(&o.FarewellGrace, DefaultFarewellGrace)
@@ -322,6 +333,15 @@ func (r *Relay) farewell(conn Stream, f v1.Frame) {
 	<-done
 }
 
+// viewSize says whether a size from a view is usable, and bounds it: 0 on a side
+// is no size, and a side over maxViewSize is cut to it.
+func viewSize(c, r uint16) (cols, rows uint16, ok bool) {
+	if c == 0 || r == 0 {
+		return 0, 0, false
+	}
+	return min(c, maxViewSize), min(r, maxViewSize), true
+}
+
 type read struct {
 	f   v1.Frame
 	err error
@@ -330,6 +350,7 @@ type read struct {
 // splice moves frames between the stream and the terminal until either ends.
 func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, cmd cfruntime.Command) {
 	write := req.Mode == v1.AttachModeWrite || req.Mode == v1.AttachModeShell
+	sized := write || r.o.ViewSized
 	stop := make(chan struct{})
 	frames := make(chan read)
 	var wg sync.WaitGroup
@@ -361,17 +382,20 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 		wg.Wait()
 	}()
 
-	// A client in write mode says its size before anything else: the terminal
+	// A client that is sized says its size before anything else: the terminal
 	// starts at it, so tmux draws once at the right size.
 	var cols, rows uint16
 	var first *read
-	if write {
+	if sized {
 		t := r.o.Clock.NewTimer(r.o.FirstResizeWait)
 		select {
 		case fr := <-frames:
 			if fr.err == nil && fr.f.Type == v1.FrameResize {
 				if c, rw, err := v1.ParseResize(fr.f.Payload); err == nil {
 					cols, rows = c, rw
+					if !write {
+						cols, rows, _ = viewSize(c, rw) // no usable size: the default
+					}
 				}
 			} else {
 				first = &fr
@@ -453,6 +477,16 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 		holdUp, firstOutput = timer.C(), drawn
 	}
 	holding := write
+	// A view's resizes are kept to the last one and applied at most once in
+	// ResizeCoalesce, so a flood of them does not reach the pty one by one.
+	var viewResize [2]uint16
+	var coalesce <-chan time.Time
+	var coalesceTimer clock.Timer
+	defer func() {
+		if coalesceTimer != nil {
+			coalesceTimer.Stop()
+		}
+	}()
 	release := func() (ok bool) {
 		holding, firstOutput, holdUp = false, nil, nil
 		pending := held
@@ -481,8 +515,20 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 				return true
 			}
 		case v1.FrameResize:
-			if c, rw, err := v1.ParseResize(fr.f.Payload); err == nil && write {
+			c, rw, err := v1.ParseResize(fr.f.Payload)
+			if err != nil || !sized {
+				break
+			}
+			if write {
 				_ = term.Resize(c, rw)
+				break
+			}
+			if c, rw, ok := viewSize(c, rw); ok {
+				viewResize = [2]uint16{c, rw}
+				if coalesce == nil {
+					coalesceTimer = r.o.Clock.NewTimer(r.o.ResizeCoalesce)
+					coalesce = coalesceTimer.C()
+				}
 			}
 		case v1.FrameClose, v1.FrameError:
 			return true
@@ -498,6 +544,9 @@ func (r *Relay) splice(ctx context.Context, conn Stream, req v1.AttachRequest, c
 			if handle(fr) {
 				return
 			}
+		case <-coalesce:
+			coalesce = nil
+			_ = term.Resize(viewResize[0], viewResize[1])
 		case <-firstOutput:
 			if !release() {
 				return

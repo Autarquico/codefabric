@@ -159,7 +159,8 @@ func (s *session) pump(from, to *peer, fromClient bool) {
 				continue // a view sends nothing to the Run
 			}
 		case v1.FrameResize:
-			if _, _, err := v1.ParseResize(f.Payload); err != nil || (fromClient && !write) {
+			// A view's size goes on too: the Worker decides whether it can use it.
+			if _, _, err := v1.ParseResize(f.Payload); err != nil {
 				continue
 			}
 		case v1.FrameClose:

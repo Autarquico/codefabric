@@ -246,6 +246,10 @@ func TestObserveAttachEvents_ReadOnlyAttachDoesNotSendInput(t *testing.T) {
 	if !strings.Contains(readFile(o.sshLog), "'-r'") {
 		t.Fatalf("ssh was not asked for -r:\n%s", readFile(o.sshLog))
 	}
+	// Over ssh the argv is the remote binary's own: the same as before, with no flag about sizes.
+	if log := readFile(o.sshLog); strings.Contains(log, "ignore-size") || !strings.HasSuffix(strings.TrimSpace(log), "'attach-session' '-t' '="+o.session+"' '-r'") {
+		t.Fatalf("ssh was asked for more than -r:\n%s", log)
+	}
 	readOnly.send("nope", "Enter")
 	time.Sleep(1500 * time.Millisecond)
 	if fileExists(typed) {
