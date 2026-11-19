@@ -23,7 +23,7 @@ import (
 // sshProbeTimeout bounds the connection of the probe (and the probe as a whole).
 const sshProbeTimeout = 5 * time.Second
 
-// doctorStore is what `cf doctor` reads of the Controller.
+// doctorStore is what `cflk doctor` reads of the Controller.
 type doctorStore interface {
 	Controller() string
 	Status(ctx context.Context) (v1.Status, error)
@@ -68,7 +68,7 @@ func openDoctorStore(opts Options) func(*cobra.Command) (doctorStore, error) {
 	return func(cmd *cobra.Command) (doctorStore, error) { return openClient(cmd) }
 }
 
-// DoctorReport is the result of `cf doctor --json`.
+// DoctorReport is the result of `cflk doctor --json`.
 type DoctorReport struct {
 	Controller DoctorController `json:"controller"`
 	Workers    []DoctorWorker   `json:"workers"`
@@ -100,11 +100,11 @@ func doctorSkill(k skillKind, s *SkillStatus) *DoctorSkill {
 	case skillMissing:
 		d.Warning = "la skill " + k.name + " de " + k.label + " no está instalada"
 	case skillOutdated:
-		d.Warning = "la skill " + k.name + " de " + k.label + " es de otra versión de cf (" + s.Version + ")"
+		d.Warning = "la skill " + k.name + " de " + k.label + " es de otra versión de Code Flock (" + s.Version + ")"
 	case skillModified:
-		d.Warning = "la skill " + k.name + " de " + k.label + " fue editada después de que cf la escribiera"
+		d.Warning = "la skill " + k.name + " de " + k.label + " fue editada después de que cflk la escribiera"
 	case skillForeign:
-		d.Warning = "hay una skill " + k.name + " de " + k.label + " que cf no escribió; " + k.installCommand() + " --force la reemplaza"
+		d.Warning = "hay una skill " + k.name + " de " + k.label + " que cflk no escribió; " + k.installCommand() + " --force la reemplaza"
 		return d
 	default:
 		return d
@@ -146,7 +146,7 @@ func newDoctorCmd(open func(*cobra.Command) (doctorStore, error), probe sshProbe
 		Long: "Checks that the Controller answers, lists every Worker with the verdict of its own doctor per component,\n" +
 			"and tries a non-interactive ssh to the target each Worker announces. An unreachable Controller fails\n" +
 			"the command; a failing component or an ssh that does not work is shown as a warning only.\n" +
-			"Run `cf worker doctor` on a Worker's machine for the detail of its local checks.",
+			"Run `cflk worker doctor` on a Worker's machine for the detail of its local checks.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			store, err := open(cmd)
@@ -171,7 +171,7 @@ func newDoctorCmd(open func(*cobra.Command) (doctorStore, error), probe sshProbe
 }
 
 // sshOverrides is attach.ssh_targets of the client config: the targets that
-// `cf attach` uses instead of the ones the Workers announce.
+// `cflk attach` uses instead of the ones the Workers announce.
 func sshOverrides() (map[string]string, error) {
 	paths, err := config.ResolveFromEnv()
 	if err != nil {
@@ -209,7 +209,7 @@ func diagnose(ctx context.Context, store doctorStore, probe sshProbe, overrides 
 			if reason := attachProblem(ctx, cmp.Or(overrides[w.Name], w.SSHTarget), probe); reason != "" {
 				warning := "attach no funcionará en " + w.Name + ": " + reason
 				if overrides[w.Name] == "" && guessedSSHTarget(w) {
-					warning += " (el Worker lo adivinó por su hostname: fija --ssh-target en `cf worker run` o `cf worker install-service`)"
+					warning += " (el Worker lo adivinó por su hostname: fija --ssh-target en `cflk worker run` o `cflk worker install-service`)"
 				}
 				rep.Workers[i].Warnings = []string{warning}
 			}
@@ -222,7 +222,7 @@ func diagnose(ctx context.Context, store doctorStore, probe sshProbe, overrides 
 	return rep, nil
 }
 
-// attachProblem is why `cf attach` cannot work toward a Worker from here, or "".
+// attachProblem is why `cflk attach` cannot work toward a Worker from here, or "".
 func attachProblem(ctx context.Context, announced string, probe sshProbe) string {
 	if announced == "" {
 		return "el Worker no anuncia un SSHTarget"

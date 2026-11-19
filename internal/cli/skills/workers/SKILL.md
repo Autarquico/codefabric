@@ -1,6 +1,6 @@
 ---
 name: workers
-description: List the CodeFabric Workers and the interactive Runs that are live on them, and say how to enter one. Use only when the user types /workers.
+description: List the Code Flock Workers and the interactive Runs that are live on them, and say how to enter one. Use only when the user types /workers.
 disable-model-invocation: true
 allowed-tools: Bash(cflk worker list --timeout 10s) Bash(cflk ps --timeout 10s)
 ---

@@ -1,15 +1,15 @@
 ---
 name: codeflock
-description: Use CodeFabric (cflk) to run coding Tasks on a pool of machines from this session. Create a Task, wait for its events without polling, read the Inbox and answer a Run that needs input. Use when the user asks to delegate work to cf or CodeFabric, to run something on another machine, or to follow or answer a Task already running there.
+description: Use Code Flock (cflk) to run coding Tasks on a pool of machines from this session. Create a Task, wait for its events without polling, read the Inbox and answer a Run that needs input. Use when the user asks to delegate work to cflk or Code Flock, to run something on another machine, or to follow or answer a Task already running there.
 ---
 
-# CodeFabric from the model
+# Code Flock from the model
 
-CodeFabric (`cflk`) runs coding agents on Workers. You drive it through the MCP server `cflk`. It has no shell and cannot read secrets: you only create, follow and answer Tasks.
+Code Flock (`cflk`) runs coding agents on Workers. You drive it through the MCP server `cflk`. It has no shell and cannot read secrets: you only create, follow and answer Tasks.
 
 ## When to use it
 
-- The user asks to delegate a job to CodeFabric, or to run it on a Worker.
+- The user asks to delegate a job to Code Flock, or to run it on a Worker.
 - The user asks what happened to a Task or Run, or to answer a Run that is waiting.
 
 Do not use it to run commands on this machine. For that, use your own tools.

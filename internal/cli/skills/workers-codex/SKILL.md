@@ -1,6 +1,6 @@
 ---
 name: workers
-description: List the CodeFabric Workers and the interactive Runs that are live on them, and say how to enter one. Use only when the user explicitly asks which Workers are available or which remote sessions are running, for example "$workers".
+description: List the Code Flock Workers and the interactive Runs that are live on them, and say how to enter one. Use only when the user explicitly asks which Workers are available or which remote sessions are running, for example "$workers".
 ---
 <!-- cflk-version: {{cflk-version}} -->
 

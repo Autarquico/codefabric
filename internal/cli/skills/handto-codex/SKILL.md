@@ -1,12 +1,12 @@
 ---
 name: handto
-description: Hand this Codex session over to a CodeFabric Worker, so the work goes on there with the same context and the same repository state. Use only when the user explicitly asks to hand this session to a named Worker, for example "$handto omarch02".
+description: Hand this Codex session over to a Code Flock Worker, so the work goes on there with the same context and the same repository state. Use only when the user explicitly asks to hand this session to a named Worker, for example "$handto omarch02".
 ---
 <!-- cflk-version: {{cflk-version}} -->
 
 # handto
 
-Hand this session over to the CodeFabric Worker that the user names.
+Hand this session over to the Code Flock Worker that the user names.
 
 ## Steps
 

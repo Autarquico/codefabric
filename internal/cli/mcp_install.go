@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +30,8 @@ const (
 	// legacyMCPServerName is how the beta.6 registered the server.
 	legacyMCPServerName = "cf"
 	skillName           = "codeflock"
+	// legacySkillName is the directory the skill had before the rename.
+	legacySkillName = "codefabric"
 	// codexToolTimeoutSec is above the 10 min maximum of events_wait; Codex
 	// cuts a tool call at 60 s unless its table says otherwise.
 	codexToolTimeoutSec = 660
@@ -251,8 +255,11 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 			return res, err
 		}
 	}
-	res.Skill.State, err = writeSkill(skillPath, codeflockSkill)
-	return res, err
+	if res.Skill.State, err = writeSkill(skillPath, codeflockSkill); err != nil {
+		return res, err
+	}
+	res.Notes = append(res.Notes, retireLegacySkill(tool, base)...)
+	return res, nil
 }
 
 // verifyRegistration reads the registration back: the old one is not removed
@@ -306,8 +313,53 @@ func uninstallMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResu
 			}
 		}
 	}
-	res.Skill.State, err = removeSkill(skillPath)
-	return res, err
+	if res.Skill.State, err = removeSkill(skillPath); err != nil {
+		return res, err
+	}
+	res.Notes = append(res.Notes, retireLegacySkill(tool, base)...)
+	return res, nil
+}
+
+// publishedLegacySkills are the SHA-256 of the SKILL.md of the `codefabric`
+// skill in the releases that wrote it (git log of internal/cli/skills/codefabric/SKILL.md).
+// It carried no version marker.
+var publishedLegacySkills = []string{
+	"565515ca750855efbfb8b098f7182e4f0b48d8850a04cdeed40b44bffbe0d452",
+	"ea6a978830e15182d0945eac7e1c94dc5d33e030b3f95895f3ff293aeb00baf2",
+}
+
+// retireLegacySkill removes the `codefabric` skill directory that the beta.6
+// `mcp install` wrote, which still sends the model to the MCP server `cf`. It
+// goes only when the directory holds nothing but a SKILL.md that is byte for
+// byte one of those releases published; anything else is the user's and stays,
+// with a note. It never fails the command: the skill of this version is in place.
+func retireLegacySkill(tool mcpTool, base string) []string {
+	path := filepath.Join(base, tool.skillsDir, legacySkillName, "SKILL.md")
+	dir := filepath.Dir(path)
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return nil
+	}
+	if !info.IsDir() || !isPublishedLegacySkill(dir, path) {
+		return []string{fmt.Sprintf("%s is a skill directory of an earlier version of cflk and can be deleted", dir)}
+	}
+	if _, err := removeSkill(path); err != nil {
+		return []string{fmt.Sprintf("%s is a skill directory of an earlier version of cflk and can be deleted (removing it failed: %v)", dir, err)}
+	}
+	return []string{fmt.Sprintf("removed %s, the skill of an earlier version of cflk", dir)}
+}
+
+func isPublishedLegacySkill(dir, path string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "SKILL.md" {
+		return false
+	}
+	content, err := readRegular(path)
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256(content)
+	return slices.Contains(publishedLegacySkills, hex.EncodeToString(sum[:]))
 }
 
 func changedState(changed bool, yes, no string) string {

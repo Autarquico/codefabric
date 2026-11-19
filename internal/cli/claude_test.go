@@ -7,8 +7,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/Autarquico/codeflock/internal/domain"
 )
@@ -27,11 +30,11 @@ func TestHandtoSkill_FrontmatterIsExact(t *testing.T) {
 	}
 	want := "---\n" +
 		"name: handto\n" +
-		"description: Hand this Claude Code session over to a CodeFabric Worker, so the work goes on there with the same context and the same repository state. Use only when the user types /handto <worker>.\n" +
+		"description: Hand this Claude Code session over to a Code Flock Worker, so the work goes on there with the same context and the same repository state. Use only when the user types /handto <worker>.\n" +
 		"disable-model-invocation: true\n" +
 		"argument-hint: <worker>\n" +
 		"arguments: [worker]\n" +
-		"allowed-tools: Bash(cflk handoff *) Bash(cflk worker list*)\n" +
+		"allowed-tools: Bash(cflk worker list --state online,degraded) Bash(cflk handoff --session * --to *)\n" +
 		"---\n" +
 		"<!-- cflk-version: v1.2.3 -->\n"
 	if !strings.HasPrefix(string(out), want) {
@@ -51,7 +54,7 @@ func TestWorkersSkill_ListsWorkersAndRemoteRuns(t *testing.T) {
 	}
 	want := "---\n" +
 		"name: workers\n" +
-		"description: List the CodeFabric Workers and the interactive Runs that are live on them, and say how to enter one. Use only when the user types /workers.\n" +
+		"description: List the Code Flock Workers and the interactive Runs that are live on them, and say how to enter one. Use only when the user types /workers.\n" +
 		"disable-model-invocation: true\n" +
 		"allowed-tools: Bash(cflk worker list --timeout 10s) Bash(cflk ps --timeout 10s)\n" +
 		"---\n" +
@@ -361,12 +364,12 @@ func TestSkillNames(t *testing.T) {
 	}
 }
 
-func TestSkills_AllowedToolsNameTheCflkCommandsExactly(t *testing.T) {
+func TestSkills_AllowedToolsNameOnlyTheCommandsTheSkillRuns(t *testing.T) {
 	for _, c := range []struct {
 		k    skillKind
 		want string
 	}{
-		{claudeHandto, "allowed-tools: Bash(cflk handoff *) Bash(cflk worker list*)\n"},
+		{claudeHandto, "allowed-tools: Bash(cflk worker list --state online,degraded) Bash(cflk handoff --session * --to *)\n"},
 		{claudeWorkers, "allowed-tools: Bash(cflk worker list --timeout 10s) Bash(cflk ps --timeout 10s)\n"},
 	} {
 		out, err := renderSkill(c.k, "v1")
@@ -427,4 +430,46 @@ func TestSkills_InstallLeavesTheFilesTheUserAddedAlone(t *testing.T) {
 		t.Fatalf("uninstall: %+v, %v", s, err)
 	}
 	requireEqual(t, string(mustRead(t, mine)), "mine")
+}
+
+func TestUserVisibleTexts_NameCflkAndNotCf(t *testing.T) {
+	cf := regexp.MustCompile(`\bcf\b`)
+	var texts []string
+	for _, state := range []string{skillMissing, skillOutdated, skillModified, skillForeign} {
+		d := doctorSkill(claudeHandto, &SkillStatus{State: state, Version: "v0"})
+		texts = append(texts, d.Warning, d.Action)
+	}
+	for _, c := range []*cobra.Command{newClaudeCmd(), newCodexCmd()} {
+		texts = append(texts, c.Short)
+		for _, sub := range c.Commands() {
+			texts = append(texts, sub.Short, sub.Long)
+		}
+	}
+	var out bytes.Buffer
+	_ = printSkill(&out, claudeHandto, SkillStatus{Name: "handto", State: skillModified})
+	_ = printSkill(&out, claudeHandto, SkillStatus{Name: "handto", State: skillCurrent, Version: "v1"})
+	texts = append(texts, out.String())
+	for _, text := range texts {
+		if cf.MatchString(text) {
+			t.Errorf("a text that the user reads still says cf: %q", text)
+		}
+	}
+}
+
+func TestHandtoSkill_AllowedToolsLeaveOutTheOverrideFlagsAndWildcardCommands(t *testing.T) {
+	out, err := renderSkill(claudeHandto, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line string
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(l, "allowed-tools:") {
+			line = l
+		}
+	}
+	for _, bad := range []string{"handoff *", "worker list*", "--force", "--yes", "--allow"} {
+		if strings.Contains(line, bad) {
+			t.Errorf("allowed-tools %q has %q", line, bad)
+		}
+	}
 }

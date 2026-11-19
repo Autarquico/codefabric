@@ -7,16 +7,15 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
-	"strconv"
-	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // mcpRegistration is a server as a tool has it registered: what it launches.
 type mcpRegistration struct {
-	Command string   `json:"command" toml:"command"`
-	Args    []string `json:"args" toml:"args"`
+	Command string
+	Args    []string
 }
 
 // mcpServeArgs are the arguments after the binary that `mcp install` registers.
@@ -38,12 +37,37 @@ func (r mcpRegistration) isCodeFlock(bin string) bool {
 
 // readRegistrations is every server registered under the scope, by name, read
 // from the file where the tool keeps them: ~/.claude.json (user) or .mcp.json
-// of the repository (project) for Claude Code, config.toml for Codex.
+// of the repository (project) for Claude Code, config.toml for Codex. A file
+// that cannot be parsed is an error, so that nothing is changed on a guess.
+// The .mcp.json of a repository is untrusted and is not read through a symlink.
 func readRegistrations(tool mcpTool, scope, base string) (map[string]mcpRegistration, error) {
 	if tool.userServer {
-		return readCodexRegistrations()
+		path, err := codexConfigPath()
+		if err != nil {
+			return nil, err
+		}
+		return readRegistrationsFile(path, os.ReadFile, parseCodexRegistrations)
 	}
-	return readClaudeRegistrations(claudeServersFile(scope, base))
+	read := os.ReadFile
+	if scope == "project" {
+		read = readRegular
+	}
+	return readRegistrationsFile(claudeServersFile(scope, base), read, parseClaudeRegistrations)
+}
+
+func readRegistrationsFile(path string, read func(string) ([]byte, error), parse func([]byte) (map[string]mcpRegistration, error)) (map[string]mcpRegistration, error) {
+	data, err := read(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	servers, err := parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("reading the MCP servers in %s: %w", path, err)
+	}
+	return servers, nil
 }
 
 // claudeServersFile is the file Claude Code keeps the servers of a scope in.
@@ -57,108 +81,72 @@ func claudeServersFile(scope, base string) string {
 	return filepath.Join(base, ".claude.json")
 }
 
-func readClaudeRegistrations(path string) (map[string]mcpRegistration, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // the Claude Code config of this user or .mcp.json of the repository
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var file struct {
-		Servers map[string]mcpRegistration `json:"mcpServers"`
-	}
+// parseClaudeRegistrations reads `mcpServers`. Keys are matched as they are
+// written, as Claude does: encoding/json would also take `MCPSERVERS` or `Command`.
+// An entry that is not an object, or has a command or args of another type,
+// comes out without them, which is never Code Flock's.
+func parseClaudeRegistrations(data []byte) (map[string]mcpRegistration, error) {
+	var file map[string]json.RawMessage
 	if err := json.Unmarshal(data, &file); err != nil {
-		return nil, fmt.Errorf("reading the MCP servers in %s: %w", path, err)
-	}
-	return file.Servers, nil
-}
-
-func readCodexRegistrations() (map[string]mcpRegistration, error) {
-	path, err := codexConfigPath()
-	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // the Codex config of this user
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return parseCodexRegistrations(string(data)), nil
-}
-
-var (
-	tomlServerHeader = regexp.MustCompile(`^\s*\[\s*mcp_servers\s*\.\s*("[^"]+"|'[^']+'|[A-Za-z0-9_-]+)\s*\]\s*(#.*)?$`)
-	tomlLaunchKey    = regexp.MustCompile(`^\s*(command|args)\s*=\s*(.*)$`)
-	tomlString       = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"|'([^']*)'`)
-)
-
-// parseCodexRegistrations reads command and args of each [mcp_servers.<name>]
-// table, which is all `codex mcp add` writes of a stdio server. Anything it
-// cannot read comes out as a registration that is not Code Flock's, and so
-// is never touched.
-func parseCodexRegistrations(content string) map[string]mcpRegistration {
-	lines := strings.Split(content, "\n")
-	kinds := classifyTOML(lines)
-	servers := map[string]mcpRegistration{}
-	current := ""
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSuffix(lines[i], "\r")
-		switch {
-		case kinds[i].header:
-			current = ""
-			if m := tomlServerHeader.FindStringSubmatch(line); m != nil {
-				current = strings.Trim(m[1], `"'`)
-				servers[current] = mcpRegistration{}
-			}
-		case current == "" || kinds[i].inValue:
-		default:
-			m := tomlLaunchKey.FindStringSubmatch(line)
-			if m == nil {
-				continue
-			}
-			value, open := m[2], tomlValue{}
-			open.feed(m[2])
-			for open.pending() && i+1 < len(lines) {
-				i++
-				value += "\n" + lines[i]
-				open.feed(lines[i])
-			}
-			reg := servers[current]
-			if m[1] == "command" {
-				reg.Command = firstString(value)
-			} else {
-				reg.Args = allStrings(value)
-			}
-			servers[current] = reg
+	var entries map[string]json.RawMessage
+	if raw, ok := file["mcpServers"]; ok {
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			return nil, err
 		}
 	}
-	return servers
+	servers := make(map[string]mcpRegistration, len(entries))
+	for name, raw := range entries {
+		var fields map[string]json.RawMessage
+		_ = json.Unmarshal(raw, &fields)
+		var reg mcpRegistration
+		if json.Unmarshal(fields["command"], &reg.Command) != nil {
+			reg.Command = ""
+		}
+		if json.Unmarshal(fields["args"], &reg.Args) != nil {
+			reg.Args = nil
+		}
+		servers[name] = reg
+	}
+	return servers, nil
 }
 
-func tomlStringValue(m []string) string {
-	if m[2] != "" || strings.HasPrefix(m[0], "'") {
-		return m[2]
+// parseCodexRegistrations reads command and args of each server under
+// [mcp_servers], in whatever form TOML allows: a [mcp_servers.<name>] table, an
+// inline table, dotted keys. An entry that is not a table, or has a command or
+// args of another type, comes out without them, which is never Code Flock's.
+func parseCodexRegistrations(data []byte) (map[string]mcpRegistration, error) {
+	var file struct {
+		Servers map[string]any `toml:"mcp_servers"`
 	}
-	if s, err := strconv.Unquote(`"` + m[1] + `"`); err == nil {
-		return s
+	if err := toml.Unmarshal(data, &file); err != nil {
+		return nil, err
 	}
-	return m[1]
+	servers := make(map[string]mcpRegistration, len(file.Servers))
+	for name, entry := range file.Servers {
+		fields, _ := entry.(map[string]any)
+		var reg mcpRegistration
+		reg.Command, _ = fields["command"].(string)
+		reg.Args = stringList(fields["args"])
+		servers[name] = reg
+	}
+	return servers, nil
 }
 
-func firstString(value string) string {
-	if m := tomlString.FindStringSubmatch(value); m != nil {
-		return tomlStringValue(m)
+// stringList is the list of strings, or nil when it is anything else.
+func stringList(v any) []string {
+	list, ok := v.([]any)
+	if !ok {
+		return nil
 	}
-	return ""
-}
-
-func allStrings(value string) []string {
-	var out []string
-	for _, m := range tomlString.FindAllStringSubmatch(value, -1) {
-		out = append(out, tomlStringValue(m))
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		s, ok := item.(string)
+		if !ok {
+			return nil
+		}
+		out = append(out, s)
 	}
 	return out
 }

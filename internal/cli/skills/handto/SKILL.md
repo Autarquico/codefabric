@@ -1,16 +1,16 @@
 ---
 name: handto
-description: Hand this Claude Code session over to a CodeFabric Worker, so the work goes on there with the same context and the same repository state. Use only when the user types /handto <worker>.
+description: Hand this Claude Code session over to a Code Flock Worker, so the work goes on there with the same context and the same repository state. Use only when the user types /handto <worker>.
 disable-model-invocation: true
 argument-hint: <worker>
 arguments: [worker]
-allowed-tools: Bash(cflk handoff *) Bash(cflk worker list*)
+allowed-tools: Bash(cflk worker list --state online,degraded) Bash(cflk handoff --session * --to *)
 ---
 <!-- cflk-version: {{cflk-version}} -->
 
 # /handto
 
-Hand this session over to the CodeFabric Worker `$worker`.
+Hand this session over to the Code Flock Worker `$worker`.
 
 Workers that can take the session right now (online or degraded):
 

@@ -11,7 +11,7 @@ import (
 
 // A fake claude: logs its arguments and the directory it ran in (to
 // $FAKE_LOG.pwd), and keeps its servers where the real one does:
-// ~/.claude.json for the user scope, .mcp.json of the cwd for the project
+// ~/.claude.json (or $CLAUDE_CONFIG_DIR/.claude.json) for the user scope, .mcp.json of the cwd for the project
 // scope. `remove` of a server that is not there fails the way the real one
 // does. FAKE_FAIL_ADD makes `add` fail and FAKE_NOOP_ADD makes it succeed
 // without writing anything.
@@ -19,7 +19,7 @@ const fakeClaude = `#!/bin/sh
 echo "claude $*" >> "$FAKE_LOG"
 pwd -P >> "$FAKE_LOG.pwd"
 op="$2"; scope="$4"; name="$5"
-if [ "$scope" = project ]; then out="$(pwd -P)/.mcp.json"; else out="$HOME/.claude.json"; fi
+if [ "$scope" = project ]; then out="$(pwd -P)/.mcp.json"; else out="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"; fi
 dir="$FAKE_STATE/$scope"
 /bin/mkdir -p "$dir"
 rebuild() {
@@ -106,6 +106,7 @@ func newMCPMachine(t *testing.T) mcpMachine {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", m.home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CODEX_HOME", m.codexHome)
 	t.Setenv("PATH", bin)
 	t.Setenv("FAKE_LOG", m.log)
@@ -137,9 +138,9 @@ func (m mcpMachine) registered(t *testing.T, tool string) map[string]mcpRegistra
 		err  error
 	)
 	if tool == "claude" {
-		regs, err = readClaudeRegistrations(filepath.Join(m.home, ".claude.json"))
+		regs, err = readRegistrations(claudeTool, "user", m.home)
 	} else {
-		regs, err = readCodexRegistrations()
+		regs, err = readRegistrations(codexTool, "user", "")
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -806,7 +807,7 @@ func TestMCPInstall_ProjectScopeReadsTheMCPJSONOfTheRepo(t *testing.T) {
 	if code, out, errOut := run(t, "mcp", "install", "--claude", "--scope", "project"); code != 0 {
 		t.Fatalf("exit %d: %s%s", code, out, errOut)
 	}
-	got, err := readClaudeRegistrations(filepath.Join(repo, ".mcp.json"))
+	got, err := readRegistrations(claudeTool, "project", repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -849,11 +850,222 @@ func TestMCPInstall_TheSkillDirectoryKeepsTheFilesOfTheUser(t *testing.T) {
 }
 
 func TestParseCodexRegistrations_ReadsCommandAndArgsOfEachServer(t *testing.T) {
-	got := parseCodexRegistrations("model = \"x\"\n\n[mcp_servers.cf]\ncommand = \"/opt/a b/cf\"\nargs = [\n  \"mcp\", \"serve\",\n  '--profile', \"read\"\n]\n\n" +
-		"[mcp_servers.\"cflk\"] # mine\ncommand = '/x/cflk'\nargs = [\"mcp\"]\ntool_timeout_sec = 660\n[mcp_servers.cf.env]\nA = \"1\"\n[projects.\"/p\"]\ncommand = \"no\"\n")
+	got, err := parseCodexRegistrations([]byte("model = \"x\"\n\n[mcp_servers.cf]\ncommand = \"/opt/a b/cf\"\nargs = [\n  \"mcp\", \"serve\",\n  '--profile', \"read\"\n]\n\n" +
+		"[mcp_servers.\"cflk\"] # mine\ncommand = '/x/cflk'\nargs = [\"mcp\"]\ntool_timeout_sec = 660\n[mcp_servers.cf.env]\nA = \"1\"\n[projects.\"/p\"]\ncommand = \"no\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	requireEqual(t, len(got), 2)
 	requireEqual(t, got["cf"].Command, "/opt/a b/cf")
 	requireEqual(t, got["cf"].Args, []string{"mcp", "serve", "--profile", "read"})
 	requireEqual(t, got["cflk"].Command, "/x/cflk")
 	requireEqual(t, got["cflk"].Args, []string{"mcp"})
+}
+
+// The three forms TOML has for the same server, and a comment after the args.
+var codexForms = map[string]string{
+	"table":   "[mcp_servers.cflk]\ncommand = \"/opt/other/tool\"\nargs = [\"x\", \"y\"]\n",
+	"inline":  "[mcp_servers]\ncflk = { command = \"/opt/other/tool\", args = [\"x\", \"y\"] }\n",
+	"dotted":  "[mcp_servers]\ncflk.command = \"/opt/other/tool\"\ncflk.args = [\"x\", \"y\"]\n",
+	"dotted2": "mcp_servers.cflk.command = \"/opt/other/tool\"\nmcp_servers.cflk.args = [\"x\", \"y\"]\n",
+}
+
+func TestParseCodexRegistrations_ReadsTheThreeFormsOfAServer(t *testing.T) {
+	for name, content := range codexForms {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseCodexRegistrations([]byte(content))
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireEqual(t, got["cflk"].Command, "/opt/other/tool")
+			requireEqual(t, got["cflk"].Args, []string{"x", "y"})
+		})
+	}
+}
+
+func TestParseCodexRegistrations_ACommentAfterTheArgsIsNotAnArgument(t *testing.T) {
+	got, err := parseCodexRegistrations([]byte("[mcp_servers.cf]\ncommand = \"/opt/cf\" # \"old\"\nargs = [\"mcp\", \"serve\", \"--profile\", \"read\"] # was \"modify\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEqual(t, got["cf"].Command, "/opt/cf")
+	requireEqual(t, got["cf"].Args, mcpServeArgs("read"))
+	requireEqual(t, got["cf"].isCodeFlock("/opt/cf"), true)
+}
+
+func TestParseCodexRegistrations_WhatItCannotReadIsNotCodeFlocks(t *testing.T) {
+	got, err := parseCodexRegistrations([]byte("[mcp_servers]\na = 3\nb = { command = 7, args = [1] }\nc = { command = \"cflk\", args = [\"mcp\", 2] }\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEqual(t, len(got), 3)
+	for name, reg := range got {
+		if reg.isCodeFlock("/bin/x") {
+			t.Errorf("%s reads as Code Flock's: %+v", name, reg)
+		}
+	}
+	if _, err := parseCodexRegistrations([]byte("[mcp_servers.cflk\ncommand = ")); err == nil {
+		t.Error("a file that is not TOML parsed")
+	}
+}
+
+func TestParseClaudeRegistrations_MatchesKeysAsClaudeDoes(t *testing.T) {
+	got, err := parseClaudeRegistrations([]byte(`{"MCPSERVERS":{"cflk":{"command":"/a","args":[]}},"mcpServers":{"cflk":{"Command":"/b","command":"/c","args":["mcp"]},"cf":{"command":5,"args":"x"},"odd":3}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEqual(t, len(got), 3)
+	requireEqual(t, got["cflk"].Command, "/c")
+	requireEqual(t, got["cflk"].Args, []string{"mcp"})
+	requireEqual(t, got["cf"].Command+strings.Join(got["cf"].Args, ""), "")
+	requireEqual(t, got["odd"].Command+strings.Join(got["odd"].Args, ""), "")
+	if got, _ := parseClaudeRegistrations([]byte(`{"MCPServers":{"cflk":{"command":"/a"}}}`)); len(got) != 0 {
+		t.Errorf("a key in another case was read: %v", got)
+	}
+}
+
+func TestMCPInstall_ACflkThatIsNotCodeFlockIsAnErrorInEachFormOfTheCodexConfig(t *testing.T) {
+	for name, content := range codexForms {
+		t.Run(name, func(t *testing.T) {
+			m := newMCPMachine(t)
+			if err := os.WriteFile(m.codexConfig(), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			code, stdout, _ := run(t, "mcp", "install", "--codex", "--json")
+			if code == 0 {
+				t.Fatal("install over a cflk that is not Code Flock succeeded")
+			}
+			requireEqual(t, errorOf(t, stdout)["code"], "CF_INVALID_REQUEST")
+			requireEqual(t, len(m.calls(t)), 0)
+			requireEqual(t, readFile(t, m.codexConfig()), content)
+			if code, _, _ := run(t, "mcp", "uninstall", "--codex"); code != 0 {
+				t.Fatalf("uninstall exit %d", code)
+			}
+			requireEqual(t, len(m.calls(t)), 0)
+			requireEqual(t, readFile(t, m.codexConfig()), content)
+		})
+	}
+}
+
+func TestMCPInstall_AConfigThatCannotBeParsedIsAnErrorWithoutChanges(t *testing.T) {
+	m := newMCPMachine(t)
+	broken := "[mcp_servers.cflk\ncommand = \"/opt/other/tool\"\n"
+	if err := os.WriteFile(m.codexConfig(), []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := run(t, "mcp", "install", "--codex"); code == 0 {
+		t.Fatal("install over a config that cannot be read succeeded")
+	}
+	requireEqual(t, len(m.calls(t)), 0)
+	requireEqual(t, readFile(t, m.codexConfig()), broken)
+}
+
+func TestMCPInstall_ClaudeConfigDirHoldsTheUserRegistrations(t *testing.T) {
+	m := newMCPMachine(t)
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	requireEqual(t, claudeServersFile("user", m.home), filepath.Join(dir, ".claude.json"))
+	m.seed(t, "claude", "user", "cf", "/opt/cf", "mcp", "serve", "--profile", "read")
+	if code, out, errOut := run(t, "mcp", "install", "--claude"); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out, errOut)
+	}
+	got, err := readRegistrations(claudeTool, "user", m.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEqual(t, len(got), 1)
+	requireEqual(t, got["cflk"].Command, selfBinary(t))
+	if _, err := os.Stat(filepath.Join(m.home, ".claude.json")); !os.IsNotExist(err) {
+		t.Errorf("the home was read or written: %v", err)
+	}
+}
+
+func TestMCPInstall_AProjectMCPJSONThatIsASymlinkIsAnErrorWithoutChanges(t *testing.T) {
+	for _, verb := range []string{"install", "uninstall"} {
+		t.Run(verb, func(t *testing.T) {
+			m := newMCPMachine(t)
+			repo := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil { //nolint:gosec // a test directory
+				t.Fatal(err)
+			}
+			outside := filepath.Join(t.TempDir(), "outside.json")
+			const content = `{"mcpServers":{}}`
+			if err := os.WriteFile(outside, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, filepath.Join(repo, ".mcp.json")); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(repo)
+			if code, _, errOut := run(t, "mcp", verb, "--claude", "--scope", "project"); code == 0 || !strings.Contains(errOut, "symlink") {
+				t.Fatalf("exit %d: %s", code, errOut)
+			}
+			requireEqual(t, len(m.calls(t)), 0)
+			requireEqual(t, readFile(t, outside), content)
+		})
+	}
+}
+
+func TestMCPInstall_TheCodefabricSkillOfAPublishedVersionIsRemoved(t *testing.T) {
+	for _, file := range []string{"legacy-skill-2b610f2.md", "legacy-skill-4028d40.md"} {
+		for _, verb := range []string{"install", "uninstall"} {
+			t.Run(file+"/"+verb, func(t *testing.T) {
+				m := newMCPMachine(t)
+				legacy := filepath.Join(m.home, ".claude", "skills", "codefabric")
+				if err := os.MkdirAll(legacy, 0o755); err != nil { //nolint:gosec // a test directory
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(legacy, "SKILL.md"), []byte(readFile(t, filepath.Join("testdata", file))), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if code, out, errOut := run(t, "mcp", verb, "--claude"); code != 0 {
+					t.Fatalf("exit %d: %s%s", code, out, errOut)
+				}
+				if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+					t.Errorf("the skill directory of the earlier version is still there: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestMCPInstall_ACodefabricSkillThatIsNotAPublishedVersionStaysWithANote(t *testing.T) {
+	published := readFile(t, filepath.Join("testdata", "legacy-skill-4028d40.md"))
+	cases := map[string]func(t *testing.T, dir string){
+		"edited": func(t *testing.T, dir string) { writeLegacy(t, dir, "SKILL.md", published+"my edit\n") },
+		"extra file": func(t *testing.T, dir string) {
+			writeLegacy(t, dir, "SKILL.md", published)
+			writeLegacy(t, dir, "notes.md", "mine")
+		},
+		"other skill": func(t *testing.T, dir string) { writeLegacy(t, dir, "SKILL.md", "---\nname: codefabric\n---\nmine\n") },
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := newMCPMachine(t)
+			legacy := filepath.Join(m.home, ".claude", "skills", "codefabric")
+			setup(t, legacy)
+			before := map[string]string{}
+			entries, _ := os.ReadDir(legacy)
+			for _, e := range entries {
+				before[e.Name()] = readFile(t, filepath.Join(legacy, e.Name()))
+			}
+			code, out, errOut := run(t, "mcp", "install", "--claude")
+			if code != 0 || strings.Count(out, "an earlier version of cflk and can be deleted") != 1 {
+				t.Fatalf("exit %d: %s%s", code, out, errOut)
+			}
+			for file, content := range before {
+				requireEqual(t, readFile(t, filepath.Join(legacy, file)), content)
+			}
+		})
+	}
+}
+
+func writeLegacy(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // a test directory
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
