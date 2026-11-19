@@ -289,3 +289,23 @@ func TestACLOpensReadsTheACLOfAFileOnMacOS(t *testing.T) {
 		t.Error("an ACL that lets everyone write was not seen")
 	}
 }
+
+// The ACL is read with /bin/ls, not with the first ls of the PATH.
+func TestACLOpensIgnoresAnLsOnThePATH(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("ACLs are read with the ls of macOS")
+	}
+	bin := t.TempDir()
+	fake := "#!/bin/sh\necho '-rw-r--r-- 1 a b 0 Jan 1 00:00 f'\necho ' 0: user:mallory allow write'\n"
+	if err := os.WriteFile(filepath.Join(bin, "ls"), []byte(fake), 0o700); err != nil { //nolint:gosec // a script that stands for ls
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	file := filepath.Join(t.TempDir(), "program")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if reason := svcunit.ACLOpens(file); reason != "" {
+		t.Errorf("the ls of the PATH was used: %q", reason)
+	}
+}

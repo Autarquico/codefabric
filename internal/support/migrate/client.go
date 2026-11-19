@@ -56,30 +56,58 @@ func (e ClientEnv) withDefaults() ClientEnv {
 // `<kind> run` it keeps the data directory held for as long as the daemon lives,
 // so that no other command moves it from under it.
 func Client(e ClientEnv, out io.Writer) (release func(), err error) {
-	release = func() {}
 	e = e.withDefaults()
 	if asksForHelp(e.Args) {
-		return release, nil
+		return func() {}, nil
 	}
+	if err := moveClient(e, out); err != nil {
+		return func() {}, err
+	}
+	if runKind(e.Args) == "" {
+		return func() {}, nil
+	}
+	return holdDataInUse(e), nil
+}
+
+// holdDataInUse holds the data directory a daemon really uses, wherever it
+// comes from: a default, a CFLK_DATA_DIR or CF_DATA_DIR, or the old directory
+// kept for lack of a new one. A daemon that cannot take it runs all the same:
+// the Worker and the Controller of one machine share the directory, and whoever
+// holds it keeps it from moving.
+func holdDataInUse(e ClientEnv) func() {
+	paths, err := config.Resolve(e.Getenv, e.Home)
+	if err != nil {
+		return func() {}
+	}
+	hold, err := holdData(paths.DataDir)
+	if err != nil {
+		return func() {}
+	}
+	return hold
+}
+
+// moveClient moves what there is to move, holding the old data directory
+// while it does.
+func moveClient(e ClientEnv, out io.Writer) error {
 	loc, err := config.Locate(e.Getenv, e.Home)
 	if err != nil {
-		return release, nil // the command reports it
+		return nil // the command reports it
 	}
 	pairs, err := clientPairs(e, loc)
 	if err != nil || len(pairs) == 0 {
-		return release, nil
+		return nil
 	}
 	if !anyOldExists(pairs) {
-		return release, nil
+		return nil
 	}
 	home, err := e.Home()
 	if err != nil {
-		return release, nil
+		return nil
 	}
 	// With a service of the old name installed nothing moves: its install-service
 	// does, and config.Resolve says so.
 	if len(config.OldUnits(home, e.GOOS)) > 0 {
-		return release, nil
+		return nil
 	}
 	running := runKind(e.Args)
 	if held := daemonsOn(config.Paths{DataDir: dataPair(pairs, loc)}); len(held) > 0 {
@@ -88,45 +116,42 @@ func Client(e ClientEnv, out io.Writer) (release func(), err error) {
 				_, _ = fmt.Fprintf(out, "cflk: a %s uses %s; it moves when it starts as `cflk %s run`, or with `cflk %s install-service`\n",
 					strings.ToUpper(kind[:1])+kind[1:], dataPair(pairs, loc), kind, kind)
 			}
-			return release, nil
+			return nil
 		}
 	}
 	unlock, err := lockMigration(home)
 	if err != nil {
 		_, _ = fmt.Fprintln(out, "cflk: not moving the directories now: "+err.Error())
-		return release, nil
+		return nil
 	}
 	defer unlock()
 	hold, err := holdData(dataPair(pairs, loc))
 	if err != nil {
 		_, _ = fmt.Fprintln(out, "cflk: not moving the directories now: "+err.Error())
-		return release, nil
+		return nil
 	}
-	if running != "" {
-		release = hold
-	} else {
-		defer hold()
-	}
+	defer hold()
 	res, err := e.Mover.Move(pairs)
 	var clash *ClashError
 	switch {
 	case errors.As(err, &clash):
 		_, _ = fmt.Fprintln(out, "cflk: "+clash.Error())
-		return release, nil
+		return nil
 	case err != nil:
-		release()
-		return func() {}, err
+		return err
 	}
 	for _, p := range res.Moved {
 		_, _ = fmt.Fprintf(out, "cflk: moved %s to %s\n", p.Old, p.New)
 	}
-	return release, nil
+	return nil
 }
 
-// asksForHelp says whether the command only prints help: `--help`, `-h` or
+// asksForHelp says whether the command only prints help: `--help`, `--help=...`, `-h` or
 // `help` among its arguments. Cobra answers it, and nothing should move first.
 func asksForHelp(args []string) bool {
-	return slices.ContainsFunc(args, func(a string) bool { return a == "--help" || a == "-h" || a == "help" })
+	return slices.ContainsFunc(args, func(a string) bool {
+		return a == "--help" || a == "-h" || a == "help" || strings.HasPrefix(a, "--help=")
+	})
 }
 
 const daemonLockName = ".cflk-daemon.lock"

@@ -358,3 +358,28 @@ func TestServiceResumedWithTheWorkerStoppedChecksForRunsBeforeMoving(t *testing.
 		t.Errorf("asked %d times; the directories moved", asked)
 	}
 }
+
+// A run cut between a rename and the record of it: the pair is put back, with
+// the rest, when the next run fails.
+func TestServiceResumedAfterACutBetweenARenameAndItsRecordPutsThatPairBack(t *testing.T) {
+	r := newRig(t)
+	snap := Snapshot{Active: true, Env: map[string]string{"CF_CONFIG_DIR": r.cfg, "CF_DATA_DIR": r.data, "TMUX_TMPDIR": "/run/tmux"}, Argv: []string{"/opt/cf/bin/cf", "worker", "run"}}
+	r.fleet.Set("cf-worker.service", true, false)
+	newCfg := filepath.Join(r.home, ".config", "codeflock")
+	cfg := Pair{Old: r.cfg, New: newCfg}
+	if err := os.Rename(r.cfg, newCfg); err != nil { // the rename, and then the process died
+		t.Fatal(err)
+	}
+	if err := (progressFile{dirs: Dirs{OldData: r.data, NewData: r.data}}).write(journal{
+		Members: map[string]Snapshot{"cf-worker": snap}, Created: []string{"codeflock-worker"}, Intended: []Pair{cfg},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.fleet.Fail("systemctl --user start codeflock-worker", errors.New("boom"))
+	if _, err := r.service().Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
+	}
+	if !has(t, filepath.Join(r.cfg, "f")) || has(t, newCfg) {
+		t.Error("the pair that moved before the cut was not put back")
+	}
+}

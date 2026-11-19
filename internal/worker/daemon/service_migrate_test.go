@@ -295,7 +295,7 @@ func TestScenario_RenameCLI_LaunchDaemon_ImprimeLosComandosYNoCambiaNada(t *test
 	for _, want := range []string{
 		"sudo sh -eu <<'CFLK_PLAN'",
 		"launchctl bootout system/'com.codefabric.worker'",
-		"sudo -u 'ana' mv '/Users/ana/.local/share/codefabric' '/Users/ana/.local/share/codeflock'",
+		"sudo -u 'ana' mv -n '/Users/ana/.local/share/codefabric' '/Users/ana/.local/share/codeflock'",
 		"mv -n \"$tmp\" '" + filepath.Join(daemons, "com.codeflock.worker.plist") + "'",
 		"launchctl bootstrap system",
 		"# launchctl bootstrap system '" + path + "'", // the way back, commented out

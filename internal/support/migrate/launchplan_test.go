@@ -60,8 +60,8 @@ func TestLaunchPlanForADaemonIsOneBlockForRootWithTheWayBackCommentedOut(t *test
 	for _, want := range []string{
 		"sudo sh -eu <<'CFLK_PLAN'",
 		"launchctl bootout system/'com.codefabric.worker'",
-		"sudo -u 'ana' mv '/Users/ana/.config/codefabric' '/Users/ana/.config/codeflock'",
-		"sudo -u 'ana' mv '/Users/ana/Library/Logs/codefabric' '/Users/ana/Library/Logs/codeflock'",
+		"sudo -u 'ana' mv -n '/Users/ana/.config/codefabric' '/Users/ana/.config/codeflock'",
+		"sudo -u 'ana' mv -n '/Users/ana/Library/Logs/codefabric' '/Users/ana/Library/Logs/codeflock'",
 		"chown root:wheel \"$tmp\"",
 		"launchctl bootstrap system '/Library/LaunchDaemons/com.codeflock.worker.plist'",
 		"<string>com.codeflock.worker</string>", "<key>CFLK_DATA_DIR</key>", "<string>/usr/local/bin/cflk</string>",
@@ -86,7 +86,7 @@ func TestLaunchPlanForADaemonIsOneBlockForRootWithTheWayBackCommentedOut(t *test
 		t.Errorf("a chosen directory moved:\n%s", forward)
 	}
 	for _, want := range []string{
-		"sudo -u 'ana' mv '/Users/ana/.config/codeflock' '/Users/ana/.config/codefabric'",
+		"sudo -u 'ana' mv -n '/Users/ana/.config/codeflock' '/Users/ana/.config/codefabric'",
 		"launchctl bootout system/'com.codeflock.worker' || true",
 		"launchctl bootstrap system '/Library/LaunchDaemons/com.codefabric.worker.plist'",
 	} {
@@ -97,7 +97,7 @@ func TestLaunchPlanForADaemonIsOneBlockForRootWithTheWayBackCommentedOut(t *test
 	if strings.Contains(forward, "rm '/Library/LaunchDaemons/com.codefabric.worker.plist'") {
 		t.Errorf("the old property list is deleted, so there is no way back:\n%s", forward)
 	}
-	if strings.Index(back, "mv '/Users/ana/Library/Logs/codeflock'") > strings.Index(back, "mv '/Users/ana/.config/codeflock'") {
+	if strings.Index(back, "mv -n '/Users/ana/Library/Logs/codeflock'") > strings.Index(back, "mv -n '/Users/ana/.config/codeflock'") {
 		t.Errorf("the way back is not in reverse order:\n%s", back)
 	}
 }
@@ -235,7 +235,7 @@ func TestLaunchPlanOfADaemonNeverUsesTheHomeOfWhoAsks(t *testing.T) {
 			t.Fatal(err)
 		}
 		script := strings.Join(cmds, "\n")
-		if strings.Contains(script, "alice") || !strings.Contains(script, "sudo -u 'bob' mv '/Users/bob/.config/codefabric'") {
+		if strings.Contains(script, "alice") || !strings.Contains(script, "sudo -u 'bob' mv -n '/Users/bob/.config/codefabric'") {
 			t.Errorf("\n%s", script)
 		}
 	})
@@ -310,8 +310,24 @@ func TestLaunchPlanChecksBeforeStoppingAndRemovesOnlyWhatItWrote(t *testing.T) {
 	if bootout := strings.Index(forward, "launchctl bootout"); check < 0 || check > bootout {
 		t.Errorf("the destination of the new plist is checked after the bootout:\n%s", forward)
 	}
-	if strings.Contains(forward, "mv -n '/Users/") || !strings.Contains(forward, "if [ ! -d '/Users/ana/.config/codeflock' ] || [ -e '/Users/ana/.config/codefabric' ] || [ -e '/Users/ana/.config/codeflock/codefabric' ]") {
-		t.Errorf("a directory move is not checked afterwards:\n%s", forward)
+	cfg := "'/Users/ana/.config/codeflock'"
+	for _, want := range []string{
+		"ino=$(stat -f %i '/Users/ana/.config/codefabric')",
+		`if [ -e '/Users/ana/.config/codefabric' ] || [ -L '/Users/ana/.config/codefabric' ] || [ "$(stat -f %i ` + cfg + `)" != "$ino" ]`,
+	} {
+		if !strings.Contains(forward, want) {
+			t.Errorf("a directory move is not checked by its inode, missing %q:\n%s", want, forward)
+		}
+	}
+	if !strings.Contains(back, "ino=$(stat -f %i "+cfg+")") {
+		t.Errorf("the way back does not check the inode:\n%s", back)
+	}
+	loaded := strings.Index(forward, "launchctl print system/'com.codeflock.worker'")
+	if bootout := strings.Index(forward, "launchctl bootout"); loaded < 0 || loaded > bootout {
+		t.Errorf("a successor already loaded is not looked for before the bootout:\n%s", forward)
+	}
+	if mark, publish := strings.Index(forward, "touch '"+newPlist+".cflk-written'"), strings.Index(forward, `mv -n "$tmp"`); mark < 0 || mark > publish {
+		t.Errorf("the marker is not written before the property list is published:\n%s", forward)
 	}
 	marker := "if [ -e '" + newPlist + ".cflk-written' ]; then"
 	rm := strings.Index(back, "rm -f '"+newPlist+"'")

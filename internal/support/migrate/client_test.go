@@ -248,7 +248,7 @@ func runClient(t *testing.T, e ClientEnv, out io.Writer) error {
 }
 
 func TestClientDoesNotMoveForHelp(t *testing.T) {
-	for _, args := range [][]string{{"worker", "run", "--help"}, {"controller", "run", "-h"}, {"help", "worker", "run"}, {"--help"}} {
+	for _, args := range [][]string{{"worker", "run", "--help"}, {"controller", "run", "-h"}, {"help", "worker", "run"}, {"--help"}, {"worker", "run", "--help=true"}, {"worker", "run", "--help=false"}} {
 		home := t.TempDir()
 		oldClient(t, home)
 		e := clientEnv(home, nil)
@@ -321,5 +321,29 @@ func TestClientDoesNotMoveADataDirectoryAnotherProcessHolds(t *testing.T) {
 	}
 	if has(t, filepath.Join(home, ".local", "share", "codeflock")) || !strings.Contains(out.String(), "has") {
 		t.Errorf("moved, or silent: %q", out.String())
+	}
+}
+
+// A daemon that runs on the old root because CFLK_DATA_DIR says so holds it as
+// well: a second `run`, on the default directories, does not move it.
+func TestClientRunHoldsTheDataDirectoryItIsGiven(t *testing.T) {
+	home := t.TempDir()
+	_, oldData := oldClient(t, home)
+	tree(t, oldData, "worker", "w")
+	first := clientEnv(home, map[string]string{"CFLK_DATA_DIR": oldData})
+	first.Args = []string{"worker", "run"}
+	release, err := Client(first, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	second := clientEnv(home, nil)
+	second.Args = []string{"worker", "run"}
+	var out bytes.Buffer
+	if err := runClient(t, second, &out); err != nil {
+		t.Fatal(err)
+	}
+	if has(t, filepath.Join(home, ".local", "share", "codeflock")) || !has(t, filepath.Join(oldData, "worker", "f")) {
+		t.Errorf("moved the directory of a live daemon: %q", out.String())
 	}
 }

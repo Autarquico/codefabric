@@ -104,6 +104,7 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	say("%s", absent(newPlist))
 	say("%s", absent(written))
 	say("%s", absent(oldKept))
+	say("if launchctl print %s >/dev/null 2>&1; then echo %s >&2; exit 1; fi", target(newLabel), shellQuote(newLabel+" is loaded already: stop here"))
 	say("# 2. Stop the old service; its file stays.")
 	say("launchctl bootout %s", target(oldLabel))
 	say("# 3. Move the directories it uses.")
@@ -120,10 +121,10 @@ func (p LaunchPlan) Commands() ([]string, error) {
 		say(`chown root:wheel "$tmp"`)
 	}
 	say(`chmod 644 "$tmp"`)
-	say(`mv -n "$tmp" %s`, shellQuote(newPlist))
-	say(`if [ -e "$tmp" ]; then echo %s >&2; exit 1; fi`, shellQuote(newPlist+" appeared meanwhile: stop here"))
-	say("# The way back removes the new property list only if this plan wrote it, which this file says.")
+	say("# The way back removes the new property list only if this plan is about to write it, which this file says.")
 	say("touch %s", shellQuote(written))
+	say(`mv -n "$tmp" %s`, shellQuote(newPlist))
+	say(`if [ -e "$tmp" ]; then rm -f %s; echo %s >&2; exit 1; fi`, shellQuote(written), shellQuote(newPlist+" appeared meanwhile: stop here"))
 	say("# 5. Load it.")
 	say("launchctl bootstrap %s %s", domain, shellQuote(newPlist))
 	say("# 6. Keep the old property list aside: the way back needs it.")
@@ -132,7 +133,7 @@ func (p LaunchPlan) Commands() ([]string, error) {
 
 	var back []string
 	undo := func(format string, a ...any) { back = append(back, fmt.Sprintf(format, a...)) }
-	undo("# Stop and remove the new service, only if this plan wrote it.")
+	undo("# Stop and remove the new service, only if this plan was about to write it.")
 	undo("if [ -e %s ]; then", shellQuote(written))
 	undo("\tlaunchctl bootout %s || true", target(newLabel))
 	undo("\trm -f %s %s", shellQuote(newPlist), shellQuote(written))
@@ -188,18 +189,20 @@ func commented(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-// move is a move that never goes into a destination that exists: `mv` would put
-// the directory inside it, and follow it if it is a link. The block stops there,
-// and stops too if, after the move, the source is still there or the
-// destination holds a directory of its name: it appeared between the check and
-// the move, and the directory went inside it. An optional directory that is not
-// there is not moved.
+// move is a move that never goes into a destination that exists: `mv -n` does
+// not replace what is there, but would put the directory inside a directory.
+// The block stops if the destination exists, and stops after the move unless the
+// destination is the very directory that was there before it, which its inode
+// says (`stat -f %i`, of macOS): if one appeared between the check and the move,
+// the directory went inside it. An optional directory that is not there is not
+// moved.
 func move(as, from, to string, optional bool) []string {
 	lines := []string{
 		fmt.Sprintf("if [ -e %[1]s ] || [ -L %[1]s ]; then echo %[2]s >&2; exit 1; fi", shellQuote(to), shellQuote(to+" exists: stop here")),
-		fmt.Sprintf("%smv %s %s", as, shellQuote(from), shellQuote(to)),
-		fmt.Sprintf("if [ ! -d %[1]s ] || [ -e %[2]s ] || [ -e %[3]s ]; then echo %[4]s >&2; exit 1; fi",
-			shellQuote(to), shellQuote(from), shellQuote(filepath.Join(to, filepath.Base(from))), shellQuote(to+" is not the directory that moved: stop here")),
+		fmt.Sprintf("ino=$(stat -f %%i %s)", shellQuote(from)),
+		fmt.Sprintf("%smv -n %s %s", as, shellQuote(from), shellQuote(to)),
+		fmt.Sprintf(`if [ -e %[1]s ] || [ -L %[1]s ] || [ "$(stat -f %%i %[2]s)" != "$ino" ]; then echo %[3]s >&2; exit 1; fi`,
+			shellQuote(from), shellQuote(to), shellQuote(to+" is not the directory that moved: stop here")),
 	}
 	if !optional {
 		return lines

@@ -177,12 +177,16 @@ func unsafeTo(info fs.FileInfo, path string, uid int, trusted func(gid int) bool
 	return ""
 }
 
-// aclOpens says why the ACL of path (macOS, read from `ls -lde`) lets someone
+// lsBinary is the ls of the system, by its path: what decides whether root may
+// run a program is not read from whatever the PATH of the caller finds first.
+const lsBinary = "/bin/ls"
+
+// aclOpens says why the ACL of path (macOS, read from `/bin/ls -lde`) lets someone
 // other than root change it or what it holds, or "" if it does not (no ACL, or
 // entries that only deny). The rule of acl_closed in install.sh. An ACL that
 // cannot be read counts as open.
 func aclOpens(path string) string {
-	out, err := exec.CommandContext(context.Background(), "ls", "-lde", path).Output() //nolint:gosec // ls, over a path being checked
+	out, err := exec.CommandContext(context.Background(), lsBinary, "-lde", path).Output() //nolint:gosec // the ls of the system, over a path being checked
 	if err != nil {
 		return "has an ACL that cannot be read"
 	}

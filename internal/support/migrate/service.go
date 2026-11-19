@@ -536,6 +536,15 @@ func (s Service) run(ctx context.Context, members []member, specs []svcunit.Spec
 		names   []string
 	)
 	record := func(r svcunit.Result) { actions = append(actions, r.Actions...) }
+	// A run cut between a rename and its record finds the pair as intended, its
+	// old directory gone and the new one there: it moved, and is put back with
+	// the rest.
+	if reconciled := j.withInterruptedMoves(); len(reconciled.Moved) != len(j.Moved) {
+		j = reconciled
+		if err := progress.write(j); err != nil {
+			return svcunit.Result{}, err
+		}
+	}
 	var steps []step
 	for _, m := range members {
 		names = append(names, m.old.Name)
@@ -570,6 +579,10 @@ func (s Service) run(ctx context.Context, members []member, specs []svcunit.Spec
 		// back, now or on a run that resumes this one, reverses what moved and
 		// nothing else.
 		for _, p := range todo {
+			j.Intended = withPairs(j.Intended, []Pair{p})
+			if err := progress.write(j); err != nil {
+				return err
+			}
 			moved, err := s.Mover.Move([]Pair{p})
 			for _, m := range moved.Moved {
 				actions = append(actions, "move "+m.Old+" "+m.New)
@@ -645,6 +658,22 @@ func (s Service) run(ctx context.Context, members []member, specs []svcunit.Spec
 	result.Actions, result.Changed = append(actions, tidy.Actions...), true
 	result.Warnings = append(result.Warnings, tidy.Warnings...)
 	return result, nil
+}
+
+// withInterruptedMoves is j with, as moved, the pairs it intended and did not
+// record whose old directory is gone and whose new one is there.
+func (j journal) withInterruptedMoves() journal {
+	for _, p := range j.Intended {
+		if slices.Contains(j.Moved, p) {
+			continue
+		}
+		_, oldErr := os.Lstat(p.Old)
+		_, newErr := os.Lstat(p.New)
+		if errors.Is(oldErr, os.ErrNotExist) && newErr == nil {
+			j.Moved = withPairs(j.Moved, []Pair{p})
+		}
+	}
+	return j
 }
 
 func withPairs(have, more []Pair) []Pair {
@@ -733,6 +762,9 @@ type journal struct {
 	// Members are the services of the migration, as they were before anything
 	// changed: whether each ran is not to be read from a unit already stopped.
 	Members map[string]Snapshot `json:"members"`
+	// Intended are the pairs a migration was about to move, recorded before
+	// each rename: a cut between the rename and Moved leaves a pair here only.
+	Intended []Pair `json:"intended,omitempty"`
 	// Moved are the directory pairs this migration moved, each recorded once moved.
 	Moved []Pair `json:"moved,omitempty"`
 	// Created are the units of the new name this migration made.

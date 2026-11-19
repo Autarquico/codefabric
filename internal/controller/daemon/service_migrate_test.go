@@ -116,7 +116,7 @@ func TestScenario_RenameCLI_ControllerEnLaunchd_ImprimeLosComandos(t *testing.T)
 	for _, want := range []string{
 		"sh -eu <<'CFLK_PLAN'",
 		"launchctl bootout gui/$(id -u)/'com.codefabric.controller'",
-		"mv '" + home + "/.local/share/codefabric' '" + home + "/.local/share/codeflock'",
+		"mv -n '" + home + "/.local/share/codefabric' '" + home + "/.local/share/codeflock'",
 		"mv -n \"$tmp\" '" + filepath.Join(dir, "com.codeflock.controller.plist") + "'",
 		"# launchctl bootstrap gui/$(id -u) '" + path + "'", // the way back, commented out
 	} {
