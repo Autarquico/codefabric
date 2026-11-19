@@ -30,36 +30,30 @@ const (
 // ControllerFeatures is what the last heartbeat said the Controller understands.
 // The zero value knows nothing yet.
 type ControllerFeatures struct {
-	answer atomic.Int32 // 0 unknown, 1 takes the answer of an exited, 2 does not
-	idle   atomic.Int32 // 0 unknown, 1 takes end_reason idle_after_result, 2 does not
+	set atomic.Pointer[featureSet] // nil: unknown
 }
+
+// featureSet is published whole, so that a reader never sees half of a heartbeat.
+type featureSet struct{ answer, idle bool }
 
 // Set records the features of a heartbeat response; the latest one counts, so a
 // Controller that is rolled back to an older version is noticed.
 func (f *ControllerFeatures) Set(features []string) {
-	f.answer.Store(featureValue(features, v1.FeatureRunAnswer))
-	f.idle.Store(featureValue(features, v1.FeatureIdleAfterResult))
+	f.set.Store(&featureSet{
+		answer: slices.Contains(features, v1.FeatureRunAnswer),
+		idle:   slices.Contains(features, v1.FeatureIdleAfterResult),
+	})
 }
 
-func featureValue(features []string, name string) int32 {
-	if slices.Contains(features, name) {
-		return 1
+// takes says what the Controller takes, and whether that is known at all:
+// before the first heartbeat the sender does not send anything, as sending
+// without the answer would lose it for good.
+func (f *ControllerFeatures) takes() (set featureSet, known bool) {
+	p := f.set.Load()
+	if p == nil {
+		return featureSet{}, false
 	}
-	return 2
-}
-
-// takesIdleAfterResult says whether the Controller takes an exited with the end
-// reason idle_after_result. Unknown counts as no: the sender does not send
-// anything before the features are known at all (see takesAnswer).
-func (f *ControllerFeatures) takesIdleAfterResult() bool {
-	return f.idle.Load() == 1
-}
-
-// takesAnswer says whether the Controller takes the answer of an exited, and
-// whether that is known at all.
-func (f *ControllerFeatures) takesAnswer() (takes, known bool) {
-	v := f.answer.Load()
-	return v == 1, v != 0
+	return *p, true
 }
 
 // Sender sends the journal. Rows go in the order of their seq, by Run, up to
@@ -155,11 +149,11 @@ type group struct {
 func (s *Sender) Flush(ctx context.Context) (int, error) {
 	withAnswer, withIdle := true, true
 	if s.Features != nil {
-		var known bool
-		if withAnswer, known = s.Features.takesAnswer(); !known {
+		set, known := s.Features.takes()
+		if !known {
 			return 0, nil
 		}
-		withIdle = s.Features.takesIdleAfterResult()
+		withAnswer, withIdle = set.answer, set.idle
 	}
 	pending, err := state.PendingJournal(ctx, s.DB.Reader(), pageRows)
 	if err != nil {
@@ -182,6 +176,14 @@ func (s *Sender) Flush(ctx context.Context) (int, error) {
 			batch, rest := split(g.rows)
 			g.rows = rest
 			n, fenced, err := s.send(ctx, g.key, batch, withAnswer, withIdle)
+			if isInvalidRequest(err) && carriesNewFields(batch, withAnswer, withIdle) {
+				// A Controller rolled back since its last heartbeat refuses the fields it
+				// no longer knows as a malformed request: once more without them, before
+				// the Run is given up for good.
+				s.Log.WarnContext(ctx, "the Controller refused a report with an answer or an end reason: sending it without them",
+					"run", g.key.RunID, "lease_epoch", g.key.LeaseEpoch)
+				n, fenced, err = s.send(ctx, g.key, batch, false, false)
+			}
 			settled += n
 			if err != nil {
 				var coded *domain.Error
@@ -208,6 +210,26 @@ func (s *Sender) Flush(ctx context.Context) (int, error) {
 }
 
 // split takes the longest prefix that fits one request.
+func isInvalidRequest(err error) bool {
+	var coded *domain.Error
+	return errors.As(err, &coded) && coded.Code == domain.CodeInvalidRequest
+}
+
+// carriesNewFields says whether sending the batch with these settings puts an
+// answer or the idle_after_result reason on the wire.
+func carriesNewFields(batch []state.JournalRow, withAnswer, withIdle bool) bool {
+	for _, r := range batch {
+		e, err := entryOf(r)
+		if err != nil {
+			continue
+		}
+		if withAnswer && e.Answer != "" || withIdle && e.EndReason == domain.EndIdleAfterResult {
+			return true
+		}
+	}
+	return false
+}
+
 func split(rows []state.JournalRow) (batch, rest []state.JournalRow) {
 	size := 64 // the envelope
 	for i, r := range rows {

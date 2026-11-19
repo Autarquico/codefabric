@@ -317,7 +317,12 @@ func (e *Executor) finalize(ctx context.Context, r state.Run, f facts) (done boo
 		}
 	}
 	f.inputRequired = inputRequired && (errors.Is(orderErr, state.ErrNotFound) || order.Reason == ReasonInputRequired && order.Source == SourceWorker)
-	f.idleAfterResult = orderErr == nil && order.Reason == ReasonIdleAfterResult && order.Source == SourceWorker && !order.ExitFirst
+	// The reason is kept only if, after the last drain, the harness still looks
+	// finished (no later activity, no error result, no prompt open) and the
+	// wrapper says it ended from our stop: output that arrived while the stop was
+	// being ordered, or an exit of its own, is an ordinary end.
+	f.idleAfterResult = orderErr == nil && order.Reason == ReasonIdleAfterResult && order.Source == SourceWorker && !order.ExitFirst &&
+		cur.ResultOK && !inputRequired && f.exit != nil && f.exit.Cause == execwrap.CauseStop
 	spawned := f.started != nil
 	reportedStart := r.StartedAt != nil || spawned
 	// A Run whose harness ran is to be sealed (§22.6). The intent, which is all that sealing depends

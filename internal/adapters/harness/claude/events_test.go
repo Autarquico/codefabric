@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,9 @@ func TestScenario_ClaudeCodeAdapter_Stream(t *testing.T) {
 	evs := collect(t, fixture(t, "success-handbuilt.jsonl"))
 	want := []harness.Event{
 		{Kind: harness.EventSessionStarted, SessionID: "5b0e1c1e-2f64-4d0e-9a33-6f1a7d0c9a11", Model: "claude-opus-5-5"},
+		{Kind: harness.EventTurnActivity},
+		{Kind: harness.EventTurnActivity},
+		{Kind: harness.EventTurnActivity},
 		{Kind: harness.EventUsage, Usage: &harness.UsageEvent{Model: "claude-haiku-5", InputTokens: i64(0), OutputTokens: i64(2), CacheReadTokens: i64(300)}},
 		{Kind: harness.EventUsage, Usage: &harness.UsageEvent{Model: "claude-opus-5-5", InputTokens: i64(5), OutputTokens: i64(40), CacheReadTokens: i64(7168), CacheWriteTokens: i64(0)}},
 		{Kind: harness.EventResult, Result: &harness.Result{Summary: "Created hello.txt"}},
@@ -65,9 +69,10 @@ func TestScenario_ClaudeCodeAdapter_Stream(t *testing.T) {
 // is a failed Run, and the zeros it reports are known zeros.
 func TestScenario_ClaudeCodeAdapter_StreamFailed(t *testing.T) {
 	evs := collect(t, fixture(t, "notlogged-2.1.314.jsonl"))
-	if len(evs) != 4 {
+	if len(evs) != 5 {
 		t.Fatalf("events = %+v", evs)
 	}
+	evs = slices.Delete(evs, 1, 2) // the assistant message the Run printed: turn activity
 	if evs[0].Kind != harness.EventSessionStarted || evs[0].Model != "claude-opus-5-5" || evs[0].SessionID == "" {
 		t.Errorf("session = %+v", evs[0])
 	}
@@ -202,4 +207,21 @@ func equalUsage(a, b harness.UsageEvent) bool {
 	same := func(p, q *int64) bool { return p == nil && q == nil || p != nil && q != nil && *p == *q }
 	return a.Model == b.Model && same(a.InputTokens, b.InputTokens) && same(a.OutputTokens, b.OutputTokens) &&
 		same(a.CacheReadTokens, b.CacheReadTokens) && same(a.CacheWriteTokens, b.CacheWriteTokens)
+}
+
+func TestTheLinesOfATurnInProgressAreTurnActivityAndTheSystemLinesAroundItsEndAreNot(t *testing.T) {
+	for line, want := range map[string]bool{
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}`:                true,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash"}]}}`: true,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t"}]}}`:        true,
+		`{"type":"stream_event","event":{"type":"content_block_delta"}}`:                          true,
+		`{"type":"system","subtype":"hook_started"}`:                                              false,
+		`{"type":"system","subtype":"hook_response"}`:                                             false,
+		`{"type":"system","subtype":"status"}`:                                                    false,
+	} {
+		evs := collect(t, line+"\n")
+		if got := len(evs) == 1 && evs[0].Kind == harness.EventTurnActivity; got != want || (!want && len(evs) != 0) {
+			t.Errorf("%s: events = %+v, want activity %v", line, evs, want)
+		}
+	}
 }

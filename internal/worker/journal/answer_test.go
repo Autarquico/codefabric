@@ -209,3 +209,106 @@ func (w reasonsWire) ReportRun(_ context.Context, _ string, req v1.RunReportRequ
 	}
 	return resp, nil
 }
+
+// A Controller rolled back between two heartbeats refuses the fields it no
+// longer knows as an invalid request; the Run is not given up for that.
+func TestAControllerRolledBackBetweenHeartbeatsGetsTheReportOnceMoreWithoutTheFieldsAndTheRunIsNotFenced(t *testing.T) {
+	f := newFixture(t)
+	j := journal.New("01J0000000000000000000000E1", f.clock)
+	k := state.Key{RunID: "run_a", LeaseEpoch: 1}
+	err := f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+		if _, err := state.InsertAssigned(t.Context(), tx, state.Run{Key: k, LeaseID: "lease_a", Spec: []byte("{}"), CreatedAt: t0, AcceptBy: t0}); err != nil {
+			return err
+		}
+		_, err := j.AppendTx(t.Context(), tx, k, v1.RunReportEntry{Kind: v1.ReportExited, At: t0, Answer: "done", EndReason: domain.EndIdleAfterResult})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	features := &journal.ControllerFeatures{}
+	features.Set([]string{v1.FeatureRunAnswer, v1.FeatureIdleAfterResult}) // the last heartbeat; the rollback came after it
+	var requests []v1.RunReportEntry
+	c := reporterFunc(func(req v1.RunReportRequest) (v1.RunReportResponse, error) {
+		e := req.Entries[0]
+		requests = append(requests, e)
+		if e.Answer != "" || e.EndReason != "" {
+			return v1.RunReportResponse{}, domain.NewError(domain.CodeInvalidRequest, "unknown field", nil)
+		}
+		return v1.RunReportResponse{Outcomes: []v1.RunReportOutcome{{WorkerSeq: e.WorkerSeq, Result: v1.ReportApplied}}}, nil
+	})
+	s := f.sender(c, j)
+	s.Features = features
+	if _, err := s.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[1].Answer != "" || requests[1].EndReason != "" || f.pending() != 0 {
+		t.Errorf("requests = %+v, %d pending", requests, f.pending())
+	}
+	if run, err := state.RunBy(t.Context(), f.db.Reader(), k); err != nil || run.FencedCode != "" {
+		t.Errorf("the Run is fenced: %q (%v)", run.FencedCode, err)
+	}
+}
+
+type reporterFunc func(v1.RunReportRequest) (v1.RunReportResponse, error)
+
+func (r reporterFunc) ReportRun(_ context.Context, _ string, req v1.RunReportRequest) (v1.RunReportResponse, error) {
+	return r(req)
+}
+
+// The features of a heartbeat are one value: a Flush that races with Set sees
+// the set of one heartbeat or the other, never a mix.
+func TestControllerFeaturesAreNeverSeenHalfUpdated(t *testing.T) {
+	f := newFixture(t)
+	j := journal.New("01J0000000000000000000000E1", f.clock)
+	features := &journal.ControllerFeatures{}
+	both := []string{v1.FeatureRunAnswer, v1.FeatureIdleAfterResult}
+	features.Set(both)
+	var mu sync.Mutex
+	mixed := false
+	c := reporterFunc(func(req v1.RunReportRequest) (v1.RunReportResponse, error) {
+		var resp v1.RunReportResponse
+		for _, e := range req.Entries {
+			if (e.Answer != "") != (e.EndReason != "") {
+				mu.Lock()
+				mixed = true
+				mu.Unlock()
+			}
+			resp.Outcomes = append(resp.Outcomes, v1.RunReportOutcome{WorkerSeq: e.WorkerSeq, Result: v1.ReportApplied})
+		}
+		return resp, nil
+	})
+	s := f.sender(c, j)
+	s.Features = features
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 500 {
+			if i%2 == 0 {
+				features.Set(nil)
+			} else {
+				features.Set(both)
+			}
+		}
+	}()
+	for i := range 100 {
+		k := state.Key{RunID: "run_" + strings.Repeat("a", 1+i), LeaseEpoch: 1}
+		err := f.db.WithTx(t.Context(), func(tx *state.Tx) error {
+			if _, err := state.InsertAssigned(t.Context(), tx, state.Run{Key: k, LeaseID: "lease", Spec: []byte("{}"), CreatedAt: t0, AcceptBy: t0}); err != nil {
+				return err
+			}
+			_, err := j.AppendTx(t.Context(), tx, k, v1.RunReportEntry{Kind: v1.ReportExited, At: t0, Answer: "a", EndReason: domain.EndIdleAfterResult})
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Flush(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
+	if mixed {
+		t.Error("a report went with the answer or the end reason but not both")
+	}
+}

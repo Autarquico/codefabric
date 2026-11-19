@@ -59,7 +59,7 @@ func finishedAndInputEnded(t *testing.T, f *fixture, k state.Key, lines string) 
 }
 
 func TestIdleAfterResult_StopsAHarnessThatNeverExitsAndTheRunIsReportedWithTheReason(t *testing.T) {
-	f, k, w := idleFixture(t)
+	f, k, w := idleFixtureWhoseWrapperDoes(t, func(dir string) string { return exitMarker(dir, execwrap.CauseStop) })
 	finishedAndInputEnded(t, f, k, "model m-1\nanswer all done\n")
 	f.clock.Advance(testIdle - time.Second)
 	f.e.step(t.Context(), k)
@@ -77,8 +77,6 @@ func TestIdleAfterResult_StopsAHarnessThatNeverExitsAndTheRunIsReportedWithTheRe
 	case <-time.After(10 * time.Second):
 		t.Fatal("the harness was not asked to stop")
 	}
-	// No exit code is invented: the harness was ended by a signal, or its wrapper was lost to the stop.
-	f.writeExit(k, execwrap.Exit{Signal: "SIGTERM", ExitedAt: t0.Add(time.Minute), Cause: execwrap.CauseExit})
 	waitFor(t, "the Run to be settled", func() bool {
 		_ = w.cmd.Process.Kill()
 		return f.e.step(t.Context(), k)
@@ -206,5 +204,116 @@ func TestIdleAfterResult_AnAdapterWithoutTheCapabilityIsNeverStopped(t *testing.
 	f.e.step(t.Context(), k)
 	if o, ok := f.idleOrder(k); ok {
 		t.Fatalf("stopped: %+v", o)
+	}
+}
+
+// exitMarker is the shell that leaves the marker a wrapper writes as the harness
+// ends: the cause, and what it saw; nothing for a wrapper that is lost.
+func exitMarker(dir, cause string) string {
+	exit := `{"exit_code":null,"signal":"SIGTERM","exited_at":"` + t0.Add(time.Minute).Format(time.RFC3339) + `","cause":"` + cause + `","remnants_killed":0}`
+	return "printf '%s' '" + exit + "' > " + filepath.Join(dir, execwrap.ExitFile) // builtins only: the group is being signalled
+}
+
+// idleFixtureWhoseWrapperDoes is idleFixture with a wrapper that runs `onStop`
+// (shell builtins only: the whole group is being signalled) when the stop reaches it, and ends. That is how its marker, or
+// the last words of the harness, arrive while the stop is being carried out.
+func idleFixtureWhoseWrapperDoes(t *testing.T, onStop func(dir string) string) (*fixture, state.Key, *helper) {
+	t.Helper()
+	f, k, old := idleFixture(t)
+	_ = old.cmd.Process.Kill()
+	<-old.ended
+	w := newTrappingWrapperProcess(t, "onstop() { "+onStop(f.runDir(k))+"; exit 0; }; trap onstop TERM", "while :; do sleep 0.05; done")
+	f.writeWrapper(k, w.w)
+	f.writeStarted(k, w.w, t0)
+	return f, k, w
+}
+
+// stopForIdle drives a Run to the stop for idleness and waits for its wrapper to
+// end, with what it does as the stop reaches it.
+func stopForIdle(t *testing.T, f *fixture, k state.Key, w *helper) {
+	t.Helper()
+	f.clock.Advance(testIdle + time.Second)
+	f.e.step(t.Context(), k) // starts the count
+	f.clock.Advance(testIdle + time.Second)
+	f.e.step(t.Context(), k)
+	if o, ok := f.idleOrder(k); !ok || o.Reason != ReasonIdleAfterResult {
+		t.Fatalf("order = %+v, %v", o, ok)
+	}
+	select {
+	case <-w.ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the harness was not asked to stop")
+	}
+}
+
+func settleIdle(t *testing.T, f *fixture, k state.Key) v1.RunReportEntry {
+	t.Helper()
+	waitFor(t, "the Run to be settled", func() bool { return f.e.step(t.Context(), k) })
+	reports := f.reports(k)
+	if len(reports) < 2 || reports[1].Kind != v1.ReportExited {
+		t.Fatalf("reports = %+v", reports)
+	}
+	return reports[1]
+}
+
+func TestIdleAfterResult_ActivityAfterTheResultCancelsItButAHookLineDoesNot(t *testing.T) {
+	for name, tc := range map[string]struct {
+		line    string
+		stopped bool
+	}{"an assistant line": {"activity\n", false}, "a hook line": {"hook\n", true}} {
+		t.Run(name, func(t *testing.T) {
+			f, k, _ := idleFixture(t)
+			finishedAndInputEnded(t, f, k, "result\n")
+			f.appendEvents(k, tc.line)
+			f.e.step(t.Context(), k)
+			f.clock.Advance(testIdle + time.Second)
+			f.e.step(t.Context(), k)
+			f.clock.Advance(testIdle + time.Second)
+			f.e.step(t.Context(), k)
+			if _, ok := f.idleOrder(k); ok != tc.stopped {
+				t.Errorf("stopped = %v, want %v", ok, tc.stopped)
+			}
+		})
+	}
+}
+
+func TestIdleAfterResult_ThePromptOrTheErrorDrainedAtSettlementDropsTheReason(t *testing.T) {
+	for name, late := range map[string]string{"an error result": "failed", "a question": "ask", "activity": "activity"} {
+		t.Run(name, func(t *testing.T) {
+			f, k, w := idleFixtureWhoseWrapperDoes(t, func(dir string) string {
+				// the harness said it as the stop reached it
+				return "echo " + late + " >> " + filepath.Join(dir, execwrap.EventsFile) + "; " + exitMarker(dir, execwrap.CauseStop)
+			})
+			finishedAndInputEnded(t, f, k, "answer done\n")
+			stopForIdle(t, f, k, w)
+			if x := settleIdle(t, f, k); x.EndReason == domain.EndIdleAfterResult {
+				t.Errorf("exited = %+v", x)
+			}
+		})
+	}
+}
+
+func TestIdleAfterResult_OnlyAnExitOfOurStopCarriesTheReason(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cause  string // "" leaves no marker: the wrapper is lost
+		reason domain.EndReason
+	}{
+		"a stop of ours":         {execwrap.CauseStop, domain.EndIdleAfterResult},
+		"a natural exit":         {execwrap.CauseExit, ""},
+		"a wrapper that is lost": {"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, k, w := idleFixtureWhoseWrapperDoes(t, func(dir string) string {
+				if tc.cause == "" {
+					return ":"
+				}
+				return exitMarker(dir, tc.cause)
+			})
+			finishedAndInputEnded(t, f, k, "answer done\n")
+			stopForIdle(t, f, k, w)
+			if x := settleIdle(t, f, k); x.EndReason != tc.reason {
+				t.Errorf("end reason = %q, want %q: %+v", x.EndReason, tc.reason, x)
+			}
+		})
 	}
 }
