@@ -67,14 +67,19 @@ func TestScenario_ReadOnlyAttach_VeLaSesionEntera(t *testing.T) {
 		t.Errorf("a view of 100x30 left the window at %s, not %s", got, windowOfWriter)
 	}
 
-	view.resizeTerminal(160, 45)
-	eventually(t, "the view to be as large as the window", func() bool { return view.size() == "160x45" })
-	if got := o.windowSize(); got != windowOfWriter {
-		t.Errorf("a view of 160x45 left the window at %s, not %s", got, windowOfWriter)
+	// Once as large as the window, and then larger than it: the Worker gets each
+	// size, which the row where tmux draws its status line proves, and the window
+	// stays the writer's.
+	for _, size := range []struct{ cols, rows int }{{160, 45}, {200, 60}} {
+		view.resizeTerminal(size.cols, size.rows)
+		eventually(t, fmt.Sprintf("the view to draw the %d rows of its terminal", size.rows), func() bool {
+			return view.size() == fmt.Sprintf("%dx%d", size.cols, size.rows) &&
+				strings.Contains(view.tmux("capture-pane", "-p", "-t", "0", "-S", fmt.Sprint(size.rows-1), "-E", fmt.Sprint(size.rows-1)), "[cf-run")
+		})
+		if got := o.windowSize(); got != windowOfWriter {
+			t.Errorf("a view of %dx%d left the window at %s, not %s", size.cols, size.rows, got, windowOfWriter)
+		}
 	}
-	eventually(t, "the view to draw the 45 rows of its terminal", func() bool {
-		return strings.Contains(view.tmux("capture-pane", "-p", "-t", "0", "-S", "44", "-E", "44"), "[cf-run")
-	})
 
 	view.send("nope", "Enter")
 	view.detach()

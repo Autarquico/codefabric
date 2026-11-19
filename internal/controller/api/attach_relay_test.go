@@ -566,7 +566,7 @@ func TestAttach_ClientDetachTellsTheWorker(t *testing.T) {
 	}
 }
 
-func TestAttach_AViewSeesTheRunAndSendsNothingToIt(t *testing.T) {
+func TestAttach_AViewSeesTheRunAndSendsOnlyItsSize(t *testing.T) {
 	f := newAttachFixture(t)
 	ownerC, ownerW, _ := f.join(f.owner, v1.AttachModeWrite)
 	laptopC, laptopW, _ := f.join(f.laptop, v1.AttachModeView)

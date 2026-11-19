@@ -3,7 +3,6 @@ package attachrelay
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -119,7 +118,12 @@ func (t *fakeTerm) Done() <-chan struct{} { return t.done }
 func (t *fakeTerm) ExitStatus() int       { <-t.done; return t.status }
 func (t *fakeTerm) Close() error          { t.end(); return nil }
 func (t *fakeTerm) end()                  { t.once.Do(func() { close(t.done) }) }
-func (t *fakeTerm) typed() string         { t.mu.Lock(); defer t.mu.Unlock(); return string(t.written) }
+func (t *fakeTerm) sizes() [][2]uint16 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([][2]uint16(nil), t.resizes...)
+}
+func (t *fakeTerm) typed() string { t.mu.Lock(); defer t.mu.Unlock(); return string(t.written) }
 
 type rig struct {
 	t     *testing.T
@@ -272,37 +276,115 @@ func TestRelay_ViewModeNeverWritesToTheTerminal(t *testing.T) {
 	})
 }
 
-func TestRelay_ViewTakesItsSizeOnlyWhenTheRuntimeKeepsItFromTheWindow(t *testing.T) {
-	for _, supported := range []bool{false, true} {
-		t.Run(fmt.Sprintf("supported=%v", supported), func(t *testing.T) {
-			r := newRig(t, func(o *Options) { o.ViewSized = supported; o.FirstResizeWait = 20 * time.Millisecond })
-			r.run()
-			c := r.ask(v1.AttachModeView)
-			<-r.rt.readOnly
-			if supported {
-				_ = v1.WriteFrame(c, v1.ResizeFrame(160, 45))
-			}
-			want := [2]uint16{}
-			if supported {
-				want = [2]uint16{160, 45}
-			}
-			if got := <-r.opens; got != want {
-				t.Fatalf("the view started at %v, want %v", got, want)
-			}
-			_ = v1.WriteFrame(c, v1.ResizeFrame(100, 30))
-			_ = v1.WriteFrame(c, v1.DataFrame([]byte("typed")))
-			r.term.out <- []byte("screen")
-			frame(t, c)
-			r.term.mu.Lock()
-			resizes := len(r.term.resizes)
-			r.term.mu.Unlock()
-			if (resizes == 1) != supported || resizes > 1 {
-				t.Errorf("a view resized the terminal %d times, supported=%v", resizes, supported)
-			}
-			if got := r.term.typed(); got != "" {
-				t.Errorf("a view typed %q", got)
-			}
-		})
+// TestScenario_ReadOnlyAttach_VersionesMezcladas: a Worker that cannot keep a
+// view's size from the window ignores it, and a view whose size never arrives
+// (a Controller that drops it) starts at the default size, with no hang.
+func TestScenario_ReadOnlyAttach_VersionesMezcladas(t *testing.T) {
+	t.Run("a Worker without support ignores the size of the view", func(t *testing.T) {
+		r := newRig(t, func(o *Options) { o.FirstResizeWait = 20 * time.Millisecond })
+		r.run()
+		c := r.ask(v1.AttachModeView)
+		<-r.rt.readOnly
+		_ = v1.WriteFrame(c, v1.ResizeFrame(160, 45))
+		if got := <-r.opens; got != [2]uint16{} {
+			t.Fatalf("the view started at %v, want the default", got)
+		}
+		_ = v1.WriteFrame(c, v1.ResizeFrame(100, 30))
+		_ = v1.WriteFrame(c, v1.DataFrame([]byte("typed")))
+		r.term.out <- []byte("screen")
+		frame(t, c)
+		if got := r.term.sizes(); len(got) != 0 {
+			t.Errorf("the terminal was resized to %v", got)
+		}
+		if got := r.term.typed(); got != "" {
+			t.Errorf("a view typed %q", got)
+		}
+	})
+	t.Run("a Controller that drops the size of the view leaves it at the default", func(t *testing.T) {
+		r := newRig(t, func(o *Options) { o.ViewSized = true; o.FirstResizeWait = 20 * time.Millisecond })
+		r.run()
+		c := r.ask(v1.AttachModeView)
+		<-r.rt.readOnly
+		if got := <-r.opens; got != [2]uint16{} {
+			t.Fatalf("the view started at %v, want the default (0 asks for it)", got)
+		}
+		r.term.out <- []byte("screen")
+		if f := frame(t, c); f.Type != v1.FrameData || string(f.Payload) != "screen" {
+			t.Fatalf("frame = %+v", f)
+		}
+	})
+}
+
+func TestRelay_ViewTakesItsSizeWhenTheRuntimeKeepsItFromTheWindow(t *testing.T) {
+	r := newRig(t, func(o *Options) { o.ViewSized = true; o.ResizeCoalesce = time.Millisecond })
+	r.run()
+	c := r.ask(v1.AttachModeView)
+	<-r.rt.readOnly
+	_ = v1.WriteFrame(c, v1.ResizeFrame(160, 45))
+	if got := <-r.opens; got != [2]uint16{160, 45} {
+		t.Fatalf("the view started at %v", got)
+	}
+	_ = v1.WriteFrame(c, v1.ResizeFrame(100, 30))
+	_ = v1.WriteFrame(c, v1.DataFrame([]byte("typed")))
+	eventually(t, "the view's resize", func() bool {
+		got := r.term.sizes()
+		return len(got) == 1 && got[0] == [2]uint16{100, 30}
+	})
+	r.term.out <- []byte("screen")
+	frame(t, c)
+	if got := r.term.typed(); got != "" {
+		t.Errorf("a view typed %q", got)
+	}
+}
+
+func TestRelay_ASizeFromAViewIsKeptWithinBounds(t *testing.T) {
+	r := newRig(t, func(o *Options) { o.ViewSized = true; o.ResizeCoalesce = time.Millisecond })
+	r.run()
+	c := r.ask(v1.AttachModeView)
+	<-r.rt.readOnly
+	_ = v1.WriteFrame(c, v1.ResizeFrame(65535, 65535))
+	if got := <-r.opens; got != [2]uint16{maxViewSize, maxViewSize} {
+		t.Fatalf("the view started at %v, want it cut to %d", got, maxViewSize)
+	}
+	_ = v1.WriteFrame(c, v1.ResizeFrame(0, 0))
+	_ = v1.WriteFrame(c, v1.ResizeFrame(80, 0))
+	_ = v1.WriteFrame(c, v1.ResizeFrame(0, 24))
+	_ = v1.WriteFrame(c, v1.ResizeFrame(2000, 7))
+	eventually(t, "the usable size", func() bool { return len(r.term.sizes()) == 1 })
+	if got := r.term.sizes()[0]; got != [2]uint16{maxViewSize, 7} {
+		t.Errorf("resized to %v, want %dx7", got, maxViewSize)
+	}
+}
+
+func TestRelay_ASizeOfZeroFromAViewStartsAtTheDefault(t *testing.T) {
+	r := newRig(t, func(o *Options) { o.ViewSized = true })
+	r.run()
+	c := r.ask(v1.AttachModeView)
+	<-r.rt.readOnly
+	_ = v1.WriteFrame(c, v1.ResizeFrame(0, 0))
+	if got := <-r.opens; got != [2]uint16{} {
+		t.Errorf("the view started at %v, want the default", got)
+	}
+}
+
+func TestRelay_ABurstOfViewResizesReachesTheTerminalCoalesced(t *testing.T) {
+	r := newRig(t, func(o *Options) { o.ViewSized = true; o.ResizeCoalesce = 200 * time.Millisecond })
+	r.run()
+	c := r.ask(v1.AttachModeView)
+	<-r.rt.readOnly
+	_ = v1.WriteFrame(c, v1.ResizeFrame(80, 24))
+	<-r.opens
+	const burst = 500
+	for i := range burst {
+		_ = v1.WriteFrame(c, v1.ResizeFrame(uint16(100+i%100), 30)) //nolint:gosec // small
+	}
+	_ = v1.WriteFrame(c, v1.ResizeFrame(123, 45))
+	eventually(t, "the last size of the burst", func() bool {
+		got := r.term.sizes()
+		return len(got) > 0 && got[len(got)-1] == [2]uint16{123, 45}
+	})
+	if n := len(r.term.sizes()); n > 5 {
+		t.Errorf("%d resizes of the terminal for a burst of %d", n, burst+1)
 	}
 }
 
