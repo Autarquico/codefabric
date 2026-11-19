@@ -1,4 +1,4 @@
-# Written by `cf controller install-service`: running it again rewrites this file.
+# Written by `cflk controller install-service`: running it again rewrites this file.
 [Unit]
 Description=CodeFabric Controller
 

@@ -21,12 +21,12 @@ func TestResolveUsesXDGDefaultsOnEveryOS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ConfigDir != "/home/ana/.config/codefabric" || p.DataDir != "/home/ana/.local/share/codefabric" {
+	if p.ConfigDir != "/home/ana/.config/codeflock" || p.DataDir != "/home/ana/.local/share/codeflock" {
 		t.Errorf("%+v", p)
 	}
-	if p.CredentialsDir() != "/home/ana/.config/codefabric/credentials" ||
-		p.DatabaseFile() != "/home/ana/.local/share/codefabric/controller.db" ||
-		p.PKIDir() != "/home/ana/.local/share/codefabric/pki" {
+	if p.CredentialsDir() != "/home/ana/.config/codeflock/credentials" ||
+		p.DatabaseFile() != "/home/ana/.local/share/codeflock/controller.db" ||
+		p.PKIDir() != "/home/ana/.local/share/codeflock/pki" {
 		t.Errorf("derived paths: %s %s %s", p.CredentialsDir(), p.DatabaseFile(), p.PKIDir())
 	}
 }
@@ -42,14 +42,14 @@ func TestResolvePrecedence(t *testing.T) {
 	if p.ConfigDir != "/override/c" {
 		t.Errorf("CF_CONFIG_DIR lost: %s", p.ConfigDir)
 	}
-	if p.DataDir != filepath.Join("/xdg/d", "codefabric") {
+	if p.DataDir != filepath.Join("/xdg/d", "codeflock") {
 		t.Errorf("XDG_DATA_HOME lost: %s", p.DataDir)
 	}
 }
 
 func TestResolveIgnoresRelativeXDGAndRejectsRelativeOverrides(t *testing.T) {
 	p, err := resolve(t, map[string]string{"XDG_CONFIG_HOME": "relative/dir"})
-	if err != nil || p.ConfigDir != "/home/ana/.config/codefabric" {
+	if err != nil || p.ConfigDir != "/home/ana/.config/codeflock" {
 		t.Errorf("%+v %v", p, err)
 	}
 	if _, err := resolve(t, map[string]string{"CF_DATA_DIR": "relative"}); err == nil {
@@ -184,5 +184,62 @@ func TestWorkerPathsLiveUnderTheirOwnDirectory(t *testing.T) {
 		if got != want {
 			t.Errorf("got %s, want %s", got, want)
 		}
+	}
+}
+
+// capture reports the warnings of legacy variables to a buffer, afresh.
+func capture(t *testing.T) *strings.Builder {
+	t.Helper()
+	var b strings.Builder
+	was := legacyVarWarning
+	legacyVarWarning = &b
+	warnedVars.Clear()
+	t.Cleanup(func() { legacyVarWarning = was; warnedVars.Clear() })
+	return &b
+}
+
+func TestResolveReadsTheOldVariablesWithOneWarningPerProcess(t *testing.T) {
+	warned := capture(t)
+	env := map[string]string{"CF_CONFIG_DIR": "/old/c", "CF_DATA_DIR": "/old/d"}
+	for range 3 {
+		p, err := resolve(t, env)
+		if err != nil || p.ConfigDir != "/old/c" || p.DataDir != "/old/d" {
+			t.Fatalf("%+v %v", p, err)
+		}
+	}
+	if n := strings.Count(warned.String(), "CF_CONFIG_DIR is deprecated"); n != 1 {
+		t.Errorf("%d warnings of CF_CONFIG_DIR:\n%s", n, warned)
+	}
+	if !strings.Contains(warned.String(), "use CFLK_CONFIG_DIR") || !strings.Contains(warned.String(), "CF_DATA_DIR is deprecated") {
+		t.Errorf("warnings:\n%s", warned)
+	}
+}
+
+func TestResolveCFLKWinsOverCFAndSaysNothing(t *testing.T) {
+	warned := capture(t)
+	p, err := resolve(t, map[string]string{"CFLK_CONFIG_DIR": "/new/c", "CF_CONFIG_DIR": "/old/c", "CFLK_DATA_DIR": "/new/d"})
+	if err != nil || p.ConfigDir != "/new/c" || p.DataDir != "/new/d" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	if warned.Len() != 0 {
+		t.Errorf("warned: %s", warned)
+	}
+}
+
+func TestResolveRejectsARelativeOldVariableByName(t *testing.T) {
+	capture(t)
+	if _, err := resolve(t, map[string]string{"CF_CONFIG_DIR": "rel"}); err == nil || !strings.Contains(err.Error(), "CF_CONFIG_DIR") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestLocateSaysWhichDirectoriesAreDefault(t *testing.T) {
+	capture(t)
+	l, err := Locate(func(k string) string { return map[string]string{"CFLK_DATA_DIR": "/mine"}[k] }, func() (string, error) { return "/home/ana", nil })
+	if err != nil || !l.ConfigIsDefault || l.DataIsDefault {
+		t.Fatalf("%+v %v", l, err)
+	}
+	if got := LegacyOf(l.ConfigDir); got != "/home/ana/.config/codefabric" {
+		t.Errorf("legacy = %s", got)
 	}
 }

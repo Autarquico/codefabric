@@ -39,7 +39,7 @@ type SecretEnv struct {
 // reservedSecretEnvPrefixes and reservedSecretEnv are the environment the
 // Worker and the shell own: a secret must not replace them.
 var (
-	reservedSecretEnvPrefixes = []string{"CF_", "GIT_", "TMUX"}
+	reservedSecretEnvPrefixes = []string{"CF_", "CFLK_", "GIT_", "TMUX"}
 	reservedSecretEnv         = []string{"PATH", "HOME", "SHELL", "USER"}
 )
 
