@@ -45,6 +45,9 @@ func (f *ControllerFeatures) Set(features []string) {
 	})
 }
 
+// forget makes what the Controller takes unknown, until the next Set.
+func (f *ControllerFeatures) forget() { f.set.Store(nil) }
+
 // takes says what the Controller takes, and whether that is known at all:
 // before the first heartbeat the sender does not send anything, as sending
 // without the answer would lose it for good.
@@ -176,13 +179,15 @@ func (s *Sender) Flush(ctx context.Context) (int, error) {
 			batch, rest := split(g.rows)
 			g.rows = rest
 			n, fenced, err := s.send(ctx, g.key, batch, withAnswer, withIdle)
-			if isInvalidRequest(err) && carriesNewFields(batch, withAnswer, withIdle) {
+			if isInvalidRequest(err) && s.Features != nil && carriesNewFields(batch, withAnswer, withIdle) {
 				// A Controller rolled back since its last heartbeat refuses the fields it
-				// no longer knows as a malformed request: once more without them, before
-				// the Run is given up for good.
-				s.Log.WarnContext(ctx, "the Controller refused a report with an answer or an end reason: sending it without them",
+				// no longer knows as a malformed request. The Run is not given up for that:
+				// what the Controller takes is unknown again, nothing is sent until the next
+				// heartbeat says it, and the rows wait for it as they are.
+				s.Log.WarnContext(ctx, "the Controller refused a report with an answer or an end reason: it waits for the next heartbeat",
 					"run", g.key.RunID, "lease_epoch", g.key.LeaseEpoch)
-				n, fenced, err = s.send(ctx, g.key, batch, false, false)
+				s.Features.forget()
+				return settled, err
 			}
 			settled += n
 			if err != nil {
