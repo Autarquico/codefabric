@@ -181,7 +181,7 @@ func (g repoGit) IsAncestor(ancestor, descendant string) (bool, error) {
 	return false, fmt.Errorf("git merge-base exited %d", code)
 }
 
-// Command is `cf relay`: the entry points git calls into the binary. They are
+// Command is `cflk relay`: the entry points git calls into the binary. They are
 // not for people, and hidden.
 func Command() *cobra.Command {
 	hook := &cobra.Command{Use: "hook", Short: "Hooks of the git relay", Hidden: true}

@@ -162,9 +162,9 @@ func (a *Authority) checkEnrolment(kind domain.Kind, worker *v1.WorkerSettings) 
 	case kind == domain.KindWorker && a.enroll == nil:
 		return domain.NewError(domain.CodeNotImplemented, "worker enrolment is not available", nil)
 	case kind == domain.KindWorker && worker == nil:
-		return invalidRequest("this is a worker invitation: redeem it with `cf worker join`")
+		return invalidRequest("this is a worker invitation: redeem it with `cflk worker join`")
 	case kind == domain.KindClient && worker != nil:
-		return invalidRequest("this is a client invitation: redeem it with `cf connect`")
+		return invalidRequest("this is a client invitation: redeem it with `cflk connect`")
 	}
 	return nil
 }

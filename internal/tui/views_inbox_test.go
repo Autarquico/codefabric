@@ -129,11 +129,11 @@ func TestScenario_NeedsInputInbox_NotRespondableShowsTheAttachHint(t *testing.T)
 	m := openInbox(t, be, inboxFixture())
 	press(t, m, "down")
 	press(t, m, "down")
-	if got := frame(m); !strings.Contains(got, "cf attach r-7e2f") {
+	if got := frame(m); !strings.Contains(got, "cflk attach r-7e2f") {
 		t.Errorf("the detail has no attach hint:\n%s", got)
 	}
 	press(t, m, "y")
-	if got := frame(m); !strings.Contains(got, "cannot be answered from here: cf attach r-7e2f") || len(be.ran) != 0 {
+	if got := frame(m); !strings.Contains(got, "cannot be answered from here: cflk attach r-7e2f") || len(be.ran) != 0 {
 		t.Errorf("answered a Run that cannot be, or said nothing (ran %v):\n%s", be.ran, got)
 	}
 }

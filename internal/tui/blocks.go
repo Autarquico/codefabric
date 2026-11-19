@@ -353,9 +353,9 @@ func (m *Menu) render(c RenderContext, label string) []string {
 // commandOf is the cf command that the action runs, for the person to learn.
 func commandOf(d actions.Descriptor) string {
 	if d.Terminal {
-		return "cf attach"
+		return "cflk attach"
 	}
-	return "cf " + strings.Join(d.Path, " ")
+	return "cflk " + strings.Join(d.Path, " ")
 }
 
 // Confirm asks before a destructive action. It shows what will run and on what,
@@ -430,10 +430,20 @@ func (n Notice) render(c RenderContext) []string {
 
 // wrapped is a labelled text that continues under itself instead of being cut.
 func wrapped(c RenderContext, label, text string, style lipgloss.Style) []string {
+	return labelled(c, label, style, text, func(t string, width int) string { return ansi.Wrap(t, width, "") })
+}
+
+// wrappedAtSpaces is wrapped for text that is typed back, such as commands: it breaks only at spaces, never inside
+// a flag like --harness.
+func wrappedAtSpaces(c RenderContext, label, text string, style lipgloss.Style) []string {
+	return labelled(c, label, style, text, wrapAtSpaces)
+}
+
+func labelled(c RenderContext, label string, style lipgloss.Style, text string, wrap func(string, int) string) []string {
 	if text == "" {
 		return nil
 	}
-	parts := strings.Split(ansi.Wrap(printable(text), max(c.inner()-labelWidth-2, 8), ""), "\n")
+	parts := strings.Split(wrap(printable(text), max(c.inner()-labelWidth-2, 8)), "\n")
 	lines := make([]string, len(parts))
 	for i, part := range parts {
 		lead := ""
@@ -443,6 +453,27 @@ func wrapped(c RenderContext, label, text string, style lipgloss.Style) []string
 		lines[i] = margin + c.Theme.Faint.Render(fit(lead, labelWidth)) + "  " + style.Render(part)
 	}
 	return lines
+}
+
+// wrapAtSpaces fills lines up to width by words; a word longer than a line is the only thing that gets cut.
+func wrapAtSpaces(text string, width int) string {
+	var lines []string
+	line := ""
+	for _, word := range strings.Fields(text) {
+		if ansi.StringWidth(word) > width {
+			word = ansi.Hardwrap(word, width, true)
+		}
+		switch {
+		case line == "":
+			line = word
+		case ansi.StringWidth(line)+1+ansi.StringWidth(word) <= width && !strings.Contains(word, "\n"):
+			line += " " + word
+		default:
+			lines = append(lines, line)
+			line = word
+		}
+	}
+	return strings.Join(append(lines, line), "\n")
 }
 
 // keyHints draws "[key] label" cells for a footer.

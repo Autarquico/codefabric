@@ -132,7 +132,7 @@ func TestAttachSession_RunsTheSessionOnTheTerminalItIsGiven(t *testing.T) {
 	}
 }
 
-// The transports in `cf ps` come from the Controller: a control character in
+// The transports in `cflk ps` come from the Controller: a control character in
 // them does not reach the terminal.
 func TestPs_TheTransportColumnDropsControlCharacters(t *testing.T) {
 	var out strings.Builder

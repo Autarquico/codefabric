@@ -1,4 +1,4 @@
-// Package ssh is the Transport (§5.4) `cf attach` uses in v0.x: it opens a
+// Package ssh is the Transport (§5.4) `cflk attach` uses in v0.x: it opens a
 // terminal on another machine with the OpenSSH client and runs one command in it.
 //
 // What it is given comes, in the end, from a Worker, and becomes a local process

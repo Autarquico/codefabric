@@ -51,7 +51,7 @@ type Checkpoint struct {
 	// Interval is the time between the automatic checkpoints of a Run that is
 	// going. Unset or 0, there are none.
 	Interval Duration `json:"interval,omitempty"`
-	// PreDestructiveTimeout is how long `cf worker drain --force` waits for the
+	// PreDestructiveTimeout is how long `cflk worker drain --force` waits for the
 	// checkpoints it asks before it cancels the Runs: the time a Worker may take
 	// to quiesce a harness (checkpoint.grace) and to publish what it captured.
 	// Unset, it is DefaultPreDestructiveTimeout; it never exceeds
@@ -163,7 +163,7 @@ func (d *Duration) UnmarshalJSON(raw []byte) error {
 func LoadController(p Paths) (Controller, error) {
 	raw, err := os.ReadFile(p.ControllerConfigFile())
 	if errors.Is(err, fs.ErrNotExist) {
-		return Controller{}, fmt.Errorf("%w: %s does not exist (run cf controller init)", ErrNotInitialized, p.ControllerConfigFile())
+		return Controller{}, fmt.Errorf("%w: %s does not exist (run cflk controller init)", ErrNotInitialized, p.ControllerConfigFile())
 	}
 	if err != nil {
 		return Controller{}, fmt.Errorf("config: reading controller config: %w", err)

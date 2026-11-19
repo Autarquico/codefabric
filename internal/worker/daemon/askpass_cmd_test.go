@@ -195,7 +195,7 @@ func TestEnsureAskpassScriptRunsWithSpacesAndQuotes(t *testing.T) {
 	if err := os.MkdirAll(helperDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	helper := filepath.Join(helperDir, "cf")
+	helper := filepath.Join(helperDir, "cflk")
 	if err := os.WriteFile(helper, []byte("#!/bin/sh\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\n"), 0o700); err != nil { //nolint:gosec // a test helper
 		t.Fatal(err)
 	}

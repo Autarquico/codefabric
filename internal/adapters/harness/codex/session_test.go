@@ -151,7 +151,7 @@ func TestExportIsDeterministicAndHoldsTheRolloutAsItIs(t *testing.T) {
 
 // running is a rollout whose last call has no output yet, with a line Codex
 // writes after it while it runs: the shape of the session of $handto once the
-// call of cf handoff is on disk.
+// call of cflk handoff is on disk.
 func running(t *testing.T) harness.SessionRef {
 	t.Helper()
 	dir := t.TempDir()

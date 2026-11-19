@@ -22,7 +22,7 @@ func requireShell(ctx context.Context, q store.Querier, run store.Run, worker *s
 		return err
 	}
 	if !project.Shell {
-		return domain.NewError(domain.CodePolicyDenied, "the shell is off in this Project: enable it with `cf project set "+project.Name+" --shell on`",
+		return domain.NewError(domain.CodePolicyDenied, "the shell is off in this Project: enable it with `cflk project set "+project.Name+" --shell on`",
 			map[string]any{"policy": domain.PolicyProjectShell, "project": project.Name})
 	}
 	if worker == nil || !slices.Contains(worker.Report.Capabilities, domain.AttachShellCapability) {

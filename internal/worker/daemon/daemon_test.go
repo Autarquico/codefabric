@@ -348,7 +348,7 @@ func TestRun_EndsWhenTheWorkerIsRemoved(t *testing.T) {
 	case <-daemonRun.done:
 		var coded *domain.Error
 		err := daemonRun.err
-		if !errors.As(err, &coded) || coded.Code != domain.CodeUnauthenticated || !strings.Contains(coded.Message, "cf worker join") {
+		if !errors.As(err, &coded) || coded.Code != domain.CodeUnauthenticated || !strings.Contains(coded.Message, "cflk worker join") {
 			t.Errorf("Run ended with %v, want CF_UNAUTHENTICATED with the way out for a Worker", err)
 		}
 	case <-time.After(10 * time.Second):

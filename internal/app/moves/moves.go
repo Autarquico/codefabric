@@ -106,7 +106,7 @@ func (s *Service) Get(ctx context.Context, taskID string) (v1.MoveTaskResponse, 
 	return out, err
 }
 
-// Of answers the last move of the Task a reference points to, for `cf task show`.
+// Of answers the last move of the Task a reference points to, for `cflk task show`.
 func (s *Service) Of(ctx context.Context, ref, project string) (v1.Move, error) {
 	var out v1.Move
 	err := s.db.Read(ctx, func(q store.Querier) error {

@@ -1,7 +1,7 @@
-// Package taskpull is `cf task pull`: it brings the work of a Task from the relay to a
+// Package taskpull is `cflk task pull`: it brings the work of a Task from the relay to a
 // checkout of this machine, and the session of its harness to the home of the user
 // (§11.7). It never resets, stashes or cleans: it adds a branch, moves one that is
-// behind, and switches to it only when the tree is clean. It is also `cf run fetch`,
+// behind, and switches to it only when the tree is clean. It is also `cflk run fetch`,
 // which brings the published result of a Run to a new branch.
 package taskpull
 
@@ -119,7 +119,7 @@ func (p *puller) pull(ctx context.Context, task string) (Result, error) {
 	if plan.Live {
 		if !p.opts.Defer {
 			return res, domain.NewError(domain.CodeInvalidTransition, fmt.Sprintf(
-				"task %s has a live Run (%s): `cf task pull %s --defer` suspends it with a checkpoint and brings it here", plan.Task, plan.RunState, task), nil)
+				"task %s has a live Run (%s): `cflk task pull %s --defer` suspends it with a checkpoint and brings it here", plan.Task, plan.RunState, task), nil)
 		}
 		if plan, err = p.deferred(ctx, task); err != nil {
 			return res, err
@@ -334,8 +334,8 @@ func requestID() string {
 // online it cannot, until the lease expires and the Run is lost.
 func timedOut(plan v1.PullPlan, task string, wait time.Duration) string {
 	if plan.Worker != "" && plan.WorkerState != domain.WorkerOnline {
-		return fmt.Sprintf("the Worker %s of %s is %s, so its Run cannot publish a checkpoint in %s: when its lease expires the Run becomes lost, and then `cf task pull %s` brings its last checkpoint",
+		return fmt.Sprintf("the Worker %s of %s is %s, so its Run cannot publish a checkpoint in %s: when its lease expires the Run becomes lost, and then `cflk task pull %s` brings its last checkpoint",
 			plan.Worker, plan.Task, plan.WorkerState, wait, task)
 	}
-	return fmt.Sprintf("the Run of %s was asked for a checkpoint and has not published it in %s: run `cf task pull %s` again when it has", plan.Task, wait, task)
+	return fmt.Sprintf("the Run of %s was asked for a checkpoint and has not published it in %s: run `cflk task pull %s` again when it has", plan.Task, wait, task)
 }

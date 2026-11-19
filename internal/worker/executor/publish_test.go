@@ -176,7 +176,7 @@ func TestScenario_GitRelayPublication_SelladoFallido_Executor(t *testing.T) {
 		t.Error("a failed sealing was tried again by itself")
 	}
 
-	// cf run publish: a new try, which seals again (there is no commit).
+	// cflk run publish: a new try, which seals again (there is no commit).
 	g.mu.Lock()
 	g.seal = nil
 	g.mu.Unlock()
@@ -278,7 +278,7 @@ func (f *fixture) sealedRun() state.Key {
 	return k
 }
 
-// publishOrder gives the executor a `cf run publish` order for the Run.
+// publishOrder gives the executor a `cflk run publish` order for the Run.
 func (f *fixture) publishOrder(k state.Key) {
 	f.t.Helper()
 	f.nextID++

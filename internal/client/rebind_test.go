@@ -147,7 +147,7 @@ func TestRebind_ARefusalNamesTheRightThing(t *testing.T) {
 
 	empty := filepath.Join(t.TempDir(), "none")
 	_, err = client.RebindWorker(context.Background(), empty, "127.0.0.1:1", client.WithRecoveryHint(client.WorkerRecoveryHint))
-	if err == nil || !strings.Contains(err.Error(), "cf worker join") || strings.Contains(err.Error(), "cf connect") {
+	if err == nil || !strings.Contains(err.Error(), "cflk worker join") || strings.Contains(err.Error(), "cflk connect") {
 		t.Errorf("no Worker credentials: %v", err)
 	}
 }

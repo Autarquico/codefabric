@@ -85,7 +85,7 @@ func TestScenario_HandoffInsideARunUsesTheSocketOfTheRun(t *testing.T) {
 
 	code, out, errOut := runHandoff(t, "--session", "s-1", "--to", "omarch02")
 	got := requests()
-	if code != 0 || !strings.Contains(out, "fix-login") || !strings.Contains(out, "cf attach fix-login") ||
+	if code != 0 || !strings.Contains(out, "fix-login") || !strings.Contains(out, "cflk attach fix-login") ||
 		len(got) != 1 || got[0] != (client.RunSocketRequest{Op: "move", Worker: "omarch02"}) {
 		t.Fatalf("exit %d, out %q, err %q, requests %v", code, out, errOut, got)
 	}
@@ -136,8 +136,8 @@ func TestScenario_HandoffOverridesNeedATerminal(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	const id = "11111111-2222-4333-8444-555555555555"
 	for flag, want := range map[string]string{
-		"--force":                   "cf handoff --session " + id + " --to w --force",
-		"--allow-sensitive-session": "cf handoff --session " + id + " --to w --allow-sensitive-session",
+		"--force":                   "cflk handoff --session " + id + " --to w --force",
+		"--allow-sensitive-session": "cflk handoff --session " + id + " --to w --allow-sensitive-session",
 	} {
 		code, _, errOut := runHandoffWith(t, strings.NewReader(""), "--session", id, "--to", "w", flag)
 		if code == 0 || !strings.Contains(errOut, "CF_CONFIRMATION_REQUIRED") || !strings.Contains(errOut, want) {
@@ -166,8 +166,8 @@ func TestScenario_HandoffOverridesAreRefusedInsideARunToo(t *testing.T) {
 func TestHandoffError_NamesTheCommandThatLiftsTheGuard(t *testing.T) {
 	handed := handoffError(&csession.HandedOffError{ID: "s", Task: "t"}, "s-1", "w")
 	secret := handoffError(&csession.SensitiveError{Findings: []csession.Finding{{File: "f", Line: 1, Kind: "API key"}}}, "s-1", "w")
-	if !strings.Contains(handed.Error(), "cf handoff --session s-1 --to w --force") ||
-		!strings.Contains(secret.Error(), "cf handoff --session s-1 --to w --allow-sensitive-session") {
+	if !strings.Contains(handed.Error(), "cflk handoff --session s-1 --to w --force") ||
+		!strings.Contains(secret.Error(), "cflk handoff --session s-1 --to w --allow-sensitive-session") {
 		t.Errorf("%v\n%v", handed, secret)
 	}
 }
@@ -182,7 +182,7 @@ func TestHandoffError_OffersNoFlagForAPolicyOfTheProject(t *testing.T) {
 
 func TestHandoffError_QuotesWhatTheUserWillPasteIntoAShell(t *testing.T) {
 	err := handoffError(&csession.HandedOffError{ID: "s", Task: "t"}, "s-1", "w; touch x #")
-	if want := "cf handoff --session s-1 --to 'w; touch x #' --force"; !strings.Contains(err.Error(), want) {
+	if want := "cflk handoff --session s-1 --to 'w; touch x #' --force"; !strings.Contains(err.Error(), want) {
 		t.Errorf("%v does not contain %s", err, want)
 	}
 	if got := shellQuote("it's"); got != `'it'\''s'` {
@@ -192,7 +192,7 @@ func TestHandoffError_QuotesWhatTheUserWillPasteIntoAShell(t *testing.T) {
 
 func TestHandoffError_QuotesASessionIdThatIsNotAnId(t *testing.T) {
 	err := handoffError(&csession.HandedOffError{ID: "s", Task: "t"}, "$(touch x); id", "w")
-	if want := "cf handoff --session '$(touch x); id' --to w --force"; !strings.Contains(err.Error(), want) {
+	if want := "cflk handoff --session '$(touch x); id' --to w --force"; !strings.Contains(err.Error(), want) {
 		t.Errorf("%v does not contain %s", err, want)
 	}
 }
@@ -202,7 +202,7 @@ func TestScenario_HandoffForceWithAllowSensitiveAsksForBothInTheCommand(t *testi
 	t.Setenv("HOME", t.TempDir())
 	const id = "11111111-2222-4333-8444-555555555555"
 	args := []string{"--session", id, "--to", "w", "--force", "--allow-sensitive-session"}
-	want := "cf handoff --session " + id + " --to w --force --allow-sensitive-session"
+	want := "cflk handoff --session " + id + " --to w --force --allow-sensitive-session"
 	if code, _, errOut := runHandoffWith(t, strings.NewReader(""), args...); code == 0 || !strings.Contains(errOut, "CF_CONFIRMATION_REQUIRED") || !strings.Contains(errOut, want) {
 		t.Errorf("without a terminal: exit %d, err %q; want the command %q", code, errOut, want)
 	}

@@ -139,7 +139,7 @@ func loadBundle(dir string) (bundle, error) {
 	}
 	if !exists {
 		return bundle{}, domain.NewError(domain.CodeUnauthenticated,
-			"no credentials found; run `cf connect <invitation>`", nil)
+			"no credentials found; run `cflk connect <invitation>`", nil)
 	}
 	return readBundle(dir)
 }

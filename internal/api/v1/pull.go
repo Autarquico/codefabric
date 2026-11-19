@@ -2,7 +2,7 @@ package v1
 
 import "github.com/Autarquico/codeflock/internal/domain"
 
-// PullPlan is GET /v1/tasks/{ref}/pull: what `cf task pull` would bring to the
+// PullPlan is GET /v1/tasks/{ref}/pull: what `cflk task pull` would bring to the
 // checkout of the caller. While the last Run of the Task is live (Live) there is no
 // checkpoint to bring yet: the client defers the Run first, or refuses. Otherwise
 // Checkpoint is the last one the Run published and Commit what its ref points to in
@@ -26,7 +26,7 @@ type PullPlan struct {
 	Commit     string      `json:"commit,omitempty"`
 
 	// SourceBranch is the local branch the Task started from, when it was started from a
-	// snapshot of a checkout (`cf do --snapshot`).
+	// snapshot of a checkout (`cflk do --snapshot`).
 	SourceBranch string `json:"source_branch,omitempty"`
 	// SeedDigest is the digest of the session seed of the Run that carried one, if any:
 	// what tells a Task seeded from this machine from one seeded from another.

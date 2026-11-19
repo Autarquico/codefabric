@@ -16,7 +16,7 @@ import (
 )
 
 // newWorkerCmd is the administration of Workers. The daemon's own commands
-// (join, run) are composed into it by cmd/cf, since they need the Worker packages.
+// (join, run) are composed into it by cmd/cflk, since they need the Worker packages.
 func newWorkerCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "worker", Short: "Run and administer Workers"}
 	cmd.AddCommand(newWorkerListCmd(), newWorkerShowCmd(), newWorkerSetControllerCmd(),
@@ -216,7 +216,7 @@ func guessedSSHTarget(w v1.Worker) bool {
 
 func sshTargetOf(w v1.Worker) string {
 	if guessedSSHTarget(w) {
-		return w.SSHTarget + " (guessed from the hostname; set --ssh-target on `cf worker run` or `cf worker install-service` if other machines cannot reach it)"
+		return w.SSHTarget + " (guessed from the hostname; set --ssh-target on `cflk worker run` or `cflk worker install-service` if other machines cannot reach it)"
 	}
 	return dash(w.SSHTarget)
 }

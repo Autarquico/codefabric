@@ -132,7 +132,7 @@ func Run(ctx context.Context, o Options) error {
 	if exists, err := client.CredentialsExist(o.Paths.WorkerCredentialsDir()); err != nil {
 		return err
 	} else if !exists {
-		return domain.NewError(domain.CodeUnauthenticated, "this machine has not joined as a Worker; run `cf worker join <invitation>`", nil)
+		return domain.NewError(domain.CodeUnauthenticated, "this machine has not joined as a Worker; run `cflk worker join <invitation>`", nil)
 	}
 	var opts []client.Option
 	if o.Controller != "" {
@@ -645,7 +645,7 @@ func (d *daemon) ackJournal(ctx context.Context, upTo uint64) {
 
 // announcedSSHTarget is the target the heartbeat carries. The default is the
 // user of the daemon at the hostname the machine reports, which is a guess that
-// other machines may not resolve: `cf worker show` lets a person see it, and a
+// other machines may not resolve: `cflk worker show` lets a person see it, and a
 // client can override it. It is only announced if it is a valid target.
 func (d *daemon) announcedSSHTarget(hostname string) string {
 	if !d.defaultSSH {

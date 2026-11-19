@@ -279,7 +279,7 @@ func TestScenario_GitRelayPublication_SelladoFallido_Controller(t *testing.T) {
 		t.Errorf("Task = %v/%v (%v)", task.State, task.WaitingReason, err)
 	}
 
-	// cf run publish: pending again, an order for the Worker, no new reservation.
+	// cflk run publish: pending again, an order for the Worker, no new reservation.
 	before := len(e.commands(w))
 	run, err := e.app.Runs.Publish(t.Context(), e.owner, r.run.ID, v1.ActionRequest{RequestID: "again-1"})
 	must(t, err)

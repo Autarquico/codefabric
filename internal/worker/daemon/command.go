@@ -29,7 +29,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/worker/secretjit"
 )
 
-// Command is the part of `cf worker` that is the daemon's: join and run. The
+// Command is the part of `cflk worker` that is the daemon's: join and run. The
 // CLI merges it with the administration commands of the same name.
 func Command() *cobra.Command {
 	cmd := &cobra.Command{Use: "worker"}
@@ -114,7 +114,7 @@ func newJoinCmd() *cobra.Command {
 					Name       string `json:"name"`
 				}{res.IdentityID, res.Controller, name})
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Joined %s as Worker %s (%s). Start it with: cf worker run\n", res.Controller, name, res.IdentityID)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Joined %s as Worker %s (%s). Start it with: cflk worker run\n", res.Controller, name, res.IdentityID)
 			return err
 		},
 	}
@@ -134,7 +134,7 @@ func newJoinCmd() *cobra.Command {
 }
 
 // JoinWizard runs the join wizard over p, even if its input is not a terminal.
-// `cf setup` calls it; interrupted, it resumes with `cf worker join --resume`.
+// `cflk setup` calls it; interrupted, it resumes with `cflk worker join --resume`.
 func JoinWizard(ctx context.Context, controller string, p *prompt.Prompter, invitation string) error {
 	paths, err := config.ResolveFromEnv()
 	if err != nil {
@@ -265,7 +265,7 @@ func newInstallServiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "install-service",
 		Short: "Run the Worker as a service of this user (systemd --user or launchd)",
-		Long: "Run `cf worker run` as a service of this user: a systemd --user unit on Linux, a launchd\n" +
+		Long: "Run `cflk worker run` as a service of this user: a systemd --user unit on Linux, a launchd\n" +
 			"agent on macOS. The service keeps the Runs alive across its own restarts, and installing\n" +
 			"what is installed and running changes nothing. Its PATH is calculated now (--path replaces\n" +
 			"it); changing it later does not reach the Runs that are going, nor a tmux server already up.",
@@ -294,7 +294,7 @@ func newInstallServiceCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&o.SSHTarget, "ssh-target", "",
 		"how clients reach this machine to attach to a Run, [user@]host[:port] (default: <user>@<hostname>; none: attach is not offered)")
-	f.StringVar(&o.Binary, "binary", "", "the cf the service runs, as an absolute path (default: this one)")
+	f.StringVar(&o.Binary, "binary", "", "the cflk the service runs, as an absolute path (default: this one)")
 	f.StringVar(&o.PATH, "path", "", "the PATH of the service, of absolute directories (default: those of cf, tmux and git, then the usual ones)")
 	f.BoolVar(&dryRun, "dry-run", false, "show the file and where it would go, and change nothing")
 	return cmd
@@ -326,7 +326,7 @@ func printService(cmd *cobra.Command, res ServiceResult, changed, unchanged stri
 
 // jsonOutput reads the root command's persistent --json (internal/cli owns
 // it; this package cannot import the CLI).
-// wizardContext is what decides whether `cf worker join` asks questions.
+// wizardContext is what decides whether `cflk worker join` asks questions.
 type wizardContext struct {
 	Terminal, NonInteractive, JSON bool
 	// Complete says the invitation and every answer the wizard would ask came as flags.

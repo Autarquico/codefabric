@@ -111,7 +111,7 @@ type (
 		from
 		target    Row
 		runErr    error // how the process ended
-		finishErr error // what `cf attach` would answer to that
+		finishErr error // what `cflk attach` would answer to that
 	}
 	timelineMsg struct {
 		from
@@ -713,5 +713,5 @@ func (b *browser) cliLines(c RenderContext, row Row) []string {
 	if b.spec.cliNote == nil {
 		return nil
 	}
-	return wrapped(c, "CLI only", b.spec.cliNote(row), c.Theme.Faint)
+	return wrappedAtSpaces(c, "CLI only", b.spec.cliNote(row), c.Theme.Faint)
 }

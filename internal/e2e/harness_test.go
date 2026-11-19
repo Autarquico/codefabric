@@ -23,10 +23,10 @@ func TestHarness_TheBinaryIsCF(t *testing.T) {
 	h := New(t)
 	p := h.Box("c").CF(RoleClient, "version", "version", "--json")
 	if err := p.Wait(h.Context()); err != nil {
-		t.Fatalf("cf version: %v\n%s", err, p.Log())
+		t.Fatalf("cflk version: %v\n%s", err, p.Log())
 	}
 	if !strings.Contains(p.Log(), "{") {
-		t.Errorf("cf version --json said %q", p.Log())
+		t.Errorf("cflk version --json said %q", p.Log())
 	}
 }
 
@@ -766,7 +766,7 @@ func tmuxServer(t *testing.T, tmpDir, name string) tmuxServerProc {
 	return s
 }
 
-// startWrapper starts the wrapper of cf, `cf worker exec`, in a session of the
+// startWrapper starts the wrapper of cf, `cflk worker exec`, in a session of the
 // tmux server, as a Worker does, with a harness that leaves a child, and
 // returns its group once started.json says the harness runs.
 func startWrapper(t *testing.T, h *Harness, server tmuxServerProc, runDir string) group {

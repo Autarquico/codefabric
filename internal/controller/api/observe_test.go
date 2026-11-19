@@ -51,7 +51,7 @@ func TestRespondRoute_ATaskNotWaitingIsNotRespondableAndTheBodyIsChecked(t *test
 	if status != http.StatusConflict || env.Code != domain.CodeRunNotRespondable {
 		t.Fatalf("respond = %d %+v", status, env)
 	}
-	if env.Details["attach"] != "cf attach "+f.run.Short {
+	if env.Details["attach"] != "cflk attach "+f.run.Short {
 		t.Errorf("details = %v", env.Details)
 	}
 	if status, env, _ = f.call(hc, http.MethodPost, "/v1/tasks/"+f.run.TaskID+"/respond", `{"nope":1}`); status != http.StatusBadRequest || env.Code != domain.CodeInvalidRequest {

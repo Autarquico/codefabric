@@ -36,7 +36,7 @@ type Settings struct {
 	JournalMaxSize string `json:"journal_max_size,omitempty"`
 	JournalHardMax string `json:"journal_hard_max,omitempty"`
 	// AllowShell says whether this Worker lets a shell be opened in the worktree
-	// of its Runs (cf shell). Off unless the owner of this machine turns it on:
+	// of its Runs (cflk shell). Off unless the owner of this machine turns it on:
 	// the shell has the authority of the user the Worker runs as.
 	AllowShell bool `json:"allow_shell,omitempty"`
 	// SetupPending says the join has not finished: the Worker reports the

@@ -20,7 +20,7 @@ import (
 
 // inputFixture is a fakeFixture whose harness takes structured input and whose
 // Worker announces it. The permission bridge is the fakeharness itself, which
-// asks the socket of the Run as `cf worker mcp-bridge` does.
+// asks the socket of the Run as `cflk worker mcp-bridge` does.
 func newInputFixture(t *testing.T, steps ...fakeharness.Step) *fakeFixture {
 	t.Helper()
 	f := newFakeFixture(t, 2*time.Second, every(configWith(t, "dark", steps...)))

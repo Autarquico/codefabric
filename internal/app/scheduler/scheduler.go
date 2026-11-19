@@ -322,7 +322,7 @@ func (s *Service) assign(ctx context.Context, queued store.Run) (outcome, error)
 }
 
 // explainWaiting stores why the Runs wait (§10.6). There is one reason, for
-// whatever keeps a Run from a Worker, capacity included: cf run explain says
+// whatever keeps a Run from a Worker, capacity included: cflk run explain says
 // which filter. Only the Runs that do not have it yet are written, in one
 // transaction, so a queue that stays as it is costs no writes.
 func (s *Service) explainWaiting(ctx context.Context, waiting []store.Run) error {

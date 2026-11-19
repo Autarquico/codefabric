@@ -23,14 +23,14 @@ sha256_of() {
 
 targets='linux_amd64 linux_arm64 darwin_amd64 darwin_arm64'
 for target in $targets; do
-	[ -f "$dist/cf_${version#v}_$target.tar.gz" ] || { echo "missing tarball for $target in $dist" >&2; exit 1; }
+	[ -f "$dist/cflk_${version#v}_$target.tar.gz" ] || { echo "missing tarball for $target in $dist" >&2; exit 1; }
 done
-[ "$(find "$dist" -maxdepth 1 -name 'cf_*.tar.gz' | wc -l | tr -d ' ')" -eq 4 ] || { echo "dist must hold exactly the four tarballs" >&2; exit 1; }
+[ "$(find "$dist" -maxdepth 1 -name 'cflk_*.tar.gz' | wc -l | tr -d ' ')" -eq 4 ] || { echo "dist must hold exactly the four tarballs" >&2; exit 1; }
 
 {
 	printf 'version: %s\n' "$version"
 	for target in $targets; do
-		name="cf_${version#v}_$target.tar.gz"
+		name="cflk_${version#v}_$target.tar.gz"
 		printf '%s  %s\n' "$(sha256_of "$dist/$name")" "$name"
 	done
 } >"$dist/checksums.txt"

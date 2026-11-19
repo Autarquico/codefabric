@@ -20,7 +20,7 @@ type TaskRef struct {
 	Project domain.ID
 }
 
-// PsRuns lists the Runs that `cf ps` shows: those that have not ended and
+// PsRuns lists the Runs that `cflk ps` shows: those that have not ended and
 // those that ended with their session still active, oldest first, with their
 // Tasks. The Workers are read with Workers, in the same snapshot.
 func PsRuns(ctx context.Context, q Querier) ([]Run, map[domain.ID]TaskRef, error) {

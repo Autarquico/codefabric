@@ -21,7 +21,7 @@ type BlobOpener interface {
 // when a client pulls it. Without one, a pull cannot bring the session.
 func WithBlobs(b BlobOpener) Option { return func(s *Service) { s.blobs = b } }
 
-// PullPlan says what `cf task pull` brings (§11.7): the last checkpoint the last Run of
+// PullPlan says what `cflk task pull` brings (§11.7): the last checkpoint the last Run of
 // the Task published, with the commit its ref has in the relay. A Run that is live has
 // none yet, which Live says; the client decides whether to defer it. It changes nothing:
 // the pull is marked (TaskPulled) once the client has what it came for.

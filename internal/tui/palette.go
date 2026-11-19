@@ -144,7 +144,7 @@ func (p *palette) results() []paletteItem {
 	}
 	var out []scored
 	for _, it := range p.items {
-		score := fuzzyScore(p.input, it.title, it.id, strings.TrimPrefix(it.command, "cf "))
+		score := fuzzyScore(p.input, it.title, it.id, strings.TrimPrefix(it.command, "cflk "))
 		if score == 0 {
 			continue
 		}
@@ -551,7 +551,7 @@ func (p *palette) body(c RenderContext, room int) []string {
 	case modeColon:
 		lines := []string{p.inputLine(c, ": ")}
 		if p.input == "" {
-			lines = append(lines, margin+c.Theme.Faint.Render("A cf command without the cf: task cancel <task>"))
+			lines = append(lines, margin+c.Theme.Faint.Render("A cflk command without the cflk: task cancel <task>"))
 		}
 		return lines
 	case modeAsk:

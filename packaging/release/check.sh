@@ -30,18 +30,31 @@ printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$
 
 expected=""
 for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
-	expected="$expected cf_${version#v}_$target.tar.gz"
+	expected="$expected cflk_${version#v}_$target.tar.gz"
 done
 listed=$(sed 1d "$dist/checksums.txt" | awk '{ print $2 }' | LC_ALL=C sort | tr '\n' ' ')
 want="${expected# } "
 [ "$listed" = "$want" ] || fail "checksums.txt must list exactly: $want(got: $listed)"
 if sed 1d "$dist/checksums.txt" | grep -Evq '^[0-9a-f]{64}  [^ ]+$'; then fail "checksums.txt has a malformed line"; fi
 
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
 for name in $expected; do
 	[ -f "$dist/$name" ] || fail "$name is missing"
 	sum=$(awk -v n="$name" '$2 == n { print $1 }' "$dist/checksums.txt")
 	[ "$sum" = "$(sha256_of "$dist/$name")" ] || fail "$name does not match its checksum"
-	tar -tzf "$dist/$name" | grep -qx 'cf' || fail "$name does not contain cf"
+	# the rule of install.sh: exactly one entry per binary, and a regular file
+	tar -tzf "$dist/$name" >"$scratch/members" || fail "$name is not readable"
+	if grep -Eq '(^/|(^|/)\.\.(/|$))' "$scratch/members"; then fail "$name has an unsafe member path"; fi
+	for bin in cflk cf; do
+		count=$(grep -cx "$bin" "$scratch/members" || true)
+		[ "$count" -ge 1 ] || fail "$name does not contain $bin"
+		[ "$count" -eq 1 ] || fail "$name contains $bin more than once"
+		rm -rf "$scratch/unpacked"
+		mkdir "$scratch/unpacked"
+		tar -xzf "$dist/$name" -C "$scratch/unpacked" "$bin" || fail "could not extract $bin from $name"
+		{ [ -f "$scratch/unpacked/$bin" ] && [ ! -L "$scratch/unpacked/$bin" ]; } || fail "$bin in $name is not a regular file"
+	done
 done
-[ "$(find "$dist" -maxdepth 1 -name 'cf_*.tar.gz' | wc -l | tr -d ' ')" -eq 4 ] || fail "dist holds tarballs beyond the four listed"
+[ "$(find "$dist" -maxdepth 1 -name 'cflk_*.tar.gz' | wc -l | tr -d ' ')" -eq 4 ] || fail "dist holds tarballs beyond the four listed"
 echo "release-check: $dist ok ($version)"

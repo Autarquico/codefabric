@@ -15,8 +15,8 @@ func newShellCmd(term Terminal) *cobra.Command {
 		Use:   "shell <task|run>",
 		Short: "Open a shell in the worktree of a Run, on its Worker; closing it does not end the Run",
 		Long: "Open a shell in the worktree of a Run, or of the latest live Run of a Task, on the Worker that holds it,\n" +
-			"through the Controller. It is off by default: the Project must have it on (cf project set --shell on) and\n" +
-			"so must the Worker (cf worker config set allow_shell true), and each shell is audited. The shell has the\n" +
+			"through the Controller. It is off by default: the Project must have it on (cflk project set --shell on) and\n" +
+			"so must the Worker (cflk worker config set allow_shell true), and each shell is audited. The shell has the\n" +
 			"authority of the OS user of the Worker: the worktree does not isolate it. Close it with Ctrl-] or by\n" +
 			"exiting the shell; either ends the shell, never the Run. There is no --ssh.",
 		Args: cobra.ExactArgs(1),
@@ -32,7 +32,7 @@ func newShellCmd(term Terminal) *cobra.Command {
 			}
 			req.Shell = true
 			if !isTerminal(cmd.InOrStdin()) {
-				return domain.NewError(domain.CodeInvalidRequest, "cf shell needs a terminal on its standard input", nil)
+				return domain.NewError(domain.CodeInvalidRequest, "cflk shell needs a terminal on its standard input", nil)
 			}
 			if term == nil {
 				return errNoTerminal()
@@ -57,7 +57,7 @@ func newShellCmd(term Terminal) *cobra.Command {
 
 // ShellStatus is the error of a shell that ended by itself with a status other
 // than 0. It is the status of the person's last command, not a failure of the
-// attach: `cf shell` exits with it and prints nothing (no CF_* code).
+// attach: `cflk shell` exits with it and prints nothing (no CF_* code).
 type ShellStatus int
 
 func (e ShellStatus) Error() string { return "the shell exited with status " + strconv.Itoa(int(e)) }
@@ -65,7 +65,7 @@ func (e ShellStatus) Error() string { return "the shell exited with status " + s
 // shellEnd splits how a shell session ended into the status of the shell, which
 // is the person's, and the error that belongs to the attach, which is only the
 // relay's or the policy's (a CF_* error). Ctrl-] and an exit of the shell with
-// status 0 are both status 0. `cf shell` and the TUI action read it the same way.
+// status 0 are both status 0. `cflk shell` and the TUI action read it the same way.
 func shellEnd(runErr error) (status int, failure error) {
 	var exit ExitStatus
 	var coded *domain.Error

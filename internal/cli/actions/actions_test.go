@@ -22,29 +22,29 @@ import (
 // command is either an action or here: the parity test fails until it is one.
 var notActions = map[string]string{
 	// Reads: the views read through the SDK, which is what these commands call.
-	"cf client list": "read", "cf config paths": "read", "cf config show": "read", "cf doctor": "read",
-	"cf environment list": "read", "cf environment show": "read", "cf events": "read", "cf logs": "read",
-	"cf project explain": "read", "cf project list": "read", "cf project secrets list": "read", "cf project show": "read",
-	"cf inbox": "read", "cf ps": "read", "cf notify watch": "long-running foreground watcher", "cf notify test": "notifies this machine, not the cluster", "cf run explain": "read", "cf run list": "read", "cf run show": "read", "cf status": "read", "cf storage stats": "read",
-	"cf task list": "read", "cf task show": "read", "cf version": "read", "cf worker list": "read", "cf worker show": "read",
-	"cf workflow diff": "read", "cf workflow explain": "read", "cf workflow history": "read", "cf workflow list": "read",
-	"cf workflow show": "read", "cf workflow status": "read",
-	"cf run checkpoint list":   "read",
-	"cf run checkpoint show":   "read",
-	"cf run checkpoint create": "manual capture; the TUI offers no checkpoint action until defer and move exist",
+	"cflk client list": "read", "cflk config paths": "read", "cflk config show": "read", "cflk doctor": "read",
+	"cflk environment list": "read", "cflk environment show": "read", "cflk events": "read", "cflk logs": "read",
+	"cflk project explain": "read", "cflk project list": "read", "cflk project secrets list": "read", "cflk project show": "read",
+	"cflk inbox": "read", "cflk ps": "read", "cflk notify watch": "long-running foreground watcher", "cflk notify test": "notifies this machine, not the cluster", "cflk run explain": "read", "cflk run list": "read", "cflk run show": "read", "cflk status": "read", "cflk storage stats": "read",
+	"cflk task list": "read", "cflk task show": "read", "cflk version": "read", "cflk worker list": "read", "cflk worker show": "read",
+	"cflk workflow diff": "read", "cflk workflow explain": "read", "cflk workflow history": "read", "cflk workflow list": "read",
+	"cflk workflow show": "read", "cflk workflow status": "read",
+	"cflk run checkpoint list":   "read",
+	"cflk run checkpoint show":   "read",
+	"cflk run checkpoint create": "manual capture; the TUI offers no checkpoint action until defer and move exist",
 	// This machine's identity and setup, not something the TUI does to the cluster.
-	"cf connect": "enrols this machine", "cf client remove": "revokes a client identity", "cf client renew": "renews this machine's credentials",
-	"cf worker set-controller": "changes the address in this machine's Worker credentials",
-	"cf mcp install":           "registers cf in this machine's model CLIs", "cf mcp uninstall": "removes cf from this machine's model CLIs",
-	"cf claude install": "writes the /handto skill into this machine's Claude Code", "cf claude uninstall": "removes the /handto skill from this machine's Claude Code", "cf claude status": "read", "cf claude statusline": "read",
-	"cf codex install": "writes the handto skill into this machine's Codex", "cf codex uninstall": "removes the handto skill from this machine's Codex", "cf codex status": "read",
-	"cf handoff":   "run by the /handto skill inside a Claude Code session, not from the TUI",
-	"cf task pull": "writes a branch and a session into the checkout of a shell, which the TUI does not have",
-	"cf run fetch": "writes a branch into the checkout of a shell, which the TUI does not have",
+	"cflk connect": "enrols this machine", "cflk client remove": "revokes a client identity", "cflk client renew": "renews this machine's credentials",
+	"cflk worker set-controller": "changes the address in this machine's Worker credentials",
+	"cflk mcp install":           "registers cf in this machine's model CLIs", "cflk mcp uninstall": "removes cf from this machine's model CLIs",
+	"cflk claude install": "writes the /handto skill into this machine's Claude Code", "cflk claude uninstall": "removes the /handto skill from this machine's Claude Code", "cflk claude status": "read", "cflk claude statusline": "read",
+	"cflk codex install": "writes the handto skill into this machine's Codex", "cflk codex uninstall": "removes the handto skill from this machine's Codex", "cflk codex status": "read",
+	"cflk handoff":   "run by the /handto skill inside a Claude Code session, not from the TUI",
+	"cflk task pull": "writes a branch and a session into the checkout of a shell, which the TUI does not have",
+	"cflk run fetch": "writes a branch into the checkout of a shell, which the TUI does not have",
 	// Maintenance of the Controller's storage, run by whoever operates it.
-	"cf gc": "maintenance of the Controller, not something the TUI does to the cluster",
+	"cflk gc": "maintenance of the Controller, not something the TUI does to the cluster",
 	// Same command as an action that exists.
-	"cf do": "shortcut of task.new, which needs the working directory of a shell",
+	"cflk do": "shortcut of task.new, which needs the working directory of a shell",
 }
 
 func leaves(root *cobra.Command) map[string]*cobra.Command {
@@ -110,7 +110,7 @@ func TestScenario_TuiViewsActions_ParidadCLI(t *testing.T) {
 			t.Errorf("%s is registered twice", d.ID)
 		}
 		ids[d.ID] = true
-		path := strings.Join(append([]string{"cf"}, d.Path...), " ")
+		path := strings.Join(append([]string{"cflk"}, d.Path...), " ")
 		cmd, ok := tree[path]
 		if !ok {
 			t.Errorf("%s: no command %q in the cobra tree", d.ID, path)
@@ -146,7 +146,7 @@ func TestScenario_TuiViewsActions_ParidadCLI(t *testing.T) {
 func TestScenario_TuiViewsActions_NoDaemonCommandsInTheTree(t *testing.T) {
 	// The binary composes the daemon commands in; the registry runs the CLI tree without them.
 	tree := leaves(cli.CommandTree(cli.Options{}))
-	for _, daemon := range []string{"cf controller init", "cf controller run", "cf setup", "cf install-service", "cf worker run", "cf worker join"} {
+	for _, daemon := range []string{"cflk controller init", "cflk controller run", "cflk setup", "cflk install-service", "cflk worker run", "cflk worker join"} {
 		if _, ok := tree[daemon]; ok {
 			t.Errorf("the tree the registry runs holds the daemon command %q", daemon)
 		}
@@ -199,9 +199,9 @@ func TestScenario_TuiViewsActions_PolicyHintsNameTheWayToTurnItOn(t *testing.T) 
 		details map[string]any
 		want    string
 	}{
-		{"project", map[string]any{"policy": domain.PolicyProjectShell, "project": "shop"}, "cf project set shop --shell on"},
-		{"project without a name", map[string]any{"policy": domain.PolicyProjectShell}, "cf project set <project> --shell on"},
-		{"worker", map[string]any{"policy": domain.PolicyWorkerAllowShell}, "cf worker config set allow_shell true"},
+		{"project", map[string]any{"policy": domain.PolicyProjectShell, "project": "shop"}, "cflk project set shop --shell on"},
+		{"project without a name", map[string]any{"policy": domain.PolicyProjectShell}, "cflk project set <project> --shell on"},
+		{"worker", map[string]any{"policy": domain.PolicyWorkerAllowShell}, "cflk worker config set allow_shell true"},
 		{"no policy", nil, "ask an owner"},
 		{"another policy", map[string]any{"policy": "budget.x"}, "ask an owner"},
 	} {

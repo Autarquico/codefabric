@@ -79,7 +79,7 @@ type Project struct {
 	// harness's own state; off unless the Project opts in.
 	NativeState bool `json:"native_state"`
 	// Shell says whether a shell may be opened in the worktree of a Run of the
-	// Project (cf shell); off unless the Project opts in, and the Worker must
+	// Project (cflk shell); off unless the Project opts in, and the Worker must
 	// allow it too.
 	Shell     bool      `json:"shell"`
 	CreatedAt time.Time `json:"created_at"`
@@ -178,7 +178,7 @@ type CreateTaskRequest struct {
 	ResolvedRef  string `json:"resolved_ref,omitempty"`
 	SourceCommit string `json:"source_commit,omitempty"`
 	// Snapshot asks the client to snapshot its working tree and start from
-	// that (cf do --snapshot). It never travels: the client turns it into
+	// that (cflk do --snapshot). It never travels: the client turns it into
 	// SourceSnapshot, SourceBranch and the pair of the source.
 	Snapshot bool `json:"-"`
 	// SnapshotReport, if set, is filled with what the snapshot left out; client side only.
@@ -248,7 +248,7 @@ type ResumeTaskRequest struct {
 	Worker     string          `json:"worker,omitempty"`
 	NativeSeed *NativeStateRef `json:"native_seed,omitempty"`
 	Force      bool            `json:"force,omitempty"`
-	// SourceSnapshot is the digest of a snapshot the client sent to the relay (`cf task
+	// SourceSnapshot is the digest of a snapshot the client sent to the relay (`cflk task
 	// resume --snapshot`): the Run starts from that tree and not from the checkpoint,
 	// and it needs NativeSeed, the session that carries the conversation. SourceBranch is
 	// the local branch the snapshot started from.
@@ -301,7 +301,7 @@ type MoveTaskResponse struct {
 // Move is a Task continuing on another Worker (§11.5). Stage is requested,
 // checkpointing, checkpointed, resuming, done or failed; it only advances.
 // Failure, when set, is why the stage could not be done: the Task waits for a
-// decision and `cf task move` retries from that stage. Loss is set when the
+// decision and `cflk task move` retries from that stage. Loss is set when the
 // source Run was lost: the work after that checkpoint does not travel.
 type Move struct {
 	ID           string     `json:"id"`

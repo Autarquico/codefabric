@@ -30,7 +30,7 @@ func TestCommandsFromOtherPackagesJoinTheGroupOfTheSameName(t *testing.T) {
 	}
 	for _, want := range []string{"list", "show", "drain", "undrain", "remove", "run"} {
 		if !strings.Contains(strings.Join(names, " "), want) {
-			t.Errorf("`cf worker` lacks %q: %v", want, names)
+			t.Errorf("`cflk worker` lacks %q: %v", want, names)
 		}
 	}
 	commandNamed(t, root, "extra")

@@ -64,7 +64,7 @@ type RestoreResult struct {
 	// Listen is where the daemon will bind.
 	Listen string `json:"listen"`
 	// OwnerID is the owner created for the operator of this host; its credentials
-	// are in the config directory, as `cf controller init` leaves them.
+	// are in the config directory, as `cflk controller init` leaves them.
 	OwnerID string `json:"owner_id"`
 	// CARestored is false when the backup had no CA: a new one was made, and every
 	// client and Worker must join again.
@@ -183,7 +183,7 @@ func splitHostPort(addr string) (host, port string, err error) {
 
 // listenFor is the address the restored daemon binds. An explicit --listen wins.
 // Otherwise the one of the backup stays, unless the advertised port is another
-// one: then the daemon follows it (as `cf controller init` does), keeping the
+// one: then the daemon follows it (as `cflk controller init` does), keeping the
 // host of the old address only if it is a wildcard, since a concrete IP of the
 // old host means nothing on this one.
 func listenFor(explicit, advertise, backedUp string) string {
@@ -612,7 +612,7 @@ func (s *staging) finish(ctx context.Context, x extracted, o RestoreOptions) (Re
 	}
 	if info.SchemaVersion > latest {
 		return RestoreResult{}, domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf(
-			"restore: the backup has schema %d and this cf only knows up to %d: restore it with a cf at least as new as the one that made it", info.SchemaVersion, latest), nil)
+			"restore: the backup has schema %d and this cflk only knows up to %d: restore it with a cflk at least as new as the one that made it", info.SchemaVersion, latest), nil)
 	}
 
 	ca, restored, err := s.certificateAuthority(o, x)
@@ -663,7 +663,7 @@ const releaseReasonRestoredWithoutCA = "restored_without_ca"
 // releaseGoneWorkers ends what the Workers of the backup still held when no
 // identity of theirs can come back: their live Runs are lost, as the
 // reconciliation loses them, and their reservations are released, so that
-// cf worker remove accepts them and nothing waits for them.
+// cflk worker remove accepts them and nothing waits for them.
 func (s *staging) releaseGoneWorkers(ctx context.Context, staged config.Paths, clk clock.Clock) (err error) {
 	db, err := store.Open(ctx, staged.DatabaseFile(), store.Options{Clock: clk})
 	if err != nil {
@@ -677,7 +677,7 @@ func (s *staging) releaseGoneWorkers(ctx context.Context, staged config.Paths, c
 	return nil
 }
 
-// createOwner does what `cf controller init` does for the first owner: an
+// createOwner does what `cflk controller init` does for the first owner: an
 // identity signed by ca, with its credentials in the config directory. The
 // owner can create the join tokens of everything else, which is what a Controller
 // whose CA is new needs: no identity of the old one is valid there.

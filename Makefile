@@ -14,7 +14,8 @@ export CGO_ENABLED := 0
 .PHONY: build test test-race test-integration test-e2e test-e2e-property test-e2e-race e2e-reap bench lint fmt cover cross release-snapshot test-installer clean
 
 build:
-	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/cf ./cmd/cf
+	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/cflk ./cmd/cflk
+	go build -trimpath -ldflags '-s -w' -o bin/cf ./cmd/cf-transition
 
 test:
 	go test ./...
@@ -38,12 +39,12 @@ E2E_SEEDING := CF_E2E_SEEDS=$(E2E_SEEDS) $(if $(E2E_SEED),CF_E2E_SEED=$(E2E_SEED
 E2E_TEST    := go test -tags e2e -count=1 -v -timeout $(E2E_TIMEOUT)
 
 test-e2e: build
-	CF_E2E_BIN=$(CURDIR)/bin/cf $(E2E_SEEDING) $(E2E_TEST) ./internal/e2e/...
+	CF_E2E_BIN=$(CURDIR)/bin/cflk $(E2E_SEEDING) $(E2E_TEST) ./internal/e2e/...
 
 test-e2e-property: build
-	CF_E2E_BIN=$(CURDIR)/bin/cf $(E2E_SEEDING) $(E2E_TEST) -run '^TestProperty_' ./internal/e2e/
+	CF_E2E_BIN=$(CURDIR)/bin/cflk $(E2E_SEEDING) $(E2E_TEST) -run '^TestProperty_' ./internal/e2e/
 
-# Every cf of the cluster built with -race by TestMain: CF_E2E_BIN is emptied,
+# Every cflk of the cluster built with -race by TestMain: CF_E2E_BIN is emptied,
 # since a binary from outside would run uninstrumented.
 test-e2e-race:
 	CF_E2E_BIN= CF_E2E_RACE=1 CGO_ENABLED=1 $(E2E_SEEDING) $(E2E_TEST) -race ./internal/e2e/
@@ -52,7 +53,7 @@ test-e2e-race:
 # CF_E2E_ROOT) that are this user's alone and whose owner is proven dead
 # (killing what their manifests started) and leaves live invocations alone.
 e2e-reap: build
-	CF_E2E_BIN=$(CURDIR)/bin/cf go test -tags e2e -count=1 -v -run '^$$' ./internal/e2e/
+	CF_E2E_BIN=$(CURDIR)/bin/cflk go test -tags e2e -count=1 -v -run '^$$' ./internal/e2e/
 
 lint:
 	golangci-lint run
@@ -68,7 +69,8 @@ cross:
 	@for t in $(TARGETS); do \
 		os=$${t%/*}; arch=$${t#*/}; \
 		echo "build $$os/$$arch"; \
-		GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags '$(LDFLAGS)' -o bin/cf-$$os-$$arch ./cmd/cf || exit 1; \
+		GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags '$(LDFLAGS)' -o bin/cflk-$$os-$$arch ./cmd/cflk || exit 1; \
+		GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags '-s -w' -o bin/cf-$$os-$$arch ./cmd/cf-transition || exit 1; \
 	done
 
 release-snapshot:

@@ -15,7 +15,7 @@ const (
 
 	// A value shorter than MinSecretValueLen cannot be redacted without
 	// redacting ordinary text too, so it is refused where a value is registered
-	// (`cf worker secrets set`) and never reaches a Run.
+	// (`cflk worker secrets set`) and never reaches a Run.
 	MinSecretValueLen = 8
 	MaxSecretValueLen = 64 << 10
 

@@ -10,7 +10,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/domain"
 )
 
-// newTaskRespondCmd is `cf task respond`: it answers what a Task's Run waits on.
+// newTaskRespondCmd is `cflk task respond`: it answers what a Task's Run waits on.
 func newTaskRespondCmd() *cobra.Command {
 	var (
 		req         v1.RespondRequest
@@ -71,7 +71,7 @@ func answerOf(allow, deny bool, text string) (v1.InputAnswer, error) {
 	return v1.InputAnswer{Text: text}, nil
 }
 
-// newInboxCmd is `cf inbox`: what needs a person.
+// newInboxCmd is `cflk inbox`: what needs a person.
 func newInboxCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "inbox",
@@ -99,7 +99,7 @@ func printInbox(out io.Writer, items []v1.InboxItem) error {
 		case it.Prompt != nil:
 			prompt, detail = it.Prompt.ID+" ("+string(it.Prompt.Kind)+")", it.Prompt.Summary
 			if !it.Run.Respondable {
-				detail += " [attach: cf attach " + it.Run.Short + "]"
+				detail += " [attach: cflk attach " + it.Run.Short + "]"
 			}
 		case it.EndReason != "":
 			detail = string(it.EndReason)

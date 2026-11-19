@@ -123,7 +123,7 @@ func validateExcluded(e v1.RunReportEntry) error {
 	return nil
 }
 
-// Publish is `cf run publish`: another try at publishing the result of a Run
+// Publish is `cflk run publish`: another try at publishing the result of a Run
 // whose publication failed (§22.6). The publication goes back to pending and the
 // Worker that holds the result is told to publish it again, without
 // reserving anything: a pending publication does not hold the reservation

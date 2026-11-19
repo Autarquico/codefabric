@@ -7,19 +7,21 @@ TestScenario_VerifiedInstall() {
 	serve_dist
 	run_install "$KEY_A/install.sh"
 	assert_rc 0
-	[ -x "$T/bin/cf" ] || fail "cf is not installed and executable in CF_INSTALL_DIR"
-	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf version printed '$("$T/bin/cf" version)', want $BARE_VERSION"
-	[ "$(ls -A "$T/bin")" = "cf" ] || fail "the install dir holds more than cf: $(ls -A "$T/bin")"
-	assert_out_contains "installed $T/bin/cf ($VERSION)"
+	[ -x "$T/bin/cflk" ] || fail "cflk is not installed and executable in CFLK_INSTALL_DIR"
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk version printed '$("$T/bin/cflk" version)', want $BARE_VERSION"
+	[ "$(ls -A "$T/bin")" = "cflk" ] || fail "a fresh install holds more than cflk: $(ls -A "$T/bin")"
+	assert_out_contains "installed $T/bin/cflk ($VERSION)"
 }
 
 TestScenario_VerifiedInstall_replacesPreviousBinary() {
 	good_release "$KEY_A"
 	serve_dist
-	seed_old_cf
+	mkdir -p "$T/bin"
+	printf '#!/bin/sh\necho old\n' >"$T/bin/cflk"
+	chmod 755 "$T/bin/cflk"
 	run_install "$KEY_A/install.sh"
 	assert_rc 0
-	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "the previous cf was not replaced"
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "the previous cflk was not replaced"
 }
 
 TestScenario_VerifiedInstall_hintsWhenDirNotOnPath() {
@@ -35,7 +37,7 @@ TestScenario_VerifiedInstall_armLinux() {
 	serve_dist
 	FAKE_UNAME_M=aarch64 run_install "$KEY_A/install.sh"
 	assert_rc 0
-	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf version is wrong on linux/arm64"
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk version is wrong on linux/arm64"
 }
 
 TestScenario_VerifiedInstall_darwinArm64() {
@@ -43,9 +45,9 @@ TestScenario_VerifiedInstall_darwinArm64() {
 	serve_dist
 	FAKE_UNAME_S=Darwin FAKE_UNAME_M=arm64 run_install "$KEY_A/install.sh"
 	assert_rc 0
-	grep -q "\"GET /$TEST_NAME/$VERSION/cf_${BARE_VERSION}_darwin_arm64.tar.gz" "$TMP/server.log" || fail "the darwin_arm64 tarball was not requested"
+	grep -q "\"GET /$TEST_NAME/$VERSION/cflk_${BARE_VERSION}_darwin_arm64.tar.gz" "$TMP/server.log" || fail "the darwin_arm64 tarball was not requested"
 	! grep -q "\"GET /$TEST_NAME/.*linux_" "$TMP/server.log" || fail "a linux tarball was requested on darwin/arm64"
-	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf was not installed on darwin/arm64"
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk was not installed on darwin/arm64"
 }
 
 TestScenario_VerifiedInstall_darwinAmd64() {
@@ -53,8 +55,8 @@ TestScenario_VerifiedInstall_darwinAmd64() {
 	serve_dist
 	FAKE_UNAME_S=Darwin FAKE_UNAME_M=x86_64 run_install "$KEY_A/install.sh"
 	assert_rc 0
-	grep -q "\"GET /$TEST_NAME/$VERSION/cf_${BARE_VERSION}_darwin_amd64.tar.gz" "$TMP/server.log" || fail "the darwin_amd64 tarball was not requested"
-	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf was not installed on darwin/amd64"
+	grep -q "\"GET /$TEST_NAME/$VERSION/cflk_${BARE_VERSION}_darwin_amd64.tar.gz" "$TMP/server.log" || fail "the darwin_amd64 tarball was not requested"
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk was not installed on darwin/amd64"
 }
 
 TestScenario_VerifiedInstall_darwinRosettaPicksArm64() {
@@ -64,12 +66,13 @@ TestScenario_VerifiedInstall_darwinRosettaPicksArm64() {
 	FAKE_UNAME_S=Darwin FAKE_UNAME_M=x86_64 FAKE_PROC_TRANSLATED=1 run_install "$KEY_A/install.sh"
 	assert_rc 0
 	tail -n +"$((seen + 1))" "$TMP/server.log" >"$T/requests"
-	grep -q "\"GET /$TEST_NAME/$VERSION/cf_${BARE_VERSION}_darwin_arm64.tar.gz" "$T/requests" || fail "the darwin_arm64 tarball was not requested under Rosetta"
+	grep -q "\"GET /$TEST_NAME/$VERSION/cflk_${BARE_VERSION}_darwin_arm64.tar.gz" "$T/requests" || fail "the darwin_arm64 tarball was not requested under Rosetta"
 	! grep -q "darwin_amd64" "$T/requests" || fail "the Intel tarball was requested under Rosetta"
 }
 
-# The real cf, built with the GoReleaser ldflags and packed like its archive (LICENSE, README.md, cf), signed and
-# installed over HTTP: proves the version injection and the archive layout, which the fake fixtures cannot.
+# The real cflk and transition cf, built with the GoReleaser ldflags and packed like its archive (LICENSE, README.md,
+# cflk, cf), signed and installed over HTTP: proves the version injection and the archive layout, which the fake
+# fixtures cannot.
 TestScenario_VerifiedInstall_realBinary() {
 	command -v go >/dev/null 2>&1 || fail "go is required for the real-binary test (the CI installer job needs setup-go)"
 	goos=$(go env GOOS)
@@ -82,18 +85,19 @@ TestScenario_VerifiedInstall_realBinary() {
 	mkdir -p "$T/real"
 	(cd "$ROOT" && CGO_ENABLED=0 go build -trimpath \
 		-ldflags "-s -w -X $pkg.version=$BARE_VERSION -X $pkg.commit=abc1234 -X $pkg.date=2026-01-01T00:00:00Z" \
-		-o "$T/real/cf" ./cmd/cf) || fail "go build failed"
+		-o "$T/real/cflk" ./cmd/cflk &&
+		CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$T/real/cf" ./cmd/cf-transition) || fail "go build failed"
 	cp "$ROOT/LICENSE" "$ROOT/README.md" "$T/real/"
 	make_dist "$T/dist"
-	tar -C "$T/real" -czf "$T/dist/cf_${BARE_VERSION}_${goos}_${goarch}.tar.gz" LICENSE README.md cf
+	tar -C "$T/real" -czf "$T/dist/cflk_${BARE_VERSION}_${goos}_${goarch}.tar.gz" LICENSE README.md cflk cf
 	finalize_dist "$T/dist" "$KEY_A"
 	serve_dist
 	rc=0
-	env PATH="$PATH" HOME="$T/home" CF_RELEASE_BASE_URL="$URL/$TEST_NAME" CF_INSTALL_DIR="$T/bin" CF_VERSION="$VERSION" \
+	env PATH="$PATH" HOME="$T/home" CFLK_RELEASE_BASE_URL="$URL/$TEST_NAME" CFLK_INSTALL_DIR="$T/bin" CFLK_VERSION="$VERSION" \
 		"$(command -v sh)" "$KEY_A/install.sh" >"$T/out" 2>&1 || rc=$?
 	assert_rc 0
-	reported=$("$T/bin/cf" version --json | jq -r .version)
-	[ "$reported" = "$BARE_VERSION" ] || fail "cf version --json reports '$reported', want $BARE_VERSION"
+	reported=$("$T/bin/cflk" version --json | jq -r .version)
+	[ "$reported" = "$BARE_VERSION" ] || fail "cflk version --json reports '$reported', want $BARE_VERSION"
 }
 
 # --- Bad signature or checksum ------------------------------------------------
@@ -119,11 +123,11 @@ TestScenario_BadSignatureOrChecksum_signedByOtherKey() {
 
 TestScenario_BadSignatureOrChecksum_archiveShaMismatch() {
 	good_release "$KEY_A"
-	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cf_${BARE_VERSION}_linux_amd64.tar.gz" ok 6.6.6
+	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cflk_${BARE_VERSION}_linux_amd64.tar.gz" ok 6.6.6
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "checksum mismatch for cf_${BARE_VERSION}_linux_amd64.tar.gz"
+	assert_out_contains "checksum mismatch for cflk_${BARE_VERSION}_linux_amd64.tar.gz"
 }
 
 TestScenario_BadSignatureOrChecksum_missingSignature() {
@@ -226,12 +230,12 @@ TestScenario_Hardening_duplicateChecksumEntry() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "cf_${BARE_VERSION}_linux_amd64.tar.gz is not listed exactly once"
+	assert_out_contains "cflk_${BARE_VERSION}_linux_amd64.tar.gz is not listed exactly once"
 }
 
 TestScenario_Hardening_duplicateEntryWithDifferentHash() {
 	good_release "$KEY_A"
-	name=cf_${BARE_VERSION}_linux_amd64.tar.gz
+	name=cflk_${BARE_VERSION}_linux_amd64.tar.gz
 	good=$(hash_of "$T/dist/$name")
 	signed_checksums_body "$(printf '%064d  %s' 0 "$name")" "$good  $name"
 	serve_dist
@@ -242,7 +246,7 @@ TestScenario_Hardening_duplicateEntryWithDifferentHash() {
 
 TestScenario_Hardening_malformedLine() {
 	good_release "$KEY_A"
-	name=cf_${BARE_VERSION}_linux_amd64.tar.gz
+	name=cflk_${BARE_VERSION}_linux_amd64.tar.gz
 	signed_checksums_body "$(hash_of "$T/dist/$name") $name" # one space instead of two
 	serve_dist
 	seed_old_cf
@@ -256,25 +260,27 @@ TestScenario_Hardening_entryForPlatformMissing() {
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "cf_${BARE_VERSION}_linux_amd64.tar.gz is not listed exactly once"
+	assert_out_contains "cflk_${BARE_VERSION}_linux_amd64.tar.gz is not listed exactly once"
 }
 
-# A tarball whose checksum is signed is still not trusted to write outside the work dir or to ship a non-cf.
+# A tarball whose checksum is signed is still not trusted to write outside the work dir or to ship anything but cflk and cf.
 tarball_variant_is_rejected() { # mode
 	make_dist "$T/dist"
-	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cf_${BARE_VERSION}_linux_amd64.tar.gz" "$1" "$BARE_VERSION"
+	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cflk_${BARE_VERSION}_linux_amd64.tar.gz" "$1" "$BARE_VERSION"
 	finalize_dist "$T/dist" "$KEY_A"
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "cf_${BARE_VERSION}_linux_amd64.tar.gz"
+	assert_out_contains "cflk_${BARE_VERSION}_linux_amd64.tar.gz"
 	if [ -e "$T/evil" ] || [ -e "$T/dist/evil" ]; then fail "a tar member escaped the work directory"; fi
 }
 
 TestScenario_Hardening_tarMemberWithDotDot() { tarball_variant_is_rejected dotdot; }
-TestScenario_Hardening_tarMemberDotDotCf() { tarball_variant_is_rejected dotdot_cf; }
-TestScenario_Hardening_tarMemberNotCf() { tarball_variant_is_rejected notcf; }
-TestScenario_Hardening_tarCfIsSymlink() { tarball_variant_is_rejected symlink; }
+TestScenario_Hardening_tarMemberDotDotCflk() { tarball_variant_is_rejected dotdot_cflk; }
+TestScenario_Hardening_tarMemberNotCflk() { tarball_variant_is_rejected notcflk; }
+TestScenario_Hardening_tarCflkIsSymlink() { tarball_variant_is_rejected symlink; }
+TestScenario_Hardening_tarWithoutCf() { tarball_variant_is_rejected nocf; }
+TestScenario_Hardening_tarCfIsSymlink() { tarball_variant_is_rejected cfsymlink; }
 
 TestScenario_Hardening_missingPrerequisite() {
 	good_release "$KEY_A"
@@ -298,7 +304,7 @@ TestScenario_Hardening_invalidVersion() {
 	for bad in 1.2.3 v1.2 'v1.2.3;id' latest-ish; do
 		INST_VERSION=$bad run_install "$KEY_A/install.sh"
 		assert_rc 2
-		assert_out_contains "invalid CF_VERSION"
+		assert_out_contains "invalid CFLK_VERSION"
 	done
 	assert_no_requests
 }
@@ -307,7 +313,7 @@ TestScenario_Hardening_multiLineVersion() {
 	for bad in "$(printf 'v1.2.3\nv9.9.9')" "$(printf 'v1.2.3\ngarbage')" "$(printf 'garbage\nv1.2.3')"; do
 		INST_VERSION=$bad run_install "$KEY_A/install.sh"
 		assert_rc 2
-		assert_out_contains "invalid CF_VERSION"
+		assert_out_contains "invalid CFLK_VERSION"
 	done
 	assert_no_requests
 }
@@ -332,14 +338,14 @@ TestScenario_Hardening_downloadFailureServerDown() {
 
 TestScenario_Hardening_downloadFailureTarballMissing() {
 	good_release "$KEY_A"
-	rm "$T/dist/cf_${BARE_VERSION}_linux_amd64.tar.gz"
+	rm "$T/dist/cflk_${BARE_VERSION}_linux_amd64.tar.gz"
 	serve_dist
 	seed_old_cf
 	assert_rejected_untouched "$KEY_A/install.sh"
-	assert_out_contains "download failed: .*cf_${BARE_VERSION}_linux_amd64.tar.gz"
+	assert_out_contains "download failed: .*cflk_${BARE_VERSION}_linux_amd64.tar.gz"
 }
 
-# --- Default path: CF_VERSION unset resolves the latest release ------------------
+# --- Default path: CFLK_VERSION unset resolves the latest release ------------------
 
 # publish_latest TARGET: releases/latest answers 302 to TARGET, which serves a page, as github.com does.
 publish_latest() {
@@ -355,7 +361,7 @@ TestScenario_LatestVersion_installsWhatLatestRedirectsTo() {
 	INST_VERSION=latest run_install "$KEY_A/install.sh"
 	assert_rc 0
 	assert_out_contains "installing $VERSION"
-	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf version is wrong after installing latest"
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk version is wrong after installing latest"
 }
 
 TestScenario_LatestVersion_unsetMeansLatest() {
@@ -363,7 +369,7 @@ TestScenario_LatestVersion_unsetMeansLatest() {
 	serve_dist
 	publish_latest "/$TEST_NAME/releases/tag/$VERSION"
 	rc=0
-	env -u CF_VERSION PATH="$SHIM:$PATH" HOME="$T/home" CF_RELEASE_BASE_URL="$URL/$TEST_NAME" CF_INSTALL_DIR="$T/bin" \
+	env -u CFLK_VERSION PATH="$SHIM:$PATH" HOME="$T/home" CFLK_RELEASE_BASE_URL="$URL/$TEST_NAME" CFLK_INSTALL_DIR="$T/bin" \
 		"$(command -v sh)" "$KEY_A/install.sh" >"$T/out" 2>&1 || rc=$?
 	assert_rc 0
 	assert_out_contains "installing $VERSION"
@@ -396,7 +402,7 @@ TestScenario_PortableAwk_installsWithMawk() {
 	ln -s "$(command -v mawk)" "$T/mawkbin/awk"
 	INST_PATH="$T/mawkbin:$SHIM:$PATH" run_install "$KEY_A/install.sh"
 	assert_rc 0
-	[ "$("$T/bin/cf" version)" = "$BARE_VERSION" ] || fail "cf was not installed with mawk as awk"
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk was not installed with mawk as awk"
 }
 
 TestScenario_PortableAwk_noRegexIntervalInAwk() {
@@ -406,11 +412,12 @@ TestScenario_PortableAwk_noRegexIntervalInAwk() {
 
 # --- Install target problems ----------------------------------------------------
 
-# $T/bin/cf is not a file: the installer must refuse (exit 4) instead of moving the binary inside it.
-assert_cf_dir_refused() { # dir that $T/bin/cf is or points to
+# $T/bin/cf is a directory: it is some other tool's cf, so cflk is installed and the directory stays as it is.
+assert_cf_dir_left_alone() { # dir that $T/bin/cf is or points to
 	run_install "$KEY_A/install.sh"
-	assert_rc 4
-	assert_out_contains "is a directory"
+	assert_rc 0
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk was not installed"
+	assert_out_contains "left $T/bin/cf alone: it is a directory"
 	[ -z "$(ls -A "$1")" ] || fail "something landed inside the directory: $(ls -A "$1")"
 }
 
@@ -418,8 +425,8 @@ TestScenario_InstallTarget_cfIsDirectory() {
 	good_release "$KEY_A"
 	serve_dist
 	mkdir -p "$T/bin/cf"
-	assert_cf_dir_refused "$T/bin/cf"
-	[ "$(ls -A "$T/bin")" = "cf" ] || fail "the install dir holds more than cf: $(ls -A "$T/bin")"
+	assert_cf_dir_left_alone "$T/bin/cf"
+	[ "$(find "$T/bin" -mindepth 1 | wc -l | tr -d ' ')" -eq 2 ] || fail "unexpected files in the install dir: $(ls -A "$T/bin")"
 }
 
 TestScenario_InstallTarget_cfIsSymlinkToDirectory() {
@@ -427,8 +434,8 @@ TestScenario_InstallTarget_cfIsSymlinkToDirectory() {
 	serve_dist
 	mkdir -p "$T/bin" "$T/elsewhere"
 	ln -s "$T/elsewhere" "$T/bin/cf"
-	assert_cf_dir_refused "$T/elsewhere"
-	[ "$(ls -A "$T/bin")" = "cf" ] || fail "the install dir holds more than cf: $(ls -A "$T/bin")"
+	assert_cf_dir_left_alone "$T/elsewhere"
+	[ "$(find "$T/bin" -mindepth 1 | wc -l | tr -d ' ')" -eq 2 ] || fail "unexpected files in the install dir: $(ls -A "$T/bin")"
 }
 
 TestScenario_InstallTarget_mktempFails() {

@@ -10,13 +10,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// asCF makes the test binary behave as `cf relay ...`, which is what the hook
+// asCF makes the test binary behave as `cflk relay ...`, which is what the hook
 // of the repositories runs.
 const asCF = "CF_TEST_AS_CF"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(asCF) == "1" {
-		root := &cobra.Command{Use: "cf", SilenceUsage: true}
+		root := &cobra.Command{Use: "cflk", SilenceUsage: true}
 		root.AddCommand(Command())
 		root.SetArgs(os.Args[1:])
 		if err := root.Execute(); err != nil {

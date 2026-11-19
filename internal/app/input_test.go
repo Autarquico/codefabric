@@ -174,7 +174,7 @@ func assertNotRespondable(t *testing.T, err error, runShort string) {
 	if domain.ExitCode(de.Code) != 8 {
 		t.Errorf("exit code = %d", domain.ExitCode(de.Code))
 	}
-	if de.Details["attach"] != "cf attach "+runShort {
+	if de.Details["attach"] != "cflk attach "+runShort {
 		t.Errorf("details = %v", de.Details)
 	}
 }

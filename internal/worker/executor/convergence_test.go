@@ -416,7 +416,7 @@ func (w *world) step(i int, cancelled, lost *bool, task string) {
 		_, err := w.ctrl.app.Scheduler.Pass(ctx)
 		must(w.t, err)
 	case 12:
-		// A human asks for another try of a publication that failed (cf run publish).
+		// A human asks for another try of a publication that failed (cflk run publish).
 		for _, r := range w.runs() {
 			if r.Publication == domain.PublicationFailed {
 				_, _ = w.ctrl.app.Runs.Publish(ctx, w.owner, string(r.ID), v1.ActionRequest{})

@@ -9,7 +9,7 @@ import (
 )
 
 // The Run a forced drain checkpointed is kept: the exit its Worker reports after the
-// quiesce does not end it, and `cf task resume --worker` continues it from that checkpoint.
+// quiesce does not end it, and `cflk task resume --worker` continues it from that checkpoint.
 func TestScenario_PreDestructivo_TheCapturedRunCanBeResumedElsewhere(t *testing.T) {
 	e := newForceEnv(t)
 	r := e.acceptedRun(e.joinWorker("alpha", withCapabilities(domain.CheckpointCapability)), "x")

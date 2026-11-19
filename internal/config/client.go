@@ -78,12 +78,12 @@ func (n ClientNotify) validate() error {
 		return errors.New("notify.hook: the command is empty")
 	}
 	if cmd := n.hookCommand(); strings.ContainsRune(cmd, filepath.Separator) && !filepath.IsAbs(cmd) {
-		return fmt.Errorf("notify.hook: %q is relative to wherever cf runs; use an absolute path or a name on PATH", cmd)
+		return fmt.Errorf("notify.hook: %q is relative to wherever cflk runs; use an absolute path or a name on PATH", cmd)
 	}
 	return nil
 }
 
-// ClientAttach is what `cf attach` trusts.
+// ClientAttach is what `cflk attach` trusts.
 type ClientAttach struct {
 	// SSHTargets maps the name of a Worker to the ssh target to reach it with
 	// ([user@]host[:port]), instead of the one the Worker announced.
@@ -126,7 +126,7 @@ func (a ClientAttach) DetachByte() (byte, error) {
 		}
 		return c - 'a' + 1, nil
 	}
-	return 0, fmt.Errorf("attach.detach_key: %q is not a key cf can read", key)
+	return 0, fmt.Errorf("attach.detach_key: %q is not a key cflk can read", key)
 }
 
 // DetachLabel is how the detach key is spelled to a person: "Ctrl-]", "Ctrl-G".

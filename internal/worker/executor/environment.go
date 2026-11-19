@@ -23,7 +23,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
-// The Environment of a Run (§25) is run by a supervisor, `cf worker exec env`,
+// The Environment of a Run (§25) is run by a supervisor, `cflk worker exec env`,
 // that the daemon launches in a process group of its own and that outlives it
 // (package envwrap). The daemon's part is the protocol around it:
 //

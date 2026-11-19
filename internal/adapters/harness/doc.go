@@ -2,7 +2,7 @@
 //
 // [Adapter] is the interface of §7.2 of docs/codefabric-spec.md, adapted to the
 // Runtime + wrapper model of the executor (Appendix B5 §6.4): the process of a
-// Run belongs to tmux and to `cf worker exec`, never to the adapter. That
+// Run belongs to tmux and to `cflk worker exec`, never to the adapter. That
 // model is where it departs from §7.2:
 //
 //   - Every method that touches the machine receives the [Host] it runs on;

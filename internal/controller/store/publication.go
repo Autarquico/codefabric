@@ -42,7 +42,7 @@ func (t *Tx) FailPublication(ctx context.Context, run Run) error {
 	return t.setPublication(ctx, run, domain.PublicationPending, domain.PublicationFailed, "failing publication")
 }
 
-// RetryPublication puts a failed publication back to pending, for `cf run publish`.
+// RetryPublication puts a failed publication back to pending, for `cflk run publish`.
 func (t *Tx) RetryPublication(ctx context.Context, run Run) error {
 	return t.setPublication(ctx, run, domain.PublicationFailed, domain.PublicationPending, "retrying publication")
 }

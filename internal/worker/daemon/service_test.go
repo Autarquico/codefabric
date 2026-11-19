@@ -272,7 +272,7 @@ func TestInstallService_RefusesWhatTheServiceCouldNotUse(t *testing.T) {
 			if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // the unsafe directory the test is about
 				t.Fatal(err)
 			}
-			o.Binary = filepath.Join(dir, "cf")
+			o.Binary = filepath.Join(dir, "cflk")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -319,7 +319,7 @@ func TestInstallService_WarnsWhenTheTmuxServerMoves(t *testing.T) {
 	}
 }
 
-// The unit and the agent pass what `cf worker run` needs, and keep the Runs
+// The unit and the agent pass what `cflk worker run` needs, and keep the Runs
 // alive across a restart (TestScenario_ServiceUnits_Systemd and _Launchd run
 // them for real).
 func TestInstallService_TheFileRunsTheWorkerAndKeepsItsRuns(t *testing.T) {

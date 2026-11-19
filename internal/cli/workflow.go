@@ -26,7 +26,7 @@ type WorkflowComponent struct {
 }
 
 // WorkflowAdopter is what adopt and commit need from the machine: the
-// harness adapters and the host whose configuration is read. cmd/cf composes
+// harness adapters and the host whose configuration is read. cmd/cflk composes
 // it (ADR 0001); the CLI only sees this seam. *workflowadopt.Adopter does the
 // Prepare and the Commit.
 type WorkflowAdopter interface {

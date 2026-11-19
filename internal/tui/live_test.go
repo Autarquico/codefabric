@@ -572,7 +572,7 @@ func TestScenario_LiveView_Shell_PolicyDeniedIsTheFailureLine(t *testing.T) {
 	p.key("s")
 	p.until("the failure", p.showing("CF_POLICY_DENIED"))
 	got := frame(m)
-	for _, want := range []string{"! Shell failed", "policy project.shell", "cf project set shop --shell on"} {
+	for _, want := range []string{"! Shell failed", "policy project.shell", "cflk project set shop --shell on"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the failure lacks %q:\n%s", want, got)
 		}

@@ -25,7 +25,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
-// The secrets of this Worker are local: `cf worker secrets` writes the catalog
+// The secrets of this Worker are local: `cflk worker secrets` writes the catalog
 // and talks to no one, and the next heartbeat tells the Controller their refs.
 // A value reaches the command only on stdin or at a prompt, never in argv, and
 // no message repeats what the command was given: an argument may be a value
@@ -34,7 +34,7 @@ import (
 // valueFlag exists only to refuse a value given as a flag, and say why.
 const valueFlag = "value"
 
-// newSecretsCmd is `cf worker secrets`.
+// newSecretsCmd is `cflk worker secrets`.
 func newSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secrets",
@@ -48,7 +48,7 @@ func newSecretsCmd() *cobra.Command {
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 || jsonOutput(cmd) {
-				return invalid("`cf worker secrets` takes a subcommand: set, list or rm")
+				return invalid("`cflk worker secrets` takes a subcommand: set, list or rm")
 			}
 			return cmd.Help()
 		},
@@ -77,9 +77,9 @@ func newSecretsSetCmd() *cobra.Command {
 			"username of a git credential (the origin_secret of a Project); without it, " + secrets.DefaultUser + ". It stays on\n" +
 			"this machine. The value of " + claude.OAuthTokenRef + " must be the sk-ant-oat... token that `claude setup-token`\n" +
 			"prints (from its output, or wrapped across lines, the token alone is kept); --force stores another anyway.",
-		Example: "  printf %s \"$TOKEN\" | cf worker secrets set github/token\n  cf worker secrets set npm/token --project project_01J...\n" +
-			"  printf %s \"$TOKEN\" | cf worker secrets set github/token --backend keyring\n" +
-			"  printf %s \"$TOKEN\" | cf worker secrets set gitlab/token --user deploy-bot",
+		Example: "  printf %s \"$TOKEN\" | cflk worker secrets set github/token\n  cflk worker secrets set npm/token --project project_01J...\n" +
+			"  printf %s \"$TOKEN\" | cflk worker secrets set github/token --backend keyring\n" +
+			"  printf %s \"$TOKEN\" | cflk worker secrets set gitlab/token --user deploy-bot",
 		// The arguments are checked in RunE, to explain a value given as one.
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -121,7 +121,7 @@ func newSecretsSetCmd() *cobra.Command {
 			}
 			if badFormat {
 				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: this does not look like a Claude token: Runs will likely fail with 401, "+
-					"and `cf worker doctor` warns on auth:claude-code until you set it again.")
+					"and `cflk worker doctor` warns on auth:claude-code until you set it again.")
 			}
 			meta, err := secretMeta(cmd.Context(), store, ref)
 			if err != nil {
@@ -241,7 +241,7 @@ func checkSecretArgs(ref string, projects []string) error {
 	}
 	for _, p := range projects {
 		if kind, _, err := domain.ParseID(p); err != nil || kind != domain.KindProject {
-			return invalid("--project takes a Project ID (project_<ULID>, as `cf project show` gives it)")
+			return invalid("--project takes a Project ID (project_<ULID>, as `cflk project show` gives it)")
 		}
 	}
 	return nil
@@ -377,7 +377,7 @@ func checkValue(value []byte) error {
 func secretsError(err error) error {
 	switch {
 	case errors.Is(err, secrets.ErrNotFound):
-		return domain.NewError(domain.CodeNotFound, "this Worker holds no secret by that ref; see `cf worker secrets list`", nil)
+		return domain.NewError(domain.CodeNotFound, "this Worker holds no secret by that ref; see `cflk worker secrets list`", nil)
 	case errors.Is(err, domain.ErrInvalidSecret):
 		return invalid("the secret is not valid; nothing was stored")
 	case errors.Is(err, secrets.ErrUnavailable):
@@ -440,7 +440,7 @@ func secretRows(metas []secrets.Metadata, statuses []secrets.Status) []secretRow
 
 func printSecrets(out io.Writer, list []secretRow) error {
 	if len(list) == 0 {
-		_, err := fmt.Fprintln(out, "This Worker holds no secrets. Add one with: cf worker secrets set <ref>")
+		_, err := fmt.Fprintln(out, "This Worker holds no secrets. Add one with: cflk worker secrets set <ref>")
 		return err
 	}
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)

@@ -40,7 +40,7 @@ type Timeline struct {
 type Attachment interface {
 	// Command is the session, to run on the terminal the TUI hands over.
 	Command() tea.ExecCommand
-	// Finish turns how the session ended into the answer `cf attach` gives.
+	// Finish turns how the session ended into the answer `cflk attach` gives.
 	Finish(runErr error) error
 }
 
@@ -168,7 +168,7 @@ func projectsView() client.View[[]v1.Project] {
 	}
 }
 
-// followOutput is the follow of `cf logs --follow`: from the tail the Controller
+// followOutput is the follow of `cflk logs --follow`: from the tail the Controller
 // holds, on to a new lease epoch when the Run goes on under one, until the
 // output is closed or is not coming.
 func followOutput(ctx context.Context, c *client.Client, run string, handle func(LogEvent)) error {

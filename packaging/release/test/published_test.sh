@@ -13,14 +13,14 @@ TestScenario_PublishedSet_completeSetPasses() {
 
 TestScenario_PublishedSet_extraTarballFails() {
 	good_release "$KEY_A"
-	cp "$T/dist/cf_${BARE_VERSION}_linux_amd64.tar.gz" "$T/dist/cf_${BARE_VERSION}_linux_riscv64.tar.gz"
+	cp "$T/dist/cflk_${BARE_VERSION}_linux_amd64.tar.gz" "$T/dist/cflk_${BARE_VERSION}_linux_riscv64.tar.gz"
 	check_dist
 	assert_rc_nonzero
 }
 
 TestScenario_PublishedSet_missingTarballFails() {
 	good_release "$KEY_A"
-	rm "$T/dist/cf_${BARE_VERSION}_darwin_arm64.tar.gz"
+	rm "$T/dist/cflk_${BARE_VERSION}_darwin_arm64.tar.gz"
 	check_dist
 	assert_rc_nonzero
 }
@@ -41,7 +41,7 @@ TestScenario_PublishedSet_installShNotTheCommitsFails() {
 
 TestScenario_PublishedSet_tarballModifiedFails() {
 	good_release "$KEY_A"
-	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cf_${BARE_VERSION}_linux_arm64.tar.gz" ok 6.6.6
+	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cflk_${BARE_VERSION}_linux_arm64.tar.gz" ok 6.6.6
 	check_dist
 	assert_rc_nonzero
 	assert_out_contains "does not match"
@@ -116,7 +116,7 @@ TestScenario_PublishedSet_verifyReleaseRejectsMissingAsset() {
 
 TestScenario_PublishedSet_verifyReleaseRejectsTamperedTarball() {
 	good_release "$KEY_A"
-	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cf_${BARE_VERSION}_linux_amd64.tar.gz" ok 6.6.6
+	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cflk_${BARE_VERSION}_linux_amd64.tar.gz" ok 6.6.6
 	fake_gh "$T/dist"
 	verify_release "$VERSION"
 	assert_rc_nonzero

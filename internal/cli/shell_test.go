@@ -37,7 +37,7 @@ func TestShellEnd_TheStatusOfTheShellIsNotAnAttachFailure(t *testing.T) {
 	}
 }
 
-// cf shell ends with the status of the shell, without a CF_* line; a relay error keeps its code.
+// cflk shell ends with the status of the shell, without a CF_* line; a relay error keeps its code.
 func TestReport_AShellStatusIsTheExitCodeAndPrintsNothing(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if got := report(&out, &errOut, ShellStatus(3), false, false); got != 3 || out.Len() != 0 || errOut.Len() != 0 {

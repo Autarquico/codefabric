@@ -122,10 +122,10 @@ func (w *keyringWorker) recheck(t *testing.T) {
 	w.checked(t)
 }
 
-// cf runs `cf worker secrets <args>` against the store of the test.
+// cf runs `cflk worker secrets <args>` against the store of the test.
 func cf(t *testing.T, stdin string, args ...string) (string, error) {
 	t.Helper()
-	root := &cobra.Command{Use: "cf", SilenceUsage: true, SilenceErrors: true}
+	root := &cobra.Command{Use: "cflk", SilenceUsage: true, SilenceErrors: true}
 	root.PersistentFlags().Bool("json", false, "")
 	worker := &cobra.Command{Use: "worker"}
 	worker.AddCommand(newSecretsCmd())

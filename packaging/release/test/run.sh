@@ -45,6 +45,27 @@ echo "${FAKE_PROC_TRANSLATED:-0}"
 EOF
 chmod 755 "$SHIM/sysctl"
 
+# The installer looks at the cf of the PATH, so the tests must not see the one of the machine they run on: every
+# PATH directory that holds a cf is replaced by a directory of links to the rest of its entries.
+HOST_PATH=
+farm=0
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+	if [ -n "$dir" ] && [ -d "$dir" ] && { [ -e "$dir/cf" ] || [ -L "$dir/cf" ]; }; then
+		farm=$((farm + 1))
+		mkdir "$TMP/path$farm"
+		for entry in "$dir"/*; do
+			[ "$(basename "$entry")" = cf ] || ln -s "$entry" "$TMP/path$farm/$(basename "$entry")"
+		done
+		dir=$TMP/path$farm
+	fi
+	HOST_PATH=${HOST_PATH:+$HOST_PATH:}$dir
+done
+IFS=$old_ifs
+PATH=$HOST_PATH
+export PATH
+
 # Two release keys: KEY_A is the trusted one baked into its install.sh copy, KEY_B is an unrelated signer.
 KEY_A=$TMP/keyA
 KEY_B=$TMP/keyB

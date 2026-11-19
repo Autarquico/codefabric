@@ -29,7 +29,7 @@ type Result struct {
 }
 
 func (r Result) String() string {
-	return hideInvites(fmt.Sprintf("cf %s: exit %d\nstdout: %s\nstderr: %s", strings.Join(r.Args, " "), r.Code, r.Stdout, r.Stderr))
+	return hideInvites(fmt.Sprintf("cflk %s: exit %d\nstdout: %s\nstderr: %s", strings.Join(r.Args, " "), r.Code, r.Stdout, r.Stderr))
 }
 
 // inviteURL is an invite as cf prints and takes it.
@@ -140,47 +140,47 @@ func decodeOne(out string, v any) error {
 }
 
 // Do creates a Task as the owner, with the harness command running prompt as
-// a script; flags go to `cf do` as they are.
+// a script; flags go to `cflk do` as they are.
 func (c *Cluster) Do(prompt string, flags ...string) v1.CreateTaskResponse {
 	c.t.Helper()
 	created := JSON[v1.CreateTaskResponse](c, c.Ctl, append([]string{"do", prompt, "--harness", "command"}, flags...)...)
 	if created.Run == nil {
-		c.t.Fatalf("e2e: cf do created no Run: %+v", created.Task)
+		c.t.Fatalf("e2e: cflk do created no Run: %+v", created.Task)
 	}
 	return created
 }
 
-// TaskSet changes a Task as the owner (`cf task set`).
+// TaskSet changes a Task as the owner (`cflk task set`).
 func (c *Cluster) TaskSet(task string, flags ...string) v1.Task {
 	c.t.Helper()
 	return JSON[v1.Task](c, c.Ctl, append([]string{"task", "set", task}, flags...)...)
 }
 
-// Run is `cf run show <ref> --json` in b.
+// Run is `cflk run show <ref> --json` in b.
 func (c *Cluster) Run(b *Box, ref string) v1.Run {
 	c.t.Helper()
 	return JSON[v1.Run](c, b, "run", "show", ref)
 }
 
-// RunShow is what `cf run show <ref>` shows a person in b.
+// RunShow is what `cflk run show <ref>` shows a person in b.
 func (c *Cluster) RunShow(b *Box, ref string) string {
 	c.t.Helper()
 	return c.mustCF(b, "run", "show", ref).Stdout
 }
 
-// Ps is `cf ps` in b.
+// Ps is `cflk ps` in b.
 func (c *Cluster) Ps(b *Box) []v1.PsEntry {
 	c.t.Helper()
 	return JSON[v1.PsResponse](c, b, "ps").Runs
 }
 
-// ListWorkers is `cf worker list` in b.
+// ListWorkers is `cflk worker list` in b.
 func (c *Cluster) ListWorkers(b *Box) []v1.Worker {
 	c.t.Helper()
 	return JSON[v1.ListWorkersResponse](c, b, "worker", "list").Workers
 }
 
-// Events are all the events `cf events` gives in b, page after page from the
+// Events are all the events `cflk events` gives in b, page after page from the
 // first; filters (--run, --type, ...) go to every page.
 func (c *Cluster) Events(b *Box, filters ...string) []v1.Event {
 	c.t.Helper()
@@ -200,14 +200,14 @@ func (c *Cluster) Events(b *Box, filters ...string) []v1.Event {
 	}
 }
 
-// FollowLogs is `cf logs --run <run> --follow` in b, as a process that goes on
+// FollowLogs is `cflk logs --run <run> --follow` in b, as a process that goes on
 // until it is killed or the output ends; what it shows is its Log.
 func (c *Cluster) FollowLogs(b *Box, run string) *Proc {
 	c.t.Helper()
 	return c.cfProc(b, "", "logs", "--run", run, "--follow")
 }
 
-// FollowEvents is `cf events --follow --json` in b, as a process that goes on
+// FollowEvents is `cflk events --follow --json` in b, as a process that goes on
 // until it is killed; its Log is JSON Lines, read with FollowedEvents.
 func (c *Cluster) FollowEvents(b *Box, filters ...string) *Proc {
 	c.t.Helper()

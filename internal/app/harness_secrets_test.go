@@ -92,7 +92,7 @@ func TestHarnessRequiredSecrets_AProjectWithoutTheAllowlistRefusesTheRun(t *test
 	e.project("backend")
 	_, err := e.createTask("backend", "x", withHarness("claude-code", domain.ModeHeadless))
 	wantCode(t, err, domain.CodePolicyDenied)
-	if !strings.Contains(err.Error(), "cf project secrets allow <project> "+claudeTokenRef) {
+	if !strings.Contains(err.Error(), "cflk project secrets allow <project> "+claudeTokenRef) {
 		t.Errorf("error = %v", err)
 	}
 	if n := e.count("tasks"); n != 0 {

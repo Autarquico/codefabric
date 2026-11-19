@@ -11,7 +11,7 @@ import (
 // registerSeedRoutes adds how a client seeds a Run with its own session
 // (lineage.native_seed): the client uploads the session for a Project, the Worker
 // that holds the Run downloads it under the lease. Like the native state of a
-// checkpoint it never goes through /v1/blobs. TaskPulled is the marker that `cf task
+// checkpoint it never goes through /v1/blobs. TaskPulled is the marker that `cflk task
 // pull` leaves, which a resume checks.
 func (s *Server) registerSeedRoutes() {
 	s.handle("GET /v1/checkpoint/exclude", clientsOnly, s.checkpointExclude)

@@ -1,5 +1,5 @@
 // Package inputsock is the conversation between the daemon of a Worker and the
-// permission bridge of a Run (`cf worker mcp-bridge`, the MCP server Claude Code
+// permission bridge of a Run (`cflk worker mcp-bridge`, the MCP server Claude Code
 // calls to ask whether a tool may run), over a unix socket of the Run.
 //
 // The bridge lives and dies with the harness; the daemon may restart in the

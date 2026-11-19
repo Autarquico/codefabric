@@ -14,7 +14,7 @@ import (
 )
 
 func newConfigCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "config", Short: "Inspect CodeFabric's configuration"}
+	cmd := &cobra.Command{Use: "config", Short: "Inspect Code Flock's configuration"}
 	cmd.AddCommand(newConfigPathsCmd(), newConfigShowCmd())
 	return cmd
 }
@@ -22,7 +22,7 @@ func newConfigCmd() *cobra.Command {
 func newConfigPathsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "paths",
-		Short: "Print where CodeFabric keeps its files",
+		Short: "Print where Code Flock keeps its files",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p, err := config.ResolveFromEnv()
@@ -46,8 +46,8 @@ func newConfigPathsCmd() *cobra.Command {
 	}
 }
 
-// configShown is `cf config show`: the Controller section exists only on a
-// machine that ran `cf controller init`.
+// configShown is `cflk config show`: the Controller section exists only on a
+// machine that ran `cflk controller init`.
 type configShown struct {
 	Controller *config.Controller `json:"controller,omitempty"`
 	Client     clientShown        `json:"client"`

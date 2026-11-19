@@ -192,7 +192,7 @@ type Worker struct {
 	LastHeartbeatAt   *time.Time                `json:"last_heartbeat_at,omitempty"`
 	CreatedAt         time.Time                 `json:"created_at"`
 	RemovedAt         *time.Time                `json:"removed_at,omitempty"`
-	// SSHTarget and AttachBinaries are what the Worker announced for `cf attach`.
+	// SSHTarget and AttachBinaries are what the Worker announced for `cflk attach`.
 	SSHTarget      string            `json:"ssh_target,omitempty"`
 	AttachBinaries map[string]string `json:"attach_binaries,omitempty"`
 	// Secrets are the secrets the Worker last said it holds, sorted by ref.

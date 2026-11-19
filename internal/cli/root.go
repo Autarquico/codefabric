@@ -33,28 +33,28 @@ const (
 )
 
 // Options are what the binary composes into the CLI that the CLI cannot reach
-// itself (ADR 0001): only cmd/cf may know the adapters.
+// itself (ADR 0001): only cmd/cflk may know the adapters.
 type Options struct {
-	// Terminal opens the session of a Run in this terminal (`cf attach`). Without
+	// Terminal opens the session of a Run in this terminal (`cflk attach`). Without
 	// one, attach answers CF_NOT_IMPLEMENTED once the Controller has answered.
 	Terminal Terminal
 	// Workflows builds the adopter of the harness configuration of this machine
-	// (`cf workflow adopt|commit`). Without one they answer CF_NOT_IMPLEMENTED.
+	// (`cflk workflow adopt|commit`). Without one they answer CF_NOT_IMPLEMENTED.
 	Workflows WorkflowAdopterFactory
-	// Sessions builds the sessions of this machine's harnesses (`--session` of `cf do`
-	// and `cf task resume`). Without it they answer CF_NOT_IMPLEMENTED.
+	// Sessions builds the sessions of this machine's harnesses (`--session` of `cflk do`
+	// and `cflk task resume`). Without it they answer CF_NOT_IMPLEMENTED.
 	Sessions SessionsFactory
-	// TUI opens the terminal UI over the Controller (`cf` with no arguments on a
-	// terminal). internal/tui is composed in by cmd/cf: the CLI may not import
-	// it. Without one, `cf` prints its help.
+	// TUI opens the terminal UI over the Controller (`cflk` with no arguments on a
+	// terminal). internal/tui is composed in by cmd/cflk: the CLI may not import
+	// it. Without one, `cflk` prints its help.
 	TUI func(ctx context.Context, c *client.Client) error
-	// Native shows the desktop notifications of `cf notify`. Without one they
+	// Native shows the desktop notifications of `cflk notify`. Without one they
 	// are only logged as unavailable.
 	Native notify.Native
 
 	// openTUIClient replaces the Controller client that the TUI gets in tests.
 	openTUIClient func(*cobra.Command) (*client.Client, error)
-	// handoffStore replaces the Controller client of `cf handoff` in tests.
+	// handoffStore replaces the Controller client of `cflk handoff` in tests.
 	handoffStore func(*cobra.Command) (handoff.Controller, error)
 	// workflowStore replaces the Controller client of the workflow commands in tests.
 	workflowStore func(*cobra.Command) (workflowStore, error)
@@ -68,7 +68,7 @@ type Options struct {
 	environmentStore func(*cobra.Command) (environmentStore, error)
 	// projectUpdater replaces the Controller client of `project set` in tests.
 	projectUpdater func(*cobra.Command) (projectUpdater, error)
-	// doctorStore and sshProbe replace the Controller client and the ssh of `cf doctor` in tests.
+	// doctorStore and sshProbe replace the Controller client and the ssh of `cflk doctor` in tests.
 	doctorStore func(*cobra.Command) (doctorStore, error)
 	sshProbe    sshProbe
 	// doctorTimer replaces the timer of the deadline of the real ssh probe in tests.
@@ -206,8 +206,8 @@ func printable(s string) string {
 
 func newRootCmd(opts Options) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "cf",
-		Short:         "CodeFabric: run coding agents across a pool of machines",
+		Use:           "cflk",
+		Short:         "Code Flock: run coding agents across a pool of machines",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.ArbitraryArgs,
@@ -225,7 +225,7 @@ func newRootCmd(opts Options) *cobra.Command {
 	return root
 }
 
-// rootRun is what bare `cf` does: open the TUI when both ends are a terminal
+// rootRun is what bare `cflk` does: open the TUI when both ends are a terminal
 // and JSON was not asked for; else it is what it always was, a command that
 // only groups the others.
 func rootRun(opts Options) func(*cobra.Command, []string) error {

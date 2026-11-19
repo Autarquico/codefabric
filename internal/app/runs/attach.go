@@ -13,8 +13,8 @@ import (
 	"github.com/Autarquico/codeflock/internal/domain"
 )
 
-// reasonWorkerOffline is the reason `cf ps` gives for a Run on a Worker that
-// is offline or removed; `cf attach` answers it with CF_WORKER_OFFLINE.
+// reasonWorkerOffline is the reason `cflk ps` gives for a Run on a Worker that
+// is offline or removed; `cflk attach` answers it with CF_WORKER_OFFLINE.
 const reasonWorkerOffline = "worker_offline"
 
 // attachCheck is why a Run cannot be attached, or that it can, and through
@@ -29,7 +29,7 @@ type attachCheck struct {
 	binary     string
 }
 
-// attachable is the one decision `cf attach` and `cf ps` share, in two parts.
+// attachable is the one decision `cflk attach` and `cflk ps` share, in two parts.
 // Eligibility is about the Run: a headless Run has no terminal; a Run that is
 // over, or whose session is not active or whose handle is not known, is not
 // running; a Worker that is offline or removed cannot be reached; and the
@@ -152,7 +152,7 @@ func readsAsRun(ref string) bool {
 }
 
 // Ps answers GET /v1/ps: the Runs that have not ended, and those that ended with
-// a session still active, each with its Task, its Worker and whether `cf attach`
+// a session still active, each with its Task, its Worker and whether `cflk attach`
 // would open it, those of one Project if it is named. Everything is read in one snapshot.
 func (s *Service) Ps(ctx context.Context, by pki.Session, project string) (v1.PsResponse, error) {
 	out := v1.PsResponse{Runs: []v1.PsEntry{}}

@@ -249,7 +249,7 @@ func newProjectSetCmd(open func(*cobra.Command) (projectUpdater, error)) *cobra.
 	f.StringVar(&repoConfig, "repo-config", "", "whether the repo may carry .codefabric/project.yaml: allow or deny")
 	f.StringVar(&originSecret, "origin-secret", "", "ref of the secret that authenticates the origin (empty clears it; https only; the Project must allow it)")
 	f.StringVar(&nativeState, "native-state", "", "whether checkpoints capture the harness's own state (the session): on or off")
-	f.StringVar(&shell, "shell", "", "whether `cf shell` may open a shell in the worktree of a Run of this Project (the Worker must allow it too): on or off")
+	f.StringVar(&shell, "shell", "", "whether `cflk shell` may open a shell in the worktree of a Run of this Project (the Worker must allow it too): on or off")
 	f.StringVar(&mode, "mode", "", "default mode: headless or interactive")
 	f.StringVar(&completion, "completion", "", "default completion: first_success, promote or manual")
 	f.StringArrayVar(&addRepos, "add-repo", nil, "another URL of the repository; repeatable. A working copy belongs to the Project if its origin is exactly one of its URLs")

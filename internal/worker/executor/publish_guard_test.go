@@ -170,7 +170,7 @@ func TestASealingFailureQuotingAValueIsRedacted(t *testing.T) {
 
 // TestARepublicationAfterTheReleaseFailsClosed: once the values are gone (the
 // publication ended and released them), nothing can be checked against them,
-// so neither `cf run publish` nor the preservation of an orphan sends anything.
+// so neither `cflk run publish` nor the preservation of an orphan sends anything.
 func TestARepublicationAfterTheReleaseFailsClosed(t *testing.T) {
 	released := func(t *testing.T) (*fixture, *fakeGit, *syncBuffer, state.Key) {
 		f, g, logs := guardFixture(t)
@@ -184,7 +184,7 @@ func TestARepublicationAfterTheReleaseFailsClosed(t *testing.T) {
 		}
 		return f, g, logs, k
 	}
-	t.Run("cf run publish", func(t *testing.T) {
+	t.Run("cflk run publish", func(t *testing.T) {
 		f, g, logs, k := released(t)
 		seals, pushes := g.sealCount(), g.pushCount()
 		f.publishOrder(k)

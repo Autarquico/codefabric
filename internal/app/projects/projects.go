@@ -290,7 +290,7 @@ func checkOrigin(ctx context.Context, q store.Querier, project domain.ID, repo, 
 		return nil
 	}
 	return domain.NewError(domain.CodePolicyDenied,
-		fmt.Sprintf("origin_secret %s is not in the allowlist of the Project: allow it first with `cf project secrets allow <project> %s`", ref, ref),
+		fmt.Sprintf("origin_secret %s is not in the allowlist of the Project: allow it first with `cflk project secrets allow <project> %s`", ref, ref),
 		map[string]any{"not_allowed": []string{ref}})
 }
 

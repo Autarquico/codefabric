@@ -147,7 +147,7 @@ func TestScenario_TuiViewsActions_Workflows_RollbackConfirmsWithTheCommandItRuns
 	typeText(t, m, "claude")
 	press(t, m, "enter")
 	got := frame(m)
-	for _, want := range []string{"Roll back a Worker's harness?", "cf workflow rollback --worker=linux --harness=claude", "worker linux", "default v3"} {
+	for _, want := range []string{"Roll back a Worker's harness?", "cflk workflow rollback --worker=linux --harness=claude", "worker linux", "default v3"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("the confirmation lacks %q:\n%s", want, got)
 		}
@@ -198,13 +198,13 @@ func TestScenario_TuiViewsActions_Workflows_RollbackIsNotPresentedAsAboutTheSele
 
 func TestScenario_TuiViewsActions_Workflows_SaysWhatIsOnlyInTheCLI(t *testing.T) {
 	m := openWorkflows(t, newVersionedBackend())
-	for _, want := range []string{"cf workflow adopt <new-name>", "cf workflow commit default", "cf workflow diff default --worker=", "cf workflow explain default --worker="} {
+	for _, want := range []string{"cflk workflow adopt <new-name>", "cflk workflow commit default", "cflk workflow diff default --worker=", "cflk workflow explain default --worker="} {
 		if !strings.Contains(strings.Join(strings.Fields(frame(m)), " "), want) {
 			t.Errorf("the detail does not give %q:\n%s", want, frame(m))
 		}
 	}
 	press(t, m, "enter")
-	if got := frame(m); !strings.Contains(got, "CLI only") || !strings.Contains(got, "cf workflow adopt <new-name>") {
+	if got := frame(m); !strings.Contains(got, "CLI only") || !strings.Contains(got, "cflk workflow adopt <new-name>") {
 		t.Errorf("the menu does not say adopt is CLI-only:\n%s", got)
 	}
 }

@@ -46,7 +46,7 @@ type WorkerRef struct {
 }
 
 // PsEntry is a Run of GET /v1/ps with the Task and Worker it belongs to and
-// whether `cf attach` would open it: when it would not, NotAttachable says why
+// whether `cflk attach` would open it: when it would not, NotAttachable says why
 // (one of the NotAttachable* reasons, or "worker_offline").
 type PsEntry struct {
 	Run
@@ -54,7 +54,7 @@ type PsEntry struct {
 	Worker        *PsWorker `json:"worker"`
 	Attachable    bool      `json:"attachable"`
 	NotAttachable string    `json:"not_attachable_reason,omitempty"`
-	// Transports are the ways `cf attach` could open it (AttachTransport*);
+	// Transports are the ways `cflk attach` could open it (AttachTransport*);
 	// empty when it is not attachable.
 	Transports []string `json:"transports,omitempty"`
 }

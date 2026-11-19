@@ -88,7 +88,7 @@ func (c *Client) snapshotSource(ctx context.Context, dir string, project v1.Proj
 
 // SnapshotDir commits the working tree of dir as it is (gitctx.TakeSnapshot)
 // and sends the commit to the relay of the Project, which is what `--snapshot`
-// of `cf do` and of `cf task resume` start from. The tree is left untouched, and
+// of `cflk do` and of `cflk task resume` start from. The tree is left untouched, and
 // the files that checkpoint.exclude names (its default: the Controller does not tell
 // its configuration to clients) do not travel: Snapshot.Excluded lists them.
 func (c *Client) SnapshotDir(ctx context.Context, dir, project string) (gitctx.Snapshot, error) {
@@ -167,7 +167,7 @@ func remoteFor(ctx context.Context, dir string, p v1.Project) string {
 
 func noMatch(why string, projects []v1.Project) error {
 	names := projectNames(projects)
-	known := "there are no Projects yet: create one with `cf project create`"
+	known := "there are no Projects yet: create one with `cflk project create`"
 	if len(names) > 0 {
 		known = "Projects: " + strings.Join(names, ", ")
 	}

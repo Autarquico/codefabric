@@ -46,16 +46,16 @@ func claudeLine(id, kind, content string) string {
 func claudeBody(id string, extra ...string) []string {
 	lines := []string{
 		claudeLine(id, "user", `"hi"`),
-		claudeLine(id, "assistant", `[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"cf handoff"}}]`),
+		claudeLine(id, "assistant", `[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"cflk handoff"}}]`),
 		claudeLine(id, "user", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"a"}]`),
 		claudeLine(id, "assistant", `[{"type":"text","text":"done"}]`),
 	}
 	return append(lines, extra...)
 }
 
-// claudeInFlight is the tool call of cf handoff once Claude Code has written it: no result follows.
+// claudeInFlight is the tool call of cflk handoff once Claude Code has written it: no result follows.
 func claudeInFlight(id string) string {
-	return claudeLine(id, "assistant", `[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"cf handoff"}}]`)
+	return claudeLine(id, "assistant", `[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"cflk handoff"}}]`)
 }
 
 func (m machine) writeClaude(t *testing.T, id string, lines []string) string {

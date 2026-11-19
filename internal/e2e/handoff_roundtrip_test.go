@@ -215,9 +215,9 @@ func sessionLine(kind, cwd, content string) string {
 		kind, roundtripSession, cwd, role, body)
 }
 
-// handoffToolCall is the line of the call to `cf handoff`: the last thing of the session.
+// handoffToolCall is the line of the call to `cflk handoff`: the last thing of the session.
 func handoffToolCall(cwd string) string {
-	return fmt.Sprintf(`{"type":"assistant","version":"2.1.314","sessionId":%q,"cwd":%q,"message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"cf handoff --to w1"}}]}}`,
+	return fmt.Sprintf(`{"type":"assistant","version":"2.1.314","sessionId":%q,"cwd":%q,"message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"cflk handoff --to w1"}}]}}`,
 		roundtripSession, cwd)
 }
 
@@ -313,7 +313,7 @@ func TestScenario_HandoffRoundtrip(t *testing.T) {
 		t.Fatalf("the Run on A has no CF_RUN_SOCKET: /handto cannot work from it")
 	}
 
-	// 2. From inside the Run on A, as the agent: cf handoff --to B, through the socket.
+	// 2. From inside the Run on A, as the agent: cflk handoff --to B, through the socket.
 	// The move stops the agent that asked for it, so what its command prints may
 	// never be written: the move is seen where it lands, on B.
 	h.agentRuns(a, fmt.Sprintf("%q handoff --to %s --json\n", binary, b.Name))

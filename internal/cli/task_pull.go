@@ -29,7 +29,7 @@ var execResume = func(dir string, argv []string) error {
 	return syscall.Exec(path, argv, os.Environ()) //nolint:gosec // the command is built by the harness table of the session package
 }
 
-// newTaskPullCmd is `cf task pull <task> [--worktree p] [--no-session] [--defer] [--open]`
+// newTaskPullCmd is `cflk task pull <task> [--worktree p] [--no-session] [--defer] [--open]`
 // (§11.7): it brings the work of the Task, and the session of its harness, here.
 func newTaskPullCmd(sessions SessionsFactory) *cobra.Command {
 	var (
@@ -107,7 +107,7 @@ func renderPull(w io.Writer, r taskpull.Result) error {
 		p("%s: branch %s (%s, %s) is checked out in %s.", r.Task, r.Branch, r.Outcome, short, r.Dir)
 	default:
 		p("%s: branch %s (%s, %s) is ready but NOT checked out: this tree has uncommitted changes and none was touched.", r.Task, r.Branch, r.Outcome, short)
-		p("  To work on it without disturbing them: cf task pull %s --worktree <path>", r.Task)
+		p("  To work on it without disturbing them: cflk task pull %s --worktree <path>", r.Task)
 	}
 	if r.Sealed {
 		p("  The last commit holds what the Worker had not committed (\"cf: uncommitted changes at exit\").")

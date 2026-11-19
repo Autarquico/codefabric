@@ -11,6 +11,16 @@ brew_formula() {
 		>"$T/out" 2>"$T/err" || rc=$?
 }
 
+# brew-formula.sh and its template are R4's and still read the pre-rename cf_ tarballs: until R4, this file
+# renames the cflk_ fixture to them. Delete this function with R4 and go back to good_release.
+legacy_release() { # KEYDIR
+	good_release "$1"
+	for f in "$T"/dist/cflk_*.tar.gz; do mv "$f" "$T/dist/cf_${f##*/cflk_}"; done
+	sed 's/  cflk_/  cf_/' "$T/dist/checksums.txt" >"$T/dist/checksums.new"
+	mv "$T/dist/checksums.new" "$T/dist/checksums.txt"
+	sign_checksums "$1"
+}
+
 assert_no_stdout() { [ ! -s "$T/out" ] || fail "stdout is not empty: $(cat "$T/out")"; }
 
 assert_brew_rejects() { # error-substring
@@ -20,7 +30,7 @@ assert_brew_rejects() { # error-substring
 }
 
 TestScenario_FormulaDerivada_valid() {
-	good_release "$KEY_A"
+	legacy_release "$KEY_A"
 	brew_formula "$VERSION"
 	assert_rc 0
 	for target in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
@@ -40,28 +50,28 @@ TestScenario_FormulaDerivada_valid() {
 }
 
 TestScenario_FormulaDerivada_validWithoutExplicitVersion() {
-	good_release "$KEY_A"
+	legacy_release "$KEY_A"
 	brew_formula
 	assert_rc 0
 	grep -qF "$VERSION/cf_${BARE_VERSION}_linux_amd64.tar.gz" "$T/out" || fail "version not taken from the header"
 }
 
 TestScenario_FormulaDerivada_invalidSignature() {
-	good_release "$KEY_A"
+	legacy_release "$KEY_A"
 	sign_checksums "$KEY_B"
 	brew_formula "$VERSION"
 	assert_brew_rejects "signature does not verify"
 }
 
 TestScenario_FormulaDerivada_tamperedChecksums() {
-	good_release "$KEY_A"
+	legacy_release "$KEY_A"
 	printf '# tampered\n' >>"$T/dist/checksums.txt"
 	brew_formula "$VERSION"
 	assert_brew_rejects "signature does not verify"
 }
 
 TestScenario_FormulaDerivada_suffixedVersion() {
-	good_release "$KEY_A"
+	legacy_release "$KEY_A"
 	sed '1s/.*/version: v1.2.3-rc.1/' "$T/dist/checksums.txt" >"$T/new" && mv "$T/new" "$T/dist/checksums.txt"
 	sign_checksums "$KEY_A"
 	brew_formula
@@ -69,13 +79,13 @@ TestScenario_FormulaDerivada_suffixedVersion() {
 }
 
 TestScenario_FormulaDerivada_suffixedRequestedVersion() {
-	good_release "$KEY_A"
+	legacy_release "$KEY_A"
 	brew_formula v1.2.3-rc.1
 	assert_brew_rejects "not a plain vX.Y.Z"
 }
 
 TestScenario_FormulaDerivada_missingPlatform() {
-	good_release "$KEY_A"
+	legacy_release "$KEY_A"
 	grep -v linux_arm64 "$T/dist/checksums.txt" >"$T/new" && mv "$T/new" "$T/dist/checksums.txt"
 	sign_checksums "$KEY_A"
 	brew_formula "$VERSION"
@@ -83,7 +93,7 @@ TestScenario_FormulaDerivada_missingPlatform() {
 }
 
 TestScenario_FormulaDerivada_duplicatedPlatform() {
-	good_release "$KEY_A"
+	legacy_release "$KEY_A"
 	grep linux_amd64 "$T/dist/checksums.txt" >"$T/dup"
 	cat "$T/dup" >>"$T/dist/checksums.txt"
 	sign_checksums "$KEY_A"
@@ -92,7 +102,7 @@ TestScenario_FormulaDerivada_duplicatedPlatform() {
 }
 
 TestScenario_FormulaDerivada_invalidDigest() {
-	good_release "$KEY_A"
+	legacy_release "$KEY_A"
 	sed 's/^[0-9a-f]*  \(cf_.*darwin_arm64\)/zz  \1/' "$T/dist/checksums.txt" >"$T/new" && mv "$T/new" "$T/dist/checksums.txt"
 	sign_checksums "$KEY_A"
 	brew_formula "$VERSION"
@@ -100,7 +110,7 @@ TestScenario_FormulaDerivada_invalidDigest() {
 }
 
 TestScenario_FormulaDerivada_headerVersionMismatch() {
-	good_release "$KEY_A"
+	legacy_release "$KEY_A"
 	brew_formula v1.2.4
 	assert_brew_rejects "checksums are for $VERSION, not v1.2.4"
 }

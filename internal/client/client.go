@@ -406,10 +406,10 @@ func (e *bareStatus) Is(target error) bool {
 	return target == ErrUnknownRoute && (e.status == http.StatusNotFound || e.status == http.StatusMethodNotAllowed)
 }
 
-const renewHint = "ask the owner for a new invitation (`cf controller token create`) and run `cf connect --force <invitation>`"
+const renewHint = "ask the owner for a new invitation (`cflk controller token create`) and run `cflk connect --force <invitation>`"
 
 // WorkerRecoveryHint is the advice for a Worker whose credentials were rejected.
-const WorkerRecoveryHint = "ask the owner for a new invitation (`cf controller token create --worker`) and run `cf worker join --force <invitation>`"
+const WorkerRecoveryHint = "ask the owner for a new invitation (`cflk controller token create --worker`) and run `cflk worker join --force <invitation>`"
 
 // transportError sorts connection failures: a certificate that one side
 // refuses is an authentication problem, anything else (a name the server
@@ -424,7 +424,7 @@ func (c *Client) transportError(ctx context.Context, err error) error {
 		var wrongHost x509.HostnameError
 		if errors.As(verify.Err, &wrongHost) {
 			return domain.NewError(domain.CodeControllerUnreachable,
-				fmt.Sprintf("the Controller's certificate does not cover %q: dial an address it was issued for (see `cf controller init --advertise`)", c.serverName), cause)
+				fmt.Sprintf("the Controller's certificate does not cover %q: dial an address it was issued for (see `cflk controller init --advertise`)", c.serverName), cause)
 		}
 		return domain.NewError(domain.CodeUnauthenticated,
 			"the Controller's certificate is not trusted by the CA pinned at connect time", cause)
