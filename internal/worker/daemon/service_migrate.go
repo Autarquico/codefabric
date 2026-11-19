@@ -28,7 +28,7 @@ func (o ServiceOptions) migrateOldService(ctx context.Context, env svcunit.Env) 
 	}
 	var warnings []string
 	r, err := migrate.Service{
-		Env: env, Old: old, Mover: o.Mover, Settle: o.Settle, Binary: o.Binary, Runs: migrate.Runs{Sessions: o.Sessions},
+		Env: env, Old: old, Mover: o.Mover, Settle: o.Settle, Binary: o.Binary, LiveRuns: NoLiveRuns(o.Sessions),
 		New: func(was migrate.Snapshot, dirs migrate.Dirs) (svcunit.Spec, error) {
 			spec, w, err := workerSpec(o.carryingOver(was, dirs), env.GOOS)
 			warnings = w

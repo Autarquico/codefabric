@@ -75,7 +75,7 @@ func InstallService(ctx context.Context, o ServiceOptions) (ServiceResult, error
 	}
 	// Only now, with the request known to be good, are the directories of the old name moved.
 	noRuns := func(ctx context.Context, dirs migrate.Dirs) error {
-		return migrate.Runs{Sessions: o.Sessions}.None(ctx, o.TmuxTmpDir, dirs.OldData)
+		return NoLiveRuns(o.Sessions)(ctx, o.TmuxTmpDir, dirs.OldData)
 	}
 	if o.Paths.ConfigDir, o.Paths.DataDir, err = o.Mover.Adopt(ctx, env, o.Paths.ConfigDir, o.Paths.DataDir, noRuns); err != nil {
 		return ServiceResult{}, err

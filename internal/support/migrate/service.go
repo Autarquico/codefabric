@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,7 +88,7 @@ func (m Mover) Adopt(ctx context.Context, env svcunit.Env, cfg, data string, run
 	if len(pairs) == 0 {
 		return cfg, data, nil
 	}
-	others, err := peers(ctx, env, dirs, "")
+	others, err := peers(ctx, env, dirs, "", "")
 	if err != nil {
 		return "", "", err
 	}
@@ -124,6 +125,11 @@ func Renamed(dir string) string {
 	return dir
 }
 
+// LiveRuns refuses, with an error that says why, while the Worker whose data
+// directory is dataDir and whose tmux uses tmuxTmpDir has Runs live (or cannot
+// be asked): any move of that directory would lose them.
+type LiveRuns func(ctx context.Context, tmuxTmpDir, dataDir string) error
+
 // Service moves one service from the old name to the new one, and the
 // directories it uses with it, as steps that each can be put back. Another
 // service of the old name on the same directories (a Controller and a Worker
@@ -136,8 +142,9 @@ type Service struct {
 	New func(old Snapshot, dirs Dirs) (svcunit.Spec, error)
 	// Binary is the cflk the units moved along with this one run; empty is this executable.
 	Binary string
-	// Runs is how a Worker is checked for live Runs, before anything changes.
-	Runs Runs
+	// LiveRuns is how a Worker is checked for live Runs, before anything
+	// changes: the Worker side supplies it. nil refuses to move a Worker.
+	LiveRuns LiveRuns
 	// Settle waits until the new service has had time to fail; nil is two seconds.
 	Settle func(ctx context.Context) error
 	// Mover is where tests inject failures.
@@ -165,14 +172,14 @@ type peer struct {
 // peers are the services of the old name, other than self, that use the
 // directories about to move, running or not. One that cannot be read, or that
 // cflk cannot move, is an error: what is not known is not safe.
-func peers(ctx context.Context, env svcunit.Env, dirs Dirs, self string) ([]peer, error) {
+func peers(ctx context.Context, env svcunit.Env, dirs Dirs, self, binary string) ([]peer, error) {
 	var out []peer
 	for _, u := range config.OldUnits(env.Home, env.GOOS) {
 		if u.Name == self {
 			continue
 		}
-		if u.System {
-			if err := systemPeer(u, dirs, env.Home); err != nil {
+		if u.System || env.GOOS == "darwin" && u.Kind == "controller" {
+			if err := unmanagedPeer(u, dirs, env.Home, binary); err != nil {
 				return nil, err
 			}
 			continue
@@ -191,22 +198,39 @@ func peers(ctx context.Context, env svcunit.Env, dirs Dirs, self string) ([]peer
 	return out, nil
 }
 
-// systemPeer refuses a LaunchDaemon of the system that uses the directories:
-// only root can stop and move it.
-func systemPeer(u config.Unit, dirs Dirs, home string) error {
+// unmanagedPeer refuses a service on the directories that cflk cannot move: a
+// LaunchDaemon of the system, which only root can change, or a Controller under
+// launchd, which cflk never installs on macOS and so never writes. Nothing
+// changes; the commands to move it are the person's.
+func unmanagedPeer(u config.Unit, dirs Dirs, home, binary string) error {
+	unreadable := func(err error) error {
+		return fmt.Errorf("%s cannot be read, so it is not known whether it uses the directories about to move: nothing was changed: %w", u.Path, err)
+	}
 	content, err := os.ReadFile(u.Path) //nolint:gosec // the property list of an old service
 	if err != nil {
-		return fmt.Errorf("%s cannot be read, so it is not known whether it uses the directories about to move: nothing was changed: %w", u.Path, err)
+		return unreadable(err)
 	}
 	info, err := svcunit.ReadPlist(content)
 	if err != nil {
-		return fmt.Errorf("%s cannot be read, so it is not known whether it uses the directories about to move: nothing was changed: %w", u.Path, err)
+		return unreadable(err)
 	}
-	if dirs.uses(info.Env, home) {
+	if !dirs.uses(info.Env, home) {
+		return nil
+	}
+	if u.System {
 		return fmt.Errorf("%s is a LaunchDaemon of the system on the same directories, which only root can move: nothing was changed; "+
 			"run `cflk %s install-service` to see how to move it, and do that first", u.Path, u.Kind)
 	}
-	return nil
+	program, _, err := svcunit.Program(binary)
+	if err != nil {
+		return err
+	}
+	commands, err := LaunchPlan{Plist: u.Path, Content: content, Binary: program, UserHome: home}.Commands()
+	if err != nil {
+		return fmt.Errorf("%s is a Controller under launchd on the same directories and cannot be moved: %w", u.Path, err)
+	}
+	return fmt.Errorf("%s is a Controller under launchd on the same directories, which cflk does not manage: nothing was changed. "+
+		"To move it, run, in order, and then run this again:\n\n%s", u.Path, strings.Join(commands, "\n"))
 }
 
 // Migrate runs the move; the new services run if the old ones did. If a step
@@ -227,7 +251,7 @@ func (s Service) Migrate(ctx context.Context) (svcunit.Result, error) {
 	if err != nil {
 		return svcunit.Result{}, err
 	}
-	others, err := peers(ctx, s.Env, dirs, s.Old.Name)
+	others, err := peers(ctx, s.Env, dirs, s.Old.Name, s.Binary)
 	if err != nil {
 		return svcunit.Result{}, err
 	}
@@ -275,7 +299,10 @@ func (s Service) begin(ctx context.Context, members []member) error {
 		if m.kind != "worker" {
 			continue
 		}
-		if err := s.Runs.None(ctx, m.snap.Env["TMUX_TMPDIR"], cmp.Or(m.snap.Env["CF_DATA_DIR"], defaultData)); err != nil {
+		if s.LiveRuns == nil {
+			return fmt.Errorf("%s is a Worker and there is no way to tell whether Runs are live on it: nothing was changed", m.old.Name)
+		}
+		if err := s.LiveRuns(ctx, m.snap.Env["TMUX_TMPDIR"], cmp.Or(m.snap.Env["CF_DATA_DIR"], defaultData)); err != nil {
 			return err
 		}
 	}
@@ -313,7 +340,7 @@ func (s Service) successor(i int, m member, dirs Dirs) (svcunit.Spec, error) {
 		}
 	}
 	return svcunit.Spec{
-		Name:          "codeflock-" + strings.TrimPrefix(m.old.Name, "cf-"),
+		Name:          "codeflock-" + strings.TrimPrefix(strings.TrimPrefix(m.old.Name, "cf-"), "com.codefabric."),
 		Label:         strings.Replace(m.old.Label, "com.codefabric.", "com.codeflock.", 1),
 		Description:   "Code Flock " + strings.ToUpper(m.kind[:1]) + m.kind[1:],
 		Installer:     "cflk " + m.kind + " install-service",
@@ -383,13 +410,6 @@ func (s Service) run(ctx context.Context, members []member, specs []svcunit.Spec
 			return err
 		}, func() error { _, err := svcunit.Uninstall(ctx, s.Env, spec); return err }})
 	}
-	for _, m := range members {
-		steps = append(steps, step{"removing " + m.old.Name, func() error {
-			r, err := svcunit.Uninstall(ctx, s.Env, m.old)
-			record(r)
-			return err
-		}, nil})
-	}
 	for i, st := range steps {
 		if err := st.do(); err != nil {
 			err = fmt.Errorf("%s: %w", st.name, err)
@@ -401,9 +421,28 @@ func (s Service) run(ctx context.Context, members []member, specs []svcunit.Spec
 			return svcunit.Result{}, fmt.Errorf("%w; nothing was changed: %s run as they did", err, strings.Join(names, ", "))
 		}
 	}
+	// Every new service answers: the move is done, and what is left is tidying,
+	// which cannot take it back.
+	for _, m := range members {
+		r, err := svcunit.Uninstall(ctx, s.Env, m.old)
+		record(r)
+		if err != nil {
+			result.Warnings = append(result.Warnings, s.leftBehind(m.old, r.Path, err))
+		}
+	}
 	progress.remove()
 	result.Actions, result.Changed = actions, true
 	return result, nil
+}
+
+// leftBehind says that an old service could not be removed once the new ones
+// run: it stays stopped, and the command to take it away is the person's.
+func (s Service) leftBehind(old svcunit.Spec, path string, err error) string {
+	by := "systemctl --user disable --now " + old.Name + ".service && rm " + shellQuote(path)
+	if s.Env.GOOS == "darwin" {
+		by = "launchctl bootout gui/" + strconv.Itoa(s.Env.UID) + "/" + old.Label + "; rm " + shellQuote(path)
+	}
+	return fmt.Sprintf("the new services run, but the old %s could not be removed (%v); it stays stopped: remove it by hand with `%s`", old.Name, err, by)
 }
 
 // undo puts back what the steps did, last first, and says what could not be put back.

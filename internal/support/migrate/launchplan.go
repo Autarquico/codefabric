@@ -100,7 +100,7 @@ func (p LaunchPlan) Commands() ([]string, error) {
 // move is a move that never goes into a destination that exists: `mv` would put
 // the directory inside it, and follow it if it is a link.
 func move(as, from, to string) string {
-	return fmt.Sprintf("[ ! -e %[2]s ] && [ ! -L %[2]s ] && %[1]smv -n %[3]s %[2]s || echo %[4]s >&2",
+	return fmt.Sprintf("[ ! -e %[2]s ] && [ ! -L %[2]s ] && %[1]smv -n %[3]s %[2]s || { echo %[4]s >&2; exit 1; }",
 		as, shellQuote(to), shellQuote(from), shellQuote(to+" exists, or the move failed: stop here"))
 }
 

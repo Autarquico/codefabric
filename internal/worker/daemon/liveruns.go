@@ -1,4 +1,4 @@
-package migrate
+package daemon
 
 import (
 	"context"
@@ -12,24 +12,25 @@ import (
 	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
 	"github.com/Autarquico/codeflock/internal/config"
 	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/migrate"
 	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
-// Runs is the check that no Run is live on a Worker, which any move of its
-// data directory needs: the name of the tmux socket comes from that directory,
-// so the Runs would not be found again.
-type Runs struct {
-	// Sessions lists the Runs in the tmux server o names; nil asks tmux.
-	Sessions func(ctx context.Context, o tmux.Options) ([]string, error)
+// NoLiveRuns is the check that no Run is live on a Worker, which any move of
+// its data directory needs: the name of the tmux socket comes from that
+// directory, so the Runs would not be found again. It refuses while a Run is
+// live on the Worker whose data directory is dataDir and whose tmux uses
+// tmuxTmpDir, by its database and by its tmux; what cannot be checked counts as
+// a Run. sessions lists the Runs in the tmux server o names; nil asks tmux.
+func NoLiveRuns(sessions func(ctx context.Context, o tmux.Options) ([]string, error)) migrate.LiveRuns {
+	return func(ctx context.Context, tmuxTmpDir, dataDir string) error {
+		return noLiveRuns(ctx, sessions, tmuxTmpDir, dataDir)
+	}
 }
 
-// None refuses while a Run is live on the Worker whose data directory is
-// dataDir and whose tmux uses tmuxTmpDir: by its database and by its tmux.
-// What cannot be checked counts as a Run.
-func (r Runs) None(ctx context.Context, tmuxTmpDir, dataDir string) error {
+func noLiveRuns(ctx context.Context, sessions func(ctx context.Context, o tmux.Options) ([]string, error), tmuxTmpDir, dataDir string) error {
 	paths := config.Paths{DataDir: dataDir}
 	inDB, dbErr := liveRunsInDatabase(ctx, paths.WorkerStateFile())
-	sessions := r.Sessions
 	if sessions == nil {
 		sessions = tmuxSessions
 	}
@@ -47,14 +48,6 @@ func (r Runs) None(ctx context.Context, tmuxTmpDir, dataDir string) error {
 			"nothing was changed; drain it with `cflk worker drain <worker>`, wait for them to end, and run this again", max(inDB, len(inTmux)), inDB, len(inTmux)), nil)
 	}
 	return nil
-}
-
-func tmuxSessions(ctx context.Context, o tmux.Options) ([]string, error) {
-	rt, err := tmux.New(o)
-	if err != nil {
-		return nil, err
-	}
-	return rt.List(ctx)
 }
 
 // liveRunsInDatabase counts the assignments of the Worker that have not ended,

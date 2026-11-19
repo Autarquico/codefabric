@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
 	"github.com/Autarquico/codeflock/internal/config"
 	"github.com/Autarquico/codeflock/internal/domain"
 	"github.com/Autarquico/codeflock/internal/support/migrate"
@@ -29,9 +28,10 @@ type ServiceOptions struct {
 	// migration from the old names (migrate.Service).
 	Mover  migrate.Mover
 	Settle func(ctx context.Context) error
-	// Sessions lists the sessions of Runs in the tmux server o names, for a
-	// Worker moved along with the Controller; nil asks tmux.
-	Sessions func(ctx context.Context, o tmux.Options) ([]string, error)
+	// LiveRuns is the check of the Runs of a Worker that is moved along with
+	// the Controller (it shares its root); the composition of the binary gives
+	// it, since the Controller does not know the Worker. nil refuses that move.
+	LiveRuns migrate.LiveRuns
 	// Home is the home directory of the user for the property lists of launchd; empty is this user's.
 	Home string
 }
@@ -82,7 +82,7 @@ func InstallService(ctx context.Context, o ServiceOptions) (svcunit.Result, erro
 func (o ServiceOptions) migrateOldService(ctx context.Context, env svcunit.Env) (res svcunit.Result, migrated bool, err error) {
 	var warnings []string
 	res, err = migrate.Service{
-		Env: env, Old: oldServiceSpec(), Mover: o.Mover, Settle: o.Settle, Binary: o.Binary, Runs: migrate.Runs{Sessions: o.Sessions},
+		Env: env, Old: oldServiceSpec(), Mover: o.Mover, Settle: o.Settle, Binary: o.Binary, LiveRuns: o.LiveRuns,
 		New: func(_ migrate.Snapshot, dirs migrate.Dirs) (svcunit.Spec, error) {
 			n := o
 			n.Paths = config.Paths{ConfigDir: dirs.NewConfig, DataDir: dirs.NewData}

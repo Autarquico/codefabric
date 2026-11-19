@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
 	"github.com/Autarquico/codeflock/internal/support/svcunit"
 	"github.com/Autarquico/codeflock/internal/support/svcunit/svcunittest"
 )
@@ -57,7 +56,8 @@ func (r *rig) installOld(t *testing.T, spec svcunit.Spec, active bool) {
 func (r *rig) service() Service {
 	return Service{
 		Env: r.env, Old: oldWorker,
-		Settle: func(context.Context) error { return nil },
+		LiveRuns: func(context.Context, string, string) error { return nil },
+		Settle:   func(context.Context) error { return nil },
 		New: func(was Snapshot, dirs Dirs) (svcunit.Spec, error) {
 			spec := newWorker
 			spec.Argv = append([]string{"/opt/cflk/bin/cflk"}, was.Argv[1:]...)
@@ -149,7 +149,6 @@ func TestServiceCompensatesAFailureAtEveryStepAndTheOldOneRunsAgain(t *testing.T
 		{"the new one does not stay up", func(_ *rig, s *Service) {
 			s.Settle = func(context.Context) error { return boom }
 		}},
-		{"removing the old one", func(r *rig, _ *Service) { r.fleet.Fail("systemctl --user disable --no-reload cf-worker", boom) }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -159,7 +158,6 @@ func TestServiceCompensatesAFailureAtEveryStepAndTheOldOneRunsAgain(t *testing.T
 			if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "boom") {
 				t.Fatalf("err = %v", err)
 			}
-			r.fleet.Fail("systemctl --user disable --no-reload cf-worker", nil)
 			r.unchanged(t)
 		})
 	}
@@ -282,7 +280,7 @@ func TestServiceWithAnUnreadableUnitChangesNothing(t *testing.T) {
 func TestServiceRefusesToMoveWhatAPreflightRefuses(t *testing.T) {
 	r := newRig(t)
 	s := r.service()
-	s.Runs.Sessions = func(context.Context, tmux.Options) ([]string, error) { return []string{"cf-run_a-e1"}, nil }
+	s.LiveRuns = func(context.Context, string, string) error { return errors.New("1 Runs are live on this Worker") }
 	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
 		t.Fatalf("err = %v", err)
 	}
@@ -330,15 +328,15 @@ func TestServiceMovedWithAnotherChecksTheRunsOfTheWorkerThatIsNotItself(t *testi
 	s := r.service()
 	s.Old = oldController
 	s.New = func(Snapshot, Dirs) (svcunit.Spec, error) { return svcunit.Spec{}, errors.New("not reached") }
-	var asked tmux.Options
-	s.Runs.Sessions = func(_ context.Context, o tmux.Options) ([]string, error) {
-		asked = o
-		return []string{"cf-run_a-e1"}, nil
+	var asked [2]string
+	s.LiveRuns = func(_ context.Context, tmuxTmpDir, dataDir string) error {
+		asked = [2]string{tmuxTmpDir, dataDir}
+		return errors.New("1 Runs are live on this Worker")
 	}
 	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
 		t.Fatalf("err = %v", err)
 	}
-	if asked.TmpDir != "/run/tmux" || asked.Socket != tmux.SocketName(filepath.Join(r.data, "worker")) {
+	if asked != [2]string{"/run/tmux", r.data} {
 		t.Errorf("asked %+v", asked)
 	}
 	r.unchanged(t)
@@ -388,6 +386,87 @@ func TestServiceRefusesAnotherServiceItCannotMove(t *testing.T) {
 	})
 }
 
+func TestServiceWithAWorkerAndNoWayToAskAboutRunsChangesNothing(t *testing.T) {
+	r := newRig(t)
+	s := r.service()
+	s.LiveRuns = nil
+	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "no way to tell") {
+		t.Fatalf("err = %v", err)
+	}
+	r.unchanged(t)
+}
+
+// Once every new service answers, the move is done: an old one that cannot be
+// removed is a warning with the command to remove it, not a reason to undo.
+func TestServiceThatCannotRemoveASiblingKeepsTheMoveAndSaysHowToFinish(t *testing.T) {
+	r := newRig(t)
+	r.installOld(t, oldController, true)
+	r.fleet.Fail("systemctl --user disable --no-reload cf-controller", errors.New("boom"))
+	s := r.service()
+
+	res, err := s.Migrate(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !r.fleet.Active("codeflock-worker.service") || !r.fleet.Active("codeflock-controller.service") || r.fleet.Active("cf-controller.service") {
+		t.Errorf("worker %v, controller %v, old controller %v", r.fleet.Active("codeflock-worker.service"), r.fleet.Active("codeflock-controller.service"), r.fleet.Active("cf-controller.service"))
+	}
+	if !has(t, filepath.Join(r.home, ".local", "share", "codeflock", "f")) || has(t, filepath.Join(r.data, "f")) {
+		t.Errorf("the data did not stay in codeflock")
+	}
+	if has(t, r.unit("cf-worker")) || has(t, filepath.Join(r.home, ".local", "share", "codeflock", progressName)) {
+		t.Errorf("the Worker was not removed, or the progress is left")
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "cf-controller") || !strings.Contains(res.Warnings[0], "systemctl --user disable --now cf-controller.service && rm ") {
+		t.Errorf("warnings: %q", res.Warnings)
+	}
+}
+
+func TestServiceRefusesAControllerUnderLaunchdOnTheSameRoot(t *testing.T) {
+	home := t.TempDir()
+	agents := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(agents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plist := `<plist><dict><key>Label</key><string>com.codefabric.controller</string>
+<key>ProgramArguments</key><array><string>/usr/local/bin/cf</string><string>controller</string><string>run</string></array>
+<key>EnvironmentVariables</key><dict><key>CF_DATA_DIR</key><string>` + home + `/.local/share/codefabric</string></dict></dict></plist>`
+	path := filepath.Join(agents, "com.codefabric.controller.plist")
+	if err := os.WriteFile(path, []byte(plist), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirs := Dirs{OldConfig: home + "/.config/codefabric", NewConfig: home + "/.config/codeflock", OldData: home + "/.local/share/codefabric", NewData: home + "/.local/share/codeflock"}
+	env := svcunit.Env{Home: home, UID: 501, GOOS: "darwin"}
+
+	_, err := peers(t.Context(), env, dirs, "com.codefabric.worker", svcunittest.Program(t))
+
+	if err == nil {
+		t.Fatal("a Controller under launchd was taken as a sibling to move")
+	}
+	for _, want := range []string{"launchctl bootout gui/$(id -u)/com.codefabric.controller", "mv -n", "nothing was changed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in:\n%s", want, err)
+		}
+	}
+}
+
+func TestSuccessorOfASiblingOnMacOSIsNamedByItsKind(t *testing.T) {
+	s := Service{Env: svcunit.Env{Home: "/Users/ana", GOOS: "darwin"}, Binary: svcunittest.Program(t)}
+	m := member{
+		old:  svcunit.Spec{Name: "com.codefabric.worker", Label: "com.codefabric.worker"},
+		kind: "worker",
+		snap: Snapshot{Argv: []string{"/usr/local/bin/cf", "worker", "run"}},
+	}
+	spec, err := s.successor(1, m, Dirs{OldConfig: "/c", NewConfig: "/c", OldData: "/d", NewData: "/d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Name != "codeflock-worker" || spec.Label != "com.codeflock.worker" {
+		t.Errorf("name %q, label %q", spec.Name, spec.Label)
+	}
+}
+
 func TestServiceMigrationOnAnotherRootIsLeftAlone(t *testing.T) {
 	r := newRig(t)
 	other := t.TempDir()
@@ -410,7 +489,7 @@ func TestServiceResumedWithTheOldServiceRunningAgainAsksAboutRunsAgain(t *testin
 		t.Fatal(err)
 	}
 	s := r.service()
-	s.Runs.Sessions = func(context.Context, tmux.Options) ([]string, error) { return []string{"cf-run_a-e1"}, nil }
+	s.LiveRuns = func(context.Context, string, string) error { return errors.New("1 Runs are live on this Worker") }
 	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
 		t.Fatalf("err = %v", err)
 	}
@@ -429,7 +508,7 @@ func TestServiceIgnoresTheProgressOfAMigrationThatIsNotItsOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := r.service()
-	s.Runs.Sessions = func(context.Context, tmux.Options) ([]string, error) { return []string{"cf-run_a-e1"}, nil }
+	s.LiveRuns = func(context.Context, string, string) error { return errors.New("1 Runs are live on this Worker") }
 	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
 		t.Fatalf("a file of the Controller was taken for the Worker's: %v", err)
 	}

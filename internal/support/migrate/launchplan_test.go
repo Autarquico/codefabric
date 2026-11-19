@@ -71,6 +71,28 @@ func TestLaunchPlanForADaemonPrintsEveryCommandWithSudoAndTheWayBack(t *testing.
 	}
 }
 
+// A plan that is pasted whole must stop at a move that was refused: it must not
+// go on to write and load the new property list.
+func TestLaunchPlanStopsAtAMoveThatWasRefused(t *testing.T) {
+	cmds, err := LaunchPlan{Plist: "/Library/LaunchDaemons/com.codefabric.worker.plist", Content: []byte(daemonPlist), System: true}.Commands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moves := 0
+	for _, line := range cmds {
+		if !strings.Contains(line, "mv -n ") {
+			continue
+		}
+		moves++
+		if !strings.Contains(line, "|| { echo ") || !strings.HasSuffix(line, "; exit 1; }") {
+			t.Errorf("a refused move does not stop the script: %s", line)
+		}
+	}
+	if moves == 0 {
+		t.Fatal("no moves in the plan")
+	}
+}
+
 func TestLaunchPlanForAnAgentNeedsNoSudo(t *testing.T) {
 	cmds, err := LaunchPlan{Plist: "/Users/ana/Library/LaunchAgents/com.codefabric.controller.plist", Content: []byte(daemonPlist)}.Commands()
 	if err != nil {

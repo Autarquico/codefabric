@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
 	"github.com/Autarquico/codeflock/internal/config"
 	"github.com/Autarquico/codeflock/internal/controller/daemon"
 	"github.com/Autarquico/codeflock/internal/support/svcunit"
@@ -149,6 +148,7 @@ func TestInstallService_AWorkerOnTheSameRootIsMovedInTheSameRun(t *testing.T) {
 	o, fleet, old := oldController(t)
 	withWorker(t, o, old)
 	fleet.Set("cf-worker.service", true, true)
+	o.LiveRuns = func(context.Context, string, string) error { return nil }
 
 	if _, err := daemon.InstallService(t.Context(), o); err != nil {
 		t.Fatal(err)
@@ -163,11 +163,24 @@ func TestInstallService_AWorkerOnTheSameRootIsMovedInTheSameRun(t *testing.T) {
 	}
 }
 
+func TestInstallService_AWorkerAndNoCheckOfItsRunsStopsTheMoveOfTheController(t *testing.T) {
+	o, fleet, old := oldController(t)
+	withWorker(t, o, old)
+	fleet.Set("cf-worker.service", true, true)
+
+	if _, err := daemon.InstallService(t.Context(), o); err == nil || !strings.Contains(err.Error(), "no way to tell") {
+		t.Fatalf("err = %v", err)
+	}
+	if !fleet.Active("cf-controller.service") || !fleet.Active("cf-worker.service") {
+		t.Error("an old service was stopped")
+	}
+}
+
 func TestInstallService_AWorkerWithLiveRunsStopsTheMoveOfTheController(t *testing.T) {
 	o, fleet, old := oldController(t)
 	withWorker(t, o, old)
 	fleet.Set("cf-worker.service", true, true)
-	o.Sessions = func(context.Context, tmux.Options) ([]string, error) { return []string{"cf-run_a-e1"}, nil }
+	o.LiveRuns = func(context.Context, string, string) error { return errors.New("1 Runs are live on this Worker") }
 
 	if _, err := daemon.InstallService(t.Context(), o); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
 		t.Fatalf("err = %v", err)
