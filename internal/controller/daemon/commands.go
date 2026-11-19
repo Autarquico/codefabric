@@ -19,8 +19,9 @@ import (
 
 const defaultPort = "7443"
 
-// Command is `cflk controller`: init, run, token create and its service. A
-// Worker that shares its root is not moved along with it.
+// Command is `cflk controller`: init, run, token create and its service.
+// Without the Runs check, a migration that would move a Worker sharing its
+// root is refused.
 func Command() *cobra.Command { return CommandWith(nil) }
 
 // CommandWith is Command with the check of the Runs of a Worker that shares the

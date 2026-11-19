@@ -436,13 +436,14 @@ func (s Service) run(ctx context.Context, members []member, specs []svcunit.Spec
 }
 
 // leftBehind says that an old service could not be removed once the new ones
-// run: it stays stopped, and the command to take it away is the person's.
+// run: it may still start at the next login, so the command to take it away
+// is the person's.
 func (s Service) leftBehind(old svcunit.Spec, path string, err error) string {
 	by := "systemctl --user disable --now " + old.Name + ".service && rm " + shellQuote(path)
 	if s.Env.GOOS == "darwin" {
 		by = "launchctl bootout gui/" + strconv.Itoa(s.Env.UID) + "/" + old.Label + "; rm " + shellQuote(path)
 	}
-	return fmt.Sprintf("the new services run, but the old %s could not be removed (%v); it stays stopped: remove it by hand with `%s`", old.Name, err, by)
+	return fmt.Sprintf("the new services run, but the old %s could not be removed (%v) and may start again at the next login: remove it by hand with `%s`", old.Name, err, by)
 }
 
 // undo puts back what the steps did, last first, and says what could not be put back.
