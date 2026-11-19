@@ -35,7 +35,9 @@ func TestScenario_RenameCLI_ClienteConLaConfigAntigua(t *testing.T) {
 	}
 
 	var said bytes.Buffer
-	if err := migrate.Client(migrate.ClientEnv{}, &said); err != nil {
+	release, err := migrate.Client(migrate.ClientEnv{}, &said)
+	defer release()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(said.String(), "moved "+old.ConfigDir) {
@@ -48,7 +50,7 @@ func TestScenario_RenameCLI_ClienteConLaConfigAntigua(t *testing.T) {
 		t.Fatalf("client list after the move: exit %d\n%s%s", code, out, errOut)
 	}
 	said.Reset()
-	if err := migrate.Client(migrate.ClientEnv{}, &said); err != nil || said.Len() != 0 {
+	if _, err := migrate.Client(migrate.ClientEnv{}, &said); err != nil || said.Len() != 0 {
 		t.Errorf("a second run said %q (%v); it must be silent", said.String(), err)
 	}
 }
@@ -82,7 +84,7 @@ func TestScenario_RenameCLI_ClienteEnrolado_ConUnaUnidadVieja(t *testing.T) {
 		t.Setenv(v, "")
 	}
 
-	if err := migrate.Client(migrate.ClientEnv{}, &bytes.Buffer{}); err != nil {
+	if _, err := migrate.Client(migrate.ClientEnv{}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(old.ConfigDir); err != nil {

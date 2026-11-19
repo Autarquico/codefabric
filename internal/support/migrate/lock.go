@@ -9,19 +9,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// lockMigration takes the lock of every migration of services and directories
-// that share the old data directory dataDir, and refuses at once if another
-// process holds it. The file lives in the directory that holds that one, which
-// no migration moves (the lock files in the directories themselves move with
-// them), and is of the user: a Worker and a Controller of one root, and any
-// spelling of its path, find the same one. It is released when the process
-// ends too.
-func lockMigration(dataDir string) (release func(), err error) {
-	resolvedDir := dataDir
-	if resolved, err := filepath.EvalSymlinks(dataDir); err == nil {
-		resolvedDir = resolved
-	}
-	parent := filepath.Dir(filepath.Clean(resolvedDir))
+// lockMigration takes the one lock of every migration of this user, and
+// refuses at once if another process holds it. The file is in the directory
+// that holds the default data directory of the user (~/.local/share): not in a
+// directory a migration moves, and not where the data directory of a unit
+// happens to be, so that two migrations that overlap, through the data or the
+// configuration they share, can never take different locks. It is released when
+// the process ends too.
+func lockMigration(home string) (release func(), err error) {
+	_, data := legacyDirs(home)
+	parent := filepath.Dir(data)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}

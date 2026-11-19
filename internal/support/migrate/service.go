@@ -142,7 +142,7 @@ func (m Mover) Adopt(ctx context.Context, env svcunit.Env, cfg, data string, run
 	if len(pairs) == 0 {
 		return cfg, data, nil
 	}
-	release, err := lockMigration(dirs.OldData)
+	release, err := lockMigration(env.Home)
 	if err != nil {
 		return "", "", err
 	}
@@ -304,43 +304,15 @@ func unmanagedPeer(u config.Unit, dirs Dirs, home, binary string) error {
 // again if they did, and the error says what failed; if undoing fails too, the
 // error says that, and the progress file stays so that running it again goes
 // on. The result is that of the new unit of s, with the actions of the whole
-// move in front. Only one migration of a root runs at a time: another that
+// move in front. Only one migration of a user runs at a time: another that
 // holds the lock is refused.
 func (s Service) Migrate(ctx context.Context) (svcunit.Result, error) {
-	root, err := s.root(ctx)
-	if err != nil {
-		return svcunit.Result{}, err
-	}
-	release, err := lockMigration(root)
+	release, err := lockMigration(s.Env.Home)
 	if err != nil {
 		return svcunit.Result{}, err
 	}
 	defer release()
 	return s.migrate(ctx)
-}
-
-// root is the data directory the lock of this migration is taken for: the one
-// the old service uses or, if it is gone, the one holding the progress of a
-// migration that was cut while it tidied.
-func (s Service) root(ctx context.Context) (string, error) {
-	in, err := svcunit.Inspect(ctx, s.Env, s.Old)
-	switch {
-	case err != nil:
-		return "", err
-	case in.Found:
-		dirs, err := DirsOf(in.Env)
-		return dirs.OldData, err
-	case s.Data == "":
-		return "", ErrNoOldService
-	}
-	saved, err := s.pending().read()
-	if err != nil {
-		return "", err
-	}
-	if !saved.owns(s.Old.Name) {
-		return "", ErrNoOldService
-	}
-	return s.Data, nil
 }
 
 func (s Service) pending() progressFile {
@@ -405,7 +377,8 @@ func (s Service) migrate(ctx context.Context) (svcunit.Result, error) {
 		}
 	}
 	// A cut migration goes on without asking again, unless an old service
-	// runs once more: it may have taken Runs since.
+	// runs once more: it may have taken Runs since. The look with the old
+	// services stopped (in run) is made always, before anything moves.
 	checkRuns := !resumed || slices.ContainsFunc(members, func(m member) bool { return m.live })
 	if checkRuns {
 		if err := s.begin(ctx, members); err != nil {
@@ -419,7 +392,7 @@ func (s Service) migrate(ctx context.Context) (svcunit.Result, error) {
 	if err := progress.write(j); err != nil {
 		return svcunit.Result{}, err
 	}
-	return s.run(ctx, members, specs, dirs, progress, j, checkRuns)
+	return s.run(ctx, members, specs, dirs, progress, j)
 }
 
 // finishPending ends the tidying of a migration that was cut after its new
@@ -555,7 +528,7 @@ type step struct {
 	undo func() error
 }
 
-func (s Service) run(ctx context.Context, members []member, specs []svcunit.Spec, dirs Dirs, progress progressFile, j journal, checkRuns bool) (svcunit.Result, error) {
+func (s Service) run(ctx context.Context, members []member, specs []svcunit.Spec, dirs Dirs, progress progressFile, j journal) (svcunit.Result, error) {
 	var (
 		actions []string
 		result  svcunit.Result
@@ -578,35 +551,48 @@ func (s Service) run(ctx context.Context, members []member, specs []svcunit.Spec
 			return err
 		}})
 	}
-	if checkRuns {
-		// A Worker may have taken a Run between the first look and its stop:
-		// with it stopped, nothing new comes in.
-		steps = append(steps, step{"checking for live Runs again, with the old services stopped", func() error { return s.begin(ctx, members) }, nil})
-	}
+	// A Worker may have taken a Run between the first look and its stop, or
+	// before a cut that this run resumes: with it stopped, nothing new comes in,
+	// and nothing has moved yet. Once something has, the old place is not where
+	// to look.
+	steps = append(steps, step{"checking for live Runs again, with the old services stopped", func() error {
+		if len(j.Moved) > 0 {
+			return nil
+		}
+		return s.begin(ctx, members)
+	}, nil})
 	steps = append(steps, step{"moving the directories", func() error {
 		todo, err := s.Mover.Todo(pairs)
 		if err != nil {
 			return err
 		}
-		// What may move is recorded first, so that putting back, now or on a
-		// run that resumes this one, reverses those pairs and no other.
-		before := j.Moved
-		j.Moved = withPairs(before, todo)
-		if err := progress.write(j); err != nil {
-			return err
+		// One pair at a time, each recorded once it has moved, so that putting
+		// back, now or on a run that resumes this one, reverses what moved and
+		// nothing else.
+		for _, p := range todo {
+			moved, err := s.Mover.Move([]Pair{p})
+			for _, m := range moved.Moved {
+				actions = append(actions, "move "+m.Old+" "+m.New)
+			}
+			j.Moved = withPairs(j.Moved, moved.Moved)
+			if err != nil {
+				return err
+			}
+			if err := progress.write(j); err != nil {
+				return err
+			}
 		}
-		moved, err := s.Mover.Move(pairs)
-		for _, p := range moved.Moved {
-			actions = append(actions, "move "+p.Old+" "+p.New)
-		}
-		if err != nil {
-			return err
-		}
-		j.Moved = withPairs(before, moved.Moved)
-		return progress.write(j)
+		return nil
 	}, func() error {
-		_, err := s.Mover.Move(reversed(j.Moved))
-		return err
+		// Each pair back on its own: one that clashes does not keep the others
+		// from returning, and is said.
+		var errs []error
+		for _, p := range slices.Backward(j.Moved) {
+			if _, err := s.Mover.Move(reversed([]Pair{p})); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
 	}})
 	for i, m := range members {
 		spec := specs[i]
@@ -747,7 +733,7 @@ type journal struct {
 	// Members are the services of the migration, as they were before anything
 	// changed: whether each ran is not to be read from a unit already stopped.
 	Members map[string]Snapshot `json:"members"`
-	// Moved are the directory pairs this migration moved, or was about to.
+	// Moved are the directory pairs this migration moved, each recorded once moved.
 	Moved []Pair `json:"moved,omitempty"`
 	// Created are the units of the new name this migration made.
 	Created []string `json:"created,omitempty"`

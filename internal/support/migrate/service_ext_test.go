@@ -14,7 +14,7 @@ import (
 func TestServiceRefusesWhileAnotherMigrationHoldsTheLock(t *testing.T) {
 	noOverrides(t)
 	r := newRig(t)
-	release, err := lockMigration(r.data)
+	release, err := lockMigration(r.home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestServiceRefusesWhileAnotherMigrationHoldsTheLock(t *testing.T) {
 	if _, _, err := (Mover{}).Adopt(t.Context(), r.env, r.cfg, r.data, nil); err == nil || !strings.Contains(err.Error(), "another cflk") {
 		t.Fatalf("adopt: %v", err)
 	}
-	if _, err := lockMigration(link); err == nil {
+	if _, err := lockMigration(r.home); err == nil {
 		t.Error("a link to the data directory found another lock")
 	}
 	release()
@@ -270,4 +270,91 @@ func TestServiceRefusesAUnitWhoseNameIsNotPlain(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	r.unchanged(t)
+}
+
+// One lock per user: a migration whose data directory is under another parent
+// takes the same one.
+func TestServiceTakesTheSameLockWhateverTheDataDirectory(t *testing.T) {
+	noOverrides(t)
+	r := newRig(t)
+	r.data = filepath.Join(r.home, "elsewhere", "codefabric")
+	tree(t, filepath.Dir(r.data), "codefabric", "database")
+	r.installOld(t, oldWorker, true)
+	release, err := lockMigration(r.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := r.service().Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "another cflk") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// Putting back goes pair by pair: one that clashes is said, and does not keep
+// the other from returning.
+func TestServicePutsBackEachPairOnItsOwn(t *testing.T) {
+	r := newRig(t)
+	s := r.service()
+	s.Mover.Rename = func(oldPath, newPath string) error {
+		if err := renameNoReplace(oldPath, newPath); err != nil {
+			return err
+		}
+		if strings.HasSuffix(newPath, filepath.Join("share", "codeflock")) {
+			return os.MkdirAll(r.cfg, 0o700) // appears while the directories move
+		}
+		return nil
+	}
+	r.fleet.Fail("systemctl --user start codeflock-worker", errors.New("boom"))
+	_, err := s.Migrate(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), "both the old and the new directory exist") {
+		t.Fatalf("err = %v", err)
+	}
+	if !has(t, filepath.Join(r.data, "f")) || has(t, filepath.Join(r.home, ".local", "share", "codeflock")) {
+		t.Error("the data directory that could return did not")
+	}
+	if !has(t, filepath.Join(r.home, ".config", "codeflock", "f")) {
+		t.Error("the config directory is not left where it is moved to")
+	}
+}
+
+// A pair whose move failed is not recorded as moved.
+func TestServiceRecordsAPairOnlyOnceItMoved(t *testing.T) {
+	r := newRig(t)
+	s := r.service()
+	s.Mover.Rename = func(oldPath, newPath string) error {
+		if strings.HasSuffix(newPath, filepath.Join("share", "codeflock")) {
+			return errors.New("boom")
+		}
+		return renameNoReplace(oldPath, newPath)
+	}
+	r.fleet.Fail("systemctl --user start cf-worker", errors.New("boom")) // cannot be put back: the progress stays
+	if _, err := s.Migrate(t.Context()); err == nil {
+		t.Fatal("no error")
+	}
+	saved, err := (progressFile{dirs: Dirs{OldData: r.data, NewData: filepath.Join(r.home, ".local", "share", "codeflock")}}).read()
+	if err != nil || saved == nil || len(saved.Moved) != 1 || saved.Moved[0].Old != r.cfg {
+		t.Fatalf("%+v %v", saved, err)
+	}
+}
+
+// Resumed with the Worker already stopped, and before anything moves, the Runs are looked at again.
+func TestServiceResumedWithTheWorkerStoppedChecksForRunsBeforeMoving(t *testing.T) {
+	r := newRig(t)
+	snap := Snapshot{Active: true, Env: map[string]string{"CF_CONFIG_DIR": r.cfg, "CF_DATA_DIR": r.data, "TMUX_TMPDIR": "/run/tmux"}, Argv: []string{"/opt/cf/bin/cf", "worker", "run"}}
+	r.fleet.Set("cf-worker.service", true, false)
+	if err := (progressFile{dirs: Dirs{OldData: r.data, NewData: r.data}}).write(journal{Members: map[string]Snapshot{"cf-worker": snap}, Created: []string{"codeflock-worker"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := r.service()
+	asked := 0
+	s.LiveRuns = func(context.Context, string, string) error {
+		asked++
+		return errors.New("1 Runs are live")
+	}
+	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
+		t.Fatalf("err = %v", err)
+	}
+	if asked != 1 || !has(t, filepath.Join(r.cfg, "f")) || !has(t, filepath.Join(r.data, "f")) {
+		t.Errorf("asked %d times; the directories moved", asked)
+	}
 }

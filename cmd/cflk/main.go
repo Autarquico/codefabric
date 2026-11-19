@@ -36,10 +36,12 @@ func main() { os.Exit(run()) }
 func run() int {
 	if !slices.Contains(os.Args[1:], "install-service") {
 		// install-service moves the directories itself, with the service stopped.
-		if err := migrate.Client(migrate.ClientEnv{Args: os.Args[1:]}, os.Stderr); err != nil {
+		release, err := migrate.Client(migrate.ClientEnv{Args: os.Args[1:]}, os.Stderr)
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "cflk:", err)
 			return 1
 		}
+		defer release()
 	}
 	return cli.ExecuteWith(options(), commands()...)
 }

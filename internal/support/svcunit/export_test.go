@@ -12,3 +12,8 @@ func Replaceable(program string, uid int) error {
 var ReplaceableTrusting = replaceable
 
 var TrustedGroup = trustedGroup
+
+var (
+	ACLAllowsWrite = aclAllowsWrite
+	ACLOpens       = aclOpens
+)

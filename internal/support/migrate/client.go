@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/Autarquico/codeflock/internal/config"
 )
@@ -42,53 +45,117 @@ func (e ClientEnv) withDefaults() ClientEnv {
 // directories move: one given by CFLK_*_DIR or CF_*_DIR is the person's, and is
 // not touched. With a service of the old name installed nothing moves: its
 // install-service does it, with the service stopped, and config.Resolve says so.
+// Nothing moves either for a command that only asks for help, while another
+// migration holds its lock, or while another process holds the old data
+// directory (see holdData).
 //
 // A pair that clashes is a warning, not an error: the command goes on with the
 // new directories. Any other failure is an error and the command should not run.
-func Client(e ClientEnv, out io.Writer) error {
+//
+// The release it returns is for the caller to call when the command ends: for
+// `<kind> run` it keeps the data directory held for as long as the daemon lives,
+// so that no other command moves it from under it.
+func Client(e ClientEnv, out io.Writer) (release func(), err error) {
+	release = func() {}
 	e = e.withDefaults()
+	if asksForHelp(e.Args) {
+		return release, nil
+	}
 	loc, err := config.Locate(e.Getenv, e.Home)
 	if err != nil {
-		return nil // the command reports it
+		return release, nil // the command reports it
 	}
 	pairs, err := clientPairs(e, loc)
 	if err != nil || len(pairs) == 0 {
-		return nil
+		return release, nil
 	}
 	if !anyOldExists(pairs) {
-		return nil
+		return release, nil
 	}
 	home, err := e.Home()
 	if err != nil {
-		return nil
+		return release, nil
 	}
 	// With a service of the old name installed nothing moves: its install-service
 	// does, and config.Resolve says so.
 	if len(config.OldUnits(home, e.GOOS)) > 0 {
-		return nil
+		return release, nil
 	}
+	running := runKind(e.Args)
 	if held := daemonsOn(config.Paths{DataDir: dataPair(pairs, loc)}); len(held) > 0 {
-		if running := runKind(e.Args); len(held) > 1 || held[0] != running {
+		if len(held) > 1 || held[0] != running {
 			for _, kind := range held {
 				_, _ = fmt.Fprintf(out, "cflk: a %s uses %s; it moves when it starts as `cflk %s run`, or with `cflk %s install-service`\n",
 					strings.ToUpper(kind[:1])+kind[1:], dataPair(pairs, loc), kind, kind)
 			}
-			return nil
+			return release, nil
 		}
+	}
+	unlock, err := lockMigration(home)
+	if err != nil {
+		_, _ = fmt.Fprintln(out, "cflk: not moving the directories now: "+err.Error())
+		return release, nil
+	}
+	defer unlock()
+	hold, err := holdData(dataPair(pairs, loc))
+	if err != nil {
+		_, _ = fmt.Fprintln(out, "cflk: not moving the directories now: "+err.Error())
+		return release, nil
+	}
+	if running != "" {
+		release = hold
+	} else {
+		defer hold()
 	}
 	res, err := e.Mover.Move(pairs)
 	var clash *ClashError
 	switch {
 	case errors.As(err, &clash):
 		_, _ = fmt.Fprintln(out, "cflk: "+clash.Error())
-		return nil
+		return release, nil
 	case err != nil:
-		return err
+		release()
+		return func() {}, err
 	}
 	for _, p := range res.Moved {
 		_, _ = fmt.Fprintf(out, "cflk: moved %s to %s\n", p.Old, p.New)
 	}
-	return nil
+	return release, nil
+}
+
+// asksForHelp says whether the command only prints help: `--help`, `-h` or
+// `help` among its arguments. Cobra answers it, and nothing should move first.
+func asksForHelp(args []string) bool {
+	return slices.ContainsFunc(args, func(a string) bool { return a == "--help" || a == "-h" || a == "help" })
+}
+
+const daemonLockName = ".cflk-daemon.lock"
+
+// holdData takes, without waiting, the lock of the process that has the data
+// directory dir open: a daemon holds it as long as it lives, and so does the
+// process that moves the directory, whose lock goes with it (a rename keeps the
+// file). A process that cannot take it leaves the directory where it is. A
+// directory that is not there needs none.
+func holdData(dir string) (release func(), err error) {
+	if dir == "" {
+		return func() {}, nil
+	}
+	if _, err := os.Stat(dir); err != nil {
+		return func() {}, nil //nolint:nilerr // nothing to hold: the move finds out what is not there
+	}
+	path := filepath.Join(dir, daemonLockName)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // the lock file of the process that has the data directory open
+	if err != nil {
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil { //nolint:gosec // a descriptor fits an int
+		_ = f.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another cflk has %s open (it holds %s)", dir, path)
+		}
+		return nil, fmt.Errorf("migrate: locking %s: %w", path, err)
+	}
+	return func() { _ = f.Close() }, nil
 }
 
 // dataPair is the old data directory among pairs: the one a daemon of the old

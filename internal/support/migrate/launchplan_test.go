@@ -60,14 +60,15 @@ func TestLaunchPlanForADaemonIsOneBlockForRootWithTheWayBackCommentedOut(t *test
 	for _, want := range []string{
 		"sudo sh -eu <<'CFLK_PLAN'",
 		"launchctl bootout system/'com.codefabric.worker'",
-		"sudo -u 'ana' mv -n '/Users/ana/.config/codefabric' '/Users/ana/.config/codeflock'",
-		"sudo -u 'ana' mv -n '/Users/ana/Library/Logs/codefabric' '/Users/ana/Library/Logs/codeflock'",
+		"sudo -u 'ana' mv '/Users/ana/.config/codefabric' '/Users/ana/.config/codeflock'",
+		"sudo -u 'ana' mv '/Users/ana/Library/Logs/codefabric' '/Users/ana/Library/Logs/codeflock'",
 		"chown root:wheel \"$tmp\"",
 		"launchctl bootstrap system '/Library/LaunchDaemons/com.codeflock.worker.plist'",
 		"<string>com.codeflock.worker</string>", "<key>CFLK_DATA_DIR</key>", "<string>/usr/local/bin/cflk</string>",
 		"/Users/ana/Library/Logs/codeflock/com.codeflock.worker.log", "<string>/Users/ana/.config/codeflock</string>",
 		"[ ! -e", // never into a destination that is there, in the new plist too
-		"rm '/Library/LaunchDaemons/com.codefabric.worker.plist'",
+		"mv '/Library/LaunchDaemons/com.codefabric.worker.plist' '/Library/LaunchDaemons/com.codefabric.worker.plist.cflk-old'",
+		"touch '/Library/LaunchDaemons/com.codeflock.worker.plist.cflk-written'",
 	} {
 		if want == "[ ! -e" {
 			continue
@@ -85,7 +86,7 @@ func TestLaunchPlanForADaemonIsOneBlockForRootWithTheWayBackCommentedOut(t *test
 		t.Errorf("a chosen directory moved:\n%s", forward)
 	}
 	for _, want := range []string{
-		"sudo -u 'ana' mv -n '/Users/ana/.config/codeflock' '/Users/ana/.config/codefabric'",
+		"sudo -u 'ana' mv '/Users/ana/.config/codeflock' '/Users/ana/.config/codefabric'",
 		"launchctl bootout system/'com.codeflock.worker' || true",
 		"launchctl bootstrap system '/Library/LaunchDaemons/com.codefabric.worker.plist'",
 	} {
@@ -93,7 +94,10 @@ func TestLaunchPlanForADaemonIsOneBlockForRootWithTheWayBackCommentedOut(t *test
 			t.Errorf("missing %q in the way back:\n%s", want, back)
 		}
 	}
-	if strings.Index(back, "mv -n '/Users/ana/Library/Logs/codeflock'") > strings.Index(back, "mv -n '/Users/ana/.config/codeflock'") {
+	if strings.Contains(forward, "rm '/Library/LaunchDaemons/com.codefabric.worker.plist'") {
+		t.Errorf("the old property list is deleted, so there is no way back:\n%s", forward)
+	}
+	if strings.Index(back, "mv '/Users/ana/Library/Logs/codeflock'") > strings.Index(back, "mv '/Users/ana/.config/codeflock'") {
 		t.Errorf("the way back is not in reverse order:\n%s", back)
 	}
 }
@@ -231,7 +235,7 @@ func TestLaunchPlanOfADaemonNeverUsesTheHomeOfWhoAsks(t *testing.T) {
 			t.Fatal(err)
 		}
 		script := strings.Join(cmds, "\n")
-		if strings.Contains(script, "alice") || !strings.Contains(script, "sudo -u 'bob' mv -n '/Users/bob/.config/codefabric'") {
+		if strings.Contains(script, "alice") || !strings.Contains(script, "sudo -u 'bob' mv '/Users/bob/.config/codefabric'") {
 			t.Errorf("\n%s", script)
 		}
 	})
@@ -290,5 +294,31 @@ func TestPlanBinaryOfADaemonIsAProgramOnlyRootCanReplace(t *testing.T) {
 	}
 	if _, err := PlanBinary("/bin/sh", true); err != nil {
 		t.Errorf("a program of root in directories of root: %v", err)
+	}
+}
+
+// Nothing is stopped before the files of the new service are known to be absent, the way back removes the
+// successor only if the plan wrote it, and a directory that went inside one that appeared stops the block.
+func TestLaunchPlanChecksBeforeStoppingAndRemovesOnlyWhatItWrote(t *testing.T) {
+	cmds, err := LaunchPlan{Plist: "/Library/LaunchDaemons/com.codefabric.worker.plist", Content: []byte(daemonPlist), System: true, Binary: "/usr/local/bin/cflk"}.Commands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward, back := parts(t, cmds)
+	newPlist := "/Library/LaunchDaemons/com.codeflock.worker.plist"
+	check := strings.Index(forward, "if [ -e '"+newPlist+"' ] || [ -L '"+newPlist+"' ]")
+	if bootout := strings.Index(forward, "launchctl bootout"); check < 0 || check > bootout {
+		t.Errorf("the destination of the new plist is checked after the bootout:\n%s", forward)
+	}
+	if strings.Contains(forward, "mv -n '/Users/") || !strings.Contains(forward, "if [ ! -d '/Users/ana/.config/codeflock' ] || [ -e '/Users/ana/.config/codefabric' ] || [ -e '/Users/ana/.config/codeflock/codefabric' ]") {
+		t.Errorf("a directory move is not checked afterwards:\n%s", forward)
+	}
+	marker := "if [ -e '" + newPlist + ".cflk-written' ]; then"
+	rm := strings.Index(back, "rm -f '"+newPlist+"'")
+	if at := strings.Index(back, marker); at < 0 || strings.Index(back, "launchctl bootout") < at || rm < at {
+		t.Errorf("the successor is removed without asking whether this plan wrote it:\n%s", back)
+	}
+	if !strings.Contains(back, "mv '/Library/LaunchDaemons/com.codefabric.worker.plist.cflk-old' '/Library/LaunchDaemons/com.codefabric.worker.plist'") {
+		t.Errorf("the old plist is not restored from where it was kept:\n%s", back)
 	}
 }

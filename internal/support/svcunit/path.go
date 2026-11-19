@@ -1,6 +1,7 @@
 package svcunit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -47,8 +49,8 @@ const (
 
 // SystemProgram is Program for a service of the system, which runs as root:
 // the program and every directory above it must belong to root and be closed
-// to everyone else, group included (the rule of closed_path in install.sh,
-// except for ACL entries, which are not read), or whoever could replace it
+// to everyone else, group included (the rule of closed_path in install.sh, ACL
+// entries of macOS included: see aclOpens), or whoever could replace it
 // would run as root. Nothing but root is trusted.
 func SystemProgram(binary string) (program, warning string, err error) {
 	program = binary
@@ -60,7 +62,7 @@ func SystemProgram(binary string) (program, warning string, err error) {
 	if !filepath.IsAbs(program) {
 		return "", "", &InputError{Flag: "--binary", Reason: "must be an absolute path"}
 	}
-	if err := replaceableAdvising(program, 0, func(int) bool { return false }, systemAdvice); err != nil {
+	if err := replaceableAdvising(program, 0, func(int) bool { return false }, systemAdvice, runtime.GOOS == "darwin"); err != nil {
 		return "", "", err
 	}
 	return program, ExecutableWarning(program), nil
@@ -101,11 +103,13 @@ const (
 // trustedGroup) can write: a directory with the sticky bit, like /tmp, only
 // lets them replace their own entries, and what a link says is fixed.
 func replaceable(program string, uid int, trusted func(gid int) bool) error {
-	return replaceableAdvising(program, uid, trusted, userAdvice)
+	return replaceableAdvising(program, uid, trusted, userAdvice, false)
 }
 
-// replaceableAdvising is replaceable that ends its refusal with advice.
-func replaceableAdvising(program string, uid int, trusted func(gid int) bool, advice string) error {
+// replaceableAdvising is replaceable that ends its refusal with advice, and, if
+// acls, refuses too an entry whose ACL (macOS) lets someone other than root
+// write it.
+func replaceableAdvising(program string, uid int, trusted func(gid int) bool, advice string, acls bool) error {
 	refuse := func(format string, a ...any) error {
 		return &InputError{Flag: "--binary", Reason: fmt.Sprintf(format, a...)}
 	}
@@ -130,6 +134,12 @@ func replaceableAdvising(program string, uid int, trusted func(gid int) bool, ad
 			if reason := unsafeTo(info, entry, uid, trusted); reason != "" {
 				return "", refuse("%s runs from %s, which %s: another user could replace what the service runs; %s",
 					program, entry, reason, advice)
+			}
+			if acls && info.Mode()&fs.ModeSymlink == 0 {
+				if reason := aclOpens(entry); reason != "" {
+					return "", refuse("%s runs from %s, which %s: another user could replace what the service runs; %s",
+						program, entry, reason, advice)
+				}
 			}
 			if info.Mode()&fs.ModeSymlink == 0 {
 				dir = entry
@@ -165,6 +175,47 @@ func unsafeTo(info fs.FileInfo, path string, uid int, trusted func(gid int) bool
 		return fmt.Sprintf("the members of group %d can write (`chmod g-w %s` stops them)", st.Gid, path)
 	}
 	return ""
+}
+
+// aclOpens says why the ACL of path (macOS, read from `ls -lde`) lets someone
+// other than root change it or what it holds, or "" if it does not (no ACL, or
+// entries that only deny). The rule of acl_closed in install.sh. An ACL that
+// cannot be read counts as open.
+func aclOpens(path string) string {
+	out, err := exec.CommandContext(context.Background(), "ls", "-lde", path).Output() //nolint:gosec // ls, over a path being checked
+	if err != nil {
+		return "has an ACL that cannot be read"
+	}
+	if aclAllowsWrite(string(out)) {
+		return "has an ACL entry that lets someone write it"
+	}
+	return ""
+}
+
+// writeRights are the rights of an ACL entry that change a file or add to,
+// remove from, or take over a directory: write*, append, add_file,
+// add_subdirectory, delete, delete_child and chown.
+var writeRights = regexp.MustCompile(`write|append|add_file|add_subdirectory|delete|chown`)
+
+// aclAllowsWrite says whether the output of `ls -lde` has an `allow` entry with
+// a write-class right for a principal other than root. Its first line is the
+// file; the entries follow, as ` 0: user:name allow right,right`.
+func aclAllowsWrite(lsOutput string) bool {
+	lines := strings.Split(strings.TrimSpace(lsOutput), "\n")
+	for _, line := range lines[min(1, len(lines)):] {
+		_, entry, ok := strings.Cut(line, ": ")
+		if !ok {
+			continue
+		}
+		principal, rights, ok := strings.Cut(entry, " allow ")
+		if !ok || principal == "user:root" || principal == "user:0" {
+			continue
+		}
+		if writeRights.MatchString(rights) {
+			return true
+		}
+	}
+	return false
 }
 
 // trustedGroupOf says whether a group may write where the services of uid
