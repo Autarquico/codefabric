@@ -465,7 +465,8 @@ func checkCause(m model, v *violations, r v1.Run) {
 	}
 	switch r.State {
 	case domain.RunCompleted:
-		if r.EndReason != domain.EndExitCode || r.ExitCode == nil || *r.ExitCode != 0 {
+		exitedClean := r.EndReason == domain.EndExitCode && r.ExitCode != nil && *r.ExitCode == 0
+		if !exitedClean && r.EndReason != domain.EndIdleAfterResult {
 			v.add("[1 runs] Run %s is completed with end_reason %q and exit code %s", r.ID, r.EndReason, exitCode(r.ExitCode))
 		}
 	case domain.RunFailed:

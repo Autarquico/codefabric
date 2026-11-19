@@ -148,3 +148,46 @@ func TestReport_AHarnessStoppedForInputEndsFailedWithItsReasonAndKeepsTheModel(t
 		t.Errorf("view = %+v", view)
 	}
 }
+
+func TestReport_AHarnessStoppedForIdlenessEndsCompletedWhateverItsExitAndKeepsTheAnswer(t *testing.T) {
+	idle := func(en *v1.RunReportEntry) {
+		en.Cause, en.EndReason, en.Answer = v1.ExitCauseStop, domain.EndIdleAfterResult, "done"
+	}
+	cases := map[string]struct {
+		mutate   func(*v1.RunReportEntry)
+		wantCode *int
+	}{
+		"a signal": {func(en *v1.RunReportEntry) { en.Signal = "SIGTERM" }, nil},
+		"code 143": {exitCode(143), new(143)},
+		"code 0":   {exitCode(0), new(0)},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			r := e.acceptedRun(e.joinWorker("alpha"), "x")
+			r.mustSend(r.entry(v1.ReportStarted), r.entry(v1.ReportExited, idle, c.mutate), r.entry(v1.ReportStopped))
+			got := e.storedRun(r.run.ID)
+			if got.State != domain.RunCompleted || got.EndReason != domain.EndIdleAfterResult || got.Answer != "done" {
+				t.Errorf("Run = %+v", got)
+			}
+			if (got.ExitCode == nil) != (c.wantCode == nil) || (c.wantCode != nil && *got.ExitCode != *c.wantCode) {
+				t.Errorf("exit code = %v, want %v", got.ExitCode, c.wantCode)
+			}
+		})
+	}
+}
+
+func TestReport_IdlenessOfALostWrapperIsRefused(t *testing.T) {
+	e := newEnv(t)
+	r := e.acceptedRun(e.joinWorker("alpha"), "x")
+	r.mustSend(r.entry(v1.ReportStarted))
+	_, err := r.send(r.entry(v1.ReportExited, func(en *v1.RunReportEntry) {
+		en.Cause, en.EndReason = v1.ExitCauseWrapperLost, domain.EndIdleAfterResult
+	}))
+	if err == nil {
+		t.Error("a lost wrapper with idle_after_result was accepted")
+	}
+	if got := e.storedRun(r.run.ID); got.State != domain.RunRunning {
+		t.Errorf("state = %s", got.State)
+	}
+}

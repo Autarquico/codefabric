@@ -71,7 +71,7 @@ func (e *Executor) idleCheck(ctx context.Context, r state.Run) error {
 	} else if !errors.Is(err, state.ErrNotFound) {
 		return err
 	}
-	e.log.InfoContext(ctx, "the harness of a Run gave its result and stayed idle: stopping it", "run", r.RunID, "idle", now.Sub(cur.IdleSince).String())
+	e.log.InfoContext(ctx, "the harness of a Run gave its result and stayed idle: stopping it", "run", r.RunID, "reason", "idle_after_result", "idle", now.Sub(cur.IdleSince).String())
 	return e.stopLocked(ctx, r.Key, ReasonIdleAfterResult, SourceWorker)
 }
 

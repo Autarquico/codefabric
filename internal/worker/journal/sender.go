@@ -234,7 +234,7 @@ func (s *Sender) send(ctx context.Context, k state.Key, batch []state.JournalRow
 		if !withIdle && e.EndReason == domain.EndIdleAfterResult {
 			// An older Controller refuses the end reason: it settles the exit as it is,
 			// and the Worker log says why the harness was stopped.
-			s.Log.InfoContext(ctx, "the Controller does not take idle_after_result: the exit is reported without it",
+			s.Log.DebugContext(ctx, "the Controller does not take idle_after_result: the exit is reported without it",
 				"run", k.RunID, "lease_epoch", k.LeaseEpoch)
 			e.EndReason = ""
 		}

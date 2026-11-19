@@ -36,7 +36,7 @@ func TestIdentityAndCapabilities(t *testing.T) {
 		t.Error(err)
 	}
 	c := a.Capabilities()
-	if !c.ConfigIsolation || !c.Install || !slices.Equal(c.Modes, []domain.Mode{domain.ModeHeadless, domain.ModeInteractive}) {
+	if !c.ConfigIsolation || !c.Install || !c.IdleAfterResult || !slices.Equal(c.Modes, []domain.Mode{domain.ModeHeadless, domain.ModeInteractive}) {
 		t.Errorf("capabilities = %+v", c)
 	}
 }
