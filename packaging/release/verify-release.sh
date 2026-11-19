@@ -1,13 +1,13 @@
 #!/bin/sh
 # Verify a release as published: the inventory is exactly the seven assets, then the downloaded set
 # passes check.sh against INSTALL_SH (signatures, sha256 of each tarball, install.sh identical).
-# Usage: verify-release.sh TAG INSTALL_SH [REPO]      (REPO defaults to Autarquico/codefabric; needs gh)
+# Usage: verify-release.sh TAG INSTALL_SH [REPO]      (REPO defaults to Autarquico/codeflock; needs gh)
 set -eu
 
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then echo "usage: verify-release.sh TAG INSTALL_SH [REPO]" >&2; exit 2; fi
 tag=$1
 trust=$2
-repo=${3:-Autarquico/codefabric}
+repo=${3:-Autarquico/codeflock}
 here=$(cd "$(dirname "$0")" && pwd)
 version=${tag#v}
 
