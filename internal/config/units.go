@@ -1,14 +1,16 @@
-package migrate
+package config
 
 import (
 	"path/filepath"
 	"strings"
 )
 
-// Unit is a service of the old name that is installed.
+// Unit is a service of the old name, CodeFabric, that is installed.
 type Unit struct {
-	Name string // as the manager knows it
-	Kind string // "worker" or "controller": the command that migrates it
+	Name   string // as the manager knows it
+	Kind   string // "worker" or "controller": the command that migrates it
+	Path   string // its unit file or property list
+	System bool   // a LaunchDaemon of the system, which a user cannot manage
 }
 
 // OldUnits are the services installed under the names before the rename,
@@ -23,7 +25,7 @@ func OldUnits(home, goos string) []Unit {
 		dir := filepath.Join(home, ".config", "systemd", "user")
 		patterns = []string{filepath.Join(dir, "cf-worker*.service"), filepath.Join(dir, "cf-controller*.service")}
 	case "darwin":
-		for _, dir := range []string{filepath.Join(home, "Library", "LaunchAgents"), "/Library/LaunchDaemons"} {
+		for _, dir := range []string{filepath.Join(home, "Library", "LaunchAgents"), launchDaemonsDir} {
 			patterns = append(patterns, filepath.Join(dir, "com.codefabric.worker*.plist"), filepath.Join(dir, "com.codefabric.controller*.plist"))
 		}
 	}
@@ -36,8 +38,10 @@ func OldUnits(home, goos string) []Unit {
 			if strings.Contains(name, "controller") {
 				kind = "controller"
 			}
-			units = append(units, Unit{Name: name, Kind: kind})
+			units = append(units, Unit{Name: name, Kind: kind, Path: m, System: filepath.Dir(m) == launchDaemonsDir})
 		}
 	}
 	return units
 }
+
+const launchDaemonsDir = "/Library/LaunchDaemons"

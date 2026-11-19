@@ -34,7 +34,7 @@ func TestLaunchd_FirstInstallBootstrapsIntoTheGraphicalSession(t *testing.T) {
 	if res.Manager != "launchd" || res.Unit != "gui/501/"+label || len(res.Warnings) != 0 {
 		t.Errorf("result = %+v", res)
 	}
-	if info, err := os.Stat(e.Home + "/Library/Logs/codefabric"); err != nil || info.Mode().Perm() != 0o700 {
+	if info, err := os.Stat(e.Home + "/Library/Logs/codeflock"); err != nil || info.Mode().Perm() != 0o700 {
 		t.Errorf("log directory: %v %v", info, err)
 	}
 }

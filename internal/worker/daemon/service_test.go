@@ -43,7 +43,7 @@ func serviceBox(t *testing.T, goos string) (daemon.ServiceOptions, fakeManager) 
 	if goos == "linux" {
 		fake = svcunittest.NewSystemd(path)
 	} else {
-		fake = svcunittest.NewLaunchd(path, "com.codefabric.worker", 501)
+		fake = svcunittest.NewLaunchd(path, "com.codeflock.worker", 501)
 	}
 	o.Manager.Runner = fake
 	return o, fake

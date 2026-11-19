@@ -308,3 +308,85 @@ func (f *Launchd) print(argv []string, target string) (string, error) {
 	}
 	return out + "}\n", nil
 }
+
+// SystemdFleet is a user's systemd with any number of units, found by their
+// files under Home, for what moves a service from one name to another.
+type SystemdFleet struct {
+	recorder
+	Home   string
+	enable map[string]bool
+	active map[string]bool
+}
+
+// NewSystemdFleet is a systemd of a user whose home is home, with no unit loaded.
+func NewSystemdFleet(home string) *SystemdFleet {
+	return &SystemdFleet{Home: home, enable: map[string]bool{}, active: map[string]bool{}}
+}
+
+// Set makes unit enabled and running, or not, as if the manager had loaded its file.
+func (f *SystemdFleet) Set(unit string, enabled, active bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.enable[unit], f.active[unit] = enabled, active
+}
+
+// Active says whether unit is running.
+func (f *SystemdFleet) Active(unit string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.active[unit]
+}
+
+// Run is systemctl --user and loginctl.
+func (f *SystemdFleet) Run(_ context.Context, argv ...string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record(argv); err != nil {
+		return "", err
+	}
+	if argv[0] == "loginctl" {
+		return "yes\n", nil
+	}
+	if len(argv) == 3 && argv[0] == "systemctl" && argv[2] == "daemon-reload" {
+		return "", nil
+	}
+	if len(argv) < 4 || argv[0] != "systemctl" || argv[1] != "--user" {
+		return "", fmt.Errorf("svcunittest: unexpected command %q", argv)
+	}
+	unit := argv[len(argv)-1]
+	path := filepath.Join(f.Home, ".config", "systemd", "user", unit)
+	_, statErr := os.Stat(path)
+	exists := statErr == nil
+	switch argv[2] {
+	case "show":
+		load, fragment, kill, state, file := "not-found", "", "", "inactive", ""
+		if exists {
+			load, fragment, kill = "loaded", path, "control-group"
+			if b, _ := os.ReadFile(path); strings.Contains(string(b), "\nKillMode=process\n") { //nolint:gosec // the unit file of the fake
+				kill = "process"
+			}
+		}
+		if f.active[unit] {
+			state = "active"
+		}
+		if f.enable[unit] {
+			file = "enabled"
+		}
+		return fmt.Sprintf("LoadState=%s\nUnitFileState=%s\nActiveState=%s\nNeedDaemonReload=no\nFragmentPath=%s\nKillMode=%s\nDropInPaths=\n",
+			load, file, state, fragment, kill), nil
+	case "enable":
+		f.enable[unit] = true
+	case "disable":
+		f.enable[unit] = false
+	case "start", "restart":
+		if !exists {
+			return "", Exit(argv, 5, "Unit not found.")
+		}
+		f.active[unit] = true
+	case "stop", "reset-failed":
+		f.active[unit] = false
+	default:
+		return "", fmt.Errorf("svcunittest: unexpected command %q", argv)
+	}
+	return "", nil
+}

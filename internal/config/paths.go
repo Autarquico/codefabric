@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/Autarquico/codeflock/internal/domain"
@@ -114,10 +115,53 @@ func warnLegacyVar(old, current string) {
 	}
 }
 
-// Resolve is Locate without the origin of each directory.
+// Resolve is Locate, keeping the old directories while they are in use: a
+// default directory that does not exist, next to the one it had before the
+// rename that does, is the old one. Nothing moves them while a service of the
+// old name is installed (its install-service does), and until then that
+// service, and the client with it, go on with what they have. It says so once
+// per process, naming the service.
 func Resolve(getenv func(string) string, home func() (string, error)) (Paths, error) {
 	l, err := Locate(getenv, home)
-	return l.Paths, err
+	if err != nil {
+		return Paths{}, err
+	}
+	var kept bool
+	keep := func(dir *string, isDefault bool) {
+		if !isDefault {
+			return
+		}
+		if _, err := os.Lstat(*dir); err == nil {
+			return
+		}
+		if old := LegacyOf(*dir); isDir(old) {
+			*dir, kept = old, true
+		}
+	}
+	keep(&l.ConfigDir, l.ConfigIsDefault)
+	keep(&l.DataDir, l.DataIsDefault)
+	if kept {
+		warnOldUnits(home)
+	}
+	return l.Paths, nil
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func warnOldUnits(home func() (string, error)) {
+	h, err := home()
+	if err != nil {
+		return
+	}
+	for _, u := range OldUnits(h, runtime.GOOS) {
+		if _, seen := warnedVars.LoadOrStore("unit "+u.Name, true); !seen {
+			_, _ = fmt.Fprintf(legacyVarWarning, "cflk: the service %s still uses the old codefabric directories, so they were not moved; "+
+				"run `cflk %s install-service` to move them with the service\n", u.Name, u.Kind)
+		}
+	}
 }
 
 // Locate applies, per directory: the CFLK_* override, then the CF_* one (read

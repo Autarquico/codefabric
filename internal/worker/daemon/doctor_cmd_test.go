@@ -31,8 +31,8 @@ func doctorMachine(t *testing.T, stubs ...string) {
 	root := t.TempDir()
 	t.Setenv("PATH", bin)
 	t.Setenv("HOME", filepath.Join(root, "home"))
-	t.Setenv("CF_CONFIG_DIR", filepath.Join(root, "config"))
-	t.Setenv("CF_DATA_DIR", filepath.Join(root, "data"))
+	t.Setenv("CFLK_CONFIG_DIR", filepath.Join(root, "config"))
+	t.Setenv("CFLK_DATA_DIR", filepath.Join(root, "data"))
 	if err := os.MkdirAll(filepath.Join(root, "home"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -132,8 +132,8 @@ func doctorPaths(t *testing.T) config.Paths {
 func TestWorkerJoin_KeepsTheDiskThresholdInTheWorkerConfig(t *testing.T) {
 	c := newController(t)
 	paths := machine(t)
-	t.Setenv("CF_CONFIG_DIR", paths.ConfigDir)
-	t.Setenv("CF_DATA_DIR", paths.DataDir)
+	t.Setenv("CFLK_CONFIG_DIR", paths.ConfigDir)
+	t.Setenv("CFLK_DATA_DIR", paths.DataDir)
 	if code, _, errOut := cf(t, "worker", "join", "x", "--disk-min-free", "nope"); code == 0 {
 		t.Fatalf("an invalid threshold joined: %s", errOut)
 	}

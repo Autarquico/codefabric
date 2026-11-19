@@ -37,8 +37,8 @@
 	<key>ExitTimeOut</key>
 	<integer>30</integer>
 	<key>StandardOutPath</key>
-	<string>/home/me/Library/Logs/codefabric/com.codefabric.worker.log</string>
+	<string>/home/me/Library/Logs/codeflock/com.codefabric.worker.log</string>
 	<key>StandardErrorPath</key>
-	<string>/home/me/Library/Logs/codefabric/com.codefabric.worker.log</string>
+	<string>/home/me/Library/Logs/codeflock/com.codefabric.worker.log</string>
 </dict>
 </plist>

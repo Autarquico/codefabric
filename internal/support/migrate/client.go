@@ -38,7 +38,7 @@ func (e ClientEnv) withDefaults() ClientEnv {
 // CodeFabric to Code Flock, once, and says so on out. Only the default
 // directories move: one given by CFLK_*_DIR or CF_*_DIR is the person's, and is
 // not touched. With a service of the old name installed nothing moves: its
-// install-service does it, with the service stopped, and Client says so.
+// install-service does it, with the service stopped, and config.Resolve says so.
 //
 // A pair that clashes is a warning, not an error: the command goes on with the
 // new directories. Any other failure is an error and the command should not run.
@@ -59,11 +59,9 @@ func Client(e ClientEnv, out io.Writer) error {
 	if err != nil {
 		return nil
 	}
-	if units := OldUnits(home, e.GOOS); len(units) > 0 {
-		for _, u := range units {
-			_, _ = fmt.Fprintf(out, "cflk: the service %s still uses the old codefabric directories, so they were not moved; "+
-				"run `cflk %s install-service` to move them with the service\n", u.Name, u.Kind)
-		}
+	// With a service of the old name installed nothing moves: its install-service
+	// does, and config.Resolve says so.
+	if len(config.OldUnits(home, e.GOOS)) > 0 {
 		return nil
 	}
 	res, err := e.Mover.Move(pairs)

@@ -20,12 +20,50 @@ func (m launchd) path(s Spec) string {
 
 // log is where the agent writes: launchd has no journal of its own.
 func (m launchd) log(s Spec) string {
-	return filepath.Join(m.env.Home, "Library", "Logs", "codefabric", s.Label+".log")
+	return filepath.Join(m.env.Home, "Library", "Logs", "codeflock", s.Label+".log")
 }
 
 func (m launchd) render(s Spec) ([]byte, error) { return renderLaunchd(s, m.log(s)) }
 
 func (launchd) installedEnv(file []byte) (map[string]string, error) { return launchdEnv(file) }
+
+func (launchd) installedArgv(file []byte) ([]string, error) {
+	info, err := ReadPlist(file)
+	return info.Argv, err
+}
+
+func (m launchd) active(o *op, s Spec) (bool, error) {
+	loaded, err := m.find(o, s)
+	return len(loaded) == 1 && loaded[0].running(), err
+}
+
+// stop unloads the agent and leaves its file as it is.
+func (m launchd) stop(o *op, s Spec) error {
+	o.res.Manager, o.res.Unit = "launchd", s.Label
+	loaded, err := m.find(o, s)
+	if err != nil || len(loaded) == 0 {
+		return err
+	}
+	o.res.Unit = loaded[0].domain + "/" + s.Label
+	if err := m.checkLoaded(o, loaded[0], s, true); err != nil {
+		return err
+	}
+	return o.act("launchctl", "bootout", o.res.Unit)
+}
+
+// start loads the agent from its file, if it is not loaded.
+func (m launchd) start(o *op, s Spec) error {
+	o.res.Manager, o.res.Unit = "launchd", s.Label
+	loaded, err := m.find(o, s)
+	if err != nil || len(loaded) > 0 {
+		return err
+	}
+	domain := m.freshDomain(o)
+	if err := m.enableIfDisabled(o, domain, s); err != nil {
+		return err
+	}
+	return m.bootstrapFresh(o, domain, s)
+}
 
 func (m launchd) gui() string  { return "gui/" + strconv.Itoa(m.env.UID) }
 func (m launchd) user() string { return "user/" + strconv.Itoa(m.env.UID) }

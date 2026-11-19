@@ -1,0 +1,132 @@
+package daemon_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/controller/daemon"
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
+	"github.com/Autarquico/codeflock/internal/support/svcunit/svcunittest"
+)
+
+// oldController is a Controller initialised under the old directory names,
+// with a service of the old name running.
+func oldController(t *testing.T) (daemon.ServiceOptions, *svcunittest.SystemdFleet, config.Paths) {
+	t.Helper()
+	home := t.TempDir()
+	old := config.Paths{ConfigDir: filepath.Join(home, ".config", "codefabric"), DataDir: filepath.Join(home, ".local", "share", "codefabric")}
+	initController(t, old)
+	fleet := svcunittest.NewSystemdFleet(home)
+	env := svcunit.Env{Runner: fleet, Home: home, UID: 1000, GOOS: "linux"}
+	spec := svcunit.Spec{
+		Name: "cf-controller", Label: "com.codefabric.controller", Installer: "cf controller install-service",
+		Argv: []string{"/opt/cf/bin/cf", "controller", "run"},
+		Env:  []svcunit.KV{{Key: "CF_CONFIG_DIR", Value: old.ConfigDir}, {Key: "CF_DATA_DIR", Value: old.DataDir}, {Key: "PATH", Value: "/usr/bin"}},
+	}
+	if _, err := svcunit.Install(t.Context(), env, spec); err != nil {
+		t.Fatal(err)
+	}
+	fleet.Set("cf-controller.service", true, true)
+	return daemon.ServiceOptions{
+		Paths: old, Binary: svcunittest.Program(t), PATH: "/usr/bin:/bin", Manager: env,
+		Settle: func(context.Context) error { return nil },
+	}, fleet, old
+}
+
+func TestScenario_RenameCLI_Controller_MueveElServicioYLosDirectorios(t *testing.T) {
+	o, fleet, old := oldController(t)
+	dbBefore, err := os.ReadFile(old.DatabaseFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := daemon.InstallService(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !res.Changed || fleet.Active("cf-controller.service") || !fleet.Active("codeflock-controller.service") {
+		t.Errorf("%+v", res)
+	}
+	home := o.Manager.Home
+	moved := config.Paths{ConfigDir: filepath.Join(home, ".config", "codeflock"), DataDir: filepath.Join(home, ".local", "share", "codeflock")}
+	if got, err := os.ReadFile(moved.DatabaseFile()); err != nil || string(got) != string(dbBefore) {
+		t.Errorf("the database did not move intact: %v", err)
+	}
+	for _, p := range []string{moved.ControllerConfigFile(), moved.PKIDir()} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%v", err)
+		}
+	}
+	if _, err := os.Stat(old.DataDir); err == nil {
+		t.Error("the old data directory is still there")
+	}
+	got, _, _ := svcunit.InstalledEnv(o.Manager, svcunit.Spec{Name: "codeflock-controller", Label: "com.codeflock.controller"})
+	if got["CFLK_DATA_DIR"] != moved.DataDir || got["CFLK_CONFIG_DIR"] != moved.ConfigDir {
+		t.Errorf("env = %v", got)
+	}
+}
+
+func TestInstallService_ControllerFailureAfterTheMovePutsEverythingBack(t *testing.T) {
+	o, fleet, old := oldController(t)
+	fleet.Fail("systemctl --user start codeflock-controller", errors.New("boom"))
+	if _, err := daemon.InstallService(t.Context(), o); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
+	}
+	if !fleet.Active("cf-controller.service") {
+		t.Error("the old Controller does not run again")
+	}
+	for _, p := range []string{old.DatabaseFile(), old.ControllerConfigFile()} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%v", err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(o.Manager.Home, ".local", "share", "codeflock")); err == nil {
+		t.Error("the new data directory is left")
+	}
+}
+
+func TestScenario_RenameCLI_ControllerEnLaunchd_ImprimeLosComandos(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plist := `<plist><dict><key>Label</key><string>com.codefabric.controller</string>
+<key>ProgramArguments</key><array><string>/usr/local/bin/cf</string><string>controller</string><string>run</string></array>
+<key>EnvironmentVariables</key><dict><key>CF_CONFIG_DIR</key><string>` + home + `/.config/codefabric</string>
+<key>CF_DATA_DIR</key><string>` + home + `/.local/share/codefabric</string></dict></dict></plist>`
+	path := filepath.Join(dir, "com.codefabric.controller.plist")
+	if err := os.WriteFile(path, []byte(plist), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := svcunittest.NewLaunchd(path, "com.codefabric.controller", 501)
+	o := daemon.ServiceOptions{Paths: newPaths(t), Manager: svcunit.Env{Runner: fake, Home: home, UID: 501, GOOS: "darwin"}, Home: home}
+
+	_, err := daemon.InstallService(t.Context(), o)
+
+	if err == nil {
+		t.Fatal("moved a launchd Controller")
+	}
+	for _, want := range []string{
+		"launchctl bootout gui/$(id -u)/com.codefabric.controller",
+		"mv '" + home + "/.local/share/codefabric' '" + home + "/.local/share/codeflock'",
+		"tee '" + filepath.Join(dir, "com.codeflock.controller.plist") + "'",
+		"launchctl bootstrap gui/$(id -u) '" + path + "'", // the way back
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in:\n%s", want, err)
+		}
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("launchctl was run: %v", fake.Calls())
+	}
+	if got, _ := os.ReadFile(path); string(got) != plist { //nolint:gosec // a file of the test
+		t.Error("the plist changed")
+	}
+}

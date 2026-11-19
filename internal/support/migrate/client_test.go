@@ -123,7 +123,7 @@ func TestClientMovesOnlyTheDefaultOfTheTwo(t *testing.T) {
 	}
 }
 
-func TestClientWithAnOldUnitChangesNothingAndNamesIt(t *testing.T) {
+func TestClientWithAnOldUnitChangesNothing(t *testing.T) {
 	home := t.TempDir()
 	oldCfg, oldData := oldClient(t, home)
 	units := filepath.Join(home, ".config", "systemd", "user")
@@ -144,10 +144,8 @@ func TestClientWithAnOldUnitChangesNothingAndNamesIt(t *testing.T) {
 		has(t, filepath.Join(home, ".config", "codeflock")) || has(t, filepath.Join(home, ".local", "share", "codeflock")) {
 		t.Error("something moved with a service installed")
 	}
-	for _, want := range []string{"cf-worker", "cflk worker install-service", "cf-controller", "cflk controller install-service"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("%q missing from %q", want, out.String())
-		}
+	if out.Len() != 0 {
+		t.Errorf("the warning is config.Resolve's, once per process, not said here: %q", out.String())
 	}
 }
 
@@ -162,8 +160,8 @@ func TestClientWithAStoppedSuffixedUnitChangesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := Client(clientEnv(home, nil), &out); err != nil || !strings.Contains(out.String(), "cf-worker-t1") {
-		t.Fatalf("%q %v", out.String(), err)
+	if err := Client(clientEnv(home, nil), &out); err != nil {
+		t.Fatal(err)
 	}
 	if has(t, filepath.Join(home, ".config", "codeflock")) {
 		t.Error("moved")

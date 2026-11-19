@@ -11,28 +11,35 @@ import (
 	"github.com/Autarquico/codeflock/internal/client"
 	"github.com/Autarquico/codeflock/internal/config"
 	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/migrate"
 	"github.com/Autarquico/codeflock/internal/support/svcunit"
 )
 
 // ServiceOptions parameterise InstallService and UninstallService.
 type ServiceOptions struct {
 	Paths config.Paths
-	// Binary is the cf the service runs; empty is this executable.
+	// Binary is the cflk the service runs; empty is this executable.
 	Binary string
 	// PATH is the PATH of the service; empty is one calculated now (svcunit.ServicePATH).
 	PATH string
 	// TmuxTmpDir, if set, is the TMUX_TMPDIR of the service, so that it runs
 	// its Runs in the tmux server that clients of this machine find.
 	TmuxTmpDir string
-	SSHTarget  string // as for `cf worker run`
-	Controller string // as for `cf worker run`
+	SSHTarget  string // as for `cflk worker run`
+	Controller string // as for `cflk worker run`
 	// Manager is the service manager; zero (no GOOS) is that of this user.
 	Manager svcunit.Env
 	// Sessions lists the sessions of Runs in the tmux server o names; nil asks tmux.
 	Sessions func(ctx context.Context, o tmux.Options) ([]string, error)
+	// Mover and Settle are where tests inject failures and the wait of the
+	// migration from the old names (migrate.Service).
+	Mover  migrate.Mover
+	Settle func(ctx context.Context) error
+	// LaunchDaemons is where the property lists of the system are; empty is /Library/LaunchDaemons.
+	LaunchDaemons string
 
 	// For tests: a suffix of the unit and of the label, and more environment
-	// and more arguments for `cf worker run`.
+	// and more arguments for `cflk worker run`.
 	Suffix    string
 	ExtraEnv  []svcunit.KV
 	ExtraArgs []string
@@ -54,6 +61,12 @@ func InstallService(ctx context.Context, o ServiceOptions) (ServiceResult, error
 	if err != nil {
 		return ServiceResult{}, err
 	}
+	if res, migrated, err := o.migrateOldService(ctx, env); migrated || err != nil {
+		return res, err
+	}
+	if o.Paths.ConfigDir, o.Paths.DataDir, err = o.Mover.Adopt(ctx, env, o.Paths.ConfigDir, o.Paths.DataDir); err != nil {
+		return ServiceResult{}, err
+	}
 	spec, warnings, err := workerSpec(o, env.GOOS)
 	if err != nil {
 		return ServiceResult{}, serviceError(err)
@@ -62,7 +75,7 @@ func InstallService(ctx context.Context, o ServiceOptions) (ServiceResult, error
 		return ServiceResult{}, err
 	} else if !exists {
 		// The service would only fail and be restarted, over and over.
-		return ServiceResult{}, domain.NewError(domain.CodeUnauthenticated, "this machine has not joined as a Worker; run `cf worker join <invitation>` first", nil)
+		return ServiceResult{}, domain.NewError(domain.CodeUnauthenticated, "this machine has not joined as a Worker; run `cflk worker join <invitation>` first", nil)
 	}
 	if installed, found, err := svcunit.InstalledEnv(env, spec); err == nil && found {
 		warnings = append(warnings, tmuxServerMoved(installed, o)...)
@@ -78,7 +91,7 @@ func InstallService(ctx context.Context, o ServiceOptions) (ServiceResult, error
 func tmuxServerMoved(installed map[string]string, o ServiceOptions) []string {
 	var warnings []string
 	for _, v := range []struct{ what, was, is string }{
-		{"the data directory", installed["CF_DATA_DIR"], o.Paths.DataDir},
+		{"the data directory", installed["CFLK_DATA_DIR"], o.Paths.DataDir},
 		{"TMUX_TMPDIR", installed["TMUX_TMPDIR"], o.TmuxTmpDir},
 	} {
 		if v.was != v.is {
@@ -123,7 +136,7 @@ func UninstallService(ctx context.Context, o ServiceOptions) (ServiceResult, err
 		listErr = readErr
 	case !found:
 		listErr = errors.New("there is no installed file to read the data directory of the service from")
-	case installed["CF_DATA_DIR"] == "":
+	case installed["CFLK_DATA_DIR"] == "":
 		listErr = errors.New("the installed service does not say its data directory")
 	default:
 		sessions := o.Sessions
@@ -133,7 +146,7 @@ func UninstallService(ctx context.Context, o ServiceOptions) (ServiceResult, err
 		// The server of the service: a unit without TMUX_TMPDIR runs tmux
 		// with none, whatever the environment of this command says.
 		runs, listErr = sessions(ctx, tmux.Options{
-			Socket:    tmux.SocketName(config.Paths{DataDir: installed["CF_DATA_DIR"]}.WorkerDataDir()),
+			Socket:    tmux.SocketName(config.Paths{DataDir: installed["CFLK_DATA_DIR"]}.WorkerDataDir()),
 			TmpDir:    installed["TMUX_TMPDIR"],
 			OwnTmpDir: true,
 		})
@@ -143,7 +156,7 @@ func UninstallService(ctx context.Context, o ServiceOptions) (ServiceResult, err
 	if err != nil || !found && !res.Changed {
 		return out, serviceError(err)
 	}
-	unsupervised := "unsupervised until the Worker is back (`cf worker install-service` or `cf worker run`)"
+	unsupervised := "unsupervised until the Worker is back (`cflk worker install-service` or `cflk worker run`)"
 	if res.Manager == "systemd" {
 		unsupervised += "; without lingering, they may be lost when the user's last session ends"
 	}
@@ -161,6 +174,11 @@ func UninstallService(ctx context.Context, o ServiceOptions) (ServiceResult, err
 
 // serviceNames is the spec of the service with only what names it.
 func serviceNames(suffix string) svcunit.Spec {
+	return svcunit.Spec{Name: "codeflock-worker" + suffix, Label: "com.codeflock.worker" + suffix, KeepProcesses: true}
+}
+
+// oldServiceNames is the spec of the service as it was named before the rename.
+func oldServiceNames(suffix string) svcunit.Spec {
 	return svcunit.Spec{Name: "cf-worker" + suffix, Label: "com.codefabric.worker" + suffix, KeepProcesses: true}
 }
 
@@ -193,12 +211,12 @@ func workerSpec(o ServiceOptions, goos string) (svcunit.Spec, []string, error) {
 	if o.Controller != "" {
 		argv = append(argv, "--controller", o.Controller)
 	}
-	env := []svcunit.KV{{Key: "CF_CONFIG_DIR", Value: o.Paths.ConfigDir}, {Key: "CF_DATA_DIR", Value: o.Paths.DataDir}, {Key: "PATH", Value: path}}
+	env := []svcunit.KV{{Key: "CFLK_CONFIG_DIR", Value: o.Paths.ConfigDir}, {Key: "CFLK_DATA_DIR", Value: o.Paths.DataDir}, {Key: "PATH", Value: path}}
 	if o.TmuxTmpDir != "" {
 		env = append(env, svcunit.KV{Key: "TMUX_TMPDIR", Value: o.TmuxTmpDir})
 	}
 	spec := serviceNames(o.Suffix)
-	spec.Description, spec.Installer = "CodeFabric Worker", "cf worker install-service"
+	spec.Description, spec.Installer = "Code Flock Worker", "cflk worker install-service"
 	spec.Argv, spec.Env = append(argv, o.ExtraArgs...), append(env, o.ExtraEnv...)
 	return spec, warnings, nil
 }
