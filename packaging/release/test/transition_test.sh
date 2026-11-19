@@ -15,6 +15,17 @@ SH
 	chmod 755 "$1"
 }
 
+# seed_transition_cf PATH: a transition cf of some other release: it answers the probe, and its bytes are not the tarball's.
+seed_transition_cf() {
+	mkdir -p "$(dirname "$1")"
+	cat >"$1" <<'SH'
+#!/bin/sh
+# transition cf of another release
+if [ -n "$CF_TRANSITION_PROBE" ]; then echo code-flock-cf-transition; else echo old-transition-cf; fi
+SH
+	chmod 755 "$1"
+}
+
 # The output of `cf version --json` of the beta.6 binary: exactly these three keys.
 beta_json() { printf '{"version":"%s","commit":"%s","date":"2026-11-10T10:00:00Z"}' "${1:-0.4.0-beta.6}" "$BETA_COMMIT"; }
 
@@ -88,6 +99,21 @@ TestScenario_CfAjeno_commitNotAHash() {
 	foreign_cf_is_left_alone '{"version":"0.4.0-beta.6","commit":"not a hash","date":"2026-11-10T10:00:00Z"}'
 }
 
+# A cf that does not answer is not Code Flock's: it is left alone, and the installer does not wait for it.
+TestScenario_CfAjeno_doesNotAnswerInTime() {
+	installed_release
+	mkdir -p "$T/bin"
+	printf '#!/bin/sh\nexec sleep 60\n' >"$T/bin/cf"
+	chmod 755 "$T/bin/cf"
+	cp "$T/bin/cf" "$T/old-cf"
+	started=$(date +%s)
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ $(($(date +%s) - started)) -lt 30 ] || fail "the installer waited for the cf"
+	cmp -s "$T/bin/cf" "$T/old-cf" || fail "the cf that does not answer was modified"
+	assert_out_contains "left $T/bin/cf alone"
+}
+
 TestScenario_CfAjeno_notRunnable() {
 	installed_release
 	mkdir -p "$T/bin"
@@ -97,6 +123,37 @@ TestScenario_CfAjeno_notRunnable() {
 	assert_rc 0
 	cmp -s "$T/bin/cf" "$T/old-cf" || fail "the cf that does not run was modified"
 	assert_out_contains "left $T/bin/cf alone"
+}
+
+# --- A cf in another directory of the PATH: said, never touched -------------------------
+
+cf_in_another_dir() { # JSON
+	installed_release
+	seed_cf "$T/other/cf" "$1"
+	cp "$T/other/cf" "$T/old-cf"
+	INST_PATH="$T/other:$SHIM:$PATH" run_install "$KEY_A/install.sh"
+	assert_rc 0
+	cmp -s "$T/other/cf" "$T/old-cf" || fail "the cf in the other directory was modified"
+	[ "$(ls -A "$T/bin")" = "cflk" ] || fail "unexpected files in the install dir: $(ls -A "$T/bin")"
+}
+
+TestScenario_CfEnOtroDirectorio_ajenoSeDiceYNoSeToca() {
+	cf_in_another_dir 'cf version 8.7.0'
+	assert_out_contains "$T/other/cf is a cf of another tool, and was not touched. Code Flock is cflk"
+}
+
+TestScenario_CfEnOtroDirectorio_betaSeDiceConElComando() {
+	cf_in_another_dir "$(beta_json)"
+	assert_out_contains "$T/other/cf is the cf of Code Flock 0.4.0-beta.6, and was not replaced because it is not in $T/bin"
+	assert_out_contains "CFLK_INSTALL_DIR=$T/other"
+}
+
+TestScenario_CfEnOtroDirectorio_noDiceNadaSiEsElDelDirectorioDeInstalacion() {
+	installed_release
+	seed_cf "$T/bin/cf" "$(beta_json)"
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	! grep -q "not replaced because\|another tool" "$T/out" || { dump; fail "reported a cf that was replaced"; }
 }
 
 # --- Symlinks -----------------------------------------------------------------------
@@ -110,7 +167,53 @@ TestScenario_SymlinkedCf_theTargetIsReplacedAndReported() {
 	assert_rc 0
 	[ -L "$T/bin/cf" ] || fail "the symlink was replaced by a file"
 	[ "$("$T/real/cf")" = "transition-cf" ] || fail "the symlink target was not replaced"
-	assert_out_contains "$T/bin/cf is a symlink to "
+	assert_out_contains "$T/bin/cf is a symlink to .*/real/cf"
+	assert_out_contains "replaced the cf of Code Flock 0.4.0-beta.6 at .*/real/cf"
+}
+
+# The first line only states the fact; what happened is said by the line that follows.
+TestScenario_SymlinkedCf_toAForeignCfSaysOnlyThatItWasLeftAlone() {
+	installed_release
+	seed_cf "$T/real/cf" 'cf version 8.7.0'
+	cp "$T/real/cf" "$T/old-cf"
+	mkdir -p "$T/bin"
+	ln -s "$T/real/cf" "$T/bin/cf"
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	cmp -s "$T/real/cf" "$T/old-cf" || fail "the foreign cf was modified"
+	assert_out_contains "$T/bin/cf is a symlink to .*/real/cf"
+	assert_out_contains "left .*/real/cf alone"
+	! grep -q "replaced" "$T/out" || { dump; fail "the output says something was replaced"; }
+}
+
+# The link target is found as the kernel does: a ../ after a symlinked directory is relative to the real directory.
+TestScenario_SymlinkedCf_relativeTargetBehindASymlinkedDirectory() {
+	installed_release
+	seed_cf "$T/x/z/cf" "$(beta_json)"
+	mkdir -p "$T/x/y"
+	ln -s "$T/x/y" "$T/bin"
+	ln -s ../z/cf "$T/x/y/cf"
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ "$("$T/x/z/cf")" = "transition-cf" ] || fail "the target the kernel resolves to was not replaced"
+}
+
+# cflk is already installed when the cf behind the link cannot be written: the error says so.
+TestScenario_SymlinkedCf_unwritableTargetSaysCflkIsInstalled() {
+	[ "$(id -u)" -ne 0 ] || { echo "SKIP: root can write anywhere"; return 0; }
+	installed_release
+	seed_cf "$T/ro/cf" "$(beta_json)"
+	cp "$T/ro/cf" "$T/old-cf"
+	mkdir -p "$T/bin"
+	ln -s "$T/ro/cf" "$T/bin/cf"
+	chmod 555 "$T/ro"
+	run_install "$KEY_A/install.sh"
+	chmod 755 "$T/ro"
+	assert_rc 4
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk was not installed"
+	assert_out_contains "cflk $VERSION is installed at $T/bin/cflk, but .*/ro/cf could not be replaced"
+	assert_out_contains "delete it and use cflk"
+	cmp -s "$T/ro/cf" "$T/old-cf" || fail "the cf was modified"
 }
 
 TestScenario_SymlinkedCf_relativeLinkIsResolved() {
@@ -162,7 +265,30 @@ TestScenario_Reinstall_overTheTransitionCfChangesNothing() {
 	assert_out_contains "already the transition cf"
 }
 
+# The transition cf of another release is recognised by what it answers, not by its bytes.
+TestScenario_Reinstall_overTheTransitionCfOfAnotherReleaseUpdatesItQuietly() {
+	installed_release
+	seed_transition_cf "$T/bin/cf"
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ "$("$T/bin/cf")" = "transition-cf" ] || fail "the old transition cf was not updated"
+	assert_out_contains "updated the transition cf at $T/bin/cf"
+	! grep -q "not the cf\|left" "$T/out" || { dump; fail "alarming output for our own transition cf"; }
+}
+
 # --- Order: cflk first, validated, and only then the cf ---------------------------------
+
+# 1.2.3 is not 1.2.3-beta.1: the version is compared whole.
+TestScenario_Order_aCflkOfALongerVersionIsNotTheOneRequested() {
+	make_dist "$T/dist"
+	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cflk_${BARE_VERSION}_linux_amd64.tar.gz" ok "$BARE_VERSION-beta.1"
+	finalize_dist "$T/dist" "$KEY_A"
+	serve_dist
+	run_install "$KEY_A/install.sh"
+	assert_rc 4
+	assert_out_contains "does not report $VERSION"
+	[ -z "$(ls -A "$T/bin")" ] || fail "something was installed: $(ls -A "$T/bin")"
+}
 
 TestScenario_Order_aBrokenCflkLeavesTheCfAlone() {
 	make_dist "$T/dist"
@@ -189,7 +315,7 @@ TestScenario_OldRelease_isRefusedWithTheInstallerToUse() {
 	run_install "$KEY_A/install.sh"
 	assert_rc 5
 	assert_out_contains "predates the cflk rename"
-	assert_out_contains "/$VERSION/install.sh"
+	assert_out_contains "curl -fsSL .*/$VERSION/install.sh | CF_VERSION=$VERSION CF_INSTALL_DIR='$T/bin' sh"
 	cmp -s "$T/bin/cf" "$T/old-cf" || fail "the cf was modified"
 	[ "$(ls -A "$T/bin")" = "cf" ] || fail "something landed in the install dir"
 }

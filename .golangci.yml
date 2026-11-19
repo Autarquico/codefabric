@@ -62,8 +62,8 @@ linters:
             - pkg: github.com/Autarquico/codeflock/internal/adapters
               desc: interfaces must go through internal/client (invariant 7)
         # The CLI is a client of the SDK and of the wire types: nothing else of
-        # the module. What it cannot reach (the terminal of `cf attach`) is
-        # composed into it by cmd/cf.
+        # the module. What it cannot reach (the terminal of `cflk attach`) is
+        # composed into it by cmd/cflk.
         cli:
           list-mode: strict
           files: ["**/internal/cli/**", "!$test"]

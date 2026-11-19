@@ -9,7 +9,7 @@ import tarfile
 
 out, mode, version = sys.argv[1:4]
 script = ("#!/bin/sh\necho %s\n" % version).encode()
-transition = b"#!/bin/sh\necho transition-cf\n"
+transition = b"#!/bin/sh\nif [ -n \"$CF_TRANSITION_PROBE\" ]; then echo code-flock-cf-transition; else echo transition-cf; fi\n"
 
 
 def add(archive, name, body=script):

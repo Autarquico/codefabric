@@ -1,4 +1,4 @@
-// Command cf is the CodeFabric CLI, TUI and daemon binary.
+// Command cflk is the Code Flock CLI, TUI and daemon binary.
 package main
 
 import (
@@ -30,7 +30,7 @@ import (
 func main() { os.Exit(run()) }
 
 // run composes the binary: the CLI with the terminal that attaches over ssh, and
-// the commands of the daemons. Tests that need the binary to behave as cf call it.
+// the commands of the daemons. Tests that need the binary to behave as cflk call it.
 func run() int { return cli.ExecuteWith(options(), commands()...) }
 
 // options are what the CLI cannot reach itself (ADR 0001).

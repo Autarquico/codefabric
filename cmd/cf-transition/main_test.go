@@ -94,6 +94,19 @@ func TestRunsTheCflkNextToIt(t *testing.T) {
 	}
 }
 
+func TestAnswersTheInstallerProbeWithoutRunningCflk(t *testing.T) {
+	dir := install(t)
+	cmd := exec.CommandContext(t.Context(), filepath.Join(dir, "cf"), "args", "x")
+	cmd.Env = append(cleanEnv("/usr/bin:/bin"), "CF_TRANSITION_PROBE=1")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(out), "code-flock-cf-transition\n"; got != want {
+		t.Errorf("stdout = %q, want %q (and no cflk output)", got, want)
+	}
+}
+
 func TestFallsBackToPath(t *testing.T) {
 	dir := install(t)
 	other := t.TempDir()

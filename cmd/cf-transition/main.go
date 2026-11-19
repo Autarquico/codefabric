@@ -15,7 +15,18 @@ import (
 
 const target = "cflk"
 
+// The installer asks a cf who it is by setting probeVar: the transition cf answers probeAnswer and exits, without
+// running cflk. Any other cf ignores the variable, so the answer says "I am a transition cf" whatever my version.
+const (
+	probeVar    = "CF_TRANSITION_PROBE"
+	probeAnswer = "code-flock-cf-transition"
+)
+
 func main() {
+	if os.Getenv(probeVar) != "" {
+		fmt.Println(probeAnswer)
+		return
+	}
 	self, _ := os.Executable()
 	path, err := locate(self)
 	if err != nil {

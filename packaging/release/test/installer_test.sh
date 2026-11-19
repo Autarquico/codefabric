@@ -412,11 +412,12 @@ TestScenario_PortableAwk_noRegexIntervalInAwk() {
 
 # --- Install target problems ----------------------------------------------------
 
-# $T/bin/cf is not a file: the installer must refuse (exit 4) instead of moving the binary inside it.
-assert_cf_dir_refused() { # dir that $T/bin/cf is or points to
+# $T/bin/cf is a directory: it is some other tool's cf, so cflk is installed and the directory stays as it is.
+assert_cf_dir_left_alone() { # dir that $T/bin/cf is or points to
 	run_install "$KEY_A/install.sh"
-	assert_rc 4
-	assert_out_contains "is a directory"
+	assert_rc 0
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk was not installed"
+	assert_out_contains "left $T/bin/cf alone: it is a directory"
 	[ -z "$(ls -A "$1")" ] || fail "something landed inside the directory: $(ls -A "$1")"
 }
 
@@ -424,8 +425,8 @@ TestScenario_InstallTarget_cfIsDirectory() {
 	good_release "$KEY_A"
 	serve_dist
 	mkdir -p "$T/bin/cf"
-	assert_cf_dir_refused "$T/bin/cf"
-	[ "$(ls -A "$T/bin")" = "cf" ] || fail "the install dir holds more than cf: $(ls -A "$T/bin")"
+	assert_cf_dir_left_alone "$T/bin/cf"
+	[ "$(find "$T/bin" -mindepth 1 | wc -l | tr -d ' ')" -eq 2 ] || fail "unexpected files in the install dir: $(ls -A "$T/bin")"
 }
 
 TestScenario_InstallTarget_cfIsSymlinkToDirectory() {
@@ -433,8 +434,8 @@ TestScenario_InstallTarget_cfIsSymlinkToDirectory() {
 	serve_dist
 	mkdir -p "$T/bin" "$T/elsewhere"
 	ln -s "$T/elsewhere" "$T/bin/cf"
-	assert_cf_dir_refused "$T/elsewhere"
-	[ "$(ls -A "$T/bin")" = "cf" ] || fail "the install dir holds more than cf: $(ls -A "$T/bin")"
+	assert_cf_dir_left_alone "$T/elsewhere"
+	[ "$(find "$T/bin" -mindepth 1 | wc -l | tr -d ' ')" -eq 2 ] || fail "unexpected files in the install dir: $(ls -A "$T/bin")"
 }
 
 TestScenario_InstallTarget_mktempFails() {

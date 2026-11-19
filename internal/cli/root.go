@@ -44,9 +44,9 @@ type Options struct {
 	// Sessions builds the sessions of this machine's harnesses (`--session` of `cflk do`
 	// and `cflk task resume`). Without it they answer CF_NOT_IMPLEMENTED.
 	Sessions SessionsFactory
-	// TUI opens the terminal UI over the Controller (`cf` with no arguments on a
+	// TUI opens the terminal UI over the Controller (`cflk` with no arguments on a
 	// terminal). internal/tui is composed in by cmd/cflk: the CLI may not import
-	// it. Without one, `cf` prints its help.
+	// it. Without one, `cflk` prints its help.
 	TUI func(ctx context.Context, c *client.Client) error
 	// Native shows the desktop notifications of `cflk notify`. Without one they
 	// are only logged as unavailable.
@@ -207,7 +207,7 @@ func printable(s string) string {
 func newRootCmd(opts Options) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "cflk",
-		Short:         "CodeFabric: run coding agents across a pool of machines",
+		Short:         "Code Flock: run coding agents across a pool of machines",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.ArbitraryArgs,
@@ -225,7 +225,7 @@ func newRootCmd(opts Options) *cobra.Command {
 	return root
 }
 
-// rootRun is what bare `cf` does: open the TUI when both ends are a terminal
+// rootRun is what bare `cflk` does: open the TUI when both ends are a terminal
 // and JSON was not asked for; else it is what it always was, a command that
 // only groups the others.
 func rootRun(opts Options) func(*cobra.Command, []string) error {

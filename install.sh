@@ -8,8 +8,8 @@
 # Exit: 2 invalid arguments, 3 unsupported platform, 4 prerequisite failure, 5 download/checksum/signature failure
 #
 # It verifies the signed checksum list, then the tarball, and only then installs cflk and validates it.
-# Only after that does it look at an existing cf: the cf of a Code Flock beta is replaced by the transition cf
-# (which runs cflk); any other cf is left alone.
+# Only after that does it look at an existing cf: the cf of a Code Flock beta (or an older transition cf) is replaced
+# by the transition cf (which runs cflk); any other cf is left alone. A cf elsewhere on the PATH is only reported.
 # The trust root is the allowed_signers block below. While it holds the PLACEHOLDER no signature verifies,
 # so the installer fails closed. Review-first users verify this file with install.sh.sig.
 set -eu
@@ -18,6 +18,9 @@ DEFAULT_BASE_URL='https://github.com/Autarquico/codeflock/releases/download'
 LATEST_URL='https://github.com/Autarquico/codeflock/releases/latest'
 NAMESPACE='codefabric-release'
 PRINCIPAL='release@codefabric'
+
+TRANSITION_ANSWER='code-flock-cf-transition'
+PROBE_SECONDS=5
 
 log() { printf 'install.sh: %s\n' "$*" >&2; }
 die() { code=$1; shift; log "error: $*"; exit "$code"; }
@@ -155,7 +158,9 @@ check_checksums() {
 	header=$(sed -n 1p "$WORK/checksums.txt")
 	[ "$header" = "version: $VERSION" ] || die 5 "checksums.txt is signed for '${header#version: }', not $VERSION"
 	if sed 1d "$WORK/checksums.txt" | grep -Eq '^[0-9a-f]{64}  cf_'; then
-		die 5 "$VERSION predates the cflk rename (its assets are cf_*, not cflk_*); install it with the install.sh published with that release: $BASE_URL/$VERSION/install.sh"
+		old_dir=
+		[ "$INSTALL_DIR" = "$HOME/.local/bin" ] || old_dir=" CF_INSTALL_DIR='$INSTALL_DIR'"
+		die 5 "$VERSION predates the cflk rename (its assets are cf_*, not cflk_*); install it with the installer published with that release: curl -fsSL $BASE_URL/$VERSION/install.sh | CF_VERSION=$VERSION$old_dir sh"
 	fi
 	if sed 1d "$WORK/checksums.txt" | grep -Evq '^[0-9a-f]{64}  cflk_[0-9A-Za-z.+-]+_(linux|darwin)_(amd64|arm64)\.tar\.gz$'; then
 		die 5 'checksums.txt contains a malformed line'
@@ -188,16 +193,19 @@ download_tarball() {
 }
 
 # place SRC DEST: copy next to DEST, then rename over it, so a reader never sees half a file.
+# Fails (leaving no TMP_BIN behind that the exit trap does not remove) when DEST's directory is not writable.
 place() {
 	dest_dir=$(dirname "$2")
-	TMP_BIN=$(mktemp "$dest_dir/.$(basename "$2").XXXXXX") || die 4 "cannot write to $dest_dir"
-	{ cp "$1" "$TMP_BIN" && chmod 755 "$TMP_BIN"; } || die 4 "cannot write to $dest_dir"
+	TMP_BIN=$(mktemp "$dest_dir/.$(basename "$2").XXXXXX") || return 1
+	{ cp "$1" "$TMP_BIN" && chmod 755 "$TMP_BIN"; } || return 1
 }
 
 install_cflk() {
-	place "$WORK/unpacked/cflk" "$DIR/cflk"
+	place "$WORK/unpacked/cflk" "$DIR/cflk" || die 4 "cannot write to $DIR"
 	"$TMP_BIN" version >"$WORK/cflk.version" 2>&1 </dev/null || die 4 'the new cflk does not run; nothing was installed'
-	grep -qF "${VERSION#v}" "$WORK/cflk.version" || die 4 "the new cflk does not report $VERSION; nothing was installed"
+	# the version is a whole word of the output: 0.4.0 is not 0.4.0-beta.1, nor 10.4.0
+	awk -v v="${VERSION#v}" '{ for (i = 1; i <= NF; i++) if ($i == v) found = 1 } END { exit !found }' "$WORK/cflk.version" ||
+		die 4 "the new cflk does not report $VERSION; nothing was installed"
 	mv -f "$TMP_BIN" "$DIR/cflk" || die 4 "cannot install into $DIR"
 	TMP_BIN=
 	log "installed $DIR/cflk ($VERSION)"
@@ -217,23 +225,71 @@ resolve_link() {
 		esac
 	done
 	[ -e "$p" ] || return 1
-	parent=$(cd "$(dirname "$p")" && pwd -P) || return 1
+	parent=$(cd -P "$(dirname "$p")" && pwd -P) || return 1
 	printf '%s/%s\n' "$parent" "$(basename "$p")"
 }
 
-# The version of a cf that is without doubt the one of a Code Flock beta: `version --json` is exactly
-# {"version","commit","date"} and the version is 0.4.0-beta.N or older. Prints it, or fails.
-code_flock_beta_version() {
-	json=$("$1" version --json 2>/dev/null </dev/null | tr -d ' \t\r\n') || return 1
-	printf '%s\n' "$json" | grep -Eq '^\{"version":"[^"]*","commit":"[0-9a-f]{7,40}","date":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[^"]*"\}$' || return 1
-	found=$(printf '%s\n' "$json" | sed 's/^{"version":"\([^"]*\)".*$/\1/')
-	printf '%s\n' "$found" | grep -Eq '^v?0\.([0-3]\.[0-9]+([-+][0-9A-Za-z.+-]*)?|4\.0-beta\.[0-9]+)$' || return 1
-	printf '%s\n' "$found"
+# run_limited SECONDS CMD...: CMD with its own stdio, killed when it does not finish in time (so a foreign cf that
+# waits for a terminal cannot hang the installer). Uses timeout(1) when there is one; macOS has none.
+run_limited() {
+	secs=$1
+	shift
+	if have timeout; then
+		timeout -s KILL "$secs" "$@"
+		return
+	fi
+	"$@" &
+	cmd_pid=$!
+	(
+		trap 'kill "$sleep_pid"; exit 0' TERM
+		sleep "$secs" &
+		sleep_pid=$!
+		wait "$sleep_pid"
+		kill -9 "$cmd_pid"
+	) >/dev/null 2>&1 &
+	killer_pid=$!
+	status=0
+	wait "$cmd_pid" || status=$?
+	kill "$killer_pid" >/dev/null 2>&1 || true
+	wait "$killer_pid" >/dev/null 2>&1 || true
+	return "$status"
 }
 
-# After cflk is in place, the cf of Code Flock gets replaced by the transition cf. Anything else stays.
-transition_cf() {
-	[ -e "$DIR/cf" ] || [ -L "$DIR/cf" ] || return 0
+# The version of a Code Flock beta from what its `version --json` printed: exactly {"version","commit","date"}, and
+# the version is 0.4.0-beta.N or older. Prints it, or fails.
+beta_version_of() {
+	json=$(printf '%s\n' "$1" | tr -d ' \t\r\n')
+	printf '%s\n' "$json" | grep -Eq '^\{"version":"[^"]*","commit":"[0-9a-f]{7,40}","date":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[^"]*"\}$' || return 1
+	beta_found=$(printf '%s\n' "$json" | sed 's/^{"version":"\([^"]*\)".*$/\1/')
+	printf "%s\n" "$beta_found" | grep -Eq '^v?0\.([0-3]\.[0-9]+([-+][0-9A-Za-z.+-]*)?|4\.0-beta\.[0-9]+)$' || return 1
+	printf "%s\n" "$beta_found"
+}
+
+# classify_cf FILE: what a cf says of itself, given PROBE_SECONDS to answer. Sets CF_KIND:
+#   transition  it answers the probe: a transition cf of any release
+#   beta        its `version --json` is that of a Code Flock beta (CF_BETA is the version)
+#   foreign     anything else, a cf that does not run or does not answer in time included
+classify_cf() {
+	CF_KIND=foreign
+	CF_BETA=
+	run_limited "$PROBE_SECONDS" env CF_TRANSITION_PROBE=1 "$1" version --json >"$WORK/probe.out" 2>/dev/null </dev/null || return 0
+	answer=$(cat "$WORK/probe.out")
+	if [ "$answer" = "$TRANSITION_ANSWER" ]; then
+		CF_KIND=transition
+	elif CF_BETA=$(beta_version_of "$answer"); then
+		CF_KIND=beta
+	fi
+}
+
+# replace_cf DEST: the transition cf over DEST.
+replace_cf() {
+	place "$WORK/unpacked/cf" "$1" || return 1
+	mv -f "$TMP_BIN" "$1" || return 1
+	TMP_BIN=
+}
+
+# $DIR/cf exists and is not a directory.
+transition_cf_in_dir() {
 	if ! real=$(resolve_link "$DIR/cf"); then
 		log "left $DIR/cf alone: it is a symlink that does not resolve to a file"
 		return 0
@@ -241,9 +297,9 @@ transition_cf() {
 	shown=$DIR/cf
 	if [ -L "$DIR/cf" ]; then
 		shown=$real
-		log "$DIR/cf is a symlink to $real; that file is the one examined and replaced"
+		log "$DIR/cf is a symlink to $real"
 	fi
-	if [ "$real" = "$(cd "$DIR" && pwd -P)/cflk" ]; then
+	if [ "$real" = "$(cd -P "$DIR" && pwd -P)/cflk" ]; then
 		log "$DIR/cf already runs cflk; nothing to change"
 		return 0
 	fi
@@ -251,20 +307,50 @@ transition_cf() {
 		log "$shown is already the transition cf; nothing to change"
 		return 0
 	fi
-	if ! old=$(code_flock_beta_version "$real"); then
-		log "left $shown alone: it is not the cf of a Code Flock beta (a different tool, or too new to be sure). Use cflk for Code Flock"
+	classify_cf "$real"
+	case $CF_KIND in
+		foreign)
+			log "left $shown alone: it is not the cf of Code Flock (a different tool, one too new to be sure, or one that did not answer). Use cflk for Code Flock"
+			return 0
+			;;
+		transition) done_message="updated the transition cf at $shown; it runs cflk and goes away in 0.5" ;;
+		beta) done_message="replaced the cf of Code Flock $CF_BETA at $shown with the transition cf: it runs cflk and goes away in 0.5. Use cflk from now on" ;;
+	esac
+	replace_cf "$real" ||
+		die 4 "cflk $VERSION is installed at $DIR/cflk, but $real could not be replaced (no write access to $(dirname "$real")?). Replace it by hand with the cf from the release tarball, or delete it and use cflk"
+	log "$done_message"
+}
+
+# The cf that a shell would run, when it is not in $DIR: said, never touched.
+report_cf_on_path() {
+	found=$(command -v cf 2>/dev/null) || return 0
+	[ -f "$found" ] || return 0
+	[ "$(cd -P "$(dirname "$found")" && pwd -P)" != "$(cd -P "$DIR" && pwd -P)" ] || return 0
+	if ! real=$(resolve_link "$found"); then
+		log "left $found alone: it is a symlink that does not resolve to a file. Code Flock is cflk"
 		return 0
 	fi
-	place "$WORK/unpacked/cf" "$real"
-	mv -f "$TMP_BIN" "$real" || die 4 "cflk is installed, but $real could not be replaced"
-	TMP_BIN=
-	log "replaced the cf of Code Flock $old at $shown with the transition cf: it runs cflk and goes away in 0.5. Use cflk from now on"
+	classify_cf "$real"
+	case $CF_KIND in
+		foreign) log "$found is a cf of another tool, and was not touched. Code Flock is cflk" ;;
+		transition) log "$found is a transition cf of another Code Flock install: it runs the cflk next to it, not the one just installed" ;;
+		beta) log "$found is the cf of Code Flock $CF_BETA, and was not replaced because it is not in $DIR. To replace it, run this installer again with CFLK_INSTALL_DIR=$(dirname "$found"), or delete it. Use cflk for Code Flock" ;;
+	esac
+}
+
+# After cflk is in place, the cf of Code Flock gets replaced by the transition cf. Anything else stays.
+transition_cf() {
+	if [ -d "$DIR/cf" ]; then
+		log "left $DIR/cf alone: it is a directory (or a link to one). Code Flock is cflk"
+	elif [ -e "$DIR/cf" ] || [ -L "$DIR/cf" ]; then
+		transition_cf_in_dir
+	fi
+	report_cf_on_path
 }
 
 install_binaries() {
 	DIR=${INSTALL_DIR%/}
 	mkdir -p "$DIR" || die 4 "cannot create $DIR"
-	[ ! -d "$DIR/cf" ] || die 4 "$DIR/cf is a directory (or a link to one); move it away and run the installer again"
 	[ ! -d "$DIR/cflk" ] || die 4 "$DIR/cflk is a directory (or a link to one); move it away and run the installer again"
 	install_cflk
 	transition_cf

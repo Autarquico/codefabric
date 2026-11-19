@@ -16,8 +16,8 @@
  v1    09:00   adopted
  CLI only      cflk workflow adopt <new-name> · cflk workflow commit default ·
                cflk workflow diff default --worker=<worker> --harness=<harness>
-               · cflk workflow explain default --worker=<worker> --
-               harness=<harness>
+               · cflk workflow explain default --worker=<worker>
+               --harness=<harness>
 
  ──────────────────────────────────────────────────────────────────────────────
  [↑↓] Move [/] Filter [enter] Actions [A] Apply [s] Sync [R] Rollback
