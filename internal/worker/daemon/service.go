@@ -64,11 +64,7 @@ func InstallService(ctx context.Context, o ServiceOptions) (ServiceResult, error
 	if res, migrated, err := o.migrateOldService(ctx, env); migrated || err != nil {
 		return res, err
 	}
-	if o.Paths.ConfigDir, o.Paths.DataDir, err = o.Mover.Adopt(ctx, env, o.Paths.ConfigDir, o.Paths.DataDir); err != nil {
-		return ServiceResult{}, err
-	}
-	spec, warnings, err := workerSpec(o, env.GOOS)
-	if err != nil {
+	if _, _, err := workerSpec(o, env.GOOS); err != nil {
 		return ServiceResult{}, serviceError(err)
 	}
 	if exists, err := client.CredentialsExist(o.Paths.WorkerCredentialsDir()); err != nil {
@@ -76,6 +72,17 @@ func InstallService(ctx context.Context, o ServiceOptions) (ServiceResult, error
 	} else if !exists {
 		// The service would only fail and be restarted, over and over.
 		return ServiceResult{}, domain.NewError(domain.CodeUnauthenticated, "this machine has not joined as a Worker; run `cflk worker join <invitation>` first", nil)
+	}
+	// Only now, with the request known to be good, are the directories of the old name moved.
+	noRuns := func(ctx context.Context, dirs migrate.Dirs) error {
+		return migrate.Runs{Sessions: o.Sessions}.None(ctx, o.TmuxTmpDir, dirs.OldData)
+	}
+	if o.Paths.ConfigDir, o.Paths.DataDir, err = o.Mover.Adopt(ctx, env, o.Paths.ConfigDir, o.Paths.DataDir, noRuns); err != nil {
+		return ServiceResult{}, err
+	}
+	spec, warnings, err := workerSpec(o, env.GOOS)
+	if err != nil {
+		return ServiceResult{}, serviceError(err)
 	}
 	if installed, found, err := svcunit.InstalledEnv(env, spec); err == nil && found {
 		warnings = append(warnings, tmuxServerMoved(installed, o)...)

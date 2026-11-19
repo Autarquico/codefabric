@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
 	"github.com/Autarquico/codeflock/internal/support/svcunit"
 	"github.com/Autarquico/codeflock/internal/support/svcunit/svcunittest"
 )
@@ -201,7 +202,7 @@ func TestServiceResumesFromTheProgressFileAfterACut(t *testing.T) {
 	if _, err := Move([]Pair{{r.cfg, filepath.Join(r.home, ".config", "codeflock")}, {r.data, newData}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := (progressFile{dirs: Dirs{OldData: r.data, NewData: newData}}).write(snap); err != nil {
+	if err := (progressFile{dirs: Dirs{OldData: r.data, NewData: newData}}).write([]member{{old: oldWorker, snap: snap}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.service().Migrate(t.Context()); err != nil {
@@ -229,16 +230,26 @@ func TestServiceWithASuffixKeepsItsSuffix(t *testing.T) {
 	r.installOld(t, suffixed, true)
 	s := r.service()
 	s.Old = suffixed
-	// Both old units run on the same directories and the other one is running.
-	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "cf-worker") {
-		t.Fatalf("err = %v", err)
+	s.New = func(was Snapshot, dirs Dirs) (svcunit.Spec, error) {
+		spec := newWorker
+		spec.Name, spec.Label = "codeflock-worker-t1", "com.codeflock.worker-t1"
+		spec.Argv = append([]string{"/opt/cflk/bin/cflk"}, was.Argv[1:]...)
+		spec.Env = []svcunit.KV{{Key: "CFLK_CONFIG_DIR", Value: dirs.NewConfig}, {Key: "CFLK_DATA_DIR", Value: dirs.NewData}}
+		return spec, nil
 	}
-	r.fleet.Set("cf-worker.service", true, false)
+	// Both old units use the same directories: they move together.
 	if _, err := s.Migrate(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if has(t, r.unit("cf-worker-t1")) || !has(t, r.unit("cf-worker")) {
-		t.Errorf("only the named one moves")
+	for _, name := range []string{"cf-worker-t1", "cf-worker"} {
+		if has(t, r.unit(name)) {
+			t.Errorf("%s is still there", name)
+		}
+	}
+	for _, name := range []string{"codeflock-worker-t1", "codeflock-worker"} {
+		if !r.fleet.Active(name + ".service") {
+			t.Errorf("%s does not run", name)
+		}
 	}
 }
 
@@ -271,8 +282,8 @@ func TestServiceWithAnUnreadableUnitChangesNothing(t *testing.T) {
 func TestServiceRefusesToMoveWhatAPreflightRefuses(t *testing.T) {
 	r := newRig(t)
 	s := r.service()
-	s.Preflight = func(context.Context, Snapshot, Dirs) error { return errors.New("a Run is live") }
-	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "a Run is live") {
+	s.Runs.Sessions = func(context.Context, tmux.Options) ([]string, error) { return []string{"cf-run_a-e1"}, nil }
+	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
 		t.Fatalf("err = %v", err)
 	}
 	r.unchanged(t)
@@ -281,32 +292,146 @@ func TestServiceRefusesToMoveWhatAPreflightRefuses(t *testing.T) {
 	}
 }
 
-func TestServiceAndControllerOnTheSameRoot(t *testing.T) {
+var oldController = svcunit.Spec{Name: "cf-controller", Label: "com.codefabric.controller"}
+
+func TestServiceAndControllerOnTheSameRootMoveTogether(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		controllerActive bool
+	}{{"both running", true}, {"the other stopped", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			r.installOld(t, oldController, tc.controllerActive)
+			if _, err := r.service().Migrate(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if has(t, r.unit("cf-controller")) || has(t, r.unit("cf-worker")) || has(t, r.data) {
+				t.Errorf("something of the old name is left")
+			}
+			if !r.fleet.Active("codeflock-worker.service") || r.fleet.Active("codeflock-controller.service") != tc.controllerActive {
+				t.Errorf("worker %v, controller %v", r.fleet.Active("codeflock-worker.service"), r.fleet.Active("codeflock-controller.service"))
+			}
+			got, found, err := svcunit.InstalledEnv(r.env, svcunit.Spec{Name: "codeflock-controller", Label: "com.codeflock.controller"})
+			newData := filepath.Join(r.home, ".local", "share", "codeflock")
+			if err != nil || !found || got["CFLK_DATA_DIR"] != newData || got["CFLK_CONFIG_DIR"] != filepath.Join(r.home, ".config", "codeflock") {
+				t.Errorf("the Controller unit: %v %v %v", got, found, err)
+			}
+			in, _ := svcunit.Inspect(t.Context(), r.env, svcunit.Spec{Name: "codeflock-controller", Label: "com.codeflock.controller"})
+			if len(in.Argv) == 0 || in.Argv[0] == "/opt/cf/bin/cf" || filepath.Base(in.Argv[0]) == "cf" {
+				t.Errorf("the Controller still runs the old program: %v", in.Argv)
+			}
+		})
+	}
+}
+
+func TestServiceMovedWithAnotherChecksTheRunsOfTheWorkerThatIsNotItself(t *testing.T) {
 	r := newRig(t)
-	controller := svcunit.Spec{Name: "cf-controller", Label: "com.codefabric.controller"}
-	r.installOld(t, controller, true)
-	// The Controller runs on the directories the Worker is about to move: refused, nothing changed.
-	if _, err := r.service().Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "cf-controller") || !strings.Contains(err.Error(), "cflk controller install-service") {
+	r.installOld(t, oldController, true)
+	s := r.service()
+	s.Old = oldController
+	s.New = func(Snapshot, Dirs) (svcunit.Spec, error) { return svcunit.Spec{}, errors.New("not reached") }
+	var asked tmux.Options
+	s.Runs.Sessions = func(_ context.Context, o tmux.Options) ([]string, error) {
+		asked = o
+		return []string{"cf-run_a-e1"}, nil
+	}
+	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
 		t.Fatalf("err = %v", err)
 	}
+	if asked.TmpDir != "/run/tmux" || asked.Socket != tmux.SocketName(filepath.Join(r.data, "worker")) {
+		t.Errorf("asked %+v", asked)
+	}
 	r.unchanged(t)
-	// Stopped, it does not hold the directories: the Worker moves them, and the Controller finds them moved.
-	r.fleet.Set("cf-controller.service", true, false)
+}
+
+func TestServiceRefusesAnotherServiceItCannotMove(t *testing.T) {
+	t.Run("one it cannot read", func(t *testing.T) {
+		r := newRig(t)
+		if err := os.Mkdir(r.unit("cf-controller"), 0o700); err != nil { // a directory where the file should be
+			t.Fatal(err)
+		}
+		if _, err := r.service().Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "cf-controller") {
+			t.Fatalf("err = %v", err)
+		}
+		r.unchanged(t)
+	})
+	t.Run("one that names no directories uses the ones of the old name", func(t *testing.T) {
+		r := newRig(t)
+		r.installOld(t, oldController, true)
+		// Its unit says no CF_*_DIR: what it runs on is the default, which is what moves.
+		bare := oldController
+		bare.Argv = []string{"/opt/cf/bin/cf", "controller", "run"}
+		bare.Env = []svcunit.KV{{Key: "PATH", Value: "/usr/bin"}}
+		if _, err := svcunit.Install(t.Context(), r.env, bare); err != nil {
+			t.Fatal(err)
+		}
+		r.fleet.Set("cf-controller.service", true, true)
+		if _, err := r.service().Migrate(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		got, _, _ := svcunit.InstalledEnv(r.env, svcunit.Spec{Name: "codeflock-controller", Label: "com.codeflock.controller"})
+		if got["CFLK_DATA_DIR"] != filepath.Join(r.home, ".local", "share", "codeflock") || has(t, r.unit("cf-controller")) {
+			t.Errorf("the Controller was not moved with the root: %v", got)
+		}
+	})
+	t.Run("a failure on the way puts both back", func(t *testing.T) {
+		r := newRig(t)
+		r.installOld(t, oldController, true)
+		r.fleet.Fail("systemctl --user start codeflock-controller", errors.New("boom"))
+		if _, err := r.service().Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "boom") {
+			t.Fatalf("err = %v", err)
+		}
+		r.unchanged(t)
+		if !has(t, r.unit("cf-controller")) || !r.fleet.Active("cf-controller.service") || has(t, r.unit("codeflock-controller")) {
+			t.Errorf("the Controller is not as it was")
+		}
+	})
+}
+
+func TestServiceMigrationOnAnotherRootIsLeftAlone(t *testing.T) {
+	r := newRig(t)
+	other := t.TempDir()
+	cfg, data := r.cfg, r.data
+	r.cfg, r.data = filepath.Join(other, "c"), filepath.Join(other, "d")
+	r.installOld(t, oldController, true)
+	r.cfg, r.data = cfg, data
 	if _, err := r.service().Migrate(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	s := r.service()
-	s.Old = controller
-	s.New = func(_ Snapshot, dirs Dirs) (svcunit.Spec, error) {
-		spec := svcunit.Spec{Name: "codeflock-controller", Label: "com.codeflock.controller", Argv: []string{"/opt/cflk/bin/cflk", "controller", "run"}}
-		spec.Env = []svcunit.KV{{Key: "CFLK_DATA_DIR", Value: dirs.NewData}}
-		return spec, nil
+	if !has(t, r.unit("cf-controller")) || !r.fleet.Active("cf-controller.service") {
+		t.Errorf("a service of another root was touched")
 	}
-	if _, err := s.Migrate(t.Context()); err != nil {
+}
+
+func TestServiceResumedWithTheOldServiceRunningAgainAsksAboutRunsAgain(t *testing.T) {
+	r := newRig(t)
+	snap := Snapshot{Active: true, Env: map[string]string{"CF_CONFIG_DIR": r.cfg, "CF_DATA_DIR": r.data, "TMUX_TMPDIR": "/run/tmux"}, Argv: []string{"/opt/cf/bin/cf", "worker", "run"}}
+	if err := (progressFile{dirs: Dirs{OldData: r.data}}).write([]member{{old: oldWorker, snap: snap}}); err != nil {
 		t.Fatal(err)
 	}
-	if has(t, r.unit("cf-controller")) || has(t, r.data) || !has(t, filepath.Join(r.home, ".local", "share", "codeflock", "f")) {
-		t.Errorf("the Controller was not moved onto the moved root")
+	s := r.service()
+	s.Runs.Sessions = func(context.Context, tmux.Options) ([]string, error) { return []string{"cf-run_a-e1"}, nil }
+	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(strings.Join(r.fleet.Calls(), "\n"), " stop ") {
+		t.Errorf("the service was stopped: %v", r.fleet.Calls())
+	}
+	if !r.fleet.Active("cf-worker.service") || !has(t, filepath.Join(r.cfg, "f")) {
+		t.Errorf("something changed")
+	}
+}
+
+func TestServiceIgnoresTheProgressOfAMigrationThatIsNotItsOwn(t *testing.T) {
+	r := newRig(t)
+	snap := Snapshot{Active: false, Env: map[string]string{"CF_DATA_DIR": r.data}, Argv: []string{"/x/cf", "controller", "run"}}
+	if err := (progressFile{dirs: Dirs{OldData: r.data}}).write([]member{{old: oldController, snap: snap}}); err != nil {
+		t.Fatal(err)
+	}
+	s := r.service()
+	s.Runs.Sessions = func(context.Context, tmux.Options) ([]string, error) { return []string{"cf-run_a-e1"}, nil }
+	if _, err := s.Migrate(t.Context()); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
+		t.Fatalf("a file of the Controller was taken for the Worker's: %v", err)
 	}
 }
 
@@ -323,27 +448,72 @@ func TestServiceLeavesADirectoryTheOwnerChoseWhereItIs(t *testing.T) {
 	}
 }
 
+// adopting reads the environment: these tests have none of the person's.
+func noOverrides(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"CFLK_CONFIG_DIR", "CFLK_DATA_DIR", "CF_CONFIG_DIR", "CF_DATA_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"} {
+		t.Setenv(name, "")
+	}
+}
+
 func TestAdoptMovesTheDirectoriesOfAMachineWithNoOldService(t *testing.T) {
+	noOverrides(t)
 	r := newRig(t)
 	if err := os.Remove(r.unit("cf-worker")); err != nil {
 		t.Fatal(err)
 	}
-	cfg, data, err := (Mover{}).Adopt(t.Context(), r.env, r.cfg, r.data)
+	cfg, data, err := (Mover{}).Adopt(t.Context(), r.env, r.cfg, r.data, nil)
 	if err != nil || filepath.Base(cfg) != "codeflock" || filepath.Base(data) != "codeflock" || !has(t, filepath.Join(data, "f")) {
 		t.Fatalf("%s %s %v", cfg, data, err)
 	}
 	// What is not named codefabric is the person's.
-	if cfg, data, err = (Mover{}).Adopt(t.Context(), r.env, "/mine/c", "/mine/d"); err != nil || cfg != "/mine/c" || data != "/mine/d" {
+	if cfg, data, err = (Mover{}).Adopt(t.Context(), r.env, "/mine/c", "/mine/d", nil); err != nil || cfg != "/mine/c" || data != "/mine/d" {
 		t.Errorf("%s %s %v", cfg, data, err)
 	}
 }
 
-func TestAdoptRefusesWhileAnOldServiceRunsOnTheDirectories(t *testing.T) {
+func TestAdoptLeavesWhatThePersonGaveEvenIfItIsNamedCodefabric(t *testing.T) {
+	noOverrides(t)
+	for _, name := range []string{"CFLK_DATA_DIR", "CF_DATA_DIR"} {
+		t.Run(name, func(t *testing.T) {
+			noOverrides(t)
+			r := newRig(t)
+			if err := os.Remove(r.unit("cf-worker")); err != nil {
+				t.Fatal(err)
+			}
+			mine := filepath.Join(t.TempDir(), "codefabric")
+			tree(t, filepath.Dir(mine), "codefabric", "mine")
+			t.Setenv(name, mine)
+			_, data, err := (Mover{}).Adopt(t.Context(), r.env, r.cfg, mine, nil)
+			if err != nil || data != mine || !has(t, filepath.Join(mine, "f")) || has(t, filepath.Join(filepath.Dir(mine), "codeflock")) {
+				t.Fatalf("%s %v", data, err)
+			}
+		})
+	}
+}
+
+func TestAdoptRefusesWhileAnotherOldServiceUsesTheDirectories(t *testing.T) {
+	noOverrides(t)
 	r := newRig(t)
-	if _, _, err := (Mover{}).Adopt(t.Context(), r.env, r.cfg, r.data); err == nil {
-		t.Fatal("moved the directories under a running service")
+	if _, _, err := (Mover{}).Adopt(t.Context(), r.env, r.cfg, r.data, nil); err == nil || !strings.Contains(err.Error(), "cf-worker") {
+		t.Fatalf("err = %v", err)
 	}
 	if !has(t, filepath.Join(r.data, "f")) {
+		t.Errorf("moved")
+	}
+}
+
+func TestAdoptAsksTheCallerFirstAndMovesNothingIfItRefuses(t *testing.T) {
+	noOverrides(t)
+	r := newRig(t)
+	if err := os.Remove(r.unit("cf-worker")); err != nil {
+		t.Fatal(err)
+	}
+	refuse := func(context.Context, Dirs) error { return errors.New("a Run is live") }
+	if _, _, err := (Mover{}).Adopt(t.Context(), r.env, r.cfg, r.data, refuse); err == nil || !strings.Contains(err.Error(), "a Run is live") {
+		t.Fatalf("err = %v", err)
+	}
+	if !has(t, filepath.Join(r.data, "f")) || !has(t, filepath.Join(r.cfg, "f")) {
 		t.Errorf("moved")
 	}
 }

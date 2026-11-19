@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
 	"github.com/Autarquico/codeflock/internal/config"
 	"github.com/Autarquico/codeflock/internal/controller/daemon"
 	"github.com/Autarquico/codeflock/internal/support/svcunit"
@@ -115,7 +116,7 @@ func TestScenario_RenameCLI_ControllerEnLaunchd_ImprimeLosComandos(t *testing.T)
 	}
 	for _, want := range []string{
 		"launchctl bootout gui/$(id -u)/com.codefabric.controller",
-		"mv '" + home + "/.local/share/codefabric' '" + home + "/.local/share/codeflock'",
+		"mv -n '" + home + "/.local/share/codefabric' '" + home + "/.local/share/codeflock'",
 		"tee '" + filepath.Join(dir, "com.codeflock.controller.plist") + "'",
 		"launchctl bootstrap gui/$(id -u) '" + path + "'", // the way back
 	} {
@@ -128,5 +129,53 @@ func TestScenario_RenameCLI_ControllerEnLaunchd_ImprimeLosComandos(t *testing.T)
 	}
 	if got, _ := os.ReadFile(path); string(got) != plist { //nolint:gosec // a file of the test
 		t.Error("the plist changed")
+	}
+}
+
+// withWorker is a Worker of the old name on the same root, with its program and arguments.
+func withWorker(t *testing.T, o daemon.ServiceOptions, old config.Paths) {
+	t.Helper()
+	spec := svcunit.Spec{
+		Name: "cf-worker", Label: "com.codefabric.worker", KeepProcesses: true, Installer: "cf worker install-service",
+		Argv: []string{"/opt/cf/bin/cf", "worker", "run", "--ssh-target", "me@host"},
+		Env:  []svcunit.KV{{Key: "CF_CONFIG_DIR", Value: old.ConfigDir}, {Key: "CF_DATA_DIR", Value: old.DataDir}, {Key: "TMUX_TMPDIR", Value: "/run/tmux"}},
+	}
+	if _, err := svcunit.Install(t.Context(), o.Manager, spec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInstallService_AWorkerOnTheSameRootIsMovedInTheSameRun(t *testing.T) {
+	o, fleet, old := oldController(t)
+	withWorker(t, o, old)
+	fleet.Set("cf-worker.service", true, true)
+
+	if _, err := daemon.InstallService(t.Context(), o); err != nil {
+		t.Fatal(err)
+	}
+
+	if fleet.Active("cf-worker.service") || fleet.Active("cf-controller.service") || !fleet.Active("codeflock-worker.service") || !fleet.Active("codeflock-controller.service") {
+		t.Errorf("worker %v, controller %v", fleet.Active("codeflock-worker.service"), fleet.Active("codeflock-controller.service"))
+	}
+	in, err := svcunit.Inspect(t.Context(), o.Manager, svcunit.Spec{Name: "codeflock-worker", Label: "com.codeflock.worker"})
+	if err != nil || strings.Join(in.Argv[1:], " ") != "worker run --ssh-target me@host" || in.Env["TMUX_TMPDIR"] != "/run/tmux" {
+		t.Errorf("the Worker unit: %+v %v", in, err)
+	}
+}
+
+func TestInstallService_AWorkerWithLiveRunsStopsTheMoveOfTheController(t *testing.T) {
+	o, fleet, old := oldController(t)
+	withWorker(t, o, old)
+	fleet.Set("cf-worker.service", true, true)
+	o.Sessions = func(context.Context, tmux.Options) ([]string, error) { return []string{"cf-run_a-e1"}, nil }
+
+	if _, err := daemon.InstallService(t.Context(), o); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
+		t.Fatalf("err = %v", err)
+	}
+	if !fleet.Active("cf-controller.service") || !fleet.Active("cf-worker.service") {
+		t.Error("an old service was stopped")
+	}
+	if _, err := os.Stat(old.DatabaseFile()); err != nil {
+		t.Errorf("the data directory moved: %v", err)
 	}
 }

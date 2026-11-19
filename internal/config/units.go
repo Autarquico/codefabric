@@ -34,14 +34,18 @@ func OldUnits(home, goos string) []Unit {
 		matches, _ := filepath.Glob(pattern)
 		for _, m := range matches {
 			name := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(m), ".service"), ".plist")
-			kind := "worker"
-			if strings.Contains(name, "controller") {
-				kind = "controller"
-			}
-			units = append(units, Unit{Name: name, Kind: kind, Path: m, System: filepath.Dir(m) == launchDaemonsDir})
+			units = append(units, Unit{Name: name, Kind: KindOf(name), Path: m, System: filepath.Dir(m) == launchDaemonsDir})
 		}
 	}
 	return units
+}
+
+// KindOf is "worker" or "controller": which of the two a service of the old name is.
+func KindOf(name string) string {
+	if strings.Contains(name, "controller") {
+		return "controller"
+	}
+	return "worker"
 }
 
 const launchDaemonsDir = "/Library/LaunchDaemons"

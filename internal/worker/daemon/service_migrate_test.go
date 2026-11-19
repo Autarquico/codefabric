@@ -293,7 +293,7 @@ func TestScenario_RenameCLI_LaunchDaemon_ImprimeLosComandosYNoCambiaNada(t *test
 	}
 	for _, want := range []string{
 		"sudo launchctl bootout system/com.codefabric.worker",
-		"sudo -u ana mv '/Users/ana/.local/share/codefabric' '/Users/ana/.local/share/codeflock'",
+		"sudo -u 'ana' mv -n '/Users/ana/.local/share/codefabric' '/Users/ana/.local/share/codeflock'",
 		"sudo tee '" + filepath.Join(daemons, "com.codeflock.worker.plist") + "'",
 		"sudo launchctl bootstrap system",
 		"sudo launchctl bootstrap system '" + path + "'", // the way back
@@ -310,5 +310,109 @@ func TestScenario_RenameCLI_LaunchDaemon_ImprimeLosComandosYNoCambiaNada(t *test
 	}
 	if _, err := os.Stat(filepath.Join(daemons, "com.codeflock.worker.plist")); err == nil {
 		t.Error("a new property list was written")
+	}
+}
+
+// withController is a Controller of the old name on the same root as the Worker.
+func (w *oldWorker) withController(t *testing.T, active bool) {
+	t.Helper()
+	spec := svcunit.Spec{
+		Name: "cf-controller", Label: "com.codefabric.controller", Installer: "cf controller install-service",
+		Argv: []string{"/opt/cf/bin/cf", "controller", "run"},
+		Env:  []svcunit.KV{{Key: "CF_CONFIG_DIR", Value: w.paths.ConfigDir}, {Key: "CF_DATA_DIR", Value: w.paths.DataDir}, {Key: "PATH", Value: "/usr/bin"}},
+	}
+	if _, err := svcunit.Install(t.Context(), w.opts.Manager, spec); err != nil {
+		t.Fatal(err)
+	}
+	w.fleet.Set("cf-controller.service", true, active)
+}
+
+func TestInstallService_AControllerOnTheSameRootIsMovedInTheSameRun(t *testing.T) {
+	w := newOldWorker(t)
+	w.withController(t, true)
+
+	if _, err := daemon.InstallService(t.Context(), w.opts); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"cf-controller", "cf-worker"} {
+		if _, err := os.Stat(w.unit(name)); err == nil {
+			t.Errorf("%s is still there", name)
+		}
+	}
+	if !w.fleet.Active("codeflock-controller.service") || !w.fleet.Active("codeflock-worker.service") {
+		t.Errorf("not running: controller %v, worker %v", w.fleet.Active("codeflock-controller.service"), w.fleet.Active("codeflock-worker.service"))
+	}
+	got, _, _ := svcunit.InstalledEnv(w.opts.Manager, svcunit.Spec{Name: "codeflock-controller", Label: "com.codeflock.controller"})
+	if got["CFLK_DATA_DIR"] != filepath.Join(w.home, ".local", "share", "codeflock") {
+		t.Errorf("env = %v", got)
+	}
+}
+
+func TestInstallService_ALiveRunStopsTheMoveOfTheWorkerAndOfTheControllerWithIt(t *testing.T) {
+	w := newOldWorker(t)
+	w.withController(t, true)
+	w.insertLiveRun(t)
+
+	if _, err := daemon.InstallService(t.Context(), w.opts); err == nil || !strings.Contains(err.Error(), "1 Runs are live") {
+		t.Fatalf("err = %v", err)
+	}
+	w.untouched(t)
+	if _, err := os.Stat(w.unit("cf-controller")); err != nil || !w.fleet.Active("cf-controller.service") {
+		t.Errorf("the Controller was touched: %v", err)
+	}
+}
+
+// With no old service the directories move all the same, so the request must
+// be good, and the Worker idle, before anything does.
+func TestInstallService_NothingMovesUnlessTheRequestAndTheWorkerAreGood(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, w *oldWorker)
+	}{
+		{"a live Run", func(t *testing.T, w *oldWorker) { w.insertLiveRun(t) }},
+		{"a bad flag", func(_ *testing.T, w *oldWorker) { w.opts.SSHTarget = "not a target" }},
+		{"a machine that has not joined", func(t *testing.T, w *oldWorker) {
+			if err := os.RemoveAll(w.paths.WorkerCredentialsDir()); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newOldWorker(t)
+			if err := os.Remove(w.unit("cf-worker")); err != nil {
+				t.Fatal(err)
+			}
+			tc.setup(t, w)
+			if _, err := daemon.InstallService(t.Context(), w.opts); err == nil {
+				t.Fatal("installed")
+			}
+			if b, err := os.ReadFile(filepath.Join(w.paths.DataDir, "controller.db")); err != nil || string(b) != "controller database" {
+				t.Errorf("the data directory moved: %q %v", b, err)
+			}
+			if _, err := os.Stat(filepath.Join(w.home, ".local", "share", "codeflock")); err == nil {
+				t.Error("a new directory exists")
+			}
+		})
+	}
+}
+
+func TestInstallService_ALaunchDaemonPlanRunsThisCflkNotTheTransitionCf(t *testing.T) {
+	daemons, home := t.TempDir(), t.TempDir()
+	plist := `<plist><dict><key>Label</key><string>com.codefabric.worker</string>
+<key>ProgramArguments</key><array><string>/usr/local/bin/cf</string><string>worker</string><string>run</string></array>
+<key>EnvironmentVariables</key><dict><key>CF_CONFIG_DIR</key><string>/srv/c/codefabric</string><key>CF_DATA_DIR</key><string>/srv/d/codefabric</string></dict></dict></plist>`
+	if err := os.WriteFile(filepath.Join(daemons, "com.codefabric.worker.plist"), []byte(plist), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := svcunittest.NewLaunchd(filepath.Join(home, "Library", "LaunchAgents", "com.codeflock.worker.plist"), "com.codeflock.worker", 501)
+	o := daemon.ServiceOptions{
+		Paths:   config.Paths{ConfigDir: filepath.Join(home, "c"), DataDir: filepath.Join(home, "d")},
+		Manager: svcunit.Env{Runner: fake, Home: home, UID: 501, GOOS: "darwin"}, LaunchDaemons: daemons,
+	}
+	_, err := daemon.InstallService(t.Context(), o)
+	exe, _ := os.Executable()
+	if err == nil || !strings.Contains(err.Error(), "<string>"+exe+"</string>") || strings.Contains(err.Error(), "/usr/local/bin/cf<") {
+		t.Fatalf("err = %v", err)
 	}
 }

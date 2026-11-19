@@ -108,7 +108,7 @@ func CheckSecretEnv(env []SecretEnv) error {
 	for _, e := range env {
 		switch {
 		case !ValidSecretEnvName(e.Name):
-			return fmt.Errorf("%w: %q cannot carry a secret: it must match [A-Za-z_][A-Za-z0-9_]*, and neither start with CF_, GIT_ or TMUX nor be PATH, HOME, SHELL or USER", ErrInvalidSecret, e.Name)
+			return fmt.Errorf("%w: %q cannot carry a secret: it must match [A-Za-z_][A-Za-z0-9_]*, and neither start with CF_, CFLK_, GIT_ or TMUX nor be PATH, HOME, SHELL or USER", ErrInvalidSecret, e.Name)
 		case seen[e.Name]:
 			return fmt.Errorf("%w: variable %q is repeated", ErrInvalidSecret, e.Name)
 		case !ValidSecretRef(e.Ref):

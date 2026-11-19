@@ -1,13 +1,16 @@
 package migrate
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Autarquico/codeflock/internal/config"
@@ -48,18 +51,54 @@ func (d Dirs) pairs(env svcunit.Env) []Pair {
 	return pairs
 }
 
+// legacyDirs are the directories a service of the old name uses when its
+// environment names none.
+func legacyDirs(home string) (cfg, data string) {
+	return filepath.Join(home, ".config", "codefabric"), filepath.Join(home, ".local", "share", "codefabric")
+}
+
+// uses says whether a service with this environment uses a directory that is
+// about to move: it would go on writing to where it was.
+func (d Dirs) uses(env map[string]string, home string) bool {
+	cfg, data := legacyDirs(home)
+	return d.OldConfig != d.NewConfig && cmp.Or(env["CF_CONFIG_DIR"], cfg) == d.OldConfig ||
+		d.OldData != d.NewData && cmp.Or(env["CF_DATA_DIR"], data) == d.OldData
+}
+
 // Adopt moves the directories of an install-service with no old service to
 // move them: it is run from a machine whose default directories still have the
-// old name, which are the ones config.Resolve then gives. It returns the new
-// paths, and refuses while an old service is running on the old ones.
-func (m Mover) Adopt(ctx context.Context, env svcunit.Env, cfg, data string) (newCfg, newData string, err error) {
-	dirs := Dirs{OldConfig: cfg, NewConfig: Renamed(cfg), OldData: data, NewData: Renamed(data)}
+// old name, which are the ones config.Resolve then gives. Only those move: a
+// directory given by CFLK_*_DIR or CF_*_DIR is the person's. It refuses while
+// another service of the old name uses them, and while runs, if given, refuses.
+// It returns the new paths.
+func (m Mover) Adopt(ctx context.Context, env svcunit.Env, cfg, data string, runs func(context.Context, Dirs) error) (newCfg, newData string, err error) {
+	dirs := Dirs{OldConfig: cfg, NewConfig: cfg, OldData: data, NewData: data}
+	loc, err := config.Locate(os.Getenv, func() (string, error) { return env.Home, nil })
+	if err != nil {
+		return cfg, data, nil // the command reports it
+	}
+	if loc.ConfigIsDefault && cfg == config.LegacyOf(loc.ConfigDir) {
+		dirs.NewConfig = loc.ConfigDir
+	}
+	if loc.DataIsDefault && data == config.LegacyOf(loc.DataDir) {
+		dirs.NewData = loc.DataDir
+	}
 	pairs := dirs.pairs(env)
 	if len(pairs) == 0 {
 		return cfg, data, nil
 	}
-	if err := checkShared(ctx, env, dirs); err != nil {
+	others, err := peers(ctx, env, dirs, "")
+	if err != nil {
 		return "", "", err
+	}
+	if len(others) > 0 {
+		return "", "", fmt.Errorf("%s uses the directories about to move: run `cflk %s install-service` first, which moves it",
+			others[0].spec.Name, config.KindOf(others[0].spec.Name))
+	}
+	if runs != nil {
+		if err := runs(ctx, dirs); err != nil {
+			return "", "", err
+		}
 	}
 	if _, err := m.Move(pairs); err != nil {
 		return "", "", err
@@ -86,26 +125,96 @@ func Renamed(dir string) string {
 }
 
 // Service moves one service from the old name to the new one, and the
-// directories it uses with it, as steps that each can be put back.
+// directories it uses with it, as steps that each can be put back. Another
+// service of the old name on the same directories (a Controller and a Worker
+// share a root) is moved in the same run, since it could not be left behind: if
+// it cannot be moved, nothing is.
 type Service struct {
 	Env svcunit.Env
 	Old svcunit.Spec
-	// Preflight refuses, before anything changes, a service that must not be
-	// touched now; it is not asked again when a cut migration resumes.
-	Preflight func(ctx context.Context, old Snapshot, dirs Dirs) error
 	// New is the unit that replaces the old one.
 	New func(old Snapshot, dirs Dirs) (svcunit.Spec, error)
+	// Binary is the cflk the units moved along with this one run; empty is this executable.
+	Binary string
+	// Runs is how a Worker is checked for live Runs, before anything changes.
+	Runs Runs
 	// Settle waits until the new service has had time to fail; nil is two seconds.
 	Settle func(ctx context.Context) error
 	// Mover is where tests inject failures.
 	Mover Mover
 }
 
-// Migrate runs the move; the new service runs if the old one did. If a step fails the ones before it are undone in
-// reverse order, the old service runs again if it did, and the error says what
-// failed; if undoing fails too, the error says that, and the progress file
-// stays so that running it again goes on. The result is that of the new unit,
-// with the actions of the whole move in front.
+// member is one of the services of a migration.
+type member struct {
+	old  svcunit.Spec
+	kind string
+	snap Snapshot
+	live bool // running now, whatever snap says
+}
+
+func newMember(old svcunit.Spec, in svcunit.Installed) member {
+	return member{old: old, kind: config.KindOf(old.Name), snap: Snapshot{Active: in.Active, Env: in.Env, Argv: in.Argv}, live: in.Active}
+}
+
+// peer is another service of the old name that uses the directories about to move.
+type peer struct {
+	spec svcunit.Spec
+	in   svcunit.Installed
+}
+
+// peers are the services of the old name, other than self, that use the
+// directories about to move, running or not. One that cannot be read, or that
+// cflk cannot move, is an error: what is not known is not safe.
+func peers(ctx context.Context, env svcunit.Env, dirs Dirs, self string) ([]peer, error) {
+	var out []peer
+	for _, u := range config.OldUnits(env.Home, env.GOOS) {
+		if u.Name == self {
+			continue
+		}
+		if u.System {
+			if err := systemPeer(u, dirs, env.Home); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		spec := svcunit.Spec{Name: u.Name, Label: u.Name, KeepProcesses: u.Kind == "worker"}
+		in, err := svcunit.Inspect(ctx, env, spec)
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("%s cannot be read, so it is not known whether it uses the directories about to move: nothing was changed: %w", u.Name, err)
+		case !in.Found:
+			continue
+		case dirs.uses(in.Env, env.Home):
+			out = append(out, peer{spec: spec, in: in})
+		}
+	}
+	return out, nil
+}
+
+// systemPeer refuses a LaunchDaemon of the system that uses the directories:
+// only root can stop and move it.
+func systemPeer(u config.Unit, dirs Dirs, home string) error {
+	content, err := os.ReadFile(u.Path) //nolint:gosec // the property list of an old service
+	if err != nil {
+		return fmt.Errorf("%s cannot be read, so it is not known whether it uses the directories about to move: nothing was changed: %w", u.Path, err)
+	}
+	info, err := svcunit.ReadPlist(content)
+	if err != nil {
+		return fmt.Errorf("%s cannot be read, so it is not known whether it uses the directories about to move: nothing was changed: %w", u.Path, err)
+	}
+	if dirs.uses(info.Env, home) {
+		return fmt.Errorf("%s is a LaunchDaemon of the system on the same directories, which only root can move: nothing was changed; "+
+			"run `cflk %s install-service` to see how to move it, and do that first", u.Path, u.Kind)
+	}
+	return nil
+}
+
+// Migrate runs the move; the new services run if the old ones did. If a step
+// fails the ones before it are undone in reverse order, the old services run
+// again if they did, and the error says what failed; if undoing fails too, the
+// error says that, and the progress file stays so that running it again goes
+// on. The result is that of the new unit of s, with the actions of the whole
+// move in front.
 func (s Service) Migrate(ctx context.Context) (svcunit.Result, error) {
 	in, err := svcunit.Inspect(ctx, s.Env, s.Old)
 	switch {
@@ -114,58 +223,104 @@ func (s Service) Migrate(ctx context.Context) (svcunit.Result, error) {
 	case !in.Found:
 		return svcunit.Result{}, ErrNoOldService
 	}
-	snap := Snapshot{Active: in.Active, Env: in.Env, Argv: in.Argv}
 	dirs, err := DirsOf(in.Env)
 	if err != nil {
 		return svcunit.Result{}, err
 	}
-	progress := progressFile{dirs: dirs}
-	if saved, ok, err := progress.read(); err != nil {
-		return svcunit.Result{}, err
-	} else if ok {
-		snap = saved
-	} else if err := s.begin(ctx, snap, dirs); err != nil {
-		return svcunit.Result{}, err
-	}
-	spec, err := s.New(snap, dirs)
+	others, err := peers(ctx, s.Env, dirs, s.Old.Name)
 	if err != nil {
 		return svcunit.Result{}, err
 	}
-	if err := progress.write(snap); err != nil {
+	members := []member{newMember(s.Old, in)}
+	for _, p := range others {
+		members = append(members, newMember(p.spec, p.in))
+	}
+	progress := progressFile{dirs: dirs}
+	saved, err := progress.read()
+	if err != nil {
 		return svcunit.Result{}, err
 	}
-	return s.run(ctx, snap, dirs, spec, progress)
+	_, resumed := saved[s.Old.Name]
+	if resumed {
+		for i, m := range members {
+			if snap, ok := saved[m.old.Name]; ok {
+				members[i].snap = snap
+			}
+		}
+	}
+	// A cut migration goes on without asking again, unless an old service
+	// runs once more: it may have taken Runs since.
+	if !resumed || slices.ContainsFunc(members, func(m member) bool { return m.live }) {
+		if err := s.begin(ctx, members); err != nil {
+			return svcunit.Result{}, err
+		}
+	}
+	specs := make([]svcunit.Spec, len(members))
+	for i, m := range members {
+		if specs[i], err = s.successor(i, m, dirs); err != nil {
+			return svcunit.Result{}, err
+		}
+	}
+	if err := progress.write(members); err != nil {
+		return svcunit.Result{}, err
+	}
+	return s.run(ctx, members, specs, dirs, progress)
 }
 
-// begin is what a migration that starts checks: Preflight, and that no other
-// service of the old name is running on the directories about to move.
-func (s Service) begin(ctx context.Context, snap Snapshot, dirs Dirs) error {
-	if s.Preflight != nil {
-		if err := s.Preflight(ctx, snap, dirs); err != nil {
+// begin refuses, before anything changes, a Worker with Runs live.
+func (s Service) begin(ctx context.Context, members []member) error {
+	home := s.Env.Home
+	_, defaultData := legacyDirs(home)
+	for _, m := range members {
+		if m.kind != "worker" {
+			continue
+		}
+		if err := s.Runs.None(ctx, m.snap.Env["TMUX_TMPDIR"], cmp.Or(m.snap.Env["CF_DATA_DIR"], defaultData)); err != nil {
 			return err
 		}
 	}
-	return checkShared(ctx, s.Env, dirs, s.Old.Name, s.Old.Label)
+	return nil
 }
 
-// checkShared refuses while another service of the old name, not one of self, is
-// running on the directories that are about to move: it would go on writing
-// to where they were.
-func checkShared(ctx context.Context, env svcunit.Env, dirs Dirs, self ...string) error {
-	for _, u := range config.OldUnits(env.Home, env.GOOS) {
-		if slices.Contains(self, u.Name) || u.System {
-			continue
+// successor is the unit that replaces a member: the first is the caller's own,
+// the others carry over what their old unit had, with the new names and the
+// directories where they are now.
+func (s Service) successor(i int, m member, dirs Dirs) (svcunit.Spec, error) {
+	if i == 0 {
+		return s.New(m.snap, dirs)
+	}
+	binary, _, err := svcunit.Program(s.Binary)
+	if err != nil {
+		return svcunit.Spec{}, err
+	}
+	if len(m.snap.Argv) == 0 {
+		return svcunit.Spec{}, fmt.Errorf("%s says no program to run, so it cannot be moved", m.old.Name)
+	}
+	cfg, data := legacyDirs(s.Env.Home)
+	where := func(have, old, now string) string {
+		if have == old {
+			return now
 		}
-		other, err := svcunit.Inspect(ctx, env, svcunit.Spec{Name: u.Name, Label: u.Name})
-		if err != nil || !other.Found {
-			continue
-		}
-		if shared := other.Env["CF_DATA_DIR"] == dirs.OldData || other.Env["CF_CONFIG_DIR"] == dirs.OldConfig; shared && other.Active {
-			return fmt.Errorf("%s is running on the same directories, and they are about to move: stop it first "+
-				"(and then run `cflk %s install-service` to move it as well)", u.Name, u.Kind)
+		return have
+	}
+	env := []svcunit.KV{
+		{Key: "CFLK_CONFIG_DIR", Value: where(cmp.Or(m.snap.Env["CF_CONFIG_DIR"], cfg), dirs.OldConfig, dirs.NewConfig)},
+		{Key: "CFLK_DATA_DIR", Value: where(cmp.Or(m.snap.Env["CF_DATA_DIR"], data), dirs.OldData, dirs.NewData)},
+	}
+	for _, key := range slices.Sorted(maps.Keys(m.snap.Env)) {
+		if key != "CF_CONFIG_DIR" && key != "CF_DATA_DIR" {
+			env = append(env, svcunit.KV{Key: key, Value: m.snap.Env[key]})
 		}
 	}
-	return nil
+	return svcunit.Spec{
+		Name:          "codeflock-" + strings.TrimPrefix(m.old.Name, "cf-"),
+		Label:         strings.Replace(m.old.Label, "com.codefabric.", "com.codeflock.", 1),
+		Description:   "Code Flock " + strings.ToUpper(m.kind[:1]) + m.kind[1:],
+		Installer:     "cflk " + m.kind + " install-service",
+		Argv:          append([]string{binary}, m.snap.Argv[1:]...),
+		Env:           env,
+		KeepProcesses: m.kind == "worker",
+	}, nil
 }
 
 type step struct {
@@ -174,43 +329,51 @@ type step struct {
 	undo func() error
 }
 
-func (s Service) run(ctx context.Context, snap Snapshot, dirs Dirs, spec svcunit.Spec, progress progressFile) (svcunit.Result, error) {
+func (s Service) run(ctx context.Context, members []member, specs []svcunit.Spec, dirs Dirs, progress progressFile) (svcunit.Result, error) {
 	var (
 		actions []string
 		result  svcunit.Result
 		pairs   = dirs.pairs(s.Env)
+		names   []string
 	)
 	back := make([]Pair, len(pairs))
 	for i, p := range pairs {
 		back[len(pairs)-1-i] = Pair{Old: p.New, New: p.Old}
 	}
 	record := func(r svcunit.Result) { actions = append(actions, r.Actions...) }
-	steps := []step{
-		{"stopping " + s.Old.Name, func() error {
-			r, err := svcunit.Stop(ctx, s.Env, s.Old)
+	var steps []step
+	for _, m := range members {
+		names = append(names, m.old.Name)
+		steps = append(steps, step{"stopping " + m.old.Name, func() error {
+			r, err := svcunit.Stop(ctx, s.Env, m.old)
 			record(r)
 			return err
 		}, func() error {
-			if !snap.Active {
+			if !m.snap.Active {
 				return nil
 			}
-			_, err := svcunit.Start(ctx, s.Env, s.Old)
+			_, err := svcunit.Start(ctx, s.Env, m.old)
 			return err
-		}},
-		{"moving the directories", func() error {
-			moved, err := s.Mover.Move(pairs)
-			for _, p := range moved.Moved {
-				actions = append(actions, "move "+p.Old+" "+p.New)
-			}
-			return err
-		}, func() error { _, err := s.Mover.Move(back); return err }},
-		{"installing the new service", func() error {
+		}})
+	}
+	steps = append(steps, step{"moving the directories", func() error {
+		moved, err := s.Mover.Move(pairs)
+		for _, p := range moved.Moved {
+			actions = append(actions, "move "+p.Old+" "+p.New)
+		}
+		return err
+	}, func() error { _, err := s.Mover.Move(back); return err }})
+	for i, m := range members {
+		spec := specs[i]
+		steps = append(steps, step{"installing " + spec.Name, func() error {
 			r, err := svcunit.Install(ctx, s.Env, spec)
-			result = r
+			if i == 0 {
+				result = r
+			}
 			record(r)
 			switch {
 			case err != nil:
-			case snap.Active:
+			case m.snap.Active:
 				err = s.settled(ctx, spec)
 			default: // it was stopped: it stays installed, and stopped
 				var stopped svcunit.Result
@@ -218,12 +381,14 @@ func (s Service) run(ctx context.Context, snap Snapshot, dirs Dirs, spec svcunit
 				record(stopped)
 			}
 			return err
-		}, func() error { _, err := svcunit.Uninstall(ctx, s.Env, spec); return err }},
-		{"removing " + s.Old.Name, func() error {
-			r, err := svcunit.Uninstall(ctx, s.Env, s.Old)
+		}, func() error { _, err := svcunit.Uninstall(ctx, s.Env, spec); return err }})
+	}
+	for _, m := range members {
+		steps = append(steps, step{"removing " + m.old.Name, func() error {
+			r, err := svcunit.Uninstall(ctx, s.Env, m.old)
 			record(r)
 			return err
-		}, nil},
+		}, nil})
 	}
 	for i, st := range steps {
 		if err := st.do(); err != nil {
@@ -233,7 +398,7 @@ func (s Service) run(ctx context.Context, snap Snapshot, dirs Dirs, spec svcunit
 					errors.New("run `install-service` again to go on, or put the old service back by hand"))
 			}
 			progress.remove()
-			return svcunit.Result{}, fmt.Errorf("%w; nothing was changed: %s runs as it did", err, s.Old.Name)
+			return svcunit.Result{}, fmt.Errorf("%w; nothing was changed: %s run as they did", err, strings.Join(names, ", "))
 		}
 	}
 	progress.remove()
@@ -282,7 +447,9 @@ func (s Service) settled(ctx context.Context, spec svcunit.Spec) error {
 }
 
 // progressFile is the record of a migration that is under way, in the data
-// directory: the old one while it has not moved, the new one after.
+// directory: the old one while it has not moved, the new one after. It is of
+// the whole migration, so it names every service in it: one that does not
+// name the service being moved is not its own.
 type progressFile struct{ dirs Dirs }
 
 const progressName = ".cflk-service-migration.json"
@@ -291,28 +458,33 @@ func (p progressFile) paths() []string {
 	return []string{filepath.Join(p.dirs.OldData, progressName), filepath.Join(p.dirs.NewData, progressName)}
 }
 
-func (p progressFile) read() (Snapshot, bool, error) {
+// read is what the cut migration saved, by service: nil if there is none.
+func (p progressFile) read() (map[string]Snapshot, error) {
 	for _, path := range p.paths() {
 		b, err := os.ReadFile(path) //nolint:gosec // the progress file, at a path built from the old service's own data directory
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return Snapshot{}, false, fmt.Errorf("migrate: %w", err)
+			return nil, fmt.Errorf("migrate: %w", err)
 		}
-		var snap Snapshot
-		if err := json.Unmarshal(b, &snap); err != nil {
-			return Snapshot{}, false, fmt.Errorf("migrate: reading %s: %w", path, err)
+		var saved map[string]Snapshot
+		if err := json.Unmarshal(b, &saved); err != nil {
+			return nil, fmt.Errorf("migrate: reading %s: %w", path, err)
 		}
-		return snap, true, nil
+		return saved, nil
 	}
-	return Snapshot{}, false, nil
+	return nil, nil
 }
 
 // write records the migration where the data is now: if the data directory
 // does not exist yet there is nothing to record against, and nothing to resume.
-func (p progressFile) write(snap Snapshot) error {
-	b, err := json.Marshal(snap)
+func (p progressFile) write(members []member) error {
+	saved := make(map[string]Snapshot, len(members))
+	for _, m := range members {
+		saved[m.old.Name] = m.snap
+	}
+	b, err := json.Marshal(saved)
 	if err != nil {
 		return err
 	}

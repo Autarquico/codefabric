@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -16,11 +17,17 @@ import (
 // root loads, or a Controller agent, which cflk does not install on macOS. The
 // commands are printed, with the ones that put things back, and nothing changes.
 type LaunchPlan struct {
-	Plist    string // the old property list
-	Content  []byte
-	System   bool   // a LaunchDaemon: its commands need sudo
-	Binary   string // the program the new service runs; empty keeps the old one
-	UserHome string // where the user of the service keeps their files, if the plist does not say
+	Plist   string // the old property list
+	Content []byte
+	System  bool   // a LaunchDaemon: its commands need sudo
+	Binary  string // the program the new service runs: cflk, as an absolute path
+	// UserHome is where the user of an agent keeps their files, if its plist
+	// does not say. It is never used for a LaunchDaemon, whose files are those
+	// the property list says: the home of whoever asks is not the daemon's.
+	UserHome string
+	// LookupHome is the home directory of a user, for a LaunchDaemon that runs
+	// as one; nil asks the system.
+	LookupHome func(name string) (string, error)
 }
 
 var programPath = regexp.MustCompile(`(<key>ProgramArguments</key>\s*<array>\s*<string>)[^<]*(</string>)`)
@@ -31,9 +38,9 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	home := info.Env["HOME"]
-	if home == "" {
-		home = p.UserHome
+	home, err := p.homeOf(info)
+	if err != nil {
+		return nil, err
 	}
 	pairs, err := p.pairs(info, home)
 	if err != nil {
@@ -46,7 +53,7 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	if p.System {
 		domain, sudo = "system", "sudo "
 		if info.UserName != "" {
-			as = "sudo -u " + info.UserName + " "
+			as = "sudo -u " + shellQuote(info.UserName) + " "
 		}
 	}
 	// The directories are the user's, whoever runs the commands.
@@ -61,11 +68,16 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	say("%slaunchctl bootout %s/%s", sudo, domain, oldLabel)
 	say("# 2. Move the directories it uses.")
 	for _, pair := range pairs {
-		say("%smv %s %s", as, shellQuote(pair.Old), shellQuote(pair.New))
+		say("%s", move(as, pair.Old, pair.New))
 	}
 	say("# 3. Write the new property list.")
-	say("%stee %s >/dev/null <<'CFLK_PLIST'", sudo, shellQuote(newPlist))
-	out = append(out, strings.TrimRight(string(p.rewritten(pairs)), "\n"), "CFLK_PLIST")
+	plist := strings.TrimRight(string(p.rewritten(pairs)), "\n")
+	delimiter := "CFLK_PLIST"
+	for strings.Contains(plist, delimiter) {
+		delimiter += "_"
+	}
+	say("%stee %s >/dev/null <<'%s'", sudo, shellQuote(newPlist), delimiter)
+	out = append(out, plist, delimiter)
 	if p.System {
 		say("sudo chown root:wheel %s", shellQuote(newPlist))
 		say("sudo chmod 644 %s", shellQuote(newPlist))
@@ -79,10 +91,49 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	say("%slaunchctl bootout %s/%s", sudo, domain, newLabel)
 	say("%srm -f %s", sudo, shellQuote(newPlist))
 	for i := len(pairs) - 1; i >= 0; i-- {
-		say("%smv %s %s", as, shellQuote(pairs[i].New), shellQuote(pairs[i].Old))
+		say("%s", move(as, pairs[i].New, pairs[i].Old))
 	}
 	say("%slaunchctl bootstrap %s %s", sudo, domain, shellQuote(p.Plist))
 	return out, nil
+}
+
+// move is a move that never goes into a destination that exists: `mv` would put
+// the directory inside it, and follow it if it is a link.
+func move(as, from, to string) string {
+	return fmt.Sprintf("[ ! -e %[2]s ] && [ ! -L %[2]s ] && %[1]smv -n %[3]s %[2]s || echo %[4]s >&2",
+		as, shellQuote(to), shellQuote(from), shellQuote(to+" exists, or the move failed: stop here"))
+}
+
+// homeOf is where the user of the service keeps their files. For a
+// LaunchDaemon only the property list says: its HOME, or the home of its
+// UserName; for an agent, the user's own.
+func (p LaunchPlan) homeOf(info svcunit.PlistInfo) (string, error) {
+	switch {
+	case info.Env["HOME"] != "":
+		return info.Env["HOME"], nil
+	case !p.System:
+		return p.UserHome, nil
+	case info.UserName == "":
+		return "", nil
+	}
+	lookup := p.LookupHome
+	if lookup == nil {
+		lookup = func(name string) (string, error) {
+			u, err := user.Lookup(name)
+			if err != nil {
+				return "", err
+			}
+			return u.HomeDir, nil
+		}
+	}
+	home, err := lookup(info.UserName)
+	if err == nil && !filepath.IsAbs(home) {
+		err = errors.New("it is not an absolute path")
+	}
+	if err != nil {
+		return "", fmt.Errorf("the home of %q, the user of the service, cannot be found, so there is no telling what to move: %w", info.UserName, err)
+	}
+	return home, nil
 }
 
 // pairs are the directories the service uses that the old name put where they

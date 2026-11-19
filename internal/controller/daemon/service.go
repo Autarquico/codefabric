@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
 	"github.com/Autarquico/codeflock/internal/config"
 	"github.com/Autarquico/codeflock/internal/domain"
 	"github.com/Autarquico/codeflock/internal/support/migrate"
@@ -27,6 +29,9 @@ type ServiceOptions struct {
 	// migration from the old names (migrate.Service).
 	Mover  migrate.Mover
 	Settle func(ctx context.Context) error
+	// Sessions lists the sessions of Runs in the tmux server o names, for a
+	// Worker moved along with the Controller; nil asks tmux.
+	Sessions func(ctx context.Context, o tmux.Options) ([]string, error)
 	// Home is the home directory of the user for the property lists of launchd; empty is this user's.
 	Home string
 }
@@ -61,7 +66,7 @@ func InstallService(ctx context.Context, o ServiceOptions) (svcunit.Result, erro
 	if migrated || err != nil {
 		return res, err
 	}
-	if o.Paths.ConfigDir, o.Paths.DataDir, err = o.Mover.Adopt(ctx, env, o.Paths.ConfigDir, o.Paths.DataDir); err != nil {
+	if o.Paths.ConfigDir, o.Paths.DataDir, err = o.Mover.Adopt(ctx, env, o.Paths.ConfigDir, o.Paths.DataDir, nil); err != nil {
 		return svcunit.Result{}, err
 	}
 	if _, spec, warnings, err = controllerService(o); err != nil {
@@ -77,7 +82,7 @@ func InstallService(ctx context.Context, o ServiceOptions) (svcunit.Result, erro
 func (o ServiceOptions) migrateOldService(ctx context.Context, env svcunit.Env) (res svcunit.Result, migrated bool, err error) {
 	var warnings []string
 	res, err = migrate.Service{
-		Env: env, Old: oldServiceSpec(), Mover: o.Mover, Settle: o.Settle,
+		Env: env, Old: oldServiceSpec(), Mover: o.Mover, Settle: o.Settle, Binary: o.Binary, Runs: migrate.Runs{Sessions: o.Sessions},
 		New: func(_ migrate.Snapshot, dirs migrate.Dirs) (svcunit.Spec, error) {
 			n := o
 			n.Paths = config.Paths{ConfigDir: dirs.NewConfig, DataDir: dirs.NewData}
@@ -90,7 +95,7 @@ func (o ServiceOptions) migrateOldService(ctx context.Context, env svcunit.Env) 
 	case errors.Is(err, migrate.ErrNoOldService):
 		return svcunit.Result{}, false, nil
 	case err != nil:
-		return svcunit.Result{}, true, err
+		return svcunit.Result{}, true, inputError(err)
 	}
 	res.Warnings = append(warnings, res.Warnings...)
 	return res, true, nil
@@ -104,7 +109,7 @@ func (o ServiceOptions) launchdPlan() error {
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	if o.Manager.GOOS != "" && o.Manager.GOOS != "darwin" || o.Manager.GOOS == "" && runtime.GOOS != "darwin" {
+	if cmp.Or(o.Manager.GOOS, runtime.GOOS) != "darwin" {
 		return nil
 	}
 	for _, u := range config.OldUnits(home, "darwin") {
@@ -115,7 +120,11 @@ func (o ServiceOptions) launchdPlan() error {
 		if err != nil {
 			return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("%s cannot be read, so the Controller was not moved: %v", u.Path, err), nil)
 		}
-		commands, err := migrate.LaunchPlan{Plist: u.Path, Content: content, System: u.System, Binary: o.Binary, UserHome: home}.Commands()
+		binary, _, err := svcunit.Program(o.Binary)
+		if err != nil {
+			return inputError(err)
+		}
+		commands, err := migrate.LaunchPlan{Plist: u.Path, Content: content, System: u.System, Binary: binary, UserHome: home}.Commands()
 		if err != nil {
 			return domain.NewError(domain.CodeInvalidRequest, fmt.Sprintf("%s cannot be moved: %v", u.Path, err), nil)
 		}
