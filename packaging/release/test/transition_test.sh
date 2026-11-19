@@ -175,31 +175,48 @@ TestScenario_CfEnOtroDirectorio_noDiceNadaSiEsElDelDirectorioDeInstalacion() {
 	! grep -q "another cf is first" "$T/out" || { dump; fail "reported a cf that was replaced"; }
 }
 
-# CODE-7: the cf that was just replaced, reached through a link whose directory is first on the PATH, is not "another cf".
-TestScenario_SymlinkedCf_theOneJustReplacedIsNotReportedAsAnother() {
+# CODE-7: the cf that was just replaced, reached through a link, is not "another cf" even when the directory
+# the link pointed to is first on the PATH: the cf there is the one the link was replaced by, or it is a cf that was left alone.
+TestScenario_SymlinkedCf_theLinkJustReplacedIsNotReportedAsAnother() {
 	installed_release
 	seed_cf "$T/real/cf" "$(beta_json)"
 	mkdir -p "$T/bin"
 	ln -s "$T/real/cf" "$T/bin/cf"
-	INST_PATH="$T/real:$SHIM:$PATH" run_install "$KEY_A/install.sh"
+	INST_PATH="$T/bin:$SHIM:$PATH" run_install "$KEY_A/install.sh"
 	assert_rc 0
-	assert_out_contains "replaced the cf of Code Flock 0.4.0-beta.6 at .*/real/cf"
+	assert_out_contains "replaced the cf link at $T/bin/cf"
 	! grep -q "another cf is first" "$T/out" || { dump; fail "reported the replaced cf as another one"; }
 }
 
 # --- Symlinks -----------------------------------------------------------------------
 
-TestScenario_SymlinkedCf_theTargetIsReplacedAndReported() {
+# A link to another directory is replaced itself; the cf it pointed to is never touched.
+TestScenario_SymlinkedCf_theLinkIsReplacedAndTheTargetIsLeftAlone() {
 	installed_release
 	seed_cf "$T/real/cf" "$(beta_json)"
+	cp "$T/real/cf" "$T/old-cf"
 	mkdir -p "$T/bin"
 	ln -s "$T/real/cf" "$T/bin/cf"
 	run_install "$KEY_A/install.sh"
 	assert_rc 0
-	[ -L "$T/bin/cf" ] || fail "the symlink was replaced by a file"
-	[ "$("$T/real/cf")" = "transition-cf" ] || fail "the symlink target was not replaced"
+	[ ! -L "$T/bin/cf" ] || fail "the link was not replaced"
+	[ "$("$T/bin/cf")" = "transition-cf" ] || fail "the link was not replaced by the transition cf"
+	cmp -s "$T/real/cf" "$T/old-cf" || fail "the cf the link pointed to was modified"
 	assert_out_contains "$T/bin/cf is a symlink to .*/real/cf"
-	assert_out_contains "replaced the cf of Code Flock 0.4.0-beta.6 at .*/real/cf"
+	assert_out_contains "replaced the cf link at $T/bin/cf"
+	assert_out_contains ".*/real/cf was left alone; "
+}
+
+# A link inside the install directory is not "another directory": its target is replaced and the link stays.
+TestScenario_SymlinkedCf_aLinkInsideTheInstallDirKeepsItsShape() {
+	installed_release
+	seed_cf "$T/bin/cf.real" "$(beta_json)"
+	ln -s cf.real "$T/bin/cf"
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ -L "$T/bin/cf" ] || fail "the symlink was replaced by a file"
+	[ "$("$T/bin/cf.real")" = "transition-cf" ] || fail "the target in the install dir was not replaced"
+	assert_out_contains "replaced the cf of Code Flock 0.4.0-beta.6 at .*/bin/cf.real"
 }
 
 # The first line only states the fact; what happened is said by the line that follows.
@@ -226,25 +243,9 @@ TestScenario_SymlinkedCf_relativeTargetBehindASymlinkedDirectory() {
 	ln -s ../z/cf "$T/x/y/cf"
 	run_install "$KEY_A/install.sh"
 	assert_rc 0
-	[ "$("$T/x/z/cf")" = "transition-cf" ] || fail "the target the kernel resolves to was not replaced"
-}
-
-# cflk is already installed when the cf behind the link cannot be written: the error says so.
-TestScenario_SymlinkedCf_unwritableTargetSaysCflkIsInstalled() {
-	[ "$(id -u)" -ne 0 ] || { echo "SKIP: root can write anywhere"; return 0; }
-	installed_release
-	seed_cf "$T/ro/cf" "$(beta_json)"
-	cp "$T/ro/cf" "$T/old-cf"
-	mkdir -p "$T/bin"
-	ln -s "$T/ro/cf" "$T/bin/cf"
-	chmod 555 "$T/ro"
-	run_install "$KEY_A/install.sh"
-	chmod 755 "$T/ro"
-	assert_rc 4
-	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk was not installed"
-	assert_out_contains "cflk $VERSION is installed at $T/bin/cflk, but .*/ro/cf could not be replaced"
-	assert_out_contains "cflk is installed; remove or replace .*/ro/cf by hand (with sudo"
-	cmp -s "$T/ro/cf" "$T/old-cf" || fail "the cf was modified"
+	[ "$("$T/x/y/cf")" = "transition-cf" ] || fail "the link was not replaced by the transition cf"
+	[ "$("$T/x/z/cf")" != "transition-cf" ] || fail "the target the kernel resolves to was replaced"
+	assert_out_contains "$T/bin/cf is a symlink to $(cd -P "$T/x/z" && pwd -P)/cf"
 }
 
 TestScenario_SymlinkedCf_relativeLinkIsResolved() {
@@ -254,7 +255,9 @@ TestScenario_SymlinkedCf_relativeLinkIsResolved() {
 	ln -s ../real/cf "$T/bin/cf"
 	run_install "$KEY_A/install.sh"
 	assert_rc 0
-	[ "$("$T/real/cf")" = "transition-cf" ] || fail "the relative symlink target was not replaced"
+	[ "$("$T/bin/cf")" = "transition-cf" ] || fail "the relative link was not replaced"
+	[ ! -L "$T/bin/cf" ] || fail "the link was kept"
+	[ "$("$T/real/cf")" != "transition-cf" ] || fail "the cf outside the install dir was replaced"
 }
 
 TestScenario_SymlinkedCf_toCflkIsNotReplaced() {
@@ -397,4 +400,113 @@ TestScenario_ReleaseSet_fourTarballsWithBothBinariesPassCheck() {
 		tar -tzf "$T/dist/cflk_${BARE_VERSION}_$target.tar.gz" | grep -qx cflk || fail "$target lacks cflk"
 		tar -tzf "$T/dist/cflk_${BARE_VERSION}_$target.tar.gz" | grep -qx cf || fail "$target lacks cf"
 	done
+}
+
+# --- A cf that is not trustworthy is neither run nor read ---------------------------------
+
+# the probe would leave $T/ran behind
+seed_probing_cf() { # PATH
+	mkdir -p "$(dirname "$1")"
+	printf '#!/bin/sh\n: >"%s/ran"\nprintf "%%s\\n" '"'"'%s'"'"'\n' "$T" "$(beta_json)" >"$1"
+	chmod 755 "$1"
+}
+
+# umask 002 with a user-private group: the group is the installing user's own, so the cf is still run
+TestScenario_CfNoFiable_writableByTheUsersOwnGroupIsRun() {
+	installed_release
+	seed_probing_cf "$T/bin/cf"
+	chmod 775 "$T/bin/cf"
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ -e "$T/ran" ] || fail "a cf writable only by the user's own group was not run"
+}
+
+TestScenario_CfNoFiable_writableByAnotherGroupIsNotRun() {
+	other_group=$(id -G | tr ' ' '\n' | grep -vx "$(id -g)" | head -n 1)
+	[ -n "$other_group" ] || { echo "SKIP: the user belongs to no second group"; return 0; }
+	installed_release
+	seed_probing_cf "$T/bin/cf"
+	chgrp "$other_group" "$T/bin/cf"
+	chmod 775 "$T/bin/cf"
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ ! -e "$T/ran" ] || fail "a cf that others can write was run"
+	assert_out_contains "left $T/bin/cf alone: it, or its directory, is not owned by you or root, or can be written by others"
+	[ "$("$T/bin/cflk" version)" = "$BARE_VERSION" ] || fail "cflk was not installed"
+}
+
+TestScenario_CfNoFiable_inADirectoryOthersCanWriteIsNotRun() {
+	installed_release
+	seed_probing_cf "$T/other/cf"
+	chmod 777 "$T/other"
+	mkdir -p "$T/bin"
+	ln -s "$T/other/cf" "$T/bin/cf"
+	run_install "$KEY_A/install.sh"
+	chmod 755 "$T/other"
+	assert_rc 0
+	[ ! -e "$T/ran" ] || fail "a cf in a directory others can write was run"
+	[ -L "$T/bin/cf" ] || fail "the link changed"
+	assert_out_contains "left .*/other/cf alone: it, or its directory, is not owned by you or root"
+}
+
+# A FIFO would block cmp and the probe's open: it is not a regular file, so it is left alone, and quickly.
+TestScenario_CfNoFiable_aFifoIsLeftAloneWithoutWaiting() {
+	installed_release
+	mkdir -p "$T/bin"
+	mkfifo "$T/bin/cf"
+	started=$(date +%s)
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ $(($(date +%s) - started)) -lt 4 ] || fail "the installer waited for the FIFO"
+	[ -p "$T/bin/cf" ] || fail "the FIFO changed"
+	assert_out_contains "left $T/bin/cf alone: it is not a regular file"
+}
+
+TestScenario_CfNoFiable_aLinkToAFifoIsLeftAlone() {
+	installed_release
+	mkdir -p "$T/bin" "$T/other"
+	mkfifo "$T/other/cf"
+	ln -s "$T/other/cf" "$T/bin/cf"
+	started=$(date +%s)
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ $(($(date +%s) - started)) -lt 4 ] || fail "the installer waited for the FIFO"
+	[ -L "$T/bin/cf" ] || fail "the link changed"
+	assert_out_contains "not a regular file"
+}
+
+# --- CDPATH does not redirect a relative install directory -----------------------------
+
+TestScenario_Cdpath_aRelativeInstallDirIsNotRedirected() {
+	installed_release
+	mkdir -p "$T/work/bin" "$T/decoy/bin"
+	seed_cf "$T/work/bin/cf" "$(beta_json)"
+	cd "$T/work" || exit 1
+	rc=0
+	env PATH="$SHIM:$PATH" HOME="$T/home" CDPATH="$T/decoy" \
+		CFLK_RELEASE_BASE_URL="$URL/$TEST_NAME" CFLK_INSTALL_DIR=bin CFLK_VERSION="$VERSION" \
+		FAKE_UNAME_S=Linux FAKE_UNAME_M=x86_64 "$(command -v sh)" "$KEY_A/install.sh" >"$T/out" 2>&1 || rc=$?
+	assert_rc 0
+	[ "$("$T/work/bin/cf")" = "transition-cf" ] || fail "the beta cf was not replaced"
+	[ -z "$(ls -A "$T/decoy/bin")" ] || fail "the CDPATH directory was used"
+}
+
+# --- The release check enforces the installer's rule on every tarball ---------------------
+
+TestScenario_ReleaseSet_checkRejectsADuplicateCf() {
+	make_dist "$T/dist"
+	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cflk_${BARE_VERSION}_linux_arm64.tar.gz" dupcf "$BARE_VERSION"
+	finalize_dist "$T/dist" "$KEY_A"
+	run_cmd sh "$RELEASE_DIR/check.sh" "$T/dist" "$KEY_A/install.sh"
+	assert_rc 1
+	assert_out_contains "cflk_${BARE_VERSION}_linux_arm64.tar.gz contains cf more than once"
+}
+
+TestScenario_ReleaseSet_checkRejectsASymlinkedCflk() {
+	make_dist "$T/dist"
+	python3 -I "$RELEASE_DIR/test/mktar.py" "$T/dist/cflk_${BARE_VERSION}_darwin_amd64.tar.gz" symlink "$BARE_VERSION"
+	finalize_dist "$T/dist" "$KEY_A"
+	run_cmd sh "$RELEASE_DIR/check.sh" "$T/dist" "$KEY_A/install.sh"
+	assert_rc 1
+	assert_out_contains "cflk in cflk_${BARE_VERSION}_darwin_amd64.tar.gz is not a regular file"
 }

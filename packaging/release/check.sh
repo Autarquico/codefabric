@@ -37,12 +37,22 @@ want="${expected# } "
 [ "$listed" = "$want" ] || fail "checksums.txt must list exactly: $want(got: $listed)"
 if sed 1d "$dist/checksums.txt" | grep -Evq '^[0-9a-f]{64}  [^ ]+$'; then fail "checksums.txt has a malformed line"; fi
 
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
 for name in $expected; do
 	[ -f "$dist/$name" ] || fail "$name is missing"
 	sum=$(awk -v n="$name" '$2 == n { print $1 }' "$dist/checksums.txt")
 	[ "$sum" = "$(sha256_of "$dist/$name")" ] || fail "$name does not match its checksum"
+	# the rule of install.sh: exactly one entry per binary, and a regular file
+	tar -tzf "$dist/$name" >"$scratch/members" || fail "$name is not readable"
 	for bin in cflk cf; do
-		tar -tzf "$dist/$name" | grep -qx "$bin" || fail "$name does not contain $bin"
+		count=$(grep -cx "$bin" "$scratch/members" || true)
+		[ "$count" -ge 1 ] || fail "$name does not contain $bin"
+		[ "$count" -eq 1 ] || fail "$name contains $bin more than once"
+		rm -rf "$scratch/unpacked"
+		mkdir "$scratch/unpacked"
+		tar -xzf "$dist/$name" -C "$scratch/unpacked" "$bin" || fail "could not extract $bin from $name"
+		{ [ -f "$scratch/unpacked/$bin" ] && [ ! -L "$scratch/unpacked/$bin" ]; } || fail "$bin in $name is not a regular file"
 	done
 done
 [ "$(find "$dist" -maxdepth 1 -name 'cflk_*.tar.gz' | wc -l | tr -d ' ')" -eq 4 ] || fail "dist holds tarballs beyond the four listed"

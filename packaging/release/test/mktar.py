@@ -1,6 +1,6 @@
 """Build a fake release tarball: mktar.py OUT MODE VERSION.
 
-MODE: ok | dotdot | dotdot_cflk | notcflk | symlink | nocf | cfsymlink. The fake cflk prints the bare version for any
+MODE: ok | dotdot | dotdot_cflk | notcflk | symlink | nocf | cfsymlink | dupcf. The fake cflk prints the bare version for any
 arguments; the fake transition cf prints "transition-cf".
 """
 import io
@@ -49,5 +49,9 @@ with tarfile.open(out, "w:gz") as archive:
     elif mode == "cfsymlink":
         add(archive, "cflk")
         link(archive, "cf")
+    elif mode == "dupcf":
+        add(archive, "cflk")
+        add(archive, "cf", transition)
+        add(archive, "cf", transition)
     else:
         sys.exit("unknown mode " + mode)

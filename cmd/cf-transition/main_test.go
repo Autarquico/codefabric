@@ -120,6 +120,30 @@ func TestFallsBackToPath(t *testing.T) {
 	}
 }
 
+// A cflk next to cf that this process cannot execute is not chosen: the one on PATH runs.
+func TestSkipsANeighbourItCannotExecute(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can execute anything with an execute bit")
+	}
+	dir := install(t)
+	if err := os.Chmod(filepath.Join(dir, "cflk"), 0o001); err != nil { // an execute bit, but not for its owner: not for us
+		t.Fatal(err)
+	}
+	onPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(onPath, "cflk"), []byte(fakeCflk), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), filepath.Join(dir, "cf"), "args", "x")
+	cmd.Env = cleanEnv(onPath + ":/usr/bin:/bin")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got, want := string(out), "cflk|x\n"; got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
 func TestSymlinkedCfFindsCflkNextToTheRealOne(t *testing.T) {
 	dir := install(t)
 	links := t.TempDir()

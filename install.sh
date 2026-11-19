@@ -13,6 +13,8 @@
 # The trust root is the allowed_signers block below. While it holds the PLACEHOLDER no signature verifies,
 # so the installer fails closed. Review-first users verify this file with install.sh.sig.
 set -eu
+# a CDPATH would make `cd` print the directory it picks and can pick another one
+unset CDPATH
 
 DEFAULT_BASE_URL='https://github.com/Autarquico/codeflock/releases/download'
 LATEST_URL='https://github.com/Autarquico/codeflock/releases/latest'
@@ -69,7 +71,7 @@ detect_platform() {
 }
 
 require_commands() {
-	for c in curl tar awk sed grep mktemp ssh-keygen cp chmod mv mkdir rm cat wc tr basename dirname readlink cmp; do
+	for c in curl tar awk sed grep mktemp ssh-keygen cp chmod mv mkdir rm cat wc tr basename dirname readlink cmp id ls; do
 		have "$c" || die 4 "required command not found: $c"
 	done
 	have sha256sum || have shasum || die 4 'required command not found: sha256sum or shasum'
@@ -288,6 +290,18 @@ replace_cf() {
 	TMP_BIN=
 }
 
+# closed_to_others PATH: PATH belongs to the user running the installer or to root, others cannot write it, and
+# its group cannot either, unless that group is the installing user's own (a user-private group, umask 002) and the
+# installer is not root. Read from `ls -ldn` (the same on macOS and Linux): mode, owner id and group id in fields 1, 3, 4.
+closed_to_others() {
+	# shellcheck disable=SC2012 # the mode and owner of one path; find has no portable equivalent
+	ls -ldn "$1" 2>/dev/null | awk -v me="$(id -u)" -v mygroup="$(id -g)" '{
+		group_ok = substr($1, 6, 1) != "w" || (me != 0 && $4 == mygroup)
+		ok = ($3 == me || $3 == 0) && group_ok && substr($1, 9, 1) != "w"
+		exit !ok
+	}'
+}
+
 # $DIR/cf exists and is not a directory.
 transition_cf_in_dir() {
 	if ! real=$(resolve_link "$DIR/cf"); then
@@ -295,12 +309,23 @@ transition_cf_in_dir() {
 		return 0
 	fi
 	shown=$DIR/cf
+	dest=$real
 	if [ -L "$DIR/cf" ]; then
 		shown=$real
 		log "$DIR/cf is a symlink to $real"
 	fi
-	if [ "$real" = "$(cd -P "$DIR" && pwd -P)/cflk" ]; then
+	real_dir=$(cd -P "$DIR" && pwd -P)
+	if [ "$real" = "$real_dir/cflk" ]; then
 		log "$DIR/cf already runs cflk; nothing to change"
+		return 0
+	fi
+	# Nothing is run, read or replaced until it is a regular file that only the user or root can change.
+	if [ ! -f "$real" ]; then
+		log "left $shown alone: it is not a regular file"
+		return 0
+	fi
+	if ! closed_to_others "$real" || ! closed_to_others "$(dirname "$real")"; then
+		log "left $shown alone: it, or its directory, is not owned by you or root, or can be written by others. Use cflk for Code Flock"
 		return 0
 	fi
 	if cmp -s "$real" "$WORK/unpacked/cf"; then
@@ -316,8 +341,14 @@ transition_cf_in_dir() {
 		transition) done_message="updated the transition cf at $shown; it runs cflk and goes away in 0.5" ;;
 		beta) done_message="replaced the cf of Code Flock $CF_BETA at $shown with the transition cf: it runs cflk and goes away in 0.5. Use cflk from now on" ;;
 	esac
-	replace_cf "$real" ||
-		die 4 "cflk $VERSION is installed at $DIR/cflk, but $real could not be replaced (no write access to $(dirname "$real")?). cflk is installed; remove or replace $real by hand (with sudo if its directory belongs to the system), or just use cflk"
+	# A link to another directory is replaced itself: a cf outside $DIR is never touched.
+	if [ -L "$DIR/cf" ] && [ "$(dirname "$real")" != "$real_dir" ]; then
+		dest=$DIR/cf
+		done_message="replaced the cf link at $dest with the transition cf: it runs cflk and goes away in 0.5. Use cflk from now on"
+	fi
+	replace_cf "$dest" ||
+		die 4 "cflk $VERSION is installed at $DIR/cflk, but $dest could not be replaced (no write access to $(dirname "$dest")?). cflk is installed; remove or replace $dest by hand (with sudo if its directory belongs to the system), or just use cflk"
+	[ "$dest" = "$real" ] || log "$real was left alone; it is no longer reached through $dest"
 	log "$done_message"
 }
 

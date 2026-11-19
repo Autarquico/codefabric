@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -42,14 +43,15 @@ func main() {
 	os.Exit(126)
 }
 
-// locate finds cflk in the directory of the running executable (symlinks resolved), else on PATH.
+// locate finds cflk in the directory of the running executable (symlinks resolved) when this process can run it,
+// else on PATH.
 func locate(self string) (string, error) {
 	if self != "" {
 		if resolved, err := filepath.EvalSymlinks(self); err == nil {
 			self = resolved
 		}
 		sibling := filepath.Join(filepath.Dir(self), target)
-		if info, err := os.Stat(sibling); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+		if info, err := os.Stat(sibling); err == nil && info.Mode().IsRegular() && unix.Access(sibling, unix.X_OK) == nil {
 			return sibling, nil
 		}
 	}
