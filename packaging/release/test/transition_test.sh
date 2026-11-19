@@ -420,6 +420,16 @@ seed_probing_cf() { # PATH
 	chmod 755 "$1"
 }
 
+# The installer's primary group is not private (macOS: staff), so its write bit opens the cf too.
+TestScenario_CfNoFiable_writableByThePrimaryGroupIsNotRun() {
+	installed_release
+	seed_probing_cf "$T/bin/cf"
+	chmod 775 "$T/bin/cf"
+	run_install "$KEY_A/install.sh"
+	assert_rc 0
+	[ ! -e "$T/ran" ] || fail "a cf writable by the primary group was run"
+}
+
 TestScenario_CfNoFiable_writableByAnotherGroupIsNotRun() {
 	other_group=$(id -G | tr ' ' '\n' | grep -vx "$(id -g)" | head -n 1)
 	[ -n "$other_group" ] || { echo "SKIP: the user belongs to no second group"; return 0; }

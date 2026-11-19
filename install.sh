@@ -314,25 +314,22 @@ closed_to_others() {
 acl_closed() {
 	if [ "$(uname -s)" = Darwin ]; then
 		# shellcheck disable=SC2012 # the ACL of one path; nothing else prints it on macOS
-		if ls -lden "$1" 2>/dev/null | awk 'NR > 1' |
-			grep -Eq ' allow .*(write|append|add_file|add_subdirectory|delete|chown)'; then
+		acl=$(ls -lden "$1" 2>/dev/null) && [ -n "$acl" ] || return 1
+		if printf '%s\n' "$acl" | awk 'NR > 1' | grep -Eq ' allow .*(write|append|add_file|add_subdirectory|delete|chown)'; then
 			return 1
 		fi
 	else
 		# shellcheck disable=SC2012 # see closed_to_others
-		ls -ldn "$1" 2>/dev/null | awk 'NR == 1 { exit substr($1, 11, 1) == "+" }'
+		acl=$(ls -ldn "$1" 2>/dev/null) && [ -n "$acl" ] || return 1
+		printf '%s\n' "$acl" | awk 'NR == 1 { exit substr($1, 11, 1) == "+" }'
 	fi
 }
 
-# closed_path PATH: PATH and every directory above it are closed to others, so nobody else can swap what PATH
-# names between the check and its use.
+# closed_path PATH: every directory from / down to PATH, and PATH itself, is closed to others, so nobody else can
+# swap what PATH names between the check and its use. Checked top down: each step stands on one already closed.
 closed_path() {
-	p=$1
-	while :; do
-		closed_to_others "$p" || return 1
-		[ "$p" = / ] && return 0
-		p=$(dirname "$p")
-	done
+	[ "$1" = / ] || closed_path "$(dirname "$1")" || return 1
+	closed_to_others "$1"
 }
 
 # $DIR/cf exists and is not a directory.
