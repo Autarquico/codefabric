@@ -6,12 +6,10 @@ status: active
 priority: P1
 size: M
 issue: 208
-prs: []
+prs: [209]
 related_issues: [208, 203]
 depends_on: [live-attach, claude-code-adapter]
-related_specs:
-  - live-attach
-  - claude-code-adapter
+related_specs: [live-attach, claude-code-adapter]
 created: 2026-11-19
 updated: 2026-11-19
 ---
