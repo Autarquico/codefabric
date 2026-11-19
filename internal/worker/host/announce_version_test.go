@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 type versioned struct {

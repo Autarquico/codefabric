@@ -18,12 +18,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client/session"
-	"github.com/Autarquico/codefabric/internal/client/taskpull"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client/session"
+	"github.com/Autarquico/codeflock/internal/client/taskpull"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 const sessionID = "11111111-2222-4333-8444-555555555555"

@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/codex"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/localhost"
 )
 
 // kit is what differs between adapters: where three kinds of component live

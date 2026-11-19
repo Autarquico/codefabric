@@ -5,7 +5,7 @@ package main
 import (
 	"os"
 
-	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
+	"github.com/Autarquico/codeflock/internal/testutil/fakeharness"
 )
 
 func main() {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // audit collects what a hub reports: the entries and the closes.

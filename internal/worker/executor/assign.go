@@ -6,9 +6,9 @@ import (
 	"errors"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 const reasonUnknownCommand = "unknown_command"

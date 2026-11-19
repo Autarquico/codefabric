@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/cli/actions"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/cli"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // recordedRequest is what reached the fake Controller.

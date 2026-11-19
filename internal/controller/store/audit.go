@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // AuditEntry is one §16.5 record. Before and After are marshalled to JSON when

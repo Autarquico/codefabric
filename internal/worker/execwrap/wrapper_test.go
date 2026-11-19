@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/redact"
-	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
-	"github.com/Autarquico/codefabric/internal/worker/procident"
-	"github.com/Autarquico/codefabric/internal/worker/secretjit"
+	"github.com/Autarquico/codeflock/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/testutil/fakeharness"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
+	"github.com/Autarquico/codeflock/internal/worker/secretjit"
 )
 
 const (

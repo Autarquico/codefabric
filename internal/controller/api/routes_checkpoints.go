@@ -4,9 +4,9 @@ import (
 	"io"
 	"net/http"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/checkpoints"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/checkpoints"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // registerCheckpointRoutes adds how a Worker takes part in a capture (§23): the

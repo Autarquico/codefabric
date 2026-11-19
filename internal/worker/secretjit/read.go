@@ -14,8 +14,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 const noFollow = unix.O_NOFOLLOW

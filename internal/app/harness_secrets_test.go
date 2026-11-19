@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/runs"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/runs"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 const claudeTokenRef = "claude/oauth-token" //nolint:gosec // a ref, not a credential

@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
 )
 
 // shellSecretName is a variable of the environment of the Worker that a shell

@@ -9,11 +9,11 @@ import (
 	"os/exec"
 	"strings"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client/gitctx"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/repoconfig"
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client/gitctx"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/repoconfig"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // ExplainProject asks what the configuration of a Project is at req.Commit.

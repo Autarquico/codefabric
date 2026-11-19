@@ -12,8 +12,8 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/worker/secretjit"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/worker/secretjit"
 )
 
 // escMini is mini with markers in its TOML files.

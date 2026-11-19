@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"time"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // stopOrder is a stop of the Run that arrives now. It notes whether the

@@ -14,14 +14,14 @@ import (
 	"testing"
 	"time"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
-	"github.com/Autarquico/codefabric/internal/worker/gitops"
-	"github.com/Autarquico/codefabric/internal/worker/journal"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/gitops"
+	"github.com/Autarquico/codeflock/internal/worker/journal"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // answers makes the fake Controller answer the rounds in turn; the last repeats.

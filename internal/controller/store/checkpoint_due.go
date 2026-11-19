@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // CapturableRun is a Run that is going under an accepted lease, with the

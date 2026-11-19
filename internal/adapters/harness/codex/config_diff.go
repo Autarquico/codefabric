@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // DiffConfig compares snap with ~/.codex: a component missing there is

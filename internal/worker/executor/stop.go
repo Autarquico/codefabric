@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"syscall"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/worker/procident"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // Sources of a stop.

@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/envutil"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/envutil"
 )
 
 const (

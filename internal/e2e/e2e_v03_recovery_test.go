@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/e2e/netproxy"
-	"github.com/Autarquico/codefabric/internal/worker/procident"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/e2e/netproxy"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
 )
 
 // recoveryRuns is how many Runs are in flight: two per Worker.

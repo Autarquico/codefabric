@@ -3,8 +3,8 @@ package api
 import (
 	"net/http"
 
-	"github.com/Autarquico/codefabric/internal/controller/attachhub"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/controller/attachhub"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // AddRoute registers a route for a test, with the same authorisation as any other.

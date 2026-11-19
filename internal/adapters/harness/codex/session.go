@@ -14,7 +14,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // sessionIDPattern is the only shape of a session id that reaches a path or an

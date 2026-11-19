@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Timings of the streams. A stream sends a keepalive every 15 s, so three of

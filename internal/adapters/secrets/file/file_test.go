@@ -20,9 +20,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 const (

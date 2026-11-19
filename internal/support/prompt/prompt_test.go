@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/support/prompt"
+	"github.com/Autarquico/codeflock/internal/support/prompt"
 )
 
 func TestAsk_DefaultAndAnswer(t *testing.T) {

@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	secretsfile "github.com/Autarquico/codeflock/internal/adapters/secrets/file"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // argvOf is the command line of a live process as other users of the machine

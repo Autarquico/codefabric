@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/worker/daemon"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
-	"github.com/Autarquico/codefabric/internal/worker/executor"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/worker/daemon"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
+	"github.com/Autarquico/codeflock/internal/worker/executor"
 )
 
 func TestRun_GivesTheExecutorTheWorktreeRetentionOfTheSettings(t *testing.T) {

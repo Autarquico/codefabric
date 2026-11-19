@@ -12,13 +12,13 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
-	"github.com/Autarquico/codefabric/internal/worker/procident"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // errStaleRound says that a reconciliation was overtaken by a newer request for

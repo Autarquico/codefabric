@@ -11,9 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/client/taskpull"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/client/taskpull"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // execResume replaces this process with the command that resumes the session, in dir. It

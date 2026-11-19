@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func TestCheckFTS5_PassesOnThisBuild(t *testing.T) {

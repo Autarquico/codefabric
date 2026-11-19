@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/client/taskpull"
+	"github.com/Autarquico/codeflock/internal/client/taskpull"
 )
 
 // A file the checkout ignores and the checkpoint versions is not overwritten by a switch:

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // PushClass says what a failed push means for the attempts allowed (Appendix B5).

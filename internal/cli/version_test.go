@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/buildinfo"
+	"github.com/Autarquico/codeflock/internal/buildinfo"
 )
 
 func TestScenario_RepoBootstrap_VersionJSON(t *testing.T) {

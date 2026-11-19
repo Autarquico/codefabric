@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/Autarquico/codefabric/internal/cli/actions"
+import "github.com/Autarquico/codeflock/internal/cli/actions"
 
 // selection is what the palette offers to act on: the item under the cursor of
 // a view, of the kind that view lists.

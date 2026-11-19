@@ -12,9 +12,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/cli/actions"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/cli"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
 )
 
 // A browser is a list with a detail pane under it (§19.4), over the items of a

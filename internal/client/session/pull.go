@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/codex"
 )
 
 // SeededSession is the session of this machine that was handed off with the seed whose

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/app/search"
+	"github.com/Autarquico/codeflock/internal/app/search"
 )
 
 func TestMatchExpression_OnlyWordsSurvive(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // RunStatusOf is the Run's position in the machine, with the origin a Run in

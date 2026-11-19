@@ -14,12 +14,12 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/workers"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/workers"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 const (

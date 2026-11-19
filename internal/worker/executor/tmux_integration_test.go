@@ -15,13 +15,13 @@ import (
 	"testing"
 	"time"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
-	"github.com/Autarquico/codefabric/internal/worker/procident"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // countingRuntime counts the Starts that reach the real Runtime.

@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/svcunit"
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
 )
 
 // ServiceOptions parameterise InstallService and UninstallService.

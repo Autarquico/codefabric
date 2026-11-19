@@ -9,7 +9,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // repo is the git repository the work is brought to. Nothing here resets, stashes or

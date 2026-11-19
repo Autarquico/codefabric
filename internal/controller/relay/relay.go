@@ -23,10 +23,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/atomicfile"
-	"github.com/Autarquico/codefabric/internal/support/gitbin"
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/atomicfile"
+	"github.com/Autarquico/codeflock/internal/support/gitbin"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // Defaults of Config.

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // PrepareSpec is what a worktree is made from.

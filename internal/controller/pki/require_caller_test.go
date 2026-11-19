@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 func TestRequireCaller_ChecksTheIdentityInsideTheTransaction(t *testing.T) {

@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/command"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/command"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // fakeGlobal is the global configuration of the Worker: a lock per harness, and

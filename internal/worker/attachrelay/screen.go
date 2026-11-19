@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // MaxScreenBytes bounds one screen: it is sent as one data frame, so it is what

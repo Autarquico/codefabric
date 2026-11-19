@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // askUserQuestion is the tool with which Claude Code asks the person

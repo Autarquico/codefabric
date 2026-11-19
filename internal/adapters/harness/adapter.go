@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Adapter is one harness (§7.2): what CodeFabric knows of a program that does

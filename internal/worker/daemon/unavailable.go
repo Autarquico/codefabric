@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
 )
 
 var errNoRuntime = errors.New("this Worker has no Runtime to run sessions in")

@@ -13,8 +13,8 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/atomicfile"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/atomicfile"
 )
 
 // NameFor is the name of the session of a Run under a lease epoch (§6.4); it

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 func logLines(t *testing.T, db *state.DB, sizes ...int) {

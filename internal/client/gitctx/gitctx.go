@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // ErrNoOrigin means the directory has no "origin" remote to take a repository from.

@@ -4,7 +4,7 @@ import (
 	"cmp"
 	"slices"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // SelectionOf is the selection that re-adopts the components of m: what a

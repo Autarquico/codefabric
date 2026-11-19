@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 // Phase is where the Worker stands with an assignment. It is local: the

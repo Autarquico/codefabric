@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
 )
 
 type fakeRunSockets struct {

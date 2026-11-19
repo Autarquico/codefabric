@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/cli"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // A Line is a command typed in the TUI with the syntax of the CLI and without

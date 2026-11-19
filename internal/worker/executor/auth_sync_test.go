@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/worker/host"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/worker/host"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 type authRecorder struct {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Project is a row of projects. The workflow and environment are "" when unset.

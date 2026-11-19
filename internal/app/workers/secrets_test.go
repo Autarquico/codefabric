@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 var secretsAt = time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)

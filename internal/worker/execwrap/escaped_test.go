@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/redact"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
 )
 
 // A value with a quote, a backslash, a slash, a newline, a tab and two control

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // EventSchemaVersion is stamped on events that do not carry one.

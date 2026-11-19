@@ -3,7 +3,7 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/Autarquico/codefabric/internal/cli/actions"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
 )
 
 // handoff is the lifecycle of an action that takes over the terminal (attach,

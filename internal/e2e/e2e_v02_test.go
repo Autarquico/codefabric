@@ -15,12 +15,12 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/host"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/codex"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/localhost"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/host"
 )
 
 // The scenarios of the spec e2e-v0-2 (§42.4 #6, #7 and #12 and the Done of

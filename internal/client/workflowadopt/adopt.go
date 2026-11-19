@@ -11,9 +11,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Errors of the adopt. They name harnesses, components and files, never a value.

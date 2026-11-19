@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/gittest"
-	"github.com/Autarquico/codefabric/internal/worker/gitops"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/gittest"
+	"github.com/Autarquico/codeflock/internal/worker/gitops"
 )
 
 const resumedCheckpoint = "cp_01J0000000000000000000CP01"

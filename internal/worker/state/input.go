@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // States of an input prompt and of an input order.

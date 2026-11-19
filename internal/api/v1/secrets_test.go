@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Without secrets, what a daemon or a client sends is what it sent before them.

@@ -9,9 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // Journal writes the reports of one run of the daemon, which has the epoch

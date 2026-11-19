@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/support/svcunit"
-	"github.com/Autarquico/codefabric/internal/support/svcunit/svcunittest"
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
+	"github.com/Autarquico/codeflock/internal/support/svcunit/svcunittest"
 )
 
 // newLaunchd is a fake launchd of a user whose home is a fresh directory.

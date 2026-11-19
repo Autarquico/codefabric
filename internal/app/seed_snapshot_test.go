@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/controller/store"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // A resume from a snapshot of the client starts from that tree and the session seeds it:

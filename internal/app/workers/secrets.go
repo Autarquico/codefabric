@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/input"
-	"github.com/Autarquico/codefabric/internal/app/mutation"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/input"
+	"github.com/Autarquico/codeflock/internal/app/mutation"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // The generation of a daemon (§11.6 of the plan of #23) fences its whole

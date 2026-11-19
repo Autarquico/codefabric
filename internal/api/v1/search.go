@@ -1,6 +1,6 @@
 package v1
 
-import "github.com/Autarquico/codefabric/internal/domain"
+import "github.com/Autarquico/codeflock/internal/domain"
 
 // Search limits (§37): the longest query and the most results one call returns.
 const (

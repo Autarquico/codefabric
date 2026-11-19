@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/runs"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/runs"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // registerOutputRoutes adds the output of Runs (#14): the Workers send it in

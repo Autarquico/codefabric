@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/support/atomicfile"
-	"github.com/Autarquico/codefabric/internal/support/treedigest"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/support/atomicfile"
+	"github.com/Autarquico/codeflock/internal/support/treedigest"
 )
 
 // The names the materialisation of a Run takes in its run directory.

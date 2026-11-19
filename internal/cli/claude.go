@@ -13,8 +13,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/buildinfo"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/buildinfo"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 //go:embed skills/handto/SKILL.md

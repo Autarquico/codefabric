@@ -13,7 +13,7 @@ Trabajamos en **es**. Issues, comentarios, informes y commits del PM en es.
 ## El proyecto
 
 - **Codename**: `codefabric`
-- **Repo**: `Autarquico/codefabric`
+- **Repo**: `Autarquico/codeflock` (módulo Go `github.com/Autarquico/codeflock`)
 - **Project board**: `Autarquico/projects/5`
 - **MCP**: `github`
 

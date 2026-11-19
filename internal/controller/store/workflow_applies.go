@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // States of a workflow_applies row.

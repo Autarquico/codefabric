@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // The contract of the flags the structured input depends on, against the real

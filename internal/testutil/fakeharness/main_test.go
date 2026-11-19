@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/support/treedigest"
-	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/support/treedigest"
+	"github.com/Autarquico/codeflock/internal/testutil/fakeharness"
 )
 
 func TestMain(m *testing.M) {

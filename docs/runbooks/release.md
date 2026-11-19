@@ -3,7 +3,7 @@
 Spec: [release-installer-site](../specs/release-installer-site.md). Todo lo que sigue es manual salvo lo que
 hacen `release.yml` y `pages.yml` una vez empujado el tag. Los pasos 1 a 4 bloquean el tag `v0.2.0`, no los PRs.
 
-Convenciones fijas: principal `release@codefabric`, namespace `codefabric-release`, repo `Autarquico/codefabric`.
+Convenciones fijas: principal `release@codefabric`, namespace `codefabric-release`, repo `Autarquico/codeflock`.
 
 ## 1. Generar la clave y custodiarla
 

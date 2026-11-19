@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // wantPrivate fails unless the delivery in dir is 0700 and its files 0600,

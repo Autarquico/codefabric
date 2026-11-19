@@ -6,9 +6,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/app/gc"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/app/gc"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // failingRelay refuses to delete the refs named in fail, until fail is emptied.

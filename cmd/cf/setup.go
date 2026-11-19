@@ -7,10 +7,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/prompt"
-	workerdaemon "github.com/Autarquico/codefabric/internal/worker/daemon"
+	"github.com/Autarquico/codeflock/internal/cli"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/prompt"
+	workerdaemon "github.com/Autarquico/codeflock/internal/worker/daemon"
 )
 
 // Roles `cf setup` can set up. The Controller is not one of them (D9): it is

@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // MaxWait is the longest timeout a wait_file or read_line step may have.

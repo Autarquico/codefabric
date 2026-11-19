@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func userOfRef(t *testing.T, w *keyringWorker, ref string) string {

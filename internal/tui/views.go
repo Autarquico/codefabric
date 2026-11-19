@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/cli/actions"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // The views of §19.4, by route. Tasks, Runs, Workers, Workflows and Projects are

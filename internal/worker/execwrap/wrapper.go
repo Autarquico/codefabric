@@ -12,12 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/support/envutil"
-	"github.com/Autarquico/codefabric/internal/support/redact"
-	"github.com/Autarquico/codefabric/internal/worker/procident"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/envutil"
+	"github.com/Autarquico/codeflock/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
 )
 
 // Timings the wrapper uses, all on its clock.

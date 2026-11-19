@@ -78,7 +78,7 @@ TestScenario_VerifiedInstall_realBinary() {
 		linux/amd64 | linux/arm64 | darwin/amd64 | darwin/arm64) ;;
 		*) echo "SKIP: $goos/$goarch has no release tarball"; return 0 ;;
 	esac
-	pkg=github.com/Autarquico/codefabric/internal/buildinfo
+	pkg=github.com/Autarquico/codeflock/internal/buildinfo
 	mkdir -p "$T/real"
 	(cd "$ROOT" && CGO_ENABLED=0 go build -trimpath \
 		-ldflags "-s -w -X $pkg.version=$BARE_VERSION -X $pkg.commit=abc1234 -X $pkg.date=2026-01-01T00:00:00Z" \

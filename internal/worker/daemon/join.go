@@ -7,9 +7,9 @@ import (
 	"context"
 	"fmt"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/config"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/config"
 )
 
 // JoinOptions parameterise Join.

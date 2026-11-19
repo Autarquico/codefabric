@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"net/url"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // PutNativeSeed uploads size bytes of r as the session that seeds a Run of the Project

@@ -9,7 +9,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 const (

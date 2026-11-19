@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/codex"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
 )
 
 // fakeCodex prints the recording of `codex exec --json` 0.160.1 to stdout, a

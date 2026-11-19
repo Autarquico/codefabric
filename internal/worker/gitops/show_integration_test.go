@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/support/gittest"
-	"github.com/Autarquico/codefabric/internal/worker/gitops"
+	"github.com/Autarquico/codeflock/internal/support/gittest"
+	"github.com/Autarquico/codeflock/internal/worker/gitops"
 )
 
 func (r *rig) source4(files map[string]string) string {

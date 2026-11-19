@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/pty"
+	"github.com/Autarquico/codeflock/internal/adapters/pty"
 )
 
 // start skips where the machine cannot give a pty (a sandbox with no /dev/ptmx).

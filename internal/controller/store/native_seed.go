@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // RecordNativeSeed remembers that a client uploaded the blob digest as a seed for

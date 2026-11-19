@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // OpenAcceptedLeases lists, by lease ID after the given one and up to limit, the

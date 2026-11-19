@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
-	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/localhost"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
+	"github.com/Autarquico/codeflock/internal/worker/sysinfo"
 )
 
 func doctored(t *testing.T, runtime func(context.Context) error) *daemon {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/controller/store"
 )
 
 // WatchStore has Start hand the options and the store it opens to seen, for

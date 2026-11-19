@@ -12,9 +12,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/support/redact"
-	"github.com/Autarquico/codefabric/internal/worker/secretjit"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/worker/secretjit"
 )
 
 // RenderFile is a file of a configuration that carries secret markers: the

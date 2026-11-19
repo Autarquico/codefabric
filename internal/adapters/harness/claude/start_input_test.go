@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 var bridgeArgv = []string{"/usr/local/bin/cf", "worker", "mcp-bridge", "--socket", "/s/abc.sock"}

@@ -15,14 +15,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/worker/workflowfetch"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/codex"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/worker/workflowfetch"
 )
 
 // fakeController serves the manifest and blobs of each order and records what

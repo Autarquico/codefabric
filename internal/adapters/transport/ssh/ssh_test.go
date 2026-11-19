@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/transport/ssh"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/transport/ssh"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // fakeSSH is an ssh that logs its arguments, one per line, and exits with the

@@ -25,8 +25,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/localhost"
 )
 
 // Fixture is how the suite drives one adapter. Every function receives the

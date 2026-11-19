@@ -5,9 +5,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/cli/actions"
-	"github.com/Autarquico/codefabric/internal/client"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
+	"github.com/Autarquico/codeflock/internal/client"
 )
 
 // A view is described once, as a viewDef over the type of the items of its

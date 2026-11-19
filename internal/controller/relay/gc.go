@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // collectTimeout bounds one git gc. It is an infrastructure deadline on a

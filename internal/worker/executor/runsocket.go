@@ -3,13 +3,13 @@ package executor
 import (
 	"context"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
-	"github.com/Autarquico/codefabric/internal/buildinfo"
-	"github.com/Autarquico/codefabric/internal/cli/skills"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
-	"github.com/Autarquico/codefabric/internal/worker/host"
-	"github.com/Autarquico/codefabric/internal/worker/runsocket"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/buildinfo"
+	"github.com/Autarquico/codeflock/internal/cli/skills"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/host"
+	"github.com/Autarquico/codeflock/internal/worker/runsocket"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // runSocketEnv makes sure an interactive Run has its socket (see RunSockets) and

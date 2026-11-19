@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	"github.com/Autarquico/codefabric/internal/adapters/secrets/file"
-	"github.com/Autarquico/codefabric/internal/adapters/secrets/keyring"
-	"github.com/Autarquico/codefabric/internal/adapters/secrets/secretstest"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets/file"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets/keyring"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets/secretstest"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // requireKeyring skips unless CF_REQUIRE_KEYRING=1: these tests write to the

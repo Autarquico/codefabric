@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // The property of the delivery of #23 (§11.4, §11.9): any sequence of

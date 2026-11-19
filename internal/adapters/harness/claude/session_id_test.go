@@ -7,8 +7,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func TestSessionIDIsAStableUUIDv5OfRunAndEpoch(t *testing.T) {

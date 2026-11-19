@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Simulated load (milestone benchmark): 25 Workers and 100 Runs for 5 s.

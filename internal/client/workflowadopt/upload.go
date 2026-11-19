@@ -7,7 +7,7 @@ import (
 	"io"
 	"slices"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 // Store is the part of the Controller that adopt uses: *client.Client.

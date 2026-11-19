@@ -9,7 +9,7 @@ import (
 	"os"
 	"slices"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // usageEvents is the usage a result reports, its only source (the assistant

@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func asDomain(err error, target **domain.Error) bool { return errors.As(err, target) }

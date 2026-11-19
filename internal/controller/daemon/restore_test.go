@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/controller/daemon"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/controller/daemon"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func readFile(t *testing.T, path string) []byte {

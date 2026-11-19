@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/app"
-	"github.com/Autarquico/codefabric/internal/app/checkpoints"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/app"
+	"github.com/Autarquico/codeflock/internal/app/checkpoints"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // fakeHistory tells the commits of a Run.

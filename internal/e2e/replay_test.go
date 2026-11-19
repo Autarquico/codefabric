@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/e2e/netproxy"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/e2e/netproxy"
 )
 
 // replayLines is how many lines the harness prints, a quarter of a second apart, all before the partition ends (a line printed after the harness exits is not captured).

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
-	"github.com/Autarquico/codefabric/internal/support/redact"
-	"github.com/Autarquico/codefabric/internal/worker/host"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/codex"
+	"github.com/Autarquico/codeflock/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/worker/host"
 )
 
 // TestRender_ConfigTomlInAnEventIsRedactedInEveryForm walks a secret from

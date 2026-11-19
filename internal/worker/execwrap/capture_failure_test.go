@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // eventsDouble is an events.jsonl whose writes fail, and that counts its closes.

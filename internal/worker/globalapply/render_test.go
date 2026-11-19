@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
 )
 
 func TestRenderComponent_ARenderedFileIsForItsOwnerOnly(t *testing.T) {

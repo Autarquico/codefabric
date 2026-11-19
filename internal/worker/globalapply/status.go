@@ -4,7 +4,7 @@ import (
 	"context"
 	"slices"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // Applied is a component this Worker applied, as the host holds it now.

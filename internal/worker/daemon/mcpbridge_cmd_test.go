@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/worker/inputsock"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/worker/inputsock"
 )
 
 // daemonSide answers every question with decision, and acks.

@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/checkpoints"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/checkpoints"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func TestCheckpointOrder_NativeStateFollowsTheProject(t *testing.T) {

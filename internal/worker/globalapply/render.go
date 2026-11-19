@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // SecretResolver gives the value of a secret ref from the secret store of

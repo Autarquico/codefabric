@@ -6,9 +6,9 @@ import (
 	"os/exec"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client/taskpull"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client/taskpull"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // runFetcher is a Controller with one Run that published its result to the relay of the world.

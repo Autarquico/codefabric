@@ -3,8 +3,8 @@ package doctor_test
 import (
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
 )
 
 func TestJournalLimits(t *testing.T) {

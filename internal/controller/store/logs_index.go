@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/Autarquico/codefabric/internal/controller/blob"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/controller/blob"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // OutputRange returns the bytes [from, to) of the output, which must lie inside

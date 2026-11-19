@@ -3,9 +3,9 @@ package daemon
 import (
 	"slices"
 
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/attachrelay"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/attachrelay"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
 )
 
 // allowShell reads allow_shell from the config now. A config that cannot be

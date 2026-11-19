@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/testutil/fakeharness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/testutil/fakeharness"
 )
 
 // startUntilReady starts the program with steps and waits for its first

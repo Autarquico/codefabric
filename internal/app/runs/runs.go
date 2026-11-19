@@ -9,16 +9,16 @@ import (
 	"errors"
 	"fmt"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/environments"
-	"github.com/Autarquico/codefabric/internal/app/input"
-	"github.com/Autarquico/codefabric/internal/app/leases"
-	"github.com/Autarquico/codefabric/internal/app/mutation"
-	"github.com/Autarquico/codefabric/internal/app/refs"
-	"github.com/Autarquico/codefabric/internal/app/workflows"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/environments"
+	"github.com/Autarquico/codeflock/internal/app/input"
+	"github.com/Autarquico/codeflock/internal/app/leases"
+	"github.com/Autarquico/codeflock/internal/app/mutation"
+	"github.com/Autarquico/codeflock/internal/app/refs"
+	"github.com/Autarquico/codeflock/internal/app/workflows"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // Rederive brings the materialised state of a Task up to date inside the

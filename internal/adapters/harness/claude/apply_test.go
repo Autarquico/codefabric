@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
 )
 
 func applyRun(t *testing.T, h harness.Host, snap harness.NativeSnapshot, linkAuth bool) (string, harness.ApplyResult) {

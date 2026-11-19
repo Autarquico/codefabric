@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/controller/blob"
+	"github.com/Autarquico/codeflock/internal/controller/blob"
 )
 
 func TestPutGzip_StoresTheCompressedBytesAndOpenGzipReadsTheRawOnes(t *testing.T) {

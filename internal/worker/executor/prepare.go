@@ -8,10 +8,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 
-	"github.com/Autarquico/codefabric/internal/worker/gitops"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/worker/gitops"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // Git is what the executor needs of git: the worktree of a Run, the commit that

@@ -9,7 +9,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // setup prepares a run directory before the operation under test.

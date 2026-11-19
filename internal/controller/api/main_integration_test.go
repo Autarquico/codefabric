@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/controller/relay"
+	"github.com/Autarquico/codeflock/internal/controller/relay"
 )
 
 // asCF makes the test binary behave as `cf relay ...`, which is what the hook

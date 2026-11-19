@@ -14,11 +14,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/client/handoff"
-	csession "github.com/Autarquico/codefabric/internal/client/session"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/client/handoff"
+	csession "github.com/Autarquico/codeflock/internal/client/session"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // fakeRunSocket answers the requests of a Run as the Worker would: a move to

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func TestProjects_CreateShowSetAndAudit(t *testing.T) {

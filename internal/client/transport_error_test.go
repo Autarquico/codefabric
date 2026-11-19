@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func TestTransportError_OnlyCertificateAlertsAreAuthenticationFailures(t *testing.T) {

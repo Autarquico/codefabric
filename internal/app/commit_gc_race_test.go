@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/app"
-	"github.com/Autarquico/codefabric/internal/app/gc"
-	"github.com/Autarquico/codefabric/internal/controller/blob"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/app"
+	"github.com/Autarquico/codeflock/internal/app/gc"
+	"github.com/Autarquico/codeflock/internal/controller/blob"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // afterOpenBlobs runs a hook once, right after the commit's verification

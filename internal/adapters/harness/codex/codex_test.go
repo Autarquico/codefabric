@@ -8,10 +8,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/codex"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func spec(mode domain.Mode) harness.RunSpec {

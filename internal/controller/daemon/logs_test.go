@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/controller/daemon"
-	"github.com/Autarquico/codefabric/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/controller/daemon"
+	"github.com/Autarquico/codeflock/internal/controller/store"
 )
 
 // The store logs about its own writes (store.WithTx). Were that logger the

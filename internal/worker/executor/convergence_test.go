@@ -21,20 +21,20 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app"
-	"github.com/Autarquico/codefabric/internal/app/leases"
-	"github.com/Autarquico/codefabric/internal/app/runs"
-	"github.com/Autarquico/codefabric/internal/app/workers"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
-	"github.com/Autarquico/codefabric/internal/worker/gitops"
-	"github.com/Autarquico/codefabric/internal/worker/journal"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app"
+	"github.com/Autarquico/codeflock/internal/app/leases"
+	"github.com/Autarquico/codeflock/internal/app/runs"
+	"github.com/Autarquico/codeflock/internal/app/workers"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/gitops"
+	"github.com/Autarquico/codeflock/internal/worker/journal"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // errLost is an answer that never arrived: what it answered was applied.

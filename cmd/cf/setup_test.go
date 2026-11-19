@@ -9,10 +9,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/support/prompt"
-	"github.com/Autarquico/codefabric/internal/worker/setup"
+	"github.com/Autarquico/codeflock/internal/cli"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/support/prompt"
+	"github.com/Autarquico/codeflock/internal/worker/setup"
 )
 
 // setupRecorder are the steps `cf setup` ran, in order.

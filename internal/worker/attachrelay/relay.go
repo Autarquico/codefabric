@@ -15,12 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/pty"
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/client"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/adapters/pty"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/client"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // Defaults of Options.

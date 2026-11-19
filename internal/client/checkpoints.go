@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"net/url"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // RequestCheckpoint asks for a manual checkpoint of a live Run (`cf run

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/support/treedigest"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/support/treedigest"
 )
 
 // TestScenario_HarnessAdapterFramework_Aislamiento: two Runs with different

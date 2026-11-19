@@ -16,17 +16,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/prompt"
-	"github.com/Autarquico/codefabric/internal/support/redact"
-	"github.com/Autarquico/codefabric/internal/support/svcunit"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
-	"github.com/Autarquico/codefabric/internal/worker/envwrap"
-	"github.com/Autarquico/codefabric/internal/worker/executor"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
-	"github.com/Autarquico/codefabric/internal/worker/secretjit"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/prompt"
+	"github.com/Autarquico/codeflock/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
+	"github.com/Autarquico/codeflock/internal/worker/envwrap"
+	"github.com/Autarquico/codeflock/internal/worker/executor"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/secretjit"
 )
 
 // Command is the part of `cf worker` that is the daemon's: join and run. The

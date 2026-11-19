@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strconv"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 // ApplyWorkflow orders a Worker to apply a Workflow to a harness. It always

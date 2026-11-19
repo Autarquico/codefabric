@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/worker/journal"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/worker/journal"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // output is the output.log side as the degrader sees it: a number of unsent

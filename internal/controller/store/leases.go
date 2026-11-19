@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // ErrNoRowChanged is returned by a compare-and-set that matched no row. The

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
 )
 
 // Vault is a secrets.Vault in memory that can be locked, and whose items a

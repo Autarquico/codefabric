@@ -3,7 +3,7 @@ package v1
 import (
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Workflows (§8.9) are versioned sets of native harness configuration. Their

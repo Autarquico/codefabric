@@ -17,8 +17,8 @@ import (
 
 	"github.com/pressly/goose/v3"
 
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 var epoch0 = time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)

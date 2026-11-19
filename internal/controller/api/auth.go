@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // route says who may call a pattern. An empty allow list means anonymous.

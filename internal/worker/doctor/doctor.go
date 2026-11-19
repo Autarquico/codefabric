@@ -16,13 +16,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
-	"github.com/Autarquico/codefabric/internal/adapters/runtime/tmux"
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/worker/globalapply"
-	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/adapters/runtime/tmux"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/worker/globalapply"
+	"github.com/Autarquico/codeflock/internal/worker/sysinfo"
 )
 
 // ClaudeKeychainItem is where Claude Code keeps its login on macOS.

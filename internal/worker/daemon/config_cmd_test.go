@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
 )
 
 func TestWorkerConfigSet_DiskMinFreeKeepsTheOtherSettings(t *testing.T) {

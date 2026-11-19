@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // withStructuredInput keeps the announcement of structured-input:v1 only if the

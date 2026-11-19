@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"strconv"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // OutputQuery selects output of a Run: Tail (the last bytes) or Offset (from a

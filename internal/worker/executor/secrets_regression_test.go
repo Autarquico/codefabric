@@ -5,8 +5,8 @@ package executor
 import (
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // Directed regressions of what the properties of the secrets found (T18): each

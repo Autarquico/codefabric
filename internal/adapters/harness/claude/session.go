@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 var _ harness.SessionPorter = Adapter{}

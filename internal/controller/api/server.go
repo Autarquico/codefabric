@@ -11,12 +11,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/app"
-	"github.com/Autarquico/codefabric/internal/buildinfo"
-	"github.com/Autarquico/codefabric/internal/controller/attachhub"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/controller/relay"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/app"
+	"github.com/Autarquico/codeflock/internal/buildinfo"
+	"github.com/Autarquico/codeflock/internal/controller/attachhub"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/controller/relay"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // Limits that keep a slow or silent peer from holding a connection forever.

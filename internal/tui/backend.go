@@ -5,10 +5,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/cli/actions"
-	"github.com/Autarquico/codefabric/internal/client"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/cli"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
+	"github.com/Autarquico/codeflock/internal/client"
 )
 
 // Backend is what the views ask of the Controller besides the feeds: the

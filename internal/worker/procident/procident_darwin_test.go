@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Autarquico/codefabric/internal/worker/procident"
+	"github.com/Autarquico/codeflock/internal/worker/procident"
 )
 
 // A token recorded before the boot session uuid carries kern.boottime, which

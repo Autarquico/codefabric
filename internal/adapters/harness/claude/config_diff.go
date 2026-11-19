@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // DiffConfig compares snap with ~/.claude and ~/.claude.json: a component

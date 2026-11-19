@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/client"
+	"github.com/Autarquico/codeflock/internal/client"
 )
 
 // terminalStream is a stream that says whether it is a terminal.

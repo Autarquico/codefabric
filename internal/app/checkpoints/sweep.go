@@ -7,9 +7,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/app/mutation"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/app/mutation"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 var systemActor = domain.ActorRef{Kind: domain.ActorSystem, ID: "controller"}

@@ -39,7 +39,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // clockOrReal is the clock a zero value runs on.

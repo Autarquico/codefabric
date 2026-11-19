@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // ErrConfigLockHeld is returned when a lease cannot take the configuration lock

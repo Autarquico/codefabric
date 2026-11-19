@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // The status of a shell is the person's: Ctrl-] and a clean exit are 0, any other

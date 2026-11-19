@@ -3,7 +3,7 @@ package buildinfo
 
 import "runtime/debug"
 
-// Set at link time via -ldflags "-X github.com/Autarquico/codefabric/internal/buildinfo.version=...".
+// Set at link time via -ldflags "-X github.com/Autarquico/codeflock/internal/buildinfo.version=...".
 var (
 	version = "dev"
 	commit  = ""

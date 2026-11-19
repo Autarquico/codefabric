@@ -12,9 +12,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	supscreen "github.com/Autarquico/codefabric/internal/support/screen"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	supscreen "github.com/Autarquico/codeflock/internal/support/screen"
 )
 
 // The live view (spec live-attach): the panel of the Tasks and Runs views and

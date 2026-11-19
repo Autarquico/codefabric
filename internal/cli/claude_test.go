@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func runClaude(t *testing.T, args ...string) (code int, stdout, stderr string) {

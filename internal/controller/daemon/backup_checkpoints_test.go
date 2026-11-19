@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/controller/blob"
-	"github.com/Autarquico/codefabric/internal/controller/daemon"
-	"github.com/Autarquico/codefabric/internal/controller/relay"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/support/gittest"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/controller/blob"
+	"github.com/Autarquico/codeflock/internal/controller/daemon"
+	"github.com/Autarquico/codeflock/internal/controller/relay"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/gittest"
 )
 
 type plantedCheckpoint struct {

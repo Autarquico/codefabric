@@ -1,6 +1,6 @@
 package v1
 
-import "github.com/Autarquico/codefabric/internal/domain"
+import "github.com/Autarquico/codeflock/internal/domain"
 
 // RunMoveRequest is the body of POST /v1/worker/runs/{run}/move: the Worker of a
 // Run asks, for the Run, to move its Task to the Worker named Worker (`/handto`

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // LeaseByRunEpoch is the lease a Run was given under epoch; ErrNotFound if

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func (f *leaseFixture) move(id string, run domain.ID) Move {

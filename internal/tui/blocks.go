@@ -8,7 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/Autarquico/codefabric/internal/cli/actions"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
 )
 
 // The building blocks of the list/detail views: a filterable list, a field

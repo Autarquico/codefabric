@@ -16,16 +16,16 @@ import (
 	"time"
 	"unicode/utf8"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/input"
-	"github.com/Autarquico/codefabric/internal/app/refs"
-	"github.com/Autarquico/codefabric/internal/app/stream"
-	"github.com/Autarquico/codefabric/internal/controller/eventbus"
-	"github.com/Autarquico/codefabric/internal/controller/pki"
-	"github.com/Autarquico/codefabric/internal/controller/store"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/support/slogtee"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/input"
+	"github.com/Autarquico/codeflock/internal/app/refs"
+	"github.com/Autarquico/codeflock/internal/app/stream"
+	"github.com/Autarquico/codeflock/internal/controller/eventbus"
+	"github.com/Autarquico/codeflock/internal/controller/pki"
+	"github.com/Autarquico/codeflock/internal/controller/store"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/slogtee"
 )
 
 // Service runs the log use cases. Every write of the logs goes through it, so

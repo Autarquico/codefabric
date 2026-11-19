@@ -4,8 +4,8 @@
 package setup
 
 import (
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
 )
 
 // Progress is where the wizard stopped and its answers.

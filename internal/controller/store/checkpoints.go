@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Checkpoint is a stored checkpoint of a Run (§23.1): the domain's, plus the

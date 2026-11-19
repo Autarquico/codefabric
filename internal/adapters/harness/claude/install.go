@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // InstallScript is the official installer of Claude Code.

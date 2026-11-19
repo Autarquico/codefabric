@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
 )
 
 // A Worker reads the answer of a heartbeat as it reads any other: a field it

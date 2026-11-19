@@ -1,6 +1,6 @@
 package v1
 
-import "github.com/Autarquico/codefabric/internal/domain"
+import "github.com/Autarquico/codeflock/internal/domain"
 
 // Limits of the activity tail (GET /v1/overview?activity=N).
 const (

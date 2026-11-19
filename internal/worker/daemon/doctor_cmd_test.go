@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/cli"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/worker/daemon"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
-	"github.com/Autarquico/codefabric/internal/worker/setup"
+	"github.com/Autarquico/codeflock/internal/cli"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/worker/daemon"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
+	"github.com/Autarquico/codeflock/internal/worker/setup"
 )
 
 // doctorMachine is a machine whose PATH holds only the stubs given: no real

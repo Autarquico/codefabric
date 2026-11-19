@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 const cutValue = "ghp-cut-sentinel-0123456789abcdef0123456789abcdef0123456789abcdef"

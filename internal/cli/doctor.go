@@ -15,9 +15,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // sshProbeTimeout bounds the connection of the probe (and the probe as a whole).

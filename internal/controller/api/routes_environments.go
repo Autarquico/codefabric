@@ -3,8 +3,8 @@ package api
 import (
 	"net/http"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/environments"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/environments"
 )
 
 // maxEnvironmentBytes bounds an apply body: a definition within the domain's

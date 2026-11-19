@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
-	"github.com/Autarquico/codefabric/internal/adapters/secrets/secretstest"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/worker/daemon"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	secretsfile "github.com/Autarquico/codeflock/internal/adapters/secrets/file"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets/secretstest"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/worker/daemon"
 )
 
 func secretRefs(w v1.Worker) []string {

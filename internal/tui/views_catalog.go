@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/cli/actions"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/cli/actions"
 )
 
 // Workflows and Projects (§19.4): what is versioned and what it is applied to,

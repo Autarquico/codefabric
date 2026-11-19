@@ -7,8 +7,8 @@ import (
 	"path"
 	"strings"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
-	"github.com/Autarquico/codefabric/internal/domain"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // ErrNotAttachable is returned for a handle or binary that this package would

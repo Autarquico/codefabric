@@ -3,9 +3,9 @@ package checkpoints
 import (
 	"context"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/app/refs"
-	"github.com/Autarquico/codefabric/internal/controller/store"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/app/refs"
+	"github.com/Autarquico/codeflock/internal/controller/store"
 )
 
 // OfRun lists the published checkpoints of the Run a reference points to, by seq.

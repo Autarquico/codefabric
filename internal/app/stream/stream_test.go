@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/app/stream"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/app/stream"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 type result struct {

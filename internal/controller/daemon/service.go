@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/svcunit"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
 )
 
 // ServiceOptions parameterise InstallService and UninstallService.

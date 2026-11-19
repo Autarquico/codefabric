@@ -3,7 +3,7 @@ package tmux
 import (
 	"testing"
 
-	cfruntime "github.com/Autarquico/codefabric/internal/adapters/runtime"
+	cfruntime "github.com/Autarquico/codeflock/internal/adapters/runtime"
 )
 
 // Only the absence of a server means there are no sessions: any other failure

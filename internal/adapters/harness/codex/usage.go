@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
 )
 
 // CollectUsage reads the usage of the Run from its events file. A Run that

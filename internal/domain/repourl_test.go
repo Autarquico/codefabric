@@ -3,7 +3,7 @@ package domain_test
 import (
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func TestValidRepoURL_AcceptsTheAllowlist(t *testing.T) {

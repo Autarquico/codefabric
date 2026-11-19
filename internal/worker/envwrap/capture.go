@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/support/redact"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
 )
 
 // defaultDrainWait is how long the copies of a script get, after it ended, to

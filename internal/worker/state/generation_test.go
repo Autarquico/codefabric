@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 func TestStartGeneration_EachRunTakesTheNextAndItSurvivesReopening(t *testing.T) {

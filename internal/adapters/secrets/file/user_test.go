@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func userOf(t *testing.T, s *Store, ref string) string {

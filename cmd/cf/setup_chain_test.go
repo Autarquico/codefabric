@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/support/prompt"
+	"github.com/Autarquico/codeflock/internal/support/prompt"
 )
 
 // chained runs `cf setup --role both` with the real runCommand and the real

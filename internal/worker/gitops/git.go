@@ -21,11 +21,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/support/gitbin"
-	"github.com/Autarquico/codefabric/internal/support/procgroup"
-	"github.com/Autarquico/codefabric/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/gitbin"
+	"github.com/Autarquico/codeflock/internal/support/procgroup"
+	"github.com/Autarquico/codeflock/internal/support/redact"
 )
 
 // Deadlines of the git children. They are on contexts in real time: they bound

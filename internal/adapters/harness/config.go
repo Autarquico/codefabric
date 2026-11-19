@@ -3,7 +3,7 @@ package harness
 import (
 	"io/fs"
 
-	"github.com/Autarquico/codefabric/internal/support/treedigest"
+	"github.com/Autarquico/codeflock/internal/support/treedigest"
 )
 
 // NativeSnapshot is the native configuration of a harness, as components

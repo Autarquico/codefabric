@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/worker/host"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/worker/host"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // recoverRuns brings back what the previous daemon left (§6.4). It runs before the

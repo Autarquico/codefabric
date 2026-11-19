@@ -3,7 +3,7 @@ package v1
 import (
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // WorkerSettings is what a machine contributes as a Worker, chosen when it

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // SegmentBytes is the size at which the hot bytes of an output are sealed into

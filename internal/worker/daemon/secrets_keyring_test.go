@@ -15,16 +15,16 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/localhost"
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	secretsfile "github.com/Autarquico/codefabric/internal/adapters/secrets/file"
-	"github.com/Autarquico/codefabric/internal/adapters/secrets/secretstest"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
-	"github.com/Autarquico/codefabric/internal/worker/sysinfo"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/localhost"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	secretsfile "github.com/Autarquico/codeflock/internal/adapters/secrets/file"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets/secretstest"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
+	"github.com/Autarquico/codeflock/internal/worker/sysinfo"
 )
 
 const keyringValue = "kr-sentinel-3d9f1c7a-never-in-the-catalog"

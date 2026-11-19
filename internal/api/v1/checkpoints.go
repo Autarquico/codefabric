@@ -3,7 +3,7 @@ package v1
 import (
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // CheckpointCommand orders the Worker of the live lease of a Run to capture a

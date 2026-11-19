@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 func TestMigration0214_KeepsTheRowsThatExistedWithNoSessionAndStoresNewOnes(t *testing.T) {

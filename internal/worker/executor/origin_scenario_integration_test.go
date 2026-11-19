@@ -18,14 +18,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/support/gittest"
-	"github.com/Autarquico/codefabric/internal/testutil/gitorigin"
-	"github.com/Autarquico/codefabric/internal/worker/execwrap"
-	"github.com/Autarquico/codefabric/internal/worker/gitops"
-	"github.com/Autarquico/codefabric/internal/worker/secretjit"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/support/gittest"
+	"github.com/Autarquico/codeflock/internal/testutil/gitorigin"
+	"github.com/Autarquico/codeflock/internal/worker/execwrap"
+	"github.com/Autarquico/codeflock/internal/worker/gitops"
+	"github.com/Autarquico/codeflock/internal/worker/secretjit"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // These scenarios run the executor of a Worker over the real gitops, the real

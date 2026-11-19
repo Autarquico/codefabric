@@ -8,9 +8,9 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness"
-	"github.com/Autarquico/codefabric/internal/adapters/harness/codex"
-	"github.com/Autarquico/codefabric/internal/worker/host"
+	"github.com/Autarquico/codeflock/internal/adapters/harness"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/codex"
+	"github.com/Autarquico/codeflock/internal/worker/host"
 )
 
 // awkwardValues are secrets that every TOML string form writes differently.

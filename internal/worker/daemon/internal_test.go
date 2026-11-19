@@ -10,12 +10,12 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/Autarquico/codefabric/internal/adapters/harness/claude"
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/config"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/clock"
-	"github.com/Autarquico/codefabric/internal/worker/doctor"
+	"github.com/Autarquico/codeflock/internal/adapters/harness/claude"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/config"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/worker/doctor"
 )
 
 func TestBackoffGrowsFromATenthOfTheIntervalToTheInterval(t *testing.T) {

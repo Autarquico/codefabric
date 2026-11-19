@@ -3,7 +3,7 @@ package harness
 import (
 	"context"
 
-	"github.com/Autarquico/codefabric/internal/support/clock"
+	"github.com/Autarquico/codeflock/internal/support/clock"
 )
 
 // Host is the local machine an adapter acts on (§7.2): the daemon of the

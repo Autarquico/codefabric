@@ -4,8 +4,8 @@ import (
 	"io"
 	"net/http"
 
-	v1 "github.com/Autarquico/codefabric/internal/api/v1"
-	"github.com/Autarquico/codefabric/internal/domain"
+	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // registerSeedRoutes adds how a client seeds a Run with its own session

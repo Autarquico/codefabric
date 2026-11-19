@@ -7,12 +7,12 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Autarquico/codefabric/internal/adapters/secrets"
-	"github.com/Autarquico/codefabric/internal/domain"
-	"github.com/Autarquico/codefabric/internal/support/redact"
-	"github.com/Autarquico/codefabric/internal/worker/gitops"
-	"github.com/Autarquico/codefabric/internal/worker/secretjit"
-	"github.com/Autarquico/codefabric/internal/worker/state"
+	"github.com/Autarquico/codeflock/internal/adapters/secrets"
+	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/redact"
+	"github.com/Autarquico/codeflock/internal/worker/gitops"
+	"github.com/Autarquico/codeflock/internal/worker/secretjit"
+	"github.com/Autarquico/codeflock/internal/worker/state"
 )
 
 // The credential of the origin (§16.7). The Run froze the ref and the URL it

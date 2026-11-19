@@ -15,7 +15,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/Autarquico/codefabric/internal/domain"
+	"github.com/Autarquico/codeflock/internal/domain"
 )
 
 // Backends: where a Store keeps the value of a secret. Backend names the one

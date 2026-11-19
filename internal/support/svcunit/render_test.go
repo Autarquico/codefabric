@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autarquico/codefabric/internal/support/svcunit"
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
