@@ -41,8 +41,8 @@ func TestKeysBefore_TheDetachKeyIsTheOneGiven(t *testing.T) {
 // unreadable one is an error and not a silent default.
 func TestDetachKeyOf_ComesFromTheClientConfig(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CF_CONFIG_DIR", dir)
-	t.Setenv("CF_DATA_DIR", t.TempDir())
+	t.Setenv("CFLK_CONFIG_DIR", dir)
+	t.Setenv("CFLK_DATA_DIR", t.TempDir())
 	if key, name, err := detachKeyOf(); err != nil || key != 0x1d || name != "Ctrl-]" {
 		t.Fatalf("no config: %#x %q %v, want Ctrl-]", key, name, err)
 	}

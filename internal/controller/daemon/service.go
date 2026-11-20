@@ -55,7 +55,7 @@ func InstallService(ctx context.Context, o ServiceOptions) (svcunit.Result, erro
 	if err := o.launchdPlan(); err != nil {
 		return svcunit.Result{}, err
 	}
-	env, spec, warnings, err := controllerService(o)
+	env, _, _, err := controllerService(o)
 	if err != nil {
 		return svcunit.Result{}, err
 	}
@@ -69,7 +69,8 @@ func InstallService(ctx context.Context, o ServiceOptions) (svcunit.Result, erro
 	if o.Paths.ConfigDir, o.Paths.DataDir, err = o.Mover.Adopt(ctx, env, o.Paths.ConfigDir, o.Paths.DataDir, nil); err != nil {
 		return svcunit.Result{}, err
 	}
-	if _, spec, warnings, err = controllerService(o); err != nil {
+	_, spec, warnings, err := controllerService(o)
+	if err != nil {
 		return svcunit.Result{}, err
 	}
 	res, err = svcunit.Install(ctx, env, spec)

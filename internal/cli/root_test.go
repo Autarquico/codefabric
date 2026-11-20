@@ -46,8 +46,8 @@ func errorOf(t *testing.T, stdout string) map[string]any {
 
 func isolatedMachine(t *testing.T) {
 	t.Helper()
-	t.Setenv("CF_CONFIG_DIR", t.TempDir())
-	t.Setenv("CF_DATA_DIR", t.TempDir())
+	t.Setenv("CFLK_CONFIG_DIR", t.TempDir())
+	t.Setenv("CFLK_DATA_DIR", t.TempDir())
 }
 
 func TestApiSdkCliStatus_UsageErrorsAreInvalidRequestWithExit2(t *testing.T) {

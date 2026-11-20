@@ -70,7 +70,7 @@ func startController(t *testing.T, host config.Paths) *controllerProcess {
 	for attempt := 0; ; attempt++ {
 		c := &controllerProcess{t: t, out: &syncBuffer{}, done: make(chan struct{})}
 		c.cmd = exec.CommandContext(context.WithoutCancel(t.Context()), exe, "controller", "run") //nolint:gosec // this very test binary
-		c.cmd.Env = append(os.Environ(), asCF+"=1", "CF_CONFIG_DIR="+host.ConfigDir, "CF_DATA_DIR="+host.DataDir)
+		c.cmd.Env = append(os.Environ(), asCF+"=1", "CFLK_CONFIG_DIR="+host.ConfigDir, "CFLK_DATA_DIR="+host.DataDir)
 		c.cmd.Stdout, c.cmd.Stderr = c.out, c.out
 		if err := c.cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -183,7 +183,7 @@ func (b *reconcileBox) startWith(extra ...string) *daemonProcess {
 	}
 	d := &daemonProcess{t: b.t, out: &syncBuffer{}, done: make(chan struct{})}
 	d.cmd = exec.CommandContext(context.WithoutCancel(b.t.Context()), exe, append([]string{"worker", "run", "--heartbeat-interval", heartbeatEvery}, extra...)...) //nolint:gosec // this very test binary
-	d.cmd.Env = append(os.Environ(), asCF+"=1", "CF_CONFIG_DIR="+b.box.ConfigDir, "CF_DATA_DIR="+b.box.DataDir)
+	d.cmd.Env = append(os.Environ(), asCF+"=1", "CFLK_CONFIG_DIR="+b.box.ConfigDir, "CFLK_DATA_DIR="+b.box.DataDir)
 	d.cmd.Stdout, d.cmd.Stderr = d.out, d.out
 	if err := d.cmd.Start(); err != nil {
 		b.t.Fatal(err)

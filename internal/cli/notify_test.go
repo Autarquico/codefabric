@@ -18,7 +18,7 @@ type workingNative struct{ shown int }
 func (w *workingNative) Show(context.Context, string, string) error { w.shown++; return nil }
 
 func TestNotifyTestReportsTheRealResult(t *testing.T) {
-	t.Setenv("CF_CONFIG_DIR", t.TempDir())
+	t.Setenv("CFLK_CONFIG_DIR", t.TempDir())
 	run := func(opts Options) (int, string, string) {
 		var out, errOut strings.Builder
 		code := RunContextWith(context.Background(), opts, []string{"notify", "test"}, strings.NewReader(""), &out, &errOut)

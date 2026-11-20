@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 
 	if out := os.Getenv(echoTo); out != "" {
 		env := map[string]string{}
-		for _, key := range []string{"CF_CONFIG_DIR", "CF_DATA_DIR", "PATH", "TMUX_TMPDIR"} {
+		for _, key := range []string{"CFLK_CONFIG_DIR", "CFLK_DATA_DIR", "PATH", "TMUX_TMPDIR"} {
 			env[key] = os.Getenv(key)
 		}
 		raw, _ := json.Marshal(echoed{Args: os.Args[1:], Env: env})

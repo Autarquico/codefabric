@@ -61,8 +61,8 @@ func machine(t *testing.T) config.Paths {
 
 func use(t *testing.T, p config.Paths) {
 	t.Helper()
-	t.Setenv("CF_CONFIG_DIR", p.ConfigDir)
-	t.Setenv("CF_DATA_DIR", p.DataDir)
+	t.Setenv("CFLK_CONFIG_DIR", p.ConfigDir)
+	t.Setenv("CFLK_DATA_DIR", p.DataDir)
 }
 
 var (

@@ -133,8 +133,8 @@ func TestDoctor_AFailingWorkerOnlyWarns(t *testing.T) {
 
 func TestDoctor_ProbesTheSSHTargetOverrideOfAttach(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CF_CONFIG_DIR", dir)
-	t.Setenv("CF_DATA_DIR", t.TempDir())
+	t.Setenv("CFLK_CONFIG_DIR", dir)
+	t.Setenv("CFLK_DATA_DIR", t.TempDir())
 	paths, err := config.ResolveFromEnv()
 	if err != nil {
 		t.Fatal(err)

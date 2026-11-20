@@ -83,8 +83,13 @@ const lockName = ".cflk-migrate.lock"
 func (m Mover) Move(pairs []Pair) (Result, error) {
 	m = m.withDefaults()
 	// Planning again under the lock: another process may have moved meanwhile.
+	var seen error
 	for range 3 {
 		p, err := m.plan(pairs)
+		if changing(err) {
+			seen = err
+			continue
+		}
 		if err != nil || len(p.todo) == 0 {
 			return Result{AlreadyMoved: p.done}, err
 		}
@@ -99,11 +104,24 @@ func (m Mover) Move(pairs []Pair) (Result, error) {
 			return Result{Moved: moved, AlreadyMoved: again.done}, err
 		}
 		release()
-		if err != nil {
+		if err != nil && !changing(err) {
 			return Result{}, err
 		}
+		seen = err
+	}
+	if seen != nil {
+		return Result{}, seen
 	}
 	return Result{}, errors.New("migrate: the directories keep changing under another process")
+}
+
+// changing says whether a plan failed for what another process moving the
+// directories at that moment looks like: a directory that vanished while it
+// was measured, or one seen in both places because it moved between the two
+// looks. A plan that fails so again and again is what it says.
+func changing(err error) bool {
+	var clash *ClashError
+	return errors.Is(err, os.ErrNotExist) || errors.As(err, &clash)
 }
 
 // Todo are the pairs Move would move now: the old directory is there and the

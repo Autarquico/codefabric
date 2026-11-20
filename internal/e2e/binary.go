@@ -107,8 +107,8 @@ func childEnv(dirs boxDirs, extra ...string) []string {
 	set("LC_ALL", "C")
 	set("HOME", dirs.home)
 	set("TERM", "xterm-256color")
-	set("CF_CONFIG_DIR", dirs.config)
-	set("CF_DATA_DIR", dirs.data)
+	set("CFLK_CONFIG_DIR", dirs.config)
+	set("CFLK_DATA_DIR", dirs.data)
 	set("TMUX_TMPDIR", dirs.tmux)
 	if race {
 		// A binary built with -race waits a second before it exits; every
