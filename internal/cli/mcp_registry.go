@@ -23,6 +23,42 @@ type mcpRegistration struct {
 	// Unsupported names the other settings of the entry (cwd, env_vars, ...):
 	// `mcp add` cannot write them, so a move to another name would lose them.
 	Unsupported []string
+	// CustomTimeout: the entry has a tool_timeout_sec other than the one install sets.
+	CustomTimeout bool
+}
+
+// ownSettings are the settings of the entry that `mcp add` would lose.
+func (r mcpRegistration) ownSettings() []string {
+	out := slices.Clone(r.Unsupported)
+	if r.CustomTimeout {
+		out = append(out, "tool_timeout_sec")
+	}
+	return out
+}
+
+func (r mcpRegistration) hasSettingsAddCannotWrite() bool { return len(r.ownSettings()) > 0 }
+
+// notMovableTo says, empty when it can, what of r (the cf) would be lost by
+// retiring it in favour of the cflk registration: settings `mcp add` cannot
+// write, or environment variables that cflk does not have with the same value.
+func (r mcpRegistration) notMovableTo(cflk mcpRegistration, hasCflk bool) string {
+	if own := r.ownSettings(); len(own) > 0 {
+		return "settings (" + strings.Join(own, ", ") + ")"
+	}
+	if !hasCflk {
+		return ""
+	}
+	var missing []string
+	for key, value := range r.Env {
+		if got, ok := cflk.Env[key]; !ok || got != value {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		slices.Sort(missing)
+		return "environment variables that cflk does not have (" + strings.Join(missing, ", ") + ")"
+	}
+	return ""
 }
 
 // mcpServeArgs are the arguments after the binary that `mcp install` registers.
@@ -47,7 +83,26 @@ func (r mcpRegistration) isCodeFlock(bin string) bool {
 	return r.Command == bin || isCodeFlockExecutable(r.Command, bin)
 }
 
+// isStaleCodeFlock: an absolute path called cf or cflk that no longer exists
+// (the install directory changed). Its arguments are the ones mcp install
+// writes, so it is ours and expired. A relative command not found in PATH is not.
+func isStaleCodeFlock(command string) bool {
+	if !filepath.IsAbs(command) {
+		return false
+	}
+	switch strings.TrimSuffix(strings.ToLower(filepath.Base(command)), ".exe") {
+	case "cf", "cflk":
+	default:
+		return false
+	}
+	_, err := os.Lstat(command)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
 func isCodeFlockExecutable(command, bin string) bool {
+	if isStaleCodeFlock(command) {
+		return true
+	}
 	path, err := exec.LookPath(command)
 	if err != nil {
 		return false
@@ -182,6 +237,9 @@ func parseCodexRegistrations(data []byte) (map[string]mcpRegistration, error) {
 			if reg.Env = stringMap(env); reg.Env == nil {
 				reg.Unsupported = append(reg.Unsupported, "env")
 			}
+		}
+		if timeout, ok := fields["tool_timeout_sec"]; ok && timeout != int64(codexToolTimeoutSec) {
+			reg.CustomTimeout = true
 		}
 		reg.Unsupported = append(reg.Unsupported, unknownKeys(fields, "command", "args", "env", "tool_timeout_sec")...)
 		servers[name] = reg

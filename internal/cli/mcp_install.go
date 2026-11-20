@@ -216,20 +216,30 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 	}
 	current, hasCurrent := registered[mcpServerName]
 	legacy, hasLegacy := registered[legacyMCPServerName]
+	keepCurrent := hasCurrent && current.hasSettingsAddCannotWrite()
+	if keepCurrent {
+		res.Notes = append(res.Notes, fmt.Sprintf("the %s server %q has settings that `%s mcp add` cannot write (%s), so it was left as it is: change its profile by hand",
+			tool.name, mcpServerName, tool.name, strings.Join(current.ownSettings(), ", ")))
+	}
 	replacesLegacy := hasLegacy && legacy.isCodeFlock(bin)
-	if replacesLegacy && len(legacy.Unsupported) > 0 {
-		replacesLegacy = false
-		res.Notes = append(res.Notes, fmt.Sprintf("the %s server %q has settings that `%s mcp add` cannot write (%s), so it was left registered: move them to %q by hand and remove it",
-			tool.name, legacyMCPServerName, tool.name, strings.Join(legacy.Unsupported, ", "), mcpServerName))
+	if replacesLegacy {
+		if reason := legacy.notMovableTo(current, hasCurrent); reason != "" {
+			replacesLegacy = false
+			res.Notes = append(res.Notes, fmt.Sprintf("the %s server %q has %s that `%s mcp add` cannot move to %q, so it was left registered: move them by hand and remove it",
+				tool.name, legacyMCPServerName, reason, tool.name, mcpServerName))
+		}
 	}
 	env := current.Env
 	if !hasCurrent && replacesLegacy {
 		env = legacy.Env
 	}
 	remove, add := removeArgs(tool, f.scope, mcpServerName), addArgs(tool, f.scope, bin, mcpServeArgs(f.profile), env)
-	res.Commands = [][]string{remove, maskEnv(add)}
+	if !keepCurrent {
+		res.Commands = [][]string{remove, maskEnv(add)}
+	}
+	legacyRemove := removeArgs(tool, f.scope, legacyMCPServerName)
 	if replacesLegacy {
-		res.Commands = append(res.Commands, removeArgs(tool, f.scope, legacyMCPServerName))
+		res.Commands = append(res.Commands, legacyRemove)
 	}
 	if tool.userServer && f.scope == "project" {
 		res.Notes = append(res.Notes, "Codex has no project scope for MCP servers: the server is registered for the user, only the skill goes to the repository")
@@ -242,7 +252,9 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 		if err := refuseSymlinkedConfig(cfgPath); err != nil {
 			return res, err
 		}
-		res.Timeout = &mcpTimeout{Path: cfgPath, Seconds: codexToolTimeoutSec, State: "would set"}
+		if !keepCurrent {
+			res.Timeout = &mcpTimeout{Path: cfgPath, Seconds: codexToolTimeoutSec, State: "would set"}
+		}
 	}
 	skill, err := renderCodeflockSkill(buildinfo.Get().Version)
 	if err != nil {
@@ -254,39 +266,45 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 	}
 	if f.dryRun {
 		res.Skill.State = "would write"
+		if keepSkill {
+			res.Skill.State = "kept"
+			res.Notes = append(res.Notes, foreignSkillNote(skillPath, true))
+		}
 		return res, nil
 	}
 	dir := cliDir(tool, f.scope, base)
-	if err := runRemove(ctx, cliPath, dir, remove); err != nil {
-		return res, err
-	}
-	register := func() error {
-		if err := runCLI(ctx, cliPath, dir, add); err != nil {
-			return err
-		}
-		if tool.configTimeout {
-			changed, err := setCodexToolTimeout(cfgPath, codexToolTimeoutSec)
-			if err != nil {
-				return err
-			}
-			res.Timeout.State = changedState(changed, "set", "unchanged")
-		}
-		return verifyRegistration(tool, f, base, bin, env)
-	}
-	if err := register(); err != nil {
-		if !hasCurrent {
+	if !keepCurrent {
+		if err := runRemove(ctx, cliPath, dir, remove); err != nil {
 			return res, err
 		}
-		return res, putBack(ctx, tool, f.scope, cliPath, dir, cfgPath, current, err)
+		register := func() error {
+			if err := runCLI(ctx, cliPath, dir, add); err != nil {
+				return err
+			}
+			if tool.configTimeout {
+				changed, err := setCodexToolTimeout(cfgPath, codexToolTimeoutSec)
+				if err != nil {
+					return err
+				}
+				res.Timeout.State = changedState(changed, "set", "unchanged")
+			}
+			return verifyRegistration(tool, f, base, bin, env)
+		}
+		if err := register(); err != nil {
+			if !hasCurrent {
+				return res, err
+			}
+			return res, putBack(ctx, tool, f.scope, base, cliPath, dir, cfgPath, current, err)
+		}
 	}
 	if replacesLegacy {
-		if err := runRemove(ctx, cliPath, dir, res.Commands[2]); err != nil {
+		if err := runRemove(ctx, cliPath, dir, legacyRemove); err != nil {
 			return res, err
 		}
 	}
 	if keepSkill {
 		res.Skill.State = "kept"
-		res.Notes = append(res.Notes, fmt.Sprintf("%s is a skill that cflk did not write, so it was left alone; delete it and run this again to install the codeflock skill", skillPath))
+		res.Notes = append(res.Notes, foreignSkillNote(skillPath, true))
 	} else if res.Skill.State, err = writeSkill(skillPath, skill); err != nil {
 		return res, err
 	}
@@ -294,15 +312,39 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 	return res, nil
 }
 
+func foreignSkillNote(path string, install bool) string {
+	note := path + " is a skill that cflk did not write, so it was left alone"
+	if install {
+		note += "; delete it and run this again to install the codeflock skill"
+	}
+	return note
+}
+
 // putBack registers again what install removed, when the new registration did
-// not come out: it must not leave the user without the server they had.
-func putBack(ctx context.Context, tool mcpTool, scope, cliPath, dir, cfgPath string, previous mcpRegistration, cause error) error {
+// not come out: it must not leave the user without the server they had. It
+// reads the registration back and only says it was put back when it is the one
+// that was there.
+func putBack(ctx context.Context, tool mcpTool, scope, base, cliPath, dir, cfgPath string, previous mcpRegistration, cause error) error {
 	argv := addArgs(tool, scope, previous.Command, previous.Args, previous.Env)
 	if err := runCLI(ctx, cliPath, dir, argv); err != nil {
 		return fmt.Errorf("%w (putting back the previous %q registration failed too: %w)", cause, mcpServerName, err)
 	}
 	if tool.configTimeout {
-		_, _ = setCodexToolTimeout(cfgPath, codexToolTimeoutSec)
+		if _, err := setCodexToolTimeout(cfgPath, codexToolTimeoutSec); err != nil {
+			cause = fmt.Errorf("%w (setting its tool_timeout_sec failed: %w)", cause, err)
+		}
+	}
+	registered, err := readRegistrations(tool, scope, base)
+	if err != nil {
+		return fmt.Errorf("%w (the previous %q registration was put back, but reading it back failed: %w)", cause, mcpServerName, err)
+	}
+	got, ok := registered[mcpServerName]
+	if !ok {
+		return fmt.Errorf("%w (the previous %q registration was NOT put back: no %q server is registered now)", cause, mcpServerName, mcpServerName)
+	}
+	if got.Command != previous.Command || !slices.Equal(got.Args, previous.Args) || !maps.Equal(got.Env, previous.Env) {
+		return fmt.Errorf("%w (the previous %q registration was NOT put back as it was: it now launches %s with the arguments %q and the environment variables %v)",
+			cause, mcpServerName, got.Command, got.Args, slices.Sorted(maps.Keys(got.Env)))
 	}
 	return fmt.Errorf("%w (the previous %q registration was put back)", cause, mcpServerName)
 }
@@ -373,7 +415,7 @@ func uninstallMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResu
 		return res, err
 	case foreign:
 		res.Skill.State = "kept"
-		res.Notes = append(res.Notes, fmt.Sprintf("%s is a skill that cflk did not write, so it was left alone", skillPath))
+		res.Notes = append(res.Notes, foreignSkillNote(skillPath, false))
 	default:
 		if res.Skill.State, err = removeSkill(skillPath); err != nil {
 			return res, err
@@ -549,7 +591,23 @@ func runOutput(ctx context.Context, cliPath, dir string, argv []string) (string,
 	cmd := exec.CommandContext(ctx, cliPath, argv[1:]...) //nolint:gosec // cliPath comes from LookPath of a fixed name; the arguments are built here
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
-	return string(out), err
+	return maskEnvValues(string(out), argv), err
+}
+
+// maskEnvValues hides in text every value of the --env flags of argv: a CLI
+// that fails can echo the arguments it was given.
+func maskEnvValues(text string, argv []string) string {
+	var values []string
+	for i := 0; i+1 < len(argv); i++ {
+		if _, value, _ := strings.Cut(argv[i+1], "="); argv[i] == "--env" && value != "" {
+			values = append(values, value)
+		}
+	}
+	slices.SortFunc(values, func(a, b string) int { return len(b) - len(a) })
+	for _, value := range values {
+		text = strings.ReplaceAll(text, value, "***")
+	}
+	return text
 }
 
 // --- skill ---
@@ -662,7 +720,7 @@ func writeSkill(path string, content []byte) (string, error) {
 	return "written", nil
 }
 
-// readRegular reads a file that is not a symlink.
+// readRegular reads a regular file: not a symlink, not a FIFO.
 func readRegular(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -670,6 +728,9 @@ func readRegular(path string) ([]byte, error) {
 	}
 	if info.Mode()&fs.ModeSymlink != 0 {
 		return nil, symlinkError(path)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path) // ReadFile would block on a FIFO
 	}
 	return os.ReadFile(path) //nolint:gosec // a fixed path under the skills directory
 }
