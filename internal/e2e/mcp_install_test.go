@@ -16,41 +16,76 @@ import (
 	"time"
 )
 
-// A fake claude: logs its argv; `remove` of a server that is not there fails
-// the way the real one does.
+// A fake claude: logs its argv and keeps its servers where the real one does,
+// with the command, args and env it was given: ~/.claude.json for the user
+// scope, .mcp.json of the working directory for the project scope. `remove` of
+// a server that is not there fails the way the real one does.
 const mcpFakeClaude = `#!/bin/sh
 echo "claude $*" >> "$FAKE_LOG"
-case "$2" in
-add) /usr/bin/touch "$FAKE_STATE/claude-registered" ;;
+op="$2"; scope="$4"; name="$5"
+if [ "$scope" = project ]; then out="$(pwd -P)/.mcp.json"; else out="$HOME/.claude.json"; fi
+dir="$FAKE_STATE/$scope"
+/bin/mkdir -p "$dir"
+rebuild() {
+	{
+		printf '{"mcpServers":{'
+		sep=""
+		for f in "$dir"/*.json; do
+			[ -e "$f" ] || continue
+			printf '%s' "$sep"
+			/bin/cat "$f"
+			sep=","
+		done
+		printf '}}\n'
+	} > "$out"
+}
+case "$op" in
+add)
+	shift 5
+	env=""
+	while [ "$1" = --env ]; do env="$env${env:+,}\"${2%%=*}\":\"${2#*=}\""; shift 2; done
+	shift
+	cmd="$1"
+	shift
+	args=""
+	for a in "$@"; do args="$args${args:+,}\"$a\""; done
+	printf '"%s":{"type":"stdio","command":"%s","args":[%s],"env":{%s}}' "$name" "$cmd" "$args" "$env" > "$dir/$name.json"
+	rebuild ;;
 remove)
-	if [ -e "$FAKE_STATE/claude-registered" ]; then /bin/rm "$FAKE_STATE/claude-registered"
-	else echo 'No MCP server "cf" in user scope'; exit 1; fi ;;
+	if [ -e "$dir/$name.json" ]; then /bin/rm "$dir/$name.json"; rebuild
+	else echo "No MCP server found with name: $name"; exit 1; fi ;;
 esac
 `
 
-// A fake codex 0.160.1: `add` rewrites the [mcp_servers.cf] table of
+// A fake codex 0.160.1: `add` rewrites the [mcp_servers.<name>] table of
 // $CODEX_HOME/config.toml with command and args on one line each (and so drops
-// any tool_timeout_sec); `remove` deletes the table. Other tables stay. The
-// table goes before the first [projects.*] table, in the middle of the file, as
-// in a config that has trusted projects.
+// any tool_timeout_sec), and --env goes to its [mcp_servers.<name>.env] table;
+// `remove` deletes both. Other tables stay. The table goes before the first
+// [projects.*] table, in the middle of the file, as in a config that has
+// trusted projects.
 const mcpFakeCodex = `#!/bin/sh
 echo "codex $*" >> "$FAKE_LOG"
 cfg="$CODEX_HOME/config.toml"
+name="$3"
 drop() {
 	[ -e "$cfg" ] || return 0
-	/usr/bin/awk '/^\[/ { skip = ($0 == "[mcp_servers.cf]") } !skip' "$cfg" > "$cfg.new" && /bin/mv "$cfg.new" "$cfg"
+	/usr/bin/awk -v t="[mcp_servers.$name]" -v e="[mcp_servers.$name.env]" '/^\[/ { skip = ($0 == t || $0 == e) } !skip' "$cfg" > "$cfg.new" && /bin/mv "$cfg.new" "$cfg"
 }
 case "$2" in
 remove) drop ;;
 add)
 	drop
-	shift 4
+	shift 3
+	env=""
+	while [ "$1" = --env ]; do env="$env${2%%=*} = \"${2#*=}\"\n"; shift 2; done
+	shift
 	cmd="$1"
 	shift
 	args=""
 	for a in "$@"; do args="$args${args:+, }\"$a\""; done
 	[ -e "$cfg" ] || : > "$cfg"
-	printf '[mcp_servers.cf]\ncommand = "%s"\nargs = [%s]\n' "$cmd" "$args" > "$cfg.tbl"
+	printf '[mcp_servers.%s]\ncommand = "%s"\nargs = [%s]\n' "$name" "$cmd" "$args" > "$cfg.tbl"
+	[ -n "$env" ] && { printf '\n[mcp_servers.%s.env]\n' "$name"; printf "$env"; } >> "$cfg.tbl"
 	/usr/bin/awk -v f="$cfg.tbl" 'function emit(  l) { while ((getline l < f) > 0) print l; print "" }
 		/^\[projects\./ && !done { emit(); done = 1 }
 		{ print }
@@ -239,14 +274,14 @@ func TestScenario_MCP_Instalacion_ClaudeUserYProject(t *testing.T) {
 	b.mustCF("mcp", "install", "--claude", "--scope", "project")
 
 	mcpWantCalls(t, b.calls(), []string{
-		"claude mcp remove --scope user cf",
-		"claude mcp add --scope user cf -- " + binary + " mcp serve --profile execute",
-		"claude mcp remove --scope project cf",
-		"claude mcp add --scope project cf -- " + binary + " mcp serve --profile execute",
+		"claude mcp remove --scope user cflk",
+		"claude mcp add --scope user cflk -- " + binary + " mcp serve --profile execute",
+		"claude mcp remove --scope project cflk",
+		"claude mcp add --scope project cflk -- " + binary + " mcp serve --profile execute",
 	})
 	skills := map[string]string{
-		"user":    filepath.Join(b.home, ".claude", "skills", "codefabric", "SKILL.md"),
-		"project": filepath.Join(b.repo, ".claude", "skills", "codefabric", "SKILL.md"),
+		"user":    filepath.Join(b.home, ".claude", "skills", "codeflock", "SKILL.md"),
+		"project": filepath.Join(b.repo, ".claude", "skills", "codeflock", "SKILL.md"),
 	}
 	for scope, path := range skills {
 		if strings.TrimSpace(mcpRead(t, path)) == "" {
@@ -257,6 +292,16 @@ func TestScenario_MCP_Instalacion_ClaudeUserYProject(t *testing.T) {
 		}
 		if got := mcpMode(t, filepath.Dir(path)); got != 0o755 {
 			t.Errorf("scope %s: skill directory mode %o, want 755", scope, got)
+		}
+		if !strings.Contains(mcpRead(t, path), "<!-- cflk-version: ") {
+			t.Errorf("scope %s: the skill at %s has no cflk-version marker", scope, path)
+		}
+	}
+	registries := map[string]string{"user": filepath.Join(b.home, ".claude.json"), "project": filepath.Join(b.repo, ".mcp.json")}
+	for scope, path := range registries {
+		want := `{"mcpServers":{"cflk":{"type":"stdio","command":"` + binary + `","args":["mcp","serve","--profile","execute"],"env":{}}}}`
+		if got := strings.TrimSpace(mcpRead(t, path)); got != want {
+			t.Errorf("scope %s: %s\n got %s\nwant %s", scope, path, got, want)
 		}
 	}
 	if mcpRead(t, skills["user"]) != mcpRead(t, skills["project"]) {
@@ -270,11 +315,11 @@ func TestScenario_MCP_Instalacion_CodexFijaElTimeoutSinTocarOtrasTablas(t *testi
 	b.mustCF("mcp", "install", "--codex")
 
 	mcpWantCalls(t, b.calls(), []string{
-		"codex mcp remove cf",
-		"codex mcp add cf -- " + binary + " mcp serve --profile execute",
+		"codex mcp remove cflk",
+		"codex mcp add cflk -- " + binary + " mcp serve --profile execute",
 	})
 	config := mcpRead(t, b.codexConfig())
-	if got := mcpWithoutTable(config, "[mcp_servers.cf]"); got != mcpOtherTables {
+	if got := mcpWithoutTable(config, "[mcp_servers.cflk]"); got != mcpOtherTables {
 		t.Errorf("the tables the user had changed:\n%s", config)
 	}
 	if got := mcpTable(config, mcpProjectsHeader); !slices.Equal(got, []string{`trust_level = "trusted"`}) {
@@ -285,13 +330,13 @@ func TestScenario_MCP_Instalacion_CodexFijaElTimeoutSinTocarOtrasTablas(t *testi
 		`args = ["mcp", "serve", "--profile", "execute"]`,
 		"tool_timeout_sec = 660",
 	}
-	if got := mcpTable(config, "[mcp_servers.cf]"); !slices.Equal(got, want) {
-		t.Errorf("[mcp_servers.cf]:\n got %q\nwant %q", got, want)
+	if got := mcpTable(config, "[mcp_servers.cflk]"); !slices.Equal(got, want) {
+		t.Errorf("[mcp_servers.cflk]:\n got %q\nwant %q", got, want)
 	}
 	if got := mcpTable(config, "[mcp_servers.other]"); len(got) != 2 {
 		t.Errorf("[mcp_servers.other] = %q", got)
 	}
-	skill := filepath.Join(b.home, ".agents", "skills", "codefabric", "SKILL.md")
+	skill := filepath.Join(b.home, ".agents", "skills", "codeflock", "SKILL.md")
 	if got := mcpMode(t, skill); got != 0o644 {
 		t.Errorf("skill mode %o, want 644", got)
 	}
@@ -304,8 +349,8 @@ func TestScenario_MCP_Instalacion_ReinstalarConOtroPerfilNoDuplicaNiReescribeLaS
 	b := newMCPBox(t, "claude", "codex")
 	b.write(b.codexConfig(), mcpOtherTables)
 	skills := []string{
-		filepath.Join(b.home, ".claude", "skills", "codefabric", "SKILL.md"),
-		filepath.Join(b.home, ".agents", "skills", "codefabric", "SKILL.md"),
+		filepath.Join(b.home, ".claude", "skills", "codeflock", "SKILL.md"),
+		filepath.Join(b.home, ".agents", "skills", "codeflock", "SKILL.md"),
 	}
 	b.mustCF("mcp", "install", "--claude", "--scope", "user")
 	b.mustCF("mcp", "install", "--codex")
@@ -324,26 +369,26 @@ func TestScenario_MCP_Instalacion_ReinstalarConOtroPerfilNoDuplicaNiReescribeLaS
 
 	calls := b.calls()
 	for _, want := range []string{
-		"claude mcp add --scope user cf -- " + binary + " mcp serve --profile read",
-		"codex mcp add cf -- " + binary + " mcp serve --profile read",
+		"claude mcp add --scope user cflk -- " + binary + " mcp serve --profile read",
+		"codex mcp add cflk -- " + binary + " mcp serve --profile read",
 	} {
 		if !slices.Contains(calls, want) {
 			t.Errorf("no call %q in %q", want, calls)
 		}
 	}
 	config := mcpRead(t, b.codexConfig())
-	if n := strings.Count(config, "[mcp_servers.cf]"); n != 1 {
-		t.Fatalf("%d [mcp_servers.cf] tables:\n%s", n, config)
+	if n := strings.Count(config, "[mcp_servers.cflk]"); n != 1 {
+		t.Fatalf("%d [mcp_servers.cflk] tables:\n%s", n, config)
 	}
 	want := []string{
 		`command = "` + binary + `"`,
 		`args = ["mcp", "serve", "--profile", "read"]`,
 		"tool_timeout_sec = 660",
 	}
-	if got := mcpTable(config, "[mcp_servers.cf]"); !slices.Equal(got, want) {
-		t.Errorf("[mcp_servers.cf]:\n got %q\nwant %q", got, want)
+	if got := mcpTable(config, "[mcp_servers.cflk]"); !slices.Equal(got, want) {
+		t.Errorf("[mcp_servers.cflk]:\n got %q\nwant %q", got, want)
 	}
-	if got := mcpWithoutTable(config, "[mcp_servers.cf]"); got != mcpOtherTables {
+	if got := mcpWithoutTable(config, "[mcp_servers.cflk]"); got != mcpOtherTables {
 		t.Errorf("the tables the user had changed:\n%s", config)
 	}
 	if got := mcpTable(config, mcpProjectsHeader); !slices.Equal(got, []string{`trust_level = "trusted"`}) {
@@ -412,15 +457,21 @@ func TestScenario_MCP_Instalacion_UninstallDejaElHomeLimpio(t *testing.T) {
 	b.mustCF("mcp", "uninstall", "--claude", "--scope", "project")
 	b.mustCF("mcp", "uninstall", "--codex")
 
-	if files := mcpFiles(t, b.home); len(files) != 0 {
+	// claude keeps its own files: what must be left in them is no server.
+	if files := mcpFiles(t, b.home); !slices.Equal(files, []string{".claude.json"}) {
 		t.Errorf("files left in HOME: %q", files)
 	}
-	if files := mcpFiles(t, b.repo); len(files) != 0 {
+	if files := mcpFiles(t, b.repo); !slices.Equal(files, []string{".mcp.json"}) {
 		t.Errorf("files left in the repository: %q", files)
 	}
+	for _, path := range []string{filepath.Join(b.home, ".claude.json"), filepath.Join(b.repo, ".mcp.json")} {
+		if got := strings.TrimSpace(mcpRead(t, path)); got != `{"mcpServers":{}}` {
+			t.Errorf("%s still has servers: %s", path, got)
+		}
+	}
 	for _, dir := range []string{
-		filepath.Join(b.home, ".claude", "skills", "codefabric"), filepath.Join(b.home, ".agents", "skills", "codefabric"),
-		filepath.Join(b.repo, ".claude", "skills", "codefabric"),
+		filepath.Join(b.home, ".claude", "skills", "codeflock"), filepath.Join(b.home, ".agents", "skills", "codeflock"),
+		filepath.Join(b.repo, ".claude", "skills", "codeflock"),
 	} {
 		if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("%s was left (%v)", dir, err)
@@ -429,20 +480,17 @@ func TestScenario_MCP_Instalacion_UninstallDejaElHomeLimpio(t *testing.T) {
 	if got := mcpRead(t, b.codexConfig()); got != mcpOtherTables {
 		t.Errorf("config.toml is not as the user had it:\n%s", got)
 	}
-	if _, err := os.Stat(filepath.Join(b.state, "claude-registered")); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("claude still has the server registered (%v)", err)
-	}
 	// A second uninstall finds nothing to do and still succeeds.
 	b.mustCF("mcp", "uninstall", "--claude", "--scope", "user")
 	b.mustCF("mcp", "uninstall", "--codex")
 }
 
 // The unit suite already covers the rule (TestCfBinary_PrefersThePATHEntryOnlyWhenItIsTheRunningBinary);
-// this one shows it in a real process: the cf in PATH is a symlink to the
+// this one shows it in a real process: the cflk in PATH is a symlink to the
 // binary, and that link, not its target, is what gets registered.
 func TestScenario_MCP_Instalacion_RegistraLaRutaDelPATHYNoElDestinoDelSymlink(t *testing.T) {
 	b := newMCPBox(t, "claude")
-	link := filepath.Join(b.bin, "cf")
+	link := filepath.Join(b.bin, "cflk")
 	if err := os.Symlink(binary, link); err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +498,39 @@ func TestScenario_MCP_Instalacion_RegistraLaRutaDelPATHYNoElDestinoDelSymlink(t 
 		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
 	}
 	mcpWantCalls(t, b.calls(), []string{
-		"claude mcp remove --scope user cf",
-		"claude mcp add --scope user cf -- " + link + " mcp serve --profile execute",
+		"claude mcp remove --scope user cflk",
+		"claude mcp add --scope user cflk -- " + link + " mcp serve --profile execute",
 	})
+}
+
+// The beta.6 registered `cf`: install leaves `cflk` in its place when the old
+// one is Code Flock's, and does not touch a `cf` that is something else.
+func TestScenario_MCP_Instalacion_ReemplazaElRegistroCfDeCodeFlockYNoTocaElAjeno(t *testing.T) {
+	serve := []string{"mcp", "serve", "--profile", "execute"}
+	for _, legacy := range []struct {
+		name, command string
+		args          []string
+		wantCfLeft    bool
+	}{
+		{"claude user scope: cf is Code Flock's", binary, serve, false},
+		{"claude user scope: cf is not Code Flock's", "other", []string{"x"}, true},
+	} {
+		t.Run(legacy.name, func(t *testing.T) {
+			b := newMCPBox(t, "claude")
+			seed := exec.CommandContext(t.Context(), filepath.Join(b.bin, "claude"), append([]string{"mcp", "add", "--scope", "user", "cf", "--", legacy.command}, legacy.args...)...) //nolint:gosec // the fake
+			seed.Env = []string{"HOME=" + b.home, "PATH=" + b.bin, "FAKE_LOG=" + b.log, "FAKE_STATE=" + b.state}
+			if out, err := seed.CombinedOutput(); err != nil {
+				t.Fatalf("seeding cf: %v: %s", err, out)
+			}
+			b.mustCF("mcp", "install", "--claude", "--scope", "user")
+
+			registry := mcpRead(t, filepath.Join(b.home, ".claude.json"))
+			if !strings.Contains(registry, `"cflk":{`) {
+				t.Errorf("cflk is not registered:\n%s", registry)
+			}
+			if got := strings.Contains(registry, `"cf":{`); got != legacy.wantCfLeft {
+				t.Errorf("cf registered = %v, want %v:\n%s", got, legacy.wantCfLeft, registry)
+			}
+		})
+	}
 }
