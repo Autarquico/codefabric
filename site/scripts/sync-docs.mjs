@@ -142,9 +142,14 @@ function kindOnDisk(root) {
   };
 }
 
+// The guide pages that exist under root: a tag before beta.7 has no upgrade page.
+export function guidePagesIn(root = contentRoot) {
+  return GUIDE_PAGES.filter((file) => !OPTIONAL_PAGES.includes(file) || existsSync(path.join(root, GUIDE_DIR, file)));
+}
+
 export function syncDocs({ root = contentRoot, out = outputDir, base = BASE, ref = repoRef() } = {}) {
   const kindOf = kindOnDisk(root);
-  const present = GUIDE_PAGES.filter((file) => !OPTIONAL_PAGES.includes(file) || existsSync(path.join(root, GUIDE_DIR, file)));
+  const present = guidePagesIn(root);
   const pages = present.map((file) => {
     const sourcePath = path.join(root, GUIDE_DIR, file);
     if (!existsSync(sourcePath)) throw new Error(`${GUIDE_DIR}/${file} is missing under ${root}`);

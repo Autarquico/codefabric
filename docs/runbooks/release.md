@@ -142,13 +142,15 @@ cd "$(brew --repository autarquico/tap)"
 cp "$rb" Formula/codeflock.rb
 brew audit --strict --online autarquico/tap/codeflock
 brew install autarquico/tap/codeflock && brew test autarquico/tap/codeflock
-git add Formula/codeflock.rb && git commit -m "codeflock X.Y.Z" && git push
+git add Formula/codeflock.rb
 ```
 
-La primera vez tras el rename (la primera versión estable), en el mismo commit y antes del `git commit` de arriba:
-se borra `Formula/codefabric.rb` y se copia `packaging/homebrew/formula_renames.json` a la raíz del tap, para que
-`brew upgrade` de quien tenga `codefabric` instale `codeflock` (ver `packaging/homebrew/README.md`). El `git add`
-tiene que incluir los dos cambios:
+Ese bloque deja la fórmula en el índice y no hace commit ni push. Después, un único commit:
+
+- **Versión normal:** `git commit -m "codeflock X.Y.Z" && git push`.
+- **La primera vez tras el rename (la primera versión estable):** en ese mismo commit, sin ningún commit previo solo con la fórmula, se borra `Formula/codefabric.rb` y se copia `packaging/homebrew/formula_renames.json` a la raíz del tap, para que
+`brew upgrade` de quien tenga `codefabric` instale `codeflock` (ver `packaging/homebrew/README.md`). El índice
+tiene que incluir los tres cambios:
 
 ```sh
 repo=/ruta/al/checkout-en-el-commit-del-tag

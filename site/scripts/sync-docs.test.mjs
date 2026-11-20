@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { GUIDE_PAGES, OPTIONAL_PAGES, splitFrontMatter, syncDocs, transformPage } from './sync-docs.mjs';
+import { GUIDE_PAGES, OPTIONAL_PAGES, guidePagesIn, splitFrontMatter, syncDocs, transformPage } from './sync-docs.mjs';
 
 const known = new Set(['docs/guide/img/a.webp', 'docs/guide/cli.md', 'docs/guide/tui.md', 'docs/guide/mcp.md', 'docs/guide/concepts.md', 'docs/guide/getting-started.md', 'docs/codefabric-spec.md', 'internal/tui', 'README.md']);
 const kindOf = (p) => (!known.has(p) ? null : p === 'internal/tui' ? 'dir' : 'file');
@@ -72,6 +72,12 @@ test('a tag from before the upgrade page still syncs, with the pages it has', ()
   const { root, out } = fixture(older);
   assert.deepEqual(syncDocs({ root, out, ref: 'v0.3.0' }), older);
   assert.deepEqual(readdirSync(out).sort(), [...older].sort());
+});
+
+test('the sidebar lists only the pages the tag has', () => {
+  const older = GUIDE_PAGES.filter((f) => !OPTIONAL_PAGES.includes(f));
+  assert.deepEqual(guidePagesIn(fixture(older).root), older);
+  assert.deepEqual(guidePagesIn(fixture(GUIDE_PAGES).root), GUIDE_PAGES);
 });
 
 test('syncDocs fails clearly when a guide page is missing', () => {

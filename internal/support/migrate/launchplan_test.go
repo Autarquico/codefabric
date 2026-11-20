@@ -350,13 +350,66 @@ func TestLaunchPlanWayBackDoesNotGoOnAfterAFailedBootout(t *testing.T) {
 	if strings.Contains(back, "|| true") {
 		t.Errorf("the way back ignores a failed bootout:\n%s", back)
 	}
-	if !strings.Contains(forward, "launchctl print system/'com.codefabric.controller' >/dev/null 2>&1; then echo") {
-		t.Errorf("the plan does not refuse while another job of the old name is loaded:\n%s", forward)
-	}
 	if strings.Contains(forward, "'com.codefabric.worker is loaded") {
 		t.Errorf("the plan refuses because of the very job it moves:\n%s", forward)
 	}
 	if first, bootout := strings.Index(forward, "com.codefabric.controller is loaded"), strings.Index(forward, "launchctl bootout"); first < 0 || first > bootout {
 		t.Errorf("the other jobs are looked for after the bootout:\n%s", forward)
+	}
+}
+
+func controllerPlist(config, data string) string {
+	return strings.NewReplacer("com.codefabric.worker", "com.codefabric.controller",
+		"/Users/ana/.config/codefabric", config, "/Users/ana/mine", data).Replace(daemonPlist)
+}
+
+func planWithController(t *testing.T, content string, readErr error) string {
+	t.Helper()
+	cmds, err := LaunchPlan{
+		Plist: "/Library/LaunchDaemons/com.codefabric.worker.plist", Content: []byte(daemonPlist), System: true, Binary: "/usr/local/bin/cflk",
+		ReadFile: func(string) ([]byte, error) { return []byte(content), readErr },
+	}.Commands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward, _ := parts(t, cmds)
+	return forward
+}
+
+// The other job stops the plan only when it uses the directories that move.
+func TestLaunchPlanRefusesForTheOtherJobOnlyIfItSharesTheRoot(t *testing.T) {
+	const loaded = "launchctl print system/'com.codefabric.controller' >/dev/null 2>&1; then echo"
+	shared := planWithController(t, controllerPlist("/Users/ana/.config/codefabric", "/Users/ana/mine"), nil)
+	if !strings.Contains(shared, loaded) || !strings.Contains(shared, "uses the same directories") {
+		t.Errorf("a job that shares the root does not stop the plan:\n%s", shared)
+	}
+	if !strings.Contains(shared, "same directories: drain it and stop it (launchctl bootout) first, then run this again'") {
+		t.Errorf("no refusal for a shared root:\n%s", shared)
+	}
+	separate := planWithController(t, controllerPlist("/Users/bob/.config/codefabric", "/Users/bob/mine"), nil)
+	if strings.Contains(separate, "com.codefabric.controller") {
+		t.Errorf("a job with its own root is looked at:\n%s", separate)
+	}
+	unknown := planWithController(t, "", errors.New("no such file"))
+	if !strings.Contains(unknown, "warning: com.codefabric.controller is loaded and its directories are not known") {
+		t.Errorf("an unknown root does not warn:\n%s", unknown)
+	}
+	if strings.Contains(unknown, "uses the same directories") {
+		t.Errorf("an unknown root refuses:\n%s", unknown)
+	}
+	if strings.Contains(unknown, "2>&1; then echo 'warning: com.codefabric.controller is loaded and its directories are not known: if it uses the same ones, stop it (Ctrl-C and launchctl bootout) before the move below' >&2; exit") {
+		t.Errorf("the warning exits:\n%s", unknown)
+	}
+}
+
+// A Worker that shares the root of a Controller already moved is stopped and
+// its directories are at the new place: the plan must go on to write its plist.
+func TestLaunchPlanToleratesAJobNotLoadedAndDirectoriesAlreadyMoved(t *testing.T) {
+	forward := planWithController(t, "", errors.New("no such file"))
+	if !strings.Contains(forward, "if launchctl print system/'com.codefabric.worker' >/dev/null 2>&1; then launchctl bootout system/'com.codefabric.worker'; fi") {
+		t.Errorf("the bootout does not wait for the job to be loaded:\n%s", forward)
+	}
+	if !strings.Contains(forward, "elif [ ! -d '/Users/ana/.config/codeflock' ]; then echo") {
+		t.Errorf("a directory already moved is not tolerated:\n%s", forward)
 	}
 }

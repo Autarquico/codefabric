@@ -33,7 +33,7 @@ The installer puts `cflk` first and checks it runs. Only then does it replace a 
 
 ## Before you start
 
-Going back needs what the migration removes, so keep it now, on each machine that has a service. The migration removes the old unit and the beta.7 installer replaces `cf`.
+Going back needs what the migration removes, so keep it now, on every machine, clients included. The migration removes the old unit and the beta.7 installer replaces `cf`; the file with its place (`cf-path`) is needed on a client that has no service too.
 
 ```sh
 mkdir -p ~/cflk-beta6-backup
@@ -43,7 +43,7 @@ cp ~/Library/LaunchAgents/com.codefabric.*.plist ~/cflk-beta6-backup/ 2>/dev/nul
 sudo cp /Library/LaunchDaemons/com.codefabric.*.plist ~/cflk-beta6-backup/ 2>/dev/null                                      # macOS LaunchDaemon
 ```
 
-The copies carry the flags and the environment (`PATH`, `TMUX_TMPDIR`, directories) that `install-service` of the beta.6 would otherwise write again with its defaults.
+If `cf-path` is missing or empty at rollback, find where the beta.6 was (`ls -l` the `cf` your units and `PATH` name; the transition shim is the one to replace) and pass that directory as `CF_INSTALL_DIR` by hand. The copies carry the flags and the environment (`PATH`, `TMUX_TMPDIR`, directories) that `install-service` of the beta.6 would otherwise write again with its defaults.
 
 ## The order
 
@@ -64,7 +64,14 @@ cf ps                          # wait until no Run is listed on that Worker
 
      A Worker that shares its root is migrated by this very command, with its own flags and environment. Do not run `cflk worker install-service` for it afterwards: the old unit that supplied its settings is gone.
 
-   - On macOS, `install-service` does not move the Controller: it is only for systemd. Under launchd it changes nothing and prints the commands, in order, to stop the old one, move the directories, write the new property list and load it. The printed block refuses to run while another job of the old name (`com.codefabric.worker`) is loaded. A Worker that shares the root has to be drained and stopped first (`launchctl bootout gui/$(id -u)/com.codefabric.worker`, or `system/…` for a LaunchDaemon), or it would keep the old directories open while the Controller starts on the new ones. Run the block, then migrate that Worker with `cflk worker install-service`: it leaves it installed and stopped, and a second `cflk worker install-service`, with the flags of the copy you kept, starts it. The block removes the old property list: you kept a copy above.
+   - On macOS, `install-service` does not move the Controller: it is only for systemd. Under launchd it changes nothing and prints the commands, in order, to stop the old one, move the directories, write the new property list and load it. The printed block reads the property list of the other job of the old name (`com.codefabric.worker`): if that job uses the same directories and is loaded, the block refuses; if it cannot tell, it warns. A Worker that shares the root has to be drained and stopped first, in the domain it is loaded in, or it would keep the old directories open while the Controller starts on the new ones:
+
+     ```sh
+     D=gui/$(id -u); launchctl print $D/com.codefabric.worker >/dev/null 2>&1 || D=user/$(id -u)   # an agent installed over ssh is in user/
+     launchctl bootout $D/com.codefabric.worker       # for a LaunchDaemon: sudo launchctl bootout system/com.codefabric.worker
+     ```
+
+     Run the block, then migrate that Worker once. A LaunchDaemon: `cflk worker install-service --binary /opt/codeflock/bin/cflk`; its block skips what is already stopped and already moved, writes the new property list and loads it. A LaunchAgent: `cflk worker install-service` writes the new property list, with the environment of the old one, and leaves it stopped: load it with `launchctl bootstrap $D ~/Library/LaunchAgents/com.codeflock.worker.plist`. Do not run `install-service` a second time: it would write a unit from its flags alone and lose that environment. The block removes the old property list: you kept a copy above.
    - Under a supervisor of your own (a system unit, nohup, tmux), the installer and any other `cflk` command leave its directories alone while it runs. Stop the Controller, change its command to `cflk controller run` and start it again: that first run moves the directories. A Worker under a supervisor of your own goes the same way, with `cflk worker run`, once drained.
 
    Clients and Workers keep connecting without enrolling again: the database, the certificates and the relay move with the directories.
@@ -144,12 +151,13 @@ Do it in this order across a pool, the reverse of the upgrade: the clients, then
    systemctl --user daemon-reload
    ```
 
-   On macOS, with a launchd agent, the domain is `gui/<uid>`, or `user/<uid>` if the agent was installed over ssh. Find where it is loaded, and stop only when `bootout` succeeds: if it fails, the job is still running, and nothing below is safe.
+   On macOS, with a launchd agent, the domain is `gui/<uid>`, or `user/<uid>` if the agent was installed over ssh. Find where it is loaded and keep it in `D` for the rest of the rollback (this shell), and stop only when `bootout` succeeds: if it fails, the job is still running, and nothing below is safe.
 
    ```sh
-   launchctl print gui/$(id -u)/com.codeflock.worker >/dev/null 2>&1 && echo gui || echo "not in gui; try user/$(id -u)"
-   launchctl bootout gui/$(id -u)/com.codeflock.worker      # the domain it printed; if this fails, stop here
-   launchctl print gui/$(id -u)/com.codeflock.worker        # must now fail: the job is gone
+   D=gui/$(id -u); launchctl print $D/com.codeflock.worker >/dev/null 2>&1 || D=user/$(id -u)
+   launchctl print $D/com.codeflock.worker >/dev/null 2>&1 || echo "not loaded in gui or user: check by hand before going on"
+   launchctl bootout $D/com.codeflock.worker                # if this fails, stop here
+   launchctl print $D/com.codeflock.worker                  # must now fail: the job is gone
    rm ~/Library/LaunchAgents/com.codeflock.worker.plist     # only once the line above failed
    ```
 
@@ -190,7 +198,7 @@ Do it in this order across a pool, the reverse of the upgrade: the clients, then
    systemctl --user daemon-reload && systemctl --user enable --now cf-worker
    ```
 
-   On macOS, with a launchd agent: `cp ~/cflk-beta6-backup/com.codefabric.worker.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.codefabric.worker.plist`. For a LaunchDaemon, put the copy back in `/Library/LaunchDaemons` and `sudo launchctl bootstrap system /Library/LaunchDaemons/com.codefabric.worker.plist`.
+   On macOS, with a launchd agent: `cp ~/cflk-beta6-backup/com.codefabric.worker.plist ~/Library/LaunchAgents/ && launchctl bootstrap $D ~/Library/LaunchAgents/com.codefabric.worker.plist` (`D` is the domain you found in step 1; if this is a new shell, find it again as there). For a LaunchDaemon, put the copy back in `/Library/LaunchDaemons` and `sudo launchctl bootstrap system /Library/LaunchDaemons/com.codefabric.worker.plist`.
 
    Without a copy, `cf worker install-service` (or `cf controller install-service` on Linux) writes a unit with the defaults: add back the flags and the environment you had.
 

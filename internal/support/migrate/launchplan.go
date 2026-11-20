@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"os"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -29,6 +30,9 @@ type LaunchPlan struct {
 	// LookupHome is the home directory of a user, for a LaunchDaemon that runs
 	// as one; nil asks the system.
 	LookupHome func(name string) (string, error)
+	// ReadFile reads the property list of the other job of the old name, to
+	// know whether it shares the directories; nil reads the disk.
+	ReadFile func(path string) ([]byte, error)
 }
 
 var programPath = regexp.MustCompile(`(<key>ProgramArguments</key>\s*<array>\s*<string>)[^<]*(</string>)`)
@@ -105,17 +109,26 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	say("%s", absent(written))
 	say("%s", absent(oldKept))
 	say("if launchctl print %s >/dev/null 2>&1; then echo %s >&2; exit 1; fi", target(newLabel), shellQuote(newLabel+" is loaded already: stop here"))
-	// The plan stops one job. Another of the old name that is loaded may share
-	// the directories about to move, and would keep them open at the old place.
+	// The plan stops one job. Another of the old name that is loaded and uses
+	// the directories about to move would keep them open at the old place: that
+	// one stops the plan. If its directories cannot be known, the plan warns.
 	for _, kind := range []string{"worker", "controller"} {
-		if other := "com.codefabric." + kind; other != oldLabel {
+		other := "com.codefabric." + kind
+		if other == oldLabel {
+			continue
+		}
+		switch p.sharesDirectories(other, planned) {
+		case sharesYes:
 			say("if launchctl print %s >/dev/null 2>&1; then echo %s >&2; exit 1; fi", target(other),
-				shellQuote(other+" is loaded: if it uses the same directories, drain it and stop it (launchctl bootout) first, then run this again"))
+				shellQuote(other+" is loaded and uses the same directories: drain it and stop it (launchctl bootout) first, then run this again"))
+		case sharesUnknown:
+			say("if launchctl print %s >/dev/null 2>&1; then echo %s >&2; fi", target(other),
+				shellQuote("warning: "+other+" is loaded and its directories are not known: if it uses the same ones, stop it (Ctrl-C and launchctl bootout) before the move below"))
 		}
 	}
-	say("# 2. Stop the old service; its file stays.")
-	say("launchctl bootout %s", target(oldLabel))
-	say("# 3. Move the directories it uses.")
+	say("# 2. Stop the old service if it is loaded; its file stays.")
+	say("if launchctl print %[1]s >/dev/null 2>&1; then launchctl bootout %[1]s; fi", target(oldLabel))
+	say("# 3. Move the directories it uses; one that a job sharing them already moved is left where it is.")
 	for _, pr := range planned {
 		forward = append(forward, move(as, pr.Old, pr.New, pr.optional)...)
 	}
@@ -179,6 +192,49 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	return out, nil
 }
 
+type sharing int
+
+const (
+	sharesNo sharing = iota
+	sharesYes
+	sharesUnknown
+)
+
+// sharesDirectories says whether the job of that label, whose property list
+// sits next to this one, uses a config or data directory this plan moves. If
+// its plist cannot be read or says no directories, it is unknown.
+func (p LaunchPlan) sharesDirectories(label string, mine []plannedPair) sharing {
+	read := p.ReadFile
+	if read == nil {
+		read = os.ReadFile
+	}
+	content, err := read(filepath.Join(filepath.Dir(p.Plist), label+".plist"))
+	if err != nil {
+		return sharesUnknown
+	}
+	other := LaunchPlan{Plist: p.Plist, Content: content, System: p.System, UserHome: p.UserHome, LookupHome: p.LookupHome}
+	info, err := svcunit.ReadPlist(content)
+	if err != nil {
+		return sharesUnknown
+	}
+	home, err := other.homeOf(info)
+	if err != nil {
+		return sharesUnknown
+	}
+	theirs, err := other.pairs(info, home)
+	if err != nil {
+		return sharesUnknown
+	}
+	for _, m := range mine {
+		for _, t := range theirs {
+			if !m.optional && !t.optional && m.Old == t.Old {
+				return sharesYes
+			}
+		}
+	}
+	return sharesNo
+}
+
 // distinct is name, made longer until none of avoid has it: a heredoc ends at
 // the first line that is its delimiter.
 func distinct(name string, avoid ...string) string {
@@ -202,8 +258,8 @@ func commented(text string) string {
 // The block stops if the destination exists, and stops after the move unless the
 // destination is the very directory that was there before it, which its inode
 // says (`stat -f %i`, of macOS): if one appeared between the check and the move,
-// the directory went inside it. An optional directory that is not there is not
-// moved.
+// the directory went inside it. A directory that is not there is not moved:
+// if it is not optional, the block stops unless it is already at the new place.
 func move(as, from, to string, optional bool) []string {
 	lines := []string{
 		fmt.Sprintf("if [ -e %[1]s ] || [ -L %[1]s ]; then echo %[2]s >&2; exit 1; fi", shellQuote(to), shellQuote(to+" exists: stop here")),
@@ -212,12 +268,13 @@ func move(as, from, to string, optional bool) []string {
 		fmt.Sprintf(`if [ -e %[1]s ] || [ -L %[1]s ] || [ "$(stat -f %%i %[2]s)" != "$ino" ]; then echo %[3]s >&2; exit 1; fi`,
 			shellQuote(from), shellQuote(to), shellQuote(to+" is not the directory that moved: stop here")),
 	}
-	if !optional {
-		return lines
-	}
 	out := []string{fmt.Sprintf("if [ -e %s ]; then", shellQuote(from))}
 	for _, l := range lines {
 		out = append(out, "\t"+l)
+	}
+	if !optional {
+		// Gone from the old place and there at the new one: a job that shares it moved it.
+		out = append(out, fmt.Sprintf("elif [ ! -d %s ]; then echo %s >&2; exit 1", shellQuote(to), shellQuote(from+" is not there, and neither is "+to+": stop here")))
 	}
 	return append(out, "fi")
 }
