@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -423,6 +424,19 @@ func TestLaunchPlanSkipsAMoveOnlyForADirectoryAJobMigratedUses(t *testing.T) {
 	forward := planWithController(t, "", errors.New("no such file"))
 	if strings.Contains(forward, "elif [ ! -d") || !strings.Contains(forward, "else echo '/Users/ana/.config/codefabric is not there: stop here' >&2; exit 1") {
 		t.Errorf("a missing source is tolerated with no job that uses the destination:\n%s", forward)
+	}
+}
+
+// A migrated job that keeps the defaults uses them under the new name.
+func TestLaunchPlanSkipsAMoveForAMigratedJobOnTheDefaults(t *testing.T) {
+	migrated := regexp.MustCompile(`(?s)\s*<key>CF_CONFIG_DIR</key>.*?<key>CF_DATA_DIR</key>\s*<string>[^<]*</string>`).
+		ReplaceAllString(strings.ReplaceAll(daemonPlist, "com.codefabric.worker", "com.codeflock.controller"), "")
+	if strings.Contains(migrated, "CF_CONFIG_DIR") {
+		t.Fatal("the fixture still names its directories")
+	}
+	forward := planWithController(t, migrated, nil)
+	if !strings.Contains(forward, "elif [ ! -d '/Users/ana/.config/codeflock' ]") {
+		t.Errorf("the default directory of a migrated job is not taken as its own:\n%s", forward)
 	}
 }
 

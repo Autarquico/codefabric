@@ -272,18 +272,21 @@ func commented(text string) string {
 // the directory went inside it. A directory that is not there is not moved: if
 // it is not optional, the block stops, unless it is skippable (a job already
 // migrated uses the new place) and it is a real directory there. A mark file,
-// if given, is touched once the directory has moved.
+// if given, is touched just before the directory moves.
 func move(as, from, to string, skippable, optional bool, mark string) []string {
 	lines := []string{
 		fmt.Sprintf("if [ -e %[1]s ] || [ -L %[1]s ]; then echo %[2]s >&2; exit 1; fi", shellQuote(to), shellQuote(to+" exists: stop here")),
 		fmt.Sprintf("ino=$(stat -f %%i %s)", shellQuote(from)),
-		fmt.Sprintf("%smv -n %s %s", as, shellQuote(from), shellQuote(to)),
-		fmt.Sprintf(`if [ -e %[1]s ] || [ -L %[1]s ] || [ "$(stat -f %%i %[2]s)" != "$ino" ]; then echo %[3]s >&2; exit 1; fi`,
-			shellQuote(from), shellQuote(to), shellQuote(to+" is not the directory that moved: stop here")),
 	}
 	if mark != "" {
+		// Before the move: a mark without the move is harmless to the way back,
+		// which moves only what is at the new place; a move without the mark is not.
 		lines = append(lines, "touch "+shellQuote(mark))
 	}
+	lines = append(lines,
+		fmt.Sprintf("%smv -n %s %s", as, shellQuote(from), shellQuote(to)),
+		fmt.Sprintf(`if [ -e %[1]s ] || [ -L %[1]s ] || [ "$(stat -f %%i %[2]s)" != "$ino" ]; then echo %[3]s >&2; exit 1; fi`,
+			shellQuote(from), shellQuote(to), shellQuote(to+" is not the directory that moved: stop here")))
 	out := []string{fmt.Sprintf("if [ -e %s ]; then", shellQuote(from))}
 	for _, l := range lines {
 		out = append(out, "\t"+l)
@@ -339,9 +342,13 @@ func (p LaunchPlan) migratedUses(newLabel, dir string) bool {
 		if err != nil {
 			continue
 		}
+		// A migrated plist without its own directories uses the defaults of the
+		// new name, which directories gives under the old one.
 		cfg, data := directories(info, home)
-		if sameDir(dir, cfg) || sameDir(dir, data) {
-			return true
+		for _, d := range []string{cfg, data, Renamed(cfg), Renamed(data)} {
+			if d != "" && sameDir(dir, d) {
+				return true
+			}
 		}
 	}
 	return false
