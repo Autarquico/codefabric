@@ -2,12 +2,12 @@
 codename: codefabric
 title: Attach desde aquí (abrir una terminal con el attach)
 type: feature
-status: draft
+status: active
 priority: P2
 size: M
-issue:
+issue: 218
 prs: []
-related_issues: []
+related_issues: [218]
 depends_on: [live-attach]
 related_specs: [live-attach, claude-handto]
 created: 2026-11-20
