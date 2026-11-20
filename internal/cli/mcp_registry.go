@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"debug/buildinfo"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -16,6 +19,10 @@ import (
 type mcpRegistration struct {
 	Command string
 	Args    []string
+	Env     map[string]string
+	// Unsupported names the other settings of the entry (cwd, env_vars, ...):
+	// `mcp add` cannot write them, so a move to another name would lose them.
+	Unsupported []string
 }
 
 // mcpServeArgs are the arguments after the binary that `mcp install` registers.
@@ -23,16 +30,41 @@ func mcpServeArgs(profile string) []string {
 	return []string{"mcp", "serve", "--profile", profile}
 }
 
+// codeFlockModules are the Go modules the cflk and the cf of the beta.6 are built from.
+var codeFlockModules = []string{"github.com/Autarquico/codeflock", "github.com/Autarquico/codefabric"}
+
 // isCodeFlock says whether the registration launches `cflk mcp serve` (or the
 // `cf` of the beta.6) the way `mcp install` writes it: the arguments are
 // `mcp serve --profile <profile>` and the executable is the one being
-// installed (bin) or is called cflk or cf. A Cloud Foundry `cf` registered
-// under that name does not match.
+// installed (bin) or a binary built from the module of Code Flock. The name
+// of the file proves nothing: a Cloud Foundry `cf`, or any script called cf,
+// does not match. The executable is read, never run: the registration may come
+// from the .mcp.json of an untrusted repository.
 func (r mcpRegistration) isCodeFlock(bin string) bool {
-	if name := filepath.Base(r.Command); name != "cflk" && name != "cf" && r.Command != bin {
+	if len(r.Args) != 4 || !slices.Contains(mcpProfiles, r.Args[3]) || !slices.Equal(r.Args, mcpServeArgs(r.Args[3])) {
 		return false
 	}
-	return len(r.Args) == 4 && slices.Contains(mcpProfiles, r.Args[3]) && slices.Equal(r.Args, mcpServeArgs(r.Args[3]))
+	return r.Command == bin || isCodeFlockExecutable(r.Command, bin)
+}
+
+func isCodeFlockExecutable(command, bin string) bool {
+	path, err := exec.LookPath(command)
+	if err != nil {
+		return false
+	}
+	if sameFile(path, bin) {
+		return true
+	}
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return false // buildinfo.ReadFile would block on a FIFO
+	}
+	bi, err := buildinfo.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(codeFlockModules, func(module string) bool {
+		return bi.Main.Path == module || strings.HasPrefix(bi.Path, module+"/")
+	})
 }
 
 // readRegistrations is every server registered under the scope, by name, read
@@ -107,9 +139,26 @@ func parseClaudeRegistrations(data []byte) (map[string]mcpRegistration, error) {
 		if json.Unmarshal(fields["args"], &reg.Args) != nil {
 			reg.Args = nil
 		}
+		if env, ok := fields["env"]; ok && json.Unmarshal(env, &reg.Env) != nil {
+			reg.Env = nil
+			reg.Unsupported = append(reg.Unsupported, "env")
+		}
+		reg.Unsupported = append(reg.Unsupported, unknownKeys(fields, "command", "args", "env", "type")...)
 		servers[name] = reg
 	}
 	return servers, nil
+}
+
+// unknownKeys are the keys of fields that are not in known, sorted.
+func unknownKeys[V any](fields map[string]V, known ...string) []string {
+	var out []string
+	for key := range fields {
+		if !slices.Contains(known, key) {
+			out = append(out, key)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // parseCodexRegistrations reads command and args of each server under
@@ -129,6 +178,12 @@ func parseCodexRegistrations(data []byte) (map[string]mcpRegistration, error) {
 		var reg mcpRegistration
 		reg.Command, _ = fields["command"].(string)
 		reg.Args = stringList(fields["args"])
+		if env, ok := fields["env"]; ok {
+			if reg.Env = stringMap(env); reg.Env == nil {
+				reg.Unsupported = append(reg.Unsupported, "env")
+			}
+		}
+		reg.Unsupported = append(reg.Unsupported, unknownKeys(fields, "command", "args", "env", "tool_timeout_sec")...)
 		servers[name] = reg
 	}
 	return servers, nil
@@ -147,6 +202,23 @@ func stringList(v any) []string {
 			return nil
 		}
 		out = append(out, s)
+	}
+	return out
+}
+
+// stringMap is the table of strings, or nil when it is anything else.
+func stringMap(v any) map[string]string {
+	table, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(table))
+	for key, item := range table {
+		s, ok := item.(string)
+		if !ok {
+			return nil
+		}
+		out[key] = s
 	}
 	return out
 }

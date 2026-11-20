@@ -2,6 +2,7 @@
 name: codeflock
 description: Use Code Flock (cflk) to run coding Tasks on a pool of machines from this session. Create a Task, wait for its events without polling, read the Inbox and answer a Run that needs input. Use when the user asks to delegate work to cflk or Code Flock, to run something on another machine, or to follow or answer a Task already running there.
 ---
+<!-- cflk-version: {{cflk-version}} -->
 
 # Code Flock from the model
 

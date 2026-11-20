@@ -7,14 +7,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Autarquico/codeflock/internal/buildinfo"
 )
 
 // A fake claude: logs its arguments and the directory it ran in (to
 // $FAKE_LOG.pwd), and keeps its servers where the real one does:
 // ~/.claude.json (or $CLAUDE_CONFIG_DIR/.claude.json) for the user scope, .mcp.json of the cwd for the project
 // scope. `remove` of a server that is not there fails the way the real one
-// does. FAKE_FAIL_ADD makes `add` fail and FAKE_NOOP_ADD makes it succeed
-// without writing anything.
+// does. FAKE_FAIL_ADD makes the first `add` fail and FAKE_NOOP_ADD makes it
+// succeed without writing anything.
 const fakeClaude = `#!/bin/sh
 echo "claude $*" >> "$FAKE_LOG"
 pwd -P >> "$FAKE_LOG.pwd"
@@ -37,14 +39,17 @@ rebuild() {
 }
 case "$op" in
 add)
-	if [ -n "$FAKE_FAIL_ADD" ]; then echo "interrupted" >&2; exit 1; fi
-	[ -n "$FAKE_NOOP_ADD" ] && exit 0
-	shift 6
+	if [ -n "$FAKE_FAIL_ADD" ] && [ ! -e "$FAKE_STATE/faulted" ]; then : > "$FAKE_STATE/faulted"; echo "interrupted" >&2; exit 1; fi
+	if [ -n "$FAKE_NOOP_ADD" ] && [ ! -e "$FAKE_STATE/faulted" ]; then : > "$FAKE_STATE/faulted"; exit 0; fi
+	shift 5
+	env=""
+	while [ "$1" = --env ]; do env="$env${env:+,}\"${2%%=*}\":\"${2#*=}\""; shift 2; done
+	shift
 	cmd="$1"
 	shift
 	args=""
 	for a in "$@"; do args="$args${args:+,}\"$a\""; done
-	printf '"%s":{"type":"stdio","command":"%s","args":[%s],"env":{}}' "$name" "$cmd" "$args" > "$dir/$name.json"
+	printf '"%s":{"type":"stdio","command":"%s","args":[%s],"env":{%s}}' "$name" "$cmd" "$args" "$env" > "$dir/$name.json"
 	rebuild ;;
 remove)
 	if [ -e "$dir/$name.json" ]; then /bin/rm "$dir/$name.json"; rebuild
@@ -56,29 +61,33 @@ esac
 // $CODEX_HOME/config.toml with command and args, and so drops any
 // tool_timeout_sec; `remove` deletes the table. The table goes before the
 // first [projects.*] table, in the middle of the file, as in a config that
-// has trusted projects. Other tables stay. FAKE_FAIL_ADD and FAKE_NOOP_ADD
-// are as in the fake claude.
+// has trusted projects, and --env goes to its [mcp_servers.<name>.env] table.
+// Other tables stay. FAKE_FAIL_ADD and FAKE_NOOP_ADD are as in the fake claude.
 const fakeCodex = `#!/bin/sh
 echo "codex $*" >> "$FAKE_LOG"
 cfg="$CODEX_HOME/config.toml"
 name="$3"
 drop() {
 	[ -e "$cfg" ] || return 0
-	/usr/bin/awk -v t="[mcp_servers.$name]" '/^\[/ { skip = ($0 == t) } !skip' "$cfg" > "$cfg.new" && /bin/mv "$cfg.new" "$cfg"
+	/usr/bin/awk -v t="[mcp_servers.$name]" -v e="[mcp_servers.$name.env]" '/^\[/ { skip = ($0 == t || $0 == e) } !skip' "$cfg" > "$cfg.new" && /bin/mv "$cfg.new" "$cfg"
 }
 case "$2" in
 remove) drop ;;
 add)
-	if [ -n "$FAKE_FAIL_ADD" ]; then echo "interrupted" >&2; exit 1; fi
-	[ -n "$FAKE_NOOP_ADD" ] && exit 0
+	if [ -n "$FAKE_FAIL_ADD" ] && [ ! -e "$FAKE_STATE/faulted" ]; then : > "$FAKE_STATE/faulted"; echo "interrupted" >&2; exit 1; fi
+	if [ -n "$FAKE_NOOP_ADD" ] && [ ! -e "$FAKE_STATE/faulted" ]; then : > "$FAKE_STATE/faulted"; exit 0; fi
 	drop
-	shift 4
+	shift 3
+	env=""
+	while [ "$1" = --env ]; do env="$env${2%%=*} = \"${2#*=}\"\n"; shift 2; done
+	shift
 	cmd="$1"
 	shift
 	args=""
 	for a in "$@"; do args="$args${args:+, }\"$a\""; done
 	[ -e "$cfg" ] || : > "$cfg"
 	printf '[mcp_servers.%s]\ncommand = "%s"\nargs = [%s]\n' "$name" "$cmd" "$args" > "$cfg.tbl"
+	[ -n "$env" ] && { printf '\n[mcp_servers.%s.env]\n' "$name"; printf "$env"; } >> "$cfg.tbl"
 	/usr/bin/awk -v f="$cfg.tbl" 'function emit(  l) { while ((getline l < f) > 0) print l; print "" }
 		/^\[projects\./ && !done { emit(); done = 1 }
 		{ print }
@@ -117,11 +126,21 @@ func newMCPMachine(t *testing.T) mcpMachine {
 // seed registers a server the way the tool would, and forgets the call.
 func (m mcpMachine) seed(t *testing.T, tool, scope, name, command string, args ...string) {
 	t.Helper()
+	m.seedEnv(t, tool, scope, name, nil, command, args...)
+}
+
+// seedEnv is seed with environment variables, as KEY=VALUE.
+func (m mcpMachine) seedEnv(t *testing.T, tool, scope, name string, env []string, command string, args ...string) {
+	t.Helper()
 	argv := []string{"mcp", "add"}
 	if tool == "claude" {
 		argv = append(argv, "--scope", scope)
 	}
-	argv = append(argv, name, "--", command)
+	argv = append(argv, name)
+	for _, kv := range env {
+		argv = append(argv, "--env", kv)
+	}
+	argv = append(argv, "--", command)
 	out, err := exec.CommandContext(t.Context(), filepath.Join(m.bin, tool), append(argv, args...)...).CombinedOutput() //nolint:gosec // a test double
 	if err != nil {
 		t.Fatalf("seeding %s: %v: %s", name, err, out)
@@ -164,6 +183,17 @@ func (m mcpMachine) skill(tool string) string {
 	return filepath.Join(m.home, map[string]string{"claude": ".claude", "codex": ".agents"}[tool], "skills", "codeflock", "SKILL.md")
 }
 
+// betaCf is a `cf` of Code Flock, as the beta.6 registered it: a file called cf
+// that is this very binary.
+func betaCf(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "cf")
+	if err := os.Symlink(selfBinary(t), path); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func (m mcpMachine) codexConfig() string { return filepath.Join(m.codexHome, "config.toml") }
 
 func readFile(t *testing.T, path string) string {
@@ -191,6 +221,15 @@ func reflectEqual(a, b any) bool {
 	return a == b
 }
 
+func renderedSkill(t *testing.T) string {
+	t.Helper()
+	out, err := renderCodeflockSkill(buildinfo.Get().Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
 func selfBinary(t *testing.T) string {
 	t.Helper()
 	self, err := os.Executable()
@@ -210,7 +249,7 @@ func TestMCPInstall_ClaudeRunsRemoveThenAddWithScopeAndWritesTheSkill(t *testing
 		"claude mcp remove --scope user cflk",
 		"claude mcp add --scope user cflk -- " + selfBinary(t) + " mcp serve --profile execute",
 	})
-	requireEqual(t, readFile(t, m.skill("claude")), string(codeflockSkill))
+	requireEqual(t, readFile(t, m.skill("claude")), renderedSkill(t))
 	info, err := os.Stat(m.skill("claude"))
 	if err != nil {
 		t.Fatal(err)
@@ -284,7 +323,7 @@ func TestMCPInstall_CodexAddsTheToolTimeoutAndLeavesOtherTablesAlone(t *testing.
 		t.Errorf("no timeout in the cflk table:\n%s", cfg)
 	}
 	requireEqual(t, strings.Count(cfg, "tool_timeout_sec"), 2)
-	requireEqual(t, readFile(t, m.skill("codex")), string(codeflockSkill))
+	requireEqual(t, readFile(t, m.skill("codex")), renderedSkill(t))
 }
 
 func TestSetCodexToolTimeout_KeepsTheModeAndRefusesASymlink(t *testing.T) {
@@ -682,7 +721,7 @@ func TestMCPInstall_ReplacesTheCfOfTheBetaOnceCflkIsRegistered(t *testing.T) {
 	for _, tool := range []string{"claude", "codex"} {
 		t.Run(tool, func(t *testing.T) {
 			m := newMCPMachine(t)
-			m.seed(t, tool, "user", "cf", "/opt/cf", "mcp", "serve", "--profile", "read")
+			m.seed(t, tool, "user", "cf", betaCf(t), "mcp", "serve", "--profile", "read")
 			if code, out, errOut := run(t, "mcp", "install", "--"+tool); code != 0 {
 				t.Fatalf("exit %d: %s%s", code, out, errOut)
 			}
@@ -767,13 +806,14 @@ func TestMCPInstall_AnInterruptedAddLeavesTheCfAndTheNextRunFinishesTheMove(t *t
 		for _, fault := range []string{"FAKE_FAIL_ADD", "FAKE_NOOP_ADD"} {
 			t.Run(tool+"/"+fault, func(t *testing.T) {
 				m := newMCPMachine(t)
-				m.seed(t, tool, "user", "cf", "/opt/cf", "mcp", "serve", "--profile", "execute")
+				beta := betaCf(t)
+				m.seed(t, tool, "user", "cf", beta, "mcp", "serve", "--profile", "execute")
 				t.Setenv(fault, "1")
 				if code, _, _ := run(t, "mcp", "install", "--"+tool); code == 0 {
 					t.Fatal("install succeeded although cflk was not registered")
 				}
 				got := m.registered(t, tool)
-				requireEqual(t, got["cf"].Command, "/opt/cf")
+				requireEqual(t, got["cf"].Command, beta)
 				if _, ok := got["cflk"]; ok {
 					t.Error("cflk is registered after a failed add")
 				}
@@ -803,7 +843,7 @@ func TestMCPInstall_ProjectScopeReadsTheMCPJSONOfTheRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(repo)
-	m.seed(t, "claude", "project", "cf", "/opt/cf", "mcp", "serve", "--profile", "modify")
+	m.seed(t, "claude", "project", "cf", betaCf(t), "mcp", "serve", "--profile", "modify")
 	if code, out, errOut := run(t, "mcp", "install", "--claude", "--scope", "project"); code != 0 {
 		t.Fatalf("exit %d: %s%s", code, out, errOut)
 	}
@@ -815,22 +855,43 @@ func TestMCPInstall_ProjectScopeReadsTheMCPJSONOfTheRepo(t *testing.T) {
 	requireEqual(t, got["cflk"].Command, selfBinary(t))
 }
 
-func TestMCPRegistration_IsCodeFlockOnlyWhenTheExecutableAndTheArgumentsMatch(t *testing.T) {
+func TestMCPRegistration_IsCodeFlockOnlyWhenTheExecutableIsAndTheArgumentsMatch(t *testing.T) {
+	dir := t.TempDir()
+	bin := selfBinary(t)
+	link := filepath.Join(dir, "cf")
+	if err := os.Symlink(bin, link); err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(dir, "cflk-copy")      // not the same file, but built from this module
+	if data, err := os.ReadFile(bin); err != nil { //nolint:gosec // the test binary
+		t.Fatal(err)
+	} else if err := os.WriteFile(copied, data, 0o755); err != nil { //nolint:gosec // a copy of the test binary that must run
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "cflk")                                       // called cflk, is not
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // a test double
+		t.Fatal(err)
+	}
 	cases := []struct {
+		name string
 		r    mcpRegistration
 		want bool
 	}{
-		{mcpRegistration{"/usr/local/bin/cflk", mcpServeArgs("execute")}, true},
-		{mcpRegistration{"/opt/homebrew/bin/cf", mcpServeArgs("read")}, true},
-		{mcpRegistration{"cf", []string{"target", "list"}}, false},
-		{mcpRegistration{"cf", mcpServeArgs("root")}, false},
-		{mcpRegistration{"cf", append(mcpServeArgs("read"), "--extra")}, false},
-		{mcpRegistration{"/bin/node", mcpServeArgs("read")}, false},
-		{mcpRegistration{"/opt/mine/cflk-dev", mcpServeArgs("read")}, true},
-		{mcpRegistration{}, false},
+		{"the binary being installed", mcpRegistration{Command: bin, Args: mcpServeArgs("execute")}, true},
+		{"a link to it", mcpRegistration{Command: link, Args: mcpServeArgs("read")}, true},
+		{"a copy built from the module", mcpRegistration{Command: copied, Args: mcpServeArgs("read")}, true},
+		{"called cflk, is a script", mcpRegistration{Command: script, Args: mcpServeArgs("read")}, false},
+		{"called cf, does not exist", mcpRegistration{Command: "/opt/none/cf", Args: mcpServeArgs("read")}, false},
+		{"another binary", mcpRegistration{Command: "/bin/sh", Args: mcpServeArgs("read")}, false},
+		{"another arguments", mcpRegistration{Command: link, Args: []string{"target", "list"}}, false},
+		{"another profile", mcpRegistration{Command: link, Args: mcpServeArgs("root")}, false},
+		{"an extra argument", mcpRegistration{Command: link, Args: append(mcpServeArgs("read"), "--extra")}, false},
+		{"empty", mcpRegistration{}, false},
 	}
 	for _, c := range cases {
-		requireEqual(t, c.r.isCodeFlock("/opt/mine/cflk-dev"), c.want)
+		t.Run(c.name, func(t *testing.T) {
+			requireEqual(t, c.r.isCodeFlock(bin), c.want)
+		})
 	}
 }
 
@@ -965,7 +1026,7 @@ func TestMCPInstall_ClaudeConfigDirHoldsTheUserRegistrations(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	requireEqual(t, claudeServersFile("user", m.home), filepath.Join(dir, ".claude.json"))
-	m.seed(t, "claude", "user", "cf", "/opt/cf", "mcp", "serve", "--profile", "read")
+	m.seed(t, "claude", "user", "cf", betaCf(t), "mcp", "serve", "--profile", "read")
 	if code, out, errOut := run(t, "mcp", "install", "--claude"); code != 0 {
 		t.Fatalf("exit %d: %s%s", code, out, errOut)
 	}
@@ -1067,5 +1128,152 @@ func writeLegacy(t *testing.T, dir, name, content string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMCPInstall_ACodeflockSkillThatCflkDidNotWriteIsLeftAloneWithANote(t *testing.T) {
+	for _, tool := range []string{"claude", "codex"} {
+		t.Run(tool, func(t *testing.T) {
+			m := newMCPMachine(t)
+			writeLegacy(t, filepath.Dir(m.skill(tool)), "SKILL.md", "---\nname: codeflock\n---\nmine\n")
+			code, out, errOut := run(t, "mcp", "install", "--"+tool)
+			if code != 0 || !strings.Contains(out, "did not write") {
+				t.Fatalf("install: exit %d: %s%s", code, out, errOut)
+			}
+			requireEqual(t, readFile(t, m.skill(tool)), "---\nname: codeflock\n---\nmine\n")
+			requireEqual(t, m.registered(t, tool)["cflk"].Command, selfBinary(t))
+			if code, out, errOut := run(t, "mcp", "uninstall", "--"+tool); code != 0 || !strings.Contains(out, "did not write") {
+				t.Fatalf("uninstall: exit %d: %s%s", code, out, errOut)
+			}
+			requireEqual(t, readFile(t, m.skill(tool)), "---\nname: codeflock\n---\nmine\n")
+		})
+	}
+}
+
+func TestMCPInstall_TheSkillCarriesTheMarkerAndIsReplacedWhenItDoes(t *testing.T) {
+	m := newMCPMachine(t)
+	writeLegacy(t, filepath.Dir(m.skill("claude")), "SKILL.md", "---\nname: codeflock\n---\n<!-- cflk-version: v0.0.1 -->\nold\n")
+	if code, out, errOut := run(t, "mcp", "install", "--claude"); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out, errOut)
+	}
+	got := readFile(t, m.skill("claude"))
+	requireEqual(t, got, renderedSkill(t))
+	requireEqual(t, strings.Contains(got, "<!-- cflk-version: "+buildinfo.Get().Version+" -->\n"), true)
+	if code, _, _ := run(t, "mcp", "uninstall", "--claude"); code != 0 {
+		t.Fatal("uninstall failed")
+	}
+	if _, err := os.Stat(m.skill("claude")); !os.IsNotExist(err) {
+		t.Errorf("the skill with the marker was not removed: %v", err)
+	}
+}
+
+func TestMCPInstall_AFailedAddPutsTheRegistrationItReplacedBack(t *testing.T) {
+	for _, tool := range []string{"claude", "codex"} {
+		for _, fault := range []string{"FAKE_FAIL_ADD", "FAKE_NOOP_ADD"} {
+			t.Run(tool+"/"+fault, func(t *testing.T) {
+				m := newMCPMachine(t)
+				m.seedEnv(t, tool, "user", "cflk", []string{"K=v"}, selfBinary(t), "mcp", "serve", "--profile", "read")
+				t.Setenv(fault, "1")
+				code, _, errOut := run(t, "mcp", "install", "--"+tool)
+				if code == 0 || !strings.Contains(errOut, "put back") {
+					t.Fatalf("exit %d: %s", code, errOut)
+				}
+				got := m.registered(t, tool)["cflk"]
+				requireEqual(t, got.Command, selfBinary(t))
+				requireEqual(t, got.Args, mcpServeArgs("read"))
+				requireEqual(t, got.Env["K"], "v")
+			})
+		}
+	}
+}
+
+func TestMCPInstall_TheEnvOfTheServerGoesToCflk(t *testing.T) {
+	for _, tool := range []string{"claude", "codex"} {
+		t.Run(tool, func(t *testing.T) {
+			m := newMCPMachine(t)
+			m.seedEnv(t, tool, "user", "cf", []string{"CF_CONTROLLER=http://c:8080", "TOKEN=s3cret"}, betaCf(t), "mcp", "serve", "--profile", "read")
+			code, out, errOut := run(t, "mcp", "install", "--"+tool, "--dry-run")
+			if code != 0 || strings.Contains(out+errOut, "s3cret") || !strings.Contains(out, "TOKEN=***") {
+				t.Fatalf("dry run: exit %d: %s%s", code, out, errOut)
+			}
+			if code, out, errOut := run(t, "mcp", "install", "--"+tool); code != 0 || strings.Contains(out+errOut, "s3cret") {
+				t.Fatalf("exit %d: %s%s", code, out, errOut)
+			}
+			got := m.registered(t, tool)
+			if _, ok := got["cf"]; ok {
+				t.Error("the cf is still registered")
+			}
+			requireEqual(t, got["cflk"].Env["CF_CONTROLLER"], "http://c:8080")
+			requireEqual(t, got["cflk"].Env["TOKEN"], "s3cret")
+			if code, out, errOut := run(t, "mcp", "install", "--"+tool); code != 0 {
+				t.Fatalf("second install: exit %d: %s%s", code, out, errOut)
+			}
+			requireEqual(t, m.registered(t, tool)["cflk"].Env["TOKEN"], "s3cret")
+		})
+	}
+}
+
+func TestMCPInstall_ACfWithSettingsThatAddCannotWriteIsNotMoved(t *testing.T) {
+	m := newMCPMachine(t)
+	beta := betaCf(t)
+	cfg := "[mcp_servers.cf]\ncommand = \"" + beta + "\"\nargs = [\"mcp\", \"serve\", \"--profile\", \"read\"]\ncwd = \"/work\"\n"
+	if err := os.WriteFile(m.codexConfig(), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, "mcp", "install", "--codex")
+	if code != 0 || !strings.Contains(out, "cwd") {
+		t.Fatalf("exit %d: %s%s", code, out, errOut)
+	}
+	got := m.registered(t, "codex")
+	requireEqual(t, got["cf"].Command, beta)
+	requireEqual(t, got["cflk"].Command, selfBinary(t))
+	for _, c := range m.calls(t) {
+		if strings.HasSuffix(c, " cf") {
+			t.Errorf("the cf was removed: %s", c)
+		}
+	}
+}
+
+func TestMCPInstall_ACfCalledCfWithTheServeArgumentsThatIsNotCodeFlockIsLeftAlone(t *testing.T) {
+	for _, tool := range []string{"claude", "codex"} {
+		t.Run(tool, func(t *testing.T) {
+			m := newMCPMachine(t)
+			script := filepath.Join(t.TempDir(), "cf")
+			if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // a test double
+				t.Fatal(err)
+			}
+			m.seed(t, tool, "user", "cf", script, "mcp", "serve", "--profile", "read")
+			for _, verb := range []string{"install", "uninstall"} {
+				if code, out, errOut := run(t, "mcp", verb, "--"+tool); code != 0 {
+					t.Fatalf("%s: exit %d: %s%s", verb, code, out, errOut)
+				}
+				requireEqual(t, m.registered(t, tool)["cf"].Command, script)
+			}
+		})
+	}
+}
+
+func TestMCPCodex_ASymlinkedConfigIsRefusedBeforeAnythingChanges(t *testing.T) {
+	for _, verb := range []string{"install", "uninstall"} {
+		t.Run(verb, func(t *testing.T) {
+			m := newMCPMachine(t)
+			target := filepath.Join(t.TempDir(), "real.toml")
+			if err := os.WriteFile(target, []byte("[mcp_servers.cflk]\ncommand = \""+selfBinary(t)+"\"\nargs = [\"mcp\", \"serve\", \"--profile\", \"read\"]\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, m.codexConfig()); err != nil {
+				t.Fatal(err)
+			}
+			before := readFile(t, target)
+			code, _, errOut := run(t, "mcp", verb, "--codex")
+			if code == 0 || !strings.Contains(errOut, "symlink") {
+				t.Fatalf("exit %d: %s", code, errOut)
+			}
+			requireEqual(t, len(m.calls(t)), 0)
+			requireEqual(t, readFile(t, target), before)
+			if _, err := os.Stat(m.skill("codex")); !os.IsNotExist(err) {
+				t.Errorf("the skill was touched: %v", err)
+			}
+		})
 	}
 }
