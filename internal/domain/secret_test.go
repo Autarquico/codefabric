@@ -54,7 +54,7 @@ func TestValidSecretEnvName(t *testing.T) {
 
 		"": false, "1A": false, "A-B": false, "A.B": false, "A B": false, "Ñ": false,
 		strings.Repeat("A", MaxSecretEnvNameLen+1): false,
-		"CF_TOKEN": false, "GIT_ASKPASS": false, "TMUX": false, "TMUX_PANE": false,
+		"CF_TOKEN": false, "CFLK_DATA_DIR": false, "GIT_ASKPASS": false, "TMUX": false, "TMUX_PANE": false,
 		"PATH": false, "HOME": false, "SHELL": false, "USER": false,
 	} {
 		if got := ValidSecretEnvName(name); got != want {
@@ -65,8 +65,8 @@ func TestValidSecretEnvName(t *testing.T) {
 
 func TestReservedSecretEnv(t *testing.T) {
 	for name, want := range map[string]bool{
-		"CF_X": true, "GIT_DIR": true, "TMUX": true, "PATH": true, "USER": true,
-		"PATHS": false, "USERNAME": false, "CFX": false, "GITHUB_TOKEN": false,
+		"CF_X": true, "CFLK_X": true, "GIT_DIR": true, "TMUX": true, "PATH": true, "USER": true,
+		"PATHS": false, "USERNAME": false, "CFX": false, "CFLKX": false, "GITHUB_TOKEN": false,
 	} {
 		if got := ReservedSecretEnv(name); got != want {
 			t.Errorf("ReservedSecretEnv(%q) = %v, want %v", name, got, want)

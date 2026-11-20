@@ -46,7 +46,7 @@ const (
 	defaultApplyAttempts = 20
 	applyPollEvery       = 500 * time.Millisecond
 	defaultAvailability  = domain.AvailabilityAlways
-	resumeHint           = "cf worker join --resume"
+	resumeHint           = "cflk worker join --resume"
 )
 
 // workflowAPI is the part of *client.Client the initial Workflow needs.
@@ -170,7 +170,7 @@ func runWizard(ctx context.Context, env wizardEnv, p *prompt.Prompter, choices J
 		w.say("Reanudando el join de %s desde el paso %d.", pr.Name, pr.Step)
 	case pending && !choices.Force:
 		return domain.NewError(domain.CodeInvalidRequest,
-			"hay un join sin terminar en este equipo: continúalo con `"+resumeHint+"` o empieza de cero con `cf worker join --force`", nil)
+			"hay un join sin terminar en este equipo: continúalo con `"+resumeHint+"` o empieza de cero con `cflk worker join --force`", nil)
 	}
 	if err := w.steps(ctx); err != nil {
 		if errors.Is(err, io.EOF) {
@@ -457,7 +457,7 @@ func quoteArgv(argv []string) string {
 func (w *wizard) initialWorkflow(ctx context.Context) error {
 	api, err := w.env.Workflows()
 	if err != nil || api == nil {
-		w.say("Workflow inicial omitido: este equipo no tiene credenciales de cliente. Usa `cf workflow apply` desde un cliente.")
+		w.say("Workflow inicial omitido: este equipo no tiene credenciales de cliente. Usa `cflk workflow apply` desde un cliente.")
 		return nil
 	}
 	list, err := api.ListWorkflows(ctx)
@@ -516,7 +516,7 @@ func (w *wizard) apply(ctx context.Context, api workflowAPI, workflow, harnessID
 			return err
 		}
 	}
-	w.say("%s para %s queda pedido: se aplicará cuando arranque `cf worker run`.", workflow, harnessID)
+	w.say("%s para %s queda pedido: se aplicará cuando arranque `cflk worker run`.", workflow, harnessID)
 	return nil
 }
 
@@ -618,9 +618,9 @@ func (w *wizard) finish(ctx context.Context) error {
 	if err := setup.MarkDone(w.env.Paths); err != nil {
 		return err
 	}
-	w.say("\nListo: el Worker %s está preparado. Arráncalo con `cf worker run` (o `cf worker install-service`).", w.pr.Name)
+	w.say("\nListo: el Worker %s está preparado. Arráncalo con `cflk worker run` (o `cflk worker install-service`).", w.pr.Name)
 	w.say("Si su daemon ya estaba en marcha, reinícialo para que anuncie los harnesses elegidos: hasta entonces seguirá reportando `setup` en fallo " +
-		"(`cf worker run` de nuevo; si es un servicio, `systemctl --user restart cf-worker` o `launchctl kickstart -k gui/$(id -u)/com.codefabric.worker`).")
+		"(`cflk worker run` de nuevo; si es un servicio, `systemctl --user restart codeflock-worker` o `launchctl kickstart -k gui/$(id -u)/com.codeflock.worker`).")
 	return nil
 }
 

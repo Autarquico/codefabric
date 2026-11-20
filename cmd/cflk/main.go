@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/client/workflowadopt"
 	"github.com/Autarquico/codeflock/internal/controller/daemon"
 	"github.com/Autarquico/codeflock/internal/controller/relay"
+	"github.com/Autarquico/codeflock/internal/support/migrate"
 	"github.com/Autarquico/codeflock/internal/tui"
 	workerdaemon "github.com/Autarquico/codeflock/internal/worker/daemon"
 )
@@ -31,7 +33,18 @@ func main() { os.Exit(run()) }
 
 // run composes the binary: the CLI with the terminal that attaches over ssh, and
 // the commands of the daemons. Tests that need the binary to behave as cflk call it.
-func run() int { return cli.ExecuteWith(options(), commands()...) }
+func run() int {
+	if !slices.Contains(os.Args[1:], "install-service") {
+		// install-service moves the directories itself, with the service stopped.
+		release, err := migrate.Client(migrate.ClientEnv{Args: os.Args[1:]}, os.Stderr)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "cflk:", err)
+			return 1
+		}
+		defer release()
+	}
+	return cli.ExecuteWith(options(), commands()...)
+}
 
 // options are what the CLI cannot reach itself (ADR 0001).
 func options() cli.Options {
@@ -123,5 +136,5 @@ func (f failedAdopter) Commit(context.Context, string, *workflowadopt.Prepared, 
 }
 
 func commands() []*cobra.Command {
-	return []*cobra.Command{daemon.Command(), daemon.BackupCommand(), daemon.RestoreCommand(), workerdaemon.Command(), relay.Command(), mcpCommand(), newSetupCmd(binarySetupSteps())}
+	return []*cobra.Command{daemon.CommandWith(workerdaemon.NoLiveRuns(nil)), daemon.BackupCommand(), daemon.RestoreCommand(), workerdaemon.Command(), relay.Command(), mcpCommand(), newSetupCmd(binarySetupSteps())}
 }

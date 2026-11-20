@@ -305,8 +305,8 @@ func TestBackup_RefusesToOverwriteOrToWriteIntoTheDataDirectory(t *testing.T) {
 func TestBackupCommand_ReadsThePassphraseFromAFileAndWarnsWithoutOne(t *testing.T) {
 	p := newPaths(t)
 	initController(t, p)
-	t.Setenv("CF_CONFIG_DIR", p.ConfigDir)
-	t.Setenv("CF_DATA_DIR", p.DataDir)
+	t.Setenv("CFLK_CONFIG_DIR", p.ConfigDir)
+	t.Setenv("CFLK_DATA_DIR", p.DataDir)
 	dir := t.TempDir()
 	run := func(args ...string) (string, error) {
 		cmd := daemon.BackupCommand()

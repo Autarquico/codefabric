@@ -1,8 +1,10 @@
 package svcunit_test
 
 import (
+	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -231,5 +233,79 @@ func TestResolvePATH(t *testing.T) {
 	}
 	if got, err := svcunit.ResolvePATH("linux", "", "/opt/cf/cf"); err != nil || !strings.HasPrefix(got, "/opt/cf:") {
 		t.Errorf("calculated: %q %v", got, err)
+	}
+}
+
+func TestACLAllowsWriteOnlyForAnAllowThatWritesToSomeoneButRoot(t *testing.T) {
+	const header = "drwxr-xr-x+ 3 root  wheel  96 Jan  1 00:00 /usr/local/bin\n"
+	for _, tc := range []struct {
+		name, entries string
+		want          bool
+	}{
+		{"no ACL", "", false},
+		{"only a deny", " 0: group:everyone deny delete\n", false},
+		{"a read allow", " 0: user:ana allow list,search,readattr\n", false},
+		{"write", " 0: user:ana allow write,append\n", true},
+		{"add_file", " 0: group:staff allow list,add_file\n", true},
+		{"add_subdirectory", " 0: group:staff allow add_subdirectory\n", true},
+		{"delete_child", " 0: user:ana allow delete_child\n", true},
+		{"chown", " 0: user:ana allow chown\n", true},
+		{"writesecurity", " 0: user:ana allow writesecurity\n", true},
+		{"root itself", " 0: user:root allow write\n", false},
+		{"a deny first, then an allow", " 0: user:ana deny write\n 1: group:staff allow write\n", true},
+	} {
+		if got := svcunit.ACLAllowsWrite(header + tc.entries); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The real `ls -lde` of macOS, over a file with an ACL made by chmod +a.
+func TestACLOpensReadsTheACLOfAFileOnMacOS(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("ACLs are read with the ls of macOS")
+	}
+	file := filepath.Join(t.TempDir(), "program")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if reason := svcunit.ACLOpens(file); reason != "" {
+		t.Fatalf("a file with no ACL: %q", reason)
+	}
+	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "chmod", "-N", file).Run() }) //nolint:gosec // a temporary file; a deny delete would keep it from being removed
+	run := func(entry string) {
+		t.Helper()
+		out, err := exec.CommandContext(t.Context(), "chmod", "+a", entry, file).CombinedOutput() //nolint:gosec // a temporary file of this test
+		if err != nil {
+			t.Skipf("chmod +a: %v: %s", err, out)
+		}
+	}
+	run("group:everyone deny delete")
+	if reason := svcunit.ACLOpens(file); reason != "" {
+		t.Errorf("an ACL that only denies: %q", reason)
+	}
+	run("group:everyone allow write")
+	if reason := svcunit.ACLOpens(file); reason == "" {
+		t.Error("an ACL that lets everyone write was not seen")
+	}
+}
+
+// The ACL is read with /bin/ls, not with the first ls of the PATH.
+func TestACLOpensIgnoresAnLsOnThePATH(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("ACLs are read with the ls of macOS")
+	}
+	bin := t.TempDir()
+	fake := "#!/bin/sh\necho '-rw-r--r-- 1 a b 0 Jan 1 00:00 f'\necho ' 0: user:mallory allow write'\n"
+	if err := os.WriteFile(filepath.Join(bin, "ls"), []byte(fake), 0o700); err != nil { //nolint:gosec // a script that stands for ls
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	file := filepath.Join(t.TempDir(), "program")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if reason := svcunit.ACLOpens(file); reason != "" {
+		t.Errorf("the ls of the PATH was used: %q", reason)
 	}
 }

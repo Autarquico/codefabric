@@ -30,7 +30,7 @@ type environmentWorld struct {
 func newEnvironmentWorld(t *testing.T, def map[string]any) environmentWorld {
 	t.Helper()
 	w := environmentWorld{repoConfigWorld: newRepoConfigWorld(t, map[string]string{"README.md": "hello\n"})}
-	w.host = config.Paths{ConfigDir: os.Getenv("CF_CONFIG_DIR"), DataDir: os.Getenv("CF_DATA_DIR")}
+	w.host = config.Paths{ConfigDir: os.Getenv("CFLK_CONFIG_DIR"), DataDir: os.Getenv("CFLK_DATA_DIR")}
 
 	use(t, w.box)
 	if code, _, errOut := setSecret(t, environmentSecret+"\n", "env/token"); code != 0 {

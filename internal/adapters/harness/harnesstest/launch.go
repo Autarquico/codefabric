@@ -99,7 +99,7 @@ func (e *env) checkLaunch(t *testing.T, op string, l harness.Launch) {
 		if !ok || k == "" {
 			t.Errorf("%s: env entry %q is not KEY=VALUE", op, kv)
 		}
-		if strings.HasPrefix(k, "CF_") || strings.HasPrefix(k, "TMUX") {
+		if strings.HasPrefix(k, "CF_") || strings.HasPrefix(k, "CFLK_") || strings.HasPrefix(k, "TMUX") {
 			t.Errorf("%s: adds %s, a variable of the Runtime, to the environment", op, k)
 		}
 	}

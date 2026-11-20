@@ -170,7 +170,7 @@ func (o *outer) panePID() int {
 // attachEnv is the environment of `cflk attach` as a client on the laptop, with the fake ssh first in the PATH.
 func (o *observeBox) attachEnv(extra ...string) []string {
 	return append([]string{
-		asCF + "=1", "CF_CONFIG_DIR=" + o.client.ConfigDir, "CF_DATA_DIR=" + o.client.DataDir,
+		asCF + "=1", "CFLK_CONFIG_DIR=" + o.client.ConfigDir, "CFLK_DATA_DIR=" + o.client.DataDir,
 		"PATH=" + o.fakeBin + ":" + os.Getenv("PATH"), "FAKE_SSH_LOG=" + o.sshLog, "TERM=xterm-256color",
 	}, extra...)
 }
@@ -312,7 +312,7 @@ func startCFProcess(t *testing.T, paths config.Paths, args ...string) *cfProcess
 	}
 	p := &cfProcess{out: &syncBuffer{}, done: make(chan struct{})}
 	p.cmd = exec.CommandContext(context.WithoutCancel(t.Context()), exe, args...) //nolint:gosec // this very test binary
-	p.cmd.Env = append(os.Environ(), asCF+"=1", "CF_CONFIG_DIR="+paths.ConfigDir, "CF_DATA_DIR="+paths.DataDir)
+	p.cmd.Env = append(os.Environ(), asCF+"=1", "CFLK_CONFIG_DIR="+paths.ConfigDir, "CFLK_DATA_DIR="+paths.DataDir)
 	p.cmd.Stdout, p.cmd.Stderr = p.out, p.out
 	if err := p.cmd.Start(); err != nil {
 		t.Fatal(err)

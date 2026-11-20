@@ -116,3 +116,71 @@ func launchdEnv(plist []byte) (map[string]string, error) {
 	}
 	return env, nil
 }
+
+// systemdArgv reads the ExecStart= of a unit this package wrote: the quoted
+// arguments, undone as execArg did them.
+func systemdArgv(unit []byte) []string {
+	undo := strings.NewReplacer(`\\`, `\`, `\"`, `"`, "%%", "%", "$$", "$")
+	lines := bufio.NewScanner(bytes.NewReader(unit))
+	for lines.Scan() {
+		rest, found := strings.CutPrefix(lines.Text(), "ExecStart=")
+		if !found {
+			continue
+		}
+		var argv []string
+		for len(rest) > 0 && rest[0] == '"' {
+			end := 1
+			for end < len(rest) && rest[end] != '"' {
+				if rest[end] == '\\' {
+					end++
+				}
+				end++
+			}
+			if end >= len(rest) {
+				return nil
+			}
+			argv = append(argv, undo.Replace(rest[1:end]))
+			rest = strings.TrimPrefix(rest[end+1:], " ")
+		}
+		return argv
+	}
+	return nil
+}
+
+// PlistInfo is what a property list of a service says of how it runs.
+type PlistInfo struct {
+	Argv     []string
+	Env      map[string]string
+	UserName string // of a LaunchDaemon that runs as a user; empty for an agent
+}
+
+// ReadPlist reads the property list of a launchd service.
+func ReadPlist(plist []byte) (PlistInfo, error) {
+	var doc struct {
+		Dict plistNode `xml:"dict"`
+	}
+	if err := xml.Unmarshal(plist, &doc); err != nil {
+		return PlistInfo{}, fmt.Errorf("svcunit: reading the property list: %w", err)
+	}
+	info := PlistInfo{Env: map[string]string{}}
+	top := doc.Dict.Children
+	for i := 0; i+1 < len(top); i++ {
+		if top[i].XMLName.Local != "key" {
+			continue
+		}
+		value := top[i+1]
+		switch {
+		case top[i].Text == "UserName" && value.XMLName.Local == "string":
+			info.UserName = value.Text
+		case top[i].Text == "ProgramArguments" && value.XMLName.Local == "array":
+			for _, arg := range value.Children {
+				info.Argv = append(info.Argv, arg.Text)
+			}
+		case top[i].Text == "EnvironmentVariables" && value.XMLName.Local == "dict":
+			for j := 0; j+1 < len(value.Children); j += 2 {
+				info.Env[value.Children[j].Text] = value.Children[j+1].Text
+			}
+		}
+	}
+	return info, nil
+}

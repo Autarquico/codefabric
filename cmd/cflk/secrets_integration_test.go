@@ -56,7 +56,7 @@ func TestSecretsLocal_AValueOnStdinIsNeverInArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.CommandContext(t.Context(), exe, "worker", "secrets", "set", "github/token") //nolint:gosec // this very test binary
-	cmd.Env = append(os.Environ(), asCF+"=1", "CF_CONFIG_DIR="+box.ConfigDir, "CF_DATA_DIR="+box.DataDir)
+	cmd.Env = append(os.Environ(), asCF+"=1", "CFLK_CONFIG_DIR="+box.ConfigDir, "CFLK_DATA_DIR="+box.DataDir)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func newPromptBox(t *testing.T, ref string) *promptBox {
 	status := filepath.Join(t.TempDir(), "status")
 	// The shell lets the interrupt reach cf alone, and outlives it to report.
 	script := `trap : INT; "$1" worker secrets set "$2"; echo "exit=$?" > "$3.tmp"; stty -a >> "$3.tmp"; mv "$3.tmp" "$3"; sleep 60`
-	env := []string{asCF + "=1", "CF_CONFIG_DIR=" + box.ConfigDir, "CF_DATA_DIR=" + box.DataDir, "TERM=xterm-256color"}
+	env := []string{asCF + "=1", "CFLK_CONFIG_DIR=" + box.ConfigDir, "CFLK_DATA_DIR=" + box.DataDir, "TERM=xterm-256color"}
 	o := inTerminal(t, env, "/bin/sh", "-c", script, "sh", exe, ref, status)
 	p := &promptBox{outer: o, box: box, status: status}
 	p.waitScreen(t, "Value of secret "+ref)

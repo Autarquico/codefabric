@@ -167,8 +167,9 @@ func (f *Systemd) Run(_ context.Context, argv ...string) (string, error) {
 	switch argv[2] {
 	case "show":
 		yes := map[bool]string{true: "yes", false: "no"}[f.NeedDaemonReload]
-		return fmt.Sprintf("LoadState=%s\nUnitFileState=%s\nActiveState=%s\nNeedDaemonReload=%s\nFragmentPath=%s\nKillMode=%s\nDropInPaths=\n",
-			f.LoadState, f.UnitFileState, f.ActiveState, yes, f.Fragment, f.killMode), nil
+		sub := map[bool]string{true: "running", false: "dead"}[f.ActiveState == "active"]
+		return fmt.Sprintf("LoadState=%s\nUnitFileState=%s\nActiveState=%s\nNeedDaemonReload=%s\nFragmentPath=%s\nKillMode=%s\nDropInPaths=\nSubState=%s\nNRestarts=0\n",
+			f.LoadState, f.UnitFileState, f.ActiveState, yes, f.Fragment, f.killMode, sub), nil
 	case "daemon-reload":
 		f.reload()
 	case "enable":
@@ -289,11 +290,11 @@ func (f *Launchd) print(argv []string, target string) (string, error) {
 	if !loaded {
 		return "", Exit(argv, 113, fmt.Sprintf("Could not find service %q in domain", f.Label))
 	}
-	state := "not running"
+	state, pid := "not running", ""
 	if f.Running {
-		state = "running"
+		state, pid = "running", "\tpid = 4242\n"
 	}
-	out := fmt.Sprintf("%s = {\n\tpath = %s\n\ttype = LaunchAgent\n\tstate = %s\n\n\tresource coalition = {\n\t\tstate = active\n\t}\n", target, f.from, state)
+	out := fmt.Sprintf("%s = {\n\tpath = %s\n\ttype = LaunchAgent\n\tstate = %s\n"+pid+"\n\tresource coalition = {\n\t\tstate = active\n\t}\n", target, f.from, state)
 	switch f.Abandon {
 	case "unknown":
 	case "":
@@ -307,4 +308,107 @@ func (f *Launchd) print(argv []string, target string) (string, error) {
 		out += "\tproperties = " + f.Abandon + "\n"
 	}
 	return out + "}\n", nil
+}
+
+// SystemdFleet is a user's systemd with any number of units, found by their
+// files under Home, for what moves a service from one name to another.
+type SystemdFleet struct {
+	recorder
+	Home     string
+	enable   map[string]bool
+	active   map[string]bool
+	sub      map[string]string
+	restarts map[string]int
+}
+
+// NewSystemdFleet is a systemd of a user whose home is home, with no unit loaded.
+func NewSystemdFleet(home string) *SystemdFleet {
+	return &SystemdFleet{Home: home, enable: map[string]bool{}, active: map[string]bool{}, sub: map[string]string{}, restarts: map[string]int{}}
+}
+
+// Set makes unit enabled and running, or not, as if the manager had loaded its file.
+func (f *SystemdFleet) Set(unit string, enabled, active bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.enable[unit], f.active[unit] = enabled, active
+}
+
+// SetSubState makes systemd say unit is in this sub state (auto-restart, start...) while it stays active.
+func (f *SystemdFleet) SetSubState(unit, sub string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub[unit] = sub
+}
+
+// CountRestart makes systemd say unit has restarted once more by itself.
+func (f *SystemdFleet) CountRestart(unit string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restarts[unit]++
+}
+
+// Active says whether unit is running.
+func (f *SystemdFleet) Active(unit string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.active[unit]
+}
+
+// Run is systemctl --user and loginctl.
+func (f *SystemdFleet) Run(_ context.Context, argv ...string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record(argv); err != nil {
+		return "", err
+	}
+	if argv[0] == "loginctl" {
+		return "yes\n", nil
+	}
+	if len(argv) == 3 && argv[0] == "systemctl" && argv[2] == "daemon-reload" {
+		return "", nil
+	}
+	if len(argv) < 4 || argv[0] != "systemctl" || argv[1] != "--user" {
+		return "", fmt.Errorf("svcunittest: unexpected command %q", argv)
+	}
+	unit := argv[len(argv)-1]
+	path := filepath.Join(f.Home, ".config", "systemd", "user", unit)
+	_, statErr := os.Stat(path)
+	exists := statErr == nil
+	switch argv[2] {
+	case "show":
+		load, fragment, kill, state, file := "not-found", "", "", "inactive", ""
+		if exists {
+			load, fragment, kill = "loaded", path, "control-group"
+			if b, _ := os.ReadFile(path); strings.Contains(string(b), "\nKillMode=process\n") { //nolint:gosec // the unit file of the fake
+				kill = "process"
+			}
+		}
+		if f.active[unit] {
+			state = "active"
+		}
+		if f.enable[unit] {
+			file = "enabled"
+		}
+		sub := f.sub[unit]
+		if sub == "" {
+			sub = map[bool]string{true: "running", false: "dead"}[f.active[unit]]
+		}
+		return fmt.Sprintf("LoadState=%s\nUnitFileState=%s\nActiveState=%s\nNeedDaemonReload=no\nFragmentPath=%s\nKillMode=%s\nDropInPaths=\nSubState=%s\nNRestarts=%d\n",
+			load, file, state, fragment, kill, sub, f.restarts[unit]), nil
+	case "enable":
+		f.enable[unit] = true
+	case "disable":
+		f.enable[unit] = false
+	case "start", "restart":
+		if !exists {
+			return "", Exit(argv, 5, "Unit not found.")
+		}
+		f.active[unit] = true
+	case "stop", "reset-failed":
+		f.active[unit] = false
+		delete(f.sub, unit)
+	default:
+		return "", fmt.Errorf("svcunittest: unexpected command %q", argv)
+	}
+	return "", nil
 }

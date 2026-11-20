@@ -251,6 +251,18 @@ linters:
             - $gostd
             - github.com/Autarquico/codeflock/internal/support/svcunit
             - github.com/Autarquico/codeflock/internal/support/atomicfile
+        # support is the leaf utilities: it never reaches up to the Worker, the
+        # Controller or an adapter, which inject what they know (migrate.LiveRuns).
+        support:
+          list-mode: lax
+          files: ["**/internal/support/**", "!$test"]
+          deny:
+            - pkg: github.com/Autarquico/codeflock/internal/worker
+              desc: support does not know the Worker; it is given what it needs
+            - pkg: github.com/Autarquico/codeflock/internal/controller
+              desc: support does not know the Controller; it is given what it needs
+            - pkg: github.com/Autarquico/codeflock/internal/adapters
+              desc: support does not know the adapters; it is given what it needs
         store:
           list-mode: lax
           files: ["**/internal/controller/store/**"]

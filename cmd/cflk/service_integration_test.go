@@ -316,7 +316,7 @@ func TestServiceUnits_TheDaemonGetsItsArgvAndEnvironment(t *testing.T) {
 		t.Fatalf("%v: %s", err, raw)
 	}
 	wantArgs := []string{"worker", "run", "--ssh-target", "me@box"}
-	wantEnv := map[string]string{"CF_CONFIG_DIR": box.ConfigDir, "CF_DATA_DIR": box.DataDir, "PATH": o.PATH, "TMUX_TMPDIR": o.TmuxTmpDir}
+	wantEnv := map[string]string{"CFLK_CONFIG_DIR": box.ConfigDir, "CFLK_DATA_DIR": box.DataDir, "PATH": o.PATH, "TMUX_TMPDIR": o.TmuxTmpDir}
 	if !slices.Equal(got.Args, wantArgs) || fmt.Sprint(got.Env) != fmt.Sprint(wantEnv) {
 		t.Errorf("the daemon got %+v\nwant args %q and env %q\n(%s)", got, wantArgs, wantEnv, m.logs(t, res))
 	}

@@ -1,4 +1,4 @@
-# Written by `cf worker install-service`: running it again rewrites this file.
+# Written by `cflk worker install-service`: running it again rewrites this file.
 [Unit]
 Description=CodeFabric Worker
 

@@ -21,7 +21,7 @@ const awkward = `/Users/a b/100% "cf" $HOME\x &<>`
 func workerSpec() svcunit.Spec {
 	return svcunit.Spec{
 		Name: "cf-worker", Label: "com.codefabric.worker", Description: "CodeFabric Worker",
-		Installer: "cf worker install-service",
+		Installer: "cflk worker install-service",
 		Argv:      []string{"/opt/cf dir/bin/cf", "worker", "run", "--ssh-target", "me@host", awkward},
 		Env: []svcunit.KV{
 			{Key: "CF_CONFIG_DIR", Value: "/home/me/.config/codefabric"},
@@ -35,7 +35,7 @@ func workerSpec() svcunit.Spec {
 func controllerSpec() svcunit.Spec {
 	return svcunit.Spec{
 		Name: "cf-controller", Label: "com.codefabric.controller", Description: "CodeFabric Controller",
-		Installer: "cf controller install-service",
+		Installer: "cflk controller install-service",
 		Argv:      []string{"/usr/local/bin/cf", "controller", "run"},
 		Env:       []svcunit.KV{{Key: "CF_DATA_DIR", Value: "/srv/cf 50%"}, {Key: "PATH", Value: "/usr/bin:/bin"}},
 	}
@@ -106,7 +106,7 @@ func TestRender_RefusesWhatAFileCannotHold(t *testing.T) {
 		"relative program":       func(s *svcunit.Spec) { s.Argv[0] = "cf" },
 		"bad variable name":      func(s *svcunit.Spec) { s.Env[0].Key = "A B" },
 		"bad unit name":          func(s *svcunit.Spec) { s.Name = "cf/worker" },
-		"dashes in the comment":  func(s *svcunit.Spec) { s.Installer = "cf -- x" },
+		"dashes in the comment":  func(s *svcunit.Spec) { s.Installer = "cflk -- x" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			spec := workerSpec()

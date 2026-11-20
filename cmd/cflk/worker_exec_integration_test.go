@@ -42,7 +42,7 @@ func startDaemon(t *testing.T, box config.Paths) *daemonProcess {
 	}
 	d := &daemonProcess{t: t, out: &syncBuffer{}, done: make(chan struct{})}
 	d.cmd = exec.CommandContext(context.WithoutCancel(t.Context()), exe, "worker", "run") //nolint:gosec // this very test binary
-	d.cmd.Env = append(os.Environ(), asCF+"=1", "CF_CONFIG_DIR="+box.ConfigDir, "CF_DATA_DIR="+box.DataDir)
+	d.cmd.Env = append(os.Environ(), asCF+"=1", "CFLK_CONFIG_DIR="+box.ConfigDir, "CFLK_DATA_DIR="+box.DataDir)
 	d.cmd.Stdout, d.cmd.Stderr = d.out, d.out
 	if err := d.cmd.Start(); err != nil {
 		t.Fatal(err)

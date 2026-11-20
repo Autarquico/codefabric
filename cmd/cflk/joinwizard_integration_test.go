@@ -30,7 +30,7 @@ func TestScenario_DoctorAndJoinWizard_SetupPendiente(t *testing.T) {
 
 	// invitation, name, cpus, memory, availability, disk; then the input ends at the harness questions.
 	code, out, _ := cf(t, invite+"\nalpha\n\n\n\n"+lowDisk+"\n", "setup", "--role", "worker")
-	if code == 0 || !strings.Contains(out, "cf worker join --resume") {
+	if code == 0 || !strings.Contains(out, "cflk worker join --resume") {
 		t.Fatalf("an interrupted wizard: exit %d\n%s", code, out)
 	}
 

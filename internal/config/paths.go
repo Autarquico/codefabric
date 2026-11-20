@@ -1,19 +1,25 @@
-// Package config resolves where CodeFabric keeps its files and reads the
+// Package config resolves where Code Flock keeps its files and reads the
 // Controller's own settings.
 package config
 
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 
 	"github.com/Autarquico/codeflock/internal/domain"
 )
 
-const appDir = "codefabric"
+const (
+	appDir       = "codeflock"
+	legacyAppDir = "codefabric"
+)
 
-// Paths are the effective locations of CodeFabric's files (§35).
+// Paths are the effective locations of Code Flock's files (§35).
 type Paths struct {
 	ConfigDir string // client credentials and controller.json
 	DataDir   string // controller.db and the PKI
@@ -83,36 +89,130 @@ func (p Paths) GCLockFile() string { return filepath.Join(p.DataDir, "gc.lock") 
 // PKIDir holds the CA and the server certificate.
 func (p Paths) PKIDir() string { return filepath.Join(p.DataDir, "pki") }
 
-// Resolve applies, per directory: the CF_* override, then the XDG variable,
-// then the XDG default under the home directory. It uses the XDG layout on
-// every OS so a CLI user finds the same paths everywhere; see ADR 0002 D8.
-// Relative values are ignored, as the XDG specification requires.
+// Located is Paths with whether each directory is the default one, that is,
+// not given by a variable of the user: only a default directory is migrated
+// from its pre-rename name; one given by hand is respected as it is.
+type Located struct {
+	Paths
+	ConfigIsDefault bool
+	DataIsDefault   bool
+}
+
+// LegacyOf is the directory a default directory had before the rename of
+// CodeFabric to Code Flock: the same place under the old application name.
+func LegacyOf(dir string) string { return filepath.Join(filepath.Dir(dir), legacyAppDir) }
+
+// legacyVarWarning is where the use of a CF_* variable is reported, and
+// warnedVars what has been reported already: once per process and variable.
+var (
+	legacyVarWarning io.Writer = os.Stderr
+	warnedVars       sync.Map
+)
+
+func warnLegacyVar(old, current string) {
+	if _, seen := warnedVars.LoadOrStore(old, true); !seen {
+		_, _ = fmt.Fprintf(legacyVarWarning, "cflk: %s is deprecated and will stop being read in 0.5; use %s\n", old, current)
+	}
+}
+
+// Resolve is Locate, keeping the old directories while they are in use: a
+// default directory that does not exist, next to the one it had before the
+// rename that does, is the old one. Nothing moves them while a service of the
+// old name is installed (its install-service does), and until then that
+// service, and the client with it, go on with what they have. It says so once
+// per process, naming the service.
 func Resolve(getenv func(string) string, home func() (string, error)) (Paths, error) {
-	dir := func(override, xdgVar, homeRel string) (string, error) {
-		if v := getenv(override); v != "" {
+	l, err := Locate(getenv, home)
+	if err != nil {
+		return Paths{}, err
+	}
+	var kept bool
+	keep := func(dir *string, isDefault bool) {
+		if !isDefault {
+			return
+		}
+		if _, err := os.Lstat(*dir); err == nil {
+			return
+		}
+		if old := LegacyOf(*dir); isDir(old) {
+			*dir, kept = old, true
+		}
+	}
+	keep(&l.ConfigDir, l.ConfigIsDefault)
+	keep(&l.DataDir, l.DataIsDefault)
+	if kept {
+		warnOldUnits(home)
+	}
+	return l.Paths, nil
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func warnOldUnits(home func() (string, error)) {
+	h, err := home()
+	if err != nil {
+		return
+	}
+	for _, u := range OldUnits(h, runtime.GOOS) {
+		if _, seen := warnedVars.LoadOrStore("unit "+u.Name, true); !seen {
+			_, _ = fmt.Fprintf(legacyVarWarning, "cflk: the service %s still uses the old codefabric directories, so they were not moved; "+
+				"run `cflk %s install-service` to move them with the service\n", u.Name, u.Kind)
+		}
+	}
+}
+
+// Override is the variable that gives a directory and its value: the CFLK_*
+// one if it is set, else the CF_* one it had before the rename, else the first
+// with an empty value. It is the one rule of precedence, for the environment of
+// the process (Locate) and for that of a service unit alike.
+func Override(getenv func(string) string, override, legacyOverride string) (name, value string) {
+	if v := getenv(override); v != "" {
+		return override, v
+	}
+	if v := getenv(legacyOverride); v != "" {
+		return legacyOverride, v
+	}
+	return override, ""
+}
+
+// Locate applies, per directory: the CFLK_* override, then the CF_* one (read
+// with a warning until 0.5), then the XDG variable, then the XDG default under
+// the home directory. It uses the XDG layout on every OS so a CLI user finds
+// the same paths everywhere; see ADR 0002 D8. Relative values are ignored, as
+// the XDG specification requires.
+func Locate(getenv func(string) string, home func() (string, error)) (Located, error) {
+	dir := func(override, legacyOverride, xdgVar, homeRel string) (path string, isDefault bool, err error) {
+		name, v := Override(getenv, override, legacyOverride)
+		if name == legacyOverride {
+			warnLegacyVar(legacyOverride, override)
+		}
+		if v != "" {
 			if !filepath.IsAbs(v) {
-				return "", fmt.Errorf("config: %s must be an absolute path, got %q", override, v)
+				return "", false, fmt.Errorf("config: %s must be an absolute path, got %q", name, v)
 			}
-			return filepath.Clean(v), nil
+			return filepath.Clean(v), false, nil
 		}
 		if v := getenv(xdgVar); filepath.IsAbs(v) {
-			return filepath.Join(v, appDir), nil
+			return filepath.Join(v, appDir), true, nil
 		}
 		h, err := home()
 		if err != nil {
-			return "", fmt.Errorf("config: locating the home directory: %w", err)
+			return "", false, fmt.Errorf("config: locating the home directory: %w", err)
 		}
-		return filepath.Join(h, homeRel, appDir), nil
+		return filepath.Join(h, homeRel, appDir), true, nil
 	}
-	cfg, err := dir("CF_CONFIG_DIR", "XDG_CONFIG_HOME", ".config")
+	cfg, cfgDefault, err := dir("CFLK_CONFIG_DIR", "CF_CONFIG_DIR", "XDG_CONFIG_HOME", ".config")
 	if err != nil {
-		return Paths{}, err
+		return Located{}, err
 	}
-	data, err := dir("CF_DATA_DIR", "XDG_DATA_HOME", filepath.Join(".local", "share"))
+	data, dataDefault, err := dir("CFLK_DATA_DIR", "CF_DATA_DIR", "XDG_DATA_HOME", filepath.Join(".local", "share"))
 	if err != nil {
-		return Paths{}, err
+		return Located{}, err
 	}
-	return Paths{ConfigDir: cfg, DataDir: data}, nil
+	return Located{Paths: Paths{ConfigDir: cfg, DataDir: data}, ConfigIsDefault: cfgDefault, DataIsDefault: dataDefault}, nil
 }
 
 // ResolveFromEnv is Resolve over the real environment.

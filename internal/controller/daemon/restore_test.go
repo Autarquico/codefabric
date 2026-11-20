@@ -283,8 +283,8 @@ func TestScenario_RestoreWithAWrongOrMissingPassphraseLeavesNothingBehind(t *tes
 func TestScenario_RestoreWithoutACAExplainsHowToJoinAgain(t *testing.T) {
 	src, backup := backupFile(t, "")
 	dst := newPaths(t)
-	t.Setenv("CF_CONFIG_DIR", dst.ConfigDir)
-	t.Setenv("CF_DATA_DIR", dst.DataDir)
+	t.Setenv("CFLK_CONFIG_DIR", dst.ConfigDir)
+	t.Setenv("CFLK_DATA_DIR", dst.DataDir)
 	addr := freeAddr(t)
 
 	cmd := daemon.RestoreCommand()
@@ -295,7 +295,7 @@ func TestScenario_RestoreWithoutACAExplainsHowToJoinAgain(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 
-	for _, want := range []string{addr, "cf controller run", "cf controller token create", "cf connect --force", "cf worker join --force", "cf worker list", "cf worker remove", "then restart the Worker", dst.CredentialsDir()} {
+	for _, want := range []string{addr, "cflk controller run", "cflk controller token create", "cflk connect --force", "cflk worker join --force", "cflk worker list", "cflk worker remove", "then restart the Worker", dst.CredentialsDir()} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("the next steps do not mention %q:\n%s", want, stdout.String())
 		}
@@ -372,8 +372,8 @@ func TestRestore_ListenFollowsTheAdvertisedPortAndIsValidated(t *testing.T) {
 func TestRestoreCommand_ReadsThePassphraseFromAFile(t *testing.T) {
 	_, backup := backupFile(t, "hunter2")
 	dst := newPaths(t)
-	t.Setenv("CF_CONFIG_DIR", dst.ConfigDir)
-	t.Setenv("CF_DATA_DIR", dst.DataDir)
+	t.Setenv("CFLK_CONFIG_DIR", dst.ConfigDir)
+	t.Setenv("CFLK_DATA_DIR", dst.DataDir)
 	pass := filepath.Join(t.TempDir(), "pass")
 	write(t, pass, "hunter2\n", 0o600)
 

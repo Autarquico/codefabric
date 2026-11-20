@@ -13,15 +13,22 @@ import (
 	"github.com/Autarquico/codeflock/internal/client"
 	"github.com/Autarquico/codeflock/internal/config"
 	"github.com/Autarquico/codeflock/internal/domain"
+	"github.com/Autarquico/codeflock/internal/support/migrate"
 	"github.com/Autarquico/codeflock/internal/support/svcunit"
 )
 
 const defaultPort = "7443"
 
 // Command is `cflk controller`: init, run, token create and its service.
-func Command() *cobra.Command {
+// Without the Runs check, a migration that would move a Worker sharing its
+// root is refused.
+func Command() *cobra.Command { return CommandWith(nil) }
+
+// CommandWith is Command with the check of the Runs of a Worker that shares the
+// root of the Controller and so moves along with it (migrate.LiveRuns).
+func CommandWith(runs migrate.LiveRuns) *cobra.Command {
 	cmd := &cobra.Command{Use: "controller", Short: "Run and administer the Controller"}
-	cmd.AddCommand(newInitCmd(), newRunCmd(), newTokenCmd(), newInstallServiceCmd(), newUninstallServiceCmd())
+	cmd.AddCommand(newInitCmd(), newRunCmd(), newTokenCmd(), newInstallServiceCmd(runs), newUninstallServiceCmd())
 	return cmd
 }
 
@@ -139,9 +146,9 @@ func newTokenCmd() *cobra.Command {
 	return token
 }
 
-func newInstallServiceCmd() *cobra.Command {
+func newInstallServiceCmd(runs migrate.LiveRuns) *cobra.Command {
 	var (
-		o      ServiceOptions
+		o      = ServiceOptions{LiveRuns: runs}
 		dryRun bool
 	)
 	cmd := &cobra.Command{

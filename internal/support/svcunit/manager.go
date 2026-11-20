@@ -47,6 +47,11 @@ type manager interface {
 	path(Spec) string
 	render(Spec) ([]byte, error)
 	installedEnv(file []byte) (map[string]string, error)
+	installedArgv(file []byte) ([]string, error)
+	active(*op, Spec) (bool, error)
+	probe(*op, Spec) (Probe, error)
+	stop(*op, Spec) error
+	start(*op, Spec) error
 	install(*op, Spec) error
 	uninstall(*op, Spec) error
 }
@@ -122,6 +127,78 @@ func InstalledEnv(env Env, s Spec) (vars map[string]string, found bool, err erro
 	}
 	vars, err = m.installedEnv(file)
 	return vars, err == nil, err
+}
+
+// Installed is a service as its file says, and whether it is running.
+type Installed struct {
+	Found  bool
+	Env    map[string]string
+	Argv   []string // the program first
+	Active bool
+}
+
+// Inspect reads the file of the service of s and asks the manager whether it
+// runs. Nothing changes.
+func Inspect(ctx context.Context, env Env, s Spec) (Installed, error) {
+	m, err := managerFor(env)
+	if err != nil {
+		return Installed{}, err
+	}
+	file, err := os.ReadFile(m.path(s))
+	if errors.Is(err, os.ErrNotExist) {
+		return Installed{}, nil
+	}
+	if err != nil {
+		return Installed{}, fmt.Errorf("svcunit: %w", err)
+	}
+	in := Installed{Found: true}
+	if in.Env, err = m.installedEnv(file); err != nil {
+		return Installed{}, err
+	}
+	if in.Argv, err = m.installedArgv(file); err != nil {
+		return Installed{}, err
+	}
+	o := &op{ctx: ctx, runner: env.Runner}
+	in.Active, err = m.active(o, s)
+	return in, err
+}
+
+// Probe is one reading of whether a service is up, for telling a service that
+// stays up from one that is starting, or that fails and is restarted.
+type Probe struct {
+	// Up is a service in its steady running state, not one starting, stopping
+	// or waiting to restart.
+	Up bool
+	// Generation changes when the service restarts: the restart counter of
+	// systemd, the process id under launchd.
+	Generation string
+}
+
+// ProbeOf reads Probe from the manager. Nothing changes.
+func ProbeOf(ctx context.Context, env Env, s Spec) (Probe, error) {
+	m, err := managerFor(env)
+	if err != nil {
+		return Probe{}, err
+	}
+	return m.probe(&op{ctx: ctx, runner: env.Runner}, s)
+}
+
+// Stop stops the service of s, if it runs, and leaves it installed. With
+// KeepProcesses, a service whose manager would kill what the daemon started is
+// refused, as Uninstall does.
+func Stop(ctx context.Context, env Env, s Spec) (Result, error) {
+	if err := s.validateNames(); err != nil {
+		return Result{}, err
+	}
+	return do(ctx, env, s, manager.stop)
+}
+
+// Start runs the service of s, installed and stopped, from its file as it is.
+func Start(ctx context.Context, env Env, s Spec) (Result, error) {
+	if err := s.validateNames(); err != nil {
+		return Result{}, err
+	}
+	return do(ctx, env, s, manager.start)
 }
 
 // op is one Install or Uninstall: it runs the tools and keeps what it changed.

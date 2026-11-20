@@ -88,7 +88,7 @@ type ClientAttach struct {
 	// SSHTargets maps the name of a Worker to the ssh target to reach it with
 	// ([user@]host[:port]), instead of the one the Worker announced.
 	SSHTargets map[string]string `json:"ssh_targets,omitempty"`
-	// DetachKey is the key of cf that leaves a live session and returns to where
+	// DetachKey is the key of cflk that leaves a live session and returns to where
 	// the person was (the TUI, or the shell): "ctrl+" and a letter, "]", "\\", "^"
 	// or "_". Absent, DefaultDetachKey. tmux's own C-] on the Worker stays as a
 	// fallback whatever this says.

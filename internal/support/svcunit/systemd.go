@@ -19,6 +19,43 @@ func (systemd) render(s Spec) ([]byte, error) { return renderSystemd(s) }
 
 func (systemd) installedEnv(file []byte) (map[string]string, error) { return systemdEnv(file), nil }
 
+func (systemd) installedArgv(file []byte) ([]string, error) { return systemdArgv(file), nil }
+
+func (m systemd) active(o *op, s Spec) (bool, error) {
+	u, err := m.show(o, s.Name+".service")
+	return err == nil && u.running(), err
+}
+
+func (m systemd) probe(o *op, s Spec) (Probe, error) {
+	u, err := m.show(o, s.Name+".service")
+	if err != nil {
+		return Probe{}, err
+	}
+	return Probe{Up: u["ActiveState"] == "active" && u["SubState"] == "running", Generation: u["NRestarts"]}, nil
+}
+
+// stop stops the unit and leaves it, and its file, as they are.
+func (m systemd) stop(o *op, s Spec) error {
+	o.res.Manager, o.res.Unit = "systemd", s.Name+".service"
+	u, err := m.show(o, o.res.Unit)
+	if err != nil || !u.running() {
+		return err
+	}
+	if err := m.checkEffective(u, s, m.path(s)); err != nil {
+		return err
+	}
+	return o.act("systemctl", "--user", "stop", o.res.Unit)
+}
+
+func (m systemd) start(o *op, s Spec) error {
+	o.res.Manager, o.res.Unit = "systemd", s.Name+".service"
+	u, err := m.show(o, o.res.Unit)
+	if err != nil || u.running() {
+		return err
+	}
+	return o.act("systemctl", "--user", "start", o.res.Unit)
+}
+
 // unitState is what `systemctl show` says of a unit.
 type unitState map[string]string
 
@@ -34,7 +71,7 @@ func (u unitState) enabled() bool {
 func (m systemd) show(o *op, unit string) (unitState, error) {
 	out, err := o.query("systemctl", "--user", "show",
 		"-p", "LoadState", "-p", "UnitFileState", "-p", "ActiveState", "-p", "NeedDaemonReload",
-		"-p", "FragmentPath", "-p", "KillMode", "-p", "DropInPaths", unit)
+		"-p", "FragmentPath", "-p", "KillMode", "-p", "DropInPaths", "-p", "SubState", "-p", "NRestarts", unit)
 	if err != nil {
 		return nil, fmt.Errorf("svcunit: asking systemd about %s: %w", unit, err)
 	}

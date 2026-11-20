@@ -13,7 +13,7 @@ import (
 	"github.com/Autarquico/codeflock/internal/domain"
 )
 
-// RestoreCommand is `cf restore`: a local command, run on the host of the new
+// RestoreCommand is `cflk restore`: a local command, run on the host of the new
 // Controller before its daemon starts.
 func RestoreCommand() *cobra.Command {
 	var advertise, listen, passphraseFile string
@@ -22,7 +22,7 @@ func RestoreCommand() *cobra.Command {
 		Use:   "restore BACKUP [--advertise HOST:PORT] [--listen HOST:PORT] [--passphrase | --passphrase-file FILE]",
 		Short: "Restore a backup into an empty Controller directory",
 		Long: "Recreate the Controller of a backup on this host, with the same IDs and digests. It only goes into an\n" +
-			"empty data and config directory (see CF_DATA_DIR and CF_CONFIG_DIR) and never starts the daemon.\n" +
+			"empty data and config directory (see CFLK_DATA_DIR and CFLK_CONFIG_DIR) and never starts the daemon.\n" +
 			"--advertise sets the address clients and Workers will dial; the server certificate is issued again,\n" +
 			"by the restored CA, for it. The daemon binds the backup's --listen, on the advertised port if that\n" +
 			"differs from the backup's; --listen sets it. A CA in the backup is opened with --passphrase (asked\n" +
@@ -30,13 +30,13 @@ func RestoreCommand() *cobra.Command {
 			"\n" +
 			"Restore also creates an owner for this host, whose credentials are left in the config directory, so\n" +
 			"that you can administer the Controller here at once. Then:\n" +
-			"  1. start the Controller:                   cf controller run\n" +
-			"  2. with the CA restored, on each client:   cf connect --rebind HOST:PORT\n" +
-			"     and on each Worker:                     cf worker set-controller HOST:PORT, then restart it\n" +
+			"  1. start the Controller:                   cflk controller run\n" +
+			"  2. with the CA restored, on each client:   cflk connect --rebind HOST:PORT\n" +
+			"     and on each Worker:                     cflk worker set-controller HOST:PORT, then restart it\n" +
 			"  3. without the CA, nobody keeps an identity: create invitations here with\n" +
-			"     cf controller token create --client|--worker, and join again with cf connect --force <invitation>.\n" +
-			"     A Worker keeps its name in the restored database: see it with cf worker list, retire it with\n" +
-			"     cf worker remove <worker>, and then cf worker join --force <invitation>, then restart the Worker;\n" +
+			"     cflk controller token create --client|--worker, and join again with cflk connect --force <invitation>.\n" +
+			"     A Worker keeps its name in the restored database: see it with cflk worker list, retire it with\n" +
+			"     cflk worker remove <worker>, and then cflk worker join --force <invitation>, then restart the Worker;\n" +
 			"     or join under another name with --name. Its Runs that were active in the backup are lost, and its reservations released.\n" +
 			"Restore only backups you trust: the archive is not signed, and what it holds becomes the Controller.\n" +
 			"Join tokens not yet used are discarded: create them again.\n" +
@@ -88,17 +88,17 @@ func RestoreCommand() *cobra.Command {
 func printNextSteps(out io.Writer, res RestoreResult, paths config.Paths) {
 	fmt.Fprintf(out, "Controller %s restored: it will listen on %s and is advertised at %s.\n", res.ControllerID, res.Listen, res.Advertise)
 	fmt.Fprintf(out, "An owner for this host was created; its credentials are in %s.\n\nNext:\n", paths.CredentialsDir())
-	fmt.Fprintln(out, "  1. Start the Controller:  cf controller run")
+	fmt.Fprintln(out, "  1. Start the Controller:  cflk controller run")
 	if res.CARestored {
-		fmt.Fprintf(out, "  2. On each client:        cf connect --rebind %s\n", res.Advertise)
-		fmt.Fprintf(out, "  3. On each Worker:        cf worker set-controller %s   (then restart the Worker)\n", res.Advertise)
+		fmt.Fprintf(out, "  2. On each client:        cflk connect --rebind %s\n", res.Advertise)
+		fmt.Fprintf(out, "  3. On each Worker:        cflk worker set-controller %s   (then restart the Worker)\n", res.Advertise)
 		return
 	}
 	fmt.Fprintln(out, "  2. The backup had no CA, so a new one was made and no old identity is valid. Create an invitation per")
-	fmt.Fprintln(out, "     client and per Worker:  cf controller token create --client   |   cf controller token create --worker")
-	fmt.Fprintln(out, "  3. On each client:        cf connect --force <invitation>")
-	fmt.Fprintln(out, "     On each Worker:        cf worker list, then cf worker remove <worker> (its old identity, here)")
-	fmt.Fprintln(out, "                            and cf worker join --force <invitation>  (or join under another --name),")
+	fmt.Fprintln(out, "     client and per Worker:  cflk controller token create --client   |   cflk controller token create --worker")
+	fmt.Fprintln(out, "  3. On each client:        cflk connect --force <invitation>")
+	fmt.Fprintln(out, "     On each Worker:        cflk worker list, then cflk worker remove <worker> (its old identity, here)")
+	fmt.Fprintln(out, "                            and cflk worker join --force <invitation>  (or join under another --name),")
 	fmt.Fprintln(out, "                            then restart the Worker")
 }
 

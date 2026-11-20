@@ -34,7 +34,7 @@ func TestLaunchd_FirstInstallBootstrapsIntoTheGraphicalSession(t *testing.T) {
 	if res.Manager != "launchd" || res.Unit != "gui/501/"+label || len(res.Warnings) != 0 {
 		t.Errorf("result = %+v", res)
 	}
-	if info, err := os.Stat(e.Home + "/Library/Logs/codefabric"); err != nil || info.Mode().Perm() != 0o700 {
+	if info, err := os.Stat(e.Home + "/Library/Logs/codeflock"); err != nil || info.Mode().Perm() != 0o700 {
 		t.Errorf("log directory: %v %v", info, err)
 	}
 }
@@ -310,5 +310,18 @@ func TestLaunchd_ARefusedInstallEnablesNothing(t *testing.T) {
 	}
 	if !fake.Disabled["gui/501"] {
 		t.Error("the refused install enabled the agent")
+	}
+}
+
+func TestLaunchd_ProbeIsUpOnlyWithAProcessAndTellsItByItsPid(t *testing.T) {
+	e, fake := newLaunchd(t)
+	install(t, e, workerSpec())
+	p, err := svcunit.ProbeOf(t.Context(), e, workerSpec())
+	if err != nil || !p.Up || p.Generation == "" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	fake.Load(fake.GUIDomain(), false) // loaded, with no process
+	if p, err = svcunit.ProbeOf(t.Context(), e, workerSpec()); err != nil || p.Up {
+		t.Errorf("%+v %v", p, err)
 	}
 }
