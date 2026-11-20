@@ -132,3 +132,18 @@ exec /bin/sh "` + claudePath + `-claudePath" "$@"
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
 }
+
+func TestMCPInstall_ACflkLeftAsItIsDoesNotRetireTheCf(t *testing.T) {
+	m := newMCPMachine(t)
+	self := selfBinary(t)
+	cfg := "[mcp_servers.cf]\ncommand = \"" + self + "\"\nargs = [\"mcp\", \"serve\", \"--profile\", \"read\"]\n\n" +
+		"[mcp_servers.cflk]\ncommand = \"" + self + "\"\nargs = [\"mcp\", \"serve\", \"--profile\", \"read\"]\nenabled = false\n"
+	if err := os.WriteFile(m.codexConfig(), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, "mcp", "install", "--codex")
+	if code != 0 || !strings.Contains(out, "left registered too") {
+		t.Fatalf("exit %d: %s%s", code, out, errOut)
+	}
+	requireEqual(t, readFile(t, m.codexConfig()), cfg)
+}

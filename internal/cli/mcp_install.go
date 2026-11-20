@@ -222,6 +222,13 @@ func installMCP(ctx context.Context, tool mcpTool, f mcpFlags) (mcpInstallResult
 			tool.name, mcpServerName, tool.name, strings.Join(current.ownSettings(), ", ")))
 	}
 	replacesLegacy := hasLegacy && legacy.isCodeFlock(bin)
+	if replacesLegacy && keepCurrent {
+		// A cflk left as it is was not checked to work, so the cf that may be
+		// the working one stays.
+		replacesLegacy = false
+		res.Notes = append(res.Notes, fmt.Sprintf("the %s server %q was left registered too: remove it once %q works",
+			tool.name, legacyMCPServerName, mcpServerName))
+	}
 	if replacesLegacy {
 		if reason := legacy.notMovableTo(current, hasCurrent); reason != "" {
 			replacesLegacy = false
