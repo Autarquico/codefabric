@@ -1,20 +1,20 @@
 ---
-title: Use cf from Claude Code or Codex
-description: Register the cf MCP server in Claude Code or Codex, choose a profile, and drive Tasks from the model without leaving the session.
+title: Use cflk from Claude Code or Codex
+description: Register the cflk MCP server in Claude Code or Codex, choose a profile, and drive Tasks from the model without leaving the session.
 ---
 
-`cf mcp serve` is an MCP server that lets Claude Code or Codex use Code Flock from inside their own session: create a Task, wait for it, read its output and answer it when it needs input. The model gets a fixed set of tools. It has no shell and cannot read secrets.
+`cflk mcp serve` is an MCP server that lets Claude Code or Codex use Code Flock from inside their own session: create a Task, wait for it, read its output and answer it when it needs input. The model gets a fixed set of tools. It has no shell and cannot read secrets.
 
-The server speaks stdio and uses the identity of the client you enrolled with `cf connect`, so it needs a connected machine. You normally do not run it yourself; the tool starts it.
+The server speaks stdio and uses the identity of the client you enrolled with `cflk connect`, so it needs a connected machine. You normally do not run it yourself; the tool starts it.
 
 ## Install
 
 ```sh
-cf mcp install --claude
-cf mcp install --codex
+cflk mcp install --claude
+cflk mcp install --codex
 ```
 
-Each command registers the server with the CLI of that tool (`claude mcp add`, `codex mcp add`), so `claude` or `codex` must be on your `PATH`; if it is not, the command fails before writing anything. It also writes the `codefabric` skill, which tells the model when to use Code Flock and how. The command is idempotent: running it again replaces the registration and leaves a skill that is already current alone.
+Each command registers the server with the CLI of that tool (`claude mcp add`, `codex mcp add`), so `claude` or `codex` must be on your `PATH`; if it is not, the command fails before writing anything. It also writes the `codeflock` skill, which tells the model when to use Code Flock and how. The command is idempotent: running it again replaces the registration and leaves a skill that is already current alone.
 
 | Flag | Meaning |
 | --- | --- |
@@ -27,24 +27,24 @@ What it writes:
 
 | | Claude Code | Codex |
 | --- | --- | --- |
-| Registration | `claude mcp add --scope <scope> cf -- <path of cf> mcp serve --profile <profile>` | `codex mcp add cf -- <path of cf> mcp serve --profile <profile>` |
-| Skill, `user` scope | `~/.claude/skills/codefabric/SKILL.md` | `~/.agents/skills/codefabric/SKILL.md` |
-| Skill, `project` scope | `.claude/skills/codefabric/SKILL.md` in the repository root | `.agents/skills/codefabric/SKILL.md` in the repository root |
+| Registration | `claude mcp add --scope <scope> cflk -- <path of cflk> mcp serve --profile <profile>` | `codex mcp add cflk -- <path of cflk> mcp serve --profile <profile>` |
+| Skill, `user` scope | `~/.claude/skills/codeflock/SKILL.md` | `~/.agents/skills/codeflock/SKILL.md` |
+| Skill, `project` scope | `.claude/skills/codeflock/SKILL.md` in the repository root | `.agents/skills/codeflock/SKILL.md` in the repository root |
 
-With Claude Code and `--scope project`, `claude mcp add` runs in the repository root, wherever you run `cf`, so `.mcp.json` and the skill end up together. Codex has no project scope for MCP servers. With `--scope project` the server is still registered for your user, and only the skill goes to the repository; the command says so. For Codex, the command also sets `tool_timeout_sec = 660` in the `[mcp_servers.cf]` table of `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default). Codex cuts a tool call at 60 seconds unless told otherwise, and `events_wait` can block for up to 10 minutes. Re-adding the server with `codex mcp add` drops that setting, so run `cf mcp install --codex` again instead of adding by hand.
+With Claude Code and `--scope project`, `claude mcp add` runs in the repository root, wherever you run `cflk`, so `.mcp.json` and the skill end up together. Codex has no project scope for MCP servers. With `--scope project` the server is still registered for your user, and only the skill goes to the repository; the command says so. For Codex, the command also sets `tool_timeout_sec = 660` in the `[mcp_servers.cflk]` table of `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default). Codex cuts a tool call at 60 seconds unless told otherwise, and `events_wait` can block for up to 10 minutes. Re-adding the server with `codex mcp add` drops that setting, so run `cflk mcp install --codex` again instead of adding by hand.
 
-`<path of cf>` is the absolute path of the `cf` in your `PATH` when it is the binary you are running, and the path of the running binary otherwise. Claude Code and Codex load MCP servers and skills when a session starts: open a new session after an install, or after changing `--profile`, for it to take effect.
+`<path of cflk>` is the absolute path of the `cflk` in your `PATH` when it is the binary you are running, and the path of the running binary otherwise. Claude Code and Codex load MCP servers and skills when a session starts: open a new session after an install, or after changing `--profile`, for it to take effect.
 
-The skill is embedded in the `cf` binary. After you update `cf`, run `cf mcp install` again to refresh it.
+The skill is embedded in the `cflk` binary. After you update `cflk`, run `cflk mcp install` again to refresh it.
 
 ## Uninstall
 
 ```sh
-cf mcp uninstall --claude
-cf mcp uninstall --codex
+cflk mcp uninstall --claude
+cflk mcp uninstall --codex
 ```
 
-It removes the registration and the `SKILL.md` it wrote, and the `codefabric` directory only if it is then empty. Other skills are not touched. `--scope` selects the same scope as in the install, with one exception. Codex registers MCP servers for the user, not for a repository, so `cf mcp uninstall --codex --scope project` removes only the skill of the repository, leaves the server registered, and says so. To remove the server for every repository, run `cf mcp uninstall --codex`.
+It removes the registration and the `SKILL.md` it wrote, and the `codeflock` directory only if it is then empty. Other skills are not touched. `--scope` selects the same scope as in the install, with one exception. Codex registers MCP servers for the user, not for a repository, so `cflk mcp uninstall --codex --scope project` removes only the skill of the repository, leaves the server registered, and says so. To remove the server for every repository, run `cflk mcp uninstall --codex`.
 
 ## Profiles and tools
 
@@ -56,7 +56,7 @@ A profile is fixed when the server starts. A tool outside the profile is not lis
 | `execute` (default) | `read`, plus `tasks_create`, `tasks_respond` |
 | `modify` | `execute`, plus `tasks_cancel`, `workers_drain`, `workers_undrain` |
 
-`runs_logs` returns the output of a Run. `workflows_diff` is an apply in dry-run. `inbox_list` and `search` are what `cf inbox` and `cf search` show.
+`runs_logs` returns the output of a Run. `workflows_diff` is an apply in dry-run. `inbox_list` and `search` are what `cflk inbox` and `cflk search` show.
 
 ## The flow: create, wait, respond
 
@@ -81,24 +81,24 @@ Every tool that changes something (`tasks_create`, `tasks_respond`, `tasks_cance
 The client decides how long a call may take:
 
 - **Claude Code:** a call that runs for more than 2 minutes continues as a background task and the model is told when it ends. That is expected for long waits.
-- **Codex:** the tool timeout is `tool_timeout_sec`. `cf mcp install --codex` sets it to 660 seconds, above the 10-minute maximum. A server registered by hand keeps Codex's default of 60 seconds, and a long wait will fail.
+- **Codex:** the tool timeout is `tool_timeout_sec`. `cflk mcp install --codex` sets it to 660 seconds, above the 10-minute maximum. A server registered by hand keeps Codex's default of 60 seconds, and a long wait will fail.
 
 ## Limits
 
-- **Profiles are a local restriction on the model, not a security boundary.** They are applied by `cf mcp serve` on your machine. Anyone who can run commands as you can start the server with another profile or just use `cf`. The Controller does not enforce profiles.
+- **Profiles are a local restriction on the model, not a security boundary.** They are applied by `cflk mcp serve` on your machine. Anyone who can run commands as you can start the server with another profile or just use `cflk`. The Controller does not enforce profiles.
 - **There is no shell and no secrets access.** No profile has a tool for either.
-- **In `execute` the model can answer its own needs-input.** That includes a permission request on a Task it created. Choose `read` if you want the model to watch only, and answer from `cf inbox` yourself.
+- **In `execute` the model can answer its own needs-input.** That includes a permission request on a Task it created. Choose `read` if you want the model to watch only, and answer from `cflk inbox` yourself.
 - **`read` already sees the output of Runs** through `runs_logs`. Do not give it to a model that should not see what your Tasks print.
 - **Not available yet:** Plans, fork, compare and promote, budgets, artifacts, models and confirmations. They will be added when they exist in the CLI.
 
 ## Audit
 
-Each `cf mcp serve` opens a session with its own ID. What the model changes is recorded with the actor `mcp`: the identity of your client and the ID of that session. In the event stream you can tell an answer given by the model from one you gave with `cf task respond`. The session ID does not grant anything; permissions come from your client's certificate, as for any `cf` command.
+Each `cflk mcp serve` opens a session with its own ID. What the model changes is recorded with the actor `mcp`: the identity of your client and the ID of that session. In the event stream you can tell an answer given by the model from one you gave with `cflk task respond`. The session ID does not grant anything; permissions come from your client's certificate, as for any `cflk` command.
 
 ## Running the server by hand
 
 ```sh
-cf mcp serve --profile read
+cflk mcp serve --profile read
 ```
 
 `--profile` is `read`, `execute` (default) or `modify`. Standard output carries only the MCP protocol and diagnostics go to standard error, so do not pipe it through anything else. `--json` is rejected.

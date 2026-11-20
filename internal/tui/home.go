@@ -58,7 +58,7 @@ func (Home) Render(c RenderContext) string {
 
 // tooSmall is the notice for a terminal narrower than the home can draw.
 func tooSmall(c RenderContext) string {
-	notice := []string{c.Theme.Title.Render("CODEFABRIC"), c.Theme.Faint.Render("terminal too small")}
+	notice := []string{c.Theme.Title.Render("CODE FLOCK"), c.Theme.Faint.Render("terminal too small")}
 	lines := make([]string, 0, len(notice))
 	for _, line := range notice[:min(len(notice), c.Height)] {
 		lines = append(lines, ansi.Truncate(line, c.Width, ""))

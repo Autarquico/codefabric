@@ -1,4 +1,4 @@
-// Package tui is the terminal UI of CodeFabric (§19). Like the CLI it is a
+// Package tui is the terminal UI of Code Flock (§19). Like the CLI it is a
 // client of internal/client: it holds no business logic of its own.
 package tui
 

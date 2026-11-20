@@ -9,7 +9,7 @@ import "charm.land/lipgloss/v2"
 // both. Colour degradation (NO_COLOR, 16 colours) is the program's: bubbletea
 // downsamples what the View emits to the profile of the terminal.
 type Theme struct {
-	Title   lipgloss.Style // CODEFABRIC, panel numbers
+	Title   lipgloss.Style // CODE FLOCK, panel numbers
 	Text    lipgloss.Style
 	Faint   lipgloss.Style // labels, timestamps, unavailable keys
 	Rule    lipgloss.Style // hairlines: decoration, not text (3:1)

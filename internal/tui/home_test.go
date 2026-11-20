@@ -114,7 +114,7 @@ func TestScenario_TuiShellHome_Home_SmallTerminalKeepsTheStructure(t *testing.T)
 			t.Errorf("line of %d cells in a terminal of 48: %q", w, line)
 		}
 	}
-	for _, want := range []string{"CODEFABRIC", "TASKS", "WORKERS", "MODELS", "Activity", "[q] Quit"} {
+	for _, want := range []string{"CODE FLOCK", "TASKS", "WORKERS", "MODELS", "Activity", "[q] Quit"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("home lacks %q:\n%s", want, got)
 		}
@@ -186,7 +186,7 @@ func TestScenario_TuiShellHome_ControllerCaido(t *testing.T) {
 	if !strings.Contains(down, "Controller unreachable — reconnecting…") {
 		t.Errorf("no banner while the Controller is down:\n%s", down)
 	}
-	if !strings.Contains(down, "unreachable") || !strings.Contains(down, "CODEFABRIC") {
+	if !strings.Contains(down, "unreachable") || !strings.Contains(down, "CODE FLOCK") {
 		t.Errorf("the home does not render while the Controller is down:\n%s", down)
 	}
 	compareGolden(t, "home-down.golden", down)
@@ -280,7 +280,7 @@ func TestHome_TheFrameFitsAShortTerminalWithTheControllerDown(t *testing.T) {
 	send(m, client.UpdateSnapshot, fixture())
 
 	lines := strings.Split(frame(m), "\n")
-	if len(lines) > 12 || !strings.Contains(lines[0], "CODEFABRIC") {
+	if len(lines) > 12 || !strings.Contains(lines[0], "CODE FLOCK") {
 		t.Errorf("%d lines in a terminal of 12, first %q", len(lines), lines[0])
 	}
 }
@@ -411,7 +411,7 @@ func TestHome_AShortTerminalNeverPassesItsHeight(t *testing.T) {
 			m.Update(tea.WindowSizeMsg{Width: 48, Height: 12})
 			tc.setup(m)
 			got := frame(m)
-			if !strings.Contains(got, "CODEFABRIC") || !strings.Contains(got, "[q] Quit") || !strings.Contains(got, tc.want) {
+			if !strings.Contains(got, "CODE FLOCK") || !strings.Contains(got, "[q] Quit") || !strings.Contains(got, tc.want) {
 				t.Errorf("the compact home lacks the header, the quit key or %q:\n%s", tc.want, got)
 			}
 			compareGolden(t, "home-48x12-"+strings.ReplaceAll(tc.name, " ", "-")+".golden", got)

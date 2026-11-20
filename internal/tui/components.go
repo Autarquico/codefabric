@@ -16,7 +16,7 @@ func (c RenderContext) inner() int { return max(c.Width-2*len(margin), 0) }
 func header(c RenderContext) string {
 	dot, label := healthDot(c)
 	right := dot.Render("● " + label)
-	title := c.Theme.Title.Render("CODEFABRIC")
+	title := c.Theme.Title.Render("CODE FLOCK")
 	gap := max(c.inner()-lipgloss.Width(title)-lipgloss.Width(right), 1)
 	return margin + title + strings.Repeat(" ", gap) + right
 }

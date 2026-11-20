@@ -1,7 +1,7 @@
 ---
 import '../styles/fonts.css';
 import '../styles/theme.css';
-import { BASE, REPO_URL, repoRef, routeFor } from '../../scripts/sync-docs.mjs';
+import { BASE, REPO_URL, guidePagesIn, repoRef, routeFor } from '../../scripts/sync-docs.mjs';
 import { installCommands, siteVersion } from '../../scripts/version.mjs';
 import { LANGUAGES, home, landing } from '../i18n/landing.mjs';
 import TuiFrame from './TuiFrame.astro';
@@ -14,6 +14,7 @@ const t = landing[lang];
 const version = siteVersion();
 const commands = installCommands(version);
 const docs = routeFor('getting-started');
+const upgrade = guidePagesIn().includes('upgrade-beta7.md') ? routeFor('upgrade-beta7') : null;
 const fakeHarness = `${REPO_URL}/tree/${repoRef()}/internal/testutil/fakeharness`;
 ---
 
@@ -146,13 +147,14 @@ const fakeHarness = `${REPO_URL}/tree/${repoRef()}/internal/testutil/fakeharness
 			<section aria-labelledby="install-title">
 				<h2 id="install-title">{t.install}</h2>
 				<p class="intro">
-					{version ? <>{t.release} <code>{version}</code>.</> : t.unreleased} {t.installer[0]} <code>cf</code> {t.installer[1]} <code>~/.local/bin</code>{t.installer[2]}
+					{version ? <>{t.release} <code>{version}</code>.</> : t.unreleased} {t.installer[0]} <code>cflk</code> {t.installer[1]} <code>~/.local/bin</code>{t.installer[2]}
 				</p>
-				<h3>{t.latest}</h3>
-				<div class="scroll" role="region" aria-label={t.latestLabel} tabindex="0"><pre><code>{commands.latest}</code></pre></div>
 				<h3>{t.pinned}</h3>
 				<div class="scroll" role="region" aria-label={t.pinnedLabel} tabindex="0"><pre><code>{commands.pinned}</code></pre></div>
+				<h3>{t.latest}</h3>
+				<div class="scroll" role="region" aria-label={t.latestLabel} tabindex="0"><pre><code>{commands.latest}</code></pre></div>
 				<p class="intro"><a href={docs} hreflang="en">{t.gettingStarted}</a></p>
+				{upgrade && <p class="intro">{t.upgrade[0]} <code>cf</code>{t.upgrade[1]} <a href={upgrade} hreflang="en">{t.upgrade[2]}</a>.</p>}
 			</section>
 		</main>
 

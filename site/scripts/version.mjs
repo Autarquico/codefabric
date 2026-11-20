@@ -12,9 +12,14 @@ export function siteVersion(env = process.env) {
   return raw;
 }
 
+// The installer of a release is the only one that knows that release's assets: the one of an older release
+// cannot install it. So the pinned command takes install.sh from the tag it installs.
+export const pinnedInstallUrl = (tag) => `https://github.com/Autarquico/codeflock/releases/download/${tag}/install.sh`;
+
 export function installCommands(version) {
+  const tag = version ?? PLACEHOLDER_VERSION;
   return {
     latest: `curl -fsSL ${INSTALL_URL} | sh`,
-    pinned: `curl -fsSL ${INSTALL_URL} | CF_VERSION=${version ?? PLACEHOLDER_VERSION} sh`,
+    pinned: `curl -fsSL ${pinnedInstallUrl(tag)} | CFLK_VERSION=${tag} sh`,
   };
 }

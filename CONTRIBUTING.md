@@ -23,27 +23,27 @@ Enforced by depguard (`make lint`):
 |------|------------|--------------|
 | Unit | `make test` | pure logic |
 | Integration | `make test-integration` (tag `integration`) | SQLite, git, TLS (tmux when the runtime lands) |
-| End-to-end | `make test-e2e` (tag `e2e`) | compiled `cf` binary, multiple processes |
+| End-to-end | `make test-e2e` (tag `e2e`) | compiled `cflk` binary, multiple processes |
 
 Tests must not depend on wall-clock time: inject the clock. The end-to-end suite is the exception: it runs real processes with wide margins and tests no timeout boundary (those stay in the fake-clock tests).
 
 ### End-to-end (`internal/e2e`)
 
-A Controller, two Workers behind an L4 proxy (`internal/e2e/netproxy`) and a third client, all running the real `cf`, with real `kill -9`. Linux and macOS only. Tests that need tmux or git are skipped without them; with `CF_REQUIRE_TMUX=1` / `CF_REQUIRE_GIT=1` (as in CI) they fail instead.
+A Controller, two Workers behind an L4 proxy (`internal/e2e/netproxy`) and a third client, all running the real `cflk`, with real `kill -9`. Linux and macOS only. Tests that need tmux or git are skipped without them; with `CF_REQUIRE_TMUX=1` / `CF_REQUIRE_GIT=1` (as in CI) they fail instead.
 
 | Target | What it runs |
 |--------|--------------|
 | `make test-e2e` | the whole suite: harness, scenarios and the property test over the seed corpus |
 | `make test-e2e-property` | `TestProperty_E2eV01_Intercalados` only |
-| `make test-e2e-race` | the whole suite with every `cf` of the cluster built with `-race` |
+| `make test-e2e-race` | the whole suite with every `cflk` of the cluster built with `-race` |
 | `make e2e-reap` | runs no test; reaps the `cfe2e*` roots of the root parent that are yours alone (no link, your uid, mode `0700`/`0600`) and whose owner process is provably dead |
 
 Make variables: `E2E_SEEDS` (random seeds after the corpus, default 0), `E2E_SEED` (exactly that seed), `E2E_TIMEOUT` (default `25m`).
 
 | Variable | Effect |
 |----------|--------|
-| `CF_E2E_BIN` | `cf` binary to use instead of building one (`make test-e2e` sets `bin/cf`) |
-| `CF_E2E_RACE=1` | build `cf` with `-race`; fails if `CF_E2E_BIN` is also set |
+| `CF_E2E_BIN` | `cflk` binary to use instead of building one (`make test-e2e` sets `bin/cflk`) |
+| `CF_E2E_RACE=1` | build `cflk` with `-race`; fails if `CF_E2E_BIN` is also set |
 | `CF_E2E_SCALE` | factor for every time and wait of the cluster (CI uses `1.5` on macOS) |
 | `CF_E2E_SEED` | run exactly this seed (`0x…` or decimal) instead of the corpus |
 | `CF_E2E_SEEDS` | random seeds added after the corpus of `internal/e2e/testdata/seeds.txt` |

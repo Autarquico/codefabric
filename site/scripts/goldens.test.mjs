@@ -18,8 +18,8 @@ test('sanitizeGolden keeps layout: inner spaces, blank lines, box drawing; trims
 test('readGolden reads from the content root and fails clearly when the frame is missing', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'cf-goldens-'));
   mkdirSync(path.join(root, GOLDEN_DIR), { recursive: true });
-  writeFileSync(path.join(root, GOLDEN_DIR, 'home.golden'), ' CODEFABRIC\n');
-  assert.equal(readGolden(root, 'home.golden'), ' CODEFABRIC');
+  writeFileSync(path.join(root, GOLDEN_DIR, 'home.golden'), ' CODEFLOCK\n');
+  assert.equal(readGolden(root, 'home.golden'), ' CODEFLOCK');
   assert.throws(() => readGolden(root, 'nope.golden'), /nope\.golden not found/);
 });
 

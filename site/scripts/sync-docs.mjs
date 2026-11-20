@@ -9,7 +9,9 @@ export const SITE = 'https://autarquico.github.io';
 export const BASE = '/codeflock/';
 export const REPO_URL = 'https://github.com/Autarquico/codeflock';
 export const GUIDE_DIR = 'docs/guide';
-export const GUIDE_PAGES = ['getting-started.md', 'concepts.md', 'cli.md', 'mcp.md', 'tui.md'];
+export const GUIDE_PAGES = ['getting-started.md', 'concepts.md', 'cli.md', 'mcp.md', 'tui.md', 'upgrade-beta7.md'];
+// A tag from before the page existed does not have it; a rebuild for that tag must still work.
+export const OPTIONAL_PAGES = ['upgrade-beta7.md'];
 // Images of the guide travel with its pages, so they stay relative and Astro optimises them.
 export const GUIDE_IMAGES = 'img';
 const NOT_PUBLIC = [/^docs\/codefabric-spec\.md$/, /^docs\/specs(\/|$)/, /^docs\/adr(\/|$)/, /^docs\/runbooks(\/|$)/];
@@ -140,9 +142,15 @@ function kindOnDisk(root) {
   };
 }
 
+// The guide pages that exist under root: a tag before beta.7 has no upgrade page.
+export function guidePagesIn(root = contentRoot) {
+  return GUIDE_PAGES.filter((file) => !OPTIONAL_PAGES.includes(file) || existsSync(path.join(root, GUIDE_DIR, file)));
+}
+
 export function syncDocs({ root = contentRoot, out = outputDir, base = BASE, ref = repoRef() } = {}) {
   const kindOf = kindOnDisk(root);
-  const pages = GUIDE_PAGES.map((file) => {
+  const present = guidePagesIn(root);
+  const pages = present.map((file) => {
     const sourcePath = path.join(root, GUIDE_DIR, file);
     if (!existsSync(sourcePath)) throw new Error(`${GUIDE_DIR}/${file} is missing under ${root}`);
     if (!lstatSync(sourcePath).isFile()) throw new Error(`${GUIDE_DIR}/${file} is not a regular file`);
@@ -153,7 +161,7 @@ export function syncDocs({ root = contentRoot, out = outputDir, base = BASE, ref
   for (const { file, content } of pages) writeFileSync(path.join(out, file), content);
   const images = path.join(root, GUIDE_DIR, GUIDE_IMAGES);
   if (existsSync(images)) cpSync(images, path.join(out, GUIDE_IMAGES), { recursive: true });
-  return GUIDE_PAGES;
+  return present;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

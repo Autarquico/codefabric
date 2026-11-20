@@ -19,8 +19,8 @@ export function installProblems(html, version) {
   if (!text.includes(pinned)) problems.push(`the pinned command is missing: ${pinned}`);
   if (version === null && !text.includes(UNRELEASED_NOTE)) problems.push('a build without SITE_VERSION must say it is unreleased');
   if (version !== null) {
-    const others = [...text.matchAll(/CF_VERSION=(\S+)/g)].map((m) => m[1]).filter((v) => v !== version);
-    if (others.length > 0) problems.push(`CF_VERSION shows ${others.join(', ')} instead of ${version}`);
+    const others = [...text.matchAll(/CFLK_VERSION=(\S+)/g)].map((m) => m[1]).filter((v) => v !== version);
+    if (others.length > 0) problems.push(`CFLK_VERSION shows ${others.join(', ')} instead of ${version}`);
   }
   return problems;
 }

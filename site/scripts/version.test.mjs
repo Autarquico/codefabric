@@ -19,8 +19,12 @@ test('the one-liner is the contract with the release workflow', () => {
 });
 
 test('the pinned command carries the version, or a placeholder for unreleased builds', () => {
-  assert.match(installCommands('v0.2.0').pinned, /\| CF_VERSION=v0\.2\.0 sh$/);
-  assert.match(installCommands(null).pinned, /\| CF_VERSION=vX\.Y\.Z sh$/);
+  assert.equal(
+    installCommands('v0.4.0-beta.7').pinned,
+    'curl -fsSL https://github.com/Autarquico/codeflock/releases/download/v0.4.0-beta.7/install.sh | CFLK_VERSION=v0.4.0-beta.7 sh',
+  );
+  assert.match(installCommands('v0.2.0').pinned, /\| CFLK_VERSION=v0\.2\.0 sh$/);
+  assert.match(installCommands(null).pinned, /\| CFLK_VERSION=vX\.Y\.Z sh$/);
 });
 
 const page = (version, extra = '') => {
@@ -35,7 +39,7 @@ test('check-install accepts a page built for the version', () => {
 
 test('check-install rejects a page that carries another version or none', () => {
   assert.match(installProblems(page('v0.1.0'), 'v0.2.0').join('\n'), /pinned command is missing/);
-  assert.match(installProblems(page('v0.2.0') + 'CF_VERSION=v0.1.0 sh', 'v0.2.0').join('\n'), /instead of v0\.2\.0/);
+  assert.match(installProblems(page('v0.2.0') + 'CFLK_VERSION=v0.1.0 sh', 'v0.2.0').join('\n'), /instead of v0\.2\.0/);
   assert.match(installProblems('<p>nothing</p>', 'v0.2.0').join('\n'), /one-liner is missing/);
   assert.match(installProblems(page(null), null).join('\n'), /unreleased/);
 });
