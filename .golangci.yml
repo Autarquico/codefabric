@@ -77,6 +77,7 @@ linters:
             - github.com/Autarquico/codeflock/internal/domain
             - github.com/Autarquico/codeflock/internal/config
             - github.com/Autarquico/codeflock/internal/buildinfo
+            - github.com/pelletier/go-toml/v2
             - go.yaml.in/yaml/v3
         # repoconfig parses the untrusted file of a repo and merges it: pure, so
         # that Controller and Worker share it without knowing each other.

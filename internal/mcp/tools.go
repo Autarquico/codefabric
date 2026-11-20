@@ -88,7 +88,7 @@ type (
 	tasksCreateInput struct {
 		RequestID   string `json:"request_id" jsonschema:"any unique string; repeating a call with the same request_id has one effect"`
 		Prompt      string `json:"prompt"`
-		Project     string `json:"project,omitempty" jsonschema:"defaults to the Project of the directory cf mcp serve runs in"`
+		Project     string `json:"project,omitempty" jsonschema:"defaults to the Project of the directory cflk mcp serve runs in"`
 		Name        string `json:"name,omitempty"`
 		NoStart     bool   `json:"no_start,omitempty" jsonschema:"create the Task without starting a Run"`
 		SourceRef   string `json:"source_ref,omitempty" jsonschema:"branch or ref to start from; the Project default if empty"`
@@ -124,7 +124,7 @@ type (
 // shell (spec, "Sin shell").
 var agentHarnesses = []string{"claude-code", "codex"}
 
-// request is the CreateTaskRequest of `cf task new`. Like the CLI it sends the
+// request is the CreateTaskRequest of `cflk task new`. Like the CLI it sends the
 // harness and the rest as given and leaves their values to the Controller; unlike
 // it, it refuses a Task that starts with no harness, which no Worker accepts and
 // would stay queued for ever.
@@ -320,7 +320,7 @@ const (
 	diffPoll    = 500 * time.Millisecond
 )
 
-// workflowsDiff records a dry-run order and waits, as `cf workflow diff` does,
+// workflowsDiff records a dry-run order and waits, as `cflk workflow diff` does,
 // until the Worker closes it: the plan is in the order that settles, not in the
 // answer that creates it.
 func (t tools) workflowsDiff(ctx context.Context, in workflowsDiffInput) (any, error) {

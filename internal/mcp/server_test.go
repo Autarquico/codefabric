@@ -102,6 +102,13 @@ var readTools = []string{
 	"runs_logs", "search", "tasks_get", "tasks_list", "workers_get", "workers_list", "workflows_diff", "workflows_get", "workflows_list",
 }
 
+func TestServerIdentifiesItselfAsCodeflock(t *testing.T) {
+	s := connect(t, mcp.Read, &fake{}, clock.Real{})
+	if got := s.InitializeResult().ServerInfo.Name; got != "codeflock" {
+		t.Errorf("Implementation.Name = %q, want codeflock", got)
+	}
+}
+
 func TestToolsByProfile(t *testing.T) {
 	execute := append([]string{"tasks_create", "tasks_respond"}, readTools...)
 	modify := append([]string{"tasks_cancel", "workers_drain", "workers_undrain"}, execute...)
