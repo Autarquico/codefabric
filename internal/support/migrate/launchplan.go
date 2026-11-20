@@ -108,7 +108,10 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	say("%s", absent(newPlist))
 	say("%s", absent(written))
 	say("%s", absent(oldKept))
-	say("if launchctl print %s >/dev/null 2>&1; then echo %s >&2; exit 1; fi", target(newLabel), shellQuote(newLabel+" is loaded already: stop here"))
+	for i := range planned {
+		say("%s", absent(moved(newPlist, i)))
+	}
+	forward = append(forward, ifLoaded(target(newLabel), newLabel, "echo "+shellQuote(newLabel+" is loaded already: stop here")+" >&2; exit 1")...)
 	// The plan stops one job. Another of the old name that is loaded and uses
 	// the directories about to move would keep them open at the old place: that
 	// one stops the plan. If its directories cannot be known, the plan warns.
@@ -119,18 +122,17 @@ func (p LaunchPlan) Commands() ([]string, error) {
 		}
 		switch p.sharesDirectories(other, planned) {
 		case sharesYes:
-			say("if launchctl print %s >/dev/null 2>&1; then echo %s >&2; exit 1; fi", target(other),
-				shellQuote(other+" is loaded and uses the same directories: drain it and stop it (launchctl bootout) first, then run this again"))
+			forward = append(forward, ifLoaded(target(other), other, "echo "+shellQuote(other+" is loaded and uses the same directories: drain it and stop it (launchctl bootout) first, then run this again")+" >&2; exit 1")...)
 		case sharesUnknown:
-			say("if launchctl print %s >/dev/null 2>&1; then echo %s >&2; fi", target(other),
-				shellQuote("warning: "+other+" is loaded and its directories are not known: if it uses the same ones, stop it (Ctrl-C and launchctl bootout) before the move below"))
+			forward = append(forward, ifLoaded(target(other), other, "echo "+shellQuote("warning: "+other+" is loaded and its directories are not known: if it uses the same ones, stop it (Ctrl-C and launchctl bootout) before the move below")+" >&2")...)
 		}
 	}
 	say("# 2. Stop the old service if it is loaded; its file stays.")
-	say("if launchctl print %[1]s >/dev/null 2>&1; then launchctl bootout %[1]s; fi", target(oldLabel))
-	say("# 3. Move the directories it uses; one that a job sharing them already moved is left where it is.")
-	for _, pr := range planned {
-		forward = append(forward, move(as, pr.Old, pr.New, pr.optional)...)
+	forward = append(forward, ifLoaded(target(oldLabel), oldLabel, "launchctl bootout "+target(oldLabel))...)
+	say("# 3. Move the directories it uses; one that a job already migrated uses is left where it is. Each move leaves a mark, which the way back asks for.")
+	for i, pr := range planned {
+		skippable := !pr.optional && p.migratedUses(newLabel, pr.New)
+		forward = append(forward, move(as, pr.Old, pr.New, skippable, pr.optional, moved(newPlist, i))...)
 	}
 	say("# 4. Write the new property list; an existing file is never overwritten.")
 	say("%s", absent(newPlist))
@@ -156,11 +158,20 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	undo := func(format string, a ...any) { back = append(back, fmt.Sprintf(format, a...)) }
 	undo("# Stop and remove the new service, only if this plan was about to write it.")
 	undo("if [ -e %s ]; then", shellQuote(written))
-	undo("\tif launchctl print %s >/dev/null 2>&1; then launchctl bootout %s; fi", target(newLabel), target(newLabel))
+	for _, l := range ifLoaded(target(newLabel), newLabel, "launchctl bootout "+target(newLabel)) {
+		undo("\t%s", l)
+	}
 	undo("\trm -f %s %s", shellQuote(newPlist), shellQuote(written))
 	undo("fi")
+	undo("# Move back only what this plan moved, which its marks say.")
 	for i := len(planned) - 1; i >= 0; i-- {
-		back = append(back, move(as, planned[i].New, planned[i].Old, true)...)
+		mark := shellQuote(moved(newPlist, i))
+		undo("if [ -e %s ]; then", mark)
+		for _, l := range move(as, planned[i].New, planned[i].Old, false, true, "") {
+			undo("\t%s", l)
+		}
+		undo("\trm -f %s", mark)
+		undo("fi")
 	}
 	undo("# Put the old property list back and load it.")
 	undo("if [ -e %s ]; then", shellQuote(oldKept))
@@ -227,7 +238,7 @@ func (p LaunchPlan) sharesDirectories(label string, mine []plannedPair) sharing 
 	}
 	for _, m := range mine {
 		for _, t := range theirs {
-			if !m.optional && !t.optional && m.Old == t.Old {
+			if !m.optional && !t.optional && sameDir(m.Old, t.Old) {
 				return sharesYes
 			}
 		}
@@ -258,9 +269,11 @@ func commented(text string) string {
 // The block stops if the destination exists, and stops after the move unless the
 // destination is the very directory that was there before it, which its inode
 // says (`stat -f %i`, of macOS): if one appeared between the check and the move,
-// the directory went inside it. A directory that is not there is not moved:
-// if it is not optional, the block stops unless it is already at the new place.
-func move(as, from, to string, optional bool) []string {
+// the directory went inside it. A directory that is not there is not moved: if
+// it is not optional, the block stops, unless it is skippable (a job already
+// migrated uses the new place) and it is a real directory there. A mark file,
+// if given, is touched once the directory has moved.
+func move(as, from, to string, skippable, optional bool, mark string) []string {
 	lines := []string{
 		fmt.Sprintf("if [ -e %[1]s ] || [ -L %[1]s ]; then echo %[2]s >&2; exit 1; fi", shellQuote(to), shellQuote(to+" exists: stop here")),
 		fmt.Sprintf("ino=$(stat -f %%i %s)", shellQuote(from)),
@@ -268,15 +281,70 @@ func move(as, from, to string, optional bool) []string {
 		fmt.Sprintf(`if [ -e %[1]s ] || [ -L %[1]s ] || [ "$(stat -f %%i %[2]s)" != "$ino" ]; then echo %[3]s >&2; exit 1; fi`,
 			shellQuote(from), shellQuote(to), shellQuote(to+" is not the directory that moved: stop here")),
 	}
+	if mark != "" {
+		lines = append(lines, "touch "+shellQuote(mark))
+	}
 	out := []string{fmt.Sprintf("if [ -e %s ]; then", shellQuote(from))}
 	for _, l := range lines {
 		out = append(out, "\t"+l)
 	}
-	if !optional {
-		// Gone from the old place and there at the new one: a job that shares it moved it.
-		out = append(out, fmt.Sprintf("elif [ ! -d %s ]; then echo %s >&2; exit 1", shellQuote(to), shellQuote(from+" is not there, and neither is "+to+": stop here")))
+	switch {
+	case skippable:
+		out = append(out, fmt.Sprintf("elif [ ! -d %[1]s ] || [ -L %[1]s ]; then echo %[2]s >&2; exit 1", shellQuote(to), shellQuote(from+" is not there, and neither is "+to+": stop here")))
+	case !optional:
+		out = append(out, fmt.Sprintf("else echo %s >&2; exit 1", shellQuote(from+" is not there: stop here")))
 	}
 	return append(out, "fi")
+}
+
+// moved is the file that says the pair i of a plan has moved.
+func moved(newPlist string, i int) string {
+	return fmt.Sprintf("%s.cflk-moved-%d", newPlist, i)
+}
+
+// ifLoaded runs then if the job is loaded, and stops the block if launchd cannot
+// say: `launchctl print` exits 113 for a job that does not exist, and any other
+// failure is not proof of it.
+func ifLoaded(target, label, then string) []string {
+	return []string{
+		fmt.Sprintf("rc=0; launchctl print %s >/dev/null 2>&1 || rc=$?", target),
+		fmt.Sprintf(`if [ "$rc" = 0 ]; then %s`, then),
+		fmt.Sprintf(`elif [ "$rc" != 113 ]; then echo %s >&2; exit 1; fi`, shellQuote("cannot tell whether "+label+" is loaded: stop here")),
+	}
+}
+
+// migratedUses says whether a job already migrated, whose plist sits next to
+// this one, has dir among its directories: only then is a directory that a
+// plan finds moved already someone else's doing.
+func (p LaunchPlan) migratedUses(newLabel, dir string) bool {
+	for _, kind := range []string{"worker", "controller"} {
+		label := "com.codeflock." + kind
+		if label == newLabel {
+			continue
+		}
+		read := p.ReadFile
+		if read == nil {
+			read = os.ReadFile
+		}
+		content, err := read(filepath.Join(filepath.Dir(p.Plist), label+".plist"))
+		if err != nil {
+			continue
+		}
+		info, err := svcunit.ReadPlist(content)
+		if err != nil {
+			continue
+		}
+		other := LaunchPlan{System: p.System, UserHome: p.UserHome, LookupHome: p.LookupHome}
+		home, err := other.homeOf(info)
+		if err != nil {
+			continue
+		}
+		cfg, data := directories(info, home)
+		if sameDir(dir, cfg) || sameDir(dir, data) {
+			return true
+		}
+	}
+	return false
 }
 
 // homeOf is where the user of the service keeps their files. For a
@@ -311,18 +379,28 @@ func (p LaunchPlan) homeOf(info svcunit.PlistInfo) (string, error) {
 	return home, nil
 }
 
-// pairs are the directories the service uses that the old name put where they
-// are, and the logs of launchd, which sit under the home of the user.
-func (p LaunchPlan) pairs(info svcunit.PlistInfo, home string) ([]plannedPair, error) {
-	cfg, data := envDir(info.Env, "CONFIG_DIR", ""), envDir(info.Env, "DATA_DIR", "")
-	if home == "" && (cfg == "" || data == "") {
-		return nil, errors.New("the property list says neither the directories of the service nor HOME, so there is no telling what to move")
+// directories are the config and data directories of a service: the ones its
+// property list says, else those under home; empty if neither can be known.
+func directories(info svcunit.PlistInfo, home string) (cfg, data string) {
+	cfg, data = envDir(info.Env, "CONFIG_DIR", ""), envDir(info.Env, "DATA_DIR", "")
+	if home == "" {
+		return cfg, data
 	}
 	if cfg == "" {
 		cfg = filepath.Join(home, ".config", "codefabric")
 	}
 	if data == "" {
 		data = filepath.Join(home, ".local", "share", "codefabric")
+	}
+	return cfg, data
+}
+
+// pairs are the directories the service uses that the old name put where they
+// are, and the logs of launchd, which sit under the home of the user.
+func (p LaunchPlan) pairs(info svcunit.PlistInfo, home string) ([]plannedPair, error) {
+	cfg, data := directories(info, home)
+	if cfg == "" || data == "" {
+		return nil, errors.New("the property list says neither the directories of the service nor HOME, so there is no telling what to move")
 	}
 	var pairs []plannedPair
 	for _, dir := range []string{cfg, data} {

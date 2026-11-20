@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/Autarquico/codeflock/internal/support/svcunit"
 	"github.com/Autarquico/codeflock/internal/support/svcunit/svcunittest"
 )
 
@@ -87,7 +89,8 @@ func TestLaunchPlanForADaemonIsOneBlockForRootWithTheWayBackCommentedOut(t *test
 	}
 	for _, want := range []string{
 		"sudo -u 'ana' mv -n '/Users/ana/.config/codeflock' '/Users/ana/.config/codefabric'",
-		"if launchctl print system/'com.codeflock.worker' >/dev/null 2>&1; then launchctl bootout system/'com.codeflock.worker'; fi",
+		"rc=0; launchctl print system/'com.codeflock.worker' >/dev/null 2>&1 || rc=$?",
+		`if [ "$rc" = 0 ]; then launchctl bootout system/'com.codeflock.worker'`,
 		"launchctl bootstrap system '/Library/LaunchDaemons/com.codefabric.worker.plist'",
 	} {
 		if !strings.Contains(back, want) {
@@ -378,7 +381,7 @@ func planWithController(t *testing.T, content string, readErr error) string {
 
 // The other job stops the plan only when it uses the directories that move.
 func TestLaunchPlanRefusesForTheOtherJobOnlyIfItSharesTheRoot(t *testing.T) {
-	const loaded = "launchctl print system/'com.codefabric.controller' >/dev/null 2>&1; then echo"
+	const loaded = "launchctl print system/'com.codefabric.controller' >/dev/null 2>&1 || rc=$?"
 	shared := planWithController(t, controllerPlist("/Users/ana/.config/codefabric", "/Users/ana/mine"), nil)
 	if !strings.Contains(shared, loaded) || !strings.Contains(shared, "uses the same directories") {
 		t.Errorf("a job that shares the root does not stop the plan:\n%s", shared)
@@ -405,11 +408,52 @@ func TestLaunchPlanRefusesForTheOtherJobOnlyIfItSharesTheRoot(t *testing.T) {
 // A Worker that shares the root of a Controller already moved is stopped and
 // its directories are at the new place: the plan must go on to write its plist.
 func TestLaunchPlanToleratesAJobNotLoadedAndDirectoriesAlreadyMoved(t *testing.T) {
-	forward := planWithController(t, "", errors.New("no such file"))
-	if !strings.Contains(forward, "if launchctl print system/'com.codefabric.worker' >/dev/null 2>&1; then launchctl bootout system/'com.codefabric.worker'; fi") {
+	forward := planWithController(t, controllerPlist("/Users/ana/.config/codeflock", "/Users/ana/mine"), nil)
+	if !strings.Contains(forward, "launchctl print system/'com.codefabric.worker' >/dev/null 2>&1 || rc=$?\nif [ \"$rc\" = 0 ]; then launchctl bootout system/'com.codefabric.worker'\n") {
 		t.Errorf("the bootout does not wait for the job to be loaded:\n%s", forward)
 	}
-	if !strings.Contains(forward, "elif [ ! -d '/Users/ana/.config/codeflock' ]; then echo") {
+	if !strings.Contains(forward, "elif [ ! -d '/Users/ana/.config/codeflock' ] || [ -L '/Users/ana/.config/codeflock' ]; then echo") {
 		t.Errorf("a directory already moved is not tolerated:\n%s", forward)
+	}
+}
+
+// A directory found at the new place is skipped only for a job already migrated
+// that uses it: otherwise a missing source stops the block.
+func TestLaunchPlanSkipsAMoveOnlyForADirectoryAJobMigratedUses(t *testing.T) {
+	forward := planWithController(t, "", errors.New("no such file"))
+	if strings.Contains(forward, "elif [ ! -d") || !strings.Contains(forward, "else echo '/Users/ana/.config/codefabric is not there: stop here' >&2; exit 1") {
+		t.Errorf("a missing source is tolerated with no job that uses the destination:\n%s", forward)
+	}
+}
+
+// Two spellings of one directory, through a link, are one root.
+func TestLaunchPlanSharesDirectoriesThroughAPathAlias(t *testing.T) {
+	root := t.TempDir()
+	target, alias := filepath.Join(root, "target"), filepath.Join(root, "alias")
+	for _, dir := range []string{".config/codefabric", ".local/share/codefabric"} {
+		if err := os.MkdirAll(filepath.Join(target, "home", dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	plist := func(home string) string {
+		return strings.NewReplacer("/Users/ana/.config/codefabric", home+"/.config/codefabric", "/Users/ana/mine", home+"/.local/share/codefabric", "<string>/Users/ana</string>", "<string>"+home+"</string>").Replace(daemonPlist)
+	}
+	mine := LaunchPlan{
+		Plist: "/Library/LaunchDaemons/com.codefabric.worker.plist", Content: []byte(plist(target + "/home")), System: true,
+		ReadFile: func(string) ([]byte, error) { return []byte(plist(alias + "/home")), nil },
+	}
+	info, err := svcunit.ReadPlist(mine.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planned, err := mine.pairs(info, target+"/home")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mine.sharesDirectories("com.codefabric.controller", planned); got != sharesYes {
+		t.Errorf("an alias of the root is not the same root: %v", got)
 	}
 }

@@ -41,6 +41,8 @@ command -v cf > ~/cflk-beta6-backup/cf-path                                   # 
 cp ~/.config/systemd/user/cf-worker.service ~/.config/systemd/user/cf-controller.service ~/cflk-beta6-backup/ 2>/dev/null   # Linux
 cp ~/Library/LaunchAgents/com.codefabric.*.plist ~/cflk-beta6-backup/ 2>/dev/null                                           # macOS agent
 sudo cp /Library/LaunchDaemons/com.codefabric.*.plist ~/cflk-beta6-backup/ 2>/dev/null                                      # macOS LaunchDaemon
+# macOS agent: the domain it is loaded in (gui, or user if installed over ssh); the rollback reads it from here
+for d in gui user; do launchctl print $d/$(id -u)/com.codefabric.worker >/dev/null 2>&1 && echo $d/$(id -u) > ~/cflk-beta6-backup/launchd-domain; done
 ```
 
 If `cf-path` is missing or empty at rollback, find where the beta.6 was (`ls -l` the `cf` your units and `PATH` name; the transition shim is the one to replace) and pass that directory as `CF_INSTALL_DIR` by hand. The copies carry the flags and the environment (`PATH`, `TMUX_TMPDIR`, directories) that `install-service` of the beta.6 would otherwise write again with its defaults.
@@ -151,10 +153,10 @@ Do it in this order across a pool, the reverse of the upgrade: the clients, then
    systemctl --user daemon-reload
    ```
 
-   On macOS, with a launchd agent, the domain is `gui/<uid>`, or `user/<uid>` if the agent was installed over ssh. Find where it is loaded and keep it in `D` for the rest of the rollback (this shell), and stop only when `bootout` succeeds: if it fails, the job is still running, and nothing below is safe.
+   On macOS, with a launchd agent, the domain is `gui/<uid>`, or `user/<uid>` if the agent was installed over ssh. It was saved in `~/cflk-beta6-backup/launchd-domain` before the migration (a file that is missing means the agent was in neither: check by hand). Read it into `D`, in every shell of the rollback, and stop only when `bootout` succeeds: if it fails, the job is still running, and nothing below is safe. Do not probe for the domain again: once this step has removed the beta.7 job there is nothing left to find it by.
 
    ```sh
-   D=gui/$(id -u); launchctl print $D/com.codeflock.worker >/dev/null 2>&1 || D=user/$(id -u)
+   D=$(cat ~/cflk-beta6-backup/launchd-domain)
    launchctl print $D/com.codeflock.worker >/dev/null 2>&1 || echo "not loaded in gui or user: check by hand before going on"
    launchctl bootout $D/com.codeflock.worker                # if this fails, stop here
    launchctl print $D/com.codeflock.worker                  # must now fail: the job is gone
@@ -198,7 +200,7 @@ Do it in this order across a pool, the reverse of the upgrade: the clients, then
    systemctl --user daemon-reload && systemctl --user enable --now cf-worker
    ```
 
-   On macOS, with a launchd agent: `cp ~/cflk-beta6-backup/com.codefabric.worker.plist ~/Library/LaunchAgents/ && launchctl bootstrap $D ~/Library/LaunchAgents/com.codefabric.worker.plist` (`D` is the domain you found in step 1; if this is a new shell, find it again as there). For a LaunchDaemon, put the copy back in `/Library/LaunchDaemons` and `sudo launchctl bootstrap system /Library/LaunchDaemons/com.codefabric.worker.plist`.
+   On macOS, with a launchd agent: `cp ~/cflk-beta6-backup/com.codefabric.worker.plist ~/Library/LaunchAgents/ && launchctl bootstrap $D ~/Library/LaunchAgents/com.codefabric.worker.plist` (`D` is read from `~/cflk-beta6-backup/launchd-domain`, as in step 1: `D=$(cat ~/cflk-beta6-backup/launchd-domain)` in a new shell). For a LaunchDaemon, put the copy back in `/Library/LaunchDaemons` and `sudo launchctl bootstrap system /Library/LaunchDaemons/com.codefabric.worker.plist`.
 
    Without a copy, `cf worker install-service` (or `cf controller install-service` on Linux) writes a unit with the defaults: add back the flags and the environment you had.
 
