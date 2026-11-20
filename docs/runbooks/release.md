@@ -110,7 +110,9 @@ done
 El conjunto completo se comprueba, con el mismo `repo=` definido arriba, con
 `"$repo/packaging/release/verify-release.sh" vX.Y.Z "$repo/install.sh"`
 (necesita `gh`; el segundo argumento es el `install.sh` del repo, no el descargado).
-Salida 5 en cualquiera de ellos = firma o checksum inválidos: no instales.
+`verify-asset.sh` sale con 5 si la firma no verifica. `verify-release.sh` y `check.sh` salen con 1 en cualquier
+fallo (inventario, versión, firma, checksum de un archivo) y con 2 si se usan mal: cualquier salida distinta de 0 =
+no instales.
 
 ## 7. Publicar la fórmula de Homebrew
 
@@ -143,9 +145,19 @@ brew install autarquico/tap/codeflock && brew test autarquico/tap/codeflock
 git add Formula/codeflock.rb && git commit -m "codeflock X.Y.Z" && git push
 ```
 
-La primera vez tras el rename (la primera versión estable), en el mismo commit: se borra `Formula/codefabric.rb` y
-se copia `packaging/homebrew/formula_renames.json` a la raíz del tap, para que `brew upgrade` de quien tenga
-`codefabric` instale `codeflock` (ver `packaging/homebrew/README.md`).
+La primera vez tras el rename (la primera versión estable), en el mismo commit y antes del `git commit` de arriba:
+se borra `Formula/codefabric.rb` y se copia `packaging/homebrew/formula_renames.json` a la raíz del tap, para que
+`brew upgrade` de quien tenga `codefabric` instale `codeflock` (ver `packaging/homebrew/README.md`). El `git add`
+tiene que incluir los dos cambios:
+
+```sh
+repo=/ruta/al/checkout-en-el-commit-del-tag
+git rm Formula/codefabric.rb
+cp "$repo/packaging/homebrew/formula_renames.json" formula_renames.json
+git add Formula/codeflock.rb formula_renames.json
+git status --short   # A codeflock.rb, D codefabric.rb, A formula_renames.json
+git commit -m "codeflock X.Y.Z" && git push
+```
 
 ## 8. Rotación y revocación de la clave
 

@@ -8,14 +8,16 @@ This page takes you from nothing to a Task running on a Worker. It assumes a Git
 ## Install
 
 ```sh
-curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/Autarquico/codeflock/releases/download/v0.4.0-beta.7/install.sh | CFLK_VERSION=v0.4.0-beta.7 sh
 ```
+
+`releases/latest` skips prereleases, so while 0.4.0-beta.7 is the newest release of `cflk`, `…/releases/latest/download/install.sh` installs an older release that still calls the command `cf`: pin the version, as above, until a stable release has `cflk`.
 
 The installer puts `cflk` in `~/.local/bin`. Two variables change that:
 
 | Variable | Meaning |
 | --- | --- |
-| `CFLK_VERSION` | The version to install, such as `v0.4.0-beta.7`. Default: the latest release. |
+| `CFLK_VERSION` | The version to install, such as `v0.4.0-beta.7`. Default: the latest stable release, which is not yet one with `cflk`: set it. |
 | `CFLK_INSTALL_DIR` | Where to put `cflk`. Default: `~/.local/bin`. |
 
 ```sh
@@ -44,7 +46,7 @@ cflk version
 
 ## The network between machines
 
-Every Worker and client dials the Controller at its advertised address (port 7443 by default), and a client reaches a Worker over ssh for `cflk attach`. The recommended network is a [Tailscale](https://tailscale.com) tailnet: the machines reach each other by name wherever they are. Decide it before you start the Controller: these flags go on its first `cflk controller init`. Advertise the Controller's tailnet name, since its host goes into the Controller's certificate, and bind it to the tailnet address so the API is not reachable from anywhere else:
+Every Worker and client dials the Controller at its advertised address (port 7443 by default), and a client attaches to a Run through the Controller (`cflk attach`), or over ssh to the Worker with `cflk attach --ssh`. The recommended network is a [Tailscale](https://tailscale.com) tailnet: the machines reach each other by name wherever they are. Decide it before you start the Controller: these flags go on its first `cflk controller init`. Advertise the Controller's tailnet name, since its host goes into the Controller's certificate, and bind it to the tailnet address so the API is not reachable from anywhere else:
 
 ```sh
 cflk controller init --advertise <controller>.<tailnet>.ts.net:7443 --listen <tailnet-ip>:7443
@@ -58,9 +60,9 @@ A Worker tells clients to reach it over ssh as `<user>@<hostname>`, which is oft
 cflk worker install-service --ssh-target <user>@<worker>.<tailnet>.ts.net
 ```
 
-Tailscale only carries the traffic. The Controller's API still authenticates every Worker and client with its own certificates (mutual TLS), inside the tailnet too. `cflk attach` uses the OpenSSH client: plain ssh authenticates with your keys, Tailscale SSH with your tailnet identity and its policy.
+Tailscale only carries the traffic. The Controller's API still authenticates every Worker and client with its own certificates (mutual TLS), inside the tailnet too. `cflk attach --ssh` uses the OpenSSH client: plain ssh authenticates with your keys, Tailscale SSH with your tailnet identity and its policy.
 
-If you use Tailscale SSH in `check` mode, it asks for a login in the browser from time to time. Until you do, the ssh check of `cflk doctor` warns that it cannot reach that Worker, and `cflk attach` waits for that login.
+If you use Tailscale SSH in `check` mode, it asks for a login in the browser from time to time. Until you do, the ssh check of `cflk doctor` warns that it cannot reach that Worker, and `cflk attach --ssh` waits for that login.
 
 ## Start a Controller
 
@@ -143,7 +145,7 @@ cflk connect <invitation>                  # on the new machine
 cflk doctor
 ```
 
-It checks that the Controller answers, lists every Worker with the verdict of its own doctor, and tries a non-interactive ssh to each Worker, which `cflk attach` needs. An unreachable Controller fails the command; a failing component or an ssh that does not work is shown as a warning. On a Worker, `cflk worker doctor` gives the detail of its local checks (tmux, git, disk, harnesses and their logins).
+It checks that the Controller answers, lists every Worker with the verdict of its own doctor, and tries a non-interactive ssh to each Worker, which `cflk attach --ssh` needs. An unreachable Controller fails the command; a failing component or an ssh that does not work is shown as a warning. On a Worker, `cflk worker doctor` gives the detail of its local checks (tmux, git, disk, harnesses and their logins).
 
 ## Your first Task
 

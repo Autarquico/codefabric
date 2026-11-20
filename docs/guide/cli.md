@@ -111,7 +111,7 @@ Run and administer the Controller.
 
 ## `cflk doctor`
 
-Check that the Controller answers, list every Worker with the verdict of its own doctor per component, and try a non-interactive ssh to each Worker (which `cflk attach` needs). An unreachable Controller fails the command; the rest are warnings. For one machine's local detail, use `cflk worker doctor`.
+Check that the Controller answers, list every Worker with the verdict of its own doctor per component, and try a non-interactive ssh to each Worker (which `cflk attach --ssh` needs; plain `cflk attach` goes through the Controller). An unreachable Controller fails the command; the rest are warnings. For one machine's local detail, use `cflk worker doctor`.
 
 ## `cflk environment`
 

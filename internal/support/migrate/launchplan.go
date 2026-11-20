@@ -105,6 +105,14 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	say("%s", absent(written))
 	say("%s", absent(oldKept))
 	say("if launchctl print %s >/dev/null 2>&1; then echo %s >&2; exit 1; fi", target(newLabel), shellQuote(newLabel+" is loaded already: stop here"))
+	// The plan stops one job. Another of the old name that is loaded may share
+	// the directories about to move, and would keep them open at the old place.
+	for _, kind := range []string{"worker", "controller"} {
+		if other := "com.codefabric." + kind; other != oldLabel {
+			say("if launchctl print %s >/dev/null 2>&1; then echo %s >&2; exit 1; fi", target(other),
+				shellQuote(other+" is loaded: if it uses the same directories, drain it and stop it (launchctl bootout) first, then run this again"))
+		}
+	}
 	say("# 2. Stop the old service; its file stays.")
 	say("launchctl bootout %s", target(oldLabel))
 	say("# 3. Move the directories it uses.")
@@ -135,7 +143,7 @@ func (p LaunchPlan) Commands() ([]string, error) {
 	undo := func(format string, a ...any) { back = append(back, fmt.Sprintf(format, a...)) }
 	undo("# Stop and remove the new service, only if this plan was about to write it.")
 	undo("if [ -e %s ]; then", shellQuote(written))
-	undo("\tlaunchctl bootout %s || true", target(newLabel))
+	undo("\tif launchctl print %s >/dev/null 2>&1; then launchctl bootout %s; fi", target(newLabel), target(newLabel))
 	undo("\trm -f %s %s", shellQuote(newPlist), shellQuote(written))
 	undo("fi")
 	for i := len(planned) - 1; i >= 0; i-- {

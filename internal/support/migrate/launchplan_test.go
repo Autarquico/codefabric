@@ -87,7 +87,7 @@ func TestLaunchPlanForADaemonIsOneBlockForRootWithTheWayBackCommentedOut(t *test
 	}
 	for _, want := range []string{
 		"sudo -u 'ana' mv -n '/Users/ana/.config/codeflock' '/Users/ana/.config/codefabric'",
-		"launchctl bootout system/'com.codeflock.worker' || true",
+		"if launchctl print system/'com.codeflock.worker' >/dev/null 2>&1; then launchctl bootout system/'com.codeflock.worker'; fi",
 		"launchctl bootstrap system '/Library/LaunchDaemons/com.codefabric.worker.plist'",
 	} {
 		if !strings.Contains(back, want) {
@@ -336,5 +336,27 @@ func TestLaunchPlanChecksBeforeStoppingAndRemovesOnlyWhatItWrote(t *testing.T) {
 	}
 	if !strings.Contains(back, "mv '/Library/LaunchDaemons/com.codefabric.worker.plist.cflk-old' '/Library/LaunchDaemons/com.codefabric.worker.plist'") {
 		t.Errorf("the old plist is not restored from where it was kept:\n%s", back)
+	}
+}
+
+// A bootout that fails must stop the way back before it removes the property
+// list or moves the directories: the new service may still be running.
+func TestLaunchPlanWayBackDoesNotGoOnAfterAFailedBootout(t *testing.T) {
+	cmds, err := LaunchPlan{Plist: "/Library/LaunchDaemons/com.codefabric.worker.plist", Content: []byte(daemonPlist), System: true, Binary: "/usr/local/bin/cflk"}.Commands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward, back := parts(t, cmds)
+	if strings.Contains(back, "|| true") {
+		t.Errorf("the way back ignores a failed bootout:\n%s", back)
+	}
+	if !strings.Contains(forward, "launchctl print system/'com.codefabric.controller' >/dev/null 2>&1; then echo") {
+		t.Errorf("the plan does not refuse while another job of the old name is loaded:\n%s", forward)
+	}
+	if strings.Contains(forward, "'com.codefabric.worker is loaded") {
+		t.Errorf("the plan refuses because of the very job it moves:\n%s", forward)
+	}
+	if first, bootout := strings.Index(forward, "com.codefabric.controller is loaded"), strings.Index(forward, "launchctl bootout"); first < 0 || first > bootout {
+		t.Errorf("the other jobs are looked for after the bootout:\n%s", forward)
 	}
 }

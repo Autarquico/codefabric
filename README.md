@@ -13,15 +13,18 @@ Pre-release. The latest stable is `v0.2.1`; the `v0.4.0` betas carry the newest 
 - A Controller you run yourself, with Workers on macOS and Linux joined through a wizard and kept up as launchd or systemd services.
 - Tasks that run as isolated worktrees on a Worker, with checkpoints, a journal per Worker and backups you can restore on another host.
 - Handing a Claude Code or Codex session over to a remote Run (`handto`).
+- Attaching to a live Run, and a shell in its worktree, from your terminal, through the Controller.
 - A CLI and a TUI; signed releases and a verifying installer.
 
-Next: attaching to a live Run from your terminal ([#179](https://github.com/Autarquico/codeflock/issues/179)) and seeing remote Runs from Claude Code ([#180](https://github.com/Autarquico/codeflock/issues/180)).
+Next: seeing remote Runs from Claude Code ([#180](https://github.com/Autarquico/codeflock/issues/180)).
 
 ## Install
 
 ```bash
-curl -fsSL https://github.com/Autarquico/codeflock/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/Autarquico/codeflock/releases/download/v0.4.0-beta.7/install.sh | CFLK_VERSION=v0.4.0-beta.7 sh
 ```
+
+`releases/latest` skips prereleases: while 0.4.0-beta.7 is the newest release of `cflk`, `…/releases/latest/download/install.sh` installs an older one that still calls the command `cf`. Pin the version, as above, until a stable release has `cflk`.
 
 Then follow the [getting started guide](docs/guide/getting-started.md). Coming from the beta.6 or earlier (the command was `cf`)? Read [Upgrade to 0.4.0-beta.7](docs/guide/upgrade-beta7.md): its installer is `https://github.com/Autarquico/codeflock/releases/download/v0.4.0-beta.7/install.sh`.
 
