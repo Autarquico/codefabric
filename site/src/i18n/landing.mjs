@@ -55,6 +55,7 @@ export const landing = {
 		notVerified: [
 			{ text: 'The end-to-end tests drive a scripted fake harness. Sessions with the real Claude Code and Codex CLI are not part of the automated suite.', fakeHarness: 'The fake harness' },
 			{ text: 'Handing a real Claude Code session to a Worker, moving it to another and pulling it back was checked by hand on Linux and macOS Workers. It is not part of the automated suite.' },
+			{ text: 'Opening an attach in a new window is tested against a real tmux. In iTerm2 it was checked by hand; Terminal.app has not been tried.' },
 			{ text: 'The installer has not yet been run on a clean machine against a published release.' },
 			{ text: 'Code Flock is in early development. Expect rough edges and changes between versions.' },
 			{ text: 'The latest-release install command follows the newest stable GitHub release and skips prereleases, so until a stable release has cflk it installs the older cf. Pin the version for the beta.' },
@@ -118,6 +119,7 @@ export const landing = {
 		notVerified: [
 			{ text: 'Los tests end-to-end usan un harness falso con guion. Las sesiones con Claude Code y Codex CLI reales no forman parte de la suite automática.', fakeHarness: 'El harness falso' },
 			{ text: 'Pasar una sesión real de Claude Code a un Worker, moverla a otro y recuperarla se comprobó a mano en Workers Linux y macOS. No forma parte de la suite automática.' },
+			{ text: 'Abrir un attach en una ventana nueva se prueba contra un tmux real. En iTerm2 se comprobó a mano; en Terminal.app no se ha probado.' },
 			{ text: 'El instalador aún no se ha ejecutado en una máquina limpia contra una release publicada.' },
 			{ text: 'Code Flock está en desarrollo temprano. Espera asperezas y cambios entre versiones.' },
 			{ text: 'El comando de instalación de la última release sigue la release estable más reciente de GitHub y se salta las prereleases, así que hasta que una estable tenga cflk instala el cf antiguo. Fija la versión para la beta.' },
