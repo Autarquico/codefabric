@@ -36,9 +36,11 @@ Every tool that changes something (`tasks_create`, `tasks_respond`, `tasks_cance
 
 The server runs with one profile, chosen at install time. Tools outside it are not listed, and calling them fails. This is deliberate: do not look for a way around it.
 
-- `read`: list and get projects, Tasks, Runs, Workers and workflows; `runs_logs` for the output of a Run; `inbox_list`, `search`, `logs_query`, `events_query`, `events_wait`.
+- `read`: list and get projects, Tasks, Runs, Workers and workflows; `runs_logs` for the output of a Run; `runs_attach` to open the live session of a Run in a window of the user's terminal; `inbox_list`, `search`, `logs_query`, `events_query`, `events_wait`.
 - `execute` (default): read, plus `tasks_create` and `tasks_respond`. You can answer the needs-input of your own Tasks, including a permission request. Allow only what the user asked for.
 - `modify`: execute, plus `tasks_cancel`, `workers_drain` and `workers_undrain`.
+
+When the person wants to watch an interactive Run, call `runs_attach`; only if it fails with a command in its details, hand that command to the person to run in their terminal.
 
 If you need a tool the profile lacks, tell the user which profile it needs (`cflk mcp install --profile ...`) instead of working around it.
 

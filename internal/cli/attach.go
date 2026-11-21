@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"slices"
 	"strconv"
+	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -50,8 +53,10 @@ func DefaultAttachTransport() string { return TransportRelay }
 // the binary the Worker gave and the machine to reach. Client is the SDK client
 // the request was resolved with: the relay opens its stream through it.
 type AttachRequest struct {
-	Client     *client.Client
-	RunID      string
+	Client *client.Client
+	RunID  string
+	// RunShort is how the Run is shown to the person (run-49); it may be empty.
+	RunShort   string
 	LeaseEpoch uint64
 	Transport  string
 	Handle     v1.RuntimeHandle
@@ -73,7 +78,7 @@ func notAttachable(reason, message string) error {
 	return domain.NewError(domain.CodeRunNotAttachable, message, map[string]any{"reason": reason})
 }
 
-func newAttachCmd(term Terminal) *cobra.Command {
+func newAttachCmd(term Terminal, windows Windows) *cobra.Command {
 	var (
 		readOnly  bool
 		sshTarget string
@@ -87,7 +92,9 @@ func newAttachCmd(term Terminal) *cobra.Command {
 			"watches. Detach with Ctrl-]: the Run goes on.\n" +
 			"A Worker that does not offer the relay only admits --ssh, which attaches straight to it. For ssh, the\n" +
 			"machine to reach and the program to run on it are what the Worker announced; they are claims of\n" +
-			"that machine, and --ssh-target (or attach.ssh_targets in client.json) says where to go instead.",
+			"that machine, and --ssh-target (or attach.ssh_targets in client.json) says where to go instead.\n" +
+			"Without a terminal on its standard input (a script, an agent), it opens the attach in a new window of\n" +
+			"tmux, iTerm2 or Terminal.app, if it is running in one, and prints the command to run otherwise.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := openClient(cmd)
@@ -101,7 +108,11 @@ func newAttachCmd(term Terminal) *cobra.Command {
 			}
 			req.ReadOnly = readOnly
 			if !isTerminal(cmd.InOrStdin()) {
-				return domain.NewError(domain.CodeInvalidRequest, "cflk attach needs a terminal on its standard input", nil)
+				exe, err := os.Executable()
+				if err != nil {
+					return err
+				}
+				return openWindow(cmd, windows, exe, c.Controller(), req, sshTarget)
 			}
 			if term == nil {
 				return errNoTerminal()
@@ -122,6 +133,116 @@ func newAttachCmd(term Terminal) *cobra.Command {
 	cmd.Flags().StringVar(&sshTarget, "ssh-target", "", "reach the Worker at this [user@]host[:port] instead of the one it announced")
 	addProjectFlag(cmd, "the Project that narrows a Task name")
 	return cmd
+}
+
+// Windows opens a window of its own that runs a command, for `cflk attach`
+// without a terminal. The CLI cannot reach what does it (the terminals of the
+// machine): cmd/cflk composes it, as it does Terminal.
+type Windows interface {
+	// Open runs command in a new window titled title. It answers ErrNoWindow when
+	// the environment offers none.
+	Open(ctx context.Context, command []string, title string) (WindowOpened, error)
+}
+
+// ErrNoWindow is what Windows.Open answers when there is no terminal to open.
+var ErrNoWindow = errors.New("no terminal to open a window in")
+
+// WindowOpened is where a window opened: Launcher for programs, Label for people.
+type WindowOpened struct {
+	Launcher string
+	Label    string
+}
+
+// openWindow runs the attach of req in a new window and says where it opened.
+// Without a Windows, or without a terminal to open, it refuses as ever, with the
+// command that does it in a terminal. The window gets what was resolved here (the
+// Run, the Controller, the configuration directory), not what was typed.
+func openWindow(cmd *cobra.Command, windows Windows, exe, controller string, req AttachRequest, sshTarget string) error {
+	// The Run ID comes from the Controller and ends up in a terminal's window title.
+	if kind, _, err := domain.ParseID(req.RunID); err != nil || kind != domain.KindRun {
+		return domain.NewError(domain.CodeInternal, "the Controller answered with an attach target that is not a Run ID", nil)
+	}
+	command, err := windowCommand(exe, controller, req, sshTarget)
+	if err != nil {
+		return err
+	}
+	if windows == nil {
+		return noWindow(command)
+	}
+	shown := req.RunID
+	if short, err := domain.ParseShortID(req.RunShort); err == nil && short.Kind == domain.KindRun {
+		shown = req.RunShort
+	}
+	opened, err := windows.Open(cmd.Context(), command, shown)
+	if errors.Is(err, ErrNoWindow) {
+		return noWindow(command)
+	}
+	if err != nil {
+		var coded *domain.Error
+		if errors.As(err, &coded) {
+			return err
+		}
+		return domain.NewError(domain.CodeInternal, "could not open a window: "+err.Error(), nil)
+	}
+	answer := struct {
+		Opened string `json:"opened"`
+		Run    string `json:"run"`
+	}{opened.Launcher, req.RunID}
+	return emit(cmd, answer, func(out io.Writer) error {
+		_, err := io.WriteString(out, "Opened "+shown+" in a new "+opened.Label+" window\n")
+		return err
+	})
+}
+
+// windowCommand is the argv that attaches to req in another terminal: this
+// binary, the flags that matter, the effective Controller and configuration
+// directory, and the Run already resolved after a "--" so nothing reads it as a
+// flag. It is also the command given to whoever has to open the terminal.
+func windowCommand(exe, controller string, req AttachRequest, sshTarget string) ([]string, error) {
+	paths, err := config.ResolveFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	command := []string{"env", "CFLK_CONFIG_DIR=" + paths.ConfigDir, exe, "attach", "--controller", controller}
+	if req.ReadOnly {
+		command = append(command, "--read-only")
+	}
+	if req.Transport == TransportSSH {
+		command = append(command, "--ssh")
+	}
+	if sshTarget != "" {
+		command = append(command, "--ssh-target", sshTarget)
+	}
+	return append(command, "--", req.RunID), nil
+}
+
+// noWindow is the refusal of an attach without a terminal and without a way to
+// open one. The command is in the details as a line for a POSIX shell; in the
+// message only when it prints as one line, since the message drops control
+// characters.
+func noWindow(command []string) error {
+	message := "cflk attach needs a terminal on its standard input"
+	line, ok := shellLine(command)
+	if !ok {
+		return domain.NewError(domain.CodeInvalidRequest, message, nil)
+	}
+	if !strings.ContainsFunc(line, unicode.IsControl) {
+		message += "; to open it in one, run: " + line
+	}
+	return domain.NewError(domain.CodeInvalidRequest, message, map[string]any{"command": line})
+}
+
+// shellLine is argv as one line for a POSIX shell, every element quoted. An
+// element with a NUL byte cannot be quoted and refuses the line.
+func shellLine(argv []string) (string, bool) {
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
+		if strings.ContainsRune(arg, 0) {
+			return "", false
+		}
+		quoted[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+	}
+	return strings.Join(quoted, " "), true
 }
 
 // AttachParams is what a caller that is not the `cflk attach` command gives to
@@ -285,7 +406,7 @@ func resolveAttach(ctx context.Context, c *client.Client, ref, project, override
 	if !slices.Contains(transportsOf(target), transport) {
 		return AttachRequest{}, noTransport(transport)
 	}
-	req := AttachRequest{Client: c, RunID: target.RunID, LeaseEpoch: target.LeaseEpoch, Transport: transport, Handle: target.Handle}
+	req := AttachRequest{Client: c, RunID: target.RunID, RunShort: target.RunShort, LeaseEpoch: target.LeaseEpoch, Transport: transport, Handle: target.Handle}
 	if transport != TransportSSH {
 		if !domain.ValidAttachRuntime(target.Handle.Runtime) {
 			return AttachRequest{}, notAttachable(v1.NotAttachableRuntimeUnsupported, "the Worker named a runtime that cannot be attached")

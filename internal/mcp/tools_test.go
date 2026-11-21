@@ -155,7 +155,7 @@ func (w *world) WorkflowApply(context.Context, string) (v1.WorkflowApply, error)
 // schema that does not fit its handler fails here.
 func TestEveryToolSucceedsAgainstItsOutputSchema(t *testing.T) {
 	w := &world{}
-	s := connect(t, mcp.Modify, w, clock.NewFake(time.Unix(0, 0)))
+	s := connectWith(t, mcp.Modify, w, &fakeAttacher{}, clock.NewFake(time.Unix(0, 0)))
 	cases := map[string]struct {
 		args map[string]any
 		seen any // what the Client must have received, under w.seen[key]
@@ -169,6 +169,7 @@ func TestEveryToolSucceedsAgainstItsOutputSchema(t *testing.T) {
 		"runs_list":       {map[string]any{"task": "t1"}, "", "", []string{"runs"}},
 		"runs_get":        {map[string]any{"ref": "r1"}, "r1", "run", nil},
 		"runs_logs":       {map[string]any{"ref": "r1"}, "r1", "output", []string{"run_id", "text", "closed"}},
+		"runs_attach":     {map[string]any{"ref": "r1"}, "", "", []string{"opened", "run"}},
 		"workers_list":    {map[string]any{"include_removed": true}, true, "workers", []string{"workers"}},
 		"workers_get":     {map[string]any{"ref": "box"}, "box", "worker", nil},
 		"workflows_list":  {nil, "", "", []string{"workflows"}},
@@ -347,7 +348,7 @@ func TestCancelledEventsWaitIsNotAnUnexpectedError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	serverSide, clientSide := sdk.NewInMemoryTransports()
-	if _, err := mcp.NewServer(mcp.Read, f, clock.Real{}, "/work", &diag).Connect(ctx, serverSide, nil); err != nil {
+	if _, err := mcp.NewServer(mcp.Read, f, nil, clock.Real{}, "/work", &diag).Connect(ctx, serverSide, nil); err != nil {
 		t.Fatal(err)
 	}
 	session, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, clientSide, nil)

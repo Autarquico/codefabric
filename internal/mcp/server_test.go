@@ -52,9 +52,14 @@ func (f *fake) FollowEvents(ctx context.Context, q client.EventQuery, fn func(v1
 
 func connect(t *testing.T, profile mcp.Profile, c mcp.Client, clk clock.Clock) *sdk.ClientSession {
 	t.Helper()
+	return connectWith(t, profile, c, nil, clk)
+}
+
+func connectWith(t *testing.T, profile mcp.Profile, c mcp.Client, a mcp.Attacher, clk clock.Clock) *sdk.ClientSession {
+	t.Helper()
 	ctx := t.Context()
 	serverSide, clientSide := sdk.NewInMemoryTransports()
-	server := mcp.NewServer(profile, c, clk, "/work", io.Discard)
+	server := mcp.NewServer(profile, c, a, clk, "/work", io.Discard)
 	if _, err := server.Connect(ctx, serverSide, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +103,7 @@ func structured(t *testing.T, res *sdk.CallToolResult) map[string]any {
 }
 
 var readTools = []string{
-	"events_query", "events_wait", "inbox_list", "logs_query", "projects_get", "projects_list", "runs_get", "runs_list",
+	"events_query", "events_wait", "inbox_list", "logs_query", "projects_get", "projects_list", "runs_attach", "runs_get", "runs_list",
 	"runs_logs", "search", "tasks_get", "tasks_list", "workers_get", "workers_list", "workflows_diff", "workflows_get", "workflows_list",
 }
 

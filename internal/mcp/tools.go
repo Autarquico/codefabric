@@ -17,10 +17,12 @@ import (
 )
 
 type tools struct {
-	c    Client
-	clk  clock.Clock
-	dir  string
-	diag io.Writer
+	c        Client
+	attacher Attacher
+	profile  Profile
+	clk      clock.Clock
+	dir      string
+	diag     io.Writer
 }
 
 // Inputs. A field without omitempty is required by the schema the SDK derives.
@@ -47,6 +49,11 @@ type (
 		Tail   *uint64 `json:"tail,omitempty" jsonschema:"the last N bytes; the default when offset is not given"`
 		Offset *uint64 `json:"offset,omitempty" jsonschema:"read from this byte"`
 		Limit  uint64  `json:"limit,omitempty" jsonschema:"at most this many bytes"`
+	}
+	runsAttachInput struct {
+		Ref      string `json:"ref" jsonschema:"Run id or short id, or a Task"`
+		Project  string `json:"project,omitempty" jsonschema:"Project that narrows a name more than one Project has"`
+		ReadOnly bool   `json:"read_only,omitempty" jsonschema:"watch without sending what the person types; always so with the read profile"`
 	}
 	workersListInput struct {
 		IncludeRemoved bool `json:"include_removed,omitempty"`
@@ -180,6 +187,10 @@ func (t tools) read(s *sdk.Server) {
 	add(t, s, wire("runs.logs"), "Read the output of a Run: the last 64 KiB unless tail or offset say otherwise. answer is what its harness said last, once it ended.",
 		objectOf(map[string]string{"run_id": "string", "start": "integer", "end": "integer", "offset": "integer", "text": "string", "truncated": "boolean", "closed": "boolean", "answer": "string"}),
 		t.runLogs)
+	add(t, s, wire("runs.attach"), "Open the live session of an interactive Run in a new window of the person's terminal (tmux, iTerm2 or Terminal.app), so they can watch it. "+
+		"Result: {opened, run}. If no window can be opened it fails with the command the person can run themselves, in details.command.",
+		objectOf(map[string]string{"opened": "string", "run": "string"}),
+		t.runsAttach)
 	add(t, s, wire("workers.list"), "List the Workers. Result: {workers: [Worker]}.",
 		objectOf(map[string]string{"workers": "array"}),
 		func(ctx context.Context, in workersListInput) (any, error) {
@@ -290,6 +301,13 @@ func (t tools) modify(s *sdk.Server) {
 }
 
 const defaultTailBytes = 64 << 10
+
+func (t tools) runsAttach(ctx context.Context, in runsAttachInput) (any, error) {
+	if t.attacher == nil {
+		return nil, domain.NewError(domain.CodeNotImplemented, "this server cannot open windows", nil)
+	}
+	return t.attacher.Attach(ctx, AttachRequest{Ref: in.Ref, Project: in.Project, ReadOnly: t.profile == Read || in.ReadOnly})
+}
 
 func (t tools) runLogs(ctx context.Context, in runsLogsInput) (any, error) {
 	q := client.OutputQuery{Tail: in.Tail, Offset: in.Offset, Limit: in.Limit}
