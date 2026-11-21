@@ -288,12 +288,6 @@ If the Worker of the Run is down, `cflk task pull --defer` cannot get a checkpoi
 
 [The CLI reference](../cli/) has every flag of these commands.
 
-## Coming next
-
-These are specified and not built yet:
-
-- **Remote Runs in Claude Code.** The Workers and Runs of the pool listed from Claude Code, marked as remote, and entered from there. `cflk claude install` will set it up.
-
 ## What is tested, and what is not
 
 The core flow above is covered by automated tests. The default tests use the `command` harness, a scripted fake harness and recorded Claude Code and Codex output. No automated test runs a session with the real Claude Code or Codex CLI; an opt-in check (`CF_REQUIRE_CLAUDE=1`) only confirms the flags the Claude Code adapter relies on. Expect rough edges there, and run `cflk worker doctor` first when something does not start.

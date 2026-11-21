@@ -14,9 +14,8 @@ Pre-release. The latest stable is `v0.2.1`; the `v0.4.0` betas carry the newest 
 - Tasks that run as isolated worktrees on a Worker, with checkpoints, a journal per Worker and backups you can restore on another host.
 - Handing a Claude Code or Codex session over to a remote Run (`handto`).
 - Attaching to a live Run, and a shell in its worktree, from your terminal, through the Controller.
+- The Runs of the pool seen from Claude Code over MCP, and entered from there: with no terminal at hand, `cflk attach` opens the Run in a new tmux, iTerm2 or Terminal.app window. Not in a release yet.
 - A CLI and a TUI; signed releases and a verifying installer.
-
-Next: seeing remote Runs from Claude Code ([#180](https://github.com/Autarquico/codeflock/issues/180)).
 
 ## Install
 
