@@ -52,11 +52,11 @@ A profile is fixed when the server starts. A tool outside the profile is not lis
 
 | Profile | Tools |
 | --- | --- |
-| `read` | `projects_list`, `projects_get`, `tasks_list`, `tasks_get`, `runs_list`, `runs_get`, `runs_logs`, `workers_list`, `workers_get`, `workflows_list`, `workflows_get`, `workflows_diff`, `inbox_list`, `search`, `logs_query`, `events_query`, `events_wait` |
+| `read` | `projects_list`, `projects_get`, `tasks_list`, `tasks_get`, `runs_list`, `runs_get`, `runs_logs`, `runs_attach`, `workers_list`, `workers_get`, `workflows_list`, `workflows_get`, `workflows_diff`, `inbox_list`, `search`, `logs_query`, `events_query`, `events_wait` |
 | `execute` (default) | `read`, plus `tasks_create`, `tasks_respond` |
 | `modify` | `execute`, plus `tasks_cancel`, `workers_drain`, `workers_undrain` |
 
-`runs_logs` returns the output of a Run. `workflows_diff` is an apply in dry-run. `inbox_list` and `search` are what `cflk inbox` and `cflk search` show.
+`runs_logs` returns the output of a Run. `runs_attach` opens the live session of a Run in a new window of the terminal the server runs in (tmux, iTerm2 or Terminal.app) and answers `{opened, run}` (the attach is audited as the MCP session, not as you); with the `read` profile the window is always read-only. If no window can be opened it fails with the command to run by hand in `details.command`. `workflows_diff` is an apply in dry-run. `inbox_list` and `search` are what `cflk inbox` and `cflk search` show.
 
 ## The flow: create, wait, respond
 

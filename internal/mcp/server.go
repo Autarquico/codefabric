@@ -90,15 +90,37 @@ const (
 	maxWait     = 10 * time.Minute
 )
 
+// Attacher opens the live session of a Run in a window of the person's own
+// terminal. Whoever composes the server decides how: the MCP package does not
+// reach terminals. A *domain.Error it returns reaches the model with its code
+// and details.
+type Attacher interface {
+	Attach(ctx context.Context, req AttachRequest) (AttachResult, error)
+}
+
+// AttachRequest is what runs_attach asks of an Attacher.
+type AttachRequest struct {
+	Ref      string
+	Project  string
+	ReadOnly bool
+}
+
+// AttachResult is where the window opened and the Run it shows.
+type AttachResult struct {
+	Opened string `json:"opened"`
+	Run    string `json:"run"`
+}
+
 // NewServer builds the MCP server of a profile. Only the tools the profile
 // allows are registered, so asking for another is an unknown tool. Wire names
 // have no dots (the Anthropic API admits ^[a-zA-Z0-9_-]{1,128}$); the
 // permissions and the docs keep the names of §17.2. dir is the directory that
 // decides the Project of a Task the model creates without naming one; diag
-// receives the text of the errors the model is not shown.
-func NewServer(profile Profile, c Client, clk clock.Clock, dir string, diag io.Writer) *sdk.Server {
+// receives the text of the errors the model is not shown. attach may be nil:
+// runs_attach then answers CF_NOT_IMPLEMENTED.
+func NewServer(profile Profile, c Client, a Attacher, clk clock.Clock, dir string, diag io.Writer) *sdk.Server {
 	s := sdk.NewServer(&sdk.Implementation{Name: "codeflock", Version: buildinfo.Get().Version}, nil)
-	t := tools{c: c, clk: clk, dir: dir, diag: diag}
+	t := tools{c: c, attacher: a, profile: profile, clk: clk, dir: dir, diag: diag}
 	if profile.rank() >= Read.rank() {
 		t.read(s)
 	}

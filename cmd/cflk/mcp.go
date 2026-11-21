@@ -52,7 +52,7 @@ func newMCPCommand(open func(session, controller string) (mcp.Client, error)) *c
 			}
 			cmd.SilenceUsage = true
 			fmt.Fprintf(cmd.ErrOrStderr(), "cflk mcp: serving profile %s, session %s\n", p, session)
-			return mcp.Serve(cmd.Context(), mcp.NewServer(p, c, clock.Real{}, dir, cmd.ErrOrStderr()), cmd.InOrStdin(), cmd.OutOrStdout())
+			return mcp.Serve(cmd.Context(), mcp.NewServer(p, c, newExecAttacher(controller, session), clock.Real{}, dir, cmd.ErrOrStderr()), cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
 	serve.Flags().StringVar(&profile, "profile", string(mcp.Execute), "what the model may do: read, execute or modify")

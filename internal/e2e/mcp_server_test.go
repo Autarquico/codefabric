@@ -238,7 +238,7 @@ func (s *mcpSession) refuses(name string, args map[string]any) string {
 // The tools of the table of the spec, by wire name.
 var (
 	mcpReadTools = []string{
-		"projects_list", "projects_get", "tasks_list", "tasks_get", "runs_list", "runs_get", "runs_logs",
+		"projects_list", "projects_get", "tasks_list", "tasks_get", "runs_list", "runs_get", "runs_logs", "runs_attach",
 		"workers_list", "workers_get", "workflows_list", "workflows_get", "workflows_diff",
 		"inbox_list", "search", "logs_query", "events_query", "events_wait",
 	}
