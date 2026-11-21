@@ -225,15 +225,16 @@ func windowCommand(exe, controller string, req AttachRequest, sshTarget string) 
 
 // noWindow is the refusal of an attach without a terminal and without a way to
 // open one. The command is in the details as a line for a POSIX shell. In the
-// message it prints as one line, since the message drops control characters: an
-// argument that has some is written ANSI-C quoted, which bash and zsh read.
+// message it prints as one line, since the message drops control characters and
+// bytes that are not UTF-8: an argument that has some is written ANSI-C quoted,
+// which bash and zsh read.
 func noWindow(command []string) error {
 	message := "cflk attach needs a terminal on its standard input"
 	line, ok := shellLine(command)
 	if !ok {
 		return domain.NewError(domain.CodeInvalidRequest, message, nil)
 	}
-	if strings.ContainsFunc(line, unicode.IsControl) {
+	if !printsAsIs(line) {
 		message += "; to open it in one, run this in bash or zsh: " + oneShellLine(command)
 	} else {
 		message += "; to open it in one, run: " + line
@@ -242,13 +243,13 @@ func noWindow(command []string) error {
 }
 
 // oneShellLine is argv as a single printable line for bash or zsh: like
-// shellLine, but an argument with control characters is $'...' quoted with them
-// escaped, as are bytes that are not UTF-8. argv must not hold a NUL byte
+// shellLine, but an argument that would not print as it is is $'...' quoted,
+// with its control characters and bytes that are not UTF-8 escaped. argv must not hold a NUL byte
 // (shellLine refused it).
 func oneShellLine(argv []string) string {
 	quoted := make([]string, len(argv))
 	for i, arg := range argv {
-		if !strings.ContainsFunc(arg, unicode.IsControl) {
+		if printsAsIs(arg) {
 			quoted[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 			continue
 		}
@@ -280,6 +281,12 @@ func oneShellLine(argv []string) string {
 		quoted[i] = b.String()
 	}
 	return strings.Join(quoted, " ")
+}
+
+// printsAsIs says whether text survives the message as it is: UTF-8 without
+// control characters, which the message would drop or replace.
+func printsAsIs(text string) bool {
+	return utf8.ValidString(text) && !strings.ContainsFunc(text, unicode.IsControl)
 }
 
 // shellLine is argv as one line for a POSIX shell, every element quoted. An

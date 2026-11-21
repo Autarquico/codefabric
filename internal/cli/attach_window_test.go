@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -153,6 +154,15 @@ func TestOneShellLine_BashGivesBackTheSameBytes(t *testing.T) {
 	}
 	if got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00"); !slices.Equal(got, argv) {
 		t.Errorf("bash gave back %q, want %q", got, argv)
+	}
+}
+
+func TestAttachWindow_ABytesThatIsNotUTF8IsEscapedInTheMessage(t *testing.T) {
+	t.Setenv("CFLK_CONFIG_DIR", "/cfg-\xff")
+	_, err := runOpen(t, nil, AttachRequest{RunID: runA, Transport: TransportRelay}, "", false)
+	var coded *domain.Error
+	if !errors.As(err, &coded) || !strings.Contains(coded.Message, `$'CFLK_CONFIG_DIR=/cfg-\xff'`) || !utf8.ValidString(coded.Message) {
+		t.Errorf("err = %v", err)
 	}
 }
 
