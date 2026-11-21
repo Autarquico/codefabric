@@ -8,20 +8,20 @@ This page takes you from nothing to a Task running on a Worker. It assumes a Git
 ## Install
 
 ```sh
-curl -fsSL https://github.com/Autarquico/codeflock/releases/download/v0.4.0-beta.7/install.sh | CFLK_VERSION=v0.4.0-beta.7 sh
+curl -fsSL https://github.com/Autarquico/codeflock/releases/download/v0.4.0-beta.8/install.sh | CFLK_VERSION=v0.4.0-beta.8 sh
 ```
 
-`releases/latest` skips prereleases, so while 0.4.0-beta.7 is the newest release of `cflk`, `…/releases/latest/download/install.sh` installs an older release that still calls the command `cf`: pin the version, as above, until a stable release has `cflk`.
+`releases/latest` skips prereleases, so while 0.4.0-beta.8 is the newest release of `cflk`, `…/releases/latest/download/install.sh` installs an older release that still calls the command `cf`: pin the version, as above, until a stable release has `cflk`.
 
 The installer puts `cflk` in `~/.local/bin`. Two variables change that:
 
 | Variable | Meaning |
 | --- | --- |
-| `CFLK_VERSION` | The version to install, such as `v0.4.0-beta.7`. Default: the latest stable release, which is not yet one with `cflk`: set it. |
+| `CFLK_VERSION` | The version to install, such as `v0.4.0-beta.8`. Default: the latest stable release, which is not yet one with `cflk`: set it. |
 | `CFLK_INSTALL_DIR` | Where to put `cflk`. Default: `~/.local/bin`. |
 
 ```sh
-curl -fsSL https://github.com/Autarquico/codeflock/releases/download/v0.4.0-beta.7/install.sh | CFLK_VERSION=v0.4.0-beta.7 CFLK_INSTALL_DIR=/usr/local/bin sh
+curl -fsSL https://github.com/Autarquico/codeflock/releases/download/v0.4.0-beta.8/install.sh | CFLK_VERSION=v0.4.0-beta.8 CFLK_INSTALL_DIR=/usr/local/bin sh
 ```
 
 The installer of a release is the only one that knows that release's files, so a pinned version takes `install.sh` from its own tag. Releases before 0.4.0-beta.7 need the installer of their own release.
