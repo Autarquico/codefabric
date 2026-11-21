@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	v1 "github.com/Autarquico/codeflock/internal/api/v1"
+	"github.com/Autarquico/codeflock/internal/cli"
 	"github.com/Autarquico/codeflock/internal/domain"
 	"github.com/Autarquico/codeflock/internal/mcp"
 )
@@ -22,9 +23,12 @@ import (
 type execAttacher struct {
 	exe        string // empty: this binary
 	controller string
+	session    string // the MCP session of the server, which the attach is attributed to
 }
 
-func newExecAttacher(controller string) execAttacher { return execAttacher{controller: controller} }
+func newExecAttacher(controller, session string) execAttacher {
+	return execAttacher{controller: controller, session: session}
+}
 
 func (a execAttacher) argv(req mcp.AttachRequest) []string {
 	args := []string{"attach", "--json"}
@@ -52,6 +56,9 @@ func (a execAttacher) Attach(ctx context.Context, req mcp.AttachRequest) (mcp.At
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, exe, a.argv(req)...) //nolint:gosec // this binary, with the flags built above
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr            // Stdin nil is /dev/null
+	if a.session != "" {
+		cmd.Env = append(os.Environ(), cli.MCPSessionEnv+"="+a.session)
+	}
 	runErr := cmd.Run()
 	if runErr == nil {
 		var res mcp.AttachResult

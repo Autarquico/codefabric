@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"slices"
@@ -203,7 +204,12 @@ func windowCommand(exe, controller string, req AttachRequest, sshTarget string) 
 	if err != nil {
 		return nil, err
 	}
-	command := []string{"env", "CFLK_CONFIG_DIR=" + paths.ConfigDir, exe, "attach", "--controller", controller}
+	command := []string{"env", "CFLK_CONFIG_DIR=" + paths.ConfigDir}
+	// The window opens the relay, so it carries the MCP session that asked for it.
+	if session := mcpSessionFromEnv(); session != "" {
+		command = append(command, MCPSessionEnv+"="+session)
+	}
+	command = append(command, exe, "attach", "--controller", controller)
 	if req.ReadOnly {
 		command = append(command, "--read-only")
 	}
@@ -217,19 +223,56 @@ func windowCommand(exe, controller string, req AttachRequest, sshTarget string) 
 }
 
 // noWindow is the refusal of an attach without a terminal and without a way to
-// open one. The command is in the details as a line for a POSIX shell; in the
-// message only when it prints as one line, since the message drops control
-// characters.
+// open one. The command is in the details as a line for a POSIX shell. In the
+// message it prints as one line, since the message drops control characters: an
+// argument that has some is written ANSI-C quoted, which bash and zsh read.
 func noWindow(command []string) error {
 	message := "cflk attach needs a terminal on its standard input"
 	line, ok := shellLine(command)
 	if !ok {
 		return domain.NewError(domain.CodeInvalidRequest, message, nil)
 	}
-	if !strings.ContainsFunc(line, unicode.IsControl) {
+	if strings.ContainsFunc(line, unicode.IsControl) {
+		message += "; to open it in one, run this in bash or zsh: " + oneShellLine(command)
+	} else {
 		message += "; to open it in one, run: " + line
 	}
 	return domain.NewError(domain.CodeInvalidRequest, message, map[string]any{"command": line})
+}
+
+// oneShellLine is argv as a single printable line for bash or zsh: like
+// shellLine, but an argument with control characters is $'...' quoted with them
+// escaped. argv must not hold a NUL byte (shellLine refused it).
+func oneShellLine(argv []string) string {
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
+		if !strings.ContainsFunc(arg, unicode.IsControl) {
+			quoted[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+			continue
+		}
+		var b strings.Builder
+		b.WriteString("$'")
+		for _, r := range arg {
+			switch {
+			case r == '\\' || r == '\'':
+				b.WriteByte('\\')
+				b.WriteRune(r)
+			case r == '\n':
+				b.WriteString(`\n`)
+			case r == '\t':
+				b.WriteString(`\t`)
+			case unicode.IsControl(r):
+				for _, c := range []byte(string(r)) {
+					fmt.Fprintf(&b, `\x%02x`, c)
+				}
+			default:
+				b.WriteRune(r)
+			}
+		}
+		b.WriteByte('\'')
+		quoted[i] = b.String()
+	}
+	return strings.Join(quoted, " ")
 }
 
 // shellLine is argv as one line for a POSIX shell, every element quoted. An

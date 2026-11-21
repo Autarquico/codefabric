@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Autarquico/codeflock/internal/cli"
 	"github.com/Autarquico/codeflock/internal/domain"
 	"github.com/Autarquico/codeflock/internal/mcp"
 )
@@ -79,5 +80,30 @@ func TestExecAttacher_WithoutAValidEnvelopeIsNotCoded(t *testing.T) {
 		if err == nil || errors.As(err, &coded) {
 			t.Errorf("%s: err = %#v, want an uncoded error", name, err)
 		}
+	}
+}
+
+func TestExecAttacher_ActsForTheMCPSession(t *testing.T) {
+	const session = "0123456789abcdef0123456789abcdef"
+	t.Setenv(cli.MCPSessionEnv, "inherited")
+	exe, record := fakeCflk(t, `printf 'session=%s\n' "$CFLK_MCP_SESSION" >> "$(dirname "$0")/record"; echo '{"opened":"tmux","run":"r"}'`)
+	if _, err := (execAttacher{exe: exe, session: session}).Attach(t.Context(), mcp.AttachRequest{Ref: "r1"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(record) //nolint:gosec // a path of the test's own temp dir
+	if !strings.Contains(string(b), "session="+session+"\n") {
+		t.Errorf("child saw %q, want the session of the server", b)
+	}
+}
+
+func TestExecAttacher_WithoutASessionLeavesTheEnvironmentAlone(t *testing.T) {
+	t.Setenv(cli.MCPSessionEnv, "")
+	exe, record := fakeCflk(t, `printf 'session=%s\n' "$CFLK_MCP_SESSION" >> "$(dirname "$0")/record"; echo '{"opened":"tmux","run":"r"}'`)
+	if _, err := (execAttacher{exe: exe}).Attach(t.Context(), mcp.AttachRequest{Ref: "r1"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(record) //nolint:gosec // a path of the test's own temp dir
+	if !strings.Contains(string(b), "session=\n") {
+		t.Errorf("child saw %q", b)
 	}
 }

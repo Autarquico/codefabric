@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -42,7 +44,25 @@ func dialController(controller string) (*client.Client, error) {
 	if controller != "" {
 		opts = append(opts, client.WithController(controller))
 	}
+	if session := mcpSessionFromEnv(); session != "" {
+		opts = append(opts, client.WithMCPSession(session))
+	}
 	return client.Open(paths.CredentialsDir(), opts...)
+}
+
+// MCPSessionEnv carries the session of a `cflk mcp serve` to the `cflk` it runs,
+// so that what that process does is attributed to the MCP session and not to
+// the person.
+const MCPSessionEnv = "CFLK_MCP_SESSION"
+
+// mcpSessionFromEnv is the MCP session this process acts for: 32 lowercase hex
+// digits, what `cflk mcp serve` makes. Anything else is ignored.
+func mcpSessionFromEnv() string {
+	id := os.Getenv(MCPSessionEnv)
+	if len(id) != 32 || strings.Trim(id, "0123456789abcdef") != "" {
+		return ""
+	}
+	return id
 }
 
 // addTimeoutFlag lets a command that a skill runs give up instead of waiting for a
