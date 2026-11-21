@@ -109,20 +109,6 @@ const fakeHarness = `${REPO_URL}/tree/${repoRef()}/internal/testutil/fakeharness
 				</div>
 			</section>
 
-			<section aria-labelledby="next-title">
-				<h2 id="next-title">{t.nextTitle}</h2>
-				<p class="intro">{t.nextIntro[0]} <a href={`${REPO_URL}/tree/${repoRef()}/docs/specs`}>{t.nextIntro[1]}</a> {t.nextIntro[2]}</p>
-				<ul class="steps">
-					{t.next.map(({ title, command, text }) => (
-						<li>
-							<h3>{title}</h3>
-							{command && <p><code>{command}</code></p>}
-							<p>{text}</p>
-						</li>
-					))}
-				</ul>
-			</section>
-
 			<section aria-labelledby="claims-title">
 				<h2 id="claims-title">{t.claimsTitle}</h2>
 				<div class="claims">

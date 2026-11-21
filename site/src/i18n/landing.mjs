@@ -28,7 +28,7 @@ export const landing = {
 		steps: [
 			{ title: 'Start the Controller', command: 'cflk controller init', text: 'Run the Controller on one machine. Other machines join it with an invitation, through cflk setup.' },
 			{ title: 'Start a Task', command: 'cflk do', text: "Create a Task from this directory's repository and start it on a Worker." },
-			{ title: 'Watch it run', command: 'cflk ps', text: 'See the Runs that are live and where they are. Attach to one; closing the terminal does not end the Run.' },
+			{ title: 'Watch it run', command: 'cflk ps', text: 'See the Runs that are live and where they are. Attach to one; closing the terminal does not end the Run. From Claude Code, runs_attach opens it in a new window when Claude Code runs in tmux, iTerm2 or Terminal.app.' },
 			{ title: 'Answer what needs you', command: 'cflk inbox', text: 'Tasks waiting for input and failures to decide on are listed in one place.' },
 		],
 		journeyTitle: 'Hand a session to a Worker, and bring it back',
@@ -44,11 +44,6 @@ export const landing = {
 			{ file: 'runs-80x24.golden', title: 'Runs', text: 'The Runs view: where each Run is, and the branch it publishes.' },
 		],
 		frame: { label: 'terminal frame', caption: 'Rendered by the TUI test suite with fixture data. Source:' },
-		nextTitle: 'Coming next',
-		nextIntro: ['Specified, not built yet.', 'The specs', 'say what each one must do.'],
-		next: [
-			{ title: 'Remote Runs in Claude Code', text: 'See the Workers and the Runs of the pool from Claude Code, marked as remote, and enter them from there.' },
-		],
 		claimsTitle: 'What is verified, and what is not',
 		verifiedTitle: 'Verified',
 		verified: [
@@ -60,6 +55,7 @@ export const landing = {
 		notVerified: [
 			{ text: 'The end-to-end tests drive a scripted fake harness. Sessions with the real Claude Code and Codex CLI are not part of the automated suite.', fakeHarness: 'The fake harness' },
 			{ text: 'Handing a real Claude Code session to a Worker, moving it to another and pulling it back was checked by hand on Linux and macOS Workers. It is not part of the automated suite.' },
+			{ text: 'Opening an attach in a new window is tested against a real tmux. In iTerm2 it was checked by hand; Terminal.app has not been tried.' },
 			{ text: 'The installer has not yet been run on a clean machine against a published release.' },
 			{ text: 'Code Flock is in early development. Expect rough edges and changes between versions.' },
 			{ text: 'The latest-release install command follows the newest stable GitHub release and skips prereleases, so until a stable release has cflk it installs the older cf. Pin the version for the beta.' },
@@ -96,7 +92,7 @@ export const landing = {
 		steps: [
 			{ title: 'Arranca el Controller', command: 'cflk controller init', text: 'Ejecuta el Controller en una máquina. Las demás se unen con una invitación, mediante cflk setup.' },
 			{ title: 'Inicia una Task', command: 'cflk do', text: 'Crea una Task con el repositorio de este directorio y la inicia en un Worker.' },
-			{ title: 'Mira cómo avanza', command: 'cflk ps', text: 'Ve los Runs en marcha y dónde están. Conéctate a uno; cerrar el terminal no termina el Run.' },
+			{ title: 'Mira cómo avanza', command: 'cflk ps', text: 'Ve los Runs en marcha y dónde están. Conéctate a uno; cerrar el terminal no termina el Run. Desde Claude Code, runs_attach lo abre en una ventana nueva si Claude Code corre en tmux, iTerm2 o Terminal.app.' },
 			{ title: 'Responde a lo que te espera', command: 'cflk inbox', text: 'Las Tasks que esperan una respuesta y los fallos por decidir aparecen en un solo sitio.' },
 		],
 		journeyTitle: 'Pasa una sesión a un Worker y recupérala',
@@ -112,11 +108,6 @@ export const landing = {
 			{ file: 'runs-80x24.golden', title: 'Runs', text: 'La vista de Runs: dónde está cada Run y la rama que publica.' },
 		],
 		frame: { label: 'captura del terminal', caption: 'Generada por los tests de la TUI con datos de prueba. Fuente:' },
-		nextTitle: 'Lo próximo',
-		nextIntro: ['Especificado, aún sin construir.', 'Las specs', 'dicen qué debe hacer cada uno.'],
-		next: [
-			{ title: 'Runs remotos en Claude Code', text: 'Ve los Workers y los Runs de la flota desde Claude Code, marcados como remotos, y entra en ellos desde allí.' },
-		],
 		claimsTitle: 'Qué está verificado y qué no',
 		verifiedTitle: 'Verificado',
 		verified: [
@@ -128,6 +119,7 @@ export const landing = {
 		notVerified: [
 			{ text: 'Los tests end-to-end usan un harness falso con guion. Las sesiones con Claude Code y Codex CLI reales no forman parte de la suite automática.', fakeHarness: 'El harness falso' },
 			{ text: 'Pasar una sesión real de Claude Code a un Worker, moverla a otro y recuperarla se comprobó a mano en Workers Linux y macOS. No forma parte de la suite automática.' },
+			{ text: 'Abrir un attach en una ventana nueva se prueba contra un tmux real. En iTerm2 se comprobó a mano; en Terminal.app no se ha probado.' },
 			{ text: 'El instalador aún no se ha ejecutado en una máquina limpia contra una release publicada.' },
 			{ text: 'Code Flock está en desarrollo temprano. Espera asperezas y cambios entre versiones.' },
 			{ text: 'El comando de instalación de la última release sigue la release estable más reciente de GitHub y se salta las prereleases, así que hasta que una estable tenga cflk instala el cf antiguo. Fija la versión para la beta.' },
