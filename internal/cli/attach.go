@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -242,7 +243,8 @@ func noWindow(command []string) error {
 
 // oneShellLine is argv as a single printable line for bash or zsh: like
 // shellLine, but an argument with control characters is $'...' quoted with them
-// escaped. argv must not hold a NUL byte (shellLine refused it).
+// escaped, as are bytes that are not UTF-8. argv must not hold a NUL byte
+// (shellLine refused it).
 func oneShellLine(argv []string) string {
 	quoted := make([]string, len(argv))
 	for i, arg := range argv {
@@ -252,8 +254,13 @@ func oneShellLine(argv []string) string {
 		}
 		var b strings.Builder
 		b.WriteString("$'")
-		for _, r := range arg {
+		for rest := arg; rest != ""; {
+			r, size := utf8.DecodeRuneInString(rest)
+			raw := rest[:size]
+			rest = rest[size:]
 			switch {
+			case r == utf8.RuneError && size == 1:
+				fmt.Fprintf(&b, `\x%02x`, raw[0])
 			case r == '\\' || r == '\'':
 				b.WriteByte('\\')
 				b.WriteRune(r)
@@ -262,7 +269,7 @@ func oneShellLine(argv []string) string {
 			case r == '\t':
 				b.WriteString(`\t`)
 			case unicode.IsControl(r):
-				for _, c := range []byte(string(r)) {
+				for _, c := range []byte(raw) {
 					fmt.Fprintf(&b, `\x%02x`, c)
 				}
 			default:

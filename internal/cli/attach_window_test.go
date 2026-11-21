@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -135,6 +136,23 @@ func TestScenario_AttachWindow_UnaOrdenConSaltoDeLineaSeEscapaEnElMensaje(t *tes
 	var coded *domain.Error
 	if !errors.As(err, &coded) || !strings.HasSuffix(coded.Message, `'--ssh-target' $'me@box\nx' '--' '`+runA+`'`) || !strings.Contains(coded.Details["command"].(string), "me@box\nx") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// The line in the message gives back, in bash, the very bytes of every argument:
+// control characters, quotes, UTF-8 and bytes that are not UTF-8.
+func TestOneShellLine_BashGivesBackTheSameBytes(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	argv := []string{"/cfg\nwith 'quote'\t\\ \x01 \xff ñ \u0085", "plain", "it's"}
+	out, err := exec.CommandContext(t.Context(), bash, "-c", `printf '%s\0' `+oneShellLine(argv)).Output() //nolint:gosec // the line under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00"); !slices.Equal(got, argv) {
+		t.Errorf("bash gave back %q, want %q", got, argv)
 	}
 }
 
